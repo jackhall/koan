@@ -8,10 +8,10 @@
 //! knot about to be tied — so a refusal writes nothing. The same staging and lay-down serve the
 //! lambda door, [`lambda`], which births a callable no binder names as a one-node knot.
 
-use crate::elaborate::{Canonical, callable_type};
+use crate::elaborate::{Canonical, ParameterBinding, Registered, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
-use crate::scope::{BodyShape, ClosureBindings, ShapeKind, Site};
-use crate::symbols::TypeSymbol;
+use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
+use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Link, Weight};
 
@@ -70,10 +70,15 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.typing.map_or(&[], |typing| typing.quantifier_map)
     }
 
-    /// The expression shape this function's registration puts in its bucket, built from its type
-    /// over the head where it was born; `None` for a `FN`, which no bucket holds.
-    pub fn registered_shape(&self) -> Option<KType> {
+    /// What the registration this function was born for puts in its bucket, built from its type
+    /// over the registration's key where it was born; `None` for a function no registration binds.
+    pub fn registered(&self) -> Option<Registered<'cell>> {
         self.typing.and_then(|typing| typing.registered)
+    }
+
+    /// The expression shape this function's registration puts in its bucket.
+    pub fn registered_shape(&self) -> Option<KType> {
+        self.registered().map(|registered| registered.shape)
     }
 
     /// Where the type parameter named `name` landed in the canonical group — its index, or its
@@ -112,7 +117,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     ) -> Function<'graph, 'to, Y> {
         Function {
             ktype: self.ktype,
-            typing: Typing::laid_down(writer, self.quantifier_map(), self.registered_shape()),
+            typing: Typing::laid_down(writer, self.quantifier_map(), self.registered()),
             shape: self.shape,
             closure,
             knot_weight: self.knot_weight,
@@ -122,7 +127,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 
 /// What a call and a selection read beside a function's type: its quantifier map, each `FOR ALL`
 /// name the declaration wrote paired with its index in the canonical group or with its bound where
-/// canonical form dropped it, and the expression shape its registration puts in its bucket.
+/// canonical form dropped it, and what its registration puts in its bucket.
 ///
 /// A call binds each type-parameter slot by the **name** its map pairs with a solution: a frame
 /// walks its callee's slots symbol-sorted, so a positional read would hand one variable another's
@@ -131,7 +136,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 #[derive(Clone, Copy)]
 pub struct Typing<'cell> {
     quantifier_map: &'cell [(TypeSymbol, Canonical)],
-    registered: Option<KType>,
+    registered: Option<Registered<'cell>>,
 }
 
 impl<'cell> Typing<'cell> {
@@ -140,10 +145,22 @@ impl<'cell> Typing<'cell> {
     pub(super) fn laid_down(
         writer: Writer<'cell>,
         map: &[(TypeSymbol, Canonical)],
-        registered: Option<KType>,
+        registered: Option<Registered<'_>>,
     ) -> Option<&'cell Typing<'cell>> {
         (!map.is_empty() || registered.is_some()).then(|| {
             let quantifier_map = writer.fill(map.len(), |at| map[at]);
+            let registered = registered.map(|registered| Registered {
+                shape: registered.shape,
+                quantifier_map: writer.fill(registered.quantifier_map.len(), |at| {
+                    registered.quantifier_map[at]
+                }),
+                parameters: match registered.parameters {
+                    ParameterBinding::Named(names) => {
+                        ParameterBinding::Named(writer.fill(names.len(), |at| names[at]))
+                    }
+                    ParameterBinding::Operands => ParameterBinding::Operands,
+                },
+            });
             resident(
                 writer,
                 Typing {
@@ -154,12 +171,22 @@ impl<'cell> Typing<'cell> {
         })
     }
 
-    /// What laying the record down costs a rebuild: the map's run, plus the record.
-    pub(super) fn weight(len: usize, registered: bool) -> Weight {
-        if len == 0 && !registered {
+    /// What laying the record down costs a rebuild: the record and its runs.
+    pub(super) fn weight(len: usize, registered: Option<&Registered<'_>>) -> Weight {
+        if len == 0 && registered.is_none() {
             return Weight::ZERO;
         }
-        Weight::run::<(TypeSymbol, Canonical)>(len).plus(Weight::flat::<Typing<'_>>())
+        let (map, names) = registered.map_or((0, 0), |registered| {
+            let names = match registered.parameters {
+                ParameterBinding::Named(names) => names.len(),
+                ParameterBinding::Operands => 0,
+            };
+            (registered.quantifier_map.len(), names)
+        });
+        Weight::run::<(TypeSymbol, Canonical)>(len)
+            .plus(Weight::run::<(TypeSymbol, Canonical)>(map))
+            .plus(Weight::run::<BinderSymbol>(names))
+            .plus(Weight::flat::<Typing<'_>>())
     }
 }
 
@@ -170,8 +197,8 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
     /// it into the region.
     pub quantifier_map: &'x [(TypeSymbol, Canonical)],
-    /// The shape the elaborator built for a registration.
-    pub registered: Option<KType>,
+    /// What the elaborator built for the registration the function is born for.
+    pub registered: Option<Registered<'x>>,
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
 }
 
@@ -190,23 +217,26 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         let typing = Typing::laid_down(writer, self.quantifier_map, self.registered);
         let weight = closure.weight().plus(Typing::weight(
             self.quantifier_map.len(),
-            self.registered.is_some(),
+            self.registered.as_ref(),
         ));
         (closure, typing, weight)
     }
 }
 
-/// Read the callable of `body` into `scratch`: its type elaborated from the form it sits in, and
-/// its captures read through `activation`, each `Member` source minted by `edge`.
+/// Read the callable of `body` into `scratch`: its type elaborated from the form it sits in, born
+/// for `registration` or for none, and its captures read through `activation`, each `Member`
+/// source minted by `edge`.
 pub(super) fn staged<'graph, 'cell, 'x>(
     body: &'graph BodyShape<'graph>,
+    registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, 'cell>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
 ) -> Result<Staged<'graph, 'cell, 'x>, Untieable<'x>> {
     let form = body.form().expect("a callable body sits in its form");
-    let callable = callable_type(form, activation, types, scratch).map_err(Untieable::Type)?;
+    let callable =
+        callable_type(form, activation, types, scratch, registration).map_err(Untieable::Type)?;
     let captures = ClosureBindings::read_captures(body, activation, scratch, edge);
     Ok(Staged {
         shape: body,
@@ -217,22 +247,36 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     })
 }
 
+/// A callable body a knot node runs, beside the registration it is born for.
+pub(super) type Born<'graph> = (
+    &'graph BodyShape<'graph>,
+    Option<&'graph Registration<'graph>>,
+);
+
 /// Read every function node into `scratch`, by node index — `bodies[i]` is node `i`'s callable
-/// body, `None` for a data node — each capture of a fellow member minted as an edge through `plan`.
+/// body beside the registration it is born for, `None` for a data node — each capture of a fellow
+/// member minted as an edge through `plan`.
 pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
     activation: &KActivationView<'graph, 'cell>,
-    bodies: &[Option<&'graph BodyShape<'graph>>],
+    bodies: &[Option<Born<'graph>>],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Option<Staged<'graph, 'cell, 'x>>>, Untieable<'x>> {
     let mut staged = BumpVec::with_capacity_in(bodies.len(), scratch);
     for body in bodies {
         staged.push(match body {
-            Some(body) => Some(self::staged(body, activation, types, scratch, |index| {
-                plan.edge(index)
-                    .expect("a member index is below the knot's count")
-            })?),
+            Some((body, registration)) => Some(self::staged(
+                body,
+                *registration,
+                activation,
+                types,
+                scratch,
+                |index| {
+                    plan.edge(index)
+                        .expect("a member index is below the knot's count")
+                },
+            )?),
             None => None,
         });
     }
@@ -259,7 +303,7 @@ pub fn lambda<'graph, 'cell, 'x>(
         .nested(site)
         .filter(|body| body.kind() == ShapeKind::Callable)
         .expect("a lambda is born at the site of a callable body its shape holds");
-    let staged = staged(body, activation, types, scratch, |_| {
+    let staged = staged(body, None, activation, types, scratch, |_| {
         unreachable!("only the tie births a callable that captures a fellow member")
     })?;
     let (closure, typing, weight) = staged.laid_down(writer);

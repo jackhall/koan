@@ -3,7 +3,8 @@
 //! Every node of the source knot is rebuilt in index order, so an edge means the same node in the
 //! copy and is carried verbatim; each closure binding's value, each data node's value cell and each
 //! module member is deep-copied through the copy the crossing handed down, and the types, body
-//! shapes and knot weight ride over. The copied member is the one at the source's own index.
+//! shapes and knot weight ride over. A builtin's node points into program storage, so it is carried
+//! as-is. The copied member is the one at the source's own index.
 //!
 //! A module's members are rebuilt through that one copy, so a member that is itself a knot member
 //! brings its whole knot with it. Two members of one foreign knot therefore arrive as two copies of
@@ -37,6 +38,8 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                 Node::Function(function) => Node::Function(
                     function.rebuilt(writer, function.closure().copied(writer, &mut *copy)),
                 ),
+                // The record lives in program storage, which outlives the destination.
+                Node::Builtin(builtin) => Node::Builtin(builtin),
                 Node::Data {
                     circular,
                     knot_weight,

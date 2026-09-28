@@ -1,19 +1,18 @@
 //! One type expression, part by part: a name read through the activation, a composite built from
 //! the handles its parts elaborate to.
 
+use super::Elaboration;
+use super::reads::Reads;
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_label};
+use crate::scope::{Coordinate, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
-    constructor_param_names, dense_classes, meet,
+    constructor_param_names, dense_classes, meet, shape_keys_equal,
 };
-use crate::values::{KnottedFamily, Value};
-
-use super::Elaboration;
 
 /// The connector keywords of the formless composites.
 struct Connectors {
@@ -39,9 +38,9 @@ static CONNECTORS: Connectors = Connectors {
 /// `part` as a type, its names read through `reader`: every name is the mention `reader`'s shape
 /// recorded at its site, which must read as a type, save one a `FOR ALL` group inside `part`
 /// declares.
-pub fn type_expression<'graph, XF: KnottedFamily<'graph>>(
+pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
     part: &ExpressionPart<'graph>,
-    reader: &ActivationView<'graph, '_, XF>,
+    reader: &R,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
@@ -122,8 +121,8 @@ pub(super) struct Fellow<'f> {
 }
 
 /// What elaborating one expression reads through.
-pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'graph>> {
-    pub(super) reader: &'e ActivationView<'graph, 'cell, XF>,
+pub(super) struct Elaborator<'e, 'run, 'x, R: ?Sized> {
+    pub(super) reader: &'e R,
     pub(super) types: &'e TypeRegistry<'run>,
     pub(super) scratch: BumpAllocator<'x>,
     /// Fellow members of the component being declared, each at the relative handle it is named by
@@ -136,7 +135,7 @@ pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'gra
     pub(super) locals: &'e [(TypeSymbol, KType)],
 }
 
-impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, XF> {
+impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
     pub(super) fn part(
         &self,
         part: &ExpressionPart<'graph>,
@@ -205,10 +204,9 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         {
             return Ok(fellow.handle);
         }
-        match self.reader.read(mention.coordinate) {
-            Value::Type(value) => Ok(value.handle()),
-            _ => Err(Elaboration::NotAType { name, site }),
-        }
+        self.reader
+            .type_at(mention.coordinate)
+            .ok_or(Elaboration::NotAType { name, site })
     }
 
     /// A parenthesized or sigiled type expression.
@@ -324,24 +322,47 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             }
             // `A & B`, and `& [A B C]`, its chained form — the meet, as a union is the join. A meet
             // that comes out `Never` is a type like any other; only a bound refuses it.
-            3 if keyword(1, &CONNECTORS.meet) => Ok(meet(
-                self.types,
-                self.scratch,
-                self.part(&parts[0].value, groups)?,
-                self.part(&parts[2].value, groups)?,
-            )),
+            3 if keyword(1, &CONNECTORS.meet) => {
+                let left = self.part(&parts[0].value, groups)?;
+                let right = self.part(&parts[2].value, groups)?;
+                self.meet(site, left, right)
+            }
             2 if keyword(0, &CONNECTORS.meet) => {
                 let ExpressionPart::ListLiteral(operands) = parts[1].value else {
                     return Err(unsupported);
                 };
                 let mut met = KType::ANY;
                 for operand in operands.iter() {
-                    met = meet(self.types, self.scratch, met, self.part(operand, groups)?);
+                    met = self.meet(site, met, self.part(operand, groups)?)?;
                 }
                 Ok(met)
             }
             _ => Err(unsupported),
         }
+    }
+
+    /// The meet of `left` and `right`, written at `site`. Two signatures that rank one keyword
+    /// pattern two ways have none, and are refused rather than met at `Never`: every declaration
+    /// and definition at a key carries one ranking.
+    fn meet(&self, site: Site, left: KType, right: KType) -> Result<KType, Elaboration> {
+        let keyworded = |handle| match self.types.node(handle) {
+            TypeNode::Signature { schema, .. } => Some(schema.keyworded),
+            _ => None,
+        };
+        let classes = |shape| match self.types.node(shape) {
+            TypeNode::ExpressionShape { classes, .. } => classes,
+            _ => unreachable!("a keyworded member is an expression shape"),
+        };
+        if let (Some(ours), Some(theirs)) = (keyworded(left), keyworded(right))
+            && ours.iter().any(|mine| {
+                theirs.iter().any(|other| {
+                    shape_keys_equal(*mine, *other, self.types) && classes(*mine) != classes(*other)
+                })
+            })
+        {
+            return Err(Elaboration::RankingDisagrees { site });
+        }
+        Ok(meet(self.types, self.scratch, left, right))
     }
 
     /// The type the record under `owner` declares `name` with, read through every newtype layer

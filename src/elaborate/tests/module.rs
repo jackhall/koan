@@ -41,7 +41,8 @@ fn a_module_reports_a_value_slot_per_value_binder_and_a_manifest_member_per_type
                 "Dist",
                 Value::Type(TypeValue::new(program.writer, dist, program.types)),
             );
-            let handle = crate::elaborate::self_signature(body, program.types, program.scratch);
+            let handle =
+                crate::elaborate::self_signature(body, &[], program.types, program.scratch);
             assert_eq!(
                 handle,
                 signature(
@@ -71,7 +72,7 @@ fn an_empty_module_body_is_the_empty_signature() {
         |program| {
             let body = program.module_body("m");
             assert_eq!(
-                crate::elaborate::self_signature(body, program.types, program.scratch),
+                crate::elaborate::self_signature(body, &[], program.types, program.scratch),
                 KType::EMPTY_SIGNATURE,
             );
         },
@@ -89,7 +90,7 @@ fn two_modules_binding_the_same_members_in_either_order_are_one_handle() {
                 let body = program.module_body("m");
                 program.bind_member(body, "a", Value::Number(1.0));
                 program.bind_member(body, "b", crate::values::text(program.writer, "x"));
-                crate::elaborate::self_signature(body, program.types, program.scratch)
+                crate::elaborate::self_signature(body, &[], program.types, program.scratch)
             },
         )
     };
@@ -117,7 +118,8 @@ fn a_module_member_carries_the_type_its_value_carries_not_one_walked_from_its_co
             )
             .with_type(program.writer, program.types.list(KType::ANY));
             program.bind_member(body, "xs", Value::List(list));
-            let handle = crate::elaborate::self_signature(body, program.types, program.scratch);
+            let handle =
+                crate::elaborate::self_signature(body, &[], program.types, program.scratch);
             assert_eq!(
                 handle,
                 signature(&program, &[("xs", program.types.list(KType::ANY))], &[]),
@@ -141,7 +143,8 @@ fn a_group_bodys_self_signature_carries_the_chaining_it_declares() {
                 body.bind(registration.slot, Value::Null)
                     .expect("an empty slot binds");
             }
-            let handle = crate::elaborate::self_signature(body, program.types, program.scratch);
+            let handle =
+                crate::elaborate::self_signature(body, &[], program.types, program.scratch);
             let TypeNode::Signature { schema, .. } = program.types.node(handle) else {
                 panic!("a self-signature is a Signature node");
             };

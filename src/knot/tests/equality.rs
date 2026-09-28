@@ -1,10 +1,11 @@
-//! A function compares by the `FN` written and its captures, and renders as its type; a module is
-//! incomparable; a knot's data nodes compare as a bisimulation and render with a label wherever a
+//! A function compares by the `FN` written and its captures, and renders as its type; a builtin
+//! compares by its record; a module is incomparable; a knot's data nodes compare as a bisimulation and render with a label wherever a
 //! cycle closes.
 
-use crate::type_lattice::display_name;
+use crate::type_lattice::{KType, display_name};
 use crate::values::{Incomparable, List, Value};
 
+use super::super::builtin;
 use super::{bound, pin, with_fixture};
 
 const RING: &str =
@@ -145,5 +146,25 @@ fn a_ring_renders_with_a_label_where_it_closes() {
                 assert_eq!(rendered, expected);
             });
         }
+    });
+}
+
+#[test]
+fn a_builtin_equals_only_itself() {
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let writer = fixture.program.writer();
+        let first = Value::Knotted(builtin(writer, KType::NUMBER, 0));
+        let twin = Value::Knotted(builtin(writer, KType::NUMBER, 0));
+        assert!(
+            first.as_callable().is_some(),
+            "a builtin calls as a function"
+        );
+        assert_eq!(first.equals(&first, types, scratch), Ok(true));
+        assert_eq!(
+            first.equals(&twin, types, scratch),
+            Ok(false),
+            "another record of the same overload is another builtin"
+        );
     });
 }

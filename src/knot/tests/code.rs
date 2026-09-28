@@ -4,10 +4,11 @@
 
 use std::ptr;
 
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::display_name;
 use crate::values::{Knotted as _, Link, Value};
 
-use super::super::{Knotted, using};
+use super::super::{Knotted, UsingRefused, using};
 use super::{Fixture, bound, pin, with_fixture};
 
 /// The quote bound under `name`.
@@ -137,12 +138,14 @@ fn using_fills_the_holes_a_record_names_and_ignores_the_rest() {
             };
             let (x, y) = (fixture.name("x"), fixture.name("y"));
 
-            let filled = using(writer, q, record("first"), types, scratch);
+            let filled =
+                using(writer, q, record("first"), types, scratch).expect("the fill agrees");
             assert_eq!(supplied(filled), [(x, 1.0)], "`z` names no hole");
             assert!(supplied(q).is_empty(), "the source code is unchanged");
             assert_eq!(filled.ktype(), q.ktype());
 
-            let both = using(writer, filled, record("second"), types, scratch);
+            let both =
+                using(writer, filled, record("second"), types, scratch).expect("the fill agrees");
             let mut expected = [(x, 1.0), (y, 2.0)];
             expected.sort_by_key(|(name, _)| *name);
             assert_eq!(
@@ -154,9 +157,9 @@ fn using_fills_the_holes_a_record_names_and_ignores_the_rest() {
             let equal = |left: Knotted<'_, '_>, right: Knotted<'_, '_>| {
                 Value::Knotted(left).equals(&Value::Knotted(right), types, scratch)
             };
-            let twice = using(writer, q, record("first"), types, scratch);
+            let twice = using(writer, q, record("first"), types, scratch).expect("the fill agrees");
             assert_eq!(equal(filled, twice), Ok(true));
-            let nine = using(writer, q, record("other"), types, scratch);
+            let nine = using(writer, q, record("other"), types, scratch).expect("the fill agrees");
             assert_eq!(equal(filled, nine), Ok(false));
             assert_eq!(equal(filled, q), Ok(false), "a filled hole is a binding");
         });
@@ -176,7 +179,8 @@ fn using_reads_a_module_by_member_name_and_keeps_refused_code_unchanged() {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
             let m = bound(fixture, activation, "m");
-            let q = using(writer, code(fixture, activation, "q"), m, types, scratch);
+            let q = using(writer, code(fixture, activation, "q"), m, types, scratch)
+                .expect("the fill agrees");
             assert!(matches!(
                 q.code().expect("a quote's node").supplied(),
                 [(_, Link::Value(Value::Number(4.0)))]
@@ -189,10 +193,77 @@ fn using_reads_a_module_by_member_name_and_keeps_refused_code_unchanged() {
                     .refusal()
                     .is_some()
             );
-            let kept = using(writer, bad, m, types, scratch);
+            let kept = using(writer, bad, m, types, scratch).expect("the fill agrees");
             assert!(
                 ptr::eq(kept.node(), bad.node()),
                 "a refused code's holes are unknown"
+            );
+        });
+    });
+}
+
+#[test]
+fn using_fills_a_keyworded_hole_with_a_module_s_registrations_at_its_key() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(
+            "MODULE m = ((EXPR #(GREET x :Str) -> Str = #(x)) (EXPR #(WAVE x :Str) -> Str = #(x)))\n\
+             MODULE none = (LET y = 1)\n\
+             LET q = #(GREET \"bob\")",
+        );
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let q = code(fixture, activation, "q");
+            let m = bound(fixture, activation, "m");
+            let greet = BinderSymbol::Key(fixture.symbols.key("GREET _").expect("a key"));
+            let filled = using(writer, q, m, types, scratch).expect("the fill agrees");
+            let [(name, Link::Value(Value::List(list)))] =
+                filled.code().expect("a quote's node").supplied()
+            else {
+                panic!("one hole filled with a list");
+            };
+            assert_eq!(*name, greet);
+            assert_eq!(list.len(), 1, "the module's one registration at the key");
+            let registered = list
+                .get(0)
+                .expect("an item")
+                .as_callable()
+                .and_then(Knotted::function)
+                .and_then(|function| function.registered_shape())
+                .expect("a registration's function");
+            assert_eq!(
+                display_name(registered, types, fixture.symbols).to_string(),
+                ":(EXPR #(GREET _ :Str) -> Str)"
+            );
+            let none = bound(fixture, activation, "none");
+            let open = using(writer, q, none, types, scratch).expect("nothing to disagree with");
+            assert!(
+                ptr::eq(open.node(), q.node()),
+                "a module with no registration at the key leaves the hole open"
+            );
+        });
+    });
+}
+
+#[test]
+fn using_refuses_registrations_ranked_other_than_the_code_s_own() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(
+            "MODULE m = ((EXPR #(MOVE 2 TO 1)) (EXPR #(MOVE x :Number TO y :Number) -> Number = #(x)))\n\
+             LET q = #((EXPR #(MOVE x :Str TO y :Str) -> Str = #(x)) (MOVE \"a\" TO \"b\"))",
+        );
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let q = code(fixture, activation, "q");
+            let m = bound(fixture, activation, "m");
+            assert_eq!(
+                using(writer, q, m, types, scratch),
+                Err(UsingRefused::Ranking {
+                    key: fixture.symbols.key("MOVE _ TO _").expect("a key")
+                })
             );
         });
     });

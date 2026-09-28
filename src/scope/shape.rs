@@ -619,6 +619,24 @@ impl<'graph> BodyShape<'graph> {
         self.required
     }
 
+    /// Whether every keyworded use at `key` that lists a candidate of its own beside a spread —
+    /// here, and in each body nested here short of another quote's code — carries the ranking
+    /// `classes`: what a `USING` filling this code's hole at `key` must agree with.
+    pub fn ranks_alike(&self, key: KeySymbol, classes: &[u8]) -> bool {
+        let own = self.candidates.iter().all(|(_, list)| {
+            list.key != key
+                || list.classes == classes
+                || list
+                    .candidates
+                    .iter()
+                    .all(|candidate| matches!(candidate, Candidate::Spread(_)))
+        });
+        own && self
+            .nested
+            .iter()
+            .all(|(_, body)| body.kind == ShapeKind::Code || body.ranks_alike(key, classes))
+    }
+
     /// The candidates of the keyworded use whose node sits at `site` ([`Site::of_node`]).
     pub fn candidates(&self, site: Site) -> Option<&'graph CandidateList<'graph>> {
         let index = self

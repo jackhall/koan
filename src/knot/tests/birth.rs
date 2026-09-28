@@ -1,19 +1,21 @@
-//! The tie: a lone function, the shape a registration's function carries, closure words, knots of
-//! fellow members read through their edges, data members and the anonymous nodes below them, and
+//! The tie: a lone function, what a registration's function carries, a combined statement's two
+//! members, closure words, knots of fellow members read through their edges, data members and the anonymous nodes below them, and
 //! every refusal.
 
-use crate::elaborate::Elaboration;
+use crate::elaborate::{Elaboration, ParameterBinding};
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{CaptureSlot, Coordinate, Site, Target};
-use crate::symbols::KeywordSymbol;
+use crate::symbols::{BinderSymbol, KeywordSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema, TypeNode};
 use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::function::Typing;
 use super::super::{Eager, KActivation, KValue, Knotted, Node, Supplied, Untieable, tie};
-use super::{Fixture, bound, callable, circular, declared, follow, pin, with_fixture};
+use super::{
+    Fixture, at_key, bound, callable, circular, declared, follow, pin, registered, with_fixture,
+};
 
 /// The component `name` belongs to, tied again with `eager` — a refusal the runner left for the
 /// test to see.
@@ -106,13 +108,19 @@ fn a_function_born_for_a_registration_carries_its_shape() {
                         .handle,
                 )
             };
-            let twice = callable(fixture, activation, "twice");
+            let twice = registered(fixture, activation, "twice");
             let twice_function = twice.function().expect("a function");
             assert_eq!(
                 twice_function.registered_shape(),
                 shape(&[keyword("TWICE"), number])
             );
-            let plus = callable(fixture, activation, "plus");
+            // The name's function is born for no registration, so it carries no bucket's shape.
+            let named = callable(fixture, activation, "twice");
+            assert_eq!(
+                named.function().expect("a function").registered_shape(),
+                None
+            );
+            let plus = registered(fixture, activation, "plus");
             assert_eq!(
                 plus.function().expect("a function").registered_shape(),
                 shape(&[number, keyword("+"), number])
@@ -133,16 +141,123 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             );
             let f = callable(fixture, activation, "f");
             assert_eq!(f.function().expect("a function").registered_shape(), None);
-            // The typing record is laid down although the quantifier map is empty. A combined
-            // statement's knot holds two members over its one body: the name's function and the
-            // registration's.
-            let member = Weight::flat::<Node<'static, 'static>>()
-                .plus(twice_function.closure().weight())
-                .plus(Weight::flat::<Typing<'static>>());
+            // A combined statement's knot holds two members over its one body: the name's
+            // function, and the registration's, whose typing record is laid down although its
+            // quantifier maps are empty, beside the one parameter name its binding reads.
+            let member =
+                Weight::flat::<Node<'static, 'static>>().plus(twice_function.closure().weight());
+            let typing = Weight::run::<BinderSymbol>(1).plus(Weight::flat::<Typing<'static>>());
             assert_eq!(
                 twice.weight(),
-                Weight::flat::<usize>().plus(member).plus(member)
+                Weight::flat::<usize>()
+                    .plus(member)
+                    .plus(member)
+                    .plus(typing)
             );
+        });
+    });
+}
+
+#[test]
+fn a_bare_definition_binds_its_function_to_its_registration_slot() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("EXPR #(TWICE x :Number) -> Number = #(x)");
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let (types, scratch) = (fixture.types, fixture.scratch());
+            let twice = at_key(fixture, activation, "TWICE _");
+            let registered = twice
+                .function()
+                .expect("a function")
+                .registered()
+                .expect("born for its registration");
+            let keyword = KeywordSymbol::declared("TWICE", fixture.symbols).expect("a keyword");
+            assert_eq!(
+                registered.shape,
+                types
+                    .shape_type(
+                        scratch,
+                        &[],
+                        &[
+                            DispatchTokenElement::Keyword(keyword),
+                            DispatchTokenElement::Slot(KType::NUMBER)
+                        ],
+                        &[],
+                        KType::NUMBER
+                    )
+                    .handle
+            );
+            assert_eq!(
+                registered.parameters,
+                ParameterBinding::Named(&[fixture.name("x")])
+            );
+        });
+    });
+}
+
+#[test]
+fn a_combined_statement_births_two_equal_members_over_its_one_body() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)");
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let named = callable(fixture, activation, "twice");
+            let registration = at_key(fixture, activation, "TWICE _");
+            assert!(!std::ptr::eq(named.node(), registration.node()));
+            assert!(std::ptr::eq(
+                named.function().expect("a function").shape(),
+                registration.function().expect("a function").shape()
+            ));
+            assert_eq!(
+                Value::Knotted(named).equals(&Value::Knotted(registration), types, scratch),
+                Ok(true),
+                "one body over the same captures"
+            );
+        });
+    });
+}
+
+#[test]
+fn registrations_that_call_each_other_are_one_knot() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(
+            "EXPR #(PING n :Number) -> Number = #(PONG n)\n\
+             EXPR #(PONG n :Number) -> Number = #(PING n)",
+        );
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let ping = at_key(fixture, activation, "PING _");
+            let pong = at_key(fixture, activation, "PONG _");
+            let knot = ping.member().knot();
+            assert_eq!(knot.len(), 2);
+            assert!(
+                (0..2).any(|index| Knotted::of(knot, index) == pong),
+                "each captures the other through an edge into one knot"
+            );
+        });
+    });
+}
+
+#[test]
+fn a_unary_operator_registers_under_both_its_keys() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("UNARY OP #(~) OVER Number -> Number = #(operands)");
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let binding = |text| {
+                at_key(fixture, activation, text)
+                    .function()
+                    .expect("a function")
+                    .registered()
+                    .expect("born for its registration")
+                    .parameters
+            };
+            assert_eq!(
+                binding("~ _"),
+                ParameterBinding::Named(&[fixture.name("operands")])
+            );
+            assert_eq!(binding("_ ~ _"), ParameterBinding::Operands);
         });
     });
 }

@@ -3,14 +3,16 @@
 
 use crate::memory::BumpAllocator;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Position, Site, Slot};
+use crate::scope::{BodyShape, Position, Site, Slot, Which};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
     DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry, display_name,
 };
 use crate::values::Value;
 
-use super::super::{Canonical, Elaboration, callable_type, type_expression};
+use super::super::{
+    Canonical, Elaboration, ParameterBinding, callable_type, static_callable_type, type_expression,
+};
 use super::{Held, Program, nulls, scalars, with_program};
 
 /// The right-hand side of `LET <name> = <rhs>` on `line`.
@@ -270,31 +272,20 @@ LET less = OP #(<) OVER Number -> Bool = #(left)
 LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
-        let typed = |name| {
-            let form = program
-                .birth(name)
-                .form()
-                .expect("a callable body sits in a form");
-            callable_type(form, program.activation, types, scratch).map(|callable| callable.ktype)
-        };
+        let typed = |name| program.callable(name, false).map(|callable| callable.ktype);
         let mapped = |name| {
-            let form = program
-                .birth(name)
-                .form()
-                .expect("a callable body sits in a form");
-            callable_type(form, program.activation, types, scratch)
+            program
+                .callable(name, false)
                 .expect("the definition elaborates")
                 .quantifier_map
                 .to_vec()
         };
         let registered = |name| {
-            let form = program
-                .birth(name)
-                .form()
-                .expect("a callable body sits in a form");
-            callable_type(form, program.activation, types, scratch)
+            program
+                .callable(name, true)
                 .expect("the definition elaborates")
                 .registered
+                .expect("born for its registration")
         };
         let x = BinderSymbol::classify("x").unwrap();
         let ys = BinderSymbol::classify("ys").unwrap();
@@ -373,49 +364,65 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                 .handle),
             "a unary operator's body takes the whole run as a list"
         );
-        assert_eq!(registered("f"), None, "no bucket holds a `FN`");
-        assert_eq!(registered("lambda_id"), None);
         assert_eq!(
-            registered("twice"),
-            Some(shape(&[keyword("TWICE", symbols), number], KType::NUMBER))
+            program
+                .callable("twice", false)
+                .map(|callable| callable.registered),
+            Ok(None),
+            "a callable born for its name carries no bucket's shape"
         );
         assert_eq!(
-            registered("id"),
-            Some(
-                types
-                    .shape_type(
-                        scratch,
-                        &[elt],
-                        &[
-                            keyword("ID", symbols),
-                            DispatchTokenElement::Slot(quantified)
-                        ],
-                        &[],
-                        quantified
-                    )
-                    .handle
-            )
+            registered("twice").shape,
+            shape(&[keyword("TWICE", symbols), number], KType::NUMBER)
         );
         assert_eq!(
-            registered("plus"),
-            Some(shape(
-                &[number, keyword("+", symbols), number],
-                KType::NUMBER
-            ))
+            registered("twice").parameters,
+            ParameterBinding::Named(&[x])
         );
         assert_eq!(
-            registered("less"),
-            Some(shape(&[number, keyword("<", symbols), number], KType::BOOL))
+            registered("id").quantifier_map,
+            &[(elt, Canonical::At(0))][..]
         );
         assert_eq!(
-            registered("negate"),
-            Some(shape(
+            registered("id").shape,
+            types
+                .shape_type(
+                    scratch,
+                    &[elt],
+                    &[
+                        keyword("ID", symbols),
+                        DispatchTokenElement::Slot(quantified)
+                    ],
+                    &[],
+                    quantified
+                )
+                .handle
+        );
+        assert_eq!(
+            registered("plus").shape,
+            shape(&[number, keyword("+", symbols), number], KType::NUMBER)
+        );
+        assert_eq!(
+            registered("plus").parameters,
+            ParameterBinding::Named(&[left, right])
+        );
+        assert_eq!(
+            registered("less").shape,
+            shape(&[number, keyword("<", symbols), number], KType::BOOL)
+        );
+        assert_eq!(
+            registered("negate").shape,
+            shape(
                 &[
                     keyword("~", symbols),
                     DispatchTokenElement::Slot(types.list(KType::NUMBER))
                 ],
                 KType::NUMBER
-            ))
+            )
+        );
+        assert_eq!(
+            registered("negate").parameters,
+            ParameterBinding::Named(&[operands])
         );
     });
 }
@@ -456,7 +463,8 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
         };
         let callable = |body| {
             let form = BodyShape::form(body).expect("a callable body sits in a form");
-            let callable = callable_type(form, program.activation, types, scratch)
+            let registration = Some(program.registration(body));
+            let callable = callable_type(form, program.activation, types, scratch, registration)
                 .expect("the definition elaborates");
             (
                 callable.ktype,
@@ -603,13 +611,14 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
             .expect("the definition births a body");
         for body in [program.birth("lambda"), program.birth("id"), twice] {
             let form = body.form().expect("a callable body sits in a form");
-            let ktype = callable_type(form, program.activation, types, scratch)
+            let ktype = callable_type(form, program.activation, types, scratch, None)
                 .expect("it elaborates")
                 .ktype;
             assert_eq!(sorted_bounds(types, ktype), vec![KType::NUMBER]);
         }
         let form = program.birth("which").form().expect("a form");
-        let which = callable_type(form, program.activation, types, scratch).expect("it elaborates");
+        let which =
+            callable_type(form, program.activation, types, scratch, None).expect("it elaborates");
         assert_eq!(
             which.quantifier_map.to_vec(),
             vec![
@@ -622,5 +631,112 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
                 (program.type_name("Held"), Canonical::At(0)),
             ]
         );
+    });
+}
+
+#[test]
+fn a_registered_shape_takes_the_ranking_its_declaration_gives_and_the_type_spells_it() {
+    let source = "\
+EXPR #(MOVE 2 TO 1)
+LET move = FN EXPR #(MOVE x :Number TO y :Str) -> Number = #(x)
+LET ranked = :(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)
+LET scaled = :(EXPR #(MOVE 20 :Number TO 10 :Str) -> Number)
+LET written = :(EXPR #(MOVE _ :Number TO _ :Str) -> Number)";
+    with_program(source, scalars, nulls, |program| {
+        let ranked = elaborated(&program, 2).expect("a ranked head elaborates");
+        assert_eq!(elaborated(&program, 3), Ok(ranked), "`20 10` is `2 1`");
+        assert_ne!(
+            elaborated(&program, 4),
+            Ok(ranked),
+            "written order is another ranking"
+        );
+        let registered = program
+            .callable("move", true)
+            .expect("the definition elaborates")
+            .registered
+            .expect("born for its registration");
+        assert_eq!(
+            registered.shape, ranked,
+            "the definition ranks as the declaration it sees"
+        );
+        assert_eq!(
+            registered.parameters,
+            ParameterBinding::Named(&[
+                BinderSymbol::classify("x").unwrap(),
+                BinderSymbol::classify("y").unwrap()
+            ])
+        );
+    });
+}
+
+#[test]
+fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
+    let source = "UNARY OP #(~) OVER Number -> Number = #(operands)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
+        let shape = program.activation.shape();
+        let body = &program.lines[0]
+            .parts
+            .last()
+            .expect("a definition has a body")
+            .value;
+        let body = shape.nested(Site::of(body)).expect("the body is shaped");
+        let bridge = shape
+            .registrations()
+            .iter()
+            .find(|registration| registration.which == Which::Binary)
+            .expect("a unary operator registers under a binary key too");
+        let form = body.form().expect("a callable body sits in a form");
+        let registered = callable_type(form, program.activation, types, scratch, Some(bridge))
+            .expect("the operator elaborates")
+            .registered
+            .expect("born for its registration");
+        let number = DispatchTokenElement::Slot(KType::NUMBER);
+        assert_eq!(
+            registered.shape,
+            types
+                .shape_type(
+                    scratch,
+                    &[],
+                    &[number, keyword("~", symbols), number],
+                    &[],
+                    KType::NUMBER
+                )
+                .handle
+        );
+        assert_eq!(registered.parameters, ParameterBinding::Operands);
+    });
+}
+
+#[test]
+fn a_static_callable_type_reads_builtin_names_only() {
+    let source = "\
+NEWTYPE Dist = Number
+LET near = FN EXPR #(NEAR x :Number) -> Number = #(x)
+LET far = FN EXPR #(FAR x :Dist) -> Number = #(x)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let (shape, builtins) = (program.activation.shape(), program.activation.builtins());
+        let statically = |name| {
+            let body = program.birth(name);
+            let form = body.form().expect("a callable body sits in a form");
+            let registration = Some(program.registration(body));
+            static_callable_type(form, shape, builtins, types, scratch, registration).map(
+                |callable| {
+                    callable
+                        .registered
+                        .expect("born for its registration")
+                        .shape
+                },
+            )
+        };
+        let near = program
+            .callable("near", true)
+            .expect("the definition elaborates")
+            .registered
+            .expect("born for its registration")
+            .shape;
+        assert_eq!(statically("near"), Some(near));
+        assert_eq!(statically("far"), None, "`Dist` is no builtin");
     });
 }

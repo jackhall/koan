@@ -14,12 +14,14 @@ use crate::memory::{
     program_storage, reattachable, resident,
 };
 use crate::parse::{KExpression, parse};
-use crate::scope::{Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Slot, Target};
+use crate::scope::{
+    Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Registration, Slot, Target, Which,
+};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
-use super::{Elaboration, type_declarations};
+use super::{Callable, Elaboration, callable_type, type_declarations};
 
 /// This activation's own `slot`.
 fn local(slot: Slot) -> Coordinate {
@@ -50,7 +52,7 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub writer: Writer<'cell>,
 }
 
-impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
+impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
     pub fn type_name(&self, text: &str) -> TypeSymbol {
         TypeSymbol::declared(text, self.symbols).expect("a Type token")
     }
@@ -140,6 +142,35 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
             .shape()
             .births(slot)
             .expect("the binder births a body")
+    }
+
+    /// The registration `body` is born for — a `UNARY OP`'s keyword-first one of its two.
+    pub fn registration(&self, body: &BodyShape<'graph>) -> &'graph Registration<'graph> {
+        let shape = self.activation.shape();
+        shape
+            .registrations()
+            .iter()
+            .find(|registration| {
+                registration.which != Which::Binary
+                    && shape
+                        .births(registration.slot)
+                        .is_some_and(|born| std::ptr::eq(born, body))
+            })
+            .expect("the body is registered")
+    }
+
+    /// The type of the callable `name` births, born for its registration when `registered`.
+    pub fn callable(&self, name: &str, registered: bool) -> Result<Callable<'p>, Elaboration> {
+        let body = self.birth(name);
+        let form = body.form().expect("a callable body sits in a form");
+        let registration = registered.then(|| self.registration(body));
+        callable_type(
+            form,
+            self.activation,
+            self.types,
+            self.scratch,
+            registration,
+        )
     }
 }
 

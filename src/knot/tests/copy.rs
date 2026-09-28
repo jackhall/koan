@@ -11,11 +11,14 @@ use std::ptr;
 
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::scope::{CaptureSlot, Slot};
+use crate::type_lattice::KType;
 use crate::values::{Circular, Link};
 use crate::values::{Knotted as _, Value, cross};
 
-use super::super::{Coerced, KValue, KValueFamily, Knotted};
-use super::{Fixture, Step, bound, callable, circular, copy, declared, follow, with_fixture};
+use super::super::{Coerced, KValue, KValueFamily, Knotted, builtin};
+use super::{
+    Fixture, Step, bound, callable, circular, copy, declared, follow, registered, with_fixture,
+};
 
 /// The capture `name` of `callable`'s closure.
 fn capture<'graph, 'cell>(
@@ -107,12 +110,20 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                     captured_sibling(fixture, g, "f"),
                     captured_sibling(fixture, copied, "f"),
                 );
-                // `f` is born for a registration, so its typing record rides the copy too.
-                let registered = f.function().expect("a function").registered_shape();
-                assert!(registered.is_some());
+                // `f`'s registration is born for it, so its typing record rides the copy too.
+                let registration = registered(fixture, activation, "f");
+                let copied_registration = Knotted::of(
+                    copied.member().knot(),
+                    registration.member().index().index() as usize,
+                );
+                let shape = registration.function().expect("a function").registered();
+                assert!(shape.is_some());
                 assert_eq!(
-                    copied_f.function().expect("a function").registered_shape(),
-                    registered
+                    copied_registration
+                        .function()
+                        .expect("a function")
+                        .registered(),
+                    shape
                 );
                 assert!(
                     ptr::eq(
@@ -181,6 +192,45 @@ fn a_copied_knot_outlives_its_home() {
                     let words = words.as_list().expect("`words` is a list");
                     assert_eq!(words.get(1).and_then(Value::as_str), Some("beta"));
                 }
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn a_copied_builtin_keeps_its_record() {
+    with_fixture(|fixture| {
+        let original = builtin(fixture.program.writer(), KType::NUMBER, 7);
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        let dormant = graph
+            .enter(home, |context| {
+                let source = context.lift::<KValueFamily>(Value::Knotted(original));
+                let crossed = cross(context, dest, &source).unwrap();
+                context.keep(crossed)
+            })
+            .unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        graph
+            .enter(dest, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let Value::Knotted(copied) = context.read(&carrier).value() else {
+                    panic!("a builtin crosses as a knot member");
+                };
+                assert!(
+                    !ptr::eq(copied.node(), original.node()),
+                    "a copy is a new knot"
+                );
+                let record = copied.builtin().expect("a builtin's node");
+                assert!(
+                    ptr::eq(record, original.builtin().expect("a builtin's node")),
+                    "the record in program storage is shared, not copied"
+                );
+                assert_eq!(record.id(), 7);
+                assert_eq!(copied.weight(), original.weight());
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();

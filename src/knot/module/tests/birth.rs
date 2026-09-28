@@ -7,6 +7,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::{Incomparable, Knotted as _, Resolved, Value};
 
+use crate::knot::module::layout;
 use crate::knot::tests::{Fixture, bound, callable, declared, pin, with_fixture};
 use crate::knot::{KActivation, Knotted, Untieable, tie};
 
@@ -269,6 +270,41 @@ fn a_type_member_is_read_back_through_the_declaration_door() {
                 "a newtype is its own identity"
             );
             let _ = callable;
+        })
+    });
+}
+
+#[test]
+fn a_bare_definition_is_the_run_tail_and_a_keyworded_member_of_the_signature() {
+    let source = "MODULE m = ((LET zero = 0) (EXPR #(TWICE x :Number) -> Number = #(x)))";
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let m = module(fixture, activation, "m");
+            assert_eq!(m.module().expect("a module node").members().len(), 2);
+            let [twice] = layout::registrations(m, types, scratch) else {
+                panic!("one registration past the named members");
+            };
+            let shape = twice
+                .as_callable()
+                .and_then(Knotted::function)
+                .and_then(|function| function.registered_shape())
+                .expect("the function born for the registration");
+            let TypeNode::Signature { schema, .. } = types.node(m.ktype()) else {
+                panic!("a module's type is its self-signature");
+            };
+            assert_eq!(
+                schema.keyworded,
+                [shape],
+                "its keyworded channel holds the shape"
+            );
+            assert_eq!(
+                schema.value_slots.len(),
+                1,
+                "a registration names no value slot"
+            );
         })
     });
 }

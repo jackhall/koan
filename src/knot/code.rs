@@ -6,15 +6,17 @@
 //! whose `$` names are read through the activation the quote sits in. A quote a data member holds
 //! whose `$` name reads a fellow member is instead a node of the member's knot, staged here and
 //! laid down by the [tie](super::tie()), that mention an edge. [`using`] fills holes from a record
-//! or a module into a new one-node knot. A hole or a `\` mark names no binding, so neither is
-//! held here: a hole is filled only by `USING`, and a `\` name by the `EVAL` that runs the code.
+//! or a module into a new one-node knot: a name hole with the member it names, and a keyworded hole
+//! with the list of a module's registrations at its key. A hole or a `\` mark names no binding, so
+//! neither is held here: a hole is filled only by `USING`, and a `\` name by the `EVAL` that runs
+//! the code.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
-use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::{CodeView, Link, Weight};
+use crate::symbols::{BinderSymbol, KeySymbol};
+use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
+use crate::values::{CodeView, Link, List, Value, Weight};
 
 use super::{KActivationView, KValue, Knotted, Node};
 
@@ -240,30 +242,44 @@ pub fn quote<'graph, 'cell>(
     one_node(writer, body, shape, &staged.bound, &[])
 }
 
-/// `code USING source`: a new one-node knot in `writer`'s region whose holes a field of `source` —
-/// a record, or a module's member — names are filled, and whose other holes stay holes. A field
-/// naming no hole is ignored, and a hole an earlier `USING` filled is no hole, so it is never
-/// rebound. Code whose shape carries a refusal comes back unchanged: its holes are unknown, and the
-/// `EVAL` that runs it reports the refusal. Each binding of `code` that is an edge is resolved to
-/// the member it names, so the new knot's runs hold value words only.
+/// Why a `USING` refused to fill a code's holes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsingRefused {
+    /// The module's registrations at `key` rank its slots other than the code's own candidates at
+    /// `key` do.
+    Ranking { key: KeySymbol },
+}
+
+/// `code USING source`: a new one-node knot in `writer`'s region whose holes `source` fills, and
+/// whose other holes stay holes. A name hole takes the field of `source` — a record, or a module's
+/// member — that it names; a keyworded hole takes the list of a module's registrations at its key,
+/// and stays open where the module has none. A field naming no hole is ignored, and a hole an
+/// earlier `USING` filled is no hole, so it is never rebound. Code whose shape carries a refusal
+/// comes back unchanged: its holes are unknown, and the `EVAL` that runs it reports the refusal.
+/// Each binding of `code` that is an edge is resolved to the member it names, so the new knot's
+/// runs hold value words only.
+///
+/// Refused, writing nothing, where a module's registrations at a hole's key rank their slots other
+/// than the code's own candidates at the key do.
 pub fn using<'graph, 'cell>(
     writer: Writer<'cell>,
     code: Knotted<'graph, 'cell>,
     source: KValue<'graph, 'cell>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> Knotted<'graph, 'cell> {
+) -> Result<Knotted<'graph, 'cell>, UsingRefused> {
     let node = code
         .code()
         .expect("`USING` fills the holes of a quote's code");
     let shape = node.shape();
     if shape.refusal().is_some() {
-        return code;
+        return Ok(code);
     }
     let resolved = |(name, link): &Binding<'graph, 'cell>| (*name, Link::Value(link.resolve(code)));
     let mut supplied: BumpVec<'_, Binding<'graph, 'cell>> = BumpVec::new_in(scratch);
     supplied.extend(node.supplied().iter().map(resolved));
     let before = supplied.len();
+    let mut keyed = BumpVec::new_in(scratch);
     for capture in shape.captures() {
         if capture.source != CaptureSource::Hole
             || node
@@ -273,15 +289,69 @@ pub fn using<'graph, 'cell>(
         {
             continue;
         }
-        if let Some(value) = super::field(source, capture.name, types, scratch) {
+        let value = match capture.name {
+            BinderSymbol::Key(key) => {
+                keyed.clear();
+                self::keyed(shape, key, source, types, scratch, &mut keyed)?;
+                (!keyed.is_empty())
+                    .then(|| Value::List(List::new(writer, keyed.iter().copied(), types, scratch)))
+            }
+            name => super::field(source, name, types, scratch),
+        };
+        if let Some(value) = value {
             supplied.push((capture.name, Link::Value(value)));
         }
     }
     if supplied.len() == before {
-        return code;
+        return Ok(code);
     }
     supplied.sort_unstable_by_key(|(name, _)| *name);
     let mut bound = BumpVec::with_capacity_in(node.bound().len(), scratch);
     bound.extend(node.bound().iter().map(resolved));
-    one_node(writer, node.body(), shape, &bound, &supplied)
+    Ok(one_node(writer, node.body(), shape, &bound, &supplied))
+}
+
+/// Push onto `found` each registration `source` holds whose registered shape's key is `key`. A
+/// function's key and ranking are read off its registered shape; a ranking other than the one
+/// `shape`'s own candidates at `key` carry is refused.
+fn keyed<'graph, 'cell>(
+    shape: &BodyShape<'graph>,
+    key: KeySymbol,
+    source: KValue<'graph, 'cell>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
+) -> Result<(), UsingRefused> {
+    for member in super::registrations(source, types, scratch) {
+        let registered = member
+            .as_callable()
+            .and_then(Knotted::function)
+            .and_then(|function| function.registered_shape())
+            .expect("a registration member is the function born for it");
+        let TypeNode::ExpressionShape {
+            elements, classes, ..
+        } = types.node(registered)
+        else {
+            unreachable!("a registered shape is an expression shape")
+        };
+        let run = elements.iter().map(|element| match element {
+            DispatchTokenElement::Keyword(keyword) => Some(*keyword),
+            DispatchTokenElement::Slot(_) => None,
+        });
+        if KeySymbol::of(run.clone()) != key {
+            continue;
+        }
+        // The lattice stores written order as no classes; the shape spells every class out.
+        let ranking = if classes.is_empty() {
+            let slots = run.filter(Option::is_none).count();
+            scratch.alloc_slice_fill_iter((0..slots).map(|class| class as u8))
+        } else {
+            classes
+        };
+        if !shape.ranks_alike(key, ranking) {
+            return Err(UsingRefused::Ranking { key });
+        }
+        found.push(*member);
+    }
+    Ok(())
 }

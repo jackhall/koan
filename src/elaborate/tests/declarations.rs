@@ -8,7 +8,7 @@ use crate::type_lattice::{
     member,
 };
 
-use super::super::{Elaboration, callable_type};
+use super::super::Elaboration;
 use super::{Held, Program, brought, declared, with_program};
 
 /// The representation a newtype member wraps.
@@ -221,14 +221,12 @@ fn a_bodyless_head_spells_the_shape_its_definition_spells() {
                 panic!("a SIG binds a signature");
             };
             let defined = |name| {
-                let form = program
-                    .birth(name)
-                    .form()
-                    .expect("a callable body sits in a form");
-                callable_type(form, program.activation, program.types, program.scratch)
+                program
+                    .callable(name, true)
                     .expect("the definition elaborates")
                     .registered
                     .expect("a registration")
+                    .shape
             };
             let mut declared: Vec<KType> = schema.keyworded.to_vec();
             let mut satisfiers: Vec<KType> =
@@ -660,4 +658,16 @@ fn every_member_declaring_shape_is_a_signature_member() {
     {
         brought(&format!("SIG Sg = #[({member})]"), |_| {});
     }
+}
+
+#[test]
+fn a_meet_of_signatures_ranking_one_key_two_ways_is_refused() {
+    declared(
+        "SIG Ranked = #[(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)]\n\
+         SIG Written = #[(EXPR #(MOVE _ :Number TO _ :Str) -> Number)]\n\
+         LET Both = :(Ranked & Written)",
+        |_, brought| {
+            assert!(matches!(brought, Err(Elaboration::RankingDisagrees { .. })));
+        },
+    );
 }

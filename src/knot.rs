@@ -3,10 +3,11 @@
 //!
 //! A knot member is one node of a [`Knot`](crate::memory::Knot) laid down in a cell's region.
 //! [`Knotted`] is that node, the `(knot, index)` pair, and [`Node`] is what one holds: a
-//! [function](crate::knot::function), a quote's [code](crate::knot::code), a data node — a
-//! [`Circular`] over links — a [module](crate::knot::module), or a barrier over a function member of
-//! an opaque view. A function or a quote that names no fellow is a one-node knot, and so is every
-//! module and every barrier; a deferred-only component of value binders is born together as one
+//! [function](crate::knot::function), a [builtin](crate::knot::builtin) overload, a quote's
+//! [code](crate::knot::code), a data node — a [`Circular`] over links — a
+//! [module](crate::knot::module), or a barrier over a function member of an opaque view. A function
+//! or a quote that names no fellow is a one-node knot, and so is every builtin, every module and
+//! every barrier; a deferred-only component of value binders is born together as one
 //! knot by [`tie`], each mention of a fellow member an edge into it. A `FN` a data member holds that
 //! captures a fellow member is a node of that knot, and so is a quote whose `$` name reads one. Any
 //! other callable no binder names is born alone through [`lambda`], and any other quote through
@@ -20,12 +21,13 @@
 //! copies at a crossing by re-tying its whole knot at the destination, each held value deep-copied
 //! and each edge carried verbatim, priced by the knot's memoized weight under the ordinary verdict.
 //! A function compares by its shape's address — one per `FN` written, so a copy keeps it — and its
-//! captures, a quote by its code and bindings, and a module or a barrier is
+//! captures, a builtin by its record's address, a quote by its code and bindings, and a module or a
+//! barrier is
 //! [`Incomparable`](crate::values::Incomparable).
 //!
 //! **What sits where.** This file is the vocabulary every node kind shares: the member, the node,
 //! the value and activation spelled at it, and the [`Supplied`] and [`Untieable`] a birth answers
-//! with. [`function`], [`code`] and [`module`] each own one node kind — its payload, its doors and,
+//! with. [`function`], [`builtin`], [`code`] and [`module`] each own one node kind — its payload, its doors and,
 //! for a module, everything that reads one by name — and none names another; [`data`] owns
 //! the data node; [`tie`](crate::knot::tie()) births a component over them, and `copy` re-ties a whole knot.
 //! A submodule reaches this vocabulary through the facade, never a sibling.
@@ -37,6 +39,7 @@
 //!
 //! See [knot/README.md](knot/README.md).
 
+pub mod builtin;
 pub mod code;
 mod copy;
 mod data;
@@ -47,7 +50,8 @@ mod tie;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use code::{Code, quote, using};
+pub use builtin::{BuiltinFunction, builtin};
+pub use code::{Code, UsingRefused, quote, using};
 pub use function::{Function, lambda};
 pub use module::{Coerced, Module};
 pub use tie::tie;
@@ -69,6 +73,8 @@ use crate::values::{
 #[derive(Clone, Copy)]
 pub enum Node<'graph, 'cell> {
     Function(Function<'graph, 'cell, Knotted<'graph, 'cell>>),
+    /// A builtin overload, its record in program storage.
+    Builtin(&'graph BuiltinFunction),
     /// A data node: a member's right-hand side, or an anonymous constructor below one on the path to
     /// a sibling mention.
     Data {
@@ -118,6 +124,14 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
         }
     }
 
+    /// The builtin overload this member is, if it is a builtin's node.
+    pub fn builtin(self) -> Option<&'graph BuiltinFunction> {
+        match self.node() {
+            Node::Builtin(builtin) => Some(builtin),
+            _ => None,
+        }
+    }
+
     /// The module this member is, if it is a module's node.
     pub fn module(self) -> Option<&'cell Module<'graph, 'cell>> {
         match self.node() {
@@ -156,6 +170,7 @@ impl values::Knotted for Knotted<'_, '_> {
     fn ktype(&self) -> KType {
         match self.node() {
             Node::Function(function) => function.ktype(),
+            Node::Builtin(builtin) => builtin.ktype(),
             Node::Data { circular, .. } => circular.ktype(),
             Node::Module(module) => module.ktype(),
             Node::Coerced(coerced) => coerced.ktype(),
@@ -166,6 +181,7 @@ impl values::Knotted for Knotted<'_, '_> {
     fn weight(&self) -> Weight {
         match self.node() {
             Node::Function(function) => function.knot_weight(),
+            Node::Builtin(_) => BuiltinFunction::knot_weight(),
             Node::Data { knot_weight, .. } => *knot_weight,
             Node::Module(module) => module.knot_weight(),
             Node::Coerced(coerced) => coerced.knot_weight(),
@@ -187,6 +203,11 @@ impl values::Knotted for Knotted<'_, '_> {
                 identity: std::ptr::from_ref(function.shape()).addr(),
                 closure: function.closure().links(),
             },
+            // One record per overload, so its address is the builtin's identity.
+            Node::Builtin(builtin) => Resolved::Function {
+                identity: std::ptr::from_ref(*builtin).addr(),
+                closure: &[],
+            },
             Node::Data { circular, .. } => Resolved::Circular(*circular),
             Node::Module(_) => Resolved::Module,
             Node::Coerced(_) => Resolved::Barrier,
@@ -207,6 +228,19 @@ fn field<'graph, 'cell>(
         Value::Record(record) => record.field(name.symbol()).copied(),
         Value::Knotted(member) => module::layout::member(member, name, types, scratch),
         _ => None,
+    }
+}
+
+/// The registrations `source` holds, each a function a keyworded use at its registered shape's key
+/// may select: a module's registration run, and none for any other value.
+fn registrations<'graph, 'cell>(
+    source: KValue<'graph, 'cell>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> &'cell [KValue<'graph, 'cell>] {
+    match source {
+        Value::Knotted(member) => module::layout::registrations(member, types, scratch),
+        _ => &[],
     }
 }
 

@@ -358,6 +358,57 @@ pub(crate) fn callable<'graph, 'cell>(
         .unwrap_or_else(|| panic!("`{name}` is bound to a callable"))
 }
 
+/// The callable bound at the registration the body `name` births is born for too — a combined
+/// statement's bucket half, a `UNARY OP`'s keyword-first one.
+pub(crate) fn registered<'graph, 'cell>(
+    fixture: &Fixture<'_, 'graph>,
+    activation: &KActivation<'graph, 'cell>,
+    name: &str,
+) -> Knotted<'graph, 'cell> {
+    let shape = activation.shape();
+    let (slot, _) = shape.slot(fixture.name(name)).expect("a declared binder");
+    let body = shape.births(slot).expect("the binder births a body");
+    let registration = shape
+        .registrations()
+        .iter()
+        .find(|registration| {
+            registration.which != crate::scope::Which::Binary
+                && shape
+                    .births(registration.slot)
+                    .is_some_and(|born| std::ptr::eq(born, body))
+        })
+        .expect("the body is registered");
+    activation
+        .read(crate::scope::Coordinate::Activation {
+            hops: 0,
+            target: crate::scope::Target::Local(registration.slot),
+        })
+        .as_callable()
+        .expect("a registration is bound to a callable")
+}
+
+/// The callable bound at the registration under the key `text` spells, `_` for each slot.
+pub(crate) fn at_key<'graph, 'cell>(
+    fixture: &Fixture<'_, 'graph>,
+    activation: &KActivation<'graph, 'cell>,
+    text: &str,
+) -> Knotted<'graph, 'cell> {
+    let key = fixture.symbols.key(text).expect("a key");
+    let registration = activation
+        .shape()
+        .registrations()
+        .iter()
+        .find(|registration| registration.key == key)
+        .expect("a registration at the key");
+    activation
+        .read(crate::scope::Coordinate::Activation {
+            hops: 0,
+            target: crate::scope::Target::Local(registration.slot),
+        })
+        .as_callable()
+        .expect("a registration is bound to a callable")
+}
+
 /// The data node `value` is, which must be one.
 pub(crate) fn circular<'graph, 'cell>(
     value: KValue<'graph, 'cell>,

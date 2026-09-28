@@ -7,7 +7,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KKind, KType, NodeSchema, TypeNode, is_subtype_of};
 use crate::values::construction;
 
-use super::super::{Elaboration, builtin_result};
+use super::super::{Elaboration, builtin_error, builtin_result};
 use super::{Program, brought, declared};
 
 const RESULT: &str = "UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}";
@@ -101,6 +101,16 @@ fn the_builtin_result_is_the_declared_one() {
         assert_eq!(
             builtin_result(program.types, program.symbols, program.scratch),
             program.bound("Result")
+        );
+    });
+}
+
+#[test]
+fn the_builtin_error_is_the_declared_one() {
+    brought("NEWTYPE Error = :{message :Str}", |program| {
+        assert_eq!(
+            builtin_error(program.types, program.symbols, program.scratch),
+            program.bound("Error")
         );
     });
 }

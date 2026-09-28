@@ -84,8 +84,13 @@ pub fn tie<'graph, 'cell, 'x>(
     let plan = KnotPlan::new(nodes.len() as u32);
     let mut bodies = BumpVec::with_capacity_in(nodes.len(), scratch);
     bodies.extend(nodes.iter().enumerate().map(|(index, node)| match node {
-        None => shape.births(component.members[index]),
-        Some(node) => node.function(),
+        None => {
+            let slot = component.members[index];
+            shape
+                .births(slot)
+                .map(|body| (body, shape.registration(slot)))
+        }
+        Some(node) => node.function().map(|body| (body, None)),
     }));
     let functions = function::stage(&plan, activation, &bodies, types, scratch)?;
     let mut codes = BumpVec::with_capacity_in(nodes.len(), scratch);
