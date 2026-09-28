@@ -41,13 +41,21 @@ place it is spelled:
 Three readers agree on it, and none consults the others:
 
 - a **body shape** lays its value slots out first and its type slots after, each
-  channel symbol-sorted ([two channels](../../scope/README.md#two-channels)), so a
+  channel symbol-sorted ([three channels](../../scope/README.md#three-channels)), so a
   body-born module's member run is its finished activation's slots read out in
   slot order, with no remap;
 - a **signature**'s member tables are symbol-sorted by name, so a view's member
   run is built by walking them;
 - a **`USING` block**'s parameters are the surfaced names, which the shape
   builder sorts the same way.
+
+A body-born module's run then goes on past its named members with each
+registration its body declares, in the shape's registration order — the
+function born for a bare `EXPR` or `OP` statement, or for a combined one's
+bucket beside its named value slot. A registration names no member, so no
+signature table indexes it: the self-signature carries each one's registered
+shape in its keyworded channel, and a `USING` filling a keyworded hole reads
+them off the run's tail (`layout::registrations`).
 
 So member `k` of a channel is slot `k` of that channel everywhere, and `m.f` is
 an index rather than a search. The sort is by interned symbol — a content digest
@@ -200,8 +208,6 @@ suite, since they are facts about the shape.
 - [Module programs](../../../roadmap/rewrite/modules.md) — evaluating `:|`, `:!`
   and a member read as expressions, and calling a function member through its
   barrier.
-- [Dispatch](../../../roadmap/rewrite/dispatch.md) — the keyworded channel of a
-  module's signature, empty until a bodyless definition has a slot.
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
   data member coerced through a barrier, `WITH` over a signature in a type
   expression, and a dict's keys crossing a barrier unsealed.

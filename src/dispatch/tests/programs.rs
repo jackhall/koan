@@ -144,6 +144,25 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
 }
 
 #[test]
+fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
+    assert_eq!(
+        run("LET f = (FN :{x :Number} -> Str = #(\"ran\"))\nPRINT (f {x = \"s\"})"),
+        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}"
+    );
+    let pair = "LET f = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Str = #((PRINT Elt) (\"ran\")))\n";
+    assert_eq!(
+        run(&format!("{pair}PRINT (f {{x = 1, y = 2}})")),
+        "Number\nran"
+    );
+    assert_eq!(
+        run(&format!("{pair}PRINT (f {{x = 1, y = 2, Elt = Str}})")),
+        "error: arguments :{x :Number y :Number Elt :ProperType} do not name the parameters of \
+         :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str)",
+        "a type parameter is solved, never written"
+    );
+}
+
+#[test]
 fn a_type_s_field_is_the_type_its_record_declares() {
     let source = "NEWTYPE Point = :{x :Number, y :Str}\n\
                   NEWTYPE Boxed = Point\n\

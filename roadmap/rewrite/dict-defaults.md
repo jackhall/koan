@@ -35,6 +35,5 @@ lowering.
 
 **Requires:**
 
-- [Dispatch](dispatch.md) — a dict lookup, which is what observes a default.
 
 **Unblocks:** none — a leaf.

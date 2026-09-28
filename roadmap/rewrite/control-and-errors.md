@@ -2,7 +2,7 @@
 
 Branching on a value, and catching an error.
 
-**Problem.** [Dispatch](dispatch.md) runs a program's values, names, functions
+**Problem.** [Dispatch](../../src/dispatch/README.md) runs a program's values, names, functions
 and keyworded calls, and an error there is a tagged value of the builtin
 `Error` over `{message :Str}` that ends the program when nothing catches it —
 and nothing can. `MATCH`, `MATCH … OVER`, `TRY` and `CATCH` each have a
@@ -68,8 +68,8 @@ and `CATCH`'s declared return is `Any`.
 
 **Requires:**
 
-- [Dispatch](dispatch.md) — the evaluator, block evaluation and error values.
 
 **Unblocks:**
 
+- [Call traces](call-traces.md) — a caught error's record is where its frames are read.
 - [Retire the old runtime](retire-the-old-runtime.md) — the control surface `machine` still owns.

@@ -21,7 +21,9 @@ use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda, quote};
 use crate::memory::{Active, Bump, BumpAllocator, Writer};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
-use crate::program::{Contract, Evaluated, KBirth, KBundle, KState, Language, Program, call, eval};
+use crate::program::{
+    CallKind, Contract, Evaluated, KBirth, KBundle, KState, Language, Program, call, eval,
+};
 use crate::scheduler::{
     Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
@@ -389,7 +391,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             };
             let writer = step.writer();
             let arguments = Record::new(writer, &[(parameter, argument)], types, &scratch);
-            let request = call(program, callee, Value::Record(arguments), Use::Forwards);
+            let request = call(
+                program,
+                callee,
+                Value::Record(arguments),
+                CallKind::ByName,
+                Use::Forwards,
+            );
             if let Some(contract) = contract
                 && keeps(program, callee, contract)
             {

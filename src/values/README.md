@@ -457,5 +457,9 @@ pair with are `cellgraph`'s own slate.
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,
   the lazy transformations that run koan code.
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — a builtin reading a sealed
-  argument through a mint lying under the slot type it was reached through.
+- [Recursion over runtime data](../../roadmap/rewrite/recursion-over-runtime-data.md)
+  — rendering, equality and the crossing's deep copy walking a value deeper
+  than the stack.
+- [Module programs](../../roadmap/rewrite/modules.md) — a builtin native
+  reading a sealed builtin value its overload admitted through the seal, once
+  a view's members reach a program.

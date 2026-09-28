@@ -22,6 +22,8 @@
 //! `crate::memory`, `crate::parse`, `crate::program`, `crate::scheduler`, `crate::scope`,
 //! `crate::symbols`, `crate::type_lattice` and `crate::values`; `tests::boundary` reads the source
 //! to hold it there.
+//!
+//! See [dispatch/README.md](dispatch/README.md).
 
 mod builtins;
 mod check;

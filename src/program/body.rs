@@ -42,7 +42,7 @@ use crate::type_lattice::{
 use crate::values::{Link, List, TypeValue, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
-use super::record::{Contract, Evaluated, Program, rendered};
+use super::record::{CallKind, Contract, Evaluated, Program, rendered};
 
 /// The body runner's state between units: which body it is performing, how far it got, and where
 /// it parked.
@@ -136,7 +136,8 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             program,
             callee,
             arguments,
-        }) => match frame(&step, program, callee, arguments) {
+            kind,
+        }) => match frame(&step, program, callee, arguments, kind) {
             Ok((activation, contract)) => {
                 Runner::at(program, activation, Level::Frame, Some(contract))
             }
@@ -175,10 +176,12 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
 /// What an evaluator asks for to call `callee` over `arguments`, a record of its parameters by
 /// name — and, for a quantified callee a keyworded call selected, of its type parameters, each a
 /// type value: a frame running the callee's body, placed by the bit its return type derives.
+/// `kind` says whether the arguments were admitted before the call or are checked by the frame.
 pub fn call<'graph, 'here>(
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
+    kind: CallKind,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
     let returns =
@@ -198,6 +201,7 @@ pub fn call<'graph, 'here>(
                 program,
                 callee,
                 arguments,
+                kind,
             },
         },
     }
@@ -416,15 +420,17 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 }
 
 /// A frame's activation, laid down for `callee` with every value parameter bound from `arguments`
-/// and every type parameter bound from `arguments` when it carries them, else to what the callee's
-/// `FOR ALL` group solves to — beside the contract the frame ends under. The error value's message
-/// when the callee is no function, the arguments do not name its parameters exactly, or its group
-/// has no solution.
+/// and every type parameter bound to its solution — the one a keyworded call's selection carried in
+/// `arguments`, or, for a call by name, the one solved here while each argument is admitted against
+/// its parameter's declared type — beside the contract the frame ends under. The error value's
+/// message when the callee is no function, the arguments do not name its parameters exactly, an
+/// argument does not fit its parameter, or the group has no solution.
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
+    kind: CallKind,
 ) -> Result<(&'here KActivation<'graph, 'here>, Contract), &'here str> {
     let types = program.types();
     let writer = step.writer();
@@ -445,6 +451,16 @@ fn frame<'graph, 'here>(
                 "arguments {} do not name the parameters of {}",
                 name(arguments.ktype()),
                 name(function.ktype())
+            ),
+        )
+    };
+    let unfit = || {
+        rendered(
+            writer,
+            format_args!(
+                "{} cannot be called with {}",
+                name(function.ktype()),
+                name(arguments.ktype())
             ),
         )
     };
@@ -479,23 +495,24 @@ fn frame<'graph, 'here>(
             .and_then(|value| value.as_type())
             .map(|value| value.handle())
     };
-    // The group's solution in canonical order: carried by the arguments when a keyworded call
-    // solved it, else solved here — every value parameter's declared type against the argument's
-    // carried type, under one collector.
+    // The group's solution in canonical order. A keyworded call's selection carried it by name; a
+    // call by name's is solved here, every value parameter's declared type against its argument's
+    // carried type under one collector — which, for an unquantified callee, is the arguments'
+    // admission alone.
     let mut solution: Option<BumpVec<'_, KType>> = None;
-    if !quantifiers.is_empty() {
-        let mut from_arguments = BumpVec::with_capacity_in(quantifiers.len(), scratch);
-        from_arguments.resize(quantifiers.len(), None);
-        for (name, canonical) in function.quantifier_map() {
-            if let Canonical::At(canonical) = canonical {
-                from_arguments[*canonical] = carried(*name);
-            }
-        }
-        let solved = if from_arguments.iter().all(Option::is_some) {
+    match kind {
+        CallKind::Keyworded if !quantifiers.is_empty() => {
             let mut solved = BumpVec::with_capacity_in(quantifiers.len(), scratch);
-            solved.extend(from_arguments.iter().flatten().copied());
-            solved
-        } else {
+            solved.resize(quantifiers.len(), KType::NEVER);
+            for (name, canonical) in function.quantifier_map() {
+                if let Canonical::At(canonical) = canonical {
+                    solved[*canonical] = carried(*name).ok_or_else(misnamed)?;
+                }
+            }
+            solution = Some(solved);
+        }
+        CallKind::Keyworded => {}
+        CallKind::ByName => {
             let mut collector = Collector::new(scratch, quantifiers.len());
             for (parameter, declared) in params.iter() {
                 let argument = record.field(parameter.symbol()).ok_or_else(misnamed)?;
@@ -507,11 +524,12 @@ fn frame<'graph, 'here>(
                     Variance::Co,
                     &mut collector,
                 )
-                .map_err(|_| unsolved())?;
+                .map_err(|_| unfit())?;
             }
-            collector.solve(types).map_err(|_| unsolved())?
-        };
-        solution = Some(solved);
+            if !quantifiers.is_empty() {
+                solution = Some(collector.solve(types).map_err(|_| unsolved())?);
+            }
+        }
     }
     let activation = resident(
         writer,
@@ -537,9 +555,10 @@ fn frame<'graph, 'here>(
             // A type parameter is bound by **name**: the shape's type channel reaches here
             // symbol-sorted, not in the order the `FOR ALL` group was written, so a positional
             // read would hand one variable another's solution. A name the map dropped takes its
-            // bound, since there is nothing to solve for.
+            // bound, since there is nothing to solve for. Only a keyworded call's arguments carry
+            // type parameters, so a call by name's that names one does not name its parameters.
             BinderSymbol::Type(name) => {
-                if carried(name).is_some() {
+                if kind == CallKind::Keyworded && carried(name).is_some() {
                     parameters += 1;
                 }
                 let solved = match function.canonical_quantifier(name) {

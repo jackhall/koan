@@ -27,7 +27,7 @@ use crate::memory::{Bump, BumpVec};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::Role;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{Evaluated, KBirth, KBundle, KState, Program, block, call as call_by_name};
+use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, block};
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
@@ -337,7 +337,13 @@ fn call<'graph, 'here>(
         } => {
             let arguments =
                 select::arguments(types, writer, registered, &operands, solution, &scratch);
-            let request = call_by_name(program, callee, arguments, Use::Forwards);
+            let request = crate::program::call(
+                program,
+                callee,
+                arguments,
+                CallKind::Keyworded,
+                Use::Forwards,
+            );
             if let Some(contract) = at.contract
                 && select::keeps(types, registered.shape, solution, contract)
             {
@@ -423,7 +429,7 @@ fn apply<'graph, 'here>(
         };
         return finish(step, at, value);
     }
-    let request = call_by_name(program, head, argument, Use::Forwards);
+    let request = crate::program::call(program, head, argument, CallKind::ByName, Use::Forwards);
     if let Some(contract) = at.contract
         && returns_within(program, head, contract.returns)
     {

@@ -76,7 +76,6 @@ elements a consumer takes lazily.
 
 **Requires:**
 
-- [Dispatch](dispatch.md) — a demand for an element is an ordinary dispatch.
 
 **Unblocks:**
 

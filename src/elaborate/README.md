@@ -106,14 +106,19 @@ function type, so a call through any of them is by name:
 The operator parameter names are the ones the shape builder binds in an
 operator's body, read from the one table both sides share.
 
-A definition that registers — every `EXPR` and operator one — also hands back
-its **registered shape**: the expression shape its bucket holds, keyword and
-slot in the head's written order, each slot at the type its function type gives
-that parameter. It is built from the function type rather than re-read from the
+The function born for a definition's registration — every `EXPR` and
+operator one — also carries its **registered shape**: the expression shape its
+bucket holds, keyword and slot in the head's written order, each slot at the type
+its function type gives that parameter, ranked by the classes the registration
+carries ([keyworded uses](../scope/README.md#keyworded-uses)). It is built from the function type rather than re-read from the
 head, so the two cannot disagree, and it is exactly the shape `:(EXPR …)` spells
 for the same head: the shape door renumbers the group by first occurrence in
-written order, where the function type numbers it by its sorted parameters. A
-`FN` registers nothing.
+written order, where the function type numbers it by its sorted parameters.
+Beside it rides the **parameter binding** a keyworded call builds its argument
+record by: slot `i` to the head's `i`-th name, `left` and `right` for a binary
+operator, or every slot packed into `operands` for a unary one. A `FN`
+registers nothing, and neither does a combined statement's name, which is born
+over the same body without the registration.
 
 A function type binds its group in canonical form, which may renumber or drop a
 variable, so `callable_type` hands back a **quantifier map** beside the handle:
@@ -124,11 +129,17 @@ and the registered shape with the function, and a call reads each type
 parameter's solution through the map.
 
 **The name is the key, not the position.** A callee's type-parameter slots reach
-its frame in the [type channel's](../scope/README.md#two-channels) own symbol order, not
+its frame in the [type channel's](../scope/README.md#three-channels) own symbol order, not
 the order the group was written, so nothing positional survives the trip; and the
 interned type's `quantifiers` cannot stand in for the declaration's names,
 because alpha-variants intern to one node and it carries whichever spelling
 interned first.
+
+The reader is a trait, [`Reads`](reads.rs): an activation, its view, or
+`BuiltinsOnly`, which answers only builtin coordinates. Over the last,
+`static_callable_type` types a registration before anything is born, where its
+signature names builtins alone — which is all
+[dispatch's overlap check](../dispatch/README.md#the-overlap-check) reads.
 
 A module body has no callable type here, and neither has a `USING` body: its
 type is its signature, below.
@@ -147,9 +158,10 @@ name it declares. Its **operator channel** carries the
 [groups its body's shape holds](../scope/README.md#operator-groups) — a `GROUP`
 body's own group, and nothing for a `MODULE` — so how a module's operators chain
 is part of what it is, and a signature stating that chaining is one it satisfies.
-Its keyworded channel is empty until
-[dispatch](../../roadmap/rewrite/dispatch.md) gives a bucket-only definition —
-a bare `EXPR` or `OP` statement — a slot; a bodiless bucket declaration,
+Its **keyworded channel** carries the registered shape of each registration
+its body declares — a bare `EXPR` or `OP` statement's, and a combined one's
+beside its named value slot — read off the functions born for them, which the
+caller hands in, since elaborate names no knot; a bodiless bucket declaration,
 `EXPR #(MOVE 2 TO 1)`, only ranks its bucket and declares no member.
 
 Every slot is bound: the caller runs the body to completion and only then
@@ -326,6 +338,8 @@ never a panic and never a guess:
   does not declare, or off an owner with neither — `Number.z`, or a ring of
   newtypes with no record under it;
 - `Bound` — a bound that names a type variable or is `Never`;
+- `RankingDisagrees` — a meet of two signatures whose keyworded members at one
+  key rank their slots otherwise;
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
   parameters its constructor declares, a bound on a higher-kinded `TYPE` member
@@ -389,9 +403,9 @@ interns as the union of its three members.
 
 ## Open work
 
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
-  bucket-only `EXPR` or `OP` definition fills, which a self-signature leaves
-  empty.
+- [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
+  — a type parameter canonical form drops, which a call binds to its bound
+  rather than to what the arguments solve it to.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates;
   a family's variance, which no declaration states; and a parameterized union

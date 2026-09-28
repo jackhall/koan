@@ -80,6 +80,15 @@ pub struct Contract {
     pub returns: KType,
 }
 
+/// How a call reached its callee. A keyworded call's arguments were admitted by the selection that
+/// chose the callee, which also put each type parameter's solution in the record by name. A call by
+/// name's were written by the caller, so the frame admits them and solves the group itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallKind {
+    Keyworded,
+    ByName,
+}
+
 /// What the body runner hands an evaluator: a whole statement, or one part of one.
 #[derive(Clone, Copy, Debug)]
 pub enum Evaluated<'graph> {

@@ -267,8 +267,16 @@ Three readers hang off the table:
   fact, not an `ExpressionShape` one: a user-defined bucket declares no roles.
 - **Binder discovery** ([builtin_shapes/binder.rs](builtin_shapes/binder.rs)) —
   pure structural readers plus the facts that ride an entry. A shape is a binder
-  *because* its entry carries them, and nothing else declares it. What a binder
-  then *does* is the machine's.
+  *because* its entry carries them, and nothing else declares it. The same
+  readers take a definition's head apart into its bucket key, reading each
+  slot's label as a name, `_`, or an integer rank — which only a **bucket
+  declaration** writes: `EXPR #(MOVE 2 TO 1)`, an entry of its own whose head
+  spells a rank or `_` per slot, typed nothing and returning nothing, which
+  binds no name and ranks its key
+  ([keyworded uses](../scope/README.md#keyworded-uses)). A `NEEDING` list's
+  entry reads as a name, or — a one-node quote of keywords and a `_` per slot,
+  `#[(LOG _)]` — as a bucket key. What a binder then *does* is the layers
+  above's.
 - **Slot layout** ([builtin_shapes/layout.rs](builtin_shapes/layout.rs)) — a body's
   value binders as a symbol-sorted run, computed once where the shape is lexically
   fixed and read by every activation of that body, so an activation allocates one

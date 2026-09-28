@@ -337,7 +337,7 @@ fn a_capitalized_name_holds_only_a_type() {
 }
 
 #[test]
-fn a_call_whose_argument_cannot_solve_the_group_is_refused() {
+fn a_call_whose_argument_does_not_fit_its_parameter_is_refused() {
     // `Held` is reached only under a list, so a bare number admits nowhere and the walk refuses
     // before the frame binds anything.
     let mut substrate = loaded(
@@ -347,14 +347,14 @@ fn a_call_whose_argument_cannot_solve_the_group_is_refused() {
     assert_eq!(
         substrate.with(|running| running.run()),
         Ok(Outcome::Uncaught),
-        "a group the argument cannot solve raises an error value"
+        "an argument its parameter does not admit raises an error value"
     );
     let [error] = &written()[..] else {
         panic!("one error written");
     };
     assert!(
         error.starts_with("error: :(FN FOR ALL #[Held]")
-            && error.ends_with("cannot be solved against :{x :Number}"),
+            && error.ends_with("cannot be called with :{x :Number}"),
         "{error}"
     );
 }

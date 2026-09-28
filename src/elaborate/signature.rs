@@ -4,7 +4,7 @@
 //! what its bucket holds: the expression shape built from that function type over the
 //! registration's key and ranked by its classes, and how a keyworded call binds the shape's slots to
 //! the function's parameters. A call is by name through the function type; only a bucket reads the
-//! shape. See [dispatch](../../roadmap/rewrite/dispatch.md).
+//! shape. See [dispatch](../dispatch/README.md).
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::BuiltinShapeId;

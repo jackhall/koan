@@ -18,6 +18,8 @@ beside it:
 
 - [`function.rs`](function.rs) — a function node, the staging a tie does for a
   function node, and [the lambda door](#a-lambda).
+- [`builtin.rs`](builtin.rs) — a [builtin overload's](#a-builtin-overload)
+  node and the door that lays one down.
 - [`code.rs`](code.rs) — a code node, the staging a tie does for one, and
   [the quote and `USING` doors](#a-quote).
 - [`data.rs`](data.rs) — a data node: staging, the memo derivation below, and
@@ -40,12 +42,13 @@ activation. This module closes it:
 - [`Knotted`](../knot.rs) is one member of a knot — the `(knot, index)`
   pair, sixteen bytes — so a value holding one stays a twenty-four-byte word.
   Its equality is node identity.
-- The knot's payload is a `Node`, of five arms. A `Function` node holds the
+- The knot's payload is a `Node`, of six arms. A `Function` node holds the
   function's memoized type handle, the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and its
   **typing record**: its quantifier map and its registered shape. The
-  **registered shape** is the expression shape a function born for an `EXPR` or
-  operator definition puts in its bucket, which the
+  **registered shape** is the expression shape a function born for a
+  definition's registration puts in its bucket — beside how a keyworded call
+  binds that shape's slots to the function's parameters — which the
   [elaborator builds](../elaborate/README.md#a-callables-type) from the
   function's type over its head. The **quantifier map**, where the function's
   type binds a `FOR ALL` group, pairs each
@@ -73,9 +76,10 @@ activation. This module closes it:
   quote's body as written, the code shape the program built for it where it
   loads, its carried type, its **bound** run — each `$` name's binding — and its
   **supplied** run — each hole a `USING` filled — both sorted by name, and the
-  same knot weight. `values::Knotted::resolve` says which arm a node is, and
-  `Knotted::function`, `::code`, `::module` and `::coerced` each answer only for
-  their own arm.
+  same knot weight. A `Builtin` node points at a builtin overload's record in
+  program storage. `values::Knotted::resolve` says which arm a node is, and
+  `Knotted::function`, `::builtin`, `::code`, `::module` and `::coerced` each
+  answer only for their own arm.
 - `KValue`, `KValueFamily`, `KValueCarrier` and `KActivation` spell the value,
   its family, its carrier and the activation at this parameter.
 
@@ -257,6 +261,19 @@ a callable that captures a fellow member is a node of its binder's knot, which
 the tie never asks the evaluator for. A signature that does not elaborate
 refuses `Type` and writes nothing.
 
+## A builtin overload
+
+A builtin overload is a function value like any other, so a keyworded use's
+candidates are one kind of thing whichever table or scope they come from.
+[`builtin`](builtin.rs) lays one down as a one-node knot in program storage,
+beside the builtin table that holds it: a `Builtin` node pointing at a record of
+the expression shape the overload is registered at, which is the type it
+carries, and an `id` naming its native in the embedder's table. The knot layer
+never runs one — only [dispatch](../dispatch/README.md#the-builtin-table) knows
+what an `id` means. It has no captures, it equals only itself by the record's
+address, and a copy carries the node as it is, since the record outlives every
+cell.
+
 ## A quote
 
 [`quote`](code.rs) births a quote value the evaluator meets as a one-node knot,
@@ -271,7 +288,11 @@ for. A hole or a `\` mark names no binding, so neither is held.
 
 [`using`](code.rs) is `code USING src`: a new one-node knot whose holes a field
 of `src` names — a record's field or a module's member — are filled, and whose
-other holes stay holes. A field naming no hole is ignored, and a hole an
+other holes stay holes. A keyworded hole takes the list of a module's
+registrations at its key, each key read off a function's registered shape, and
+stays open where the module has none; a module whose registrations at a hole's
+key rank their slots otherwise than the code's own candidates there is refused
+(`UsingRefused::Ranking`), since a candidate list carries one ranking. A field naming no hole is ignored, and a hole an
 earlier `USING` filled is no hole, so it is never rebound. Every binding the
 code carries that is an edge is resolved to the member it names, so the new
 knot's runs hold value words only. Code whose shape carries a refusal comes
@@ -437,9 +458,6 @@ bound run, one binding an edge to itself.
 
 ## Open work
 
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — calling a function, the
-  evaluator that births a lambda through the door where it meets one, and
-  builtins as function values with native bodies.
 - [Module programs](../../roadmap/rewrite/modules.md) — a call through a
   barrier node, which coerces its arguments inwards and its return outwards.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) —

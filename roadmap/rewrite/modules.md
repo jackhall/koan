@@ -7,8 +7,8 @@ value, its self-signature, and the doors `:|`, `:!` and `USING … SCOPE` name,
 each exercised over an activation whose members a test binds by hand. Nothing
 evaluates them. An ascription is an expression, a member read is an attribute
 expression shape, and a name a `USING` surfaces resolves to a coordinate a running reader
-has to redeem — each of which waits on [dispatch](dispatch.md) to choose the
-callable a keyworded expression runs. No module program runs on the rewritten
+has to redeem, and [dispatch](../../src/dispatch/README.md) answers each with an
+error value, since nothing evaluates it. No module program runs on the rewritten
 stack, and the old runtime's [`Module`](../../src/machine/model/values/module.rs)
 is the module surface `machine` still owns. The layer's signatures hide a type
 through an abstract `TYPE` member, and each evaluation of `:|` mints a fresh
@@ -55,6 +55,11 @@ nonce for it, so two opaque views of one module never share a carrier.
   `MODULE m :Mover = (EXPR #(MOVE p :Piece TO s :Square) -> Board = #(…))`
   satisfies a `Mover` declaring `EXPR #(MOVE 2 :Piece TO 1 :Square) -> Board`
   with no bucket declaration of its own.
+- A builtin native reads a sealed builtin value its overload admitted through
+  the seal, as [`unsealed`](../../src/values/admission.rs) reads one for
+  equality: a sealed `Number` a view's member hands to `+`, or to any native
+  whose slot admits it, computes as the number, and no member of a view over a
+  builtin type reaches a native's invariant check.
 - The old runtime's tutorial programs that use modules run on the rewritten
   stack and print the same output.
 
@@ -79,7 +84,7 @@ nonce for it, so two opaque views of one module never share a carrier.
   since a `FOR ALL` is solved against carried types when the call runs, and a
   functor quantifies itself,
   `EXPR FOR ALL #[Elt] #(MAKESET elem :(Ordered WITH {Carrier = Elt}))`, so
-  [dispatch](dispatch.md) solves `Elt` through the module's member types as it
+  [dispatch](../../src/dispatch/README.md#selection) solves `Elt` through the module's member types as it
   solves through a list's element type.
 - *Type identity — decided.* A `NEWTYPE` is the digest of its name and schema
   ([recursive groups](../../src/type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)),
@@ -114,7 +119,7 @@ nonce for it, so two opaque views of one module never share a carrier.
   and discards the solution, and a `WITH` application pins as it does anywhere.
   The one thing the annotation hands the body is each keyworded member head's
   ranking, as a bucket declaration visible to the definitions written there
-  ([dispatch](dispatch.md)), so a module meeting a signature whose members are
+  ([keyworded uses](../../src/scope/README.md#keyworded-uses)), so a module meeting a signature whose members are
   ranked does not repeat the ranking. A module without an annotation is checked
   only where it is ascribed or passed to a `:Sig` slot.
 - *Leaving a parameter unpinned — open.* Whether an application may pin some
@@ -135,7 +140,6 @@ nonce for it, so two opaque views of one module never share a carrier.
 
 **Requires:**
 
-- [Dispatch](dispatch.md) — a module program runs only under dispatch.
 
 **Unblocks:**
 

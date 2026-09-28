@@ -14,7 +14,7 @@ use crate::scope::{BodyShape, Site};
 use crate::values::copy_severed;
 
 use super::body::Runner;
-use super::record::{Contract, Evaluated, Program};
+use super::record::{CallKind, Contract, Evaluated, Program};
 
 /// The bundle a koan program's steps run over.
 pub struct KBundle;
@@ -25,11 +25,12 @@ pub enum KBirth<'graph, 'cell> {
     /// The top level's root work.
     Program { program: &'graph Program<'graph> },
     /// A call: the frame's first step lays its activation down and binds the parameters from
-    /// `arguments`, a record of them by name.
+    /// `arguments`, a record of them by name, checked as `kind` says.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
         arguments: KValue<'graph, 'cell>,
+        kind: CallKind,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
     /// carries and the names `offered`, a record of them by name, supplies.
@@ -132,10 +133,12 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     program,
                     callee,
                     arguments,
+                    kind,
                 } => KBirth::Call {
                     program,
                     callee: copy_severed::<_, KnottedFamily>(writer, view, &callee),
                     arguments: copy_severed::<_, KnottedFamily>(writer, view, &arguments),
+                    kind,
                 },
                 KBirth::Eval {
                     program,

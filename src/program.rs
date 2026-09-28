@@ -30,5 +30,5 @@ mod tests;
 
 pub use body::{CodeRefused, Runner, block, call, eval, placement_of, run};
 pub use bundle::{KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily};
-pub use record::{Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
+pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
 pub use substrate::{CellSubstrate, Running};

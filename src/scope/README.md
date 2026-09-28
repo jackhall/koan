@@ -4,9 +4,10 @@ Koan's lexical environments: the layer that answers what a name means at the
 point it is read, over the values in [`values`](../values/README.md) and the
 types in [`type_lattice`](../type_lattice/README.md).
 
-A scope resolves value names and type names. Keyword lookup — choosing a
-callable for a keyworded expression — is dispatch, the layer above, and it
-extends the resolution described here rather than replacing it.
+A scope resolves value names, type names and bucket keys. A keyworded use
+resolves where its shape is built, as a name does, to the list of callables it
+may select ([keyworded uses](#keyworded-uses)); choosing one of them per call is
+[dispatch](../dispatch/README.md), the layer above.
 
 ## Three tiers
 
@@ -328,17 +329,20 @@ A statement containing `EVAL` is ordered like any other: the code an `EVAL`
 runs reads no name of the body around it by symbol ([quotes](#quotes)), so its
 operand is its only mention.
 
-## Two channels
+## Three channels
 
 A value name and a type name are different key types, so the value channel and
 the type channel cannot collide by construction. A name whose text classifies
 as neither is rejected where the text is classified, before any scope sees it.
-The partition lives in the shape: each channel is its own run of declared
-names, sorted by symbol, and the two share one index space — value names take
-the first slots and type names the slots after. The builtin table lays its two
-channels out the same way. An activation holds one run of slots over `Value`, since a type is a
-`Value` arm, and the shape's key types keep the two channels' indices apart.
-Keyword buckets are dispatch's to resolve.
+The third channel holds **registrations**: the slot a keyworded definition's
+function is bound to under its bucket key, a binder no text names. The
+partition lives in the shape: each channel is its own run of declared binders,
+sorted by symbol, and the three share one index space — value names take the
+first slots, type names the slots after, and registrations the last. The
+builtin table lays its names out the same way, with its overloads after them,
+grouped by bucket key. An activation holds one run of slots over `Value`, since
+a type and a function are `Value` arms, and the shape's key types keep the
+channels' indices apart.
 
 **Builtins are immutable and unshadowable.** A user binding whose name collides
 with a builtin's, in either channel, is a rebind error at any depth, never a
@@ -346,6 +350,61 @@ shadow. Because no scope can hide a builtin, a builtin name resolves in the
 shape to an index into the builtin table, and a read goes through a base
 pointer to that table carried in the activation's header. An activation copies
 no part of the builtin table.
+
+## Keyworded uses
+
+A **keyworded use** — a node holding a keyword whose key is no closed
+[builtin expression shape](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
+— resolves where its shape is built to a **candidate list**
+(`BodyShape::candidates`, keyed by the node's site): the builtin overloads at
+its full bucket key, in table order, then each registration at that key visible
+to the use, the enclosing bodies innermost first. The key is the whole key, so a
+registration at `MOVE _ TO _` is no candidate for `MOVE _`, and a lone keyword
+`(NOW)` is a use of the key `NOW`. A builtin expression shape whose slots
+dispatch evaluates — `ATTR`, `FROM`, `EVAL`, `USING` — is closed and lists its
+own overloads alone, and so does the `NOT` a `!=` is rewritten to. A keyworded
+node inside a type expression is no use.
+
+**A registration is read as a name is.** Each registration in a list is a
+mention of its registration's symbol, classified eager or deferred as a name
+mention is ([visibility](#visibility)): at a statement it reads at the
+statement's position, so a definition written after it is invisible, and in a
+callable body it is deferred, so the body sees its own registration and later
+ones and captures them. Captures, components and units therefore treat a
+registration as they treat a name, and mutually recursive definitions tie as one
+knot. A use with no candidate — no builtin overload and no visible registration,
+whatever declarations it sees — is refused as an unbound name is, save in a
+quote's code, where it is a hole ([holes and marks](#holes-and-marks)), and in a
+`USING … SCOPE` body, whose operand's registrations are
+[parameters](#names-that-arrive-at-run-time).
+
+**Every keyworded definition registers.** `EXPR`, `EXPR FOR ALL`, `OP` and
+`UNARY OP` declare a registration at their statement's position, a `UNARY OP`
+two — under `⊕ _` and `_ ⊕ _`. A combined `LET f = FN EXPR …` or
+`LET plus = OP …` declares its name and its registration in one component over
+one body, so both are born together. A definition at the key of a closed
+builtin expression shape, or at a key that spells no keyword anywhere, is
+refused.
+
+**One ranking per key.** A bucket declaration, `EXPR #(MOVE 2 TO 1)`, binds
+nothing: it gives its key a ranking, each slot's
+[priority class](../type_lattice/README.md#priority-classes). A definition
+takes the ranking of the declaration visible where it is written — visible as a
+name read at its statement is — and with none, its slots' written order; an
+operator takes its chaining's, fold left and pairwise ranking `left` first and
+fold right `right` first. A definition's head carries no integer. Two
+declarations of one ranking are one, so libraries that declare a key alike
+compose; two rankings of one key that meet are refused wherever the builder sees
+both — a declaration or a definition seeing another, or builtin overloads at the
+key ranked otherwise — so every candidate list carries one ranking. An inner
+declaration never shadows an outer definition's ranking: a use sees both scopes.
+Nothing indexes rankings by key across a program, so two libraries that never
+meet never conflict.
+
+**A binder is its statement's own.** A binder or bucket declaration anywhere
+but at its statement's root — `PRINT (LET doubled = 42)`,
+`LET a = (LET b = 1)` — is refused; a parenthesized statement, `(LET a = 1)`,
+is still its statement's own.
 
 ## Placeholders and writes
 
@@ -789,6 +848,23 @@ program only for a `$` name nothing binds where the quote is written:
   has a reading (see [Open work](#open-work)); an arm set's `_` is its default
   arm;
 
+six from [keyworded uses](#keyworded-uses), each naming the key it is about
+where it has one:
+
+- a **closed bucket** — a definition or bucket declaration at the key of a
+  closed builtin expression shape;
+- **no keyword** — a definition whose key spells no keyword;
+- a **ranked definition** — a definition head writing an integer in a slot;
+- a **nested binder** — a binder or bucket declaration that is not its
+  statement's own expression;
+- a **ranking disagreement** — two rankings of one key that meet;
+- **no candidate** — a keyworded use with no builtin overload and no visible
+  registration;
+
+one [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
+built and its types can be read — an **overlap**, a user overload taking
+operands a builtin overload at its key already takes;
+
 and six more from [operator groups](#operator-groups), each naming the symbol it
 is about:
 
@@ -857,7 +933,6 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/rewrite/code-splicing.md) — how several parts

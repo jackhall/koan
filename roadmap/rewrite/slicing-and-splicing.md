@@ -78,7 +78,7 @@ elements cost O(kn).
   ([code splicing](code-splicing.md)). A spread into a list literal, or into the arguments of a function called by name, needs nothing
   more. A spread into a keyworded use leaves its bucket key's slot count
   unknown where the use is written, and dispatch keys on the full bucket key
-  ([dispatch](dispatch.md)): either such a spread is refused, or the use is
+  ([keyworded uses](../../src/scope/README.md#keyworded-uses)): either such a spread is refused, or the use is
   dispatched once the count is known.
 - *A list pattern with a rest — open.* `MATCH` has no pattern for a list's
   shape. A `[]` arm and an `[x, ..rest]` arm, which together cover every list,
@@ -99,7 +99,6 @@ Splicing into code is [code splicing](code-splicing.md)'s.
 
 **Requires:**
 
-- [Dispatch](dispatch.md) — slicing and splicing are builtins, and a view is observable only through them.
 
 **Unblocks:**
 
