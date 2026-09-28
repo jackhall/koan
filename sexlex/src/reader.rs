@@ -7,9 +7,12 @@
 //! A closer is owned by the innermost bracketed group; a layout group never owns one, so a `)`
 //! arriving inside a layout line ends that line (and every layout group above it up to the paren)
 //! and is left for the paren to consume.
+//!
+//! The descent recurses once per open group, so [`Reader::open`] refuses a group past
+//! [`MAX_DEPTH`] rather than let deep source overflow the stack.
 
 use crate::lex::{Token, lex};
-use crate::{Error, ErrorKind, Item, Kind, Node, Span};
+use crate::{Error, ErrorKind, Item, Kind, MAX_DEPTH, Node, Span};
 
 pub(crate) fn read(source: &str) -> Result<Vec<Item<'_>>, Error> {
     let mut reader = Reader {
@@ -17,6 +20,7 @@ pub(crate) fn read(source: &str) -> Result<Vec<Item<'_>>, Error> {
         pos: 0,
         layout_indent: 0,
         flat: 0,
+        depth: 0,
     };
     let mut top = Vec::new();
     while let Some(token) = reader.peek() {
@@ -50,6 +54,9 @@ struct Reader<'s> {
     layout_indent: usize,
     /// Depth of enclosing `[` / `{` groups. Above zero, line breaks are ignored.
     flat: usize,
+    /// Groups of every kind open around the next item. An error ends the whole read, so only a
+    /// group that closes gives its level back.
+    depth: usize,
 }
 
 impl<'s> Reader<'s> {
@@ -65,6 +72,18 @@ impl<'s> Reader<'s> {
         let token = self.tokens[self.pos];
         self.pos += 1;
         token
+    }
+
+    /// Enter a group opened at `span`, refusing it past [`MAX_DEPTH`].
+    fn open(&mut self, span: Span) -> Result<(), Error> {
+        if self.depth == MAX_DEPTH {
+            return Err(Error {
+                kind: ErrorKind::TooDeep { limit: MAX_DEPTH },
+                span,
+            });
+        }
+        self.depth += 1;
+        Ok(())
     }
 
     /// Consume a `Line` in indentation-governed position: tabs and odd widths are errors.
@@ -171,6 +190,9 @@ impl<'s> Reader<'s> {
 
     /// An indentation-governed line: its inline run, then every deeper line as a child.
     fn layout_line(&mut self) -> Result<Item<'s>, Error> {
+        if let Some(Token::Line { span, .. }) = self.peek() {
+            self.open(span)?;
+        }
         let indent = self.take_layout_line()?;
         self.layout_indent = indent;
         let mut items = self.inline_items()?;
@@ -183,6 +205,7 @@ impl<'s> Reader<'s> {
             start: first.span.start,
             end: last.span.end,
         };
+        self.depth -= 1;
         Ok(Item {
             node: Node::Group {
                 kind: Kind::Layout,
@@ -200,6 +223,7 @@ impl<'s> Reader<'s> {
         else {
             unreachable!("caller peeked an Open token")
         };
+        self.open(open)?;
         let opener_indent = self.layout_indent;
         let mut items = Vec::new();
 
@@ -275,6 +299,7 @@ impl<'s> Reader<'s> {
             self.flat -= 1;
             close
         };
+        self.depth -= 1;
 
         Ok(Item {
             node: Node::Group { kind, items },

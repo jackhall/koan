@@ -1,6 +1,7 @@
 //! The operator-run rewrite: what each of the four chainings builds, where a nested operator run is
 //! reached, which bodies a declared group reaches through `USING` and `EVAL`, and which operator
-//! runs the builder refuses rather than chains.
+//! runs the builder refuses rather than chains, and that no chaining deepens a statement past the
+//! depth its parse counted.
 
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BodyShape, Builtins, ShapeError, ShapeKind, Site};
@@ -661,5 +662,51 @@ fn an_operator_run_in_a_bound_is_chained() {
     );
     shaped("LET Mixed = :(Number | Str & Bool)", |_, shape| {
         assert!(matches!(shape.err(), Some(ShapeError::MixedGroups { .. })));
+    });
+}
+
+/// The node a part holds, whether parenthesized or a statement of a body.
+fn held<'graph>(node: &KExpression<'graph>, index: usize) -> &'graph KExpression<'graph> {
+    expression(&node.parts[index].value)
+}
+
+#[test]
+fn a_rewritten_statement_is_never_deeper_than_the_parse_counted() {
+    // Fold left, unary and pairwise at the top level: the pairwise run hoists its parenthesized
+    // operands, spells `!=` pairs, and is a statement of its own, so it takes the block's wrapper.
+    let source = "\
+LET zz = 1
+1 + 2 - 3 + 4
+LET Either = :(Number | Str | Null | Bool)
+(zz) != (zz) < (zz) != (zz)";
+    shaped(source, |fixture, shape| {
+        let shape = shape.expect("the program shapes");
+        let parsed = fixture.parse(source);
+        for (rewritten, written) in shape.body().iter().zip(parsed.iter()) {
+            assert!(
+                rewritten.depth() <= written.depth(),
+                "{} is {} deep, parsed as {}",
+                tree(rewritten, fixture.symbols),
+                rewritten.depth(),
+                written.depth()
+            );
+        }
+        assert_eq!(shape.body()[3].parts.len(), 1, "the block's wrapper");
+    });
+    // Fold right, inside the body of the group that declares it.
+    let source = "\
+GROUP ring FOLD RIGHT = (\
+ (OP #(@) OVER Ring = #(left))\
+ (LET x = (1 @ 2 @ 3 @ 4)))";
+    shaped(source, |fixture, shape| {
+        let shape = shape.expect("the program shapes");
+        let parsed = fixture.parse(source);
+        let rewritten = &nested(shape, &shape.body()[0], 5).body()[1];
+        let written = held(held(&parsed[0], 5), 1);
+        assert_eq!(
+            tree(held(rewritten, 3), fixture.symbols),
+            "(1 @ (2 @ (3 @ 4)))"
+        );
+        assert!(rewritten.depth() <= written.depth());
     });
 }

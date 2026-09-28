@@ -25,6 +25,10 @@
 //! `a != b` is never built: wherever a pair or a bare infix run spells it, the rewrite emits
 //! `NOT (a == b)` instead, so `!=` reaches no bucket and is the opposite of `==` by construction.
 //!
+//! The rewrite never deepens a statement past the depth the parse stored for it, which counts each
+//! operator run as the nesting built here, so the parse's
+//! [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH) check bounds the rewritten syntax too.
+//!
 //! Every node the rewrite builds is recorded by its parts address beside the operator run it was
 //! built for ([`Built`]), so a group mark over the operator run covers each use it became — and no
 //! use of an operator run nested in an operand — and the `NOT` of a `!=` is known to be the
@@ -111,15 +115,20 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         let Some(rewritten) = self.rewrite_node(node)? else {
             return Ok(None);
         };
-        if self.is_block(rewritten) {
+        let rewritten = if self.is_block(rewritten) {
             let mut run: Run<'x, 'graph> = BumpVec::new_in(self.scratch);
             run.push(Spanned::at(
                 ExpressionPart::Expression(rewritten),
                 node.source.span,
             ));
-            return Ok(Some(*self.brand.nested_node(&run, node.source).reference()));
-        }
-        Ok(Some(*rewritten.reference()))
+            *self.brand.nested_node(&run, node.source).reference()
+        } else {
+            *rewritten.reference()
+        };
+        // The parse counts an operator run as the nesting this rewrite builds, so the depth limit
+        // it checked still bounds every walk over the rewritten statement.
+        debug_assert!(rewritten.depth() <= node.depth());
+        Ok(Some(rewritten))
     }
 
     /// Whether `node` is a block the pairwise rewrite synthesized.

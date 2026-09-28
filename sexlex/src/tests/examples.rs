@@ -1,5 +1,5 @@
 use super::{err, ok};
-use crate::{ErrorKind, Kind, Node, Span, read};
+use crate::{ErrorKind, Kind, MAX_DEPTH, Node, Span, read};
 
 // --- Lines and indentation ---
 
@@ -302,6 +302,34 @@ fn a_closer_of_the_wrong_family_names_both_ends() {
             found: Kind::Bracket,
         }
     );
+}
+
+#[test]
+fn groups_nest_up_to_the_limit_and_no_deeper() {
+    // A debug build's reader frames outgrow the default test thread well before the limit; the
+    // language on top picks the stack it reads on.
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(groups_nest_to_the_limit)
+        .expect("spawn")
+        .join()
+        .expect("reads without overflow");
+}
+
+fn groups_nest_to_the_limit() {
+    // The line's layout group is depth 1, so `MAX_DEPTH - 1` parens reach the limit exactly.
+    let nested = |parens: usize| format!("{}a{}", "(".repeat(parens), ")".repeat(parens));
+    assert!(read(&nested(MAX_DEPTH - 1)).is_ok());
+    let source = nested(MAX_DEPTH);
+    let e = err(&source);
+    assert_eq!(e.kind, ErrorKind::TooDeep { limit: MAX_DEPTH });
+    assert_eq!(e.span.start as usize, MAX_DEPTH - 1);
+    assert!(e.to_string().contains(&MAX_DEPTH.to_string()));
+    // Indentation nests layout groups, and they count too.
+    let lines: String = (0..MAX_DEPTH + 1)
+        .map(|level| format!("{}a\n", "  ".repeat(level)))
+        .collect();
+    assert_eq!(err(&lines).kind, ErrorKind::TooDeep { limit: MAX_DEPTH });
 }
 
 // --- Spans ---

@@ -1,6 +1,6 @@
 //! Whole programs over what dispatch evaluates: literals, containers, names, combined definitions,
-//! lambdas, type parameters, frames' contracts, record access, construction, blocks and error
-//! values.
+//! lambdas, type parameters, frames' contracts, record access, construction, blocks, error values,
+//! and programs nested to the syntax depth limit, run on the stack the interpreter sizes for it.
 
 use super::run;
 
@@ -241,4 +241,93 @@ fn a_dict_key_that_is_no_scalar_is_an_error_value() {
         run("LET k = [1]\nPRINT {k: 1}"),
         "error: :(LIST OF Number) cannot be a dict key"
     );
+}
+
+/// A program at `depth` in each nesting shape, beside what it prints: `depth` is the stored depth
+/// of its deepest statement, and each shape's count of groups or operators is read off how the
+/// parse counts it.
+fn nested_programs(depth: usize) -> Vec<(&'static str, String, String)> {
+    let parens = |n: usize| format!("{}1{}", "(".repeat(n), ")".repeat(n));
+    let records = |n: usize| format!("{}1{}", "{a = ".repeat(n), "}".repeat(n));
+    // One level for `PRINT` or `LET`, the rest for what it holds.
+    let inner = depth - 1;
+    // A run of `k` operators counts `k + 3` above its deepest operand.
+    let folded = inner - 3;
+    let pairwise = inner - 3 - 1;
+    let operands = (0..=pairwise)
+        .map(|index| format!("(0 + {})", 1 + index % 2))
+        .collect::<Vec<_>>()
+        .join(" != ");
+    vec![
+        (
+            "parentheses",
+            format!("PRINT {}", parens(inner)),
+            "1".into(),
+        ),
+        (
+            "a quote",
+            format!("LET q = #{}\nPRINT (q == q)\nPRINT q", parens(inner)),
+            // A quote prints its code through the parentheses written around it.
+            "true\n1".into(),
+        ),
+        (
+            "a list literal",
+            format!("PRINT {}1{}", "[".repeat(inner), "]".repeat(inner)),
+            format!("{}1{}", "[".repeat(inner), "]".repeat(inner)),
+        ),
+        (
+            "a record literal",
+            format!("PRINT {}", records(inner)),
+            records(inner),
+        ),
+        (
+            "a dotted chain",
+            format!("LET r = {}\nPRINT r{}", records(inner), ".a".repeat(inner)),
+            "1".into(),
+        ),
+        (
+            "a folded operator run",
+            format!("PRINT (1{})", " + 1".repeat(folded)),
+            (folded + 1).to_string(),
+        ),
+        (
+            "a pairwise operator run",
+            format!("PRINT ({operands})"),
+            "true".into(),
+        ),
+    ]
+}
+
+#[test]
+fn a_program_nested_to_the_limit_runs_and_one_level_more_is_refused() {
+    use crate::memory::program_storage;
+    use crate::parse::{MAX_SYNTAX_DEPTH, parse};
+    use crate::program::STACK_BYTES;
+    use crate::symbols::SymbolInterner;
+
+    let deepest = |source: &str| {
+        let program = program_storage();
+        let symbols = SymbolInterner::new();
+        let statements = parse(program.brand(), &symbols, source).expect("parses");
+        statements.iter().map(|s| s.depth()).max()
+    };
+    let check = move || {
+        for (shape, source, printed) in nested_programs(MAX_SYNTAX_DEPTH) {
+            assert_eq!(deepest(&source), Some(MAX_SYNTAX_DEPTH), "{shape}");
+            assert_eq!(run(&source), printed, "{shape} at the limit");
+        }
+        for (shape, source, _) in nested_programs(MAX_SYNTAX_DEPTH + 1) {
+            let refused = run(&source);
+            assert!(
+                refused.starts_with("load: ") && refused.contains(&MAX_SYNTAX_DEPTH.to_string()),
+                "{shape} past the limit: {refused}"
+            );
+        }
+    };
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(check)
+        .expect("spawn")
+        .join()
+        .expect("runs within the stack");
 }

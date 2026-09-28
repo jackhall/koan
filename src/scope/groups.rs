@@ -24,11 +24,11 @@
 //! See [README.md § Operator groups](README.md#operator-groups).
 
 use crate::memory::{BumpAllocator, BumpVec, ProgramBrand, collect, resident};
-use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::{
     OpArity, op_declaration_arity, quoted_body, symbol_from_quote_body,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Reading, Role};
+use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{KeywordSymbol, StaticName};
 use crate::type_lattice::{DeclaredGroup, FoldDirection, ReductionMode};
@@ -54,7 +54,6 @@ struct OperatorSymbols {
     /// What the rewrite of `a != b` negates through.
     not: StaticName<KeywordSymbol>,
     equal: StaticName<KeywordSymbol>,
-    unequal: StaticName<KeywordSymbol>,
 }
 
 static OPERATORS: OperatorSymbols = OperatorSymbols {
@@ -71,7 +70,6 @@ static OPERATORS: OperatorSymbols = OperatorSymbols {
     and: crate::static_name!(KeywordSymbol, "AND"),
     not: crate::static_name!(KeywordSymbol, "NOT"),
     equal: crate::static_name!(KeywordSymbol, "=="),
-    unequal: crate::static_name!(KeywordSymbol, "!="),
 };
 
 /// The members of each builtin group, as the names they are declared under.
@@ -98,7 +96,7 @@ pub(crate) fn equal_symbol() -> KeywordSymbol {
 /// Whether `symbol` is `==` or `!=` — the two symbols that belong to no group, take `Any`, and join
 /// whichever pairwise group the rest of an operator run chains under.
 pub fn is_equality(symbol: KeywordSymbol) -> bool {
-    symbol == OPERATORS.equal.symbol() || symbol == OPERATORS.unequal.symbol()
+    symbol == OPERATORS.equal.symbol() || is_unequal(symbol)
 }
 
 /// Whether `symbol` is `==`, the one equality symbol a program declares over its own types. Its
@@ -111,7 +109,7 @@ pub fn is_equal(symbol: KeywordSymbol) -> bool {
 /// Whether `symbol` is `!=`, which no declaration may name: the builder rewrites every infix
 /// `a != b` as `NOT (a == b)`, so it never reaches dispatch and is opposite by construction.
 pub fn is_unequal(symbol: KeywordSymbol) -> bool {
-    symbol == OPERATORS.unequal.symbol()
+    symbol == KEYWORDS.unequal.symbol()
 }
 
 /// The five groups the language itself declares. They cover their members everywhere, no

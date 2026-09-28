@@ -1,12 +1,14 @@
 //! The interpreter: read a program from the file its first argument names, or from stdin, load it
 //! under [`Koan`](koan::dispatch::Koan) and run it. `PRINT` writes to stdout; a refused load, or the
 //! error value that ended the program, writes `error: <message>` to stderr and exits non-zero.
+//! The load and the run happen on a thread of [`STACK_BYTES`], the stack the language sizes its
+//! syntax depth limit against.
 
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use koan::dispatch::Koan;
-use koan::program::{CellSubstrate, Outcome, Output};
+use koan::program::{CellSubstrate, Outcome, Output, STACK_BYTES};
 
 // Allocator selection, over two axes. Miri can't call mimalloc's FFI (`mi_malloc_aligned`), so the
 // binary falls back to the system allocator under Miri. `alloc-count` then *wraps* whichever of
@@ -63,6 +65,21 @@ fn main() -> ExitCode {
             (source, String::from("<input>"))
         }
     };
+    let running = std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(move || load_and_run(&source, &path));
+    match running.map(|thread| thread.join()) {
+        Ok(Ok(code)) => code,
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(error) => {
+            eprintln!("could not start the interpreter's thread: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Load `source` and run it, reporting how it ended.
+fn load_and_run(source: &str, path: &str) -> ExitCode {
     let output = Output {
         print: |text| println!("{text}"),
         error: |text| {
@@ -71,7 +88,7 @@ fn main() -> ExitCode {
             eprintln!("{text}");
         },
     };
-    let mut substrate = match CellSubstrate::load::<Koan>(&source, &path, CELLS, output) {
+    let mut substrate = match CellSubstrate::load::<Koan>(source, path, CELLS, output) {
         Ok(substrate) => substrate,
         Err(error) => {
             eprintln!("error: {error}");

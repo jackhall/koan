@@ -47,6 +47,11 @@ use std::fmt;
 
 pub use render::render;
 
+/// The deepest group nesting [`read`] accepts, counting every [`Kind`]: a top-level line's layout
+/// group is at depth 1. The reader recurses once per group, so a limit keeps deep source an error
+/// rather than a stack overflow.
+pub const MAX_DEPTH: usize = 1024;
+
 /// Byte-offset half-open range into the source text a tree was read from.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Span {
@@ -150,6 +155,9 @@ pub enum ErrorKind {
     /// A `)` on its own line, less indented than the layout line that opened it. Span: the
     /// closer.
     CloserDedented { opener: Span },
+    /// A group would nest deeper than [`MAX_DEPTH`]. Span: the opener, or the line, that would
+    /// pass the limit.
+    TooDeep { limit: usize },
 }
 
 impl fmt::Display for Error {
@@ -191,6 +199,7 @@ impl fmt::Display for Error {
                 "closing ')' is less indented than the '(' it closes; a paren must close at the \
                  same or greater indentation as its opener."
             ),
+            ErrorKind::TooDeep { limit } => write!(f, "groups nest deeper than {limit}"),
         }
     }
 }

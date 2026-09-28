@@ -87,6 +87,9 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) transparent: StaticName<KeywordSymbol>,
     /// The connector of a code kind and the names its code needs, `Expression NEEDING #[y]`.
     pub(crate) needing: StaticName<KeywordSymbol>,
+    /// `!=`, which the operator-run rewrite turns into `NOT (a == b)`; the parse's depth count
+    /// reads it to count the nesting that rewrite builds.
+    pub(crate) unequal: StaticName<KeywordSymbol>,
 }
 
 pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
@@ -125,6 +128,7 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     opaque: crate::static_name!(KeywordSymbol, ":|"),
     transparent: crate::static_name!(KeywordSymbol, ":!"),
     needing: crate::static_name!(KeywordSymbol, "NEEDING"),
+    unequal: crate::static_name!(KeywordSymbol, "!="),
 };
 
 /// One position of a builtin bucket: a fixed keyword token, or a slot under a role typed once per

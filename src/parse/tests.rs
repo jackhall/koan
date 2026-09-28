@@ -9,6 +9,7 @@
 //! mistake reports, and the surface rules a renderer never writes.
 
 mod basics;
+mod depth;
 mod layout;
 mod list_dict;
 mod literals;

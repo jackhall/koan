@@ -18,6 +18,7 @@ use crate::source::{SourceRef, Spanned};
 use crate::memory::{ProgramBrand, Writer, collect, resident};
 use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::builtin_shapes::layout::SlotLayout;
+use crate::parse::depth::node_depth;
 use crate::symbols::{
     BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol, WILDCARD,
 };
@@ -315,6 +316,8 @@ pub struct KExpression<'a> {
     pub source: SourceRef,
     cache: NodeCache<'a>,
     body_layout: &'a SlotLayout<'a>,
+    /// How deep this node's syntax nests, counted by [`node_depth`] at construction.
+    depth: u32,
 }
 
 impl<'a> KExpression<'a> {
@@ -347,12 +350,9 @@ impl<'a> KExpression<'a> {
         source: SourceRef,
     ) -> Self {
         let key = stored_untyped_key(writer, parts.iter().map(|part| part.value.key_element()));
-        Self::seal(
-            writer,
-            parts,
-            source,
-            NodeCache::build(key, parts.first().map(|part| part.value.class())),
-        )
+        let cache = NodeCache::build(key, parts.first().map(|part| part.value.class()));
+        let depth = node_depth(parts, &cache);
+        Self::seal(writer, parts, source, cache, depth)
     }
 
     /// The node itself, over a resident run and a settled structural cache: fills the binder plan
@@ -363,12 +363,14 @@ impl<'a> KExpression<'a> {
         parts: &'a [Spanned<ExpressionPart<'a>>],
         source: SourceRef,
         cache: NodeCache<'a>,
+        depth: u32,
     ) -> Self {
         let mut expression = KExpression {
             parts,
             source,
             cache,
             body_layout: SlotLayout::EMPTY,
+            depth,
         };
         // The extractors read the node, so the plan is filled once it stands. It is written behind
         // a reference rather than stored inline: it is the widest thing a node would carry, and
@@ -413,6 +415,13 @@ impl<'a> KExpression<'a> {
     /// a spliced-out array could outlive.
     pub fn body_layout(&self) -> &'a SlotLayout<'a> {
         self.body_layout
+    }
+
+    /// How deep this node's syntax nests, an operator run counted as the nesting its rewrite
+    /// builds. A program deeper than [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH) is
+    /// refused at parse; see [`node_depth`].
+    pub fn depth(&self) -> usize {
+        self.depth as usize
     }
 
     /// The structural facts this node cached at construction. Every accessor below reads it, and
