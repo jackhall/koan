@@ -541,6 +541,23 @@ fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
     }
 }
 
+/// A keyworded hole a use of the code selects from alone refuses the `EVAL` while unfilled; one
+/// beside a builtin overload holds no function, so `x MINUS 1` above runs.
+#[test]
+fn a_required_keyworded_hole_is_unbound_when_eval_runs() {
+    let mut substrate = loaded(&format!("{TWICE}\nLET r = (twice #(NOPE 1))"), 4);
+    reset();
+    let outcome = substrate.with(|running| running.run());
+    assert!(outcome.is_err());
+    let recorded = recorded();
+    assert!(
+        recorded
+            .iter()
+            .any(|entry| entry.starts_with("refused unbound")),
+        "{recorded:?}"
+    );
+}
+
 #[test]
 fn a_parameter_needing_a_name_is_offered_it_where_eval_is_written() {
     let mut substrate = loaded(

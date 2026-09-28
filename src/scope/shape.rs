@@ -18,9 +18,13 @@
 //! captures, components and units treat it as they treat a name.
 //!
 //! A quote value's code is a [`ShapeKind::Code`] shape nested at the quote's site, built where the
-//! program loads. Its captures are its `$` names, bound where the quote is written, its open holes
-//! and its open `\` marks; it carries its type and, when its code is malformed, the error an `EVAL`
-//! of it reports. See [README.md § Quotes](README.md#quotes).
+//! program loads. Its captures are its `$` names and `$(…)` uses' registrations, bound where the
+//! quote is written, its open holes and its open `\` marks. A keyworded use in it lists the builtin
+//! overloads and the code's own registrations, and — unmarked — its key as a hole a `USING` fills,
+//! or — under `\(…)` — its key alone, which the `EVAL` running the code offers; each is a
+//! [`Candidate::Spread`], a capture named by the key. The shape records the holes some use selects
+//! from alone, carries its type and, when its code is malformed, the error an `EVAL` of it reports.
+//! See [README.md § Quotes](README.md#quotes).
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
@@ -217,16 +221,20 @@ pub struct Ranking<'graph> {
     pub classes: &'graph [u8],
 }
 
-/// One callable a keyworded use may select.
+/// One callable, or list of callables, a keyworded use may select.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Candidate {
     /// A builtin overload, or a registration read where the use resolves it.
     One(Coordinate),
+    /// A capture of a quote's code named by the use's key, whose value is a list of functions: a
+    /// keyworded hole a `USING` fills, or a `\(…)` use's key the `EVAL` running the code offers.
+    Spread(Coordinate),
 }
 
 /// What a keyworded use may select, fixed where its shape is built: the builtin overloads at its
 /// key, in table order, then each registration at the key visible to it, the enclosing bodies
-/// innermost first. Every candidate carries one ranking, `classes`.
+/// innermost first, then — in a quote's code — the capture its key names. Every candidate a shape
+/// sees carries one ranking, `classes`; a spread's is checked where it is filled.
 #[derive(Clone, Copy, Debug)]
 pub struct CandidateList<'graph> {
     pub key: KeySymbol,
@@ -274,7 +282,8 @@ pub enum CaptureSource {
         component: ComponentIndex,
         index: u32,
     },
-    /// An open hole of a code shape: a `USING` supplies it, or it stays unbound.
+    /// An open hole of a code shape, a name or a keyworded use's key: a `USING` supplies it, or it
+    /// stays unbound — a key's then holds no function, unless some use selects from it alone.
     Hole,
     /// An open `\` mark of a code shape: the `EVAL` that runs the code offers it.
     Offered,
@@ -352,14 +361,26 @@ pub struct BodyShape<'graph> {
     /// shape holds its `$` captures and nothing else.
     refusal: Option<&'graph ShapeError<'graph>>,
     /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
-    /// needed name and where it resolves at the `EVAL`.
-    offers: &'graph [(Site, &'graph [(BinderSymbol, Coordinate)])],
+    /// needed name or key and what the `EVAL` offers for it.
+    offers: &'graph [(Site, &'graph [(BinderSymbol, Offer<'graph>)])],
     /// Each registration this body declares, by slot.
     registrations: &'graph [Registration<'graph>],
     /// Each bucket declaration this body holds, in statement order.
     rankings: &'graph [Ranking<'graph>],
     /// Each keyworded use's candidates, by the use's node site.
     candidates: &'graph [(Site, CandidateList<'graph>)],
+    /// A code shape's keyworded holes some use selects from alone, sorted.
+    required: &'graph [KeySymbol],
+}
+
+/// What an `EVAL` of a code parameter offers the code it runs for one name its `NEEDING` list
+/// names.
+#[derive(Clone, Copy, Debug)]
+pub enum Offer<'graph> {
+    /// A name, where it resolves at the `EVAL`.
+    Name(Coordinate),
+    /// A bucket key, as a use at the key written at the `EVAL` resolves it.
+    Key(&'graph CandidateList<'graph>),
 }
 
 /// What a `MATCH` or `TRY` arm's block is to the expression shape holding it.
@@ -563,9 +584,9 @@ impl<'graph> BodyShape<'graph> {
         self.refusal
     }
 
-    /// The names the `EVAL` whose operand sits at `site` offers the code it runs, each beside where
-    /// it resolves there. Empty for an `EVAL` of anything but a parameter needing names.
-    pub fn offers(&self, site: Site) -> &'graph [(BinderSymbol, Coordinate)] {
+    /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each
+    /// beside what it offers. Empty for an `EVAL` of anything but a parameter needing names.
+    pub fn offers(&self, site: Site) -> &'graph [(BinderSymbol, Offer<'graph>)] {
         self.offers
             .binary_search_by_key(&site, |(offered, _)| *offered)
             .map_or(&[], |index| self.offers[index].1)
@@ -588,6 +609,13 @@ impl<'graph> BodyShape<'graph> {
     /// Every bucket declaration this body holds, in statement order.
     pub fn rankings(&self) -> &'graph [Ranking<'graph>] {
         self.rankings
+    }
+
+    /// A code shape's keyworded holes that some use of the code has no other candidate for: an
+    /// `EVAL` refuses the code while one is unfilled, and binds any other unfilled hole to no
+    /// function.
+    pub fn required_holes(&self) -> &'graph [KeySymbol] {
+        self.required
     }
 
     /// The candidates of the keyworded use whose node sits at `site` ([`Site::of_node`]).

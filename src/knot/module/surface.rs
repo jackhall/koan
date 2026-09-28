@@ -69,8 +69,8 @@ pub fn surface<'graph, 'cell>(
                 kinds += 1;
                 layout::value_count(&schema) + kinds - 1
             }
-            BinderSymbol::Registration(_) => {
-                unreachable!("a registration is declared at a statement, never as a parameter")
+            BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
+                unreachable!("a parameter is a written name")
             }
         };
         if layout::member_index(&schema, scratch, name) != Some(index) {

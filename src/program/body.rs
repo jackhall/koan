@@ -22,7 +22,7 @@ use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, 
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{Collector, KType, TypeNode, Variance, admits_with};
-use crate::values::{Link, TypeValue, Value};
+use crate::values::{Link, List, TypeValue, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
 use super::record::{Evaluated, Program};
@@ -159,15 +159,16 @@ pub enum CodeRefused<'graph> {
     NotCode,
     /// The code's shape, built where the program loaded, kept this error.
     Shape(&'graph ShapeError<'graph>),
-    /// A hole no `USING` filled, or a `\` name the `EVAL` does not offer: the first in the
-    /// shape's capture order.
+    /// A hole no `USING` filled — a name, or a key some use selects from alone — or a `\` name the
+    /// `EVAL` does not offer: the first in the shape's capture order.
     Unbound(BinderSymbol),
 }
 
 /// What an evaluator asks for to run `code` under `EVAL`, `offered` a record of the names the
 /// `EVAL` offers: a frame running the code's shape, which shares its operands' storage. Refused
 /// before anything is spawned when `code` is no code, its shape kept an error, or a name it reads
-/// is bound neither by a `USING` nor by `offered`. Nothing builds a shape here: the code's was
+/// — or a keyworded hole some use of it selects from alone — is bound neither by a `USING` nor by
+/// `offered`. Nothing builds a shape here: the code's was
 /// built where the program loaded.
 pub fn eval<'graph, 'here>(
     program: &'graph Program<'graph>,
@@ -191,10 +192,12 @@ pub fn eval<'graph, 'here>(
     for capture in shape.captures() {
         let bound = match capture.source {
             CaptureSource::Read(_) | CaptureSource::Member { .. } => true,
-            CaptureSource::Hole => node
-                .supplied()
-                .iter()
-                .any(|(name, _)| *name == capture.name),
+            CaptureSource::Hole => {
+                node.supplied()
+                    .iter()
+                    .any(|(name, _)| *name == capture.name)
+                    || matches!(capture.name, BinderSymbol::Key(key) if shape.required_holes().binary_search(&key).is_err())
+            }
             CaptureSource::Offered => offers(capture.name),
         };
         if !bound {
@@ -356,8 +359,8 @@ fn frame<'graph, 'here>(
                 };
                 Value::Type(TypeValue::new(writer, solved, types))
             }
-            BinderSymbol::Registration(_) => {
-                unreachable!("a registration is declared at a statement, never as a parameter")
+            BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
+                unreachable!("a parameter is a written name")
             }
         };
         activation.bind(slot, value).ok()?;
@@ -368,7 +371,8 @@ fn frame<'graph, 'here>(
 /// An `EVAL`'s frame: the code's activation over a closure run assembled in its shape's capture
 /// order — each `$` name from the bindings the code carries, each hole from those `USING` supplied,
 /// each `\` name from `offered` — every edge resolved to the member it names, so the run holds value
-/// words only. `None` when a name is bound nowhere, which [`eval`] refuses first.
+/// words only. A keyworded hole nothing filled holds no function. `None` when a name is bound
+/// nowhere, which [`eval`] refuses first.
 fn code_frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     program: &'graph Program<'graph>,
@@ -384,18 +388,24 @@ fn code_frame<'graph, 'here>(
         Some(run[at].1.resolve(member))
     };
     let bump = Bump::new();
+    let writer = step.writer();
     let mut links = BumpVec::with_capacity_in(shape.captures().len(), &bump);
     for capture in shape.captures() {
         let value = match capture.source {
             CaptureSource::Read(_) | CaptureSource::Member { .. } => {
                 find(node.bound(), capture.name)?
             }
-            CaptureSource::Hole => find(node.supplied(), capture.name)?,
+            CaptureSource::Hole => match find(node.supplied(), capture.name) {
+                Some(value) => value,
+                None if matches!(capture.name, BinderSymbol::Key(_)) => {
+                    Value::List(List::new(writer, [].into_iter(), program.types(), &bump))
+                }
+                None => return None,
+            },
             CaptureSource::Offered => *record.field(capture.name.symbol())?,
         };
         links.push(Link::Value(value));
     }
-    let writer = step.writer();
     let closure = ClosureBindings::of(writer, &links);
     Some(resident(
         writer,

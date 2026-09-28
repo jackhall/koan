@@ -4,7 +4,8 @@
 use crate::memory::BumpAllocator;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, ValueSymbol};
 use crate::type_lattice::{
-    FoldDirection, KKind, KType, NodeSchema, ReductionMode, TypeNode, TypeRegistry, member,
+    FoldDirection, KKind, KType, NodeSchema, ReductionMode, TypeNode, TypeRegistry, display_name,
+    member,
 };
 
 use super::super::{Elaboration, callable_type};
@@ -353,8 +354,9 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
     }
 }
 
-/// `Kind NEEDING #[…]` is the code kind needing the names its one-name quotes spell, in any order;
-/// a kind that is no code, or a list element that is no one-name quote, refuses.
+/// `Kind NEEDING #[…]` is the code kind needing the names its one-name quotes and the bucket keys
+/// its keyword quotes spell, in any order; a kind that is no code, or a list element that is
+/// neither, refuses.
 #[test]
 fn a_code_kind_needing_names_is_spelled_with_needing() {
     fn expression(
@@ -385,6 +387,20 @@ fn a_code_kind_needing_names_is_spelled_with_needing() {
                 .code_needing(program.scratch, KType::EXPRESSION, &names);
             assert_eq!(program.bound("Needs"), needing);
             assert_eq!(program.bound("Same"), needing);
+        },
+    );
+    declared(
+        "LET Keyed = :(Expression NEEDING #[(LOG _) y])",
+        &|program, brought| {
+            brought.expect("a code kind needing a key declares");
+            let log = BinderSymbol::Key(program.symbols.key("LOG _").unwrap());
+            let y = BinderSymbol::classify("y").unwrap();
+            let needing = program
+                .types
+                .code_needing(program.scratch, KType::EXPRESSION, &[log, y]);
+            assert_eq!(program.bound("Keyed"), needing);
+            let rendered = display_name(needing, program.types, program.symbols).to_string();
+            assert!(rendered.contains("#[(LOG _) y]") || rendered.contains("#[y (LOG _)]"));
         },
     );
     for source in [

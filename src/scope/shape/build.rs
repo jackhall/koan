@@ -25,8 +25,11 @@
 //!
 //! A quote value's code is built here too, as a [`ShapeKind::Code`] draft entered where the quote
 //! is written ([`Builder::enter_code`]): under the builtin groups and the groups its code holds,
-//! with its `$` names resolved outward and every other free name left open. A code draft that
-//! cannot be built is not an error of the program; its error is kept for the `EVAL` that runs it.
+//! with its `$` names and `$(…)` uses resolved outward and every other free name and key left open.
+//! A group mark covers the use it wraps and, when that use tops an operator run, every use the
+//! rewrite built for that operator run — never one in an operand. A code draft that cannot be built is not an
+//! error of the program; its error is kept for the `EVAL` that runs it, and only a `$` mark nothing
+//! binds where the quote is written refuses the program.
 //!
 //! See [README.md § Visibility](../README.md#visibility).
 
@@ -35,8 +38,8 @@ use crate::memory::{
     strongly_connected_components,
 };
 use crate::parse::builtin_shapes::binder::{
-    BinderSurface, DeclaredElement, SlotLabel, bounded, declared_element, head_run, needed_name,
-    needing, slot_label,
+    BinderSurface, DeclaredElement, SlotLabel, bounded, declared_element, head_run, needed_key,
+    needed_name, needing, slot_label,
 };
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
@@ -57,7 +60,7 @@ use super::super::signature::{
 };
 use super::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Position,
+    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
     QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
     Which, resolve_here,
 };
@@ -67,6 +70,7 @@ mod locate;
 mod rewrite;
 mod surface;
 
+use rewrite::{Built, BuiltKind, chained};
 use surface::Surfaced;
 
 /// The names a body binds that no signature writes. The shape builder binds them, and the
@@ -219,10 +223,21 @@ fn parameter_type<'graph>(
     None
 }
 
+/// What a mark in a quote's code is written over: a name, or the keyworded use a group mark wraps.
+#[derive(Clone, Copy)]
+enum Marked<'graph> {
+    Name(BinderSymbol),
+    Use(&'graph KExpression<'graph>),
+}
+
 /// Every mark `node` holds outside the quote values nested in it, each beside its site: what a code
 /// draft that could not be built would have met. A quote a builtin reads as written is syntax of
-/// the code around it, so its marks are the code's.
-fn code_marks(node: &KExpression<'_>, out: &mut BumpVec<'_, (Mark, BinderSymbol, Site)>) {
+/// the code around it, so its marks are the code's. A group mark over an operator run is left out:
+/// which uses the operator run becomes is the rewrite's, and the code was not built.
+fn code_marks<'graph>(
+    node: &KExpression<'graph>,
+    out: &mut BumpVec<'_, (Mark, Marked<'graph>, Site)>,
+) {
     let form = node.cache().builtin_shape();
     for (index, part) in node.parts.iter().enumerate() {
         let written = form
@@ -233,18 +248,30 @@ fn code_marks(node: &KExpression<'_>, out: &mut BumpVec<'_, (Mark, BinderSymbol,
 }
 
 /// [`code_marks`] for one part; `written` when a builtin reads it as written.
-fn part_marks(
-    part: &ExpressionPart<'_>,
+fn part_marks<'graph>(
+    part: &ExpressionPart<'graph>,
     written: bool,
-    out: &mut BumpVec<'_, (Mark, BinderSymbol, Site)>,
+    out: &mut BumpVec<'_, (Mark, Marked<'graph>, Site)>,
 ) {
     match part {
-        ExpressionPart::MarkedName(mark, name) => out.push((*mark, *name, Site::of(part))),
+        ExpressionPart::MarkedName(mark, name) => {
+            out.push((*mark, Marked::Name(*name), Site::of(part)))
+        }
         ExpressionPart::QuotedExpression(node) if written => code_marks(node.reference(), out),
+        ExpressionPart::MarkedUse(mark, node) => {
+            let node = node.reference();
+            let keyed = node
+                .parts
+                .iter()
+                .any(|part| matches!(part.value, ExpressionPart::Keyword(_)));
+            if keyed && !chained(node) {
+                out.push((*mark, Marked::Use(node), Site::of_node(node)));
+            }
+            code_marks(node, out)
+        }
         ExpressionPart::Expression(node)
         | ExpressionPart::SigiledTypeExpr(node)
-        | ExpressionPart::RecordType(node)
-        | ExpressionPart::MarkedUse(_, node) => code_marks(node.reference(), out),
+        | ExpressionPart::RecordType(node) => code_marks(node.reference(), out),
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
                 part_marks(item, written, out);
@@ -304,6 +331,27 @@ struct Reader {
     level: usize,
     statement: u32,
     class: MentionClass,
+}
+
+/// A group mark in force over the walk: the mark, and the operator run the node it wraps tops, if
+/// it tops one, whose every use the mark covers too.
+#[derive(Clone, Copy)]
+struct Marking {
+    mark: Mark,
+    run: Option<u32>,
+}
+
+/// Where [`Builder::listed`] lists a key's registrations from: the draft at `site` as a use at
+/// `at` sees them, each resolved from the draft at `level` through `mark` for `reader`; a closed
+/// listing holds the builtin overloads alone.
+#[derive(Clone, Copy)]
+struct Listing {
+    level: usize,
+    reader: Reader,
+    site: usize,
+    at: Position,
+    mark: Option<Mark>,
+    closed: bool,
 }
 
 /// What a nested body is to the statement it is entered from: whether its last statement is in
@@ -484,7 +532,9 @@ struct Draft<'graph, 'x> {
     /// parameter's type off.
     signature: Option<&'graph KExpression<'graph>>,
     /// Each `EVAL` of a parameter needing names, by its operand's site, beside what it offers.
-    offers: BumpVec<'x, (Site, &'graph [(BinderSymbol, Coordinate)])>,
+    offers: BumpVec<'x, (Site, &'graph [(BinderSymbol, Offer<'graph>)])>,
+    /// A code draft's keyworded holes some use selects from alone.
+    required: BumpVec<'x, KeySymbol>,
     /// A code draft's carried type, and why its code cannot be built; see [`BodyShape::code_type`].
     code_type: KType,
     refusal: Option<&'graph ShapeError<'graph>>,
@@ -556,9 +606,14 @@ struct Builder<'graph, 'x, 'e> {
     claims: &'graph Claims<'graph>,
     /// The frame of the draft being built: which groups an operator run written there sees.
     frame: &'graph GroupFrame<'graph>,
-    /// The address of every parts run the pairwise rewrite synthesized as a statement block, so
-    /// the mention pass enters it as a block rather than walking it as a call.
-    blocks: BumpBackedMap<'x, usize, ()>,
+    /// Every node the operator-run rewrite built, by its parts address: a block the mention pass
+    /// enters as a block rather than walking it as a call, and each use a group mark over its
+    /// operator run covers.
+    built: BumpBackedMap<'x, usize, Built>,
+    /// How many operator runs the rewrite has chained, which numbers each run.
+    runs: u32,
+    /// The group mark over the node being walked, if any.
+    marking: Option<Marking>,
     chain: BumpVec<'x, Draft<'graph, 'x>>,
     /// Each callable body's site beside the form node holding it, in program storage.
     forms: BumpBackedMap<'x, Site, &'graph KExpression<'graph>>,
@@ -592,7 +647,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             types,
             claims,
             frame,
-            blocks: bump_table(scratch),
+            built: bump_table(scratch),
+            runs: 0,
+            marking: None,
             chain: BumpVec::new_in(scratch),
             forms: bump_table(scratch),
             parts: bump_table(scratch),
@@ -718,7 +775,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             match name {
                 BinderSymbol::Value(name) => values.push((name, position)),
                 BinderSymbol::Type(name) => types.push((name, position)),
-                BinderSymbol::Registration(_) => unreachable!("a plan's name is a written name"),
+                BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
+                    unreachable!("a plan's name is a written name")
+                }
             }
         }
         values.sort_unstable_by_key(|(name, _)| *name);
@@ -769,6 +828,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             components: BumpVec::new_in(scratch),
             signature: None,
             offers: BumpVec::new_in(scratch),
+            required: BumpVec::new_in(scratch),
             code_type: KType::ANY_CODE,
             refusal: None,
             tail: false,
@@ -998,7 +1058,40 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// classifies a type-constructor application written in value position; every part of a call
     /// is eager, and a call spelling a keyword is a keyworded use, whose candidates are resolved
     /// here. A binder or a bucket declaration anywhere but at its statement's root is refused.
+    ///
+    /// A node the rewrite built for the operator run a group mark wraps stays under the mark; any
+    /// other node leaves it, so the mark covers no use in an operand.
     fn walk_node(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+        state: State,
+    ) -> Result<(), ShapeError<'graph>> {
+        let run = self.built_as(node).map(|built| built.run);
+        let marking = self
+            .marking
+            .filter(|marking| marking.run.is_some() && marking.run == run);
+        self.walk_marked(level, statement, node, state, marking)
+    }
+
+    /// [`walk_node`](Self::walk_node) with `marking` over `node`.
+    fn walk_marked(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+        state: State,
+        marking: Option<Marking>,
+    ) -> Result<(), ShapeError<'graph>> {
+        let outer = std::mem::replace(&mut self.marking, marking);
+        let walked = self.visit_node(level, statement, node, state);
+        self.marking = outer;
+        walked
+    }
+
+    /// The walk of one node, under whatever mark [`walk_marked`](Self::walk_marked) set.
+    fn visit_node(
         &mut self,
         level: usize,
         statement: u32,
@@ -1036,7 +1129,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .iter()
                     .any(|part| matches!(part.value, ExpressionPart::Keyword(_)))
             {
-                self.candidates(level, statement, node, false)?;
+                // The `NOT` a `!=` became is always the builtin's.
+                let negation = self
+                    .built_as(node)
+                    .is_some_and(|built| built.kind == BuiltKind::Negation);
+                self.candidates(level, statement, node, negation)?;
             }
             for part in node.parts {
                 self.walk_part(level, statement, &part.value, State::Eager)?;
@@ -1207,8 +1304,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 // A block the pairwise rewrite synthesized runs as a block: its hoists are its
                 // binders, and its value is its last statement's.
                 if self
-                    .blocks
-                    .contains_key(&(node.reference().parts.as_ptr() as usize))
+                    .built_as(node.reference())
+                    .is_some_and(|built| built.kind == BuiltKind::Block)
                 {
                     return self.enter_child(
                         level,
@@ -1263,15 +1360,20 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::MarkedName(mark, name) => {
                 self.mention_through(level, statement, part, *name, Some(*mark), state)
             }
-            // A group mark says where its keyworded use resolves, which is dispatch's; the names
-            // inside it are read as any others are.
             ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
                 Err(ShapeError::MarkOutsideQuote {
                     at: self.part_source(level, statement, Site::of(part)),
                 })
             }
-            ExpressionPart::MarkedUse(_, node) => {
-                self.walk_node(level, statement, node.reference(), State::Eager)
+            // A group mark says where the keyworded use it wraps resolves — and each use of the
+            // operator run that node tops; the names inside it are read as any others are.
+            ExpressionPart::MarkedUse(mark, node) => {
+                let node = node.reference();
+                let marking = Marking {
+                    mark: *mark,
+                    run: self.built_as(node).map(|built| built.run),
+                };
+                self.walk_marked(level, statement, node, State::Eager, Some(marking))
             }
             ExpressionPart::Type(_) | ExpressionPart::Keyword(_) | ExpressionPart::Literal(_) => {
                 Ok(())
@@ -1700,8 +1802,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// the body's end under a constructor slot. The code chains its operator runs under the builtin
     /// groups and the groups it holds, never a frame around it, and a type parameter of a form
     /// around it is no parameter of its own. Code that cannot be built keeps its error as the
-    /// shape's refusal; only a `$` name nothing binds where the quote is written refuses the
-    /// program.
+    /// shape's refusal; only a `$` name or `$(…)` use nothing binds where the quote is written
+    /// refuses the program. The code's carried type needs each `\` name and `\(…)` key it leaves
+    /// open.
     fn enter_code(
         &mut self,
         level: usize,
@@ -1761,10 +1864,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         )
     }
 
-    /// The code draft of a quote whose code could not be built: no statements, its `$` names
-    /// captured where the quote is written — each as the built draft would have captured it — and
-    /// `refusal` kept. Its carried type needs every `\` name its code writes outside the quote
-    /// values nested in it, since which of them its own binders fill is unknown.
+    /// The code draft of a quote whose code could not be built: no statements, its `$` names and
+    /// `$(…)` uses captured where the quote is written — each as the built draft would have
+    /// captured it — and `refusal` kept. Its carried type needs every `\` name and `\(…)` key its
+    /// code writes outside the quote values nested in it, since which of them its own binders fill
+    /// is unknown.
     fn refused_code(
         &mut self,
         level: usize,
@@ -1783,32 +1887,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             statement: 0,
             class: MentionClass::Eager,
         };
-        let mut resolved = Ok(());
-        for (mark, name, site) in marks.iter().copied() {
-            if mark != Mark::Written || self.builtins.lookup(name).is_some() {
-                continue;
-            }
-            let written = Some(Mark::Written);
-            if self
-                .resolve(inner, name, written, Position::PARAMETER, reader)
-                .is_none()
-            {
-                let at = self.part_source(level, statement, site);
-                resolved = Err(ShapeError::Unbound { name, site, at });
-                break;
-            }
-        }
+        let resolved = self.written_marks(level, statement, inner, reader, &marks);
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         resolved?;
         let mut built = BumpVec::new_in(self.scratch);
-        built.extend(
-            marks
-                .iter()
-                .filter(|(mark, name, _)| {
-                    *mark == Mark::Built && self.builtins.lookup(*name).is_none()
-                })
-                .map(|(_, name, _)| *name),
-        );
+        built.extend(marks.iter().filter_map(|(mark, marked, _)| match marked {
+            _ if *mark != Mark::Built => None,
+            Marked::Name(name) => self.builtins.lookup(*name).is_none().then_some(*name),
+            Marked::Use(node) => Some(BinderSymbol::Key(KeyElement::key(
+                node.cache().stored_key().iter().copied(),
+            ))),
+        }));
         draft.code_type = self
             .types
             .code_needing(self.scratch, code.code_kind(), &built);
@@ -1816,9 +1905,61 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         Ok(draft)
     }
 
+    /// Resolve each `$` mark of a refused code draft at `inner` where its quote is written, at
+    /// `level`: a name is `Unbound`, and a use `NoCandidate`, when nothing there binds it.
+    fn written_marks(
+        &mut self,
+        level: usize,
+        statement: u32,
+        inner: usize,
+        reader: Reader,
+        marks: &[(Mark, Marked<'graph>, Site)],
+    ) -> Result<(), ShapeError<'graph>> {
+        let written = Some(Mark::Written);
+        for (mark, marked, site) in marks.iter().copied() {
+            if mark != Mark::Written {
+                continue;
+            }
+            match marked {
+                Marked::Name(name) if self.builtins.lookup(name).is_some() => {}
+                Marked::Name(name) => {
+                    if self
+                        .resolve(inner, name, written, Position::PARAMETER, reader)
+                        .is_none()
+                    {
+                        let at = self.part_source(level, statement, site);
+                        return Err(ShapeError::Unbound { name, site, at });
+                    }
+                }
+                Marked::Use(node) => {
+                    let listing = Listing {
+                        level: inner,
+                        reader,
+                        site: level,
+                        at: self.chain[level].boundary(),
+                        mark: written,
+                        closed: false,
+                    };
+                    let elements = node.cache().stored_key();
+                    let mut candidates = BumpVec::new_in(self.scratch);
+                    self.listed(listing, elements, node.source, &mut candidates)?;
+                    let surfaced = self.chain[..=level].iter().any(|draft| draft.surfaced);
+                    if candidates.is_empty() && !surfaced {
+                        return Err(ShapeError::NoCandidate {
+                            key: elements,
+                            at: node.source,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// An `EVAL` of a callable's parameter whose type needs names offers each of them to the code
-    /// it runs: each resolves here as an eager read at the `EVAL`'s statement would, recorded as
-    /// one for the units pass, and is `Unbound` when nothing binds it here.
+    /// it runs: a name resolves here as an eager read at the `EVAL`'s statement would, recorded as
+    /// one for the units pass, and is `Unbound` when nothing binds it here; a key is listed as a use
+    /// at the key written at the `EVAL` would be, and is `NoCandidate` when that lists nothing.
     fn offer(
         &mut self,
         level: usize,
@@ -1838,22 +1979,58 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             statement,
             class: MentionClass::Eager,
         };
+        let writer = self.brand.writer();
         let mut offered = BumpVec::with_capacity_in(needed.len(), self.scratch);
-        // A malformed entry is the elaborator's to refuse.
-        for name in needed.iter().filter_map(needed_name) {
-            let coordinate = match self.builtins.lookup(name) {
-                Some(index) => Coordinate::Builtin(index),
-                None => self
-                    .resolve(level, name, None, at, reader)
-                    .ok_or(ShapeError::Unbound {
-                        name,
-                        site: Site::of(operand),
-                        at: node.source,
-                    })?,
+        for entry in needed.iter() {
+            if let Some(name) = needed_name(entry) {
+                let coordinate = match self.builtins.lookup(name) {
+                    Some(index) => Coordinate::Builtin(index),
+                    None => {
+                        self.resolve(level, name, None, at, reader)
+                            .ok_or(ShapeError::Unbound {
+                                name,
+                                site: Site::of(operand),
+                                at: node.source,
+                            })?
+                    }
+                };
+                offered.push((name, Offer::Name(coordinate)));
+                continue;
+            }
+            // A malformed entry is the elaborator's to refuse.
+            let Some(run) = needed_key(entry) else {
+                continue;
             };
-            offered.push((name, coordinate));
+            let mut staged = BumpVec::new_in(self.scratch);
+            staged.extend(run);
+            let elements = collect(writer, staged.iter().copied());
+            let key = KeyElement::key(elements.iter().copied());
+            let listing = Listing {
+                level,
+                reader,
+                site: level,
+                at,
+                mark: None,
+                closed: false,
+            };
+            let mut candidates = BumpVec::new_in(self.scratch);
+            let classes = self.listed(listing, elements, node.source, &mut candidates)?;
+            let surfaced = self.chain[..=level].iter().any(|draft| draft.surfaced);
+            if candidates.is_empty() && !surfaced {
+                return Err(ShapeError::NoCandidate {
+                    key: elements,
+                    at: node.source,
+                });
+            }
+            let list = CandidateList {
+                key,
+                elements,
+                classes,
+                candidates: collect(writer, candidates.iter().copied()),
+            };
+            offered.push((BinderSymbol::Key(key), Offer::Key(resident(writer, list))));
         }
-        let offered = collect(self.brand.writer(), offered.iter().copied());
+        let offered = collect(writer, offered.iter().copied());
         self.chain[level].offers.push((Site::of(operand), offered));
         Ok(())
     }
@@ -1938,11 +2115,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// Resolve the keyworded use `node`, read at its statement: the builtin overloads at its key,
-    /// then — unless `closed`, a builtin shape's own bucket — each registration at the key visible
-    /// to it, resolved as an eager read there, so each is a mention of the use's statement. Every
-    /// candidate must carry one ranking, and a use with none is refused — except in a quote's code,
-    /// where it is a hole, and under a `USING … SCOPE` body, whose operand's registrations are
-    /// candidates this builder does not read.
+    /// then — unless `closed`, a builtin shape's own bucket or a `!=`'s `NOT` — each registration
+    /// at the key visible to it, resolved as an eager read there, so each is a mention of the use's
+    /// statement. In a quote's code the use's mark decides: unmarked, the registrations it sees
+    /// within the code and then its key as a hole a `USING` fills; `$(…)`, what a use written
+    /// where the quote is sees, captured; `\(…)`, its key as a `\` capture alone, which the `EVAL`
+    /// running the code offers. Every registration must carry one ranking, and a use with no
+    /// candidate is refused — except under a `USING … SCOPE` body, whose operand's registrations
+    /// are candidates this builder does not read.
     fn candidates(
         &mut self,
         level: usize,
@@ -1950,51 +2130,68 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         closed: bool,
     ) -> Result<(), ShapeError<'graph>> {
-        let writer = self.brand.writer();
         let elements = node.cache().stored_key();
         let key = KeyElement::key(elements.iter().copied());
         let at = Position::statement(statement as usize);
-        let mut candidates = BumpVec::new_in(self.scratch);
-        candidates.extend(
-            self.builtins
-                .overloads(key)
-                .map(|index| Candidate::One(Coordinate::Builtin(BuiltinIndex(index)))),
-        );
-        let written = || collect(writer, (0..slots(elements)).map(|class| class as u8));
-        let mut classes = (!candidates.is_empty()).then(written);
-        let mut found = BumpVec::new_in(self.scratch);
-        if !closed {
-            let draft = &self.chain[level];
-            let own = (draft.kind, &draft.registered[..], &draft.rankings[..], at);
-            self.visible(own, level, key, |seen| {
-                if let Seen::Registration(entry) = seen {
-                    found.push((entry.symbol, entry.classes));
-                }
-                None::<()>
-            });
-        }
         let reader = Reader {
             level,
             statement,
             class: MentionClass::Eager,
         };
-        for (symbol, theirs) in found.iter().copied() {
-            if classes.is_some_and(|classes| classes != theirs) {
-                return Err(ShapeError::RankingDisagrees {
-                    key: elements,
-                    at: node.source,
-                });
-            }
-            classes = Some(theirs);
-            let coordinate = self
-                .resolve(level, BinderSymbol::Registration(symbol), None, at, reader)
-                .expect("a visible registration resolves");
-            candidates.push(Candidate::One(coordinate));
-        }
-        let open_ended = self.chain[..=level]
+        let code = self.chain[..=level]
             .iter()
-            .any(|draft| draft.kind == ShapeKind::Code || draft.surfaced);
-        if candidates.is_empty() && !closed && !open_ended {
+            .rposition(|draft| draft.kind == ShapeKind::Code);
+        let mark = self.marking.filter(|_| !closed).map(|marking| marking.mark);
+        let mut candidates = BumpVec::new_in(self.scratch);
+        let classes = match (mark, code) {
+            (Some(Mark::Built), _) => {
+                let offered = self
+                    .resolve(level, BinderSymbol::Key(key), Some(Mark::Built), at, reader)
+                    .expect("a quote's code leaves a `\\` key open");
+                candidates.push(Candidate::Spread(offered));
+                self.written(elements)
+            }
+            (Some(Mark::Written), Some(code)) => {
+                let site = code - 1;
+                let written_at = self.chain[site].boundary();
+                let listing = Listing {
+                    level,
+                    reader,
+                    site,
+                    at: written_at,
+                    mark: Some(Mark::Written),
+                    closed: false,
+                };
+                self.listed(listing, elements, node.source, &mut candidates)?
+            }
+            (Some(_), None) => unreachable!("a mark outside a quote is refused"),
+            (None, _) => {
+                let listing = Listing {
+                    level,
+                    reader,
+                    site: level,
+                    at,
+                    mark: None,
+                    closed,
+                };
+                let classes = self.listed(listing, elements, node.source, &mut candidates)?;
+                if let Some(code) = code
+                    && !closed
+                {
+                    let required = &mut self.chain[code].required;
+                    if candidates.is_empty() && !required.contains(&key) {
+                        required.push(key);
+                    }
+                    let hole = self
+                        .resolve(level, BinderSymbol::Key(key), None, at, reader)
+                        .expect("a quote's code leaves its holes open");
+                    candidates.push(Candidate::Spread(hole));
+                }
+                classes
+            }
+        };
+        let surfaced = self.chain[..=level].iter().any(|draft| draft.surfaced);
+        if candidates.is_empty() && !closed && !surfaced {
             return Err(ShapeError::NoCandidate {
                 key: elements,
                 at: node.source,
@@ -2003,13 +2200,79 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let list = CandidateList {
             key,
             elements,
-            classes: classes.unwrap_or_else(written),
-            candidates: collect(writer, candidates.iter().copied()),
+            classes,
+            candidates: collect(self.brand.writer(), candidates.iter().copied()),
         };
         self.chain[level]
             .candidates
             .push((Site::of_node(node), list));
         Ok(())
+    }
+
+    /// The builtin overloads at the key `elements` spell, then — unless the listing is closed —
+    /// each registration at the key a use at the listing's site sees, each resolved from its
+    /// level through its mark: pushed onto `candidates`, and the ranking they share returned. Two
+    /// rankings among them are refused at `source`.
+    fn listed(
+        &mut self,
+        listing: Listing,
+        elements: &'graph [KeyElement],
+        source: SourceRef,
+        candidates: &mut BumpVec<'x, Candidate>,
+    ) -> Result<&'graph [u8], ShapeError<'graph>> {
+        let key = KeyElement::key(elements.iter().copied());
+        let before = candidates.len();
+        candidates.extend(
+            self.builtins
+                .overloads(key)
+                .map(|index| Candidate::One(Coordinate::Builtin(BuiltinIndex(index)))),
+        );
+        let mut classes = (candidates.len() > before).then(|| self.written(elements));
+        let mut found = BumpVec::new_in(self.scratch);
+        if !listing.closed {
+            let draft = &self.chain[listing.site];
+            let own = (
+                draft.kind,
+                &draft.registered[..],
+                &draft.rankings[..],
+                listing.at,
+            );
+            self.visible(own, listing.site, key, |seen| {
+                if let Seen::Registration(entry) = seen {
+                    found.push((entry.symbol, entry.classes));
+                }
+                None::<()>
+            });
+        }
+        for (symbol, theirs) in found.iter().copied() {
+            if classes.is_some_and(|classes| classes != theirs) {
+                return Err(ShapeError::RankingDisagrees {
+                    key: elements,
+                    at: source,
+                });
+            }
+            classes = Some(theirs);
+            let name = BinderSymbol::Registration(symbol);
+            let coordinate = self
+                .resolve(
+                    listing.level,
+                    name,
+                    listing.mark,
+                    listing.at,
+                    listing.reader,
+                )
+                .expect("a visible registration resolves");
+            candidates.push(Candidate::One(coordinate));
+        }
+        Ok(classes.unwrap_or_else(|| self.written(elements)))
+    }
+
+    /// Written-order classes over the slots of `elements`.
+    fn written(&self, elements: &[KeyElement]) -> &'graph [u8] {
+        collect(
+            self.brand.writer(),
+            (0..slots(elements)).map(|class| class as u8),
+        )
     }
 
     /// Resolve and record the mention of `name` at `part`.
@@ -2433,6 +2696,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         registrations.sort_unstable_by_key(|registration| registration.slot);
         let mut candidates = draft.candidates;
         candidates.sort_unstable_by_key(|(site, _)| *site);
+        let mut required = draft.required;
+        required.sort_unstable();
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -2470,6 +2735,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 registrations: collect(writer, registrations.iter().copied()),
                 rankings: collect(writer, draft.rankings.iter().copied()),
                 candidates: collect(writer, candidates.iter().copied()),
+                required: collect(writer, required.iter().copied()),
             },
         )
     }

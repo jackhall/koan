@@ -69,6 +69,8 @@ impl<'a, P: Copy> Channels<'a, P> {
             }
             BinderSymbol::Registration(name) => search(self.registrations, name)
                 .map(|index| self.values.len() + self.types.len() + index),
+            // No binder declares a key: a key is only ever a capture's name.
+            BinderSymbol::Key(_) => None,
         }
     }
 

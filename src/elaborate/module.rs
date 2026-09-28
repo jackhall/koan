@@ -34,6 +34,7 @@ pub fn self_signature<'graph, XF: KnottedFamily<'graph>>(
             }
             // A registration names no member: its keyworded member is a shape, not a slot's name.
             BinderSymbol::Registration(_) => {}
+            BinderSymbol::Key(_) => unreachable!("no binder declares a key"),
         }
     }
     // A `GROUP` body holds the group it declares, and that chaining is part of what the module is:

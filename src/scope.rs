@@ -46,7 +46,7 @@ pub use closure::ClosureBindings;
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Position,
+    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
     QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
     Which,
 };

@@ -9,6 +9,7 @@ mod examples;
 mod groups;
 pub(crate) mod plan;
 mod properties;
+mod quoted_uses;
 mod quotes;
 mod rewrite;
 mod units;

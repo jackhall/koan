@@ -25,6 +25,11 @@
 //! `a != b` is never built: wherever a pair or a bare infix run spells it, the rewrite emits
 //! `NOT (a == b)` instead, so `!=` reaches no bucket and is the opposite of `==` by construction.
 //!
+//! Every node the rewrite builds is recorded by its parts address beside the operator run it was
+//! built for ([`Built`]), so a group mark over the operator run covers each use it became — and no
+//! use of an operator run nested in an operand — and the `NOT` of a `!=` is known to be the
+//! builtin's.
+//!
 //! See [README.md § Operator groups](../../README.md#operator-groups).
 
 use crate::memory::{BumpVec, collect};
@@ -42,6 +47,28 @@ use super::super::super::groups::{
 use super::super::super::signature::{pair_label, signature_run};
 use super::super::ShapeError;
 use super::Builder;
+
+/// A node the rewrite built, beside the operator run it was built for: operator runs are numbered
+/// in the order the rewrite chains them.
+#[derive(Clone, Copy)]
+pub(super) struct Built {
+    pub(super) run: u32,
+    pub(super) kind: BuiltKind,
+}
+
+/// What a node the rewrite built is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BuiltKind {
+    /// A keyworded use: a chained binary or unary node, or the `==` of a `!=`.
+    Use,
+    /// The `NOT` a `!=` is wrapped in, which is always the builtin's.
+    Negation,
+    /// A pairwise operator run's synthesized block, holding its hoists and its folded pairs.
+    Block,
+    /// The one-part node a group mark over a hoisting pairwise operator run wraps its block in, so the
+    /// block is held by an `Expression` part.
+    Holder,
+}
 
 /// A part run under construction, in scratch.
 type Run<'x, 'graph> = BumpVec<'x, Spanned<ExpressionPart<'graph>>>;
@@ -97,8 +124,23 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
 
     /// Whether `node` is a block the pairwise rewrite synthesized.
     fn is_block(&self, node: ProgramNode<'graph>) -> bool {
-        self.blocks
-            .contains_key(&(node.reference().parts.as_ptr() as usize))
+        self.built_as(node.reference())
+            .is_some_and(|built| built.kind == BuiltKind::Block)
+    }
+
+    /// What the rewrite built `node` as, if it built it.
+    pub(super) fn built_as(&self, node: &KExpression<'graph>) -> Option<Built> {
+        self.built.get(&(node.parts.as_ptr() as usize)).copied()
+    }
+
+    /// Record `node` as built for the operator run being chained.
+    fn record(&mut self, node: ProgramNode<'graph>, kind: BuiltKind) {
+        let built = Built {
+            run: self.runs,
+            kind,
+        };
+        self.built
+            .insert(node.reference().parts.as_ptr() as usize, built);
     }
 
     /// One node with every operator run under it chained. A node with a builtin shape is read by
@@ -167,13 +209,13 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 }
                 // `a != b` written alone is the same rewrite one pair of a pairwise run takes.
                 if let [left, separator, right] = &run[..]
-                    && let ExpressionPart::Keyword(symbol) = separator.value
-                    && is_unequal(symbol)
+                    && let Some(symbol) = lone_unequal(node)
                 {
                     let op = Operator {
                         symbol,
                         span: separator.span.unwrap_or(node.source.span),
                     };
+                    self.runs += 1;
                     return self.infix(node.source.file, *left, op, *right).map(Some);
                 }
             }
@@ -196,9 +238,24 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             ExpressionPart::RecordType(node) => Ok(self
                 .rewrite_fields(node.reference())?
                 .map(ExpressionPart::RecordType)),
-            ExpressionPart::MarkedUse(mark, node) => Ok(self
-                .rewrite_node(node.reference())?
-                .map(|node| ExpressionPart::MarkedUse(*mark, node))),
+            // A mark over a hoisting pairwise operator run holds its block in a node of one part, as a
+            // statement does, so the block is still held by an `Expression` part.
+            ExpressionPart::MarkedUse(mark, node) => {
+                let Some(rewritten) = self.rewrite_node(node.reference())? else {
+                    return Ok(None);
+                };
+                if !self.is_block(rewritten) {
+                    return Ok(Some(ExpressionPart::MarkedUse(*mark, rewritten)));
+                }
+                let source = rewritten.reference().source;
+                let holder = [Spanned::at(
+                    ExpressionPart::Expression(rewritten),
+                    source.span,
+                )];
+                let holder = self.brand.nested_node(&holder, source);
+                self.record(holder, BuiltKind::Holder);
+                Ok(Some(ExpressionPart::MarkedUse(*mark, holder)))
+            }
             ExpressionPart::ListLiteral(items) => {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
                 let mut changed = false;
@@ -397,6 +454,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         );
         let mut operands: Run<'x, 'graph> = BumpVec::new_in(self.scratch);
         operands.extend(parts.iter().step_by(2).copied());
+        // Every node built from here on is this operator run's: its operands are rewritten already.
+        self.runs += 1;
 
         let file = source.file;
         let mode = self.chaining(file, &operators)?;
@@ -595,8 +654,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         }
         hoisted.push(Spanned::at(ExpressionPart::Expression(folded), source.span));
         let block = self.brand.nested_node(&hoisted, source);
-        self.blocks
-            .insert(block.reference().parts.as_ptr() as usize, ());
+        self.record(block, BuiltKind::Block);
         Ok(block)
     }
 
@@ -622,7 +680,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 Spanned::at(ExpressionPart::Keyword(not_symbol()), op.span),
                 Spanned::at(ExpressionPart::Expression(equal), span),
             ];
-            return self.built(file, op, &negated, span);
+            let negated = self.built(file, op, &negated, span)?;
+            self.record(negated, BuiltKind::Negation);
+            return Ok(negated);
         }
         let run = [
             left,
@@ -632,10 +692,11 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         self.built(file, op, &run, span)
     }
 
-    /// One node of the rewrite, refused when its run spells a builtin form — an operator symbol
-    /// whose chained node a later reader would walk as a form rather than as a call.
+    /// One node of the rewrite, recorded as a use of the operator run being chained, and refused
+    /// when its parts spell a builtin expression shape — an operator symbol whose chained node a
+    /// later reader would walk as that shape rather than as a call.
     fn built(
-        &self,
+        &mut self,
         file: FileId,
         op: Operator,
         run: &[Spanned<ExpressionPart<'graph>>],
@@ -651,7 +712,25 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 },
             });
         }
+        self.record(node, BuiltKind::Use);
         Ok(node)
+    }
+}
+
+/// Whether the rewrite rewrites `node` itself, not only what is under it: an operator run, or a
+/// lone `a != b`.
+pub(super) fn chained(node: &KExpression<'_>) -> bool {
+    node.shape() == DispatchShape::OperatorChain || lone_unequal(node).is_some()
+}
+
+/// The `!=` of a node written `a != b`.
+fn lone_unequal(node: &KExpression<'_>) -> Option<KeywordSymbol> {
+    match node.parts {
+        [_, separator, _] => match separator.value {
+            ExpressionPart::Keyword(symbol) if is_unequal(symbol) => Some(symbol),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

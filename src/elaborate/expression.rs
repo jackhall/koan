@@ -2,7 +2,7 @@
 //! the handles its parts elaborate to.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::binder::{SlotLabel, needed_name, needing, quantifier_entries};
+use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_label};
@@ -284,7 +284,8 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 let argument = self.part(&parts[0].value, groups)?;
                 self.apply(site, constructor, &[(BinderSymbol::Type(*param), argument)])
             }
-            // `Kind NEEDING #[y …]` — a code kind below `Code`, and a list of one-name quotes.
+            // `Kind NEEDING #[y …]` — a code kind below `Code`, and a list of quotes each of one
+            // name or of a bucket key.
             3 if let Some((kind, quotes)) = needing(node) => {
                 let kind = self.part(kind, groups)?;
                 if kind.code_parent().is_none() {
@@ -292,7 +293,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 }
                 let mut names = BumpVec::with_capacity_in(quotes.len(), self.scratch);
                 for quote in quotes.iter() {
-                    names.push(needed_name(quote).ok_or(unsupported)?);
+                    names.push(needed_entry(quote).ok_or(unsupported)?);
                 }
                 Ok(self.types.code_needing(self.scratch, kind, &names))
             }

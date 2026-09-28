@@ -22,7 +22,7 @@ use sexlex::{Item, Kind, Node};
 use super::error::ParseError;
 use crate::memory::{ProgramBrand, collect};
 use crate::parse::ast::{
-    ExpressionPart, KExpression, KLiteral, KeyElement, Mark, ProgramExpression,
+    DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, Mark, ProgramExpression,
 };
 use crate::parse::builtin_shapes::KEYWORDS;
 use crate::parse::builtin_shapes::binder::{admit_bare_type_slots, needed_key};
@@ -583,10 +583,29 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 Some(outer),
             ));
         }
+        if mark == Mark::Built {
+            self.record_built_keys(&node);
+        }
         Ok(Spanned::at(
             ExpressionPart::MarkedUse(mark, self.program.alloc_node(body)),
             outer,
         ))
+    }
+
+    /// Record the spelling of each bucket key a `\(…)` use leaves for its code's builder to
+    /// offer, so the code's carried type renders the key as written: the use's own key, or, over
+    /// an operator run, each binary use of one of its operators.
+    fn record_built_keys(&self, node: &KExpression<'a>) {
+        if node.shape() != DispatchShape::OperatorChain {
+            self.symbols
+                .record_key(node.stored_key().iter().map(|element| element.keyword()));
+            return;
+        }
+        for element in node.stored_key() {
+            if let Some(keyword) = element.keyword() {
+                self.symbols.record_key([None, Some(keyword), None]);
+            }
+        }
     }
 
     /// A collection literal can't be glued to a token on either side: `foo[1]` would read as an

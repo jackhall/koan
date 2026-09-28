@@ -348,6 +348,9 @@ pub enum BinderSymbol {
     /// A registration slot, which no text spells: a keyworded use reaches it through its bucket
     /// key.
     Registration(RegistrationSymbol),
+    /// A bucket key named where a name could be: a keyworded hole or `\` mark of a quote's code,
+    /// or a key a `NEEDING` list or an `EVAL` offers. No binder declares one.
+    Key(KeySymbol),
 }
 
 impl BinderSymbol {
@@ -376,14 +379,17 @@ impl BinderSymbol {
             BinderSymbol::Value(name) => name.symbol(),
             BinderSymbol::Type(name) => name.symbol(),
             BinderSymbol::Registration(registration) => registration.symbol(),
+            BinderSymbol::Key(key) => key.symbol(),
         }
     }
 
     /// Which side of the value/type partition this name binds on. A registration binds a function,
-    /// which is a value.
+    /// and a key the list of functions filling it, which are values.
     pub fn bind_kind(self) -> BindKind {
         match self {
-            BinderSymbol::Value(_) | BinderSymbol::Registration(_) => BindKind::Value,
+            BinderSymbol::Value(_) | BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
+                BindKind::Value
+            }
             BinderSymbol::Type(_) => BindKind::Type,
         }
     }

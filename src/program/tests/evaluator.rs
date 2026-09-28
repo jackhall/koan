@@ -22,7 +22,7 @@ use crate::program::{
 use crate::scheduler::{
     Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Builtins, CaptureSlot, Position, Site, Slot};
+use crate::scope::{Builtins, CaptureSlot, Offer, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Circular, Knotted as _, Link, List, Record, TypeValue, Value};
@@ -336,7 +336,10 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 .shape()
                 .offers(Site::of(&operand.value))
                 .iter()
-                .map(|(name, at)| (*name, view.read(*at)))
+                .map(|(name, offer)| match offer {
+                    Offer::Name(at) => (*name, view.read(*at)),
+                    Offer::Key(_) => unreachable!("the miniature evaluator offers names alone"),
+                })
                 .collect();
             let offered = Record::new(step.writer(), &fields, types, &scratch);
             match eval(program, code, Value::Record(offered), Use::Forwards) {

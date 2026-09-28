@@ -9,7 +9,9 @@
 
 use std::fmt::Write as _;
 
-use crate::symbols::{KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeSymbol};
+use crate::symbols::{
+    BinderSymbol, KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeSymbol,
+};
 
 use super::digest::empty_schema_digest;
 use super::handle::{
@@ -82,7 +84,10 @@ fn write_name_in(
                 if index > 0 {
                     f.write_str(" ")?;
                 }
-                write!(f, "{}", symbols.display(name.symbol()))?;
+                match name {
+                    BinderSymbol::Key(key) => write!(f, "({})", symbols.display(key.symbol()))?,
+                    _ => write!(f, "{}", symbols.display(name.symbol()))?,
+                }
             }
             f.write_str("])")
         }

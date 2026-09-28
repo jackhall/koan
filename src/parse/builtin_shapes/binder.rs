@@ -200,6 +200,12 @@ pub(crate) fn needed_name(quote: &ExpressionPart<'_>) -> Option<BinderSymbol> {
     }
 }
 
+/// What a `NEEDING` list's quote names: a name, or a bucket key.
+pub(crate) fn needed_entry(quote: &ExpressionPart<'_>) -> Option<BinderSymbol> {
+    needed_name(quote)
+        .or_else(|| needed_key(quote).map(|run| BinderSymbol::Key(KeyElement::key(run))))
+}
+
 /// The bucket key a `NEEDING` list's quote spells, `#[(LOG _)]`: a quoted group of keywords and
 /// one `_` per slot, with at least one keyword that is not `_`. A slot name is invisible to
 /// dispatch, so the key names none.

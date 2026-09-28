@@ -4,8 +4,8 @@
 
 use crate::parse::{ExpressionPart, KExpression, Mark};
 use crate::scope::{
-    BodyShape, Builtins, CaptureSource, Coordinate, Position, ShapeError, ShapeKind, Site, Slot,
-    Target,
+    BodyShape, Builtins, CaptureSource, Coordinate, Offer, Position, ShapeError, ShapeKind, Site,
+    Slot, Target,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
@@ -79,6 +79,12 @@ fn value(fixture: &Fixture<'_, '_>, text: &str) -> BinderSymbol {
     BinderSymbol::Value(value_name(text, fixture.symbols))
 }
 
+/// The keyworded hole an unmarked use at the key `text` spells leaves open in its code.
+fn hole(fixture: &Fixture<'_, '_>, text: &str) -> (BinderSymbol, Option<Mark>, CaptureSource) {
+    let key = fixture.symbols.key(text).expect("a key");
+    (BinderSymbol::Key(key), None, CaptureSource::Hole)
+}
+
 /// Read at `slot` of the reader's own activation.
 fn local(slot: Slot) -> CaptureSource {
     CaptureSource::Read(Coordinate::Activation {
@@ -102,17 +108,19 @@ fn a_hole_a_written_name_and_a_built_name_each_resolve_their_own_way() {
         let code = code(shape, 1);
         let x = value(fixture, "x");
         let (slot, _) = shape.slot(x).unwrap();
-        // Three captures of one name: the unmarked one never reaches the program's `x`.
+        // Three captures of one name: the unmarked one never reaches the program's `x`. The use
+        // itself is a keyworded hole, resolved before its arguments.
         assert_eq!(
             captures(code),
             [
+                hole(fixture, "PRINT _ _ _"),
                 (x, None, CaptureSource::Hole),
                 (x, Some(Mark::Written), local(slot)),
                 (x, Some(Mark::Built), CaptureSource::Offered),
             ]
         );
         let parts = code.body()[0].parts;
-        for (index, capture) in [(1, 0), (2, 1), (3, 2)] {
+        for (index, capture) in [(1, 1), (2, 2), (3, 3)] {
             let mention = code.mention(Site::of(&parts[index].value)).unwrap();
             assert_eq!(mention.coordinate, captured(capture));
         }
@@ -128,7 +136,13 @@ fn a_written_name_never_binds_to_a_binder_in_its_code() {
             let code = code(shape, 1);
             let x = value(fixture, "x");
             let (outer, _) = shape.slot(x).unwrap();
-            assert_eq!(captures(code), [(x, Some(Mark::Written), local(outer))]);
+            assert_eq!(
+                captures(code),
+                [
+                    hole(fixture, "PRINT _ _"),
+                    (x, Some(Mark::Written), local(outer))
+                ]
+            );
             // The unmarked `x` is the code's own binder.
             let (inner, _) = code.slot(x).unwrap();
             let print = &code.body()[1];
@@ -157,9 +171,11 @@ fn a_function_in_code_captures_each_name_through_its_mark() {
                 value(fixture, "y"),
             );
             let (slot, _) = shape.slot(v).unwrap();
+            let print = hole(fixture, "PRINT _");
             assert_eq!(
                 captures(code),
                 [
+                    print,
                     (x, None, CaptureSource::Hole),
                     (v, Some(Mark::Written), local(slot)),
                     (y, Some(Mark::Built), CaptureSource::Offered),
@@ -167,12 +183,14 @@ fn a_function_in_code_captures_each_name_through_its_mark() {
             );
             let body = nested(code, &code.body()[0], 5);
             assert_eq!(body.kind(), ShapeKind::Callable);
+            // The three uses share one hole.
             assert_eq!(
                 captures(body),
                 [
-                    (x, None, CaptureSource::Read(captured(0))),
-                    (v, Some(Mark::Written), CaptureSource::Read(captured(1))),
-                    (y, Some(Mark::Built), CaptureSource::Read(captured(2))),
+                    (print.0, None, CaptureSource::Read(captured(0))),
+                    (x, None, CaptureSource::Read(captured(1))),
+                    (v, Some(Mark::Written), CaptureSource::Read(captured(2))),
+                    (y, Some(Mark::Built), CaptureSource::Read(captured(3))),
                 ]
             );
         },
@@ -192,6 +210,7 @@ fn marks_work_on_type_names_and_a_builtin_is_no_hole() {
             assert_eq!(
                 captures(code),
                 [
+                    hole(fixture, "PRINT _ _ _ _"),
                     (alias, Some(Mark::Written), local(slot)),
                     (carrier, None, CaptureSource::Hole),
                 ]
@@ -228,12 +247,16 @@ fn a_nested_quotes_written_name_is_a_hole_of_the_code_around_it() {
         let shape = shape.expect("the program shapes");
         let outer = code(shape, 0);
         let y = value(fixture, "y");
-        assert_eq!(captures(outer), [(y, None, CaptureSource::Hole)]);
+        let print = hole(fixture, "PRINT _");
+        assert_eq!(captures(outer), [print, (y, None, CaptureSource::Hole)]);
         let inner = nested(outer, &outer.body()[0], 1);
         assert_eq!(inner.kind(), ShapeKind::Code);
         assert_eq!(
             captures(inner),
-            [(y, Some(Mark::Written), CaptureSource::Read(captured(0)))]
+            [
+                print,
+                (y, Some(Mark::Written), CaptureSource::Read(captured(1)))
+            ]
         );
     });
 }
@@ -363,7 +386,7 @@ fn a_quote_reading_its_own_binder_is_a_one_member_knot() {
         assert_eq!(component.members, [slot]);
         let code = code(shape, 0);
         assert!(matches!(
-            code.captures()[0].source,
+            code.captures()[1].source,
             CaptureSource::Member { index: 0, .. }
         ));
     });
@@ -381,15 +404,16 @@ fn an_eval_of_a_parameter_needing_names_offers_them_where_it_is_written() {
             let (slot, _) = body.slot(it).unwrap();
             let eval = &body.body()[1];
             let offered = body.offers(Site::of(&eval.parts[1].value));
+            let [(name, Offer::Name(at))] = offered else {
+                panic!("one name is offered");
+            };
+            assert_eq!(*name, it);
             assert_eq!(
-                offered,
-                [(
-                    it,
-                    Coordinate::Activation {
-                        hops: 0,
-                        target: Target::Local(slot)
-                    }
-                )]
+                *at,
+                Coordinate::Activation {
+                    hops: 0,
+                    target: Target::Local(slot)
+                }
             );
             // The `EVAL` reads `it` as an eager read at its statement would.
             assert_eq!(
