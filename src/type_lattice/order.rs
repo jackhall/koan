@@ -35,7 +35,7 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 /// - A union is below `b` when every member is; a non-union is below a union when it is below some
 ///   member.
 /// - A signature is below another when [`sig_subtype`] accepts the pair.
-/// - A **rigid variable** — `Quantified` or `AbstractType` — is a nominal identity bounded by its
+/// - A **rigid variable** — `Quantified`, `Lexical` or `AbstractType` — is a nominal identity bounded by its
 ///   bound: below it are only itself and `Never`, above it itself and everything above its bound,
 ///   a union included. The two clauses agree because a bound is a variable-free type, so nothing
 ///   above a bound is itself rigid.
@@ -273,6 +273,7 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::Never
         | TypeNode::Union { .. }
         | TypeNode::Quantified { .. }
+        | TypeNode::Lexical { .. }
         | TypeNode::AbstractType { .. }
         | TypeNode::DeferredReturn(_) => None,
     }

@@ -221,6 +221,17 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
                 )
             })
         });
+    // A lexical variable: one of two levels, named from the type alphabet, over a ground bound.
+    let lexical_world = world.clone();
+    let lexical = (0..2usize, 0..world.type_names.len(), 0..grounds.len()).prop_map(
+        move |(level, name, bound)| {
+            lexical_world.types.lexical(
+                level,
+                lexical_world.type_names[name],
+                lexical_world.grounds()[bound],
+            )
+        },
+    );
     // A code kind needing names: a kind from three levels of the code tree, needing one to three
     // names of the binder alphabet.
     let needing_world = world.clone();
@@ -234,10 +245,19 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
     let mut rigid: Vec<KType> = bound.as_ref().clone();
     rigid.extend(members.iter().copied());
     if rigid.is_empty() {
-        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => needing].boxed();
+        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => lexical, 2 => needing]
+            .boxed();
     }
     let in_scope = (0..rigid.len()).prop_map(move |index| rigid[index]);
-    prop_oneof![6 => atoms, 1 => deferred, 2 => opaque, 2 => needing, 4 => in_scope].boxed()
+    prop_oneof![
+        6 => atoms,
+        1 => deferred,
+        2 => opaque,
+        2 => lexical,
+        2 => needing,
+        4 => in_scope
+    ]
+    .boxed()
 }
 
 /// The declaring scope a generated opaque mint is sourced at — any id that is not the canonical

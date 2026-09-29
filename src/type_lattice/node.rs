@@ -87,9 +87,9 @@ pub enum TypeNode<'run> {
     /// SIG slot or minted by opaque ascription.
     ///
     /// Named and editable where [`Self::Quantified`] is positional and alpha-equivalent, because
-    /// members are reached by name and schemas are edited by name. The two share the rigid rule
-    /// in the order, the substitution mechanism, and the role of the rigid side in a specificity
-    /// check.
+    /// members are reached by name and schemas are edited by name. The three rigid variables — these
+    /// two and [`Self::Lexical`] — share the rigid rule in the order and the role of the rigid side
+    /// in a specificity check.
     ///
     /// `source` is the binder the member is named against. `nonce` is the generativity
     /// mechanism: `None` for a SIG-body declaration, `Some(<per-application module scope id>)`
@@ -175,6 +175,19 @@ pub enum TypeNode<'run> {
         index: usize,
         bound: KType,
     },
+    /// A **lexical variable**: a name only a run binds — a `FOR ALL` or `:Type` parameter, a name a
+    /// `USING` surfaces, a quote's hole, a type binder the load left unknown — read where the
+    /// program loads. Positional by its `level` along the lexical chain of bodies that declares
+    /// it, bounded by `bound`, and named `name`. No binder captures it and no solve binds it: a run
+    /// replaces it with the type bound at its level
+    /// ([`substitute_levels`](super::substitute::substitute_levels)).
+    ///
+    /// Every field is identity: along one chain a level is one name, and the name renders it.
+    Lexical {
+        level: usize,
+        name: TypeSymbol,
+        bound: KType,
+    },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
     /// deduplicated, no nested `Union`, no member below the rest, always two or more, in the order
     /// first written. Identity is order-blind. Build through
@@ -239,13 +252,13 @@ impl TypeNode<'_> {
         }
     }
 
-    /// A rigid variable's bound — a [`Self::Quantified`]'s or an [`Self::AbstractType`]'s — or
-    /// `None` for any other node.
+    /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or an
+    /// [`Self::AbstractType`]'s — or `None` for any other node.
     pub fn rigid_bound(&self) -> Option<KType> {
         match self {
-            TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => {
-                Some(*bound)
-            }
+            TypeNode::Quantified { bound, .. }
+            | TypeNode::Lexical { bound, .. }
+            | TypeNode::AbstractType { bound, .. } => Some(*bound),
             _ => None,
         }
     }

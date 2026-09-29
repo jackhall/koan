@@ -327,7 +327,9 @@ pub fn record_type(
 pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
-        TypeNode::Quantified { bound, .. } => admits_part(bound, part, types),
+        TypeNode::Quantified { bound, .. } | TypeNode::Lexical { bound, .. } => {
+            admits_part(bound, part, types)
+        }
         TypeNode::Never => false,
         TypeNode::AnyValue => matches!(
             part,

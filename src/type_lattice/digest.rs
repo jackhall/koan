@@ -93,6 +93,7 @@ const TAG_NAME: u8 = 0x28;
 const TAG_KEYWORD: u8 = 0x29;
 const TAG_DECLARATION: u8 = 0x2A;
 const TAG_CODE_NEEDING: u8 = 0x2B;
+const TAG_LEXICAL: u8 = 0x2C;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -222,6 +223,7 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
             ..
         } => shape_digest(quantifiers.len(), elements, classes, ret.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
+        TypeNode::Lexical { level, name, bound } => lexical_digest(*level, *name, *bound),
         TypeNode::Union { members } => union_digest(scratch, members),
         TypeNode::ConstructorApply {
             constructor,
@@ -379,6 +381,15 @@ pub(super) fn shape_digest(
 pub(super) fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
     DigestHasher::new(TAG_QUANTIFIED)
         .count(index)
+        .digest(bound.digest())
+        .finish()
+}
+
+/// A lexical variable: its level, its name and its bound — every field is identity.
+pub(super) fn lexical_digest(level: usize, name: TypeSymbol, bound: KType) -> TypeDigest {
+    DigestHasher::new(TAG_LEXICAL)
+        .count(level)
+        .symbol(name.symbol())
         .digest(bound.digest())
         .finish()
 }

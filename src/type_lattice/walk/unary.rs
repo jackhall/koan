@@ -328,9 +328,9 @@ pub fn children(
             arguments.values().for_each(|kt| out(kt, false));
         }
         // A rigid variable's one child is its bound.
-        TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => {
-            out(bound, false)
-        }
+        TypeNode::Quantified { bound, .. }
+        | TypeNode::Lexical { bound, .. }
+        | TypeNode::AbstractType { bound, .. } => out(bound, false),
         // Abstract members, then manifest members, then value slots, then the keyworded shapes.
         TypeNode::Signature { schema, .. } => {
             if signature == Step::Through {
@@ -419,6 +419,7 @@ fn reassemble(
             types.constructor_apply(scratch, new[0], &rekey(scratch, arguments, &new[1..]))
         }
         TypeNode::Quantified { index, .. } => types.quantified(index, new[0]),
+        TypeNode::Lexical { level, name, .. } => types.lexical(level, name, new[0]),
         TypeNode::AbstractType {
             source,
             name,

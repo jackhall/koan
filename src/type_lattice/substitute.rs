@@ -61,6 +61,30 @@ pub fn substitute_quantified(
     )
 }
 
+/// `kt` with every lexical variable whose level `bindings` covers replaced by its binding, under
+/// any binder — no binder captures one. What a run reads a load-time type through, each level bound
+/// to the type its coordinate holds. A level past `bindings` is kept, and a signature is opaque.
+pub fn substitute_levels(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    kt: KType,
+    bindings: &[KType],
+) -> KType {
+    if bindings.is_empty() || !types.contains_rigid(kt) {
+        return kt;
+    }
+    rebuild(
+        types,
+        scratch,
+        kt,
+        OVER_QUANTIFIERS,
+        &mut |_, node, _| match *node {
+            TypeNode::Lexical { level, .. } => bindings.get(level).copied(),
+            _ => None,
+        },
+    )
+}
+
 /// `kt` at a solved call. A **binder** — a shape, or a function type carrying a group — owns the
 /// variables, so instantiating one substitutes through its positions and return and the canonical
 /// form drops the emptied group: the result is the callable this call has, as against the one the
@@ -115,16 +139,16 @@ pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
         kt,
         OVER_MEMBERS,
         &mut |_, node, _| match *node {
-            TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => {
-                Some(bound)
-            }
+            TypeNode::Quantified { bound, .. }
+            | TypeNode::Lexical { bound, .. }
+            | TypeNode::AbstractType { bound, .. } => Some(bound),
             _ => None,
         },
     )
 }
 
-/// `kt` with each free variable — a `Quantified` under none of `kt`'s own binders, or an
-/// `AbstractType` — read as the extreme that puts the result above every instance within the
+/// `kt` with each free variable — a `Quantified` under none of `kt`'s own binders, a `Lexical` or
+/// an `AbstractType` — read as the extreme that puts the result above every instance within the
 /// variables' bounds: its bound at a covariant position, `Never` at a contravariant one. The
 /// variable-free type a load-time type is compared through where the run may bind its variables to
 /// anything under their bounds. A signature is opaque, as [`TypeRegistry::contains_rigid`] reads it.
@@ -143,7 +167,7 @@ pub fn bound_above(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
         &mut |_, node, context| {
             let bound = match *node {
                 TypeNode::Quantified { bound, .. } if context.binder_depth() == 0 => bound,
-                TypeNode::AbstractType { bound, .. } => bound,
+                TypeNode::AbstractType { bound, .. } | TypeNode::Lexical { bound, .. } => bound,
                 _ => return None,
             };
             Some(match context.variance() {

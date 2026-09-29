@@ -189,7 +189,7 @@ proptest! {
         let scratch = &bump;
         let rigid = matches!(
             types.node(b),
-            TypeNode::Quantified { .. } | TypeNode::AbstractType { .. }
+            TypeNode::Quantified { .. } | TypeNode::Lexical { .. } | TypeNode::AbstractType { .. }
         );
         if rigid {
             prop_assert_eq!(
@@ -327,7 +327,9 @@ proptest! {
             _ => Visit::Descend,
         });
         let rigid = visit(&types, scratch, a, LEAF, &mut |_, node, _| match node {
-            TypeNode::Quantified { .. } | TypeNode::AbstractType { .. } => Visit::Stop,
+            TypeNode::Quantified { .. }
+            | TypeNode::Lexical { .. }
+            | TypeNode::AbstractType { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
         prop_assert_eq!(types.contains_quantified(a), quantified);

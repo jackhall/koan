@@ -54,7 +54,7 @@ struct Entry<'run> {
     node: TypeNode<'run>,
     /// Whether a `Quantified` position is reachable without crossing a shape's own binder.
     quantified: bool,
-    /// Whether any rigid variable — `Quantified` or `AbstractType` — is reachable.
+    /// Whether any rigid variable — `Quantified`, `Lexical` or `AbstractType` — is reachable.
     rigid: bool,
 }
 
@@ -86,7 +86,7 @@ impl<'run> Entry<'run> {
                 quantified: true,
                 rigid: true,
             },
-            TypeNode::AbstractType { .. } => Entry {
+            TypeNode::AbstractType { .. } | TypeNode::Lexical { .. } => Entry {
                 node,
                 quantified,
                 rigid: true,
@@ -195,6 +195,12 @@ impl<'run> TypeRegistry<'run> {
     /// interned nothing else.
     pub fn in_region(bump: BumpAllocator<'run>) -> Self {
         Self::with_verdict_slots(bump, VERDICT_SLOTS)
+    }
+
+    /// `test`-only: how many nodes the registry has interned.
+    #[cfg(test)]
+    pub fn node_count(&self) -> usize {
+        self.nodes.borrow().len()
     }
 
     /// `test`-only: a registry whose verdict table holds `slots` slots, so a test can fill a
@@ -581,6 +587,19 @@ impl<'run> TypeRegistry<'run> {
         );
         self.intern_digested(digest::quantified_digest(index, bound), || {
             TypeNode::Quantified { index, bound }
+        })
+    }
+
+    /// The lexical variable at `level`, named `name`, bounded by `bound`.
+    ///
+    /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).
+    pub fn lexical(&self, level: usize, name: TypeSymbol, bound: KType) -> KType {
+        debug_assert!(
+            !self.contains_rigid(bound),
+            "a rigid variable's bound holds no rigid variable of its own",
+        );
+        self.intern_digested(digest::lexical_digest(level, name, bound), || {
+            TypeNode::Lexical { level, name, bound }
         })
     }
 
@@ -1010,13 +1029,13 @@ impl<'run> TypeRegistry<'run> {
         self.entry(kt).quantified
     }
 
-    /// Whether any rigid variable — `Quantified` or `AbstractType` — is reachable from `kt`. Read
-    /// off the flag interning stored beside the node.
+    /// Whether any rigid variable — `Quantified`, `Lexical` or `AbstractType` — is reachable from
+    /// `kt`. Read off the flag interning stored beside the node.
     ///
     /// The invariant a **bound** carries: a bound is a variable-free type. That is what keeps the
     /// order's two rigid clauses consistent, since below a rigid variable are only itself and
     /// `Never` while above it is everything above its bound — and a rigid bound would put a
-    /// variable in both sets at once. The two doors that mint a rigid variable assert it, so a
+    /// variable in both sets at once. The three doors that mint a rigid variable assert it, so a
     /// caller that reaches for a rigid bound fails a test rather than producing a wrong verdict.
     pub fn contains_rigid(&self, kt: KType) -> bool {
         self.entry(kt).rigid

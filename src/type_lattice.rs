@@ -97,7 +97,7 @@ pub use sig_relations::{
 pub use substitute::{
     bound_above, canonicalize_binder, erase_quantified, erase_rigid, instantiate_quantified,
     quantifier_bounds, slot_more_specific_or_equal, slot_satisfied_by, slot_types_equal,
-    substitute_quantified, substitute_sig_members,
+    substitute_levels, substitute_quantified, substitute_sig_members,
 };
 pub use unify::{Collector, UnifyFailure, admits_with};
 pub use walk::Variance;

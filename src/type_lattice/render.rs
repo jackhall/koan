@@ -187,7 +187,7 @@ fn write_name_in(
             }
             f.write_str("})")
         }
-        TypeNode::AbstractType { name, .. } => {
+        TypeNode::AbstractType { name, .. } | TypeNode::Lexical { name, .. } => {
             write!(f, "{}", display_symbol(name.symbol(), symbols))
         }
         // A sealed nominal member renders by its own member name — a bare newtype (`:Wrapper`) or a

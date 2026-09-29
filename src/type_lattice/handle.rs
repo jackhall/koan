@@ -271,6 +271,7 @@ impl KType {
             | TypeNode::KFunction { .. }
             | TypeNode::ExpressionShape { .. }
             | TypeNode::Quantified { .. }
+            | TypeNode::Lexical { .. }
             | TypeNode::DeferredReturn(_)
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }

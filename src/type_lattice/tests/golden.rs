@@ -233,6 +233,11 @@ fn every_node_kind_has_its_own_tag() {
             index: 0,
             bound: KType::ANY,
         },
+        TypeNode::Lexical {
+            level: 0,
+            name,
+            bound: KType::ANY,
+        },
         TypeNode::Union { members: &members },
         TypeNode::ConstructorApply {
             constructor: KType::NUMBER,
@@ -289,6 +294,7 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::KFunction { .. } => "KFunction",
             TypeNode::ExpressionShape { .. } => "ExpressionShape",
             TypeNode::Quantified { .. } => "Quantified",
+            TypeNode::Lexical { .. } => "Lexical",
             TypeNode::Union { .. } => "Union",
             TypeNode::ConstructorApply { .. } => "ConstructorApply",
             TypeNode::Signature { .. } => "Signature",
