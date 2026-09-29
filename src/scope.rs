@@ -52,6 +52,6 @@ pub use shape::{
     Unit, UnitWork, Which, source_of, spelled,
 };
 pub use typed::{
-    Callable, Canonical, Elaboration, ElaborationDisplay, ParameterBinding, Registered, Static,
-    Variable, solutions,
+    Callable, Canonical, Elaboration, ElaborationDisplay, Narrowing, ParameterBinding, Registered,
+    Static, Statics, Variable, solutions,
 };

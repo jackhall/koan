@@ -67,7 +67,7 @@ bump, has
 `L` lay the builtin table down, builds the program's shape over that table, types
 its type channel through
 [the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load),
-has `L` check it, takes the root, and lays the record down, beside the
+has `L` check it and record what it types, takes the root, and lays the record down, beside the
 [output sinks](#faults-and-output) the embedder hands `load`. It returns a `Result`, and
 `LoadError` carries the parse error, or the rendering of the `ShapeError` that
 stopped it. A shape error borrows program storage and names symbols and types
@@ -102,7 +102,9 @@ dispatch's, and everything in this module below it free of expression forms.
 which lays the table down through program storage's writer, `evaluator`, the
 step an evaluation runs, and `check`, which may refuse the program's shape once
 it is built and its types can be read, as dispatch's
-[overlap check](../dispatch/README.md#the-overlap-check) does. A record of function pointers ranked over `'graph`
+[overlap check](../dispatch/README.md#the-overlap-check) does, and may record
+what it learns on the shape through program storage's writer, as dispatch's
+[static types](../dispatch/README.md#static-types) do. A record of function pointers ranked over `'graph`
 cannot name the bundle's projections (rustc #100013); a method generic over
 `'graph` is handed the one the program loads at. Dispatch implements it; the
 tests implement a [miniature](tests/evaluator.rs).

@@ -126,7 +126,8 @@ storage, the interner, the type registry and the cell graph over them — and th
 body runner that performs it — see
 [src/program/README.md](src/program/README.md)),
 [dispatch/](src/dispatch.rs) (the language koan's programs run under: the
-builtin table, the evaluator and keyword selection, and the overlap check — see
+builtin table, the evaluator and keyword selection, the overlap check, and
+static selection — see
 [src/dispatch/README.md](src/dispatch/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
@@ -284,7 +285,7 @@ src/
 │   ├── shape/build/locate.rs   where an error found in a statement points — the part it is about, else the nearest spanned part or node — searched for on the error path only
 │   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
-│   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Canonical / Registered / ParameterBinding and Elaboration
+│   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Canonical / Registered / ParameterBinding and Elaboration, and the value channel's Statics and Narrowing
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types, then the overloads grouped by bucket key
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each; the run's copy and weight
 │   └── activation.rs     ActivationView — one call's or block's Copy, Drop-free read half, covariant in its brand: its header, the knot member it runs and a view of its slots, read by coordinate (an edge capture as its sibling member); Activation — the view beside the slot array that binds, invariant, with one constructor per body kind
@@ -343,6 +344,7 @@ src/
 │   ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, a keyworded call, an application, and finishing under a contract
 │   ├── select.rs         admission and selection over a candidate list, a keyworded call's argument record, and whether a call keeps a contract
 │   ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
+│   ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return check
 │   └── errors.rs         the messages of the error values dispatch raises
 ├── machine.rs           pub mod core / model / execute
 └── machine/

@@ -96,8 +96,14 @@ fn a_frame_s_value_carries_its_declared_return() {
 #[test]
 fn a_return_that_misses_its_declared_type_is_an_error_value() {
     assert_eq!(
-        run("EXPR #(BAD) -> Number = #(\"s\")\nPRINT (BAD)\nPRINT \"after\""),
+        run("LET r = {v = \"s\"}\nEXPR #(BAD) -> Number = #(r.v)\nPRINT (BAD)\nPRINT \"after\""),
         "error: :(FN :{} -> Number) returned Str, which does not satisfy Number"
+    );
+    assert_eq!(
+        run("EXPR #(BAD) -> Number = #(\"s\")\nPRINT (BAD)"),
+        "load: <test>:1:26: this body returns Str, which can never satisfy its declared return \
+         Number",
+        "a body that can never return its declared type refuses the load"
     );
 }
 
@@ -124,7 +130,7 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
     );
     assert_eq!(
         run("LET p = {y = 1}\nPRINT (ATTR p \"y\")"),
-        "error: no overload of ATTR _ _ admits (:{y :Number}, Str)"
+        "load: <test>:2:7: no overload of `ATTR _ _` admits (:{y :Number}, Str)"
     );
     assert_eq!(
         run("NEWTYPE Point = :{x :Number, y :Number}\n\
@@ -212,17 +218,17 @@ fn a_type_headed_application_is_a_construction() {
 }
 
 #[test]
-fn eval_over_a_number_is_a_no_overload_miss() {
+fn eval_over_a_number_refuses_the_load() {
     assert_eq!(
         run("LET n = 1\nPRINT (EVAL n)"),
-        "error: no overload of EVAL _ admits (Number)"
+        "load: <test>:2:7: no overload of `EVAL _` admits (Number)"
     );
 }
 
 #[test]
 fn an_uncaught_error_ends_the_program_with_its_message() {
     assert_eq!(
-        run("PRINT \"before\"\nPRINT (1 + \"a\")\nPRINT \"after\""),
+        run("LET r = {v = \"a\"}\nPRINT \"before\"\nPRINT (1 + r.v)\nPRINT \"after\""),
         "before\nerror: no overload of _ + _ admits (Number, Str)"
     );
 }
@@ -230,11 +236,13 @@ fn an_uncaught_error_ends_the_program_with_its_message() {
 #[test]
 fn every_evaluation_passes_an_error_it_receives_through_unchanged() {
     assert_eq!(
-        run("EXPR #(ONE x :Number) -> Number = #(x)\nPRINT [1, (ONE (ONE \"s\"))]"),
+        run("LET r = {v = \"s\"}\n\
+             EXPR #(ONE x :Number) -> Number = #(x)\n\
+             PRINT [1, (ONE (ONE r.v))]"),
         "error: no overload of ONE _ admits (Str)"
     );
     assert_eq!(
-        run("EXPR #(DEEP) -> Number = #(1 + \"a\")\nPRINT {n = (DEEP)}"),
+        run("LET r = {v = \"a\"}\nEXPR #(DEEP) -> Number = #(1 + r.v)\nPRINT {n = (DEEP)}"),
         "error: no overload of _ + _ admits (Number, Str)",
         "through a frame's contract"
     );

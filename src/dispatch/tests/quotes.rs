@@ -19,6 +19,12 @@ fn eval_runs_code_whose_dollar_names_bind_where_the_quote_is_written() {
     );
     assert_eq!(
         run(&format!("{TWICE}TWICE (PRINT \"hi\")")),
+        "load: <test>:5:1: no overload of `TWICE _` admits (Str)"
+    );
+    assert_eq!(
+        run(&format!(
+            "{TWICE}EXPR #(LOUD x :Str) -> Any = #(PRINT x)\nTWICE (LOUD \"hi\")"
+        )),
         "hi\nerror: no overload of TWICE _ admits (Str)",
         "the argument evaluated before the call is selected"
     );

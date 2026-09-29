@@ -431,7 +431,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     };
                     drop(reader);
                     nested.fix_callable(typed);
-                    if quantified(form) {
+                    if writes_for_all(form) {
                         let own = match typed {
                             Static::Closed(callable) => Some(Own {
                                 map: callable.quantifier_map,
@@ -515,8 +515,8 @@ fn located(statement: &KExpression<'_>, error: Elaboration, site: Site) -> Sourc
         .unwrap_or(statement.source)
 }
 
-/// Whether a callable's declaration writes a `FOR ALL` group.
-fn quantified(form: &KExpression<'_>) -> bool {
+/// Whether a callable's declaration writes a `FOR ALL` group — which opens a region of its own.
+pub fn writes_for_all(form: &KExpression<'_>) -> bool {
     form.cache()
         .builtin_shape()
         .is_some_and(|shape| shape.roles().any(|role| role == Role::Quantifiers))

@@ -42,15 +42,16 @@ pub trait Language {
     /// value delivered where the drain says.
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle>;
 
-    /// What the language refuses of a shape once it is built, before anything runs — the checks
-    /// that need types. None by default.
+    /// What the language refuses of a shape once it is built, and what it records on it through
+    /// `writer`, before anything runs — the checks that need types. None by default.
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         types: &'graph TypeRegistry<'graph>,
+        writer: Writer<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
-        let _ = (shape, builtins, types, scratch);
+        let _ = (shape, builtins, types, writer, scratch);
         Ok(())
     }
 }

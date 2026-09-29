@@ -120,16 +120,23 @@ expression that produces a quoted-expression value fills the slot just as well
 — a name bound to a quote, or a call that returns one — because the slot takes
 a value, not a spelling.
 
-Forget the `#` and the argument is an ordinary group, so it runs before
-`TWICE` is ever chosen. Writing
+Forget the `#` and the argument is an ordinary group, which would run before
+`TWICE` is ever chosen — and what it produces is the `Str` the print returns,
+not code. Koan sees that when the program loads, and refuses the call before
+anything runs, so `hi` is never printed:
 
 ```koan
+EXPR #(TWICE body :Expression) -> Any = #(
+  EVAL body
+  EVAL body
+)
 TWICE (PRINT "hi")
 ```
 
-prints `hi` once — that is the argument evaluating — and *then* fails to
-dispatch, because what reached the slot was the `Str` the print returned, not
-code. Nothing is undone by the failure; the side effect had already happened.
+```text
+error: <input>:5:1: no overload of `TWICE _` admits (Str)
+```
+
 The same happens to a name — its value, not its code, reaches the slot:
 
 ```koan
@@ -142,12 +149,14 @@ TWICE greeting
 ```
 
 ```text
-error: no overload of TWICE _ admits (Str)
+error: <input>:6:1: no overload of `TWICE _` admits (Str)
 ```
 
-The message names each argument by the *type* dispatch matched it on, not by
-its spelling — `greeting` had already evaluated to a `Str`, and a `Str` is what
-failed to match an `:Expression` slot. Write `#(…)` to pass the code itself.
+The message names each argument by its *type*, not by its spelling —
+`greeting` holds a `Str`, and a `Str` can never match an `:Expression` slot.
+Where the argument's type is only known once it runs, the argument runs first,
+side effects and all, and the call fails when it is chosen. Write `#(…)` to pass
+the code itself.
 
 Hence the rule for calling a form that takes code: **quote what must not run.**
 

@@ -25,7 +25,7 @@ use crate::type_lattice::sig_relations::{
     admits_shape, meet_schemas, shape_specificity, sig_subtype,
 };
 use crate::type_lattice::substitute::{
-    canonicalize_binder, erase_quantified, instantiate_quantified, quantifier_bounds,
+    bound_above, canonicalize_binder, erase_quantified, instantiate_quantified, quantifier_bounds,
     slot_more_specific_or_equal, slot_satisfied_by, slot_types_equal, substitute_quantified,
     substitute_sig_members,
 };
@@ -365,6 +365,24 @@ proptest! {
             erase_quantified(&types, scratch, a),
             instantiate_quantified(&types, scratch, a, bounds)
         );
+    }
+
+    // A type holding a binder is left out: relating two of them runs the unifier, whose
+    // completeness is not this law's subject.
+    #[test]
+    fn bounding_above_lies_over_every_instance(a in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        prop_assume!(!visit(&types, scratch, a, LEAF, &mut |_, node, _| {
+            if node.binds_quantifiers() { Visit::Stop } else { Visit::Descend }
+        }));
+        let above = bound_above(&types, scratch, a);
+        prop_assert!(!types.contains_rigid(above));
+        prop_assert!(is_subtype_of(&types, scratch, a, above));
+        let lowest = [KType::NEVER; 8];
+        let instance = substitute_quantified(&types, scratch, a, &lowest);
+        prop_assert!(is_subtype_of(&types, scratch, instance, above));
     }
 
     #[test]

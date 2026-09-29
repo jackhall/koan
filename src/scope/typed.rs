@@ -7,6 +7,9 @@
 //! cells hold them. A cell holds a [`Static`]: unknown, closed, or rigid over [`Variable`]s the run
 //! supplies, which [`solutions`] reads through an activation for one substitution.
 //!
+//! The value channel's records live here too: the [`Statics`] the language's load pass fixes for a
+//! body, and the [`Narrowing`] of each keyworded use's candidates.
+//!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
 use std::fmt;
@@ -17,7 +20,7 @@ use crate::type_lattice::{KType, TypeRegistry, display_name};
 use crate::values::{KnottedFamily, Value};
 
 use super::activation::ActivationView;
-use super::shape::{Coordinate, Site};
+use super::shape::{Candidate, Coordinate, Site};
 
 /// Where a `FOR ALL` name the declaration wrote landed in a canonical group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,6 +176,34 @@ pub enum Static<'graph, T> {
         value: T,
         variables: &'graph [Variable],
     },
+}
+
+/// What the load fixed about one keyworded use's candidates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Narrowing<'graph> {
+    /// Every candidate stays, and a call admits them all.
+    Full,
+    /// The candidates that can admit, in list order: every other can never admit what the run
+    /// passes.
+    Kept(&'graph [Candidate]),
+    /// The one candidate the load selected: always a [`Candidate::One`], read at this coordinate.
+    Selected(Coordinate),
+}
+
+/// The value channel's load-time facts for one body: a static type for every value expression and
+/// value binder — under which every type the run carries there lies — and each keyworded use's
+/// narrowing.
+#[derive(Clone, Copy, Debug)]
+pub struct Statics<'graph> {
+    /// Each part the evaluator reads as a value, by site, sorted by site.
+    pub parts: &'graph [(Site, KType)],
+    /// Each statement, by index into the shape's body; `Any` for one that binds nothing typed.
+    pub statements: &'graph [KType],
+    /// Each slot, by index: a value binder's static type, a registration's function type, and for a
+    /// type name the type of the type value it holds.
+    pub binders: &'graph [KType],
+    /// Each keyworded use's narrowing, parallel to the shape's candidate lists.
+    pub narrowings: &'graph [Narrowing<'graph>],
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

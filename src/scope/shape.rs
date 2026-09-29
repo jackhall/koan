@@ -29,7 +29,9 @@
 //! A shape also carries a write-once cell for each type fact the elaborator's load pass fixes
 //! before the program runs — each [`TypeExpression`] it records, each type binder, each
 //! registration, a callable body's own type, and a code shape's typing refusal — laid down empty by
-//! the builder, since `scope` sits below `elaborate`. See [README.md § Load-time
+//! the builder, since `scope` sits below `elaborate`. One more cell holds the value channel's
+//! [`Statics`] — a static type per value expression and binder, and each keyworded use's
+//! [`Narrowing`] — which the language's load pass fixes. See [README.md § Load-time
 //! types](README.md#load-time-types).
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
@@ -54,7 +56,7 @@ use crate::values::Knotted;
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
-use super::typed::{Callable, Elaboration, Registered, Static};
+use super::typed::{Callable, Elaboration, Narrowing, Registered, Static, Statics};
 
 mod build;
 
@@ -418,6 +420,8 @@ pub struct BodyShape<'graph> {
     callable: &'graph Cell<Static<'graph, Callable<'graph>>>,
     /// Why a code shape's code does not type, where the load pass found a refusal in it.
     typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
+    /// The value channel's static types and narrowings, fixed by the language's load pass.
+    statics: &'graph Cell<Option<Statics<'graph>>>,
 }
 
 /// What an `EVAL` of a code parameter offers the code it runs for one name its `NEEDING` list
@@ -701,6 +705,48 @@ impl<'graph> BodyShape<'graph> {
         self.typing_refusal.set(Some(refusal));
     }
 
+    /// The value channel's load-time facts, once the language's load pass has fixed them.
+    pub fn statics(&self) -> Option<Statics<'graph>> {
+        self.statics.get()
+    }
+
+    /// The static type of the part at `site`, where the load pass typed one.
+    pub fn value_type(&self, site: Site) -> Option<KType> {
+        let parts = self.statics.get()?.parts;
+        let index = parts.binary_search_by_key(&site, |(at, _)| *at).ok()?;
+        Some(parts[index].1)
+    }
+
+    /// The static type of statement `index` of [`body`](Self::body).
+    pub fn statement_type(&self, index: usize) -> Option<KType> {
+        self.statics.get()?.statements.get(index).copied()
+    }
+
+    /// The static type of the binder at `slot`.
+    pub fn binder_type(&self, slot: Slot) -> Option<KType> {
+        self.statics.get()?.binders.get(slot.index()).copied()
+    }
+
+    /// What the load fixed about the candidates of the keyworded use at `site`: `Full` where it
+    /// fixed nothing.
+    pub fn narrowing(&self, site: Site) -> Narrowing<'graph> {
+        let Some(statics) = self.statics.get() else {
+            return Narrowing::Full;
+        };
+        self.candidates
+            .binary_search_by_key(&site, |(use_site, _)| *use_site)
+            .ok()
+            .and_then(|index| statics.narrowings.get(index).copied())
+            .unwrap_or(Narrowing::Full)
+    }
+
+    /// Written once, by the language's load pass.
+    pub fn fix_statics(&self, statics: Statics<'graph>) {
+        debug_assert!(self.statics.get().is_none());
+        debug_assert_eq!(statics.narrowings.len(), self.candidates.len());
+        self.statics.set(Some(statics));
+    }
+
     /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each
     /// beside what it offers. Empty for an `EVAL` of anything but a parameter needing names.
     pub fn offers(&self, site: Site) -> &'graph [(BinderSymbol, Offer<'graph>)] {
@@ -751,6 +797,11 @@ impl<'graph> BodyShape<'graph> {
             .nested
             .iter()
             .all(|(_, body)| body.kind == ShapeKind::Code || body.ranks_alike(key, classes))
+    }
+
+    /// Every keyworded use's candidates, by the use's node site, sorted.
+    pub fn candidate_lists(&self) -> &'graph [(Site, CandidateList<'graph>)] {
+        self.candidates
     }
 
     /// The candidates of the keyworded use whose node sits at `site` ([`Site::of_node`]).
@@ -904,6 +955,18 @@ pub enum ShapeError<'graph> {
         builtin: KType,
         at: SourceRef,
     },
+    /// A keyworded use none of whose candidates can admit its arguments' static types.
+    NoAdmittingCandidate {
+        key: &'graph [KeyElement],
+        arguments: &'graph [KType],
+        at: SourceRef,
+    },
+    /// A callable body whose static type can never satisfy its declared return.
+    ReturnNeverSatisfied {
+        body: KType,
+        returns: KType,
+        at: SourceRef,
+    },
     /// A closed type that does not elaborate.
     Type { error: Elaboration, at: SourceRef },
     /// Two guards of one `MATCH … WITH` arm set that type to one handle, `guard`; `at` is the
@@ -985,6 +1048,8 @@ impl ShapeError<'_> {
             | ShapeError::RankingDisagrees { at, .. }
             | ShapeError::NoCandidate { at, .. }
             | ShapeError::Overlaps { at, .. }
+            | ShapeError::NoAdmittingCandidate { at, .. }
+            | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
             | ShapeError::RepeatedGuard { at, .. } => *at,
         }
@@ -1128,6 +1193,22 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "this overload of `{}` takes operands the builtin {} already takes",
                 self.key(key),
                 display_name(*builtin, self.types, self.symbols)
+            ),
+            ShapeError::NoAdmittingCandidate { key, arguments, .. } => {
+                write!(f, "no overload of `{}` admits (", self.key(key))?;
+                for (index, argument) in arguments.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}", display_name(*argument, self.types, self.symbols))?;
+                }
+                f.write_str(")")
+            }
+            ShapeError::ReturnNeverSatisfied { body, returns, .. } => write!(
+                f,
+                "this body returns {}, which can never satisfy its declared return {}",
+                display_name(*body, self.types, self.symbols),
+                display_name(*returns, self.types, self.symbols)
             ),
             ShapeError::Type { error, .. } => {
                 write!(f, "{}", error.display(self.symbols, self.types))

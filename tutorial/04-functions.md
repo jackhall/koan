@@ -73,8 +73,9 @@ error: <input>:1:1: a definition's head must spell at least one keyword
 
 ## Return types are enforced
 
-The declared return type is checked against the body's value every time the
-function runs. A mismatch is an error:
+The declared return type is checked against the body. A body that can never
+produce the declared type is refused when the program loads, before anything
+runs:
 
 ```koan
 EXPR #(WRONG x :Number) -> Str = #(x)
@@ -82,7 +83,20 @@ WRONG 5
 ```
 
 ```text
-error: :(FN :{x :Number} -> Str) returned Number, which does not satisfy Str
+error: <input>:1:35: this body returns Number, which can never satisfy its declared return Str
+```
+
+Where the body's type is only known once it runs — here `x` may be anything —
+its value is checked every time the function returns, and a mismatch is an
+error:
+
+```koan
+EXPR #(LOOSE x :Any) -> Str = #(x)
+LOOSE 5
+```
+
+```text
+error: :(FN :{x :Any} -> Str) returned Number, which does not satisfy Str
 ```
 
 The message names the function by its type; [Errors](09-errors.md) covers what an

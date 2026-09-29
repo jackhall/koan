@@ -109,12 +109,17 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
 #[test]
 fn no_admitting_candidate_is_a_miss_naming_the_argument_types() {
     assert_eq!(
-        run("PRINT (\"a\" + 1)"),
+        run("LET r = {v = \"a\"}\nPRINT (r.v + 1)"),
         "error: no overload of _ + _ admits (Str, Number)"
     );
     assert_eq!(
+        run("PRINT (\"a\" + 1)"),
+        "load: <test>:1:7: no overload of `_ + _` admits (Str, Number)",
+        "a use no candidate can admit refuses the load"
+    );
+    assert_eq!(
         run("EXPR #(PICK x :Str) -> Str = #(\"a\")\nPRINT (PICK {n = 1})"),
-        "error: no overload of PICK _ admits (:{n :Number})"
+        "load: <test>:2:7: no overload of `PICK _` admits (:{n :Number})"
     );
 }
 
@@ -177,5 +182,16 @@ fn code_an_eval_runs_is_checked_for_overlaps_where_it_runs() {
         run(source),
         "loaded\nerror: <test>:1:11: this overload of `_ + _` takes operands the builtin \
          :(EXPR #(_ :Number + _ :Number) -> Number) already takes"
+    );
+}
+
+#[test]
+fn a_statically_selected_candidate_still_solves_its_group_from_the_carried_types() {
+    let source = "EXPR #(EITHER) -> (Number | Str) = #(1)\n\
+                  EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(\"both\")\n\
+                  PRINT (BOTH (EITHER) AND \"s\")";
+    assert_eq!(
+        run(source),
+        "error: no overload of BOTH _ AND _ admits (Number, Str)"
     );
 }

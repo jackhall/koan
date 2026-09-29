@@ -11,7 +11,8 @@ evaluator answers each with an error saying it does not run yet. A
 arm's last statement is in tail position, but
 [a block never tails](../../src/program/README.md#frames-contracts-and-tails). A
 one-variant union collapses to its variant, so `One.Only` is refused as naming
-no member of `Only`.
+no member of `Only`. The load's [static types](../../src/dispatch/README.md#static-types)
+read an arm's `it` as `Any`.
 
 **Acceptance criteria.**
 
@@ -31,6 +32,7 @@ no member of `Only`.
 - An arm whose `MATCH` is in tail position tails, so a recursion through `MATCH`
   arms N deep holds a constant number of cells.
 - `MATCH` branches on a scrutinee's value as well as its type.
+- An arm's `it` has the arm's guard as its static type.
 - The tutorial snippets using `MATCH` without `TRY`, `CATCH` or `Result` run on
   the rewritten stack, and `tools/verify_snippets.py`'s pending list no longer
   names `MATCH`.
@@ -63,6 +65,10 @@ no member of `Only`.
   not one the contract decides when the `MATCH` runs.
 - *`MATCH` on values — open.* How a value guard is written, typed and ranked
   against a type guard is undecided.
+- *Arms narrowed where the shape is built — open.* An arm set whose scrutinee
+  has a static type could drop, and refuse, its guards as
+  [static selection](../../src/dispatch/README.md#static-types) drops a
+  keyworded use's candidates.
 
 ## Dependencies
 

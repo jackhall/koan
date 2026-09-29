@@ -364,6 +364,14 @@ content-addressed table, a substitution that binds nothing returns its input
 handle, and every subtype verdict is memoized, so the composition costs one
 intern per changed composite.
 
+`bound_above` reads a type's free variables — a `Quantified` under none of the
+type's own binders, and every `AbstractType` — as the extreme that lies above
+every instance within their bounds: the bound at a covariant position, `Never`
+at a contravariant one, a signature left opaque. It is the variable-free type a
+load-time type is compared through where the run may bind its variables to
+anything under their bounds; `erase_rigid`, which reads a variable as its bound
+everywhere, can put a contravariant position below an instance.
+
 ### The unifier collects, it does not bind
 
 [`admits_with`](unify.rs) walks a declared type against a carried one and

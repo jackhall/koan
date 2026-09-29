@@ -6,6 +6,7 @@ mod programs;
 mod quotes;
 mod rankings;
 mod selection;
+mod statics;
 mod tail;
 
 use std::cell::RefCell;

@@ -9,8 +9,9 @@
 //!   [block door](crate::program::block) with its last statement's value its own;
 //! - a `FN`, born through the [lambda door](crate::knot::lambda);
 //! - a bucket declaration, which is `Null`;
-//! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks:
-//!   a builtin's native, or a registration's function in a frame;
+//! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks
+//!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
+//!   native, or a registration's function in a frame;
 //! - an **application** `(head argument)`: a construction when the head is a type, and otherwise a
 //!   call by name of the head over the argument record.
 //!
@@ -20,6 +21,11 @@
 //! [`Contract`], the evaluation owes the frame its value: a call whose callee's declared return
 //! satisfies the contract hops to the callee's frame, and every other value is held to the contract
 //! where it is finished.
+//!
+//! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
+//! as it evaluates. Debug builds check both halves of that agreement: a finished value's carried type
+//! lies under its node's static type, and a narrowed or selected call runs what selection over the
+//! full list would.
 
 use crate::elaborate::type_expression;
 use crate::knot::{KValue, Knotted, lambda, quote, refused_construction};
@@ -31,9 +37,9 @@ use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, bloc
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{BodyShape, CandidateList, ShapeKind, Site};
+use crate::scope::{BodyShape, CandidateList, Narrowing, ShapeKind, Site};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{TypeNode, satisfied_by, substitute_quantified};
+use crate::type_lattice::{TypeNode, bound_above, satisfied_by, substitute_quantified};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value};
 
 use super::builtins::{self, Native, Ran};
@@ -53,7 +59,7 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch> =
     Step<'a, 'graph, 'step, 'here, 'scratch, KBundle, Taken, Taken>;
 
 /// What a node is to the evaluator.
-enum Form<'graph> {
+pub(super) enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
     Block(&'graph BodyShape<'graph>),
     Lambda(&'graph KExpression<'graph>),
@@ -68,7 +74,7 @@ enum Form<'graph> {
 
 /// A part an evaluation needs: its value, or — an `ATTR` label written bare — the name as written.
 #[derive(Clone, Copy)]
-enum Wanted<'graph> {
+pub(super) enum Wanted<'graph> {
     Evaluated(&'graph ExpressionPart<'graph>),
     Label(BinderSymbol),
 }
@@ -141,14 +147,17 @@ pub(super) fn evaluate<'graph>(
 }
 
 /// What `node`, read off `shape`, is.
-fn form<'graph>(shape: &'graph BodyShape<'graph>, node: Evaluated<'graph>) -> Form<'graph> {
+pub(super) fn form<'graph>(
+    shape: &'graph BodyShape<'graph>,
+    node: Evaluated<'graph>,
+) -> Form<'graph> {
     match node {
         Evaluated::Statement(expression) => of_node(shape, expression),
         Evaluated::Part(part) => of_part(shape, part),
     }
 }
 
-fn of_part<'graph>(
+pub(super) fn of_part<'graph>(
     shape: &'graph BodyShape<'graph>,
     part: &'graph ExpressionPart<'graph>,
 ) -> Form<'graph> {
@@ -163,7 +172,7 @@ fn of_part<'graph>(
     }
 }
 
-fn of_node<'graph>(
+pub(super) fn of_node<'graph>(
     shape: &'graph BodyShape<'graph>,
     node: &'graph KExpression<'graph>,
 ) -> Form<'graph> {
@@ -332,7 +341,23 @@ fn call<'graph, 'here>(
     let writer = step.writer();
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
-    let raised = match select::selected(at, list, &arguments, &scratch) {
+    let selection = match at.view.shape().narrowing(Site::of_node(node)) {
+        Narrowing::Full => select::selected(at, list.candidates, &arguments, &scratch),
+        Narrowing::Kept(kept) => select::selected(at, kept, &arguments, &scratch),
+        Narrowing::Selected(coordinate) => select::chosen(at, coordinate, &arguments, &scratch),
+    };
+    #[cfg(debug_assertions)]
+    if !matches!(
+        at.view.shape().narrowing(Site::of_node(node)),
+        Narrowing::Full
+    ) {
+        let full = select::selected(at, list.candidates, &arguments, &scratch);
+        debug_assert!(
+            select::agree(&selection, &full),
+            "static selection runs what full selection would"
+        );
+    }
+    let raised = match selection {
         Selection::Builtin(builtin) => {
             return match builtins::run(Native::of(builtin.id()), at, writer, node, &operands) {
                 Ran::Value(value) => finish(step, at, value),
@@ -380,7 +405,7 @@ fn call<'graph, 'here>(
 
 /// The parts of a keyworded node its call needs: every slot evaluated, save an `ATTR` label
 /// written bare, which is read as written.
-fn slots<'x, 'graph>(
+pub(super) fn slots<'x, 'graph>(
     node: &'graph KExpression<'graph>,
     scratch: &'x Bump,
 ) -> BumpVec<'x, Wanted<'graph>> {
@@ -468,6 +493,42 @@ fn returns_within(
         } => satisfied_by(program.types(), &Bump::new(), returns, ret),
         _ => false,
     }
+}
+
+/// Check that `value`, unless it is an error value, carries a type under its node's static type.
+#[cfg(debug_assertions)]
+fn carried_under_static<'graph, 'here>(
+    at: &Evaluation<'graph, 'here>,
+    value: &KValue<'graph, 'here>,
+) {
+    if at.program.message(value).is_some() {
+        return;
+    }
+    let shape = at.view.shape();
+    let KBirth::Evaluate { node, .. } = at.birth else {
+        return;
+    };
+    let expected = match node {
+        Evaluated::Part(part) => shape.value_type(Site::of(part)),
+        // A statement lies in its shape's body run, so its index is its offset there.
+        Evaluated::Statement(statement) => (std::ptr::from_ref(statement) as usize)
+            .checked_sub(shape.body().as_ptr() as usize)
+            .and_then(|offset| shape.statement_type(offset / std::mem::size_of_val(statement))),
+    };
+    let Some(expected) = expected else {
+        return;
+    };
+    let types = at.program.types();
+    let scratch = Bump::new();
+    debug_assert!(
+        satisfied_by(
+            types,
+            &scratch,
+            bound_above(types, &scratch, expected),
+            value.ktype()
+        ),
+        "the carried type lies under the load-time static type"
+    );
 }
 
 /// Whether `part` is read in place rather than asked for.
@@ -616,6 +677,8 @@ fn finish<'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
     value: KValue<'graph, 'here>,
 ) -> Action<'graph, KBundle> {
+    #[cfg(debug_assertions)]
+    carried_under_static(at, &value);
     let value = match at.contract {
         Some(contract) => at.program.fulfilled(step.writer(), value, contract),
         None => value,

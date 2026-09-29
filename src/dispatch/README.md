@@ -2,7 +2,7 @@
 
 The [`Language`](../program/README.md#the-program-record) koan's programs run
 under: the builtin table a program loads over, the step every evaluation runs,
-and the check a loaded shape must pass. [`Koan`](../dispatch.rs) is the one
+and the checks a loaded shape must pass, which type it statically as they go. [`Koan`](../dispatch.rs) is the one
 implementation; the [program](../program/README.md) layer below it knows
 nothing of what a node means, and the [binary](../main.rs) loads every program
 under it.
@@ -113,17 +113,16 @@ A typed argument a candidate does not admit is a non-match that falls through to
 the others, never a bind-time error. The candidate list is fixed per site, and
 each call admits the candidates on it and reads the recorded verdicts.
 
-**Static selection** narrows that list where the shape is built. Every value
-expression and binder has a static type there — local and bidirectional, over
-[the type channel's load pass](../elaborate/README.md#the-type-channel-at-load) —
-under which every carried type the run produces lies. A candidate whose slots
-meet the arguments' static types at `Never`, a rigid variable read through its
-bound, can never admit what the run passes, and is dropped; a use left with none
-refuses the load, as a statically typed language refuses it. A use left with one
-candidate that admits the static types outright selects it there, and the call
-runs it without admitting its arguments, a quantified candidate still solving its
-group from the carried types. Otherwise the call admits what is left, as above,
-and chooses what selection over the full list would.
+**Static selection** narrows that list where the shape is built, by the
+arguments' [static types](#static-types). A candidate whose slots meet them at
+`Never` can never admit what the run passes, and is dropped; a use left with
+none refuses the load, as a statically typed language refuses it. A use left
+with one candidate that admits the static types outright selects it there, and
+the call runs it without admitting its arguments ([`chosen`](select.rs)), a
+quantified candidate still solving its group from the carried types — a solve
+that fails is the same no-overload miss full selection raises. Otherwise the
+call admits what is left, as above, and chooses what selection over the full
+list would.
 
 **A keyworded call binds by the registration.** The argument record binds each
 slot to the parameter the registration names for it — or packs every slot into
@@ -136,6 +135,77 @@ parameter's declared type and solves the callee's group against them jointly,
 so naming the callee may admit what a keyworded call of the same function
 refuses. The call says which it is (`CallKind`), so only a keyworded call's
 record is trusted to carry type parameters.
+
+## Static types
+
+[`statics`](statics.rs) runs as `Language::check`, after the overlap check,
+over the program's shape and every shape nested in it, a quote's code included.
+It gives every value expression and value binder a **static type**: a bound
+under which every type the run carries there lies, and `Any` where the load
+cannot bound it. It reads each node through the evaluator's own reading of it,
+so the load types a node as it evaluates, and it builds on what
+[the type channel's load pass](../elaborate/README.md#the-type-channel-at-load)
+fixed:
+
+- a literal has its own type, a list, dict or record literal the type its parts'
+  static types build, a quote its code type, and a type expression the type of
+  the type value it denotes;
+- a name has its binder's type: a parameter its declared type, a local its
+  right-hand side's, a registration its function type, a type name its type
+  value's; a block's `it`, an arm's `it`, a name a `USING` surfaces and a quote's
+  hole are `Any`;
+- a block has its last statement's type, a `FN` its function type, and a bucket
+  declaration `Null`;
+- a keyworded call has its selected candidate's declared return, or the join of
+  every kept candidate's — `Any` where one of them is a candidate the load
+  cannot read: a spread, a hole, a registration of unknown shape;
+- an application has the identity its construction builds when its head is a
+  type the load knows, and its callee's declared return when the head is a
+  function; a union variant construction and `ATTR` over a record are `Any`.
+
+A quantified callee's return is read through its bounds, never solved from the
+static argument types. A static type may hold the rigid variables of the
+**region** it is read in — the program, a callable body whose declaration writes
+a `FOR ALL` group, a quote's code — numbered as the type channel numbers them. A
+capture crossing into a region, and every comparison the pass makes, reads a
+type through [`bound_above`](../type_lattice/README.md#substitute-then-ask), so
+no variable is compared outside the region that binds it.
+
+**Narrowing.** Each keyworded use drops every candidate some slot of which meets
+its argument's static type at `Never`. A candidate the load cannot read is kept.
+An argument whose static type is `Never` never arrives, so its use narrows
+nothing and its own static type is `Never`. A use left with no candidate refuses
+the load (`ShapeError::NoAdmittingCandidate`):
+
+```text
+no overload of `_ + _` admits (Str, Number)
+```
+
+A use left with one closed candidate that admits the arguments' static types is
+`Selected`; one that dropped something is `Kept`, and any other is `Full`.
+
+**The return check.** A callable body whose static type — its last statement's
+— meets its declared return at `Never` refuses the load
+(`ShapeError::ReturnNeverSatisfied`), since every call of it would fault on its
+contract:
+
+```text
+this body returns Number, which can never satisfy its declared return Str
+```
+
+A body whose static type is `Never` never arrives, and is not checked. A
+callable declared to return `Never` is checked like any other, so its body must
+itself be `Never`-typed — every other body meets `Never` at `Never`, and refuses
+the load. The check is a meet, not an order: a body
+whose static type is `Any` loads, and the run holds what it returns to the
+contract.
+
+What the pass fixes rests in each shape's write-once
+[value-channel cell](../scope/README.md#load-time-types), which the call reads.
+Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running
+it reports it, as it reports the type channel's. Debug builds check both halves
+on every run: a finished value's carried type lies under its node's static type,
+and a narrowed or selected call runs what selection over the full list would.
 
 ## Tails under a contract
 
@@ -187,6 +257,11 @@ arguments, an argument a call by name does not fit
 group, a callee that is no function, a type expression that does not
 elaborate, and an `EVAL`'s refusal.
 
+A no-overload miss or a return miss the load can already see is no fault: it
+refuses the load, located at `path:line:col` ([static types](#static-types)).
+The run meets only those whose static types are too wide to tell — an argument
+read out of a record field, say, whose static type is `Any`.
+
 ## Catching
 
 `TRY` and `CATCH` are where a fault becomes a koan value. Each runs its
@@ -232,8 +307,13 @@ Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
 The suites load whole programs under `Koan` and read back what they wrote to
 either sink, one line per write ([tests.rs](tests.rs)):
 [selection](tests/selection.rs) — every ranking example, ambiguity within and
-across scopes, the no-overload miss, fall-through, builtin tie-wins, shadowed
-`==` and `PRINT`, and the overlap refusal at load and at `EVAL`;
+across scopes, the no-overload miss at load and at run, fall-through, builtin
+tie-wins, shadowed `==` and `PRINT`, the overlap refusal at load and at `EVAL`,
+and a statically selected quantified candidate whose carried solve fails;
+[statics](tests/statics.rs) — the static type of each kind of node and binder,
+a capture within and across a region, narrowing to one, several and none, both
+load refusals in a program, an uncalled body and a quote's code, and an argument
+that never arrives;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
@@ -260,9 +340,9 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
-- [Static selection](../../roadmap/rewrite/static-selection.md) — a static type
-  per value expression, and candidates narrowed and chosen where the shape is
-  built.
+- [Solving a group from static types](../../roadmap/rewrite/solving-from-static-types.md)
+  — a quantified callee's return typed at the solution its arguments' static
+  types give.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

@@ -162,7 +162,7 @@ impl CellSubstrate {
                 BodyShape::of_program(brand, &parsed, builtins, types, &owner.symbols, &scratch)
                     .map_err(refused)?;
             type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
-            L::check(shape, builtins, types, &scratch).map_err(refused)?;
+            L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
             let writer = brand.writer();
             let program = resident(
                 writer,

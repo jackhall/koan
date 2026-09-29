@@ -1,5 +1,5 @@
 //! Dispatch: the [`Language`] koan's programs run under — the builtin table, the step every
-//! evaluation runs, and the load-time overlap check.
+//! evaluation runs, and the load-time checks: the overlap check and static selection.
 //!
 //! A keyworded use's candidates are fixed where its shape is built: the builtin overloads at its
 //! bucket key, then each registration visible to it, then — in a quote's code — the functions a
@@ -7,15 +7,19 @@
 //! call evaluates its slots, keeps the candidates whose expression shape admits the arguments'
 //! carried types class by class, and ranks the survivors by the type lattice's per-class verdicts;
 //! a lone survivor runs, a builtin wins a tie, and anything else is an error value. A builtin
-//! overload is a function value like any other, whose body is a native.
+//! overload is a function value like any other, whose body is a native. Where the program loads,
+//! each use's candidates are narrowed by its arguments' static types, and chosen where one is left
+//! that admits them.
 //!
 //! - [`builtins`] lays the table down and runs the natives.
 //! - [`evaluate`] is the step: what a node is, and how its value is reached.
 //! - [`select`] admits and ranks a call's candidates.
 //! - [`check`] refuses a registration that overlaps a builtin overload.
+//! - [`statics`] types every value expression and binder where the program loads, and narrows and
+//!   selects each keyworded use's candidates by those types.
 //! - [`errors`] renders the messages of the error values dispatch raises.
 //!
-//! This file holds the vocabulary the four share: what one evaluation is born over, and what one of
+//! This file holds the vocabulary they share: what one evaluation is born over, and what one of
 //! a call's operands came to. A submodule reaches it, and its siblings, through here.
 //!
 //! **Imports.** Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
@@ -30,6 +34,7 @@ mod check;
 mod errors;
 mod evaluate;
 mod select;
+mod statics;
 
 #[cfg(test)]
 mod tests;
@@ -64,9 +69,11 @@ impl Language for Koan {
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         types: &'graph TypeRegistry<'graph>,
+        writer: Writer<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
-        check::overlaps(shape, builtins, types, scratch)
+        check::overlaps(shape, builtins, types, scratch)?;
+        statics::statics(shape, builtins, types, writer, scratch)
     }
 }
 

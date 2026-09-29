@@ -2832,6 +2832,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 registered: writer.fill(registrations.len(), |_| Cell::new(Static::Unknown)),
                 callable: resident_cell(writer, Static::Unknown),
                 typing_refusal: resident_cell(writer, None),
+                statics: resident_cell(writer, None),
             },
         )
     }

@@ -458,6 +458,16 @@ elaborator fills, `Callable`, `Canonical`, `Registered`, `ParameterBinding`, and
 holding the shape reads its cell by site or slot: the evaluator, the body runner,
 a callable's birth and the overlap check.
 
+One more cell per shape holds the **value channel**: the `Statics` dispatch's
+[load pass](../dispatch/README.md#static-types) fixes once the type channel has —
+a static type for each part the evaluator reads as a value (by site), each
+statement (by index) and each slot (by index), and one `Narrowing` per keyworded
+use, parallel to its candidate list: `Full`, the candidates `Kept`, or the one
+`Selected`. It lives here for the same reason the type channel's cells do, and
+the shape reads it by site (`value_type`, `narrowing`), statement index or slot;
+a shape the pass has not fixed — a quote's code it refused — has no static types,
+and every use in it is `Full`.
+
 ## Names that arrive at run time
 
 Two forms introduce names no shape can see.
@@ -898,9 +908,13 @@ where it has one:
 - **no candidate** — a keyworded use with no builtin overload and no visible
   registration;
 
-one [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
+three [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
 built and its types can be read — an **overlap**, a user overload taking
-operands a builtin overload at its key already takes;
+operands a builtin overload at its key already takes; **no admitting
+candidate**, a keyworded use every candidate of which
+[static selection](../dispatch/README.md#static-types) drops, naming the key and
+its arguments' static types; and a **return never satisfied**, a callable body
+whose static type meets its declared return at `Never`;
 
 two the [elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
 finds — a **type** that does not elaborate, carrying the elaborator's refusal,

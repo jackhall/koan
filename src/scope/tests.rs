@@ -263,6 +263,12 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::RankingDisagrees { key, .. } => E::RankingDisagrees { key, at },
         E::NoCandidate { key, .. } => E::NoCandidate { key, at },
         E::Overlaps { key, builtin, .. } => E::Overlaps { key, builtin, at },
+        E::NoAdmittingCandidate { key, arguments, .. } => {
+            E::NoAdmittingCandidate { key, arguments, at }
+        }
+        E::ReturnNeverSatisfied { body, returns, .. } => {
+            E::ReturnNeverSatisfied { body, returns, at }
+        }
         E::Type { error, .. } => E::Type { error, at },
         E::RepeatedGuard { guard, .. } => E::RepeatedGuard {
             guard,

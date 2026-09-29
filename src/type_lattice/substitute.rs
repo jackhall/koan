@@ -14,6 +14,7 @@ use super::node::TypeNode;
 use super::order::is_subtype_of;
 use super::registry::TypeRegistry;
 use super::schema::{Members, member};
+use super::walk::Variance;
 use super::walk::unary::{LEAF, Rebuild, Step, UnionDoor, Visit, rebuild, visit};
 
 /// The knobs a quantifier walk takes: a nested signature is opaque content, and rebuilt unions
@@ -118,6 +119,37 @@ pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
                 Some(bound)
             }
             _ => None,
+        },
+    )
+}
+
+/// `kt` with each free variable — a `Quantified` under none of `kt`'s own binders, or an
+/// `AbstractType` — read as the extreme that puts the result above every instance within the
+/// variables' bounds: its bound at a covariant position, `Never` at a contravariant one. The
+/// variable-free type a load-time type is compared through where the run may bind its variables to
+/// anything under their bounds. A signature is opaque, as [`TypeRegistry::contains_rigid`] reads it.
+///
+/// [`erase_rigid`] reads a variable as its bound everywhere, which at a contravariant position puts
+/// the result *below* an instance whose variable is bound lower.
+pub fn bound_above(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
+    if !types.contains_rigid(kt) {
+        return kt;
+    }
+    rebuild(
+        types,
+        scratch,
+        kt,
+        OVER_QUANTIFIERS,
+        &mut |_, node, context| {
+            let bound = match *node {
+                TypeNode::Quantified { bound, .. } if context.binder_depth() == 0 => bound,
+                TypeNode::AbstractType { bound, .. } => bound,
+                _ => return None,
+            };
+            Some(match context.variance() {
+                Variance::Co => bound,
+                Variance::Contra => KType::NEVER,
+            })
         },
     )
 }

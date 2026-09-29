@@ -762,3 +762,32 @@ fn a_bounded_quantifier_renders_under_its_bound() {
         "{rendered}"
     );
 }
+
+/// No law: the property holds `bound_above` over every instance, but not how tight it is. These pin
+/// the worked examples — each free variable at its bound where it is produced and at `Never` where
+/// it is taken, a variable its own binder holds left alone, and a closed type unchanged.
+#[test]
+fn bounding_above_reads_a_free_variable_by_its_position() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let above = |kt| crate::type_lattice::bound_above(&types, region, kt);
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
+    let tee = TypeSymbol::declared("Tee", &symbols).expect("a Type token");
+    let elt = types.quantified(0, KType::ANY);
+
+    assert_eq!(above(types.list(elt)), types.list(KType::ANY));
+    let taking = types.function_type(region, &[], &[(y, elt)], elt).handle;
+    let widest = types
+        .function_type(region, &[], &[(y, KType::NEVER)], KType::ANY)
+        .handle;
+    assert_eq!(above(taking), widest);
+    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    assert_eq!(above(types.quantified(0, number_or_str)), number_or_str);
+
+    let closed = types.function_type(region, &[tee], &[(y, elt)], elt).handle;
+    assert_eq!(above(closed), closed);
+    let list_of_number = types.list(KType::NUMBER);
+    assert_eq!(above(list_of_number), list_of_number);
+}
