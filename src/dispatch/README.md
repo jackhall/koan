@@ -18,10 +18,10 @@ candidates by the arguments' carried types, and runs the one that wins.
 
 Literals, names, containers, record access, construction, functions, keyword
 dispatch, the builtin library, quotes, `EVAL` and `USING` over code, and
-uncaught errors. [Control expression shapes and errors](../../roadmap/rewrite/control-and-errors.md)
-owns `MATCH`, `TRY`, `CATCH` and `Result`, and [module programs](../../roadmap/rewrite/modules.md)
-own the module expression shapes; a node dispatch has no reading for is an
-error value.
+uncaught faults. [Matching](../../roadmap/rewrite/matching.md) owns `MATCH`,
+[catching errors](#catching) `TRY`, `CATCH` and `Result`, and
+[module programs](../../roadmap/rewrite/modules.md) own the module expression
+shapes; a node dispatch has no reading for is a fault.
 
 ## What a node is
 
@@ -31,7 +31,10 @@ never the parse — as one of:
 
 - a **leaf**: a literal, lowered; a name, read through its mention's
   coordinate; a quote, born through the [quote door](../knot/README.md#a-quote);
-  a type expression, elaborated to a type value; a list, dict or record
+  a type expression, the type value of its
+  [load-time type](../scope/README.md#load-time-types) — as it is when closed,
+  its variables substituted with what their coordinates read when rigid — or,
+  where the load left it unknown, elaborated through the view; a list, dict or record
   literal, lowered whole when every part is a literal and otherwise built from
   its parts' values;
 - a **block** a pairwise operator run hoisted an operand into, run through the
@@ -49,9 +52,8 @@ never the parse — as one of:
 
 A part a node needs is read in place when it is a literal, a name or a quote,
 and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
-all at one park. **An error value is passed through**: an evaluation that
-receives one from a part finishes with it, unchanged, before doing anything
-else.
+all at one park. **A fault is passed through**: an evaluation that receives
+one from a part finishes with it, unchanged, before doing anything else.
 
 ## The builtin table
 
@@ -77,7 +79,7 @@ overload ranks its slots in written order.
   record or a tagged value over one, reading through every tagged layer to the
   field; over a type, giving the type its record declares the field with, so
   `Point.y` is `Str` and `v :Point.y` is a slot; over a union type labelled by a
-  type name, giving the variant; and over a module, an error value until
+  type name, giving the variant; and over a module, a fault until
   [module programs](../../roadmap/rewrite/modules.md). `FROM` projects a record
   to the fields it names. `EVAL` runs code (below), and `USING` fills a code's
   holes through the [`USING` door](../knot/README.md#a-quote).
@@ -108,9 +110,20 @@ label's the code kind of its name. [`select`](select.rs) then:
    admitting candidate is a **no-overload** error naming the arguments' types.
 
 A typed argument a candidate does not admit is a non-match that falls through to
-the others, never a bind-time error. The candidate list is fixed per site, but
-nothing about a selection is cached per call site: each call admits its
-candidates afresh and reads the recorded verdicts.
+the others, never a bind-time error. The candidate list is fixed per site, and
+each call admits the candidates on it and reads the recorded verdicts.
+
+**Static selection** narrows that list where the shape is built. Every value
+expression and binder has a static type there — local and bidirectional, over
+[the type channel's load pass](../elaborate/README.md#the-type-channel-at-load) —
+under which every carried type the run produces lies. A candidate whose slots
+meet the arguments' static types at `Never`, a rigid variable read through its
+bound, can never admit what the run passes, and is dropped; a use left with none
+refuses the load, as a statically typed language refuses it. A use left with one
+candidate that admits the static types outright selects it there, and the call
+runs it without admitting its arguments, a quantified candidate still solving its
+group from the carried types. Otherwise the call admits what is left, as above,
+and chooses what selection over the full list would.
 
 **A keyworded call binds by the registration.** The argument record binds each
 slot to the parameter the registration names for it — or packs every slot into
@@ -133,23 +146,27 @@ satisfies the contract — or calls an unquantified function by name whose retur
 does — it hands its cell to the callee's frame by a tail rather than spawning
 it, so a keyworded self-call in tail position holds a constant number of cells
 however deep it recurses. Any other value it finishes with is held to the
-contract: retyped to the declared return, or an error value naming the callee.
+contract: retyped to the declared return, or a fault naming the callee.
 
 ## Running code
 
-`EVAL code` checks the code's shape for overlaps, as a loaded program's is, and
+`EVAL code` checks the code's shape for overlaps, as a loaded program's is —
+its types were fixed where the program loaded, the quote's code included — and
 asks the program's `EVAL` door for a frame running it over what the `EVAL`
 offers: each name its operand's `NEEDING` list names, read where the `EVAL` is
 written, and each bucket key as the list of functions a use at the key written
 there would list, builtins included. A refusal — an overlap, the code shape's
-own error, an unbound name or a required keyworded hole — is an error value.
+own error or its typing refusal, an unbound name or a required keyworded hole —
+is a fault.
 `EVAL` over anything but code is a no-overload miss like any other.
 
 ## Errors
 
-A koan error is an [error value](../program/README.md#errors-and-output)
-carrying a message, and an uncaught one ends the program with
-`error: <message>`. [`errors`](errors.rs) words what only dispatch decides:
+A refusal while a program runs is a [fault](../program/README.md#faults-and-output):
+one of a closed set of kinds, each carrying the fields its message renders from
+when it is printed or caught, and an uncaught one ends the program with
+`error: <message>` and its trace. [`errors`](errors.rs) words what only
+dispatch decides:
 
 | Situation | Message |
 |---|---|
@@ -168,7 +185,23 @@ A refusal a layer below renders keeps its own wording: a construction misfit
 arguments, an argument a call by name does not fit
 (`:(FN :{x :Number} -> Str) cannot be called with :{x :Str}`), an unsolvable
 group, a callee that is no function, a type expression that does not
-elaborate, and an `EVAL`'s refusal. An error carries no call trace.
+elaborate, and an `EVAL`'s refusal.
+
+## Catching
+
+`TRY` and `CATCH` are where a fault becomes a koan value. Each runs its
+operand as a block, whose shape records that its fault goes to them rather
+than to the enclosing frame, so a `TRY` body is never in tail position. The
+value is the builtin union `Error`: one variant per fault kind, over a record of
+that kind's fields and `frames`, the trace an uncaught fault prints. Its
+variants are not parameterized, so a field whose type varies with the refusal,
+such as a missing key, is `Any`. A field may hold a value: the fault kept the
+frame it lies in, and the catcher copies it out as a return is copied. Once the
+`Error` is built, the catcher releases the frames the fault kept.
+
+`TRY` selects an arm by the variant as `MATCH … UNDER Error` does, binding `it`
+to its record, and a body that yields no fault yields its value. `CATCH` yields
+`Result.Ok` of its body's value or `Result.Error` of the `Error`.
 
 ## The overlap check
 
@@ -177,12 +210,13 @@ takes, since the builtin would win every such call and the overload would be
 dead there. [`check::overlaps`](check.rs) runs where a shape is built and its
 types can be read: over a loaded program's shape and every body nested in it,
 short of a quote's code, as `Language::check`, and over a quote's code where an
-`EVAL` runs it. It reads only what the builtin table spells: a registration at a
-key with builtin overloads whose signature names builtins alone is typed
-statically, and overlaps a builtin overload whose
-operands are not all `Any` when every slot pair meets above `Never`, which
-refuses the shape (`ShapeError::Overlaps`). A registration whose types are
-known only when its function is born is never checked, and one a builtin beats
+`EVAL` runs it. It reads each registration's
+[load-time](../elaborate/README.md#the-type-channel-at-load) expression shape: a
+closed, unquantified one at a key with builtin overloads — whatever declared
+types its signature names, so an alias of `Number` is checked as `Number` is —
+overlaps a builtin overload whose operands are not all `Any` when every slot pair
+meets above `Never`, which refuses the shape (`ShapeError::Overlaps`). A
+registration whose shape is rigid or unknown is never checked, and one a builtin beats
 at some operand type is simply never selected there — nothing reports it, since
 koan has no warning channel ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
 
@@ -216,14 +250,22 @@ tutorial snippet is checked against its shown output by
 
 ## Open work
 
-- [Control expression shapes and errors](../../roadmap/rewrite/control-and-errors.md)
-  — `MATCH`, `TRY`, `CATCH` and `Result`, and the payload catching needs.
+- [Matching](../../roadmap/rewrite/matching.md) — `MATCH`, its arm selection,
+  and matching on values.
+- [Faults and call traces](../../roadmap/rewrite/faults.md) — faults apart from
+  values, and the trace an uncaught one prints.
+- [Catching errors](../../roadmap/rewrite/catching.md) — `TRY`, `CATCH`, `Error`
+  and `Result`.
 - [Module programs](../../roadmap/rewrite/modules.md) — the module expression
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
-- [Call traces](../../roadmap/rewrite/call-traces.md) — the frames an error
-  passed through, printed under an uncaught one and read off a caught one.
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
+- [Elaborating the type channel at load](../../roadmap/rewrite/type-channel-at-load.md)
+  — a type expression's load-time value, and the overlap check over every closed
+  registration.
+- [Static selection](../../roadmap/rewrite/static-selection.md) — a static type
+  per value expression, and candidates narrowed and chosen where the shape is
+  built.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
-  overlap check skipping a quantified registration, a selection cache per call
-  site, and a warning for an overload never selected.
+  overlap check skipping a quantified registration, and a warning for an
+  overload never selected.

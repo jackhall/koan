@@ -1,11 +1,13 @@
 # Elaborate
 
 Type expressions and type declarations turned into
-[type lattice](../type_lattice/README.md) handles, read where they are written.
+[type lattice](../type_lattice/README.md) handles, where the program loads.
 `elaborate` sits above [`scope`](../scope/README.md) and below
-[`knot`](../knot/README.md): a function's type is elaborated from its
-signature where the function is born, a component of type binders is declared
-through [one door](#declarations), and nothing below `scope` can read a name.
+[`knot`](../knot/README.md): [the type channel's load pass](#the-type-channel-at-load)
+types every type expression, callable signature and component of type binders in
+a loaded program, a component through [one door](#declarations), and leaves to
+the run only what names a type a run binds. Nothing below `scope` can read a
+name.
 
 ## What a type expression is
 
@@ -14,13 +16,22 @@ parenthesized or sigiled group of parts. Its type names are not searched for:
 the shape builder already resolved each one to a coordinate and recorded it as
 a mention ([Resolution](../scope/README.md#resolution)), so
 [`type_expression`](expression.rs) looks the mention up by the name part's site
-through `BodyShape::mention` and reads it through the view of the activation the
-expression is read in — `scope`'s `ActivationView`, the one read type at every
-level, which names no habitat. The body runner reads a name only once its
-binder's unit has run, so every read finds its slot bound. A name bound to a type value elaborates to that value's handle. A
-parameter and return type of a callable are eager mentions of the enclosing
-shape, so the activation a signature is read through is the one the callable
-is born in.
+through `BodyShape::mention` and reads its coordinate through a **reader**
+([`Reads`](reads.rs)). Two readers exist:
+
+- **the load-time reader**, which reads no activation and answers from the
+  builtin table and the load-time types of the shapes enclosing the expression
+  ([below](#the-type-channel-at-load)) — a type, a rigid variable standing for a
+  type a run binds, or *unknown*;
+- **an activation's view** — `scope`'s `ActivationView`, the one read type at
+  every level, which names no habitat — for what the load left unknown. The body
+  runner reads a name only once its binder's unit has run, so every read finds
+  its slot bound, and a name bound to a type value elaborates to that value's
+  handle.
+
+A parameter and return type of a callable are eager mentions of the enclosing
+shape, so a signature is read through the enclosing shape's reader: at load, the
+shape the callable is written in; at a birth, the activation it is born in.
 
 Every composite is built from the handles its parts elaborate to, through the
 registry's own doors:
@@ -135,11 +146,13 @@ interned type's `quantifiers` cannot stand in for the declaration's names,
 because alpha-variants intern to one node and it carries whichever spelling
 interned first.
 
-The reader is a trait, [`Reads`](reads.rs): an activation, its view, or
-`BuiltinsOnly`, which answers only builtin coordinates. Over the last,
-`static_callable_type` types a registration before anything is born, where its
-signature names builtins alone — which is all
-[dispatch's overlap check](../dispatch/README.md#the-overlap-check) reads.
+The load pass types every callable where the program loads and rests the result
+on its body's shape, and each registration's expression shape beside the
+registration ([below](#the-type-channel-at-load)). A birth reads that type rather
+than elaborating its signature: as it is when it is closed, with its variables
+substituted when it is rigid, and through the activation it is born in only where
+the load left it unknown. [Dispatch's overlap check](../dispatch/README.md#the-overlap-check)
+reads the registrations' shapes.
 
 A module body has no callable type here, and neither has a `USING` body: its
 type is its signature, below.
@@ -328,10 +341,80 @@ data.
 Every handle the door interns erases to the entry's own bucket key, so the typed
 shape and the untyped bucket a node probes with cannot drift apart.
 
+## The type channel at load
+
+`type_channel` (`channel.rs`) runs once, where the program loads, right after the
+[shape is built](../scope/README.md#load-time-types) and before anything runs. It
+walks the shape tree from the root, **a quote's code included**, and writes each
+result into the write-once cell the builder laid beside it. A load-time type is
+one of three:
+
+- **closed** — it names only builtins and closed type binders, so it is the same
+  at every run, and the run reads it as it is;
+- **rigid** — it names a type a run binds, and is a lattice handle over one rigid
+  variable per such name, each beside the coordinate its value is read from. It
+  serves comparisons where the shape is built, since a relation that holds over a
+  rigid variable holds for every type the run can put there; where it runs it is
+  the handle with each variable replaced by what its coordinate reads, one
+  [substitution](../type_lattice/README.md#substitute-then-ask);
+- **unknown** — left to the run, which elaborates it where it is read, through
+  the activation.
+
+**What a run binds.** A type-channel slot whose value only a run supplies: a
+callable's `FOR ALL` parameter, a `:Type` parameter, a name
+[`USING … SCOPE`](../scope/README.md#names-that-arrive-at-run-time) surfaces, a
+quote's hole, `\` mark or `$` name whose source is not closed, and a type binder
+the load left unknown. The load-time reader answers each with a rigid variable
+`quantified(index, bound)`. A **region** — the program, the body of each callable
+that writes a `FOR ALL` group, and each quote's code — numbers them: the region's
+own `FOR ALL` names take their canonical index in the callable's function type,
+bounded as that type bounds them, so a written result compares with the declared
+return like with like; every other name read in the region takes the next free
+index, bounded by its own bound where it is an outer `FOR ALL` name and by `Any`
+otherwise. One slot keeps one index across its region.
+
+**What stays unknown.** A spelling whose value over a rigid variable can differ
+from substituting first and elaborating after: a meet (`Elt & Number` meets to
+`Never` over a rigid `Elt`, but is `Number` where `Elt` is `Number`), a
+projection's owner, an application's head and a `NEEDING` kind, each over a
+run-bound name; and any run-bound name read while a `FOR ALL` group is open —
+inside a nested group, or a quantified signature's own — since the lattice's
+binders shadow every index beneath them. A type binder is closed or unknown,
+never rigid: its readers across a callable boundary could not reach the
+coordinates its variables are read at, and a sealed nominal is a leaf
+substitution never enters, so a `NEWTYPE` over a `FOR ALL` name is a different
+type each call ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
+The declaration door therefore reads through the load-time reader in a mode that
+answers every run-bound name *unknown*.
+
+**Order.** Per shape, the pass types:
+
+1. each component of type binders, in [unit](../scope/README.md#units) order,
+   through [the declaration door](#declarations), so a component reads the
+   binders before it;
+2. each type expression the shape records — a sigiled type in value position, a
+   type part of a form that births no callable, a `MATCH … WITH` guard;
+3. each registration's expression shape, through [`callable_type`](signature.rs);
+4. each nested shape: a callable's signature first, through the enclosing shape's
+   reader, then its body, with every binder of every enclosing shape already
+   typed.
+
+**Guards.** Two guards of one `MATCH … WITH` arm set that type to one handle —
+`Number` and `:(Number)`, an alias and what it names, `:(Number | Str)` and
+`:(Str | Number)`, a `FOR ALL` name spelled twice — refuse the shape as
+`RepeatedGuard`, naming both.
+
+**Refusals.** A closed type that does not elaborate refuses the load as
+`ShapeError::Type`, located at the part the refusal is about, else at the type
+expression or declaration holding it. Inside a quote's code the refusal is kept
+on the code shape instead, and the `EVAL` that runs the code reports it, since a
+quote is checked where its code runs ([quotes](../scope/README.md#building-code)).
+
 ## Refusals
 
-A type expression that does not elaborate is an [`Elaboration`](../elaborate.rs),
-never a panic and never a guess:
+A type expression that does not elaborate is an `Elaboration`,
+the vocabulary `scope` holds so a shape error can carry one, never a panic and
+never a guess:
 
 - `NotAType` — a type name bound to something other than a type value;
 - `NoSuchMember` — a projection naming a union tag or record field its owner
@@ -352,6 +435,9 @@ never a panic and never a guess:
   `Unsupported` for the same reason a group head that would chain a symbol twice
   is: [`!=` is rewritten, never declared](../scope/README.md#operator-groups).
 
+A reader's *unknown* comes back as `Unknown`, the load pass's cue to leave the
+type to the run; it is never reported.
+
 Elaboration writes nothing to a region: its transient runs live in the scratch
 arena it is handed, and every node it builds is interned in the registry. A
 refusal from the door binds no slot for the same reason: its window and staged
@@ -361,8 +447,8 @@ handle minted before the refusal is content no name reaches.
 ## The import rule
 
 **Outside doc comments and `#[cfg(test)]`, `elaborate` names `crate::memory`,
-`crate::parse`, `crate::scope`, `crate::type_lattice` and `crate::values`, and
-nothing else in the crate.** It reads each part's role off `parse`'s own
+`crate::parse`, `crate::scope`, `crate::source`, `crate::symbols`,
+`crate::type_lattice` and `crate::values`, and nothing else in the crate.** It reads each part's role off `parse`'s own
 builtin shape table and the pair reader `scope` exposes to the crate, so a type
 expression's parts are walked by the same facts the shape builder walked them
 by.
@@ -400,9 +486,18 @@ each family refusal.
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
 interns as the union of its three members.
+`tests/channel.rs` runs the load pass over shaped programs
+and reads the cells it filled: a closed binder, ring and callable equal to what
+elaborating through an activation gives; a `FOR ALL` name as its canonical
+variable, a `:Type` parameter, an outer quantifier inside an inner group and a
+quote's hole as the next free index; each spelling left unknown; a nominal over a
+run-bound type left unknown and a reader of it rigid; each repeated guard; and a
+refusal refusing the load, or kept on its quote's code shape.
 
 ## Open work
 
+- [Elaborating the type channel at load](../../roadmap/rewrite/type-channel-at-load.md)
+  — the load pass, its rigid variables, and births reading the load-time type.
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound
   rather than to what the arguments solve it to.

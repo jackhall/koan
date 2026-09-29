@@ -61,11 +61,12 @@ the two collide in the `pending_rewrite` build.
 ## Dependencies
 
 The item is a delete, so it requires the rewrite to have rebuilt everything the
-deleted code implements; the leaves of that chain are the three below.
+deleted code implements; the four below are the last of it.
 
 **Requires:**
 
 - [Modules](modules.md) — the module surface `machine` still owns.
-- [Control expression shapes and errors](control-and-errors.md) — the control surface `machine` still owns.
+- [Matching](matching.md) — the branching surface `machine` still owns.
+- [Catching errors](catching.md) — the catching surface `machine` still owns.
 - [Yielding iterators](yielding-iterators.md) — the last of the execution
   surface `workgraph`'s DAG layer still owns.

@@ -123,7 +123,8 @@ quote part, so `Site::of_body` finds it as it finds any body. An `EXPR` head's
 names are read through its quote. An arm set is a dict of guard quotes to arm
 quotes, and each arm is a block shape binding `it`. A `MATCH … WITH` guard is a
 type — a type name, a `:(…)` or a `:{…}`, typed `Dict(TypeCode, Block)`, whose
-names are mentions read where the match runs — and a `MATCH … OVER` or `TRY`
+names are mentions of the shape holding the `MATCH`, typed where the program
+loads ([load-time types](#load-time-types)) — and a `MATCH … OVER` or `TRY`
 guard a label, typed `Dict(Name, Block)`; a value guard is `Inadmissible`. A
 `SIG` body's members and a bodyless `GROUP`'s heads are the statements of a
 list's quotes, each walked by its own builtin shape's roles.
@@ -426,6 +427,36 @@ completion and only then ties the binder over the finished activation, reading
 its slots out through `ActivationView::slots`. A module body's binders are its
 exports in flight, and nothing outside the body reads them before its binder is
 tied.
+
+## Load-time types
+
+A shape carries a **write-once cell** for every type fact
+[the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
+fixes before the program runs. The builder lays each cell down empty — `scope`
+sits below `elaborate`, and a shape seals before anything in it can be
+elaborated — and the pass fills it, once, where the program loads:
+
+- each **type expression** the shape records (`BodyShape::type_expressions`, by
+  site): a `:(…)` or `:{…}` in value position, a type part of a form that births
+  no callable — a `MATCH`'s result and union clause, a `TRY`'s result, an
+  ascription's signature — and each `MATCH … WITH` guard, with its arm set and
+  written index. A callable's signature, a declaration's definition and a type
+  `LET`'s right-hand side are not recorded: they are typed with their callable or
+  binder, and a type nested in a recorded one is part of it;
+- each **type binder**, beside its declaration node;
+- each **registration**, its expression shape;
+- a callable body's own **callable type**;
+- a quote's code shape's **typing refusal**, which `BodyShape::refusal` reports
+  as it reports the code's own error.
+
+A cell holds `Unknown`, a closed value, or a rigid value beside the
+`Variable`s — a rigid variable's index and the coordinate its value is
+read at — that the run substitutes. The vocabulary lives here, beside the shape
+that holds it: `Static`, `Variable`, and the callable-typing records the
+elaborator fills, `Callable`, `Canonical`, `Registered`, `ParameterBinding`, and
+`Elaboration`, so a shape error can carry an elaboration's refusal. A reader
+holding the shape reads its cell by site or slot: the evaluator, the body runner,
+a callable's birth and the overlap check.
 
 ## Names that arrive at run time
 
@@ -871,6 +902,11 @@ one [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
 built and its types can be read — an **overlap**, a user overload taking
 operands a builtin overload at its key already takes;
 
+two the [elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
+finds — a **type** that does not elaborate, carrying the elaborator's refusal,
+and a **repeated guard**, two guards of one `MATCH … WITH` arm set that type to
+one handle, naming both;
+
 and six more from [operator groups](#operator-groups), each naming the symbol it
 is about:
 
@@ -921,7 +957,10 @@ closure bindings alone, a block's beside an enclosing activation whose builtin
 table and callable it shares — so no other combination can be built.
 
 A shape and everything it holds — declared-name runs, mentions, captures,
-components, nested shapes — rest in program storage and are `Copy`. A written
+components, nested shapes — rest in program storage and are `Copy`, save the
+[load-time type](#load-time-types) cells, which are written once, where the
+program loads, and never after. A cell holding a `'graph` record makes a shape
+invariant in `'graph`, which `'graph` already is everywhere it is named. A written
 quote's code shape is built into program storage once, where the program
 loads.
 
@@ -939,6 +978,9 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
+- [Elaborating the type channel at load](../../roadmap/rewrite/type-channel-at-load.md)
+  — the load-time type cells, the type expressions the builder records, and a
+  `MATCH` guard written twice refused by handle.
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/rewrite/code-splicing.md) — how several parts

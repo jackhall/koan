@@ -145,9 +145,12 @@ shares nothing with the staging below.
 scratch first.
 
 - A function member: the body shape it births (`Shape::births`), the
-  function's type, elaborated from the form node its body sits in
-  ([A callable's type](../elaborate/README.md#a-callables-type)), and its
-  captures, read from the enclosing activation
+  function's type — the [load-time type](../scope/README.md#load-time-types) its
+  body's shape carries, and its registration's shape beside the registration: as
+  it is when closed, with its variables substituted through the enclosing
+  activation when rigid, and elaborated from the form node its body sits in
+  ([A callable's type](../elaborate/README.md#a-callables-type)) only where the
+  load left it unknown — and its captures, read from the enclosing activation
   (`ClosureBindings::read_captures`).
 - A data member ([data.rs](data.rs)): its right-hand side walked part by part.
   A literal waits to be lowered; a mention of a fellow member is an edge; any
@@ -237,7 +240,7 @@ refusal writes nothing**. The refusal is an `Untieable`:
   be.
 - `Construction` — a construction the rule refuses, with its site.
 - `TypeCycle` — a cycle of derived nodes, with the members holding it.
-- `Type` — a member's signature did not elaborate.
+- `Type` — a member's signature the load left unknown did not elaborate.
 
 ## A lambda
 
@@ -258,8 +261,9 @@ after it is born once that name is bound. The door shares the tie's staging and
 lay-down for a function node, so a door-born function weighs exactly what the
 tie gives the same function in a one-node knot. No capture it reads is an edge:
 a callable that captures a fellow member is a node of its binder's knot, which
-the tie never asks the evaluator for. A signature that does not elaborate
-refuses `Type` and writes nothing.
+the tie never asks the evaluator for. Its type is read as the tie's is, and a
+signature the load left unknown that does not elaborate refuses `Type` and
+writes nothing.
 
 ## A builtin overload
 
