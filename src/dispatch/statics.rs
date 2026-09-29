@@ -1,29 +1,35 @@
 //! Static selection: every value expression and value binder given a **static type** where the
 //! program loads, and every keyworded use's candidates narrowed by them.
 //!
-//! A static type is a bound: every type the run carries at that expression lies under it. The pass
-//! is local and bidirectional over what the [type channel's load pass](crate::elaborate::type_channel)
-//! fixed — a parameter's declared type is its reads', a callee's declared return its calls', and a
-//! literal's, a container's, a construction's and a selected candidate's own type flow up. What the
-//! load cannot bound is `Any`. A static type may hold the rigid variables of the **region** it is
-//! read in — the program, a `FOR ALL` callable's body, a quote's code, numbered as the type channel
-//! numbers them — and a capture crossing into a region is read through [`bound_above`], so no
-//! variable leaks across.
+//! A static type is an [`Interval`]: every type the run carries at that expression lies within it.
+//! An exact one is a point. The pass is local and bidirectional over what the
+//! [type channel's load pass](crate::elaborate::type_channel) fixed — a parameter's declared type
+//! is its reads', a callee's declared return its calls', and a literal's, a container's, a
+//! construction's and a selected candidate's own type flow up. What the load cannot bound is
+//! `[Never, Any]`. A static type may hold the lexical variables of its **chain** — the shapes from
+//! the program or a quote's code down, numbered as the type channel numbers them — and a crossing
+//! into code, or an `EVAL` leaving it, is read through [`bound_above`], so no variable leaks across.
 //!
-//! Each keyworded use **drops** a candidate some slot of which meets its argument's static type at
-//! `Never`, each read through `bound_above`: it can never admit what the run passes. A use left
-//! with none refuses the load. A use left with one closed candidate that admits the static types
-//! outright **selects** it, and the call runs it without admitting. A callable body whose static
-//! type meets its declared return at `Never` refuses the load too. What the pass fixes rests in
-//! each shape's write-once [`Statics`] cell, which [`evaluate`](super::evaluate) reads.
+//! Each keyworded use **judges** each candidate class by class ([`judge_by_class`]): *never*
+//! drops it, *always* means it admits whatever the run carries, and a *maybe* one the call admits.
+//! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
+//! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
+//! first, is **selected** and runs without admitting; where they rank none first, the load refuses
+//! the certain ambiguity. A quantified candidate's return is read through its group's intervals,
+//! and an `EVAL` of code the load traces to a written quote returns that code's last statement's
+//! type. A callable body whose static type meets its declared return at `Never` refuses the load
+//! too. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
+//! [`evaluate`](super::evaluate) reads.
 //!
-//! A node is read here exactly as the evaluator reads it, through its [`Form`]. Inside a quote's
-//! code a refusal is kept on the code shape, and the `EVAL` running it reports it.
+//! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
+//! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its cell,
+//! where an unmarked key's hole is a candidate the load cannot read, since a `USING` may fill it;
+//! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing. Inside a quote's code a refusal is
+//! kept on the code shape, and the `EVAL` running it reports it.
 //!
 //! See [README.md § Static types](README.md#static-types).
 
-use crate::elaborate::writes_for_all;
-use crate::knot::KBuiltins;
+use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
@@ -32,11 +38,13 @@ use crate::scope::{
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Interval, KType, TypeNode, TypeRegistry, Verdict, admit_by_class, bound_above, join_iter, meet,
-    shape_return, shape_slots,
+    Collector, Interval, KType, Record, Side, TypeNode, TypeRegistry, Variance, Verdict,
+    admits_with, bound_above, class_at_least, instantiate_quantified, intervals, join_iter,
+    judge_by_class, meet, quantifier_bounds, read_through, select_by_class, shape_return,
 };
 use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
 
+use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
 
 /// Give every value expression and value binder of `root`, and of every shape nested in it, a
@@ -54,6 +62,8 @@ pub(super) fn statics<'graph>(
         writer,
         scratch,
         chain: BumpVec::new_in(scratch),
+        unfilled: false,
+        ran: BumpVec::new_in(scratch),
     };
     pass.push(root, true);
     let visited = pass.visit(0);
@@ -61,15 +71,23 @@ pub(super) fn statics<'graph>(
     visited
 }
 
+/// A static type under `upper` and bounded below by nothing — exact where `upper` is `Number`,
+/// `Str`, `Bool` or `Null`, since no value carries a type strictly under one.
+fn under(upper: KType) -> Interval {
+    match upper {
+        KType::NUMBER | KType::STR | KType::BOOL | KType::NULL => Interval::point(upper),
+        _ => Interval::within(upper),
+    }
+}
+
 /// One shape on the chain, innermost last, with what the pass has typed of it so far.
 struct Level<'p, 'graph> {
     shape: &'graph BodyShape<'graph>,
-    /// Whether the shape roots a region: the program, a quote's code, or a callable body whose
-    /// declaration writes a `FOR ALL` group.
-    opens_region: bool,
-    parts: BumpVec<'p, (Site, KType)>,
-    statements: BumpVec<'p, KType>,
-    binders: BumpVec<'p, KType>,
+    /// Whether the shape roots a chain: the program or a quote's code.
+    roots_chain: bool,
+    parts: BumpVec<'p, (Site, Interval)>,
+    statements: BumpVec<'p, Interval>,
+    binders: BumpVec<'p, Interval>,
     narrowings: BumpVec<'p, Narrowing<'graph>>,
 }
 
@@ -80,6 +98,11 @@ struct Pass<'p, 'x, 'graph> {
     writer: Writer<'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
+    /// Whether the pass is typing a quote's code as a traced `EVAL` runs it, no hole filled: it
+    /// fixes nothing.
+    unfilled: bool,
+    /// Each quote's code beside its last statement's static type as it runs unfilled.
+    ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -87,23 +110,34 @@ struct Pass<'p, 'x, 'graph> {
 enum Known {
     /// The same at every run.
     Closed(KType),
-    /// Over rigid variables the run supplies.
+    /// Over lexical variables the run supplies.
     Rigid(KType),
     Unknown,
 }
 
+/// One candidate a keyworded use kept: what the load knows of it, its verdict, and its group's
+/// intervals where the static solve succeeded.
+#[derive(Clone, Copy)]
+struct Judgement<'x> {
+    candidate: Candidate,
+    known: Known,
+    verdict: Verdict,
+    intervals: Option<&'x [Interval]>,
+}
+
 impl<'p, 'graph> Pass<'p, '_, 'graph> {
-    fn push(&mut self, shape: &'graph BodyShape<'graph>, opens_region: bool) {
+    fn push(&mut self, shape: &'graph BodyShape<'graph>, roots_chain: bool) {
         let scratch = self.scratch;
+        let unknown = under(KType::ANY);
         let mut statements = BumpVec::with_capacity_in(shape.body().len(), scratch);
-        statements.resize(shape.body().len(), KType::ANY);
+        statements.resize(shape.body().len(), unknown);
         let mut binders = BumpVec::with_capacity_in(shape.slots(), scratch);
-        binders.resize(shape.slots(), KType::ANY);
+        binders.resize(shape.slots(), unknown);
         let mut narrowings = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
         narrowings.resize(shape.candidate_lists().len(), Narrowing::Full);
         self.chain.push(Level {
             shape,
-            opens_region,
+            roots_chain,
             parts: BumpVec::new_in(scratch),
             statements,
             binders,
@@ -111,12 +145,18 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         });
     }
 
-    /// Type the shape at chain level `level`, fix its cell, then type every shape nested in it.
+    /// Type the shape at chain level `level` — its code first — fix its cell, then type every
+    /// shape nested in it.
     fn visit(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         for slot in 0..shape.slots() {
             let seeded = self.seeded(level, Slot(slot as u32));
             self.chain[level].binders[slot] = seeded;
+        }
+        for (_, nested) in shape.nested_shapes() {
+            if nested.kind() == ShapeKind::Code && !done(nested) {
+                self.nest(level, nested)?;
+            }
         }
         for unit in shape.units() {
             match unit.work {
@@ -131,80 +171,136 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         self.fix(level);
 
         for (_, nested) in shape.nested_shapes() {
-            if nested.statics().is_some()
-                || (nested.kind() == ShapeKind::Code && nested.refusal().is_some())
-            {
-                continue;
-            }
-            let opens_region = match nested.kind() {
-                ShapeKind::Code => true,
-                ShapeKind::Callable => nested.form().is_some_and(writes_for_all),
-                _ => false,
-            };
-            self.push(nested, opens_region);
-            let visited = self.visit(level + 1);
-            self.chain.pop();
-            match visited {
-                Err(error) if nested.kind() == ShapeKind::Code => {
-                    nested.refuse_typing(resident(self.writer, error));
-                }
-                visited => visited?,
+            if !done(nested) {
+                self.nest(level, nested)?;
             }
         }
         Ok(())
     }
 
+    /// Type `nested`, a shape nested in the shape at `level`. A quote's code roots a chain and keeps
+    /// its refusal, and is typed a second time as it runs unfilled.
+    fn nest(
+        &mut self,
+        level: usize,
+        nested: &'graph BodyShape<'graph>,
+    ) -> Result<(), ShapeError<'graph>> {
+        let code = nested.kind() == ShapeKind::Code;
+        let visited = self.nested(level, nested, code);
+        match visited {
+            Err(error) if code => {
+                nested.refuse_typing(resident(self.writer, error));
+                Ok(())
+            }
+            Ok(_) if code => {
+                let unfilled = std::mem::replace(&mut self.unfilled, true);
+                // A use unfilled code can never run refuses nothing: its `EVAL` faults.
+                if let Ok(Some(last)) = self.nested(level, nested, true) {
+                    self.ran.push((nested, last));
+                }
+                self.unfilled = unfilled;
+                Ok(())
+            }
+            visited => visited.map(|_| ()),
+        }
+    }
+
+    /// Push `nested` above the shape at `level`, type it, and pop it: its last statement's static
+    /// type.
+    fn nested(
+        &mut self,
+        level: usize,
+        nested: &'graph BodyShape<'graph>,
+        roots_chain: bool,
+    ) -> Result<Option<Interval>, ShapeError<'graph>> {
+        self.push(nested, roots_chain);
+        let visited = self.visit(level + 1);
+        let last = self.chain[level + 1].statements.last().copied();
+        self.chain.pop();
+        visited.map(|_| last)
+    }
+
     /// Lay what the pass typed of the shape at `level` down in its cell.
     fn fix(&mut self, level: usize) {
-        let writer = self.writer;
+        if self.unfilled {
+            return;
+        }
+        let (writer, types) = (self.writer, self.types);
         let at = &mut self.chain[level];
         at.parts.sort_unstable_by_key(|(site, _)| *site);
+        debug_assert!(
+            (at.parts.iter().map(|(_, typed)| typed))
+                .chain(at.statements.iter())
+                .chain(at.binders.iter())
+                .all(|typed| !types.contains_quantified(typed.lower)
+                    && !types.contains_quantified(typed.upper)),
+            "no static type holds a free `Quantified`"
+        );
         at.shape.fix_statics(Statics {
-            parts: collect(
-                writer,
-                at.parts
-                    .iter()
-                    .map(|(site, typed)| (*site, Interval::within(*typed))),
-            ),
-            statements: collect(writer, at.statements.iter().copied().map(Interval::within)),
-            binders: collect(writer, at.binders.iter().copied().map(Interval::within)),
+            parts: collect(writer, at.parts.iter().copied()),
+            statements: collect(writer, at.statements.iter().copied()),
+            binders: collect(writer, at.binders.iter().copied()),
             narrowings: collect(writer, at.narrowings.iter().copied()),
         });
     }
 
     /// A slot's static type before any unit runs: a registration's function type, a type name's
-    /// type value's, a parameter's declared type, and `Any` for a local its unit sets.
-    fn seeded(&self, level: usize, slot: Slot) -> KType {
-        let at = &self.chain[level];
-        let shape = at.shape;
+    /// type value's, a parameter's declared type as its body reads it, and `[Never, Any]` for a
+    /// local its unit sets.
+    fn seeded(&self, level: usize, slot: Slot) -> Interval {
+        let shape = self.chain[level].shape;
         if shape.registration(slot).is_some() {
-            return shape.births(slot).map_or(KType::ANY, |body| callable(body));
+            return shape.births(slot).map_or(under(KType::ANY), callable);
         }
         let name = shape.slot_name(slot);
         if let BinderSymbol::Type(_) = name {
             return match shape.declared_type(slot) {
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {
-                    KType::of_kind(handle.kind_of(self.types))
+                    Interval::point(KType::of_kind(handle.kind_of(self.types)))
                 }
-                _ => KType::ANY_TYPE,
+                _ => under(KType::ANY_TYPE),
             };
         }
         let is_parameter = shape
             .slot(name)
             .is_some_and(|(_, position)| position == Position::PARAMETER);
         if shape.kind() != ShapeKind::Callable || !is_parameter {
-            return KType::ANY;
+            return under(KType::ANY);
         }
-        // A region's own rigid type would number the enclosing region's variables, not its own.
+        let declared = self
+            .in_body(shape)
+            .and_then(|ktype| match self.types.node(ktype) {
+                TypeNode::KFunction { params, .. } => params.get(name.symbol()),
+                _ => None,
+            });
+        under(declared.unwrap_or(KType::ANY))
+    }
+
+    /// A callable body's function type as its body reads it: its own group instantiated at its
+    /// group levels. `None` where the load did not type the callable.
+    fn in_body(&self, shape: &BodyShape<'graph>) -> Option<KType> {
         let ktype = match shape.callable_type() {
-            Static::Closed(callable) => callable.ktype,
-            Static::Rigid { value, .. } if !at.opens_region => value.ktype,
-            _ => return KType::ANY,
+            Static::Closed(callable)
+            | Static::Rigid {
+                value: callable, ..
+            } => callable.ktype,
+            Static::Unknown => return None,
         };
-        match self.types.node(ktype) {
-            TypeNode::KFunction { params, .. } => params.get(name.symbol()).unwrap_or(KType::ANY),
-            _ => KType::ANY,
+        let bounds = quantifier_bounds(self.types, ktype);
+        if bounds.is_empty() {
+            return Some(ktype);
         }
+        debug_assert_eq!(
+            bounds.len(),
+            shape.group_levels().len(),
+            "the type channel numbered the callable's own group"
+        );
+        Some(instantiate_quantified(
+            self.types,
+            self.scratch,
+            ktype,
+            shape.group_levels(),
+        ))
     }
 
     /// Type a component's value binders: each callable or module it births first, then each data
@@ -220,7 +316,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if let Some(body) = shape.births(*member) {
                 self.chain[level].binders[member.index()] = match body.form() {
                     Some(_) => callable(body),
-                    None => KType::ANY,
+                    None => under(KType::ANY),
                 };
             }
         }
@@ -256,16 +352,13 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         if shape.kind() != ShapeKind::Callable || shape.body().is_empty() {
             return Ok(());
         }
-        let ktype = match shape.callable_type() {
-            Static::Closed(callable) => callable.ktype,
-            Static::Rigid { value, .. } if !at.opens_region => value.ktype,
-            _ => return Ok(()),
-        };
-        let TypeNode::KFunction { ret, .. } = self.types.node(ktype) else {
+        let Some(TypeNode::KFunction { ret, .. }) =
+            self.in_body(shape).map(|ktype| self.types.node(ktype))
+        else {
             return Ok(());
         };
         let last = shape.body().len() - 1;
-        let body = at.statements[last];
+        let body = at.statements[last].upper;
         let (types, scratch) = (self.types, self.scratch);
         // A body that never arrives returns nothing to check.
         if body == KType::NEVER {
@@ -291,7 +384,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
-    ) -> Result<KType, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         let typed = self.form(level, of_part(shape, part))?;
         self.chain[level].parts.push((Site::of(part), typed));
@@ -303,62 +396,58 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-    ) -> Result<KType, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         self.form(level, of_node(shape, node))
     }
 
     /// The static type of a node or part the evaluator reads as `form`.
-    fn form(&mut self, level: usize, form: Form<'graph>) -> Result<KType, ShapeError<'graph>> {
+    fn form(&mut self, level: usize, form: Form<'graph>) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         Ok(match form {
             Form::Leaf(part) => self.leaf(level, part)?,
-            Form::Block(nested) => {
-                self.push(nested, false);
-                let visited = self.visit(level + 1);
-                self.chain.pop();
-                visited?;
-                nested
-                    .statement_type(nested.body().len().saturating_sub(1))
-                    .map_or(KType::ANY, |typed| typed.upper)
-            }
+            Form::Block(nested) => self
+                .nested(level, nested, false)?
+                .unwrap_or(under(KType::ANY)),
             Form::Lambda(node) => Site::of_body(node)
                 .and_then(|site| shape.nested(site))
-                .map_or(KType::ANY, callable),
-            Form::Declaration => KType::NULL,
+                .map_or(under(KType::ANY), callable),
+            Form::Declaration => Interval::point(KType::NULL),
             Form::Call(node, list) => self.narrow(level, node, list)?,
             Form::Apply(head, argument) => self.apply(level, head, argument)?,
-            Form::Unevaluable(_) => KType::ANY,
+            Form::Unevaluable(_) => under(KType::ANY),
         })
     }
 
     /// A leaf part: a literal's type, a name's binder's, a quote's code type, a type value's kind,
-    /// or a container's over its parts.
+    /// or a container's over its parts, end by end.
     fn leaf(
         &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
-    ) -> Result<KType, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         let (types, scratch) = (self.types, self.scratch);
         Ok(match part {
-            ExpressionPart::Literal(KLiteral::Number(_)) => KType::NUMBER,
-            ExpressionPart::Literal(KLiteral::String(_)) => KType::STR,
-            ExpressionPart::Literal(KLiteral::Boolean(_)) => KType::BOOL,
-            ExpressionPart::Literal(KLiteral::Null) => KType::NULL,
+            ExpressionPart::Literal(KLiteral::Number(_)) => Interval::point(KType::NUMBER),
+            ExpressionPart::Literal(KLiteral::String(_)) => Interval::point(KType::STR),
+            ExpressionPart::Literal(KLiteral::Boolean(_)) => Interval::point(KType::BOOL),
+            ExpressionPart::Literal(KLiteral::Null) => Interval::point(KType::NULL),
             ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
             | ExpressionPart::MarkedName(..) => match shape.mention(Site::of(part)) {
                 Some(mention) => self.read(level, mention.coordinate),
-                None => KType::ANY,
+                None => under(KType::ANY),
             },
             ExpressionPart::QuotedExpression(_) => shape
                 .nested(Site::of(part))
-                .map_or(KType::ANY, |code| code.code_type()),
+                .map_or(under(KType::ANY), |code| Interval::point(code.code_type())),
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 match shape.typed_expression(Site::of(part)) {
-                    Static::Closed(handle) => KType::of_kind(handle.kind_of(types)),
-                    _ => KType::ANY_TYPE,
+                    Static::Closed(handle) => {
+                        Interval::point(KType::of_kind(handle.kind_of(types)))
+                    }
+                    _ => under(KType::ANY_TYPE),
                 }
             }
             ExpressionPart::ListLiteral(items) => {
@@ -366,32 +455,50 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 for item in items.iter() {
                     typed.push(self.part(level, item)?);
                 }
-                list_type(types, scratch, typed.iter().copied())
+                Interval {
+                    lower: list_type(types, scratch, typed.iter().map(|each| each.lower)),
+                    upper: list_type(types, scratch, typed.iter().map(|each| each.upper)),
+                }
             }
             ExpressionPart::DictLiteral(pairs) => {
                 let mut typed = BumpVec::with_capacity_in(pairs.len(), scratch);
                 for (key, value) in pairs.iter() {
                     typed.push((self.part(level, key)?, self.part(level, value)?));
                 }
-                dict_type(types, scratch, typed.iter().copied())
+                Interval {
+                    lower: dict_type(
+                        types,
+                        scratch,
+                        typed.iter().map(|(k, v)| (k.lower, v.lower)),
+                    ),
+                    upper: dict_type(
+                        types,
+                        scratch,
+                        typed.iter().map(|(k, v)| (k.upper, v.upper)),
+                    ),
+                }
             }
             ExpressionPart::RecordLiteral(fields) => {
                 let mut typed = BumpVec::with_capacity_in(fields.len(), scratch);
                 for (name, value) in fields.iter() {
                     typed.push((*name, self.part(level, value)?));
                 }
-                record_type(types, scratch, typed.iter().copied())
+                Interval {
+                    lower: record_type(types, scratch, typed.iter().map(|(n, v)| (*n, v.lower))),
+                    upper: record_type(types, scratch, typed.iter().map(|(n, v)| (*n, v.upper))),
+                }
             }
             ExpressionPart::Keyword(_)
             | ExpressionPart::Expression(_)
-            | ExpressionPart::MarkedUse(..) => KType::ANY,
+            | ExpressionPart::MarkedUse(..) => under(KType::ANY),
         })
     }
 
-    /// The static type of what `coordinate`, read in the shape at `level`, holds.
-    fn read(&self, level: usize, coordinate: Coordinate) -> KType {
+    /// The static type of what `coordinate`, read in the shape at `level`, holds. A capture along
+    /// the chain reads its source's; one crossing into a quote's code reads it through its bounds.
+    fn read(&self, level: usize, coordinate: Coordinate) -> Interval {
         let (hops, target) = match coordinate {
-            Coordinate::Builtin(index) => return self.builtins.get(index).ktype(),
+            Coordinate::Builtin(index) => return Interval::point(self.builtins.get(index).ktype()),
             Coordinate::Activation { hops, target } => (hops, target),
         };
         let at = level - hops as usize;
@@ -410,10 +517,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     self.chain[outer].shape.components()[component.index()].members[index as usize];
                 self.chain[outer].binders[member.index()]
             }
-            _ => return KType::ANY,
+            _ => return under(KType::ANY),
         };
-        if self.chain[at].opens_region {
-            bound_above(self.types, self.scratch, read)
+        if self.chain[at].roots_chain {
+            under(bound_above(self.types, self.scratch, read.upper))
         } else {
             read
         }
@@ -444,28 +551,102 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     }
 
     /// `(head argument)`: a construction's identity when the head is a type the load knows, the
-    /// callee's declared return read through its bounds when the head is a function, else `Any`.
+    /// callee's declared return read through the group the argument solves when the head is a
+    /// function, else `[Never, Any]`.
     fn apply(
         &mut self,
         level: usize,
         head: &'graph ExpressionPart<'graph>,
         argument: &'graph ExpressionPart<'graph>,
-    ) -> Result<KType, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'graph>> {
         let callee = self.part(level, head)?;
         let payload = self.part(level, argument)?;
         let (types, scratch) = (self.types, self.scratch);
         if let Some(identity) = self.head_handle(level, head) {
-            return Ok(match construction(types, scratch, identity, payload) {
+            let upper = match construction(types, scratch, identity, payload.upper) {
                 Ok(constructed) => constructed,
                 Err(ConstructionRefused::NotConstructible(_)) => KType::ANY,
                 // A misfit faults; an unsolved family lies under the bare family.
                 Err(_) => identity,
-            });
+            };
+            let lower =
+                construction(types, scratch, identity, payload.lower).unwrap_or(KType::NEVER);
+            return Ok(Interval { lower, upper });
         }
-        Ok(match types.node(callee) {
-            TypeNode::KFunction { ret, .. } => bound_above(types, scratch, ret),
-            _ => KType::ANY,
+        Ok(match types.node(callee.upper) {
+            TypeNode::KFunction {
+                bounds,
+                params,
+                ret,
+                ..
+            } => under(self.called(bounds, params, ret, payload)),
+            _ => under(KType::ANY),
         })
+    }
+
+    /// What a call by name of a function over `params` returning `ret`, its group bounded by
+    /// `bounds`, returns for an argument of the static type `payload`: `ret` read through the
+    /// intervals the argument's fields solve the group to, or its bounds where they do not.
+    fn called(&self, bounds: &[KType], params: Record<'_>, ret: KType, payload: Interval) -> KType {
+        let (types, scratch) = (self.types, self.scratch);
+        if bounds.is_empty() {
+            return ret;
+        }
+        let fields = |typed| match types.node(typed) {
+            TypeNode::Record { fields } => Some(fields),
+            _ => None,
+        };
+        let Some(upper) = fields(payload.upper) else {
+            return self.through(ret, None);
+        };
+        let lower = fields(payload.lower);
+        let mut collector = Collector::new(scratch, bounds);
+        let mut declared = BumpVec::with_capacity_in(params.len(), scratch);
+        let mut exact = true;
+        for (name, param) in params.iter() {
+            let Some(field) = upper.get(name.symbol()) else {
+                return self.through(ret, None);
+            };
+            if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
+                return self.through(ret, None);
+            }
+            if types.contains_quantified(param) {
+                exact &= lower.and_then(|lower| lower.get(name.symbol())) == Some(field);
+            }
+            declared.push(param);
+        }
+        match collector.solve(types) {
+            Ok(solution) => {
+                let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
+                self.through(ret, Some(&solved))
+            }
+            Err(_) => self.through(ret, None),
+        }
+    }
+
+    /// `ret`, a return under its own group, read through that group's `intervals` — each variable
+    /// at `[Never, bound]` where there are none — keeping every lexical variable.
+    fn through(&self, ret: KType, intervals: Option<&[Interval]>) -> KType {
+        read_through(
+            self.types,
+            self.scratch,
+            ret,
+            Side::Above,
+            &mut |node| match *node {
+                TypeNode::Quantified { index, bound } => Some(
+                    intervals
+                        .and_then(|all| all.get(index).copied())
+                        .unwrap_or(Interval::within(bound)),
+                ),
+                _ => None,
+            },
+        )
+    }
+
+    /// `shape`'s declared return read through its own group's `intervals`.
+    fn returned(&self, shape: KType, intervals: Option<&[Interval]>) -> KType {
+        let ret = shape_return(shape, self.types).expect("a registered shape returns");
+        self.through(ret, intervals)
     }
 
     /// The type an application's head denotes, where the load knows it.
@@ -498,22 +679,27 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// A keyworded use: its arguments typed, its candidates narrowed — and selected, where one is
-    /// left that admits them outright — and its static type the join of what is left's returns.
+    /// A keyworded use: its arguments typed, each candidate judged against them, and the use
+    /// narrowed — or a candidate selected, where no *maybe* one is left and one ranks first. Its
+    /// static type is the selected candidate's return, or the join of what is left's returns.
     fn narrow(
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
         list: &'graph CandidateList<'graph>,
-    ) -> Result<KType, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         let wanted = slots(node, scratch);
         let mut arguments = BumpVec::with_capacity_in(wanted.len(), scratch);
+        let mut operand = None;
         for wanted in wanted.iter() {
             arguments.push(match wanted {
-                Wanted::Label(BinderSymbol::Type(_)) => KType::TYPE_NAME_TOKEN,
-                Wanted::Label(_) => KType::IDENTIFIER,
-                Wanted::Evaluated(part) => self.part(level, part)?,
+                Wanted::Label(BinderSymbol::Type(_)) => Interval::point(KType::TYPE_NAME_TOKEN),
+                Wanted::Label(_) => Interval::point(KType::IDENTIFIER),
+                Wanted::Evaluated(part) => {
+                    operand = operand.or(Some(*part));
+                    self.part(level, part)?
+                }
             });
         }
         let shape = self.chain[level].shape;
@@ -522,84 +708,227 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             .binary_search_by_key(&Site::of_node(node), |(site, _)| *site)
             .expect("a keyworded use's candidate list is recorded at its node");
         // A use one of whose arguments never arrives never runs its call.
-        if arguments.contains(&KType::NEVER) {
-            return Ok(KType::NEVER);
+        if arguments
+            .iter()
+            .any(|argument| argument.upper == KType::NEVER)
+        {
+            return Ok(Interval::point(KType::NEVER));
         }
-        let mut above = BumpVec::with_capacity_in(arguments.len(), scratch);
-        above.extend(
-            arguments
-                .iter()
-                .map(|argument| bound_above(types, scratch, *argument)),
-        );
+        let uppers = || collect(self.writer, arguments.iter().map(|argument| argument.upper));
 
-        let mut kept = BumpVec::new_in(scratch);
+        let mut judged = BumpVec::with_capacity_in(list.candidates.len(), scratch);
         for candidate in list.candidates {
+            // Unfilled code holds no function at an unmarked key's hole.
+            if self.unfilled && self.hole(level, *candidate) {
+                continue;
+            }
             let known = self.candidate(level, *candidate);
-            let registered = match known {
-                Known::Closed(registered) | Known::Rigid(registered) => registered,
-                Known::Unknown => {
-                    kept.push((*candidate, known));
-                    continue;
+            let (verdict, intervals) = match known {
+                Known::Closed(registered) | Known::Rigid(registered) => {
+                    let judged = judge_by_class(types, scratch, registered, &arguments);
+                    (judged.verdict, judged.intervals)
                 }
+                Known::Unknown => (Verdict::Maybe, None),
             };
-            let never = shape_slots(registered, types)
-                .zip(above.iter())
-                .any(|(slot, argument)| {
-                    meet(types, scratch, bound_above(types, scratch, slot), *argument)
-                        == KType::NEVER
+            if verdict != Verdict::Never {
+                judged.push(Judgement {
+                    candidate: *candidate,
+                    known,
+                    verdict,
+                    intervals,
                 });
-            if !never {
-                kept.push((*candidate, known));
             }
         }
-        if kept.is_empty() {
+        if judged.is_empty() {
             return Err(ShapeError::NoAdmittingCandidate {
                 key: list.elements,
-                arguments: collect(self.writer, arguments.iter().copied()),
+                arguments: uppers(),
                 at: node.source,
             });
         }
-        let returned = |registered: KType| {
-            let ret = shape_return(registered, types).expect("a registered shape returns");
-            bound_above(types, scratch, ret)
+        // A *maybe* an *always* one strictly outranks at the first class never runs: wherever it
+        // admits, the *always* one does too, and beats it.
+        let beats = |a: KType, m: KType| {
+            class_at_least(types, scratch, a, m, 0) && !class_at_least(types, scratch, m, a, 0)
         };
-        if let [(Candidate::One(coordinate), Known::Closed(registered))] = kept[..]
-            && admit_by_class(types, scratch, registered, &above).is_some()
+        let outranked = |judgement: &Judgement<'_>| match judgement.known {
+            Known::Closed(m) if judgement.verdict == Verdict::Maybe => {
+                judged.iter().any(|other| match other.known {
+                    Known::Closed(a) if other.verdict == Verdict::Always => beats(a, m),
+                    _ => false,
+                })
+            }
+            _ => false,
+        };
+        let mut left = BumpVec::with_capacity_in(judged.len(), scratch);
+        left.extend(
+            judged
+                .iter()
+                .copied()
+                .filter(|judgement| !outranked(judgement)),
+        );
+        let judged = left;
+
+        if judged
+            .iter()
+            .all(|judgement| judgement.verdict == Verdict::Always)
         {
-            self.chain[level].narrowings[index] = Narrowing::Selected(coordinate);
-            return Ok(returned(registered));
-        }
-        if kept.len() < list.candidates.len() {
-            let candidates = collect(
-                self.writer,
-                kept.iter()
-                    .map(|(candidate, _)| (*candidate, Verdict::Maybe)),
-            );
-            self.chain[level].narrowings[index] = Narrowing::Kept(candidates);
-        }
-        let mut returns = BumpVec::with_capacity_in(kept.len(), scratch);
-        for (_, known) in kept.iter() {
-            match known {
-                Known::Closed(registered) | Known::Rigid(registered) => {
-                    returns.push(returned(*registered))
+            let chosen = match judged[..] {
+                [only] => Some(only),
+                _ if judged
+                    .iter()
+                    .all(|judgement| matches!(judgement.known, Known::Closed(_))) =>
+                {
+                    let mut shapes = BumpVec::with_capacity_in(judged.len(), scratch);
+                    shapes.extend(judged.iter().map(|judgement| match judgement.known {
+                        Known::Closed(registered) => registered,
+                        _ => unreachable!("every candidate is closed"),
+                    }));
+                    let survivors = select_by_class(types, scratch, &shapes);
+                    let first = match survivors[..] {
+                        [only] => Some(only),
+                        _ => survivors
+                            .iter()
+                            .copied()
+                            .find(|survivor| self.builtin(judged[*survivor].candidate).is_some()),
+                    };
+                    match first {
+                        Some(survivor) => Some(judged[survivor]),
+                        None => {
+                            return Err(ShapeError::Ambiguous {
+                                key: list.elements,
+                                arguments: uppers(),
+                                count: survivors.len(),
+                                at: node.source,
+                            });
+                        }
+                    }
                 }
-                Known::Unknown => return Ok(KType::ANY),
+                // Several, a rigid one among them: ranked at the call.
+                _ => None,
+            };
+            if let Some(chosen) = chosen {
+                let Candidate::One(coordinate) = chosen.candidate else {
+                    unreachable!("an always candidate is no spread");
+                };
+                self.chain[level].narrowings[index] = Narrowing::Selected(coordinate);
+                return Ok(under(self.candidate_return(level, chosen, operand)));
             }
         }
-        Ok(join_iter(types, scratch, returns.iter().copied()))
+        if judged.len() < list.candidates.len()
+            || judged
+                .iter()
+                .any(|judgement| judgement.verdict == Verdict::Always)
+        {
+            let kept = collect(
+                self.writer,
+                judged
+                    .iter()
+                    .map(|judgement| (judgement.candidate, judgement.verdict)),
+            );
+            self.chain[level].narrowings[index] = Narrowing::Kept(kept);
+        }
+        let mut returns = BumpVec::with_capacity_in(judged.len(), scratch);
+        for judgement in judged.iter() {
+            if let Known::Unknown = judgement.known {
+                return Ok(under(KType::ANY));
+            }
+            returns.push(self.candidate_return(level, *judgement, operand));
+        }
+        Ok(under(join_iter(types, scratch, returns.iter().copied())))
+    }
+
+    /// What a judged candidate returns: its shape's return read through its group's intervals, or,
+    /// for `EVAL` of code the load traces through `operand`, that code's last statement's type as
+    /// it runs unfilled — traced code is written, so nothing composed or `USING` filled it.
+    fn candidate_return(
+        &self,
+        level: usize,
+        judgement: Judgement<'_>,
+        operand: Option<&'graph ExpressionPart<'graph>>,
+    ) -> KType {
+        let registered = match judgement.known {
+            Known::Closed(registered) | Known::Rigid(registered) => registered,
+            Known::Unknown => return KType::ANY,
+        };
+        let evaluates = self
+            .builtin(judgement.candidate)
+            .is_some_and(|builtin| Native::of(builtin.id()) == Native::Eval);
+        let traced = operand
+            .filter(|_| evaluates)
+            .and_then(|operand| self.traced_code(level, operand))
+            .and_then(|code| {
+                let ran = self.ran.iter().find(|(ran, _)| std::ptr::eq(*ran, code));
+                ran.map(|(_, last)| *last)
+            });
+        match traced {
+            Some(typed) => bound_above(self.types, self.scratch, typed.upper),
+            None => self.returned(registered, judgement.intervals),
+        }
+    }
+
+    /// The code shape the part `operand` runs, where the load traces it to a written quote: the
+    /// quote itself, or a name a `LET` binds to one. Code names extend this; composed code has no
+    /// shape at load.
+    fn traced_code(
+        &self,
+        level: usize,
+        operand: &'graph ExpressionPart<'graph>,
+    ) -> Option<&'graph BodyShape<'graph>> {
+        let shape = self.chain[level].shape;
+        match operand {
+            ExpressionPart::QuotedExpression(_) => shape.nested(Site::of(operand)),
+            ExpressionPart::Identifier(_) => {
+                let coordinate = shape.mention(Site::of(operand))?.coordinate;
+                let (at, slot) = self.slot_of(level, coordinate)?;
+                let holder = self.chain[at].shape;
+                match holder.rhs(slot)? {
+                    rhs @ ExpressionPart::QuotedExpression(_) => holder.nested(Site::of(rhs)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether `candidate`, read in the shape at `level`, is an unmarked key's hole: a spread a
+    /// `USING` fills.
+    fn hole(&self, level: usize, candidate: Candidate) -> bool {
+        let Candidate::Spread(Coordinate::Activation {
+            hops,
+            target: Target::Capture(capture),
+        }) = candidate
+        else {
+            return false;
+        };
+        let at = level - hops as usize;
+        match self.chain[at].shape.captures()[capture.index()].source {
+            CaptureSource::Hole => true,
+            CaptureSource::Read(inner) if !self.chain[at].roots_chain => {
+                self.hole(at - 1, Candidate::Spread(inner))
+            }
+            _ => false,
+        }
+    }
+
+    /// The builtin `candidate` names, where it names one.
+    fn builtin(&self, candidate: Candidate) -> Option<&'graph BuiltinFunction> {
+        match candidate {
+            Candidate::One(Coordinate::Builtin(index)) => self
+                .builtins
+                .get(index)
+                .as_callable()
+                .and_then(|member| member.builtin()),
+            _ => None,
+        }
     }
 
     /// What the load knows of `candidate`'s registered shape, read from the shape at `level`.
     fn candidate(&self, level: usize, candidate: Candidate) -> Known {
         let coordinate = match candidate {
             Candidate::Spread(_) => return Known::Unknown,
-            Candidate::One(Coordinate::Builtin(index)) => {
-                return match self
-                    .builtins
-                    .get(index)
-                    .as_callable()
-                    .and_then(|member| member.builtin())
-                {
+            Candidate::One(Coordinate::Builtin(_)) => {
+                return match self.builtin(candidate) {
                     Some(builtin) => Known::Closed(builtin.ktype()),
                     None => Known::Unknown,
                 };
@@ -621,13 +950,19 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     }
 }
 
-/// The function type of the callable body `body`, where the load typed it; `Any` elsewhere.
-fn callable(body: &BodyShape<'_>) -> KType {
+/// Whether the pass has typed `nested`, or need not: a quote's code the load refused is left.
+fn done(nested: &BodyShape<'_>) -> bool {
+    nested.statics().is_some() || (nested.kind() == ShapeKind::Code && nested.refusal().is_some())
+}
+
+/// The static type of the callable body `body`: a point at its function type where the load typed
+/// it, `[Never, Any]` elsewhere.
+fn callable(body: &BodyShape<'_>) -> Interval {
     match body.callable_type() {
         Static::Closed(callable)
         | Static::Rigid {
             value: callable, ..
-        } => callable.ktype,
-        Static::Unknown => KType::ANY,
+        } => Interval::point(callable.ktype),
+        Static::Unknown => under(KType::ANY),
     }
 }

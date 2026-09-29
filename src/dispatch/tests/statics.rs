@@ -4,19 +4,20 @@
 use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Program};
 use crate::scope::{BodyShape, Narrowing, Site, Slot};
+use crate::symbols::TypeSymbol;
 use crate::type_lattice::{Interval, KType, Verdict, display_name};
 
 use super::{Koan, output, run};
 
 /// Load `source` under dispatch and hand `inspect` its program, or the load's refusal.
-fn loaded<R>(source: &str, inspect: impl FnOnce(&Program<'_>) -> R) -> R {
+pub(super) fn loaded<R>(source: &str, inspect: impl FnOnce(&Program<'_>) -> R) -> R {
     let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 8, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     substrate.with(|running| inspect(running.program()))
 }
 
 /// The slot of the value binder `name` in `shape`.
-fn slot(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Slot {
+pub(super) fn slot(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Slot {
     (0..shape.slots())
         .map(|index| Slot(index as u32))
         .find(|slot| {
@@ -30,7 +31,7 @@ fn slot(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Slot {
 }
 
 /// The static type of the binder `name` in `shape`, rendered.
-fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
+pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
     let typed = shape
         .binder_type(slot(program, shape, name))
         .expect("the load typed the shape");
@@ -38,12 +39,26 @@ fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
 }
 
 /// The static type of the top-level binder `name` of `source`, rendered.
-fn top(source: &str, name: &str) -> String {
+pub(super) fn top(source: &str, name: &str) -> String {
     loaded(source, |program| binder(program, program.shape(), name))
 }
 
+/// The lexical variable at `level` named `name`, bounded by `bound`.
+pub(super) fn lexical(program: &Program<'_>, level: usize, name: &str, bound: KType) -> KType {
+    let name = TypeSymbol::declared(name, program.symbols()).expect("a Type token");
+    program.types().lexical(level, name, bound)
+}
+
+/// The upper end of the static type of the binder `name` in `shape`.
+pub(super) fn upper(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> KType {
+    shape
+        .binder_type(slot(program, shape, name))
+        .expect("the load typed the shape")
+        .upper
+}
+
 /// The body the binder `name` in `shape` births.
-fn body<'graph>(
+pub(super) fn body<'graph>(
     program: &Program<'graph>,
     shape: &'graph BodyShape<'graph>,
     name: &str,
@@ -56,22 +71,31 @@ fn body<'graph>(
 /// The narrowing of the keyworded use `LET name = <use>` in the top level of `source`.
 fn narrowing(source: &str, name: &str) -> String {
     loaded(source, |program| {
-        let shape = program.shape();
-        let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(program, shape, name)) else {
-            panic!("`{name}` is bound to a node");
-        };
-        match shape.narrowing(Site::of_node(node.reference())) {
-            Narrowing::Full => "full".to_string(),
-            Narrowing::Kept(kept) => kept.iter().fold("kept".to_string(), |text, (_, verdict)| {
-                text + match verdict {
-                    Verdict::Always => " always",
-                    Verdict::Maybe => " maybe",
-                    Verdict::Never => " never",
-                }
-            }),
-            Narrowing::Selected(_) => "selected".to_string(),
-        }
+        let_narrowing(program, program.shape(), name)
     })
+}
+
+/// The narrowing of the keyworded use `LET name = <use>` in `shape`.
+pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
+    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(program, shape, name)) else {
+        panic!("`{name}` is bound to a node");
+    };
+    rendered(shape.narrowing(Site::of_node(node.reference())))
+}
+
+/// A narrowing, rendered: `full`, `selected`, or `kept` followed by each kept candidate's verdict.
+pub(super) fn rendered(narrowing: Narrowing<'_>) -> String {
+    match narrowing {
+        Narrowing::Full => "full".to_string(),
+        Narrowing::Kept(kept) => kept.iter().fold("kept".to_string(), |text, (_, verdict)| {
+            text + match verdict {
+                Verdict::Always => " always",
+                Verdict::Maybe => " maybe",
+                Verdict::Never => " never",
+            }
+        }),
+        Narrowing::Selected(_) => "selected".to_string(),
+    }
 }
 
 #[test]
@@ -114,8 +138,8 @@ fn a_call_has_its_callee_s_return() {
             "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> :(LIST OF Elt) = #([x])\nLET w = (WRAP 1)",
             "w"
         ),
-        ":(LIST OF Any)",
-        "a quantified callee's return is read through its bounds"
+        ":(LIST OF Number)",
+        "a quantified callee's return is read through its group's intervals"
     );
 }
 
@@ -145,19 +169,17 @@ fn a_parameter_is_read_at_its_declared_type() {
         "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  LET y = x\n  y\n))",
         |program| {
             let f = body(program, program.shape(), "f");
-            let variable = program.types().quantified(0, KType::ANY);
             assert_eq!(
-                f.binder_type(slot(program, f, "y"))
-                    .map(|typed| typed.upper),
-                Some(variable),
-                "a `FOR ALL` parameter is its group's variable"
+                upper(program, f, "y"),
+                lexical(program, 0, "Elt", KType::ANY),
+                "a `FOR ALL` parameter is its group's lexical variable"
             );
         },
     );
 }
 
 #[test]
-fn a_capture_keeps_its_type_within_a_region_and_is_bounded_across_one() {
+fn a_capture_keeps_its_type_along_the_chain() {
     loaded(
         "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
          LET g = (FN :{} -> Any = #(\n    LET y = x\n    y\n  ))\n  \
@@ -165,15 +187,11 @@ fn a_capture_keeps_its_type_within_a_region_and_is_bounded_across_one() {
          x\n))",
         |program| {
             let f = body(program, program.shape(), "f");
-            let variable = program.types().quantified(0, KType::ANY);
+            let variable = lexical(program, 0, "Elt", KType::ANY);
             let g = body(program, f, "g");
-            assert_eq!(
-                g.binder_type(slot(program, g, "y"))
-                    .map(|typed| typed.upper),
-                Some(variable)
-            );
+            assert_eq!(upper(program, g, "y"), variable);
             let h = body(program, f, "h");
-            assert_eq!(binder(program, h, "z"), "Any");
+            assert_eq!(upper(program, h, "z"), variable);
         },
     );
 }
@@ -319,9 +337,11 @@ fn a_body_that_can_never_meet_its_return_refuses_the_load() {
 }
 
 #[test]
-fn a_quantified_candidate_is_selected_by_its_static_admission() {
+fn a_quantified_candidate_is_selected_when_it_always_admits() {
+    let only = "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\nLET o = (ONLY 1)";
+    assert_eq!(narrowing(only, "o"), "selected");
     let source = "EXPR #(EITHER) -> (Number | Str) = #(1)\n\
                   EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(\"both\")\n\
                   LET b = (BOTH (EITHER) AND \"s\")";
-    assert_eq!(narrowing(source, "b"), "selected");
+    assert_eq!(narrowing(source, "b"), "full", "its `y` may miss the solve");
 }

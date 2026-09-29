@@ -2,6 +2,7 @@
 //! back as what it wrote to either sink.
 
 mod boundary;
+mod generic;
 mod programs;
 mod quotes;
 mod rankings;

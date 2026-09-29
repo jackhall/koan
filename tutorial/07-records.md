@@ -208,7 +208,8 @@ error: :{name :Str age :Number} has no field email
 
 Width subtyping has a cost in dispatch: a wide record can satisfy two different
 field-subset schemas at once, with neither more specific, so a call is
-ambiguous:
+ambiguous. Here the ambiguity is certain from the types alone, so the program
+refuses to load, naming where the call is written:
 
 ```koan
 EXPR #(PICK r :{x :Number, y :Str}) -> Str = #("got xy")
@@ -218,7 +219,7 @@ PICK both
 ```
 
 ```text
-error: ambiguous call of PICK _: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
+error: <input>:4:1: ambiguous call of PICK _: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
 ```
 
 `#[<fields>] FROM <record>` resolves this by *projecting* a record to exactly the

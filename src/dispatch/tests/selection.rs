@@ -90,8 +90,32 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
     assert_eq!(
         run("EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
              EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
-             PRINT (PICK 1)"),
+             LET r = {v = 1}\n\
+             PRINT (PICK r.v)"),
         expected,
+        "one scope"
+    );
+    assert_eq!(
+        run("EXPR #(PICK x :Number) -> Str = #(\"outer\")\n\
+             LET r = {v = 1}\n\
+             EXPR #(INNER) -> Str = #(\n  \
+             EXPR #(PICK x :Number) -> Str = #(\"inner\")\n  \
+             PICK r.v\n\
+             )\n\
+             PRINT (INNER)"),
+        expected,
+        "no scope shadows another's overload"
+    );
+}
+
+#[test]
+fn a_certain_ambiguity_refuses_the_load() {
+    assert_eq!(
+        run("EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
+             EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
+             PRINT (PICK 1)"),
+        "load: <test>:3:7: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks \
+         first",
         "one scope"
     );
     assert_eq!(
@@ -101,7 +125,8 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
              PICK 1\n\
              )\n\
              PRINT (INNER)"),
-        expected,
+        "load: <test>:4:3: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks \
+         first",
         "no scope shadows another's overload"
     );
 }
@@ -186,7 +211,7 @@ fn code_an_eval_runs_is_checked_for_overlaps_where_it_runs() {
 }
 
 #[test]
-fn a_statically_selected_candidate_still_solves_its_group_from_the_carried_types() {
+fn a_candidate_that_may_admit_still_solves_its_group_from_the_carried_types() {
     let source = "EXPR #(EITHER) -> (Number | Str) = #(1)\n\
                   EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(\"both\")\n\
                   PRINT (BOTH (EITHER) AND \"s\")";
