@@ -412,6 +412,15 @@ fn a_callable_over_a_run_bound_type_is_born_with_the_solution() {
 }
 
 #[test]
+fn a_captured_type_parameter_reads_the_enclosing_call_s_solution() {
+    let source = "LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(FN :{} -> Any) = \
+                  #(FN :{} -> Any = #(:(LIST OF Elt))))\n\
+                  PRINT ((mk {x = 1, y = 2}) {})\n\
+                  PRINT ((mk {x = \"s\", y = \"t\"}) {})";
+    assert_eq!(run(source), ":(LIST OF Number)\n:(LIST OF Str)");
+}
+
+#[test]
 fn a_nominal_over_a_run_bound_type_is_declared_per_call() {
     let source = "LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Any = \
                   #((NEWTYPE Boxed = :{v :Elt}) (Boxed {v = x})))\n\

@@ -225,8 +225,8 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
 }
 
 /// Read the callable of `body` into `scratch`: its type as the load fixed it, or — where the load
-/// left it unknown — elaborated from the form it sits in, born for `registration` or for none, and its captures read through `activation`, each `Member`
-/// source minted by `edge`.
+/// left it unknown — elaborated from the declaration it sits in, born for `registration` or for
+/// none, and its captures read through `activation`, each `Member` source minted by `edge`.
 pub(super) fn staged<'graph, 'cell, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,

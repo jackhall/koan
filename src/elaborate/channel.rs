@@ -287,11 +287,13 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// What the capture `capture` of the shape at `level` holds: what its source reads where the
-    /// shape is born when that is a type, and otherwise a run-bound name of this shape's own.
+    /// shape is born — the very slot, and so its index, when the shape shares its parent's region —
+    /// and otherwise a run-bound name of this shape's own.
     fn capture_at(&self, level: usize, capture: CaptureSlot) -> Class {
         let key = Key::Capture(level, capture);
         match self.chain[level].shape.captures()[capture.index()].source {
             CaptureSource::Read(inner) if level > 0 => match self.classify(level - 1, inner) {
+                read if self.chain[level].region == self.chain[level - 1].region => read,
                 Class::Type(handle) => Class::Type(handle),
                 Class::NotAType => Class::NotAType,
                 Class::RunBound { bound, .. } | Class::Canonical { bound, .. } => {
@@ -513,7 +515,7 @@ fn located(statement: &KExpression<'_>, error: Elaboration, site: Site) -> Sourc
         .unwrap_or(statement.source)
 }
 
-/// Whether a callable's form writes a `FOR ALL` group.
+/// Whether a callable's declaration writes a `FOR ALL` group.
 fn quantified(form: &KExpression<'_>) -> bool {
     form.cache()
         .builtin_shape()

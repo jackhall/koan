@@ -2837,9 +2837,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 }
 
-/// Whether a form's type parts are typed with the callable it births or the binder it declares,
-/// rather than each as a type expression of its own: a signature, a head, a `FOR ALL` group, a
-/// declared name or definition, or a callable body.
+/// Whether an expression shape's type parts are typed with the callable it births or the binder it
+/// declares, rather than each as a type expression of its own: a signature, a head, a `FOR ALL`
+/// group, a declared name or definition, or a callable body.
 fn types_with_its_binder(form: &BuiltinShape) -> bool {
     form.roles().any(|role| {
         matches!(

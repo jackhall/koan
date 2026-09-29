@@ -1,6 +1,6 @@
 //! The type expressions a shape records for the load pass: a type in value position, a type part
-//! of a form that births no callable, and each `MATCH … WITH` guard — and nothing a callable or a
-//! binder is typed with, nor a type nested in a recorded one.
+//! of an expression shape that births no callable, and each `MATCH … WITH` guard — and nothing a
+//! callable or a binder is typed with, nor a type nested in a recorded one.
 
 use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Builtins, Static};

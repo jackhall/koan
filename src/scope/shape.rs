@@ -329,9 +329,9 @@ pub struct Unit {
 }
 
 /// A type expression the shape records, which the load pass types on its own: a `:(…)` or `:{…}`
-/// in value position, a type part of a form that births no callable, or a `MATCH … WITH` guard. A
-/// type nested in a recorded one is part of it, and a callable's signature or a declaration's
-/// definition is typed with its callable or binder instead.
+/// in value position, a type part of an expression shape that births no callable, or a
+/// `MATCH … WITH` guard. A type nested in a recorded one is part of it, and a callable's signature
+/// or a declaration's definition is typed with its callable or binder instead.
 pub struct TypeExpression<'graph> {
     pub site: Site,
     /// The part as written; for a guard, its quote.

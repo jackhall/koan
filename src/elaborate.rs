@@ -30,8 +30,9 @@
 //! other spelling is [`Unsupported`].
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
-//! `crate::parse`, `crate::scope`, `crate::source`, `crate::type_lattice` and `crate::values`, and
-//! nothing else in the crate; `tests::boundary` reads the source to hold it there.
+//! `crate::parse`, `crate::scope`, `crate::source`, `crate::symbols`, `crate::type_lattice` and
+//! `crate::values`, and nothing else in the crate; `tests::boundary` reads the source to hold it
+//! there.
 //!
 //! See [elaborate/README.md](elaborate/README.md).
 //!

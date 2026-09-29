@@ -8,7 +8,7 @@ use crate::scope::{
     Variable,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 
 use super::super::type_channel;
 use super::{Held, Program, with_program};
@@ -399,4 +399,29 @@ fn a_guard_written_twice_refuses_the_arm_set() {
             assert_eq!(guards, 2);
         },
     );
+}
+
+#[test]
+fn an_enclosing_for_all_name_keeps_its_canonical_index_across_its_region() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+                  #(FN :{y :Elt} -> Elt = #(:(LIST OF Elt))))";
+    typed(source, |program| {
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        let types = program.types;
+        let elt = types.quantified(0, KType::ANY);
+        let (value, indices) = rigid(only(inner));
+        assert_eq!(
+            value,
+            types.list(elt),
+            "read through the inner body's capture"
+        );
+        assert_eq!(indices, [0]);
+        let Static::Rigid { value, .. } = inner.callable_type() else {
+            panic!("the inner callable's type is rigid")
+        };
+        let TypeNode::KFunction { ret, .. } = types.node(value.ktype) else {
+            panic!("a function type")
+        };
+        assert_eq!(ret, elt, "its declared return is the same variable");
+    });
 }
