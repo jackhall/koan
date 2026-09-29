@@ -39,7 +39,7 @@ use crate::scheduler::{
 };
 use crate::scope::{BodyShape, CandidateList, Narrowing, ShapeKind, Site};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{TypeNode, Verdict, bound_above, satisfied_by, substitute_quantified};
+use crate::type_lattice::{TypeNode, Verdict, bound_above, satisfied_by, substitute_levels};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value};
 
 use super::builtins::{self, Native, Ran};
@@ -225,7 +225,7 @@ fn leaf<'graph, 'here>(
             let loaded = at.view.shape().typed_expression(Site::of(part)).solved(
                 &at.view,
                 &scratch,
-                |value, bindings| substitute_quantified(types, &scratch, value, bindings),
+                |value, bindings| substitute_levels(types, &scratch, value, bindings),
             );
             debug_assert!(
                 loaded.is_none() || loaded == type_expression(part, &at.view, types, &scratch).ok(),

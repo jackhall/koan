@@ -1,11 +1,11 @@
 //! The type channel's load pass over shaped programs: each cell it fills read back and compared
-//! with what elaborating through an activation gives, each variable numbered as its region
+//! with what elaborating through an activation gives, each lexical variable at the level its chain
 //! numbers it, each spelling it leaves for the run, and each refusal.
 
 use crate::memory::BumpAllocator;
 use crate::scope::{
-    BodyShape, Canonical, Elaboration, ShapeError, ShapeKind, Slot, Static, TypeExpression,
-    Variable,
+    BodyShape, Canonical, CaptureSlot, Coordinate, Elaboration, ShapeError, ShapeKind, Slot,
+    Static, Target, TypeExpression, Variable,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
@@ -97,7 +97,7 @@ fn nested<'graph>(shape: &'graph BodyShape<'graph>, kind: ShapeKind) -> &'graph 
     nested
 }
 
-/// The rigid value `typed` holds, beside its variables' indices.
+/// The rigid value `typed` holds, beside its variables' levels.
 fn rigid(typed: Static<'_, KType>) -> (KType, Vec<usize>) {
     match typed {
         Static::Rigid { value, variables } => (
@@ -117,6 +117,23 @@ fn closed(typed: Static<'_, KType>) -> KType {
 
 fn unknown(typed: Static<'_, KType>) -> bool {
     matches!(typed, Static::Unknown)
+}
+
+/// The lexical variable `name` at `level`, bounded by `Any`.
+fn lexical(program: &Program<'_, '_, '_>, level: usize, name: &str) -> KType {
+    program
+        .types
+        .lexical(level, program.type_name(name), KType::ANY)
+}
+
+/// Each callable shape nested in `shape`, in order.
+fn callables<'graph>(shape: &'graph BodyShape<'graph>) -> Vec<&'graph BodyShape<'graph>> {
+    shape
+        .nested_shapes()
+        .iter()
+        .filter(|(_, nested)| nested.kind() == ShapeKind::Callable)
+        .map(|(_, nested)| *nested)
+        .collect()
 }
 
 /// The slot of the type binder `name` in `shape`.
@@ -153,15 +170,17 @@ fn a_value_position_type_is_closed() {
 // occurs once, which a call binds to its bound, so the load reads it as that closed bound.
 
 #[test]
-fn a_for_all_name_is_its_canonical_variable() {
+fn a_for_all_name_is_its_lexical_variable() {
     let source = "LET f = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Held = \
                   #(:(LIST OF Held)))";
     typed(source, |program| {
         let body = program.birth("f");
         let types = program.types;
-        let (value, indices) = rigid(only(body));
-        assert_eq!(value, types.list(types.quantified(0, KType::ANY)));
-        assert_eq!(indices, [0]);
+        let held = lexical(program, 0, "Held");
+        let (value, levels) = rigid(only(body));
+        assert_eq!(value, types.list(held));
+        assert_eq!(levels, [0]);
+        assert_eq!(body.group_levels(), [held]);
         let Static::Closed(callable) = body.callable_type() else {
             panic!("the callable's type is closed")
         };
@@ -198,27 +217,115 @@ fn a_type_parameter_is_a_rigid_variable() {
                 .births(shape.registrations()[0].slot)
                 .expect("the registration births its body");
             let types = program.types;
-            let (value, indices) = rigid(only(body));
-            assert_eq!(value, types.list(types.quantified(0, KType::ANY)));
-            assert_eq!(indices, [0]);
+            let (value, levels) = rigid(only(body));
+            assert_eq!(value, types.list(lexical(program, 0, "Elt")));
+            assert_eq!(levels, [0]);
         },
     );
 }
 
 #[test]
-fn an_outer_for_all_name_in_an_inner_group_takes_the_next_index() {
+fn an_outer_for_all_name_keeps_its_level_in_an_inner_body() {
     let source = "LET f = (FN FOR ALL #[Ay] :{x :Ay} -> Ay = \
                   #(FN FOR ALL #[Be] :{y :Be} -> Be = #(:(MAP Ay -> Be))))";
     typed(source, |program| {
         let inner = nested(program.birth("f"), ShapeKind::Callable);
         let types = program.types;
-        let (value, indices) = rigid(only(inner));
-        let (ay, be) = (
-            types.quantified(1, KType::ANY),
-            types.quantified(0, KType::ANY),
-        );
+        let (value, levels) = rigid(only(inner));
+        let (ay, be) = (lexical(program, 0, "Ay"), lexical(program, 1, "Be"));
         assert_eq!(value, types.dict(ay, be));
-        assert_eq!(indices, [1, 0]);
+        assert_eq!(levels, [0, 1]);
+    });
+}
+
+#[test]
+fn sibling_quantified_bodies_number_their_own_names_alike() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+                  LET g = (FN FOR ALL #[Ay] :{a :Ay} -> Ay = #(a))\n  \
+                  LET h = (FN FOR ALL #[Be] :{b :Be} -> Be = #(b))\n  \
+                  x\n))";
+    typed(source, |program| {
+        let levels: Vec<_> = callables(program.birth("f"))
+            .iter()
+            .map(|body| body.group_levels().to_vec())
+            .collect();
+        assert_eq!(
+            levels,
+            [
+                vec![lexical(program, 1, "Ay")],
+                vec![lexical(program, 1, "Be")]
+            ]
+        );
+    });
+}
+
+#[test]
+fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+                  #(FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t)))";
+    typed(source, |program| {
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        let (value, levels) = match inner.callable_type() {
+            Static::Rigid { value, variables } => (
+                value,
+                variables
+                    .iter()
+                    .map(|variable| variable.level)
+                    .collect::<Vec<_>>(),
+            ),
+            typed => panic!("a rigid callable, not {typed:?}"),
+        };
+        assert_eq!(levels, [0]);
+        let TypeNode::KFunction { params, .. } = program.types.node(value.ktype) else {
+            panic!("a function type")
+        };
+        assert!(
+            params
+                .iter()
+                .any(|(_, param)| param == lexical(program, 0, "Elt"))
+        );
+        assert_eq!(inner.group_levels(), [lexical(program, 1, "Tee")]);
+    });
+}
+
+#[test]
+fn a_bound_naming_a_run_bound_name_is_left_for_the_run() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+                  #(FN FOR ALL #{Tee: Elt} :{t :Tee} -> Tee = #(t)))";
+    typed(source, |program| {
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        assert!(matches!(inner.callable_type(), Static::Unknown));
+        assert!(inner.group_levels().is_empty());
+    });
+}
+
+#[test]
+fn a_dollar_name_crossing_into_code_is_a_name_of_the_code_s_own() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+                  LET q = #(PRINT :(LIST OF $Elt))\n  \
+                  x\n))";
+    typed(source, |program| {
+        let code = nested(program.birth("f"), ShapeKind::Code);
+        let Static::Rigid { value, variables } = only(code) else {
+            panic!("a rigid type")
+        };
+        assert_eq!(value, program.types.list(lexical(program, 0, "Elt")));
+        let elt = BinderSymbol::Type(program.type_name("Elt"));
+        let capture = code
+            .captures()
+            .iter()
+            .position(|capture| capture.name == elt)
+            .expect("the code captures `$Elt`");
+        assert_eq!(
+            variables,
+            [Variable {
+                level: 0,
+                at: Coordinate::Activation {
+                    hops: 0,
+                    target: Target::Capture(CaptureSlot(capture as u32)),
+                },
+            }]
+        );
     });
 }
 
@@ -233,12 +340,31 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
                   (:(Number & Str))))";
     typed(source, |program| {
         let body = program.birth("f");
-        for statement in 0..5 {
+        let types = program.types;
+        for statement in [0, 1, 3, 4] {
             let [expression] = written_in(body, statement)[..] else {
                 panic!("one expression in statement {statement}")
             };
             assert!(unknown(expression.typed()), "statement {statement}");
         }
+        let [function] = written_in(body, 2)[..] else {
+            panic!("one expression in statement 2")
+        };
+        let (value, levels) = rigid(function.typed());
+        let tee = types.quantified(0, KType::ANY);
+        let field = |name| {
+            BinderSymbol::Value(
+                crate::symbols::ValueSymbol::declared(name, program.symbols).expect("a name"),
+            )
+        };
+        let expected = types.function_type(
+            program.scratch,
+            &[program.type_name("Tee")],
+            &[(field("y"), tee), (field("z"), lexical(program, 0, "Elt"))],
+            tee,
+        );
+        assert_eq!(value, expected.handle);
+        assert_eq!(levels, [0]);
         let [met] = written_in(body, 5)[..] else {
             panic!("one expression in the last statement")
         };
@@ -257,9 +383,9 @@ fn a_nominal_over_a_run_bound_type_is_declared_where_it_runs() {
         assert!(unknown(
             body.declared_type(type_slot(program, body, "Boxed"))
         ));
-        let (value, indices) = rigid(only(body));
-        assert_eq!(value, types.list(types.quantified(1, KType::ANY)));
-        assert_eq!(indices, [1]);
+        let (value, levels) = rigid(only(body));
+        assert_eq!(value, types.list(lexical(program, 1, "Boxed")));
+        assert_eq!(levels, [1]);
     });
 }
 
@@ -288,7 +414,7 @@ fn a_callable_and_its_registration_are_typed_at_load() {
             panic!("a callable over a run-bound name is rigid")
         };
         let types = program.types;
-        let elt = types.quantified(0, KType::ANY);
+        let elt = lexical(program, 0, "Elt");
         let name = BinderSymbol::Value(
             crate::symbols::ValueSymbol::declared("y", program.symbols).expect("a name"),
         );
@@ -324,9 +450,9 @@ fn a_quote_s_holes_are_rigid_variables() {
         } else {
             (second, first)
         };
-        let (value, indices) = rigid(only(hole));
-        assert_eq!(value, types.list(types.quantified(0, KType::ANY)));
-        assert_eq!(indices, [0]);
+        let (value, levels) = rigid(only(hole));
+        assert_eq!(value, types.list(lexical(program, 0, "Tee")));
+        assert_eq!(levels, [0]);
         assert_eq!(closed(only(alias)), types.list(KType::NUMBER));
     });
 }
@@ -402,20 +528,20 @@ fn a_guard_written_twice_refuses_the_arm_set() {
 }
 
 #[test]
-fn an_enclosing_for_all_name_keeps_its_canonical_index_across_its_region() {
+fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
     let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
                   #(FN :{y :Elt} -> Elt = #(:(LIST OF Elt))))";
     typed(source, |program| {
         let inner = nested(program.birth("f"), ShapeKind::Callable);
         let types = program.types;
-        let elt = types.quantified(0, KType::ANY);
-        let (value, indices) = rigid(only(inner));
+        let elt = lexical(program, 0, "Elt");
+        let (value, levels) = rigid(only(inner));
         assert_eq!(
             value,
             types.list(elt),
             "read through the inner body's capture"
         );
-        assert_eq!(indices, [0]);
+        assert_eq!(levels, [0]);
         let Static::Rigid { value, .. } = inner.callable_type() else {
             panic!("the inner callable's type is rigid")
         };

@@ -4,8 +4,9 @@
 //! `scope` sits below `elaborate`, so the records the elaborator hands back for a callable — its
 //! [`Callable`] type, the [`Registered`] shape its bucket holds, where each `FOR ALL` name landed
 //! ([`Canonical`]) — and its refusal ([`Elaboration`]) live here, beside the shape whose write-once
-//! cells hold them. A cell holds a [`Static`]: unknown, closed, or rigid over [`Variable`]s the run
-//! supplies, which [`solutions`] reads through an activation for one substitution.
+//! cells hold them. A cell holds a [`Static`]: unknown, closed, or rigid over [`Variable`]s — the
+//! lexical variables the run supplies, by level — which [`solutions`] reads through an activation
+//! for one substitution.
 //!
 //! The value channel's records live here too: the [`Statics`] the language's load pass fixes for a
 //! body, and the [`Narrowing`] of each keyworded use's candidates.

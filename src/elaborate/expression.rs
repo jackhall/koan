@@ -96,18 +96,6 @@ enum Quantifier {
 }
 
 impl Groups<'_> {
-    /// Whether any group on the stack declares a name.
-    pub(super) fn is_open(&self) -> bool {
-        let mut group = Some(self);
-        while let Some(here) = group {
-            if !here.names.is_empty() {
-                return true;
-            }
-            group = here.outer;
-        }
-        false
-    }
-
     fn find(&self, name: TypeSymbol) -> Quantifier {
         if let Some(index) = self.names.iter().position(|declared| *declared == name) {
             return Quantifier::Innermost(index);
@@ -157,9 +145,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             ExpressionPart::Type(name) => self.name(site, *name, groups),
             // A marked name resolves past the definition's own quantifiers and names, through the
             // mention the shape recorded.
-            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => {
-                self.mention(site, *name, groups)
-            }
+            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => self.mention(site, *name),
             ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
                 self.node(site, node.reference(), groups)
             }
@@ -195,18 +181,12 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         if let Some((_, handle)) = self.locals.iter().find(|(declared, _)| *declared == name) {
             return Ok(*handle);
         }
-        self.mention(site, name, groups)
+        self.mention(site, name)
     }
 
-    /// A type name read through the mention the shape recorded at `site`, under `groups`. A rigid
-    /// variable read while a group is open is left for the run: the group's binder would shadow
-    /// the index it is named by.
-    fn mention(
-        &self,
-        site: Site,
-        name: TypeSymbol,
-        groups: &Groups<'_>,
-    ) -> Result<KType, Elaboration> {
+    /// A type name read through the mention the shape recorded at `site`. A run-bound name reads
+    /// as its lexical variable, which no group's binder captures.
+    fn mention(&self, site: Site, name: TypeSymbol) -> Result<KType, Elaboration> {
         // A definition declares its own names, so the shape records no mention for one. Every
         // other name a type expression reads has one; a definition-local name reaching here has
         // not been declared yet — a forward reference the local table cannot answer.
@@ -226,7 +206,6 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         }
         match self.reader.type_at(mention.coordinate) {
             TypeAt::Type(handle) => Ok(handle),
-            TypeAt::Rigid(_) if groups.is_open() => Err(Elaboration::Unknown { site }),
             TypeAt::Rigid(handle) => Ok(handle),
             TypeAt::NotAType => Err(Elaboration::NotAType { name, site }),
             TypeAt::Unknown => Err(Elaboration::Unknown { site }),
@@ -445,14 +424,15 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         Ok(group)
     }
 
-    /// A bound: a closed, inhabited type. One naming a type variable — a `FOR ALL` name or a
-    /// signature's abstract member — or that is `Never` is refused at its site.
+    /// A bound: a closed, inhabited type. One naming a run-bound name is left for the run; one
+    /// naming any other type variable — a `FOR ALL` name or a signature's abstract member — or
+    /// that is `Never` is refused at its site.
     pub(super) fn bound(
         &self,
         part: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
     ) -> Result<KType, Elaboration> {
-        let bound = self.part(part, groups)?;
+        let bound = self.closed_operands(Site::of(part), || self.part(part, groups))?;
         if bound == KType::NEVER || self.types.contains_rigid(bound) {
             return Err(Elaboration::Bound {
                 site: Site::of(part),

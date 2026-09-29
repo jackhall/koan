@@ -13,7 +13,7 @@ use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::scope::{Callable, Canonical, ParameterBinding, Registered};
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{KType, TypeRegistry, substitute_quantified};
+use crate::type_lattice::{KType, TypeRegistry, substitute_levels};
 use crate::values::{Link, Weight};
 
 use super::{KActivationView, Knotted, Node, Untieable};
@@ -269,8 +269,7 @@ fn loaded<'graph, 'x>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<Callable<'x>> {
-    let substitute =
-        |value, bindings: &[KType]| substitute_quantified(types, scratch, value, bindings);
+    let substitute = |value, bindings: &[KType]| substitute_levels(types, scratch, value, bindings);
     let callable = body
         .callable_type()
         .solved(activation, scratch, |callable, bindings| Callable {

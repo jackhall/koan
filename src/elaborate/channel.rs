@@ -5,10 +5,15 @@
 //! The pass walks the shape tree from the root, keeping the chain of shapes enclosing the one it
 //! types. Its reader answers a coordinate from the builtin table and from the cells the pass has
 //! already filled — a type binder is typed before anything reads it, since a shape's binders are
-//! typed in unit order before its expressions and nested shapes. A name a run binds is a rigid
-//! variable in `Typing` mode, numbered per **region** — the program, a quantified callable's body,
-//! a quote's code — and *unknown* in `Declaring` mode, since a type binder is closed or unknown,
-//! never rigid.
+//! typed in unit order before its expressions and nested shapes. A name a run binds is a lexical
+//! variable in `Typing` mode and *unknown* in `Declaring` mode, since a type binder is closed or
+//! unknown, never rigid.
+//!
+//! Lexical variables are numbered by **level** along a **chain**: the shapes from a chain root —
+//! the program, or a quote's code — down to the one read. A shape's own names take the levels after
+//! its parent's, a callable's own `FOR ALL` group first in canonical order, so a name keeps its
+//! level wherever a nested shape of the chain reads it, and sibling shapes reuse levels. A `$` name
+//! crossing into code is a name of the code's own, bounded as the name it reads.
 //!
 //! See [README.md § The type channel at load](README.md#the-type-channel-at-load).
 
@@ -50,18 +55,19 @@ pub fn type_channel<'graph, X: Knotted>(
         writer,
         scratch,
         chain: BumpVec::new_in(scratch),
-        regions: Cell::new(BumpVec::new_in(scratch)),
     };
-    let region = pass.open_region(0, 0);
     pass.chain.push(Level {
         shape: root,
-        region,
+        root: true,
+        base: 0,
+        count: 0,
         own: None,
+        names: BumpVec::new_in(scratch),
     });
     pass.visit(0)
 }
 
-/// A run-bound slot, by the chain level whose shape holds it.
+/// A run-bound name, by the chain level of the shape that declares it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Slot(usize, Slot),
@@ -69,45 +75,40 @@ enum Key {
 }
 
 /// A quantified callable's own `FOR ALL` names, read off its load-time type: where each landed in
-/// its canonical group, and each canonical variable's bound.
+/// its canonical group, and the lexical variable each canonical variable is in its body.
 #[derive(Clone, Copy)]
 struct Own<'graph> {
     map: &'graph [(TypeSymbol, Canonical)],
-    bounds: &'graph [KType],
+    levels: &'graph [KType],
 }
 
 /// One shape on the chain, innermost last.
-struct Level<'graph> {
+struct Level<'p, 'graph> {
     shape: &'graph BodyShape<'graph>,
-    /// The region its run-bound names are numbered in, by index into [`Pass::regions`].
-    region: usize,
+    /// Whether the shape roots a chain: the program, or a quote's code.
+    root: bool,
+    /// The first level the shape's own names take.
+    base: usize,
+    /// How many levels the shape's own names take, its own group included.
+    count: usize,
     /// Set for a quantified callable body whose load-time type is known.
     own: Option<Own<'graph>>,
-}
-
-/// A run of shapes numbering their run-bound names together.
-struct Region<'x> {
-    /// The chain level of the region's root shape.
-    level: usize,
-    /// The next free index.
-    next: usize,
-    assigned: BumpVec<'x, (Key, usize)>,
+    /// Every other run-bound name the shape declares, beside its level.
+    names: BumpVec<'p, (Key, usize)>,
 }
 
 /// What a coordinate holds, as far as the load can tell.
 enum Class {
     Type(KType),
     NotAType,
-    /// A run binds it: a slot keyed `key`, bounded by `bound`.
+    /// A run binds it: a name keyed `key`, bounded by `bound`, whose level its declaring shape
+    /// holds.
     RunBound {
         key: Key,
         bound: KType,
     },
-    /// The canonical variable `index` of the region's own quantified callable.
-    Canonical {
-        index: usize,
-        bound: KType,
-    },
+    /// One of a callable's own `FOR ALL` names: this lexical variable.
+    Variable(KType),
 }
 
 /// Whether a reader is typing a type binder, which is closed or unknown, or anything else.
@@ -117,14 +118,13 @@ enum Mode {
     Typing,
 }
 
-/// The walk's state: the chain of enclosing shapes and the regions numbering their names.
+/// The walk's state: the chain of enclosing shapes, each numbering its names.
 struct Pass<'p, 'graph, 'cell, X> {
     builtins: &'p Builtins<'cell, X>,
     types: &'p TypeRegistry<'graph>,
     writer: Writer<'graph>,
     scratch: BumpAllocator<'p>,
-    chain: BumpVec<'p, Level<'graph>>,
-    regions: Cell<BumpVec<'p, Region<'p>>>,
+    chain: BumpVec<'p, Level<'p, 'graph>>,
 }
 
 /// The load-time reader: reads the names mentioned in the shape at chain level `from`.
@@ -133,7 +133,7 @@ struct Reader<'e, 'p, 'graph, 'cell, X> {
     from: usize,
     mode: Mode,
     rigid: Cell<u32>,
-    /// Each rigid variable read, once per index.
+    /// Each rigid variable read, once per level.
     variables: Cell<BumpVec<'p, Variable>>,
 }
 
@@ -147,11 +147,8 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
             Class::Type(handle) => TypeAt::Type(handle),
             Class::NotAType => TypeAt::NotAType,
             _ if self.mode == Mode::Declaring => TypeAt::Unknown,
-            Class::Canonical { index, bound } => self.rigid(index, bound, at),
-            Class::RunBound { key, bound } => {
-                let index = self.pass.index(self.from, key);
-                self.rigid(index, bound, at)
-            }
+            Class::Variable(variable) => self.rigid(variable, at),
+            Class::RunBound { key, bound } => self.rigid(self.pass.variable(key, bound), at),
         }
     }
 
@@ -161,15 +158,18 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
 }
 
 impl<X> Reader<'_, '_, '_, '_, X> {
-    /// Rigid variable `index`, bounded by `bound`, read at `at`.
-    fn rigid(&self, index: usize, bound: KType, at: Coordinate) -> TypeAt {
+    /// The lexical variable `variable`, read at `at`.
+    fn rigid(&self, variable: KType, at: Coordinate) -> TypeAt {
+        let TypeNode::Lexical { level, .. } = self.pass.types.node(variable) else {
+            unreachable!("a run-bound name reads as a lexical variable");
+        };
         self.rigid.set(self.rigid.get() + 1);
         edit(&self.variables, self.pass.scratch, |variables| {
-            if !variables.iter().any(|variable| variable.level == index) {
-                variables.push(Variable { level: index, at });
+            if !variables.iter().any(|held| held.level == level) {
+                variables.push(Variable { level, at });
             }
         });
-        TypeAt::Rigid(self.pass.types.quantified(index, bound))
+        TypeAt::Rigid(variable)
     }
 }
 
@@ -196,37 +196,25 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         }
     }
 
-    /// A new region rooted at chain level `level`, its free indices starting at `next`.
-    fn open_region(&self, level: usize, next: usize) -> usize {
-        edit(&self.regions, self.scratch, |regions| {
-            regions.push(Region {
+    /// The lexical variable the run-bound name `key` is, bounded by `bound`: its name, at the level
+    /// its declaring shape numbered it.
+    fn variable(&self, key: Key, bound: KType) -> KType {
+        let (level, name) = match key {
+            Key::Slot(level, slot) => (level, self.chain[level].shape.slot_name(slot)),
+            Key::Capture(level, capture) => (
                 level,
-                next,
-                assigned: BumpVec::new_in(self.scratch),
-            });
-            regions.len() - 1
-        })
-    }
-
-    /// The index `key` holds in the region of the shape at level `from`, assigned on first sight.
-    fn index(&self, from: usize, key: Key) -> usize {
-        edit(&self.regions, self.scratch, |regions| {
-            let region = &mut regions[self.chain[from].region];
-            if let Some((_, index)) = region.assigned.iter().find(|(held, _)| *held == key) {
-                return *index;
-            }
-            let index = region.next;
-            region.next += 1;
-            region.assigned.push((key, index));
-            index
-        })
-    }
-
-    /// The chain level of the root of the region the shape at level `from` sits in.
-    fn region_root(&self, from: usize) -> usize {
-        edit(&self.regions, self.scratch, |regions| {
-            regions[self.chain[from].region].level
-        })
+                self.chain[level].shape.captures()[capture.index()].name,
+            ),
+        };
+        let BinderSymbol::Type(name) = name else {
+            unreachable!("a run-bound name is a type name");
+        };
+        let (_, numbered) = self.chain[level]
+            .names
+            .iter()
+            .find(|(held, _)| *held == key)
+            .expect("a run-bound name has its level");
+        self.types.lexical(*numbered, name, bound)
     }
 
     /// What `at`, read in the shape at level `from`, holds.
@@ -244,13 +232,13 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             .checked_sub(hops as usize)
             .expect("a coordinate steps out only through shapes on the chain");
         match target {
-            Target::Local(slot) => self.slot_at(from, level, slot),
+            Target::Local(slot) => self.slot_at(level, slot),
             Target::Capture(capture) => self.capture_at(level, capture),
         }
     }
 
-    /// What the slot `slot` of the shape at `level` holds, read from level `from`.
-    fn slot_at(&self, from: usize, level: usize, slot: Slot) -> Class {
+    /// What the slot `slot` of the shape at `level` holds.
+    fn slot_at(&self, level: usize, slot: Slot) -> Class {
         let shape = self.chain[level].shape;
         let key = Key::Slot(level, slot);
         if shape.declarations(slot).is_some() {
@@ -270,14 +258,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         {
             return match *canonical {
                 Canonical::Dropped { bound } => Class::Type(bound),
-                Canonical::At(index) => {
-                    let bound = own.bounds[index];
-                    if self.region_root(from) == level {
-                        Class::Canonical { index, bound }
-                    } else {
-                        Class::RunBound { key, bound }
-                    }
-                }
+                Canonical::At(index) => Class::Variable(own.levels[index]),
             };
         }
         Class::RunBound {
@@ -287,18 +268,25 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// What the capture `capture` of the shape at `level` holds: what its source reads where the
-    /// shape is born — the very slot, and so its index, when the shape shares its parent's region —
-    /// and otherwise a run-bound name of this shape's own.
+    /// shape is born — the very name, and so its level, when the shape shares its parent's chain —
+    /// and otherwise, crossing into code, a run-bound name of the code's own, bounded as the name
+    /// it reads.
     fn capture_at(&self, level: usize, capture: CaptureSlot) -> Class {
         let key = Key::Capture(level, capture);
         match self.chain[level].shape.captures()[capture.index()].source {
             CaptureSource::Read(inner) if level > 0 => match self.classify(level - 1, inner) {
-                read if self.chain[level].region == self.chain[level - 1].region => read,
+                read if !self.chain[level].root => read,
                 Class::Type(handle) => Class::Type(handle),
                 Class::NotAType => Class::NotAType,
-                Class::RunBound { bound, .. } | Class::Canonical { bound, .. } => {
-                    Class::RunBound { key, bound }
-                }
+                Class::RunBound { bound, .. } => Class::RunBound { key, bound },
+                Class::Variable(variable) => Class::RunBound {
+                    key,
+                    bound: self
+                        .types
+                        .node(variable)
+                        .rigid_bound()
+                        .expect("a lexical variable has a bound"),
+                },
             },
             // A type name is never a knot member.
             CaptureSource::Member { .. } => Class::NotAType,
@@ -338,6 +326,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             match type_declarations(component, &reader, types, scratch) {
                 Ok(handles) => {
                     for (slot, handle) in component.members.iter().zip(handles) {
+                        debug_assert!(!types.contains_quantified(*handle), "{FREE}");
                         shape.fix_declared(*slot, Static::Closed(*handle));
                     }
                 }
@@ -355,6 +344,8 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 }
             }
         }
+
+        self.number(level);
 
         let top = Groups {
             names: &[],
@@ -378,7 +369,10 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 None => type_expression(expression.part, &reader, types, scratch),
             };
             match typed {
-                Ok(handle) => expression.fix(self.fixed(&reader, handle)),
+                Ok(handle) => {
+                    debug_assert!(!types.contains_quantified(handle), "{FREE}");
+                    expression.fix(self.fixed(&reader, handle));
+                }
                 Err(Elaboration::Unknown { .. }) => {}
                 Err(error) => {
                     let statement = &shape.body()[expression.statement as usize];
@@ -401,6 +395,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     let registered = callable
                         .registered
                         .expect("a callable born for a registration carries its bucket entry");
+                    debug_assert!(!types.contains_quantified(registered.shape), "{FREE}");
                     let registered = laid_registered(self.writer, registered);
                     shape.fix_registered(registration.slot, self.fixed(&reader, registered));
                 }
@@ -415,12 +410,24 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         }
 
         for (_, nested) in shape.nested_shapes() {
-            let (region, own) = match nested.kind() {
+            let root = nested.kind() == ShapeKind::Code;
+            // A quote whose code could not be built has nothing to type.
+            if root && nested.refusal().is_some() {
+                continue;
+            }
+            let base = match root {
+                true => 0,
+                false => self.chain[level].base + self.chain[level].count,
+            };
+            let own = match nested.kind() {
                 ShapeKind::Callable => {
                     let form = nested.form().expect("a callable body sits in its form");
                     let reader = self.reader(level, Mode::Typing);
                     let typed = match callable_type(form, &reader, types, scratch, None) {
-                        Ok(callable) => self.fixed(&reader, laid_callable(self.writer, callable)),
+                        Ok(callable) => {
+                            debug_assert!(!types.contains_quantified(callable.ktype), "{FREE}");
+                            self.fixed(&reader, laid_callable(self.writer, callable))
+                        }
                         Err(Elaboration::Unknown { .. }) => Static::Unknown,
                         Err(error) => {
                             return Err(ShapeError::Type {
@@ -431,32 +438,27 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     };
                     drop(reader);
                     nested.fix_callable(typed);
-                    if writes_for_all(form) {
-                        let own = match typed {
-                            Static::Closed(callable) => Some(Own {
-                                map: callable.quantifier_map,
-                                bounds: match types.node(callable.ktype) {
-                                    TypeNode::KFunction { bounds, .. } => bounds,
-                                    _ => &[],
-                                },
-                            }),
-                            _ => None,
-                        };
-                        let next = own.map_or(0, |own| own.bounds.len());
-                        (self.open_region(level + 1, next), own)
-                    } else {
-                        (self.chain[level].region, None)
+                    match typed {
+                        Static::Closed(callable)
+                        | Static::Rigid {
+                            value: callable, ..
+                        } if writes_for_all(form) => {
+                            let own = self.own(callable, base);
+                            nested.fix_group_levels(own.levels);
+                            Some(own)
+                        }
+                        _ => None,
                     }
                 }
-                // A quote whose code could not be built has nothing to type.
-                ShapeKind::Code if nested.refusal().is_some() => continue,
-                ShapeKind::Code => (self.open_region(level + 1, 0), None),
-                _ => (self.chain[level].region, None),
+                _ => None,
             };
             self.chain.push(Level {
                 shape: nested,
-                region,
+                root,
+                base,
+                count: 0,
                 own,
+                names: BumpVec::new_in(scratch),
             });
             let visited = self.visit(level + 1);
             self.chain.pop();
@@ -468,6 +470,71 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             }
         }
         Ok(())
+    }
+}
+
+/// What [`Pass::fixed`]'s callers assert of every type they fix.
+const FREE: &str = "no load-time type holds a free `Quantified`";
+
+impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
+    /// Number the run-bound names the shape at chain level `level` declares, after its own group:
+    /// each type name in slot order but a closed type binder's, then, at a chain root, each
+    /// capture naming a type.
+    fn number(&mut self, level: usize) {
+        let at = &self.chain[level];
+        let shape = at.shape;
+        let mut next = at.base + at.own.map_or(0, |own| own.levels.len());
+        let mut names = BumpVec::new_in(self.scratch);
+        for index in 0..shape.slots() {
+            let slot = Slot(index as u32);
+            let BinderSymbol::Type(name) = shape.slot_name(slot) else {
+                continue;
+            };
+            let own = at
+                .own
+                .is_some_and(|own| own.map.iter().any(|(held, _)| *held == name));
+            let closed = shape.declarations(slot).is_some()
+                && matches!(shape.declared_type(slot), Static::Closed(_));
+            if !own && !closed {
+                names.push((Key::Slot(level, slot), next));
+                next += 1;
+            }
+        }
+        for (index, capture) in shape.captures().iter().enumerate() {
+            debug_assert!(
+                at.root || !matches!(capture.source, CaptureSource::Hole | CaptureSource::Offered),
+                "only a code shape holds a hole or an offered name"
+            );
+            if at.root && matches!(capture.name, BinderSymbol::Type(_)) {
+                names.push((Key::Capture(level, CaptureSlot(index as u32)), next));
+                next += 1;
+            }
+        }
+        let at = &mut self.chain[level];
+        at.count = next - at.base;
+        at.names = names;
+    }
+
+    /// A quantified callable's own group, read off its load-time type `callable`: canonical
+    /// variable `i` is the lexical variable at level `base + i`, named as the declaration wrote
+    /// it, laid down in program storage.
+    fn own(&self, callable: Callable<'graph>, base: usize) -> Own<'graph> {
+        let TypeNode::KFunction { bounds, .. } = self.types.node(callable.ktype) else {
+            unreachable!("a callable's type is a function type");
+        };
+        let mut levels = BumpVec::with_capacity_in(bounds.len(), self.scratch);
+        levels.extend(bounds.iter().enumerate().map(|(index, bound)| {
+            let (name, _) = callable
+                .quantifier_map
+                .iter()
+                .find(|(_, canonical)| *canonical == Canonical::At(index))
+                .expect("each canonical variable is a name the declaration wrote");
+            self.types.lexical(base + index, *name, *bound)
+        }));
+        Own {
+            map: callable.quantifier_map,
+            levels: collect(self.writer, levels.iter().copied()),
+        }
     }
 }
 
@@ -515,7 +582,8 @@ fn located(statement: &KExpression<'_>, error: Elaboration, site: Site) -> Sourc
         .unwrap_or(statement.source)
 }
 
-/// Whether a callable's declaration writes a `FOR ALL` group — which opens a region of its own.
+/// Whether a callable's declaration writes a `FOR ALL` group — whose names its body reads as
+/// lexical variables of its own.
 pub fn writes_for_all(form: &KExpression<'_>) -> bool {
     form.cache()
         .builtin_shape()
