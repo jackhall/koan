@@ -3,6 +3,7 @@
 
 mod boundary;
 mod builtin;
+mod channel;
 mod declarations;
 mod examples;
 mod families;
@@ -51,6 +52,8 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
     pub writer: Writer<'cell>,
+    /// Program storage's writer, which the load pass lays its records down through.
+    pub storage: Writer<'graph>,
 }
 
 impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
@@ -244,6 +247,7 @@ pub(super) fn with_program<R>(
                 lines: shape.body(),
                 activation,
                 writer,
+                storage: program.writer(),
             })
         })
         .expect("a fresh cell is enterable");

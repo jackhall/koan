@@ -12,6 +12,7 @@ mod properties;
 mod quoted_uses;
 mod quotes;
 mod rewrite;
+mod typed;
 mod units;
 
 use crate::memory::{

@@ -336,3 +336,86 @@ fn a_program_nested_to_the_limit_runs_and_one_level_more_is_refused() {
         .join()
         .expect("runs within the stack");
 }
+
+#[test]
+fn a_type_expression_runs_as_its_load_time_type() {
+    assert_eq!(run("PRINT :(LIST OF Number)"), ":(LIST OF Number)");
+    let source = "EXPR FOR ALL #[Elt] #(TWIN x :Elt AND y :Elt) -> Any = #(:(LIST OF Elt))\n\
+                  PRINT (TWIN 1 AND 2)\n\
+                  PRINT (TWIN \"a\" AND \"b\")";
+    assert_eq!(
+        run(source),
+        ":(LIST OF Number)\n:(LIST OF Str)",
+        "a rigid type takes each call's solution"
+    );
+}
+
+#[test]
+fn a_type_parameter_binds_the_argument_its_call_passes() {
+    let body = "-> Any = #((PRINT Elt) (:(LIST OF Elt)))";
+    assert_eq!(
+        run(&format!(
+            "EXPR #(MAKESET Elt :Type) {body}\nPRINT (MAKESET Number)"
+        )),
+        "Number\n:(LIST OF Number)",
+        "by keyword"
+    );
+    assert_eq!(
+        run(&format!(
+            "LET make = FN EXPR #(MAKESET Elt :Type) {body}\nPRINT (make {{Elt = Str}})"
+        )),
+        "Str\n:(LIST OF Str)",
+        "by name"
+    );
+}
+
+#[test]
+fn a_closed_type_that_does_not_elaborate_refuses_the_load() {
+    assert_eq!(
+        run("NEWTYPE Bad = :(Number.z)"),
+        "load: <test>:1:15: Number has no member z"
+    );
+    assert_eq!(
+        run("LET f = (FN :{} -> Any = #(:(Number.z)))"),
+        "load: <test>:1:28: Number has no member z",
+        "in the body of a callable no one calls"
+    );
+    assert_eq!(
+        run("LET q = #(PRINT :(Number.z))\nPRINT \"loaded\"\nEVAL q"),
+        "loaded\nerror: <test>:1:17: Number has no member z",
+        "in a quote's code, reported by the `EVAL` that runs it"
+    );
+}
+
+#[test]
+fn the_overlap_check_reads_declared_types() {
+    assert_eq!(
+        run("LET Num = Number\nOP #(+) OVER Num = #(0)"),
+        "load: <test>:2:1: this overload of `_ + _` takes operands the builtin \
+         :(EXPR #(_ :Number + _ :Number) -> Number) already takes"
+    );
+}
+
+#[test]
+fn a_callable_over_a_run_bound_type_is_born_with_the_solution() {
+    let source = "LET mk = (FN FOR ALL #[Elt] :{x :Elt} -> :(FN :{y :Elt} -> Elt) = \
+                  #(FN :{y :Elt} -> Elt = #(y)))\n\
+                  LET g = (mk {x = 1})\n\
+                  PRINT g\n\
+                  PRINT (g {y = 2})\n\
+                  PRINT (g {y = \"s\"})";
+    assert_eq!(
+        run(source),
+        ":(FN :{y :Number} -> Number)\n2\n\
+         error: :(FN :{y :Number} -> Number) cannot be called with :{y :Str}"
+    );
+}
+
+#[test]
+fn a_nominal_over_a_run_bound_type_is_declared_per_call() {
+    let source = "LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Any = \
+                  #((NEWTYPE Boxed = :{v :Elt}) (Boxed {v = x})))\n\
+                  PRINT (mk {x = 1, y = 2})\n\
+                  PRINT (mk {x = \"a\", y = \"b\"})";
+    assert_eq!(run(source), "Boxed({v = 1})\nBoxed({v = a})");
+}
