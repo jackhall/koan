@@ -112,12 +112,18 @@ subtree.
   erases. So no shape is ever equal to, satisfies, or is satisfied by a lambda
   type. What the two *share* is the binder: both carry a quantifier group, and
   every walk asks [`binds_quantifiers`](node.rs) rather than naming either arm.
-- **Two rigid variables**, and the split is deliberate. `Quantified` is
+- **Three rigid variables**, and the split is deliberate. `Quantified` is
   positional and bound by the enclosing binder, so two binders alpha-equivalent
-  under a renaming intern to one node. `AbstractType` is *named*, because
-  signature members are reached by name and schemas are edited by name. They
-  share the rigid rule in the order, the substitution mechanism, and the role of
-  the rigid side in a specificity check. Each is **bounded by** a closed type —
+  under a renaming intern to one node, and a free one in a declared slot is what
+  a call solves. `AbstractType` is *named*, because signature members are
+  reached by name and schemas are edited by name. A **lexical variable**
+  (`Lexical`) is a name only a run binds, read where the program loads
+  ([the type channel at load](../elaborate/README.md#the-type-channel-at-load)):
+  it is positional by its level along the lexical chain that declares it, and
+  carries its name, which renders it. No binder captures it and no solve binds
+  it. The three share the rigid rule in
+  the order, the substitution mechanism, and the role of the rigid side in a
+  specificity check. Each is **bounded by** a closed type —
   one that names no variable and is not `Never` — and lies under its bound and
   under everything above it, a union included: a variable bounded by
   `Number | Str` lies under `Number | Str | Bool`, though under neither member.
@@ -278,6 +284,24 @@ class: every candidate another strictly beats at a class drops out, and a
 class that orders neither of two leaves both to the next. `shape_specificity`
 is the same comparison between two shapes.
 
+The classes order **judging**, too. [`judge_by_class`](ranking.rs) gives a
+candidate shape a verdict against arguments of known static types, each an
+interval, class by class, beside each variable's interval:
+
+- *never* — some slot, each variable an earlier class solved read at its
+  greatest instance, meets its argument's upper end at `Never`;
+- *always* — every class admits whatever a call carries within the arguments'
+  intervals: a slot naming no variable of its own class admits its argument's
+  upper end with each earlier variable at its least instance; a slot that is a
+  variable of its class alone, named by no other slot of the class, admits the
+  argument's upper end under the variable's bound; and a class every slot of
+  which that names a variable of its own has an exact argument, and names only
+  earlier variables solved to a point, admits when its static solve does;
+- *maybe* — any other.
+
+Every rule reads a relation that holds of a lexical variable for every type a
+run binds it to, so a verdict holds at every run.
+
 ### Three families
 
 Below `Any` lie three disjoint family tops: `Value`, `Type` (`OfKind(AnyType)`,
@@ -364,13 +388,21 @@ content-addressed table, a substitution that binds nothing returns its input
 handle, and every subtype verdict is memoized, so the composition costs one
 intern per changed composite.
 
-`bound_above` reads a type's free variables — a `Quantified` under none of the
-type's own binders, and every `AbstractType` — as the extreme that lies above
-every instance within their bounds: the bound at a covariant position, `Never`
-at a contravariant one, a signature left opaque. It is the variable-free type a
-load-time type is compared through where the run may bind its variables to
-anything under their bounds; `erase_rigid`, which reads a variable as its bound
-everywhere, can put a contravariant position below an instance.
+A load-time type is read where it runs by replacing each lexical variable with
+the binding at its level ([`substitute_levels`](substitute.rs)). No binder
+captures a lexical variable, so the substitution asks no binder depth.
+
+A type is **read through intervals** ([`read_through`](substitute.rs)). Each
+variable stands for some type between a lower and an upper end. Read from
+above, a variable takes its upper end at a covariant position and its lower end
+at a contravariant one, which gives the type above every instance; read from
+below, the reverse, which gives the type below every instance. A signature is
+left opaque. `bound_above` is the read from above with every free variable — a
+`Quantified` under none of the type's own binders, every `AbstractType` and
+every lexical variable — at `[Never, bound]`, which is what a load-time type is
+compared through where a run may bind its variables to anything under their
+bounds. `erase_rigid`, which reads a variable as its bound everywhere, can put a
+contravariant position below an instance.
 
 ### The unifier collects, it does not bind
 
@@ -396,6 +428,28 @@ A **construction** collects through `Collector::least`, under which a variable
 no contribution reaches solves to `Never` rather than its bound: a family is
 covariant in its parameters, so its least instance is the one the payload asks
 for.
+
+A variable no contribution reaches solves to its declared bound: a collector
+holds the group's bounds from the start (`Collector::new`).
+
+**A solution does not grow with its arguments; an interval does.** Beside the
+solution, the unifier reports an **interval** per variable
+([`intervals`](unify.rs)), holding every solution a solve can reach over
+arguments lying within the static types it collected — each an interval of its
+own, as [dispatch](../dispatch/README.md#static-types) types an argument:
+
+- the **upper end** is the join of the lower contributions, where some covariant
+  position under no union names the variable — one every admitted argument
+  reaches — and the bound elsewhere, since a variable no contribution reaches
+  takes its bound;
+- the **lower end** is the meet of the upper contributions and the bound, where
+  the declared types name the variable at no covariant position, and `Never`
+  elsewhere;
+- where every argument whose position names a variable is **exact** — its lower
+  end is its upper — the arguments a solve can meet are those very types, so
+  each variable's interval is its solution: solved to a point.
+
+An end is a bound and no solution, so it may be a join or a meet nobody wrote.
 
 ## Records and schemas
 
@@ -530,11 +584,17 @@ vocabulary so an identity move is visible in a diff
 
 ## Open work
 
-- [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
+- [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a group interned with every declared variable kept, for solving only.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.
+- [Static types of generic code](../../roadmap/gradual-typing/solving-from-static-types.md)
+  — the lexical variable and its substitution, the collector's bounds and
+  interval, a type read through intervals, and a candidate judged by class.
+- [Solving to the least instance](../../roadmap/gradual-typing/least-instance-solving.md)
+  — a solve that joins its lower contributions and meets its upper ones, where
+  it takes a maximum or fails.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
   signature meet that bounds an abstract member by `Never`, which the
   closed-bound rule forbids.

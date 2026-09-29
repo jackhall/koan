@@ -483,7 +483,7 @@ otherwise pair with are `cellgraph`'s own slate.
 
 ## Open work
 
-- [Slicing and splicing](../../roadmap/rewrite/slicing-and-splicing.md) — views
+- [Slicing and splicing](../../roadmap/metaprogramming/slicing-and-splicing.md) — views
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,
   the lazy transformations that run koan code.
@@ -492,3 +492,5 @@ otherwise pair with are `cellgraph`'s own slate.
 - [Module programs](../../roadmap/rewrite/modules.md) — a builtin native
   reading a sealed builtin value its overload admitted through the seal, once
   a view's members reach a program.
+- [Value ascription](../../roadmap/gradual-typing/value-ascription.md) — `:!` over any
+  value, and a retype that reads a union member by member.

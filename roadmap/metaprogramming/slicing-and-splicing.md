@@ -51,7 +51,7 @@ elements cost O(kn).
   `ByteString.copy` leaves to the programmer.
 - *Only structural transformations are views — decided.* A transformation that
   runs koan code, as `map` and `filter` do, is lazy only as a
-  [yielding iterator](yielding-iterators.md), a value of its own type, and a
+  [yielding iterator](../rewrite/yielding-iterators.md), a value of its own type, and a
   copy of one copies its pending call and never forces it. Forcing inside a
   copy could fail, never finish, perform an effect wherever the value happens
   to cross, and cost what no weight measures.

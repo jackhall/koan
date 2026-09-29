@@ -351,12 +351,12 @@ one of three:
 
 - **closed** — it names only builtins and closed type binders, so it is the same
   at every run, and the run reads it as it is;
-- **rigid** — it names a type a run binds, and is a lattice handle over one rigid
-  variable per such name, each beside the coordinate its value is read from. It
-  serves comparisons where the shape is built, since a relation that holds over a
-  rigid variable holds for every type the run can put there; where it runs it is
-  the handle with each variable replaced by what its coordinate reads, one
-  [substitution](../type_lattice/README.md#substitute-then-ask);
+- **rigid** — it names a type a run binds, and is a lattice handle over one
+  lexical variable per such name, each beside the coordinate its value is read
+  from. It serves comparisons where the shape is built, since a relation that
+  holds over a rigid variable holds for every type the run can put there; where
+  it runs it is the handle with each variable replaced by what its coordinate
+  reads, one [substitution](../type_lattice/README.md#substitute-then-ask);
 - **unknown** — left to the run, which elaborates it where it is read, through
   the activation.
 
@@ -364,24 +364,40 @@ one of three:
 callable's `FOR ALL` parameter, a `:Type` parameter, a name
 [`USING … SCOPE`](../scope/README.md#names-that-arrive-at-run-time) surfaces, a
 quote's hole, `\` mark or `$` name whose source is not closed, and a type binder
-the load left unknown. The load-time reader answers each with a rigid variable
-`quantified(index, bound)`. A **region** — the program, the body of each callable
-that writes a `FOR ALL` group, and each quote's code — numbers them: the region's
-own `FOR ALL` names take their canonical index in the callable's function type,
-bounded as that type bounds them, so a written result compares with the declared
-return like with like; every other name read in the region takes the next free
-index, bounded by its own bound where it is an outer `FOR ALL` name and by `Any`
-otherwise. One slot keeps one index across its region. A `FOR ALL` name
-canonical form drops takes no index: it reads as its bound, closed, which is what
-a call binds it to.
+the load left unknown. The load-time reader answers each with a **lexical
+variable**, a [rigid node](../type_lattice/README.md#the-node-vocabulary) of its
+own: positional by its **level**, named as the name is, and bounded by its bound
+where it is a `FOR ALL` name and by `Any` otherwise. A name takes its level where
+it is declared, along the lexical chain of bodies: the names of every enclosing
+body first, then the body's own — a callable's own `FOR ALL` group first, in its
+canonical order, then its other names in slot order. So a name has one level in
+every body that reads it — the body that declares it, a body nested in that one,
+under a group a nested signature opens — and no binder captures it.
+
+A level is no identity beyond its chain. Two bodies neither of which encloses
+the other number their names alike, and equal content is one node, so typing a
+shape interns nothing that typing a shape like it has not.
+
+**One chain.** A rigid load-time type is compared only along the lexical chain
+it was typed in. A quote's code is built from the code alone, so it roots a
+chain of its own, and a type leaving it is read through
+[`bound_above`](../type_lattice/README.md#substitute-then-ask). Anything else
+that reaches a reader from outside its chain reaches it unknown.
+
+A callable's function type binds its own group by position. Its body reads
+each of those names as its lexical variable, which the pass records in the
+body's [group-levels cell](../scope/README.md#load-time-types), so a
+parameter's type and the declared return are, in the body, the function type's
+instantiated at those variables, and a written result compares with the declared
+return like with like. A `FOR ALL` name canonical form drops is no variable: it reads as its
+bound, closed, which is what a call binds it to.
 
 **What stays unknown.** A spelling whose value over a rigid variable can differ
 from substituting first and elaborating after: a meet (`Elt & Number` meets to
 `Never` over a rigid `Elt`, but is `Number` where `Elt` is `Number`), a
 projection's owner, an application's head and a `NEEDING` kind, each over a
-run-bound name; and any run-bound name read while a `FOR ALL` group is open —
-inside a nested group, or a quantified signature's own — since the lattice's
-binders shadow every index beneath them. A type binder is closed or unknown,
+run-bound name; and a `FOR ALL` bound naming one, since a bound holds no
+variable. A type binder is closed or unknown,
 never rigid: its readers across a callable boundary could not reach the
 coordinates its variables are read at, and a sealed nominal is a leaf
 substitution never enters, so a `NEWTYPE` over a `FOR ALL` name is a different
@@ -491,18 +507,20 @@ overload and a reserved bucket none, and the one union a builtin slot names
 interns as the union of its three members.
 [`tests/channel.rs`](tests/channel.rs) runs the load pass over shaped programs
 and reads the cells it filled: a closed binder, ring and callable equal to what
-elaborating through an activation gives; a `FOR ALL` name as its canonical
-variable, in its callable's body and in a callable nested in it; a `:Type`
-parameter, an outer quantifier inside an inner group and a
-quote's hole as the next free index; each spelling left unknown; a nominal over a
+elaborating through an activation gives; a `FOR ALL` name at one level, in its
+callable's body and in a callable nested in it; a `:Type` parameter, an outer
+quantifier inside an inner group and a quote's hole each as a lexical variable;
+each spelling left unknown; a nominal over a
 run-bound type left unknown and a reader of it rigid; each repeated guard; and a
 refusal refusing the load, or kept on its quote's code shape.
 
 ## Open work
 
-- [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
+- [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound
   rather than to what the arguments solve it to.
+- [Static types of generic code](../../roadmap/gradual-typing/solving-from-static-types.md)
+  — a name a run binds read as a lexical variable.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates;
   a family's variance, which no declaration states; and a parameterized union

@@ -54,4 +54,4 @@ and its examples catch an unbound name.
 
 **Unblocks:**
 
-- [Retire the old runtime](retire-the-old-runtime.md) — the catching surface `machine` still owns.
+- [Retire the old runtime](../rewrite/retire-the-old-runtime.md) — the catching surface `machine` still owns.

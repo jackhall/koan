@@ -388,12 +388,14 @@ before the program ran, and a stalled substrate. The two-program test,
 
 ## Open work
 
-- [Faults and call traces](../../roadmap/rewrite/faults.md) — faults apart
+- [Faults and call traces](../../roadmap/conditionals/faults.md) — faults apart
   from values, the frames they keep, and the trace an uncaught one prints.
-- [Catching errors](../../roadmap/rewrite/catching.md) — `TRY` and `CATCH`,
+- [Catching errors](../../roadmap/conditionals/catching.md) — `TRY` and `CATCH`,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
+- [Value ascription](../../roadmap/gradual-typing/value-ascription.md) — an argument
+  retyped to its parameter's declared type where the frame binds it.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
   receipt run laid down anew per park, and the bytes a `Shares` tail hop leaves
   in its host.

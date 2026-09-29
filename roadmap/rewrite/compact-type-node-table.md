@@ -12,22 +12,17 @@ bump can't take the old table back, so after each doubling the previous bucket
 array sits dead until the program ends. A registry of 16k mixed types measures
 11.8 MB: about 5.3 MB of live node table, 5.3 MB of dead tables, 1.2 MB of
 interned content and 49 KB of verdict table. Nothing sizes the table ahead of the
-program it serves. An opaque ascription's nonce is a `ScopeId` from
-[`ScopeId::next`](../../src/memory/scope_id.rs), which draws a process-wide
-random session and a global counter. `Option<ScopeId>` is 24 B, and a minted
-type's digest differs from one process to the next.
+program it serves.
 
 **Acceptance criteria.**
 
 - `size_of::<TypeNode>()` is 48, pinned by a `const` assert beside the enum.
-- `AbstractType`, `Signature` and `SetMember` each keep the fields their hot
-  paths read inline and carry the rest behind one `&'run` reference into the
-  registry's region, laid on an intern miss. `TypeNode` stays `Copy` and free
-  of drop glue, and the digest of every type without a nonce is unchanged.
-- The registry mints nonces from a counter it owns, `Option<Nonce>` is 4 B, and
-  nothing in the type lattice or `knot` mints a nonce through `ScopeId`. A test
-  pins that one program interned twice, into two registries, yields the same
-  digests.
+- `Signature` and `SetMember` each keep the fields their hot paths read inline
+  and carry the rest behind one `&'run` reference into the registry's region,
+  laid on an intern miss. `TypeNode` stays `Copy` and free of drop glue, and
+  the digest of every type is unchanged.
+- One program interned twice, into two registries, yields the same digests,
+  pinned by a test.
 - The `quantified` and `rigid` flags are a one-byte `Flags` field in each
   non-leaf variant, read through one `TypeNode::flags` door that answers
   `Flags::NONE` for a leaf. `Entry` does not exist, and a node table bucket is
@@ -49,16 +44,15 @@ type's digest differs from one process to the next.
 
 **Directions.**
 
-- *The layouts of `AbstractType`, `Signature` and `SetMember` — decided.*
+- *`AbstractType` — decided.* [Modules](modules.md) removes it, its nonce and
+  the mint in [`knot/module/view.rs`](../../src/knot/module/view.rs), so this
+  item lays out no `AbstractType` and mints nothing.
+- *The layouts of `Signature` and `SetMember` — decided.*
   Each has room for a `u16` at offset 2, a `u32` at offset 4, one thin
   reference at offset 8 and two 16 B fields:
   - `Signature { flags, schema: &'run SigSchema, schema_digest }`.
     `sig_satisfies` reads the schema's tables together and its verdict is
     cached, so the hop is paid once per pair.
-  - `AbstractType { flags, arity: u16, nonce: Option<Nonce>, data, bound, name }`,
-    where `data` holds `source` and `param_names`. `bound` (read by the order),
-    the arity (read by kind checks) and the nonce (read by admission) stay
-    inline.
   - `SetMember { flags, kind, index: u32, data, scc_digest, name }`, where
     `data` holds `scc_size` and the `NodeSchema`. `kind_of` and sibling
     resolution read `kind`, `index` and `scc_digest` without the hop.
@@ -66,16 +60,6 @@ type's digest differs from one process to the next.
   These hot fields are chosen from what each field is for. A field that the
   order, window or dispatch paths turn out to read per dispatch moves inline
   instead.
-- *The nonce — decided.* `Nonce(NonZeroU32)` from a checked `Cell<u32>` counter
-  on the registry, refusing rather than wrapping on overflow. The counter lives
-  on the registry, so no process-wide state feeds a type's identity. Nonces are
-  unique only within one registry, which is the scope a type's identity has.
-- *The `source` of a minted type — open.* `mint` in
-  [`knot/module/view.rs`](../../src/knot/module/view.rs) passes its nonce as
-  `source` too. With a `Nonce`, a minted type needs another `source`. The
-  substitution path keys on types without a nonce, so a nonced type's `source`
-  is never read to resolve anything. Recommended: `ScopeId::SENTINEL`, once
-  that is confirmed against `substitute.rs`.
 - *Packing the flags — decided.* A safe `flags: Flags` field per non-leaf
   variant: rustc places a variant's one-byte field in the tag's padding at
   offset 1, and the size assert turns any layout drift into a build error.
@@ -110,5 +94,7 @@ needs dispatch.
 
 **Requires:**
 
+- [Modules](modules.md) — removes `AbstractType`, a 120 B variant this item
+  gives no layout.
 
 **Unblocks:** none — a leaf.

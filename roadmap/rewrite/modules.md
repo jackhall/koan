@@ -143,5 +143,7 @@ nonce for it, so two opaque views of one module never share a carrier.
 
 **Unblocks:**
 
+- [A compact type node table](compact-type-node-table.md) — `AbstractType` is
+  gone before the node is sized.
 - [Retire the old runtime](retire-the-old-runtime.md) — the module surface
   `machine` still owns.

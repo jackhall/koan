@@ -445,12 +445,13 @@ elaborated — and the pass fills it, once, where the program loads:
   binder, and a type nested in a recorded one is part of it;
 - each **type binder**, beside its declaration node;
 - each **registration**, its expression shape;
-- a callable body's own **callable type**;
+- a callable body's own **callable type**, and the lexical variable each name of
+  its own `FOR ALL` group is in the body (`BodyShape::group_levels`);
 - a quote's code shape's **typing refusal**, which `BodyShape::refusal` reports
   as it reports the code's own error.
 
 A cell holds `Unknown`, a closed value, or a rigid value beside the
-`Variable`s — a rigid variable's index and the coordinate its value is
+`Variable`s — a variable's level and the coordinate its value is
 read at — that the run substitutes. The vocabulary lives here, beside the shape
 that holds it: `Static`, `Variable`, and the callable-typing records the
 elaborator fills, `Callable`, `Canonical`, `Registered`, `ParameterBinding`, and
@@ -460,13 +461,14 @@ a callable's birth and the overlap check.
 
 One more cell per shape holds the **value channel**: the `Statics` dispatch's
 [load pass](../dispatch/README.md#static-types) fixes once the type channel has —
-a static type for each part the evaluator reads as a value (by site), each
-statement (by index) and each slot (by index), and one `Narrowing` per keyworded
-use, parallel to its candidate list: `Full`, the candidates `Kept`, or the one
-`Selected`. It lives here for the same reason the type channel's cells do, and
-the shape reads it by site (`value_type`, `narrowing`), statement index or slot;
-a shape the pass has not fixed — a quote's code it refused — has no static types,
-and every use in it is `Full`.
+a static type, an interval, for each part the evaluator reads as a value (by
+site), each statement (by index) and each slot (by index), and one `Narrowing` per keyworded
+use, parallel to its candidate list: the one candidate selected, or each
+candidate kept beside its verdict, *always* or *maybe*. It lives here for the
+same reason the type channel's cells do, and the shape reads it by site
+(`value_type`, `narrowing`), statement index or slot; a shape the pass has not
+fixed — a quote's code it refused — has no static types, and every candidate of
+every use in it is *maybe*.
 
 ## Names that arrive at run time
 
@@ -908,13 +910,15 @@ where it has one:
 - **no candidate** — a keyworded use with no builtin overload and no visible
   registration;
 
-three [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
+four [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
 built and its types can be read — an **overlap**, a user overload taking
 operands a builtin overload at its key already takes; **no admitting
 candidate**, a keyworded use every candidate of which
 [static selection](../dispatch/README.md#static-types) drops, naming the key and
-its arguments' static types; and a **return never satisfied**, a callable body
-whose static type meets its declared return at `Never`;
+its arguments' static types; an **ambiguity**, a keyworded use every candidate
+of which always admits and none of which ranks first, naming the same; and a
+**return never satisfied**, a callable body whose static type meets its declared
+return at `Never`;
 
 two the [elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
 finds — a **type** that does not elaborate, carrying the elaborator's refusal,
@@ -994,7 +998,7 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
-- [Code splicing](../../roadmap/rewrite/code-splicing.md) — how several parts
+- [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.
