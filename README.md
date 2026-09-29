@@ -278,12 +278,13 @@ src/
 │   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
-│   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, its registrations, bucket declarations and each keyworded use's candidate list, and for a quote's code shape its carried type, its refusal, its required keyworded holes and the names and keys each EVAL offers, in program storage; Position / Coordinate / Site and ShapeError
+│   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the expression shape a callable body sits in, the body each binder births and each LET binder's right-hand side, its registrations, bucket declarations and each keyworded use's candidate list, and for a quote's code shape its carried type, its refusal, its required keyworded holes and the names and keys each EVAL offers, in program storage; the write-once load-time type cells — each recorded TypeExpression, type binder, registration and callable body, and a code shape's typing refusal — the load pass fills; Position / Coordinate / Site and ShapeError
 │   ├── shape/build.rs    the one shape builder: the claims pre-scan and group frames, the rewrite pre-pass, the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies, arms and quote values' code shapes, the components pass, and the units pass that orders a body's units
 │   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor and spanned at the source it was built from
 │   ├── shape/build/locate.rs   where an error found in a statement points — the part it is about, else the nearest spanned part or node — searched for on the error path only
 │   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
+│   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Canonical / Registered / ParameterBinding and Elaboration
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types, then the overloads grouped by bucket key
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each; the run's copy and weight
 │   └── activation.rs     ActivationView — one call's or block's Copy, Drop-free read half, covariant in its brand: its header, the knot member it runs and a view of its slots, read by coordinate (an edge capture as its sibling member); Activation — the view beside the slot array that binds, invariant, with one constructor per body kind
@@ -303,11 +304,12 @@ src/
 │   ├── equality.rs       Value::equals — structural equality, containers gated on related memoized types, a bisimulation over knot members — a function by its identity and captures, a quote by its syntax and bindings — Incomparable when a module or a barrier is reached
 │   ├── render.rs         Value::render — the surface PRINT writes, a mark pass then a write pass labelling where a cycle closes
 │   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value
-├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles through the activation they are read in; Elaboration, why one did not
+├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles where the program loads and, for what the load leaves unknown, through the activation they are read in
 ├── elaborate/
 │   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups, a code kind NEEDING names, Union.Tag
-│   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the form node its body sits in, with a registration's ranked shape and parameter binding; static_callable_type over builtins alone
-│   └── reads.rs          Reads — what elaboration reads names through: an activation, its view, or the builtin table alone
+│   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the expression shape its body sits in, with a registration's ranked shape and parameter binding
+│   ├── channel.rs        type_channel — the load pass: every type binder, type expression, callable and registration typed where the program loads, closed, rigid or unknown, into the shape's write-once cells
+│   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the load pass's reader
 ├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable, and the field a USING source names
 ├── knot/
 │   ├── function.rs       Function — a function node: its memoized type, body shape, closure bindings and knot weight; the staging a tie does for a function member

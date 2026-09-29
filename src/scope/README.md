@@ -437,10 +437,10 @@ sits below `elaborate`, and a shape seals before anything in it can be
 elaborated — and the pass fills it, once, where the program loads:
 
 - each **type expression** the shape records (`BodyShape::type_expressions`, by
-  site): a `:(…)` or `:{…}` in value position, a type part of a form that births
-  no callable — a `MATCH`'s result and union clause, a `TRY`'s result, an
-  ascription's signature — and each `MATCH … WITH` guard, with its arm set and
-  written index. A callable's signature, a declaration's definition and a type
+  site): a `:(…)` or `:{…}` in value position, a type part of an expression
+  shape that births no callable — a `MATCH`'s result and union clause, a
+  `TRY`'s result, an ascription's signature — and each `MATCH … WITH` guard,
+  with its arm set and written index. A callable's signature, a declaration's definition and a type
   `LET`'s right-hand side are not recorded: they are typed with their callable or
   binder, and a type nested in a recorded one is part of it;
 - each **type binder**, beside its declaration node;
@@ -978,9 +978,6 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Elaborating the type channel at load](../../roadmap/rewrite/type-channel-at-load.md)
-  — the load-time type cells, the type expressions the builder records, and a
-  `MATCH` guard written twice refused by handle.
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/rewrite/code-splicing.md) — how several parts

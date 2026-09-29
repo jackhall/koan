@@ -28,7 +28,7 @@ only when it runs, on the path that reaches it.
 **Directions.**
 
 - *Where static types come from — decided.* The
-  [type channel's load pass](type-channel-at-load.md), extended to the value
+  [type channel's load pass](../../src/elaborate/README.md#the-type-channel-at-load), extended to the value
   channel: local and bidirectional, a declared parameter or return flowing down,
   a literal's, a construction's and a selected callee's return flowing up.
 - *Narrow, then select — decided.* Narrowing drops only a candidate that can
@@ -43,7 +43,4 @@ only when it runs, on the path that reaches it.
 
 ## Dependencies
 
-**Requires:**
-
-- [Elaborating the type channel at load](type-channel-at-load.md) — the load pass,
-  closed and rigid types, and each registration's load-time shape.
+**Requires:** none.

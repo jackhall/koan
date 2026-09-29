@@ -260,9 +260,6 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
-- [Elaborating the type channel at load](../../roadmap/rewrite/type-channel-at-load.md)
-  — a type expression's load-time value, and the overlap check over every closed
-  registration.
 - [Static selection](../../roadmap/rewrite/static-selection.md) — a static type
   per value expression, and candidates narrowed and chosen where the shape is
   built.

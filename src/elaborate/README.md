@@ -371,7 +371,9 @@ own `FOR ALL` names take their canonical index in the callable's function type,
 bounded as that type bounds them, so a written result compares with the declared
 return like with like; every other name read in the region takes the next free
 index, bounded by its own bound where it is an outer `FOR ALL` name and by `Any`
-otherwise. One slot keeps one index across its region.
+otherwise. One slot keeps one index across its region. A `FOR ALL` name
+canonical form drops takes no index: it reads as its bound, closed, which is what
+a call binds it to.
 
 **What stays unknown.** A spelling whose value over a rigid variable can differ
 from substituting first and elaborating after: a meet (`Elt & Number` meets to
@@ -393,7 +395,8 @@ answers every run-bound name *unknown*.
    through [the declaration door](#declarations), so a component reads the
    binders before it;
 2. each type expression the shape records — a sigiled type in value position, a
-   type part of a form that births no callable, a `MATCH … WITH` guard;
+   type part of an expression shape that births no callable, a `MATCH … WITH`
+   guard;
 3. each registration's expression shape, through [`callable_type`](signature.rs);
 4. each nested shape: a callable's signature first, through the enclosing shape's
    reader, then its body, with every binder of every enclosing shape already
@@ -486,18 +489,17 @@ each family refusal.
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
 interns as the union of its three members.
-`tests/channel.rs` runs the load pass over shaped programs
+[`tests/channel.rs`](tests/channel.rs) runs the load pass over shaped programs
 and reads the cells it filled: a closed binder, ring and callable equal to what
 elaborating through an activation gives; a `FOR ALL` name as its canonical
-variable, a `:Type` parameter, an outer quantifier inside an inner group and a
+variable, in its callable's body and in a callable nested in it; a `:Type`
+parameter, an outer quantifier inside an inner group and a
 quote's hole as the next free index; each spelling left unknown; a nominal over a
 run-bound type left unknown and a reader of it rigid; each repeated guard; and a
 refusal refusing the load, or kept on its quote's code shape.
 
 ## Open work
 
-- [Elaborating the type channel at load](../../roadmap/rewrite/type-channel-at-load.md)
-  — the load pass, its rigid variables, and births reading the load-time type.
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound
   rather than to what the arguments solve it to.

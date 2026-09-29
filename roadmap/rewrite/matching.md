@@ -15,7 +15,7 @@ no member of `Only`.
 
 **Acceptance criteria.**
 
-- `MATCH`'s union form is spelled `MATCH <scrutinee> UNDER <union> -> <type>
+- `MATCH` over a union is spelled `MATCH <scrutinee> UNDER <union> -> <type>
   WITH <arms>`, in the builtin table and in the tutorial.
 - `MATCH` and `MATCH … UNDER` select the unique most specific arm whose guard
   admits the scrutinee, as dispatch selects a candidate, bind `it` in that
@@ -57,7 +57,7 @@ no member of `Only`.
 - *Guards and results are handles — decided.* A type guard, the `MATCH`'s
   written result and the enclosing callable's declared return elaborate where
   the shape is built
-  ([elaborating the type channel at load](type-channel-at-load.md)), so a guard
+  ([the type channel at load](../../src/elaborate/README.md#the-type-channel-at-load)), so a guard
   written twice is one handle written twice however each is spelled, and
   whether an arm's `MATCH` in tail position tails is a fact the shape records,
   not one the contract decides when the `MATCH` runs.
@@ -66,10 +66,7 @@ no member of `Only`.
 
 ## Dependencies
 
-**Requires:**
-
-- [Elaborating the type channel at load](type-channel-at-load.md) — guards,
-  results and the enclosing return as handles where the shape is built.
+**Requires:** none.
 
 **Unblocks:**
 

@@ -148,9 +148,9 @@ scratch first.
   function's type — the [load-time type](../scope/README.md#load-time-types) its
   body's shape carries, and its registration's shape beside the registration: as
   it is when closed, with its variables substituted through the enclosing
-  activation when rigid, and elaborated from the form node its body sits in
-  ([A callable's type](../elaborate/README.md#a-callables-type)) only where the
-  load left it unknown — and its captures, read from the enclosing activation
+  activation when rigid, and elaborated from the expression shape its body sits
+  in ([A callable's type](../elaborate/README.md#a-callables-type)) only where
+  the load left it unknown — and its captures, read from the enclosing activation
   (`ClosureBindings::read_captures`).
 - A data member ([data.rs](data.rs)): its right-hand side walked part by part.
   A literal waits to be lowered; a mention of a fellow member is an edge; any

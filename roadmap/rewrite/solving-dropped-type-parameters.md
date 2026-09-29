@@ -9,13 +9,18 @@ call's argument record carries only the canonical group's solution
 ([`arguments`](../../src/dispatch/select.rs)). So under
 `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`, `KIND 1` gives `Any`,
 not `Number`: a body cannot read the type an argument brought for a variable
-it names once.
+it names once. The [load pass](../../src/elaborate/README.md#the-type-channel-at-load)
+reads a dropped name the same way, as its bound, closed (`Canonical::Dropped`
+in [`slot_at`](../../src/elaborate/channel.rs)), and the run checks in debug
+builds that what the load fixed agrees with elaborating where it runs.
 
 **Acceptance criteria.**
 
 - A type parameter canonical form drops binds, in the body, to what the call's
   arguments solve it to, whether the callee is called by keyword or by name:
   `KIND 1` under the definition above gives `Number`.
+- The load pass reads a dropped type parameter as a rigid variable, so a type
+  fixed at load that names one agrees with what the call binds it to.
 - A callable's function type and registered shape are the handles canonical
   form gives them, so two alpha-variant definitions still share one type.
 
