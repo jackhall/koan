@@ -58,9 +58,9 @@ pub use tie::tie;
 
 use std::fmt;
 
-use crate::scope::Elaboration;
 use crate::memory::{BumpAllocator, DropFree, Edge, Member, covariant, reattachable};
 use crate::parse::ExpressionPart;
+use crate::scope::Elaboration;
 use crate::scope::{Activation, ActivationView, Builtins, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeRegistry, display_name};

@@ -643,7 +643,9 @@ impl<'graph> BodyShape<'graph> {
     pub fn typed_expression(&self, site: Site) -> Static<'graph, KType> {
         self.type_expressions
             .binary_search_by_key(&site, |recorded| recorded.site)
-            .map_or(Static::Unknown, |index| self.type_expressions[index].typed())
+            .map_or(Static::Unknown, |index| {
+                self.type_expressions[index].typed()
+            })
     }
 
     /// What the load pass fixed for the type binder at `slot`.
@@ -762,9 +764,9 @@ impl<'graph> BodyShape<'graph> {
 }
 
 /// Where the part at `site` within `node` is written: its own span, else the nearest spanned part's
-/// or node's around it, else `node`'s own source.
-pub fn source_of(node: &KExpression<'_>, site: Site) -> SourceRef {
-    build::source_within(node, site).unwrap_or(node.source)
+/// or node's around it. `None` when `node` does not hold the part.
+pub fn source_of(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
+    build::source_within(node, site)
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible

@@ -5,8 +5,8 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 
 use super::super::callable_type;
-use crate::scope::Elaboration;
 use super::{brought, declared};
+use crate::scope::Elaboration;
 
 #[test]
 fn a_record_field_names_its_declared_type() {
@@ -65,7 +65,7 @@ fn a_field_the_type_does_not_declare_is_refused() {
             let expected = owner.map_or(KType::NUMBER, |owner| program.bound(owner));
             let z = BinderSymbol::classify("z").unwrap().symbol();
             assert!(
-                matches!(brought, Err(Elaboration::NoSuchMember { owner, name }) if owner == expected && name == z),
+                matches!(brought, Err(Elaboration::NoSuchMember { owner, name, .. }) if owner == expected && name == z),
                 "`{source}` refuses the field: {brought:?}"
             );
         });

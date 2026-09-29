@@ -25,7 +25,6 @@
 use std::fmt;
 
 use crate::elaborate::type_declarations;
-use crate::scope::Canonical;
 use crate::knot::module::body_activation;
 use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Untieable, tie};
 use crate::memory::{Bump, BumpVec, resident};
@@ -33,6 +32,7 @@ use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
+use crate::scope::Canonical;
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};

@@ -134,8 +134,13 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
         "through the newtype over the record"
     );
     assert_eq!(
-        run("UNION Maybe = #{Some: Number, None: Null}\nPRINT Maybe.Some\nPRINT Maybe.Many"),
-        "Some\nerror: :(Some | None) has no member Many"
+        run("UNION Maybe = #{Some: Number, None: Null}\nPRINT Maybe.Some"),
+        "Some"
+    );
+    assert_eq!(
+        run("UNION Maybe = #{Some: Number, None: Null}\nPRINT Maybe.Many"),
+        "load: <test>:2:7: :(Some | None) has no member Many",
+        "a closed projection naming no member refuses the load"
     );
     assert_eq!(
         run("MODULE m = (LET x = 1)\nPRINT m.x"),

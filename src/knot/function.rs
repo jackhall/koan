@@ -9,9 +9,9 @@
 //! lambda door, [`lambda`], which births a callable no binder names as a one-node knot.
 
 use crate::elaborate::callable_type;
-use crate::scope::{Canonical, ParameterBinding, Registered};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
+use crate::scope::{Canonical, ParameterBinding, Registered};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Link, Weight};

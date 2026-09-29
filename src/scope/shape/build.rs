@@ -66,8 +66,8 @@ use super::{
     QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, TypeExpression,
     Unit, UnitWork, Which, resolve_here,
 };
-use std::cell::Cell;
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
+use std::cell::Cell;
 
 mod locate;
 mod rewrite;
@@ -1815,7 +1815,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             if heads == Heads::Types
                 && let Some(guard) = guard
             {
-                self.record_type(level, statement, guard, Some((Site::of(part), index as u32)));
+                self.record_type(
+                    level,
+                    statement,
+                    guard,
+                    Some((Site::of(part), index as u32)),
+                );
             }
             if heads == Heads::Types
                 && let Some(written) = guard.and_then(quoted_body)

@@ -11,12 +11,12 @@
 //! its registration names for it — or packs every slot into `operands` — and carries each of its
 //! type parameters, by name, as the type the call solved it to.
 
-use crate::scope::{Canonical, ParameterBinding, Registered};
 use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpVec, Writer};
 use crate::program::Contract;
 use crate::scope::Candidate;
 use crate::scope::{CandidateList, IMPLICIT};
+use crate::scope::{Canonical, ParameterBinding, Registered};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     KType, TypeRegistry, admit_by_class, satisfied_by, select_by_class, shape_return,

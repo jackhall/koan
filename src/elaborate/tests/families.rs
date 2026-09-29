@@ -8,8 +8,8 @@ use crate::type_lattice::{KKind, KType, NodeSchema, TypeNode, is_subtype_of};
 use crate::values::construction;
 
 use super::super::{builtin_error, builtin_result};
-use crate::scope::Elaboration;
 use super::{Program, brought, declared};
+use crate::scope::Elaboration;
 
 const RESULT: &str = "UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}";
 const OPTION: &str = "UNION (Elem AS Option) = #{Some: Elem, None: Null}";

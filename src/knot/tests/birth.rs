@@ -2,10 +2,10 @@
 //! members, closure words, knots of fellow members read through their edges, data members and the anonymous nodes below them, and
 //! every refusal.
 
-use crate::scope::{Elaboration, ParameterBinding};
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{CaptureSlot, Coordinate, Site, Target};
+use crate::scope::{Elaboration, ParameterBinding};
 use crate::symbols::{BinderSymbol, KeywordSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema, TypeNode};
 use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};

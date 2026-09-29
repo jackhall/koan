@@ -78,9 +78,13 @@ pub enum Elaboration {
     NotAType { name: TypeSymbol, site: Site },
     /// A spelling the elaborator does not elaborate, at `site`.
     Unsupported { site: Site },
-    /// A projection `Owner.name` naming a member `Owner` does not declare: a union's tag, or a
-    /// record's field.
-    NoSuchMember { owner: KType, name: Symbol },
+    /// A projection `Owner.name`, at `site`, naming a member `Owner` does not declare: a union's
+    /// tag, or a record's field.
+    NoSuchMember {
+        owner: KType,
+        name: Symbol,
+        site: Site,
+    },
     /// A bound at `site` that names a type variable — a `FOR ALL` name or a signature's abstract
     /// member — or is `Never`.
     Bound { site: Site },
@@ -92,6 +96,18 @@ pub enum Elaboration {
 }
 
 impl Elaboration {
+    /// The site the refusal is about.
+    pub fn site(&self) -> Site {
+        match self {
+            Elaboration::NotAType { site, .. }
+            | Elaboration::Unsupported { site }
+            | Elaboration::NoSuchMember { site, .. }
+            | Elaboration::Bound { site }
+            | Elaboration::RankingDisagrees { site }
+            | Elaboration::Unknown { site } => *site,
+        }
+    }
+
     /// The refusal as an error value's message, with its names spelled through `symbols` and its
     /// types through `types`.
     pub fn display<'x, 'run>(
@@ -121,7 +137,7 @@ impl fmt::Display for ElaborationDisplay<'_, '_> {
                 write!(f, "{} names no type", self.symbols.display(name.symbol()))
             }
             Elaboration::Unsupported { .. } => f.write_str("this type expression is not supported"),
-            Elaboration::NoSuchMember { owner, name } => write!(
+            Elaboration::NoSuchMember { owner, name, .. } => write!(
                 f,
                 "{} has no member {}",
                 display_name(*owner, self.types, self.symbols),

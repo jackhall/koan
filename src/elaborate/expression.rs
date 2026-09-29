@@ -304,7 +304,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                     self.types
                         .union_member_named(owner, name)
                         .or_else(|| declared_field(self.types, self.scratch, owner, name))
-                        .ok_or(Elaboration::NoSuchMember { owner, name })
+                        .ok_or(Elaboration::NoSuchMember { owner, name, site })
                 }
                 _ => Err(unsupported),
             };

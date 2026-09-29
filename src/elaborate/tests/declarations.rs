@@ -8,8 +8,8 @@ use crate::type_lattice::{
     member,
 };
 
-use crate::scope::Elaboration;
 use super::{Held, Program, brought, declared, with_program};
+use crate::scope::Elaboration;
 
 /// The representation a newtype member wraps.
 fn representation(program: &Program<'_, '_, '_>, handle: KType) -> KType {
