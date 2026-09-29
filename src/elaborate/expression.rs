@@ -1,7 +1,7 @@
 //! One type expression, part by part: a name read through the activation, a composite built from
 //! the handles its parts elaborate to.
 
-use super::reads::Reads;
+use super::reads::{Reads, TypeAt};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
@@ -96,6 +96,18 @@ enum Quantifier {
 }
 
 impl Groups<'_> {
+    /// Whether any group on the stack declares a name.
+    pub(super) fn is_open(&self) -> bool {
+        let mut group = Some(self);
+        while let Some(here) = group {
+            if !here.names.is_empty() {
+                return true;
+            }
+            group = here.outer;
+        }
+        false
+    }
+
     fn find(&self, name: TypeSymbol) -> Quantifier {
         if let Some(index) = self.names.iter().position(|declared| *declared == name) {
             return Quantifier::Innermost(index);
@@ -145,7 +157,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             ExpressionPart::Type(name) => self.name(site, *name, groups),
             // A marked name resolves past the definition's own quantifiers and names, through the
             // mention the shape recorded.
-            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => self.mention(site, *name),
+            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => {
+                self.mention(site, *name, groups)
+            }
             ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
                 self.node(site, node.reference(), groups)
             }
@@ -181,11 +195,18 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         if let Some((_, handle)) = self.locals.iter().find(|(declared, _)| *declared == name) {
             return Ok(*handle);
         }
-        self.mention(site, name)
+        self.mention(site, name, groups)
     }
 
-    /// A type name read through the mention the shape recorded at `site`.
-    fn mention(&self, site: Site, name: TypeSymbol) -> Result<KType, Elaboration> {
+    /// A type name read through the mention the shape recorded at `site`, under `groups`. A rigid
+    /// variable read while a group is open is left for the run: the group's binder would shadow
+    /// the index it is named by.
+    fn mention(
+        &self,
+        site: Site,
+        name: TypeSymbol,
+        groups: &Groups<'_>,
+    ) -> Result<KType, Elaboration> {
         // A definition declares its own names, so the shape records no mention for one. Every
         // other name a type expression reads has one; a definition-local name reaching here has
         // not been declared yet — a forward reference the local table cannot answer.
@@ -203,9 +224,30 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         {
             return Ok(fellow.handle);
         }
-        self.reader
-            .type_at(mention.coordinate)
-            .ok_or(Elaboration::NotAType { name, site })
+        match self.reader.type_at(mention.coordinate) {
+            TypeAt::Type(handle) => Ok(handle),
+            TypeAt::Rigid(_) if groups.is_open() => Err(Elaboration::Unknown { site }),
+            TypeAt::Rigid(handle) => Ok(handle),
+            TypeAt::NotAType => Err(Elaboration::NotAType { name, site }),
+            TypeAt::Unknown => Err(Elaboration::Unknown { site }),
+        }
+    }
+
+    /// `operands` elaborated, and refused `Unknown` at `site` when one read a rigid variable: the
+    /// operands of a spelling whose value over a rigid variable can differ from substituting first
+    /// and elaborating after — a meet, a projection's owner, an application's head, a `NEEDING`
+    /// kind.
+    fn closed_operands<T>(
+        &self,
+        site: Site,
+        operands: impl FnOnce() -> Result<T, Elaboration>,
+    ) -> Result<T, Elaboration> {
+        let before = self.reader.rigid_reads();
+        let elaborated = operands()?;
+        if self.reader.rigid_reads() > before {
+            return Err(Elaboration::Unknown { site });
+        }
+        Ok(elaborated)
     }
 
     /// A parenthesized or sigiled type expression.
@@ -226,7 +268,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         if let [head, payload] = parts
             && let ExpressionPart::RecordLiteral(arguments) = &payload.value
         {
-            let constructor = self.part(&head.value, groups)?;
+            let constructor = self.closed_operands(site, || self.part(&head.value, groups))?;
             let mut applied = BumpVec::with_capacity_in(arguments.len(), self.scratch);
             for (name, argument) in arguments.iter() {
                 applied.push((*name, self.part(argument, groups)?));
@@ -253,7 +295,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                     self.shape(&group, part(4), part(6), groups)
                 }
                 BuiltinShapeId::Attribute => {
-                    let owner = self.part(part(1), groups)?;
+                    let owner = self.closed_operands(site, || self.part(part(1), groups))?;
                     let name = match part(2) {
                         ExpressionPart::Type(name) => name.symbol(),
                         ExpressionPart::Identifier(name) => name.symbol(),
@@ -274,7 +316,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             }
             // `Type AS Ctor` — the arity-one sugar for the application above.
             3 if keyword(1, &CONNECTORS.as_) => {
-                let constructor = self.part(&parts[2].value, groups)?;
+                let constructor =
+                    self.closed_operands(site, || self.part(&parts[2].value, groups))?;
                 let [param] = self.param_names(constructor).ok_or(unsupported)? else {
                     return Err(unsupported);
                 };
@@ -284,7 +327,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             // `Kind NEEDING #[y …]` — a code kind below `Code`, and a list of quotes each of one
             // name or of a bucket key.
             3 if let Some((kind, quotes)) = needing(node) => {
-                let kind = self.part(kind, groups)?;
+                let kind = self.closed_operands(site, || self.part(kind, groups))?;
                 if kind.code_parent().is_none() {
                     return Err(unsupported);
                 }
@@ -322,19 +365,25 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             // `A & B`, and `& [A B C]`, its chained form — the meet, as a union is the join. A meet
             // that comes out `Never` is a type like any other; only a bound refuses it.
             3 if keyword(1, &CONNECTORS.meet) => {
-                let left = self.part(&parts[0].value, groups)?;
-                let right = self.part(&parts[2].value, groups)?;
+                let (left, right) = self.closed_operands(site, || {
+                    Ok((
+                        self.part(&parts[0].value, groups)?,
+                        self.part(&parts[2].value, groups)?,
+                    ))
+                })?;
                 self.meet(site, left, right)
             }
             2 if keyword(0, &CONNECTORS.meet) => {
                 let ExpressionPart::ListLiteral(operands) = parts[1].value else {
                     return Err(unsupported);
                 };
-                let mut met = KType::ANY;
-                for operand in operands.iter() {
-                    met = self.meet(site, met, self.part(operand, groups)?)?;
-                }
-                Ok(met)
+                self.closed_operands(site, || {
+                    let mut met = KType::ANY;
+                    for operand in operands.iter() {
+                        met = self.meet(site, met, self.part(operand, groups)?)?;
+                    }
+                    Ok(met)
+                })
             }
             _ => Err(unsupported),
         }
