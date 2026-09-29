@@ -378,12 +378,6 @@ impl Lockstep for Admits<'_, '_> {
         v: Variance,
     ) -> Admission {
         let carried_node = types.node(carried);
-        // A deferred FN return is a per-call-elaborated placeholder: it admits nothing on its own,
-        // and a return position carrying one has nothing yet to disagree with.
-        let deferred = matches!(carried_node, TypeNode::DeferredReturn(_));
-        if deferred && v == Variance::Co {
-            return Ok(());
-        }
         // A carried rigid variable fills what its bound fills. Below one is only itself, so a
         // contravariant position has nothing more to try.
         if let Some(bound) = carried_node.rigid_bound()

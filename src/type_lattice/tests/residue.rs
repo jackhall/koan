@@ -691,6 +691,34 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     assert!(is_subtype_of(&types, region, each_list, each_bounded));
 }
 
+/// No law: the regression the solution law's sampler found. A carried deferred return lies under
+/// nothing but itself and `Any`, so a slot that mentions a variable admits it no more than the
+/// same slot closed does — else the solved slot rejects the argument its admission let through.
+#[test]
+fn a_carried_deferred_return_fills_no_slot_it_is_not_under() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let deferred = types.deferred_return(DeferredReturnSurface::Type(name));
+    let admits = |declared: KType| {
+        let mut collector = Collector::new(region, 1);
+        admits_with(
+            &types,
+            region,
+            declared,
+            deferred,
+            Variance::Co,
+            &mut collector,
+        )
+    };
+    let variable = types.quantified(0, KType::ANY);
+    assert_eq!(admits(types.list(variable)), Err(UnifyFailure::Mismatch));
+    assert_eq!(admits(types.list(KType::ANY)), Err(UnifyFailure::Mismatch));
+    assert_eq!(admits(variable), Ok(()));
+}
+
 /// No law: a spelling. A group with a bounded quantifier renders as the dict it is written as, each
 /// name beside its bound, `Any` included.
 #[test]
