@@ -340,9 +340,10 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
-- [Solving a group from static types](../../roadmap/rewrite/solving-from-static-types.md)
+- [Static types of generic code](../../roadmap/rewrite/solving-from-static-types.md)
   — a quantified callee's return typed at the solution its arguments' static
-  types give.
+  types give, and generic code nested in a `FOR ALL` body typed and selected at
+  load.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

@@ -62,6 +62,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Slicing and splicing](rewrite/slicing-and-splicing.md)
 - [Solving dropped type parameters](rewrite/solving-dropped-type-parameters.md)
-- [Solving a group from static types](rewrite/solving-from-static-types.md)
+- [Static types of generic code](rewrite/solving-from-static-types.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 

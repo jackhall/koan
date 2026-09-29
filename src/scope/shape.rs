@@ -116,6 +116,11 @@ impl Position {
         Position(index as u32 + 1)
     }
 
+    /// The statement that writes here, or `None` for a parameter.
+    pub fn statement_index(self) -> Option<usize> {
+        (self.0 as usize).checked_sub(1)
+    }
+
     /// Whether a binding declared at `declared` is visible to a reader at this position — the one
     /// visibility comparison.
     pub fn sees(self, declared: Position) -> bool {

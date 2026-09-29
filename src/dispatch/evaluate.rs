@@ -341,16 +341,14 @@ fn call<'graph, 'here>(
     let writer = step.writer();
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
-    let selection = match at.view.shape().narrowing(Site::of_node(node)) {
+    let narrowing = at.view.shape().narrowing(Site::of_node(node));
+    let selection = match narrowing {
         Narrowing::Full => select::selected(at, list.candidates, &arguments, &scratch),
         Narrowing::Kept(kept) => select::selected(at, kept, &arguments, &scratch),
         Narrowing::Selected(coordinate) => select::chosen(at, coordinate, &arguments, &scratch),
     };
     #[cfg(debug_assertions)]
-    if !matches!(
-        at.view.shape().narrowing(Site::of_node(node)),
-        Narrowing::Full
-    ) {
+    if !matches!(narrowing, Narrowing::Full) {
         let full = select::selected(at, list.candidates, &arguments, &scratch);
         debug_assert!(
             select::agree(&selection, &full),

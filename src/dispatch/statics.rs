@@ -235,11 +235,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             .filter(|member| shape.registration(**member).is_none());
         if let (Some(only), None) = (values.next(), values.next()) {
             let written = shape.slot(shape.slot_name(*only)).map(|(_, at)| at);
-            if let Some(Position(at)) = written
-                && at > 0
-            {
+            if let Some(statement) = written.and_then(Position::statement_index) {
                 let typed = self.chain[level].binders[only.index()];
-                self.chain[level].statements[at as usize - 1] = typed;
+                self.chain[level].statements[statement] = typed;
             }
         }
         Ok(())
