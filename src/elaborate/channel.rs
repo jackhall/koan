@@ -165,8 +165,8 @@ impl<X> Reader<'_, '_, '_, '_, X> {
     fn rigid(&self, index: usize, bound: KType, at: Coordinate) -> TypeAt {
         self.rigid.set(self.rigid.get() + 1);
         edit(&self.variables, self.pass.scratch, |variables| {
-            if !variables.iter().any(|variable| variable.index == index) {
-                variables.push(Variable { index, at });
+            if !variables.iter().any(|variable| variable.level == index) {
+                variables.push(Variable { level: index, at });
             }
         });
         TypeAt::Rigid(self.pass.types.quantified(index, bound))

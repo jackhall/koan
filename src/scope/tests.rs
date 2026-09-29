@@ -266,6 +266,17 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::NoAdmittingCandidate { key, arguments, .. } => {
             E::NoAdmittingCandidate { key, arguments, at }
         }
+        E::Ambiguous {
+            key,
+            arguments,
+            count,
+            ..
+        } => E::Ambiguous {
+            key,
+            arguments,
+            count,
+            at,
+        },
         E::ReturnNeverSatisfied { body, returns, .. } => {
             E::ReturnNeverSatisfied { body, returns, at }
         }

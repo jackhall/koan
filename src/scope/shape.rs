@@ -50,7 +50,7 @@ use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry, display_name};
+use crate::type_lattice::{DeclaredGroup, Interval, KType, TypeRegistry, display_name};
 use crate::values::Knotted;
 
 use super::builtins::Builtins;
@@ -423,6 +423,8 @@ pub struct BodyShape<'graph> {
     registered: &'graph [Cell<Static<'graph, Registered<'graph>>>],
     /// A callable body's load-time type; `Unknown` for every other kind.
     callable: &'graph Cell<Static<'graph, Callable<'graph>>>,
+    /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
+    group_levels: &'graph Cell<&'graph [KType]>,
     /// Why a code shape's code does not type, where the load pass found a refusal in it.
     typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
     /// The value channel's static types and narrowings, fixed by the language's load pass.
@@ -703,6 +705,20 @@ impl<'graph> BodyShape<'graph> {
         self.callable.set(typed);
     }
 
+    /// A callable body's own `FOR ALL` group as its body reads it: the lexical variable each
+    /// canonical variable is, in canonical order. Empty for every other shape, and where the load
+    /// did not type the callable.
+    pub fn group_levels(&self) -> &'graph [KType] {
+        self.group_levels.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_group_levels(&self, levels: &'graph [KType]) {
+        debug_assert_eq!(self.kind, ShapeKind::Callable);
+        debug_assert!(self.group_levels.get().is_empty());
+        self.group_levels.set(levels);
+    }
+
     /// Written once, by the load pass, on a code shape whose code does not type.
     pub fn refuse_typing(&self, refusal: &'graph ShapeError<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Code);
@@ -716,19 +732,19 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// The static type of the part at `site`, where the load pass typed one.
-    pub fn value_type(&self, site: Site) -> Option<KType> {
+    pub fn value_type(&self, site: Site) -> Option<Interval> {
         let parts = self.statics.get()?.parts;
         let index = parts.binary_search_by_key(&site, |(at, _)| *at).ok()?;
         Some(parts[index].1)
     }
 
     /// The static type of statement `index` of [`body`](Self::body).
-    pub fn statement_type(&self, index: usize) -> Option<KType> {
+    pub fn statement_type(&self, index: usize) -> Option<Interval> {
         self.statics.get()?.statements.get(index).copied()
     }
 
     /// The static type of the binder at `slot`.
-    pub fn binder_type(&self, slot: Slot) -> Option<KType> {
+    pub fn binder_type(&self, slot: Slot) -> Option<Interval> {
         self.statics.get()?.binders.get(slot.index()).copied()
     }
 
@@ -966,6 +982,14 @@ pub enum ShapeError<'graph> {
         arguments: &'graph [KType],
         at: SourceRef,
     },
+    /// A keyworded use every candidate of which always admits its arguments' static types, none of
+    /// which ranks first, and no builtin among them.
+    Ambiguous {
+        key: &'graph [KeyElement],
+        arguments: &'graph [KType],
+        count: usize,
+        at: SourceRef,
+    },
     /// A callable body whose static type can never satisfy its declared return.
     ReturnNeverSatisfied {
         body: KType,
@@ -1054,6 +1078,7 @@ impl ShapeError<'_> {
             | ShapeError::NoCandidate { at, .. }
             | ShapeError::Overlaps { at, .. }
             | ShapeError::NoAdmittingCandidate { at, .. }
+            | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
             | ShapeError::RepeatedGuard { at, .. } => *at,
@@ -1200,14 +1225,22 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 display_name(*builtin, self.types, self.symbols)
             ),
             ShapeError::NoAdmittingCandidate { key, arguments, .. } => {
-                write!(f, "no overload of `{}` admits (", self.key(key))?;
-                for (index, argument) in arguments.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{}", display_name(*argument, self.types, self.symbols))?;
-                }
-                f.write_str(")")
+                write!(f, "no overload of `{}` admits ", self.key(key))?;
+                self.arguments(f, arguments)
+            }
+            ShapeError::Ambiguous {
+                key,
+                arguments,
+                count,
+                ..
+            } => {
+                write!(
+                    f,
+                    "ambiguous call of {}: {count} overloads admit ",
+                    self.key(key)
+                )?;
+                self.arguments(f, arguments)?;
+                f.write_str(" and none ranks first")
             }
             ShapeError::ReturnNeverSatisfied { body, returns, .. } => write!(
                 f,
@@ -1230,6 +1263,18 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
 impl ShapeErrorDisplay<'_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
+    }
+
+    /// `arguments` as a parenthesized, comma-separated list of types.
+    fn arguments(&self, f: &mut fmt::Formatter<'_>, arguments: &[KType]) -> fmt::Result {
+        f.write_str("(")?;
+        for (index, argument) in arguments.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", display_name(*argument, self.types, self.symbols))?;
+        }
+        f.write_str(")")
     }
 }
 

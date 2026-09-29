@@ -16,7 +16,7 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
+use crate::type_lattice::{Interval, KType, TypeRegistry, Verdict, display_name};
 use crate::values::{KnottedFamily, Value};
 
 use super::activation::ActivationView;
@@ -158,8 +158,8 @@ impl fmt::Display for ElaborationDisplay<'_, '_> {
 /// A rigid variable of a load-time type, and where the run reads its value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Variable {
-    /// The variable's index: the `Quantified` index the rigid value names it by.
-    pub index: usize,
+    /// The variable's level: the lexical variable the rigid value names it by.
+    pub level: usize,
     /// The coordinate, in the shape the value was typed in, that holds the variable's type.
     pub at: Coordinate,
 }
@@ -181,11 +181,11 @@ pub enum Static<'graph, T> {
 /// What the load fixed about one keyworded use's candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Narrowing<'graph> {
-    /// Every candidate stays, and a call admits them all.
+    /// Every candidate on the list, each *maybe*: a call admits them all.
     Full,
-    /// The candidates that can admit, in list order: every other can never admit what the run
-    /// passes.
-    Kept(&'graph [Candidate]),
+    /// The candidates a call selects among, in list order, each beside its verdict — *always* or
+    /// *maybe*, never *never*: a *maybe* one is admitted, an *always* one taken as admitted.
+    Kept(&'graph [(Candidate, Verdict)]),
     /// The one candidate the load selected: always a [`Candidate::One`], read at this coordinate.
     Selected(Coordinate),
 }
@@ -195,19 +195,21 @@ pub enum Narrowing<'graph> {
 /// narrowing.
 #[derive(Clone, Copy, Debug)]
 pub struct Statics<'graph> {
-    /// Each part the evaluator reads as a value, by site, sorted by site.
-    pub parts: &'graph [(Site, KType)],
-    /// Each statement, by index into the shape's body; `Any` for one that binds nothing typed.
-    pub statements: &'graph [KType],
-    /// Each slot, by index: a value binder's static type, a registration's function type, and for a
-    /// type name the type of the type value it holds.
-    pub binders: &'graph [KType],
+    /// Each part the evaluator reads as a value, by site, sorted by site, beside its static type:
+    /// an interval.
+    pub parts: &'graph [(Site, Interval)],
+    /// Each statement's static type, an interval, by index into the shape's body; at most `Any`
+    /// for one that binds nothing typed.
+    pub statements: &'graph [Interval],
+    /// Each slot's static type, an interval, by index: a value binder's, a registration's function
+    /// type, and for a type name the type of the type value it holds.
+    pub binders: &'graph [Interval],
     /// Each keyworded use's narrowing, parallel to the shape's candidate lists.
     pub narrowings: &'graph [Narrowing<'graph>],
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry
-/// per index up to the largest, each variable's the handle of the type its coordinate holds, and
+/// per level up to the largest, each variable's the handle of the type its coordinate holds, and
 /// `Never` where no variable is listed — a gap no free variable of the rigid value names. `None`
 /// when a coordinate holds anything but a type.
 pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
@@ -215,12 +217,12 @@ pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
     view: &ActivationView<'graph, '_, XF>,
     scratch: BumpAllocator<'x>,
 ) -> Option<BumpVec<'x, KType>> {
-    let len = variables.iter().map(|variable| variable.index + 1).max();
+    let len = variables.iter().map(|variable| variable.level + 1).max();
     let mut bindings = BumpVec::with_capacity_in(len.unwrap_or(0), scratch);
     bindings.resize(len.unwrap_or(0), KType::NEVER);
     for variable in variables {
         match view.read(variable.at) {
-            Value::Type(value) => bindings[variable.index] = value.handle(),
+            Value::Type(value) => bindings[variable.level] = value.handle(),
             _ => return None,
         }
     }

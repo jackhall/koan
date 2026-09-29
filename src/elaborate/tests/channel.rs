@@ -102,7 +102,7 @@ fn rigid(typed: Static<'_, KType>) -> (KType, Vec<usize>) {
     match typed {
         Static::Rigid { value, variables } => (
             value,
-            variables.iter().map(|variable| variable.index).collect(),
+            variables.iter().map(|variable| variable.level).collect(),
         ),
         _ => panic!("a rigid type, not {typed:?}"),
     }
@@ -181,7 +181,7 @@ fn a_for_all_name_is_its_canonical_variable() {
         assert_eq!(
             variables,
             [Variable {
-                index: 0,
+                level: 0,
                 at: super::local(slot)
             }]
         );

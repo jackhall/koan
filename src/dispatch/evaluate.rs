@@ -39,7 +39,7 @@ use crate::scheduler::{
 };
 use crate::scope::{BodyShape, CandidateList, Narrowing, ShapeKind, Site};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{TypeNode, bound_above, satisfied_by, substitute_quantified};
+use crate::type_lattice::{TypeNode, Verdict, bound_above, satisfied_by, substitute_quantified};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value};
 
 use super::builtins::{self, Native, Ran};
@@ -342,16 +342,19 @@ fn call<'graph, 'here>(
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
     let narrowing = at.view.shape().narrowing(Site::of_node(node));
+    let full = || {
+        let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
+        select::selected(at, maybe, &arguments, &scratch)
+    };
     let selection = match narrowing {
-        Narrowing::Full => select::selected(at, list.candidates, &arguments, &scratch),
-        Narrowing::Kept(kept) => select::selected(at, kept, &arguments, &scratch),
+        Narrowing::Full => full(),
+        Narrowing::Kept(kept) => select::selected(at, kept.iter().copied(), &arguments, &scratch),
         Narrowing::Selected(coordinate) => select::chosen(at, coordinate, &arguments, &scratch),
     };
     #[cfg(debug_assertions)]
     if !matches!(narrowing, Narrowing::Full) {
-        let full = select::selected(at, list.candidates, &arguments, &scratch);
         debug_assert!(
-            select::agree(&selection, &full),
+            select::agree(&selection, &full()),
             "static selection runs what full selection would"
         );
     }
@@ -493,7 +496,7 @@ fn returns_within(
     }
 }
 
-/// Check that `value`, unless it is an error value, carries a type under its node's static type.
+/// Check that `value`, unless it is an error value, carries a type within its node's static type.
 #[cfg(debug_assertions)]
 fn carried_under_static<'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
@@ -518,14 +521,16 @@ fn carried_under_static<'graph, 'here>(
     };
     let types = at.program.types();
     let scratch = Bump::new();
+    let carried = value.ktype();
     debug_assert!(
         satisfied_by(
             types,
             &scratch,
-            bound_above(types, &scratch, expected),
-            value.ktype()
-        ),
-        "the carried type lies under the load-time static type"
+            bound_above(types, &scratch, expected.upper),
+            carried
+        ) && (types.contains_rigid(expected.lower)
+            || satisfied_by(types, &scratch, carried, expected.lower)),
+        "the carried type lies within the load-time static type"
     );
 }
 

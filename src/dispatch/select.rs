@@ -7,8 +7,9 @@
 //! lone survivor runs; where several survive, a builtin among them wins, and otherwise the call is
 //! ambiguous, whichever scopes the survivors were declared in.
 //!
-//! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it kept;
-//! where it selected one, the call reads that candidate ([`chosen`]) and admits nothing, save to
+//! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it kept:
+//! it admits each *maybe* one, takes each *always* one as admitted — solving only a quantified
+//! one's group — and ranks. Where it selected one, the call reads that candidate ([`chosen`]) and admits nothing, save to
 //! solve a quantified one's group from the carried types.
 //!
 //! A selected function is called by keyword: its argument record binds each slot to the parameter
@@ -22,7 +23,7 @@ use crate::scope::{Candidate, Coordinate, IMPLICIT};
 use crate::scope::{Canonical, ParameterBinding, Registered};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    KType, TypeRegistry, admit_by_class, quantifier_bounds, satisfied_by, select_by_class,
+    KType, TypeRegistry, Verdict, admit_by_class, quantifier_bounds, satisfied_by, select_by_class,
     shape_return, substitute_quantified,
 };
 use crate::values::{List, Record, TypeValue, Value};
@@ -51,36 +52,43 @@ struct Admitted<'x, 'graph, 'here> {
     solution: &'x [KType],
 }
 
-/// Select among `candidates`, read through `at`'s view, for operands of the types `arguments`.
+/// Select among `candidates`, read through `at`'s view, for operands of the types `arguments`: each
+/// beside the load's verdict, where an *always* one is taken as admitted.
 pub(super) fn selected<'x, 'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
-    candidates: &[Candidate],
+    candidates: impl IntoIterator<Item = (Candidate, Verdict)>,
     arguments: &[KType],
     scratch: &'x Bump,
 ) -> Selection<'x, 'graph, 'here> {
     let types = at.program.types();
     let mut admitted: BumpVec<'_, Admitted<'x, 'graph, 'here>> = BumpVec::new_in(scratch);
-    let mut consider = |callee: KValue<'graph, 'here>| {
+    let mut consider = |callee: KValue<'graph, 'here>, verdict: Verdict| {
         let Some(shape) = registered_shape(callee) else {
             return;
         };
-        if let Some(solution) = admit_by_class(types, scratch, shape, arguments) {
-            admitted.push(Admitted {
+        let solution = if verdict == Verdict::Always && quantifier_bounds(types, shape).is_empty() {
+            Some(&[][..])
+        } else {
+            admit_by_class(types, scratch, shape, arguments)
+        };
+        match solution {
+            Some(solution) => admitted.push(Admitted {
                 callee,
                 shape,
                 solution,
-            });
+            }),
+            None => debug_assert!(verdict != Verdict::Always, "an always candidate admits"),
         }
     };
-    for candidate in candidates {
+    for (candidate, verdict) in candidates {
         match candidate {
-            Candidate::One(coordinate) => consider(at.view.read(*coordinate)),
+            Candidate::One(coordinate) => consider(at.view.read(coordinate), verdict),
             Candidate::Spread(coordinate) => {
-                if let Some(functions) = at.view.read(*coordinate).as_list() {
+                if let Some(functions) = at.view.read(coordinate).as_list() {
                     functions
                         .cells()
                         .iter()
-                        .for_each(|function| consider(*function));
+                        .for_each(|function| consider(*function, Verdict::Maybe));
                 }
             }
         }

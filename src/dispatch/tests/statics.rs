@@ -4,7 +4,7 @@
 use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Program};
 use crate::scope::{BodyShape, Narrowing, Site, Slot};
-use crate::type_lattice::{KType, display_name};
+use crate::type_lattice::{Interval, KType, Verdict, display_name};
 
 use super::{Koan, output, run};
 
@@ -34,7 +34,7 @@ fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
     let typed = shape
         .binder_type(slot(program, shape, name))
         .expect("the load typed the shape");
-    display_name(typed, program.types(), program.symbols()).to_string()
+    display_name(typed.upper, program.types(), program.symbols()).to_string()
 }
 
 /// The static type of the top-level binder `name` of `source`, rendered.
@@ -62,7 +62,13 @@ fn narrowing(source: &str, name: &str) -> String {
         };
         match shape.narrowing(Site::of_node(node.reference())) {
             Narrowing::Full => "full".to_string(),
-            Narrowing::Kept(kept) => format!("kept {}", kept.len()),
+            Narrowing::Kept(kept) => kept.iter().fold("kept".to_string(), |text, (_, verdict)| {
+                text + match verdict {
+                    Verdict::Always => " always",
+                    Verdict::Maybe => " maybe",
+                    Verdict::Never => " never",
+                }
+            }),
             Narrowing::Selected(_) => "selected".to_string(),
         }
     })
@@ -141,7 +147,8 @@ fn a_parameter_is_read_at_its_declared_type() {
             let f = body(program, program.shape(), "f");
             let variable = program.types().quantified(0, KType::ANY);
             assert_eq!(
-                f.binder_type(slot(program, f, "y")),
+                f.binder_type(slot(program, f, "y"))
+                    .map(|typed| typed.upper),
                 Some(variable),
                 "a `FOR ALL` parameter is its group's variable"
             );
@@ -160,7 +167,11 @@ fn a_capture_keeps_its_type_within_a_region_and_is_bounded_across_one() {
             let f = body(program, program.shape(), "f");
             let variable = program.types().quantified(0, KType::ANY);
             let g = body(program, f, "g");
-            assert_eq!(g.binder_type(slot(program, g, "y")), Some(variable));
+            assert_eq!(
+                g.binder_type(slot(program, g, "y"))
+                    .map(|typed| typed.upper),
+                Some(variable)
+            );
             let h = body(program, f, "h");
             assert_eq!(binder(program, h, "z"), "Any");
         },
@@ -178,10 +189,10 @@ fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
         let (_, code) = program.shape().nested_shapes()[0];
         let statics = code.statics().expect("the load typed the code");
         assert_eq!(statics.parts.len(), 1);
-        assert_eq!(statics.parts[0].1, KType::ANY, "a hole is `Any`");
+        assert_eq!(statics.parts[0].1.upper, KType::ANY, "a hole is `Any`");
         assert_eq!(
             statics.statements,
-            [KType::ANY],
+            [Interval::within(KType::ANY)],
             "a hole a `USING` may fill is a candidate the load cannot read"
         );
     });
@@ -219,7 +230,7 @@ fn a_candidate_that_can_never_admit_is_dropped() {
                   EXPR #(PICK x :Bool) -> Str = #(\"bool\")\n\
                   EXPR #(EITHER) -> (Number | Str) = #(1)\n\
                   LET a = (PICK (EITHER))";
-    assert_eq!(narrowing(source, "a"), "kept 2");
+    assert_eq!(narrowing(source, "a"), "kept maybe maybe");
     assert_eq!(run(&format!("{source}\nPRINT a")), "number");
 }
 

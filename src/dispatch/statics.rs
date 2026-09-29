@@ -32,8 +32,8 @@ use crate::scope::{
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    KType, TypeNode, TypeRegistry, admit_by_class, bound_above, join_iter, meet, shape_return,
-    shape_slots,
+    Interval, KType, TypeNode, TypeRegistry, Verdict, admit_by_class, bound_above, join_iter, meet,
+    shape_return, shape_slots,
 };
 use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
 
@@ -160,9 +160,14 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let at = &mut self.chain[level];
         at.parts.sort_unstable_by_key(|(site, _)| *site);
         at.shape.fix_statics(Statics {
-            parts: collect(writer, at.parts.iter().copied()),
-            statements: collect(writer, at.statements.iter().copied()),
-            binders: collect(writer, at.binders.iter().copied()),
+            parts: collect(
+                writer,
+                at.parts
+                    .iter()
+                    .map(|(site, typed)| (*site, Interval::within(*typed))),
+            ),
+            statements: collect(writer, at.statements.iter().copied().map(Interval::within)),
+            binders: collect(writer, at.binders.iter().copied().map(Interval::within)),
             narrowings: collect(writer, at.narrowings.iter().copied()),
         });
     }
@@ -315,7 +320,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 visited?;
                 nested
                     .statement_type(nested.body().len().saturating_sub(1))
-                    .unwrap_or(KType::ANY)
+                    .map_or(KType::ANY, |typed| typed.upper)
             }
             Form::Lambda(node) => Site::of_body(node)
                 .and_then(|site| shape.nested(site))
@@ -565,7 +570,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             return Ok(returned(registered));
         }
         if kept.len() < list.candidates.len() {
-            let candidates = collect(self.writer, kept.iter().map(|(candidate, _)| *candidate));
+            let candidates = collect(
+                self.writer,
+                kept.iter()
+                    .map(|(candidate, _)| (*candidate, Verdict::Maybe)),
+            );
             self.chain[level].narrowings[index] = Narrowing::Kept(candidates);
         }
         let mut returns = BumpVec::with_capacity_in(kept.len(), scratch);
