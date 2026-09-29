@@ -12,15 +12,14 @@ use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    BodyShape, Builtins, Callable, Canonical, Elaboration, IMPLICIT, ParameterBinding, Registered,
-    Registration, Site, Which, is_equal, is_unequal,
+    Callable, Canonical, Elaboration, IMPLICIT, ParameterBinding, Registered, Registration, Site,
+    Which, is_equal, is_unequal,
 };
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, GroupIntern, KType, TypeNode, TypeRegistry};
-use crate::values::Knotted;
 
 use super::expression::{Elaborator, Groups, HeadElement, QuantifierGroup, walk_head};
-use super::reads::{BuiltinsOnly, Reads};
+use super::reads::Reads;
 
 /// The type of the callable whose body sits in `form`, its signature's names read through
 /// `reader` — the activation the form runs in — born for `registration`, or for no registration.
@@ -372,20 +371,4 @@ fn registered_shape<'x>(
     };
     let shape = types.shape_type(scratch, quantifiers, &elements, classes, ret);
     (shape, parameters)
-}
-
-/// The type of the callable whose body sits in `form`, elaborated where the program loads, before
-/// any activation exists: its signature's names read through `builtins` alone, as mentioned in
-/// `shape`, the body the form is written in. `None` where the signature reads a name no builtin
-/// binds, or does not elaborate — what the load-time overlap check skips.
-pub fn static_callable_type<'graph, 'x, X: Knotted>(
-    form: &KExpression<'graph>,
-    shape: &'graph BodyShape<'graph>,
-    builtins: &Builtins<'_, X>,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'x>,
-    registration: Option<&Registration<'_>>,
-) -> Option<Callable<'x>> {
-    let reader = BuiltinsOnly { shape, builtins };
-    callable_type(form, &reader, types, scratch, registration).ok()
 }

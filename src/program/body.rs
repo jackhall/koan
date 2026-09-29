@@ -3,7 +3,8 @@
 //! body's, the code an `EVAL` runs, or a block's, in the frame's own cell.
 //!
 //! The runner claims nothing ahead and no unit has a cell of its own. A unit of type binders is
-//! declared through the elaborator's door and bound in the same step; a module binder's body runs
+//! bound to the handles the load pass fixed for it when they are closed, and otherwise declared
+//! through the elaborator's door and bound in the same step; a module binder's body runs
 //! inline, its activation laid down in the running region and the enclosing body's place kept in a
 //! resident [`Outer`]; a component the knot ties is tied, and a refusal naming eager parts becomes
 //! one evaluation per part, all asked for at one park; a lone `LET` and a statement that binds
@@ -32,8 +33,8 @@ use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::Canonical;
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
+use crate::scope::{Canonical, Static};
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
@@ -553,11 +554,17 @@ fn frame<'graph, 'here>(
                 parameters += 1;
                 *record.field(name.symbol()).ok_or_else(misnamed)?
             }
-            // A type parameter is bound by **name**: the shape's type channel reaches here
-            // symbol-sorted, not in the order the `FOR ALL` group was written, so a positional
-            // read would hand one variable another's solution. A name the map dropped takes its
-            // bound, since there is nothing to solve for. Only a keyworded call's arguments carry
-            // type parameters, so a call by name's that names one does not name its parameters.
+            // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
+            // argument like any other, passed by keyword or by name.
+            BinderSymbol::Type(name) if function.canonical_quantifier(name).is_none() => {
+                parameters += 1;
+                *record.field(name.symbol()).ok_or_else(misnamed)?
+            }
+            // A `FOR ALL` name is bound by **name**: the shape's type channel reaches here
+            // symbol-sorted, not in the order the group was written, so a positional read would
+            // hand one variable another's solution. A name the map dropped takes its bound, since
+            // there is nothing to solve for. Only a keyworded call's arguments carry one, so a
+            // call by name's that names one does not name its parameters.
             BinderSymbol::Type(name) => {
                 if kind == CallKind::Keyworded && carried(name).is_some() {
                     parameters += 1;
@@ -568,8 +575,7 @@ fn frame<'graph, 'here>(
                         .and_then(|solution| solution.get(canonical).copied())
                         .expect("a quantified callee's group is solved"),
                     Some(Canonical::Dropped { bound }) => bound,
-                    // A type-class name the group does not declare has nothing to solve it from.
-                    None => KType::ANY,
+                    None => unreachable!("a name no group declares is a `:Type` parameter"),
                 };
                 Value::Type(TypeValue::new(writer, solved, types))
             }
@@ -897,7 +903,9 @@ fn first_tie<'graph, 'here, 'scratch>(
     }
 }
 
-/// Declare a component of type binders through the elaborator's door, and bind each member.
+/// Bind each member of a component of type binders to the handle the load fixed for it when every
+/// member's is closed, and otherwise declare the component through the elaborator's door, over the
+/// activation.
 fn declared<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     runner: &mut Runner<'graph, 'here>,
@@ -908,10 +916,26 @@ fn declared<'graph, 'here>(
     let program = runner.program;
     let types = program.types();
     let writer = step.writer();
-    let handles =
+    let shape = runner.activation.shape();
+    let mut loaded = BumpVec::with_capacity_in(component.members.len(), &scratch);
+    for slot in component.members {
+        match shape.declared_type(*slot) {
+            Static::Closed(handle) => loaded.push(handle),
+            _ => break,
+        }
+    }
+    let handles: &[KType] = if loaded.len() == component.members.len() {
+        debug_assert_eq!(
+            type_declarations(component, runner.activation, types, &scratch).ok(),
+            Some(&loaded[..]),
+            "the load-time types agree with declaring where they run"
+        );
+        &loaded
+    } else {
         type_declarations(component, runner.activation, types, &scratch).map_err(|error| {
             Stopped::Raised(rendered(writer, error.display(program.symbols(), types)))
-        })?;
+        })?
+    };
     for (slot, handle) in component.members.iter().zip(handles) {
         runner.bind(
             unit,

@@ -195,3 +195,24 @@ pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
     }
     Some(bindings)
 }
+
+impl<'graph, T> Static<'graph, T> {
+    /// The value where it runs, read through `view`: a closed value as it is, and a rigid one with
+    /// its variables replaced by what their coordinates read, through `substitute`. `None` for an
+    /// unknown value, and where a variable's coordinate holds no type.
+    pub fn solved<'x, XF: KnottedFamily<'graph>>(
+        self,
+        view: &ActivationView<'graph, '_, XF>,
+        scratch: BumpAllocator<'x>,
+        substitute: impl FnOnce(T, &[KType]) -> T,
+    ) -> Option<T> {
+        match self {
+            Static::Unknown => None,
+            Static::Closed(value) => Some(value),
+            Static::Rigid { value, variables } => {
+                let bindings = solutions(variables, view, scratch)?;
+                Some(substitute(value, &bindings))
+            }
+        }
+    }
+}

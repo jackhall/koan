@@ -11,9 +11,9 @@
 use crate::elaborate::callable_type;
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
-use crate::scope::{Canonical, ParameterBinding, Registered};
+use crate::scope::{Callable, Canonical, ParameterBinding, Registered};
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{KType, TypeRegistry, substitute_quantified};
 use crate::values::{Link, Weight};
 
 use super::{KActivationView, Knotted, Node, Untieable};
@@ -224,8 +224,8 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     }
 }
 
-/// Read the callable of `body` into `scratch`: its type elaborated from the form it sits in, born
-/// for `registration` or for none, and its captures read through `activation`, each `Member`
+/// Read the callable of `body` into `scratch`: its type as the load fixed it, or — where the load
+/// left it unknown — elaborated from the form it sits in, born for `registration` or for none, and its captures read through `activation`, each `Member`
 /// source minted by `edge`.
 pub(super) fn staged<'graph, 'cell, 'x>(
     body: &'graph BodyShape<'graph>,
@@ -236,8 +236,18 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     edge: impl FnMut(u32) -> Edge,
 ) -> Result<Staged<'graph, 'cell, 'x>, Untieable<'x>> {
     let form = body.form().expect("a callable body sits in its form");
-    let callable =
-        callable_type(form, activation, types, scratch, registration).map_err(Untieable::Type)?;
+    let callable = match loaded(body, registration, activation, types, scratch) {
+        Some(callable) => {
+            debug_assert_eq!(
+                callable_type(form, activation, types, scratch, registration).ok(),
+                Some(callable),
+                "the load-time type agrees with elaborating where the callable is born"
+            );
+            callable
+        }
+        None => callable_type(form, activation, types, scratch, registration)
+            .map_err(Untieable::Type)?,
+    };
     let captures = ClosureBindings::read_captures(body, activation, scratch, edge);
     Ok(Staged {
         shape: body,
@@ -245,6 +255,54 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         quantifier_map: callable.quantifier_map,
         registered: callable.registered,
         captures,
+    })
+}
+
+/// The type the load fixed for the callable of `body`, born for `registration` or for none, read
+/// through `activation`: as it is when closed, and with its variables substituted when rigid, its
+/// runs copied into `scratch` as an elaborated type's are. `None` where the load left the callable
+/// or its registration unknown.
+fn loaded<'graph, 'x>(
+    body: &'graph BodyShape<'graph>,
+    registration: Option<&Registration<'graph>>,
+    activation: &KActivationView<'graph, '_>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'x>,
+) -> Option<Callable<'x>> {
+    let substitute =
+        |value, bindings: &[KType]| substitute_quantified(types, scratch, value, bindings);
+    let callable = body
+        .callable_type()
+        .solved(activation, scratch, |callable, bindings| Callable {
+            ktype: substitute(callable.ktype, bindings),
+            ..callable
+        })?;
+    let registered = match registration {
+        Some(registration) => {
+            let registered = activation
+                .shape()
+                .registered_type(registration.slot)
+                .solved(activation, scratch, |registered, bindings| Registered {
+                    shape: substitute(registered.shape, bindings),
+                    ..registered
+                })?;
+            Some(Registered {
+                shape: registered.shape,
+                quantifier_map: scratch.alloc_slice_copy(registered.quantifier_map),
+                parameters: match registered.parameters {
+                    ParameterBinding::Named(names) => {
+                        ParameterBinding::Named(scratch.alloc_slice_copy(names))
+                    }
+                    ParameterBinding::Operands => ParameterBinding::Operands,
+                },
+            })
+        }
+        None => None,
+    };
+    Some(Callable {
+        ktype: callable.ktype,
+        quantifier_map: scratch.alloc_slice_copy(callable.quantifier_map),
+        registered,
     })
 }
 
@@ -286,9 +344,9 @@ pub(super) fn stage<'graph, 'cell, 'x>(
 
 /// The lambda door: birth the callable whose body `activation`'s shape holds at `site` — a `FN` no
 /// binder names, found by [`Site::of_body`] — as a one-node knot in `writer`'s region. Its type is
-/// elaborated from the form its body sits in, and its captures are read through `activation`,
-/// which finds every one bound because the body runner performs a statement after every unit it
-/// reads. A signature that does not elaborate refuses `Type`, and writes nothing.
+/// read as the tie's is, and its captures are read through `activation`, which finds every one
+/// bound because the body runner performs a statement after every unit it reads. A signature the
+/// load left unknown that does not elaborate refuses `Type`, and writes nothing.
 ///
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
 /// never asks for it, so no capture here is an edge.

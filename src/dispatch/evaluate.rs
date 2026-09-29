@@ -33,7 +33,7 @@ use crate::scheduler::{
 };
 use crate::scope::{BodyShape, CandidateList, ShapeKind, Site};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{TypeNode, satisfied_by};
+use crate::type_lattice::{TypeNode, satisfied_by, substitute_quantified};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value};
 
 use super::builtins::{self, Native, Ran};
@@ -212,7 +212,19 @@ fn leaf<'graph, 'here>(
         },
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
-            let value = match type_expression(part, &at.view, types, &scratch) {
+            // The load fixed the type where it could; only what it left unknown is elaborated here.
+            let loaded = at.view.shape().typed_expression(Site::of(part)).solved(
+                &at.view,
+                &scratch,
+                |value, bindings| substitute_quantified(types, &scratch, value, bindings),
+            );
+            debug_assert!(
+                loaded.is_none() || loaded == type_expression(part, &at.view, types, &scratch).ok(),
+                "the load-time type agrees with elaborating where it runs"
+            );
+            let value = match loaded
+                .map_or_else(|| type_expression(part, &at.view, types, &scratch), Ok)
+            {
                 Ok(handle) => Value::Type(TypeValue::new(writer, handle, types)),
                 Err(refused) => program.error(writer, refused.display(program.symbols(), types)),
             };

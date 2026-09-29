@@ -53,5 +53,5 @@ pub use channel::type_channel;
 pub use declaration::type_declarations;
 pub use expression::{declared_field, type_expression};
 pub use module::self_signature;
-pub use reads::{BuiltinsOnly, Reads, TypeAt};
-pub use signature::{callable_type, static_callable_type};
+pub use reads::{Reads, TypeAt};
+pub use signature::callable_type;

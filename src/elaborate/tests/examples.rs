@@ -10,7 +10,7 @@ use crate::type_lattice::{
 };
 use crate::values::Value;
 
-use super::super::{callable_type, static_callable_type, type_expression};
+use super::super::{callable_type, type_expression};
 use super::{Held, Program, nulls, scalars, with_program};
 use crate::scope::{Canonical, Elaboration, ParameterBinding};
 
@@ -704,38 +704,5 @@ fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
                 .handle
         );
         assert_eq!(registered.parameters, ParameterBinding::Operands);
-    });
-}
-
-#[test]
-fn a_static_callable_type_reads_builtin_names_only() {
-    let source = "\
-NEWTYPE Dist = Number
-LET near = FN EXPR #(NEAR x :Number) -> Number = #(x)
-LET far = FN EXPR #(FAR x :Dist) -> Number = #(x)";
-    with_program(source, scalars, nulls, |program| {
-        let (types, scratch) = (program.types, program.scratch);
-        let (shape, builtins) = (program.activation.shape(), program.activation.builtins());
-        let statically = |name| {
-            let body = program.birth(name);
-            let form = body.form().expect("a callable body sits in a form");
-            let registration = Some(program.registration(body));
-            static_callable_type(form, shape, builtins, types, scratch, registration).map(
-                |callable| {
-                    callable
-                        .registered
-                        .expect("born for its registration")
-                        .shape
-                },
-            )
-        };
-        let near = program
-            .callable("near", true)
-            .expect("the definition elaborates")
-            .registered
-            .expect("born for its registration")
-            .shape;
-        assert_eq!(statically("near"), Some(near));
-        assert_eq!(statically("far"), None, "`Dist` is no builtin");
     });
 }

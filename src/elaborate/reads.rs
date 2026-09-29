@@ -7,9 +7,9 @@
 //! binding holds, as a [`TypeAt`]. An activation answers a type or not one; the load-time reader
 //! may also answer a rigid variable standing for a type a run binds, or that it cannot know.
 
-use crate::scope::{Activation, ActivationView, BodyShape, Builtins, Coordinate};
+use crate::scope::{Activation, ActivationView, BodyShape, Coordinate};
 use crate::type_lattice::KType;
-use crate::values::{Knotted, KnottedFamily, Value};
+use crate::values::{KnottedFamily, Value};
 
 /// What a reader answers for the binding at a coordinate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,28 +59,5 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
 
     fn type_at(&self, at: Coordinate) -> TypeAt {
         ActivationView::type_at(self, at)
-    }
-}
-
-/// A reader that reaches the builtin table and nothing else: what the load-time overlap check
-/// elaborates a registration's signature through, since no activation exists where it runs.
-pub struct BuiltinsOnly<'e, 'graph, 'cell, X> {
-    pub shape: &'graph BodyShape<'graph>,
-    pub builtins: &'e Builtins<'cell, X>,
-}
-
-impl<'graph, X: Knotted> Reads<'graph> for BuiltinsOnly<'_, 'graph, '_, X> {
-    fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.shape
-    }
-
-    fn type_at(&self, at: Coordinate) -> TypeAt {
-        match at {
-            Coordinate::Builtin(index) => match self.builtins.get(index) {
-                Value::Type(value) => TypeAt::Type(value.handle()),
-                _ => TypeAt::NotAType,
-            },
-            _ => TypeAt::NotAType,
-        }
     }
 }
