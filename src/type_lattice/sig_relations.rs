@@ -79,7 +79,7 @@ pub(super) fn admits_function(
 ) -> bool {
     let (
         TypeNode::KFunction {
-            quantifiers,
+            bounds,
             params: declared_params,
             ret: declared_ret,
             ..
@@ -93,7 +93,7 @@ pub(super) fn admits_function(
     else {
         return false;
     };
-    let mut collector = Collector::new(scratch, quantifiers.len());
+    let mut collector = Collector::new(scratch, bounds);
     for (name, slot) in declared_params.iter() {
         let Some(argument) = candidate_params.get(name.symbol()) else {
             return false;

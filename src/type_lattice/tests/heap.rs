@@ -202,7 +202,7 @@ fn interning_and_relations_touch_no_heap() {
     assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);
     assert_eq!(meet(&types, scratch, module, clashing), KType::NEVER);
 
-    let mut collector = Collector::new(scratch, 1);
+    let mut collector = Collector::new(scratch, &[KType::ANY]);
     assert!(
         admits_with(
             &types,
@@ -228,7 +228,7 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(least.solve(&types).is_ok());
-    let mut split = Collector::new(scratch, 1);
+    let mut split = Collector::new(scratch, &[KType::ANY]);
     for argument in [KType::NUMBER, KType::STR] {
         assert!(
             admits_with(

@@ -19,15 +19,22 @@
 //! variable of the other candidate stands for an unknown already and is kept. [`select_by_class`]
 //! runs the elimination over a candidate list: at each class, every candidate another strictly
 //! beats there drops out, and the rest go on.
+//!
+//! [`judge_by_class`] walks the same classes over arguments known only by their static types, each
+//! an [`Interval`], and gives a candidate a [`Verdict`] the load can act on: *never*, *always* or
+//! *maybe*, beside each variable's interval.
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::symbols::TypeSymbol;
 
 use super::handle::KType;
+use super::lattice::meet;
 use super::node::TypeNode;
+use super::order::is_subtype_of;
 use super::registry::{Relation, TypeRegistry};
 use super::shape::{DispatchTokenElement, class_of};
-use super::unify::{Collector, admits_with};
+use super::substitute::{Side, bound_above, read_through};
+use super::unify::{Collector, Interval, admits_with, intervals};
 use super::walk::Variance;
 
 /// An expression shape's parts, read once off its node for a class-by-class walk.
@@ -120,7 +127,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
 
     /// A collector with every fixed variable pinned to what it reads as.
     fn collector(&self, scratch: BumpAllocator<'s>) -> Collector<'s> {
-        let mut collector = Collector::new(scratch, self.fixed.len());
+        let mut collector = Collector::new(scratch, self.declared.bounds);
         for (index, fixed) in self.fixed.iter().enumerate() {
             if let Some(to) = fixed {
                 collector.pin(index, self.declared.bound(index), *to);
@@ -202,6 +209,168 @@ pub fn admit_by_class<'s>(
     Some(scratch.alloc_slice_fill_iter(
         (0..walk.fixed.len()).map(|index| walk.fixed[index].unwrap_or(declared.bound(index))),
     ))
+}
+
+/// What the load knows of a candidate against arguments of known static types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Some slot meets its argument's upper end at `Never`: no call admits.
+    Never,
+    /// Every call admits, whatever it carries within the static types.
+    Always,
+    /// A call may admit.
+    Maybe,
+}
+
+/// A candidate's verdict, beside each variable of its group's interval where every class's static
+/// solve succeeded.
+#[derive(Clone, Copy, Debug)]
+pub struct Judged<'s> {
+    pub verdict: Verdict,
+    pub intervals: Option<&'s [Interval]>,
+}
+
+/// Judge `declared` against one static type per slot, class by class: see README § Priority
+/// classes. No argument's upper end is `Never`.
+///
+/// A class is *never* where some slot, read at its greatest instance, meets its argument's upper
+/// end at `Never`. It admits every call when each slot does: a slot naming its own class's
+/// variables where the class is exact — those arguments exact, the earlier variables they name
+/// pinned — so the static solve is the call's; a slot whose least instance, earlier variables read
+/// at theirs, lies above its argument's upper end; or a bare variable of the class that no other
+/// slot of the class names, whose one contribution lies under its bound.
+pub fn judge_by_class<'s>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    declared: KType,
+    arguments: &[Interval],
+) -> Judged<'s> {
+    let unjudged = Judged {
+        verdict: Verdict::Maybe,
+        intervals: None,
+    };
+    let Some(ranked) = Ranked::of(types, declared) else {
+        return unjudged;
+    };
+    let mut walk = ClassWalk::new(types, scratch, ranked);
+    if walk.slots.len() != arguments.len() {
+        return unjudged;
+    }
+    let arity = ranked.quantifiers.len();
+    let mut known: BumpVec<'s, Option<Interval>> = BumpVec::with_capacity_in(arity, scratch);
+    known.resize(arity, None);
+    let mut uppers = BumpVec::with_capacity_in(arguments.len(), scratch);
+    uppers.extend(arguments.iter().map(|argument| argument.upper));
+    let (mut always, mut solved) = (true, true);
+    for class in 0..ranked.class_count() {
+        let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
+        let own = |variable: usize| walk.first[variable] == Some(class);
+        let in_class = |slot: usize| class_of(ranked.classes, slot) == class;
+        let names = |slot: usize, variable: usize| {
+            types.references_quantifier(scratch, walk.slots[slot], variable)
+        };
+        let pointed = |variable: usize| known[variable].is_some_and(Interval::is_exact);
+        let earlier =
+            |variable: usize, bound: KType| known[variable].unwrap_or(Interval::within(bound));
+        for slot in (0..walk.slots.len()).filter(|slot| in_class(*slot)) {
+            let greatest = read_through(
+                types,
+                scratch,
+                walk.slots[slot],
+                Side::Above,
+                &mut |node| match *node {
+                    TypeNode::Quantified { index, bound } => Some(earlier(index, bound)),
+                    _ => node.rigid_bound().map(Interval::within),
+                },
+            );
+            let upper = bound_above(types, scratch, arguments[slot].upper);
+            if meet(types, scratch, greatest, upper) == KType::NEVER {
+                return Judged {
+                    verdict: Verdict::Never,
+                    intervals: None,
+                };
+            }
+        }
+        let exact_class = (0..walk.slots.len())
+            .filter(|slot| in_class(*slot) && (0..arity).any(|v| own(v) && names(*slot, v)))
+            .all(|slot| {
+                arguments[slot].is_exact()
+                    && (0..arity).all(|v| own(v) || !names(slot, v) || pointed(v))
+            });
+        for slot in (0..walk.slots.len()).filter(|slot| in_class(*slot)) {
+            if !always {
+                break;
+            }
+            if exact_class && (0..arity).any(|v| own(v) && names(slot, v)) {
+                continue;
+            }
+            let least =
+                read_through(
+                    types,
+                    scratch,
+                    walk.slots[slot],
+                    Side::Below,
+                    &mut |node| match *node {
+                        TypeNode::Quantified { index, bound } if !own(index) => {
+                            Some(earlier(index, bound))
+                        }
+                        _ => None,
+                    },
+                );
+            always = if !types.contains_quantified(least) {
+                is_subtype_of(types, scratch, arguments[slot].upper, least)
+            } else if let TypeNode::Quantified { index, bound } = types.node(least)
+                && own(index)
+                && !(0..walk.slots.len())
+                    .any(|other| other != slot && in_class(other) && names(other, index))
+            {
+                is_subtype_of(types, scratch, arguments[slot].upper, bound)
+            } else {
+                false
+            };
+        }
+        match walk.admit_class(types, scratch, &uppers, class) {
+            Some(solution) => {
+                let mut positions = BumpVec::new_in(scratch);
+                positions.extend(
+                    (0..walk.slots.len())
+                        .filter(|slot| in_class(*slot))
+                        .map(|slot| walk.slots[slot]),
+                );
+                let reached = intervals(
+                    types,
+                    scratch,
+                    &positions,
+                    ranked.bounds,
+                    &solution,
+                    exact_class,
+                );
+                for variable in (0..arity).filter(|variable| own(*variable)) {
+                    known[variable] = Some(reached[variable]);
+                }
+                walk.fix(class, |variable| solution[variable]);
+            }
+            None => {
+                always = false;
+                solved = false;
+                walk.fix(class, |variable| ranked.bound(variable));
+            }
+        }
+    }
+    Judged {
+        verdict: if always {
+            Verdict::Always
+        } else {
+            Verdict::Maybe
+        },
+        intervals: solved.then(|| {
+            &*scratch.alloc_slice_fill_iter(
+                (0..arity).map(|variable| {
+                    known[variable].unwrap_or(Interval::point(ranked.bound(variable)))
+                }),
+            )
+        }),
+    }
 }
 
 /// Whether `declared` admits `candidate`'s slot types class by class — `declared`'s variables

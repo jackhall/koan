@@ -94,7 +94,7 @@ fn least_solves_an_unreached_variable_to_never() {
         [KType::NUMBER, KType::NEVER]
     );
     assert_eq!(
-        solve(Collector::new(region, 2)),
+        solve(Collector::new(region, &[KType::ANY; 2])),
         [KType::NUMBER, KType::ANY]
     );
 }

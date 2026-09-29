@@ -32,7 +32,7 @@ pub fn satisfies<X: Knotted>(
 ) -> bool {
     let carried = value.ktype();
     if types.contains_quantified(slot) {
-        let mut collector = Collector::new(scratch, 0);
+        let mut collector = Collector::new(scratch, &[]);
         return admits_with(types, scratch, slot, carried, Variance::Co, &mut collector).is_ok();
     }
     satisfied_by(types, scratch, slot, carried)

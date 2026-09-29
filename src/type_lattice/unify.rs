@@ -15,6 +15,9 @@
 //! A construction collects through [`Collector::least`], whose unreached variables solve to `Never`
 //! rather than their bound: a family is covariant in its parameters, so its least instance is the
 //! one the payload asks for.
+//!
+//! [`intervals`] reads a solve over static types as an [`Interval`] per variable: where every
+//! solution a solve over arguments within those static types can reach lies.
 
 use crate::memory::{BumpAllocator, BumpVec};
 
@@ -24,6 +27,7 @@ use super::order::{dominant, is_subtype_of};
 use super::registry::TypeRegistry;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
+use super::walk::unary::{LEAF, Visit, visit_in};
 
 /// Why a carried type does not fill a declared position. A contribution set rides as a slice of
 /// the collector that held it.
@@ -55,12 +59,128 @@ pub enum UnifyFailure<'c> {
     },
 }
 
+/// A range of types: every solution a solve can reach over arguments within the static types it
+/// collected, or every type a run carries where a static type is read. An end is a bound, not a
+/// solution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Interval {
+    pub lower: KType,
+    pub upper: KType,
+}
+
+impl Interval {
+    /// Anything under `bound`.
+    pub fn within(bound: KType) -> Self {
+        Interval {
+            lower: KType::NEVER,
+            upper: bound,
+        }
+    }
+
+    /// Exactly `kt`.
+    pub fn point(kt: KType) -> Self {
+        Interval {
+            lower: kt,
+            upper: kt,
+        }
+    }
+
+    pub fn is_exact(self) -> bool {
+        self.lower == self.upper
+    }
+}
+
+/// Each variable's interval, from the `solution` a solve over the positions `declared` gave, the
+/// group bounded by `bounds`. Where every argument naming a variable was `exact`, each interval is
+/// its solution. Otherwise the upper end is the solution where some covariant position under no
+/// union names the variable — every admitted argument reaches one — and the bound elsewhere; and
+/// the lower end is `Never` where some covariant position names it, and the solution elsewhere.
+pub fn intervals<'s>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    declared: &[KType],
+    bounds: &[KType],
+    solution: &[KType],
+    exact: bool,
+) -> BumpVec<'s, Interval> {
+    let mut out = BumpVec::with_capacity_in(solution.len(), scratch);
+    out.extend(solution.iter().enumerate().map(|(index, solved)| {
+        if exact {
+            return Interval::point(*solved);
+        }
+        let mut names = Names::default();
+        for position in declared {
+            names.over(types, scratch, *position, index, Variance::Co, false);
+        }
+        Interval {
+            lower: if names.named { KType::NEVER } else { *solved },
+            upper: if names.reached {
+                *solved
+            } else {
+                bounds.get(index).copied().unwrap_or(KType::ANY)
+            },
+        }
+    }));
+    out
+}
+
+/// Where one variable of a declared group stands at covariant positions: whether one names it, and
+/// whether one under no union does.
+#[derive(Default)]
+struct Names {
+    named: bool,
+    reached: bool,
+}
+
+impl Names {
+    /// Read `kt`, at `variance` and under a union or not, for the `index`-th variable. A nested
+    /// binder's group shadows the declared one.
+    fn over(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        kt: KType,
+        index: usize,
+        variance: Variance,
+        under_union: bool,
+    ) {
+        visit_in(
+            types,
+            scratch,
+            kt,
+            LEAF,
+            variance,
+            &mut |_, node, context| {
+                if node.binds_quantifiers() {
+                    return Visit::Skip;
+                }
+                match *node {
+                    TypeNode::Quantified { index: found, .. } => {
+                        if found == index && context.variance() == Variance::Co {
+                            self.named = true;
+                            self.reached |= !under_union;
+                        }
+                        Visit::Skip
+                    }
+                    TypeNode::Union { members } => {
+                        for member in members {
+                            self.over(types, scratch, *member, index, context.variance(), true);
+                        }
+                        Visit::Skip
+                    }
+                    _ => Visit::Descend,
+                }
+            },
+        );
+    }
+}
+
 /// What a quantified position's arguments contributed, per variable. Every cell lives in the
 /// scratch allocator the collector was built over.
 ///
 /// Cells grow on demand, so a walk that does not know the enclosing group's arity up front can
-/// still collect; [`new`](Collector::new) takes the arity a call knows, so a variable no argument
-/// reached is visible as bound-only.
+/// still collect; [`new`](Collector::new) takes the bounds of the group a call knows, so a variable
+/// no argument reached solves to its bound.
 pub struct Collector<'s> {
     scratch: BumpAllocator<'s>,
     lower: BumpVec<'s, BumpVec<'s, KType>>,
@@ -81,22 +201,10 @@ struct Mark {
 }
 
 impl<'s> Collector<'s> {
-    /// One empty cell per quantifier — what a call collects its arguments into.
-    pub fn new(scratch: BumpAllocator<'s>, arity: usize) -> Self {
-        let cells = || {
-            let mut cells = BumpVec::with_capacity_in(arity, scratch);
-            cells.resize_with(arity, || BumpVec::new_in(scratch));
-            cells
-        };
-        let mut bounds = BumpVec::with_capacity_in(arity, scratch);
-        bounds.resize(arity, KType::ANY);
-        Collector {
-            scratch,
-            lower: cells(),
-            upper: cells(),
-            bounds,
-            trail: BumpVec::new_in(scratch),
-        }
+    /// One empty cell per variable of a group bounded by `bounds` — what a call collects its
+    /// arguments into. A variable no contribution reaches solves to its bound.
+    pub fn new(scratch: BumpAllocator<'s>, bounds: &[KType]) -> Self {
+        Self::over(scratch, bounds.iter().copied())
     }
 
     /// One empty cell per quantifier, each bounded by [`KType::NEVER`] until a contribution reaches
@@ -104,9 +212,26 @@ impl<'s> Collector<'s> {
     /// so its least instance is the one the payload asks for, and a parameter the payload never
     /// reaches solves to `Never`.
     pub fn least(scratch: BumpAllocator<'s>, arity: usize) -> Self {
-        let mut collector = Self::new(scratch, arity);
-        collector.bounds.fill(KType::NEVER);
-        collector
+        Self::over(scratch, std::iter::repeat_n(KType::NEVER, arity))
+    }
+
+    /// One empty cell per bound, each cell holding its bound.
+    fn over(scratch: BumpAllocator<'s>, bounds: impl ExactSizeIterator<Item = KType>) -> Self {
+        let arity = bounds.len();
+        let cells = || {
+            let mut cells = BumpVec::with_capacity_in(arity, scratch);
+            cells.resize_with(arity, || BumpVec::new_in(scratch));
+            cells
+        };
+        let mut held = BumpVec::with_capacity_in(arity, scratch);
+        held.extend(bounds);
+        Collector {
+            scratch,
+            lower: cells(),
+            upper: cells(),
+            bounds: held,
+            trail: BumpVec::new_in(scratch),
+        }
     }
 
     /// Where the history stands now.

@@ -15,6 +15,7 @@ use crate::type_lattice::kind::KKind;
 use crate::type_lattice::lattice::{join, meet};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::order::{is_more_specific_than, is_subtype_of, satisfied_by};
+use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{
     Members, SigSchema, canonical_overloads, is_shape, shape_classes, shape_keys_equal,
@@ -29,7 +30,7 @@ use crate::type_lattice::substitute::{
     slot_more_specific_or_equal, slot_satisfied_by, slot_types_equal, substitute_quantified,
     substitute_sig_members,
 };
-use crate::type_lattice::unify::{Collector, admits_with};
+use crate::type_lattice::unify::{Collector, Interval, admits_with, intervals};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::walk::unary::{LEAF, Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
@@ -636,7 +637,7 @@ fn admits_tuple(
     shape: KType,
     arguments: &[KType],
 ) -> bool {
-    let mut collector = Collector::new(scratch, shape_quantifiers(shape, types).len());
+    let mut collector = Collector::new(scratch, quantifier_bounds(types, shape));
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
         if admits_with(
             types,
@@ -667,7 +668,7 @@ proptest! {
         if types.contains_quantified(a) {
             return Ok(());
         }
-        let mut collector = Collector::new(scratch, 0);
+        let mut collector = Collector::new(scratch, &[]);
         let admitted = admits_with(&types, scratch, a, b, Variance::Co, &mut collector).is_ok();
         prop_assert_eq!(admitted, satisfied_by(&types, scratch, a, b));
     }
@@ -685,13 +686,13 @@ proptest! {
         // `a`'s members and the list reaches its member-by-member fallback.
         let variable = types.list(types.quantified(0, KType::ANY));
         for declared in [a, types.union_of(scratch, &[a, variable])] {
-            let mut through_bound = Collector::new(scratch, 1);
+            let mut through_bound = Collector::new(scratch, &[KType::ANY]);
             if admits_with(&types, scratch, declared, bound, Variance::Co, &mut through_bound)
                 .is_err()
             {
                 continue;
             }
-            let mut collector = Collector::new(scratch, 1);
+            let mut collector = Collector::new(scratch, &[KType::ANY]);
             prop_assert!(
                 admits_with(&types, scratch, declared, b, Variance::Co, &mut collector).is_ok(),
                 "a position its bound fills refused the variable",
@@ -713,7 +714,7 @@ proptest! {
         if slots.len() != arguments.len() || !shape_keys_equal(a, b, &types) {
             return Ok(());
         }
-        let mut collector = Collector::new(scratch, bounds.len());
+        let mut collector = Collector::new(scratch, bounds);
         for (slot, argument) in slots.iter().zip(arguments.iter()) {
             if admits_with(&types, scratch, *slot, *argument, Variance::Co, &mut collector).is_err() {
                 return Ok(());
@@ -728,7 +729,7 @@ proptest! {
             prop_assert!(satisfied_by(&types, scratch, solved, *argument));
         }
         // Admission does not depend on the order the slots are read.
-        let mut backwards = Collector::new(scratch, bounds.len());
+        let mut backwards = Collector::new(scratch, bounds);
         for (slot, argument) in slots.iter().zip(arguments.iter()).rev() {
             prop_assert!(
                 admits_with(&types, scratch, *slot, *argument, Variance::Co, &mut backwards).is_ok()
@@ -766,6 +767,167 @@ proptest! {
             }
             // Every solution lies under its variable's declared bound.
             prop_assert!(is_subtype_of(&types, scratch, *solved, bound));
+        }
+    }
+}
+
+/// Static arguments for `a`, one per slot, beside carried arguments within them. Slot `k`'s static
+/// type is drawn by `picks[k]` from `a`'s own slot with its group erased, from one of `b`'s so
+/// erased, or from the argument pool, and is exact where the pick says; its carried type is the
+/// static type itself where exact, else its meet with a drawn type. `None` where some argument is
+/// `Never`.
+fn static_and_carried(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: KType,
+    b: KType,
+    picks: &[(u8, bool)],
+) -> Option<(Vec<Interval>, Vec<KType>)> {
+    let own: Vec<KType> = shape_slots(erase_quantified(types, scratch, a), types).collect();
+    let other: Vec<KType> = shape_slots(erase_quantified(types, scratch, b), types).collect();
+    let mut runner = proptest::test_runner::TestRunner::deterministic();
+    let mut draw = || {
+        arb_arguments(world(), own.len())
+            .new_tree(&mut runner)
+            .expect("the argument strategy produces a tuple")
+            .current()
+    };
+    let (pool, drawn) = (draw(), draw());
+    let mut arguments = Vec::with_capacity(own.len());
+    let mut carried = Vec::with_capacity(own.len());
+    for (k, (source, exact)) in picks.iter().take(own.len()).enumerate() {
+        let static_type = match source {
+            0 => own[k],
+            1 if !other.is_empty() => other[k % other.len()],
+            _ => pool[k],
+        };
+        let (argument, one) = if *exact {
+            (Interval::point(static_type), static_type)
+        } else {
+            (
+                Interval::within(static_type),
+                meet(types, scratch, static_type, drawn[k]),
+            )
+        };
+        if argument.upper == KType::NEVER || one == KType::NEVER {
+            return None;
+        }
+        arguments.push(argument);
+        carried.push(one);
+    }
+    Some((arguments, carried))
+}
+
+/// One pick per slot for [`static_and_carried`], weighted toward the candidate's own slot so the
+/// static solve succeeds often enough for the laws to bite.
+fn picks() -> impl Strategy<Value = Vec<(u8, bool)>> {
+    let source = prop_oneof![3 => Just(0u8), 1 => Just(1u8), 1 => Just(2u8)];
+    prop::collection::vec((source, any::<bool>()), 4)
+}
+
+/// Whether `kt` lies within `interval`.
+fn within(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    kt: KType,
+    interval: Interval,
+) -> bool {
+    is_subtype_of(types, scratch, interval.lower, kt)
+        && is_subtype_of(types, scratch, kt, interval.upper)
+}
+
+/// `shape`'s group solved jointly over one argument per slot, or `None`.
+fn solve_jointly<'s>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    shape: KType,
+    arguments: &[KType],
+) -> Option<BumpVec<'s, KType>> {
+    let mut collector = Collector::new(scratch, quantifier_bounds(types, shape));
+    for (slot, argument) in shape_slots(shape, types).zip(arguments) {
+        admits_with(
+            types,
+            scratch,
+            slot,
+            *argument,
+            Variance::Co,
+            &mut collector,
+        )
+        .ok()?;
+    }
+    collector.solve(types).ok()
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// For carried types each within its static interval, every solution over the carried types
+    /// lies in the interval reported over the static ones.
+    #[test]
+    fn a_carried_solution_lies_in_its_static_interval(
+        a in shape(),
+        b in shape(),
+        picks in picks(),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &picks) else {
+            return Ok(());
+        };
+        let uppers: Vec<KType> = arguments.iter().map(|argument| argument.upper).collect();
+        let (Some(statics), Some(solution)) = (
+            solve_jointly(&types, scratch, a, &uppers),
+            solve_jointly(&types, scratch, a, &carried),
+        ) else {
+            return Ok(());
+        };
+        let slots: Vec<KType> = shape_slots(a, &types).collect();
+        let all_exact = arguments.iter().all(|argument| argument.is_exact());
+        let reported = intervals(
+            &types,
+            scratch,
+            &slots,
+            quantifier_bounds(&types, a),
+            &statics,
+            all_exact,
+        );
+        for (solved, interval) in solution.iter().zip(reported.iter()) {
+            prop_assert!(
+                within(&types, scratch, *solved, *interval),
+                "a carried solution left its static interval",
+            );
+        }
+    }
+
+    /// A verdict holds of every call within the static types: *always* admits, *never* does not,
+    /// and a solution lies in the intervals judging reported.
+    #[test]
+    fn a_verdict_holds_of_every_call_within_its_static_types(
+        a in shape(),
+        b in shape(),
+        picks in picks(),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &picks) else {
+            return Ok(());
+        };
+        let judged = judge_by_class(&types, scratch, a, &arguments);
+        let admitted = admit_by_class(&types, scratch, a, &carried);
+        match judged.verdict {
+            Verdict::Always => prop_assert!(admitted.is_some(), "an always candidate refused"),
+            Verdict::Never => prop_assert!(admitted.is_none(), "a never candidate admitted"),
+            Verdict::Maybe => {}
+        }
+        if let (Some(reported), Some(solution)) = (judged.intervals, admitted) {
+            for (solved, interval) in solution.iter().zip(reported) {
+                prop_assert!(
+                    within(&types, scratch, *solved, *interval),
+                    "a class-by-class solution left its judged interval",
+                );
+            }
         }
     }
 }

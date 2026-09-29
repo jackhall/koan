@@ -93,7 +93,7 @@ fn a_twice_used_variable_takes_the_maximum_or_fails() {
     // `Ok` carries the solution; `Err` carries the index of a variable with no maximum, or `None`
     // for any other failure.
     let solve = |arguments: [KType; 2]| {
-        let mut collector = Collector::new(region, 1);
+        let mut collector = Collector::new(region, &[KType::ANY]);
         for (slot, argument) in slots.iter().zip(arguments.iter()) {
             if admits_with(
                 &types,
@@ -622,7 +622,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let list_of_number = types.list(KType::NUMBER);
     let carried = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, list_of_number);
     let declared = types.list(types.quantified(0, KType::ANY));
-    let mut collector = Collector::new(region, 1);
+    let mut collector = Collector::new(region, &[KType::ANY]);
     assert_eq!(
         admits_with(
             &types,
@@ -669,7 +669,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let spanning_bound = types.union_of(region, &[list_of_number, KType::STR]);
     let spanning = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, spanning_bound);
     let either = types.union_of(region, &[declared, KType::STR]);
-    let mut collector = Collector::new(region, 1);
+    let mut collector = Collector::new(region, &[KType::ANY]);
     assert_eq!(
         admits_with(
             &types,
@@ -703,7 +703,7 @@ fn a_carried_deferred_return_fills_no_slot_it_is_not_under() {
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let deferred = types.deferred_return(DeferredReturnSurface::Type(name));
     let admits = |declared: KType| {
-        let mut collector = Collector::new(region, 1);
+        let mut collector = Collector::new(region, &[KType::ANY]);
         admits_with(
             &types,
             region,

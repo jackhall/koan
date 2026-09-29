@@ -109,7 +109,7 @@ fn no_solve_binds_a_lexical_variable() {
     let elt = world.lexical(0, "Elt", KType::NUMBER);
     assert!(world.types.contains_rigid(elt));
     assert!(!world.types.contains_quantified(elt));
-    let mut collector = Collector::new(world.region, 0);
+    let mut collector = Collector::new(world.region, &[]);
     assert_eq!(
         admits_with(
             &world.types,
@@ -122,7 +122,7 @@ fn no_solve_binds_a_lexical_variable() {
         Ok(())
     );
     assert!(collector.solve(&world.types).unwrap().is_empty());
-    let mut collector = Collector::new(world.region, 0);
+    let mut collector = Collector::new(world.region, &[]);
     assert!(
         admits_with(
             &world.types,

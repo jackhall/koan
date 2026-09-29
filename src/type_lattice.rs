@@ -77,7 +77,9 @@ pub use lattice::{join, join_iter, meet};
 pub use node::{NodeSchema, TypeNode};
 pub use operators::{FoldDirection, ReductionMode};
 pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
-pub use ranking::{admit_by_class, class_at_least, select_by_class};
+pub use ranking::{
+    Judged, Verdict, admit_by_class, class_at_least, judge_by_class, select_by_class,
+};
 pub use record::Record;
 pub use registry::{GroupIntern, TypeRegistry};
 pub use render::{
@@ -95,10 +97,10 @@ pub use sig_relations::{
     sig_subtype,
 };
 pub use substitute::{
-    bound_above, canonicalize_binder, erase_quantified, erase_rigid, instantiate_quantified,
-    quantifier_bounds, slot_more_specific_or_equal, slot_satisfied_by, slot_types_equal,
-    substitute_levels, substitute_quantified, substitute_sig_members,
+    Side, bound_above, canonicalize_binder, erase_quantified, erase_rigid, instantiate_quantified,
+    quantifier_bounds, read_through, slot_more_specific_or_equal, slot_satisfied_by,
+    slot_types_equal, substitute_levels, substitute_quantified, substitute_sig_members,
 };
-pub use unify::{Collector, UnifyFailure, admits_with};
+pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;
 pub use window::{RecursiveGroupWindow, RelativeSchema, SealedGroup};

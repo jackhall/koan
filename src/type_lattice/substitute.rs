@@ -14,6 +14,7 @@ use super::node::TypeNode;
 use super::order::is_subtype_of;
 use super::registry::TypeRegistry;
 use super::schema::{Members, member};
+use super::unify::Interval;
 use super::walk::Variance;
 use super::walk::unary::{LEAF, Rebuild, Step, UnionDoor, Visit, rebuild, visit};
 
@@ -156,6 +157,32 @@ pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
 /// [`erase_rigid`] reads a variable as its bound everywhere, which at a contravariant position puts
 /// the result *below* an instance whose variable is bound lower.
 pub fn bound_above(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
+    read_through(types, scratch, kt, Side::Above, &mut |node| {
+        node.rigid_bound().map(Interval::within)
+    })
+}
+
+/// Which extreme a read through intervals takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// Above every instance: a variable's upper end at a covariant position, its lower end at a
+    /// contravariant one.
+    Above,
+    /// Below every instance: its lower end at a covariant position, its upper end at a
+    /// contravariant one.
+    Below,
+}
+
+/// `kt` read through intervals: each free variable — a `Quantified` under none of `kt`'s own
+/// binders, a lexical variable, an `AbstractType` — that `interval` answers for replaced by the end
+/// `side` takes at its position; one it answers `None` for is kept. A signature is opaque.
+pub fn read_through<'run>(
+    types: &TypeRegistry<'run>,
+    scratch: BumpAllocator<'_>,
+    kt: KType,
+    side: Side,
+    interval: &mut impl FnMut(&TypeNode<'run>) -> Option<Interval>,
+) -> KType {
     if !types.contains_rigid(kt) {
         return kt;
     }
@@ -165,14 +192,18 @@ pub fn bound_above(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
         kt,
         OVER_QUANTIFIERS,
         &mut |_, node, context| {
-            let bound = match *node {
-                TypeNode::Quantified { bound, .. } if context.binder_depth() == 0 => bound,
-                TypeNode::AbstractType { bound, .. } | TypeNode::Lexical { bound, .. } => bound,
-                _ => return None,
+            let free = match *node {
+                TypeNode::Quantified { .. } => context.binder_depth() == 0,
+                TypeNode::Lexical { .. } | TypeNode::AbstractType { .. } => true,
+                _ => false,
             };
-            Some(match context.variance() {
-                Variance::Co => bound,
-                Variance::Contra => KType::NEVER,
+            if !free {
+                return None;
+            }
+            let ends = interval(node)?;
+            Some(match (side, context.variance()) {
+                (Side::Above, Variance::Co) | (Side::Below, Variance::Contra) => ends.upper,
+                _ => ends.lower,
             })
         },
     )

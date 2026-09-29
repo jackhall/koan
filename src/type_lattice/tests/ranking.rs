@@ -8,11 +8,11 @@
 //! table's reuse, and the two signature relations a ranking refuses in.
 
 use crate::memory::{Bump, BumpAllocator};
-use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::node::TypeNode;
-use crate::type_lattice::ranking::{admit_by_class, select_by_class};
+use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, select_by_class};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_name;
 use crate::type_lattice::schema::SchemaDraft;
@@ -20,6 +20,7 @@ use crate::type_lattice::shape::{DispatchTokenElement, RawRank, Specificity, den
 use crate::type_lattice::sig_relations::{
     SigSubtypeFailure, meet_schemas, shape_specificity, sig_subtype,
 };
+use crate::type_lattice::unify::Interval;
 
 /// One position of a test head: a keyword by its text, or a slot's type.
 enum Part<'a> {
@@ -60,6 +61,11 @@ impl<'r> World<'r> {
 
     /// The shape `FOR ALL #[<group>] #(<parts>) -> Any` under `classes`.
     fn head(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8]) -> KType {
+        self.head_to(group, parts, classes, KType::ANY)
+    }
+
+    /// The shape `FOR ALL #[<group>] #(<parts>) -> <ret>` under `classes`.
+    fn head_to(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8], ret: KType) -> KType {
         let names: Vec<TypeSymbol> = group.iter().map(|text| self.name(text)).collect();
         let elements: Vec<DispatchTokenElement> = parts
             .iter()
@@ -71,8 +77,22 @@ impl<'r> World<'r> {
             })
             .collect();
         self.types
-            .shape_type(self.region, &names, &elements, classes, KType::ANY)
+            .shape_type(self.region, &names, &elements, classes, ret)
             .handle
+    }
+
+    /// `FN :{v :<param>} -> Null`.
+    fn handler(&self, param: KType) -> KType {
+        let v = BinderSymbol::declared("v", &self.symbols).expect("a bindable token");
+        self.types
+            .function_type(self.region, &[], &[(v, param)], KType::NULL)
+            .handle
+    }
+
+    /// `shape`'s verdict over `arguments`, and its intervals.
+    fn judge(&self, shape: KType, arguments: &[Interval]) -> (Verdict, Option<Vec<Interval>>) {
+        let judged = judge_by_class(&self.types, self.region, shape, arguments);
+        (judged.verdict, judged.intervals.map(<[Interval]>::to_vec))
     }
 
     /// The survivors of selection over `shapes`.
@@ -367,5 +387,107 @@ fn a_ranking_disagreement_refuses_in_the_signature_relations() {
             signature(ranked)
         )
         .is_none()
+    );
+}
+
+/// `FOR ALL #[Elt] #(ONLY x :Elt) -> Elt`: a bare slot admits whatever its argument carries, and
+/// its interval is exact where the argument is.
+#[test]
+fn a_bare_variable_always_admits() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let only = world.head_to(
+        &["Elt"],
+        &[Kw("ONLY"), Slot(world.var(0))],
+        &[],
+        world.var(0),
+    );
+    assert_eq!(
+        world.judge(only, &[Interval::within(KType::NUMBER)]),
+        (Verdict::Always, Some(vec![Interval::within(KType::NUMBER)]))
+    );
+    assert_eq!(
+        world.judge(only, &[Interval::point(KType::NUMBER)]),
+        (Verdict::Always, Some(vec![Interval::point(KType::NUMBER)]))
+    );
+}
+
+/// `FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt)`: `y` is read at `Elt`'s least instance for *always*
+/// and its greatest for *never*.
+#[test]
+fn pair_is_judged_through_its_first_class() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let number_or_str = world.union(&[KType::NUMBER, KType::STR]);
+    let parts = [
+        Kw("PAIR"),
+        Slot(world.var(0)),
+        Kw("WITH"),
+        Slot(world.var(0)),
+    ];
+    let pair = world.head(&["Elt"], &parts, &[]);
+    let number = Interval::point(KType::NUMBER);
+    assert_eq!(world.judge(pair, &[number, number]).0, Verdict::Always);
+    let either = Interval::within(number_or_str);
+    assert_eq!(
+        world.judge(pair, &[either, either]),
+        (Verdict::Maybe, Some(vec![either]))
+    );
+    assert_eq!(
+        world.judge(pair, &[number, Interval::point(KType::STR)]).0,
+        Verdict::Never
+    );
+    // Ranked together, the two slots name one variable of one class.
+    let joint = world.head(&["Elt"], &parts, &[0, 0]);
+    assert_eq!(world.judge(joint, &[either, either]).0, Verdict::Maybe);
+    assert_eq!(world.judge(joint, &[number, number]).0, Verdict::Always);
+}
+
+/// `FOR ALL #[Elt] #(FEED x :Elt TO f :<slot>)`: a later slot reads `Elt` at its least instance
+/// over `Elt`'s interval — its lower end at a covariant position, its upper end at a contravariant
+/// one.
+#[test]
+fn a_later_slot_reads_an_earlier_variable_at_its_least_instance() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let feed = |slot| {
+        world.head(
+            &["Elt"],
+            &[Kw("FEED"), Slot(world.var(0)), Kw("TO"), Slot(slot)],
+            &[],
+        )
+    };
+    let within = Interval::within(KType::NUMBER);
+    let point = Interval::point(KType::NUMBER);
+    let handler = feed(world.handler(world.var(0)));
+    let numbers = Interval::within(world.handler(KType::NUMBER));
+    assert_eq!(world.judge(handler, &[within, numbers]).0, Verdict::Always);
+    assert_eq!(world.judge(handler, &[point, numbers]).0, Verdict::Always);
+    let list = feed(world.types.list(world.var(0)));
+    let list_of_number = Interval::within(world.types.list(KType::NUMBER));
+    assert_eq!(
+        world.judge(list, &[within, list_of_number]).0,
+        Verdict::Maybe
+    );
+    assert_eq!(
+        world.judge(list, &[point, list_of_number]).0,
+        Verdict::Always
+    );
+}
+
+/// A slot that is a lexical variable admits only what lies under it.
+#[test]
+fn a_lexical_slot_admits_what_lies_under_it() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let elt = world.types.lexical(0, world.name("Elt"), KType::NUMBER);
+    let inner = world.head(&[], &[Kw("INNER"), Slot(elt)], &[]);
+    assert_eq!(
+        world.judge(inner, &[Interval::within(elt)]),
+        (Verdict::Always, Some(vec![]))
+    );
+    assert_eq!(
+        world.judge(inner, &[Interval::point(KType::NUMBER)]).0,
+        Verdict::Maybe
     );
 }

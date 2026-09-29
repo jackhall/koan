@@ -480,9 +480,9 @@ fn frame<'graph, 'here>(
     let shape = function.shape();
     let TypeNode::KFunction {
         quantifiers,
+        bounds,
         params,
         ret,
-        ..
     } = types.node(function.ktype())
     else {
         unreachable!("a function's type is a function type")
@@ -515,7 +515,7 @@ fn frame<'graph, 'here>(
         }
         CallKind::Keyworded => {}
         CallKind::ByName => {
-            let mut collector = Collector::new(scratch, quantifiers.len());
+            let mut collector = Collector::new(scratch, bounds);
             for (parameter, declared) in params.iter() {
                 let argument = record.field(parameter.symbol()).ok_or_else(misnamed)?;
                 admits_with(
