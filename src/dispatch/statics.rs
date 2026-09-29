@@ -24,8 +24,8 @@
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
 //! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its cell,
 //! where an unmarked key's hole is a candidate the load cannot read, since a `USING` may fill it;
-//! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing. Inside a quote's code a refusal is
-//! kept on the code shape, and the `EVAL` running it reports it.
+//! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing.
+//! Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running it reports it.
 //!
 //! See [README.md § Static types](README.md#static-types).
 
@@ -611,7 +611,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 return self.through(ret, None);
             }
             if types.contains_quantified(param) {
-                exact &= lower.and_then(|lower| lower.get(name.symbol())) == Some(field);
+                // As a keyworded use judges it: a rigid variable makes no solve the call's.
+                exact &= lower.and_then(|lower| lower.get(name.symbol())) == Some(field)
+                    && !types.contains_rigid(field);
             }
             declared.push(param);
         }

@@ -347,3 +347,31 @@ fn a_generic_return_is_read_through_its_group_s_intervals() {
                    LET h = (HANDLER g)";
     assert_eq!(top(handler, "h"), ":(FN :{x :Number} -> Null)");
 }
+
+#[test]
+fn an_exact_argument_over_a_lexical_variable_is_no_solve_of_the_call_s_own() {
+    let source = "EXPR FOR ALL #[Elt] #(TWO f :(FN :{} -> :(LIST OF Elt)) THEN y :Elt) -> Str = \
+                  #(\"generic\")\n\
+                  EXPR #(TWO f :Any THEN y :Number) -> Str = #(\"any\")\n\
+                  EXPR FOR ALL #{Ll: :(LIST OF Number)} #(OUTER xs :Ll AND ys :Ll) -> Str = #(\n  \
+                  LET g = (FN :{} -> Ll = #(xs))\n  \
+                  TWO g THEN 1\n\
+                  )\n\
+                  PRINT (OUTER [1] AND [2])\n\
+                  PRINT (OUTER [] AND [])";
+    assert_eq!(run(source), "generic\nany");
+    let by_name = "LET h = (FN FOR ALL #[Elt] :{f :(FN :{} -> :(LIST OF Elt))} -> \
+                   :(FN :{x :Elt} -> Null) = #(FN :{x :Elt} -> Null = #(null)))\n\
+                   EXPR FOR ALL #{Ll: :(LIST OF Number)} #(OUTER xs :Ll AND ys :Ll) -> Any = #(\n  \
+                   LET g = (FN :{} -> Ll = #(xs))\n  \
+                   LET k = (h {f = g})\n  \
+                   k\n\
+                   )\n\
+                   PRINT (OUTER [1] AND [2])\n\
+                   PRINT (OUTER [] AND [])";
+    assert_eq!(
+        run(by_name),
+        ":(FN :{x :Number} -> Null)\n:(FN :{x :Never} -> Null)",
+        "a call by name solves its group from the carried types"
+    );
+}

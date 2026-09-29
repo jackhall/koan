@@ -26,9 +26,9 @@ use crate::type_lattice::sig_relations::{
     admits_shape, meet_schemas, shape_specificity, sig_subtype,
 };
 use crate::type_lattice::substitute::{
-    bound_above, canonicalize_binder, erase_quantified, instantiate_quantified, quantifier_bounds,
-    slot_more_specific_or_equal, slot_satisfied_by, slot_types_equal, substitute_quantified,
-    substitute_sig_members,
+    Side, bound_above, canonicalize_binder, erase_quantified, instantiate_quantified,
+    quantifier_bounds, read_through, slot_more_specific_or_equal, slot_satisfied_by,
+    slot_types_equal, substitute_quantified, substitute_sig_members,
 };
 use crate::type_lattice::unify::{Collector, Interval, admits_with, intervals};
 use crate::type_lattice::walk::Variance;
@@ -771,42 +771,79 @@ proptest! {
     }
 }
 
+/// What one case draws: per slot, where its static type comes from and whether it is exact; the
+/// argument pool and the types a carried argument is met with; and per lexical level, the type the
+/// run binds it to.
+#[derive(Clone, Debug)]
+struct Draw {
+    picks: Vec<(u8, bool)>,
+    pool: Vec<KType>,
+    drawn: Vec<KType>,
+    instances: Vec<u8>,
+}
+
+/// A [`Draw`], weighted toward the candidate's own slot so the static solve succeeds often enough
+/// for the laws to bite.
+fn draw() -> impl Strategy<Value = Draw> {
+    let source = prop_oneof![3 => Just(0u8), 1 => Just(1u8), 1 => Just(2u8)];
+    (
+        prop::collection::vec((source, any::<bool>()), 4),
+        arb_arguments(world(), 4),
+        arb_arguments(world(), 4),
+        prop::collection::vec(0u8..3, 2),
+    )
+        .prop_map(|(picks, pool, drawn, instances)| Draw {
+            picks,
+            pool,
+            drawn,
+            instances,
+        })
+}
+
+/// `kt` as the run carries it: each lexical variable replaced by the type the run binds its level
+/// to — its bound, `Never`, or the bound met with a pool type, as `draw` says.
+fn instance(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType, draw: &Draw) -> KType {
+    read_through(types, scratch, kt, Side::Above, &mut |node| match *node {
+        TypeNode::Lexical { level, bound, .. } => Some(Interval::point(
+            match draw.instances.get(level).copied().unwrap_or(0) {
+                0 => bound,
+                1 => KType::NEVER,
+                _ => meet(types, scratch, bound, draw.pool[level % draw.pool.len()]),
+            },
+        )),
+        _ => None,
+    })
+}
+
 /// Static arguments for `a`, one per slot, beside carried arguments within them. Slot `k`'s static
-/// type is drawn by `picks[k]` from `a`'s own slot with its group erased, from one of `b`'s so
+/// type is drawn by `draw.picks[k]` from `a`'s own slot with its group erased, from one of `b`'s so
 /// erased, or from the argument pool, and is exact where the pick says; its carried type is the
-/// static type itself where exact, else its meet with a drawn type. `None` where some argument is
-/// `Never`.
+/// static type as the run carries it where exact, else that met with a drawn type. `None` where
+/// some argument is `Never`.
 fn static_and_carried(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     a: KType,
     b: KType,
-    picks: &[(u8, bool)],
+    draw: &Draw,
 ) -> Option<(Vec<Interval>, Vec<KType>)> {
     let own: Vec<KType> = shape_slots(erase_quantified(types, scratch, a), types).collect();
     let other: Vec<KType> = shape_slots(erase_quantified(types, scratch, b), types).collect();
-    let mut runner = proptest::test_runner::TestRunner::deterministic();
-    let mut draw = || {
-        arb_arguments(world(), own.len())
-            .new_tree(&mut runner)
-            .expect("the argument strategy produces a tuple")
-            .current()
-    };
-    let (pool, drawn) = (draw(), draw());
     let mut arguments = Vec::with_capacity(own.len());
     let mut carried = Vec::with_capacity(own.len());
-    for (k, (source, exact)) in picks.iter().take(own.len()).enumerate() {
+    for (k, (source, exact)) in draw.picks.iter().take(own.len()).enumerate() {
         let static_type = match source {
             0 => own[k],
             1 if !other.is_empty() => other[k % other.len()],
-            _ => pool[k],
+            _ => draw.pool[k],
         };
+        let run = instance(types, scratch, static_type, draw);
         let (argument, one) = if *exact {
-            (Interval::point(static_type), static_type)
+            (Interval::point(static_type), run)
         } else {
             (
                 Interval::within(static_type),
-                meet(types, scratch, static_type, drawn[k]),
+                meet(types, scratch, run, draw.drawn[k]),
             )
         };
         if argument.upper == KType::NEVER || one == KType::NEVER {
@@ -818,11 +855,17 @@ fn static_and_carried(
     Some((arguments, carried))
 }
 
-/// One pick per slot for [`static_and_carried`], weighted toward the candidate's own slot so the
-/// static solve succeeds often enough for the laws to bite.
-fn picks() -> impl Strategy<Value = Vec<(u8, bool)>> {
-    let source = prop_oneof![3 => Just(0u8), 1 => Just(1u8), 1 => Just(2u8)];
-    prop::collection::vec((source, any::<bool>()), 4)
+/// `interval` with each end as the run carries it.
+fn carried_interval(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    interval: Interval,
+    draw: &Draw,
+) -> Interval {
+    Interval {
+        lower: instance(types, scratch, interval.lower, draw),
+        upper: instance(types, scratch, interval.upper, draw),
+    }
 }
 
 /// Whether `kt` lies within `interval`.
@@ -867,23 +910,27 @@ proptest! {
     fn a_carried_solution_lies_in_its_static_interval(
         a in shape(),
         b in shape(),
-        picks in picks(),
+        draw in draw(),
     ) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &picks) else {
+        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
             return Ok(());
         };
         let uppers: Vec<KType> = arguments.iter().map(|argument| argument.upper).collect();
         let (Some(statics), Some(solution)) = (
             solve_jointly(&types, scratch, a, &uppers),
-            solve_jointly(&types, scratch, a, &carried),
+            solve_jointly(&types, scratch, instance(&types, scratch, a, &draw), &carried),
         ) else {
             return Ok(());
         };
         let slots: Vec<KType> = shape_slots(a, &types).collect();
-        let all_exact = arguments.iter().all(|argument| argument.is_exact());
+        // A static type holding a lexical variable is solved through its bound, where the call
+        // solves through the type the run binds it to.
+        let all_exact = arguments
+            .iter()
+            .all(|argument| argument.is_exact() && !types.contains_rigid(argument.upper));
         let reported = intervals(
             &types,
             scratch,
@@ -894,7 +941,7 @@ proptest! {
         );
         for (solved, interval) in solution.iter().zip(reported.iter()) {
             prop_assert!(
-                within(&types, scratch, *solved, *interval),
+                within(&types, scratch, *solved, carried_interval(&types, scratch, *interval, &draw)),
                 "a carried solution left its static interval",
             );
         }
@@ -906,16 +953,17 @@ proptest! {
     fn a_verdict_holds_of_every_call_within_its_static_types(
         a in shape(),
         b in shape(),
-        picks in picks(),
+        draw in draw(),
     ) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &picks) else {
+        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
             return Ok(());
         };
         let judged = judge_by_class(&types, scratch, a, &arguments);
-        let admitted = admit_by_class(&types, scratch, a, &carried);
+        // The run binds the candidate's lexical variables as it binds its arguments'.
+        let admitted = admit_by_class(&types, scratch, instance(&types, scratch, a, &draw), &carried);
         match judged.verdict {
             Verdict::Always => prop_assert!(admitted.is_some(), "an always candidate refused"),
             Verdict::Never => prop_assert!(admitted.is_none(), "a never candidate admitted"),
@@ -924,7 +972,7 @@ proptest! {
         if let (Some(reported), Some(solution)) = (judged.intervals, admitted) {
             for (solved, interval) in solution.iter().zip(reported) {
                 prop_assert!(
-                    within(&types, scratch, *solved, *interval),
+                    within(&types, scratch, *solved, carried_interval(&types, scratch, *interval, &draw)),
                     "a class-by-class solution left its judged interval",
                 );
             }

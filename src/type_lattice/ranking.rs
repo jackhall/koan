@@ -235,8 +235,8 @@ pub struct Judged<'s> {
 ///
 /// A class is *never* where some slot, read at its greatest instance, meets its argument's upper
 /// end at `Never`. It admits every call when each slot does: a slot naming its own class's
-/// variables where the class is exact — those arguments exact, the earlier variables they name
-/// pinned — so the static solve is the call's; a slot whose least instance, earlier variables read
+/// variables where the class is exact — those arguments exact and free of rigid variables, the
+/// earlier variables they name pinned — so the static solve is the call's; a slot whose least instance, earlier variables read
 /// at theirs, lies above its argument's upper end; or a bare variable of the class that no other
 /// slot of the class names, whose one contribution lies under its bound.
 pub fn judge_by_class<'s>(
@@ -294,7 +294,10 @@ pub fn judge_by_class<'s>(
         let exact_class = (0..walk.slots.len())
             .filter(|slot| in_class(*slot) && (0..arity).any(|v| own(v) && names(*slot, v)))
             .all(|slot| {
+                // A rigid variable the static type holds is read through its bound, where the
+                // call reads the type the run binds it to: that solve is not the call's.
                 arguments[slot].is_exact()
+                    && !types.contains_rigid(arguments[slot].upper)
                     && (0..arity).all(|v| own(v) || !names(slot, v) || pointed(v))
             });
         for slot in (0..walk.slots.len()).filter(|slot| in_class(*slot)) {
