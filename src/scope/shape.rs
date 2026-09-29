@@ -26,6 +26,12 @@
 //! from alone, carries its type and, when its code is malformed, the error an `EVAL` of it reports.
 //! See [README.md § Quotes](README.md#quotes).
 //!
+//! A shape also carries a write-once cell for each type fact the elaborator's load pass fixes
+//! before the program runs — each [`TypeExpression`] it records, each type binder, each
+//! registration, a callable body's own type, and a code shape's typing refusal — laid down empty by
+//! the builder, since `scope` sits below `elaborate`. See [README.md § Load-time
+//! types](README.md#load-time-types).
+//!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
 //! `i + 1`, and the body's end is one past its last statement. An eager mention reads at its
@@ -33,6 +39,7 @@
 //!
 //! See [README.md § Resolution](README.md#resolution).
 
+use std::cell::Cell;
 use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
@@ -47,6 +54,7 @@ use crate::values::Knotted;
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
+use super::typed::{Callable, Elaboration, Registered, Static};
 
 mod build;
 
@@ -320,6 +328,35 @@ pub struct Unit {
     pub last: bool,
 }
 
+/// A type expression the shape records, which the load pass types on its own: a `:(…)` or `:{…}`
+/// in value position, a type part of a form that births no callable, or a `MATCH … WITH` guard. A
+/// type nested in a recorded one is part of it, and a callable's signature or a declaration's
+/// definition is typed with its callable or binder instead.
+pub struct TypeExpression<'graph> {
+    pub site: Site,
+    /// The part as written; for a guard, its quote.
+    pub part: &'graph ExpressionPart<'graph>,
+    /// The statement it is written in, by index into [`BodyShape::body`] — where a refusal about it
+    /// is located.
+    pub statement: u32,
+    /// For a guard: the site of its arm set, and its place among the arms in written order.
+    pub guard: Option<(Site, u32)>,
+    typed: Cell<Static<'graph, KType>>,
+}
+
+impl<'graph> TypeExpression<'graph> {
+    /// What the load pass fixed for this expression; `Unknown` before it runs.
+    pub fn typed(&self) -> Static<'graph, KType> {
+        self.typed.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix(&self, typed: Static<'graph, KType>) {
+        debug_assert!(matches!(self.typed.get(), Static::Unknown));
+        self.typed.set(typed);
+    }
+}
+
 /// One body's resolved lexical structure. See the module documentation.
 #[derive(Clone, Copy)]
 pub struct BodyShape<'graph> {
@@ -371,6 +408,16 @@ pub struct BodyShape<'graph> {
     candidates: &'graph [(Site, CandidateList<'graph>)],
     /// A code shape's keyworded holes some use selects from alone, sorted.
     required: &'graph [KeySymbol],
+    /// Each type expression this body records, by site.
+    type_expressions: &'graph [TypeExpression<'graph>],
+    /// Each type binder's load-time type, parallel to `declarations`.
+    declared: &'graph [Cell<Static<'graph, KType>>],
+    /// Each registration's load-time bucket entry, parallel to `registrations`.
+    registered: &'graph [Cell<Static<'graph, Registered<'graph>>>],
+    /// A callable body's load-time type; `Unknown` for every other kind.
+    callable: &'graph Cell<Static<'graph, Callable<'graph>>>,
+    /// Why a code shape's code does not type, where the load pass found a refusal in it.
+    typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
 }
 
 /// What an `EVAL` of a code parameter offers the code it runs for one name its `NEEDING` list
@@ -580,9 +627,76 @@ impl<'graph> BodyShape<'graph> {
         self.code_type
     }
 
-    /// Why this code shape's code cannot be built, reported when an `EVAL` runs it.
+    /// Why this code shape's code cannot be built, or — once it is built — does not type, reported
+    /// when an `EVAL` runs it.
     pub fn refusal(&self) -> Option<&'graph ShapeError<'graph>> {
-        self.refusal
+        self.refusal.or(self.typing_refusal.get())
+    }
+
+    /// Every type expression this body records, sorted by site.
+    pub fn type_expressions(&self) -> &'graph [TypeExpression<'graph>] {
+        self.type_expressions
+    }
+
+    /// What the load pass fixed for the type expression at `site`: `Unknown` where this body
+    /// records none there.
+    pub fn typed_expression(&self, site: Site) -> Static<'graph, KType> {
+        self.type_expressions
+            .binary_search_by_key(&site, |recorded| recorded.site)
+            .map_or(Static::Unknown, |index| self.type_expressions[index].typed())
+    }
+
+    /// What the load pass fixed for the type binder at `slot`.
+    pub fn declared_type(&self, slot: Slot) -> Static<'graph, KType> {
+        self.declarations
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .map_or(Static::Unknown, |index| self.declared[index].get())
+    }
+
+    /// What the load pass fixed for the registration at `slot`.
+    pub fn registered_type(&self, slot: Slot) -> Static<'graph, Registered<'graph>> {
+        self.registrations
+            .binary_search_by_key(&slot, |registration| registration.slot)
+            .map_or(Static::Unknown, |index| self.registered[index].get())
+    }
+
+    /// What the load pass fixed for this callable body's type.
+    pub fn callable_type(&self) -> Static<'graph, Callable<'graph>> {
+        self.callable.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_declared(&self, slot: Slot, typed: Static<'graph, KType>) {
+        let index = self
+            .declarations
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .expect("a type binder records its declaration node");
+        debug_assert!(matches!(self.declared[index].get(), Static::Unknown));
+        self.declared[index].set(typed);
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_registered(&self, slot: Slot, typed: Static<'graph, Registered<'graph>>) {
+        let index = self
+            .registrations
+            .binary_search_by_key(&slot, |registration| registration.slot)
+            .expect("a registration's slot is one this body declares");
+        debug_assert!(matches!(self.registered[index].get(), Static::Unknown));
+        self.registered[index].set(typed);
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_callable(&self, typed: Static<'graph, Callable<'graph>>) {
+        debug_assert_eq!(self.kind, ShapeKind::Callable);
+        debug_assert!(matches!(self.callable.get(), Static::Unknown));
+        self.callable.set(typed);
+    }
+
+    /// Written once, by the load pass, on a code shape whose code does not type.
+    pub fn refuse_typing(&self, refusal: &'graph ShapeError<'graph>) {
+        debug_assert_eq!(self.kind, ShapeKind::Code);
+        debug_assert!(self.typing_refusal.get().is_none());
+        self.typing_refusal.set(Some(refusal));
     }
 
     /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each
@@ -645,6 +759,12 @@ impl<'graph> BodyShape<'graph> {
             .ok()?;
         Some(&self.candidates[index].1)
     }
+}
+
+/// Where the part at `site` within `node` is written: its own span, else the nearest spanned part's
+/// or node's around it, else `node`'s own source.
+pub fn source_of(node: &KExpression<'_>, site: Site) -> SourceRef {
+    build::source_within(node, site).unwrap_or(node.source)
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible
@@ -775,11 +895,20 @@ pub enum ShapeError<'graph> {
         key: &'graph [KeyElement],
         at: SourceRef,
     },
-    /// A registration whose operand types, spelled from builtin names alone, meet those of the
-    /// builtin overload `builtin` at its key, whose operands are not all `Any`.
+    /// A registration whose closed operand types meet those of the builtin overload `builtin` at
+    /// its key, whose operands are not all `Any`.
     Overlaps {
         key: &'graph [KeyElement],
         builtin: KType,
+        at: SourceRef,
+    },
+    /// A closed type that does not elaborate.
+    Type { error: Elaboration, at: SourceRef },
+    /// Two guards of one `MATCH … WITH` arm set that type to one handle, `guard`; `at` is the
+    /// second's.
+    RepeatedGuard {
+        guard: KType,
+        first: SourceRef,
         at: SourceRef,
     },
 }
@@ -853,7 +982,9 @@ impl ShapeError<'_> {
             | ShapeError::NestedBinder { at }
             | ShapeError::RankingDisagrees { at, .. }
             | ShapeError::NoCandidate { at, .. }
-            | ShapeError::Overlaps { at, .. } => *at,
+            | ShapeError::Overlaps { at, .. }
+            | ShapeError::Type { at, .. }
+            | ShapeError::RepeatedGuard { at, .. } => *at,
         }
     }
 
@@ -995,6 +1126,14 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "this overload of `{}` takes operands the builtin {} already takes",
                 self.key(key),
                 display_name(*builtin, self.types, self.symbols)
+            ),
+            ShapeError::Type { error, .. } => {
+                write!(f, "{}", error.display(self.symbols, self.types))
+            }
+            ShapeError::RepeatedGuard { guard, first, .. } => write!(
+                f,
+                "`{}` guards two arms; first at {first}",
+                display_name(*guard, self.types, self.symbols)
             ),
         }
     }

@@ -58,7 +58,7 @@ pub use tie::tie;
 
 use std::fmt;
 
-use crate::elaborate::Elaboration;
+use crate::scope::Elaboration;
 use crate::memory::{BumpAllocator, DropFree, Edge, Member, covariant, reattachable};
 use crate::parse::ExpressionPart;
 use crate::scope::{Activation, ActivationView, Builtins, Site};

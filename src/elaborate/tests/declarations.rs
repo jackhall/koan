@@ -8,7 +8,7 @@ use crate::type_lattice::{
     member,
 };
 
-use super::super::Elaboration;
+use crate::scope::Elaboration;
 use super::{Held, Program, brought, declared, with_program};
 
 /// The representation a newtype member wraps.

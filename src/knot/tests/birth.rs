@@ -2,7 +2,7 @@
 //! members, closure words, knots of fellow members read through their edges, data members and the anonymous nodes below them, and
 //! every refusal.
 
-use crate::elaborate::{Elaboration, ParameterBinding};
+use crate::scope::{Elaboration, ParameterBinding};
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{CaptureSlot, Coordinate, Site, Target};

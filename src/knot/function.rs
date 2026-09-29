@@ -8,7 +8,8 @@
 //! knot about to be tied — so a refusal writes nothing. The same staging and lay-down serve the
 //! lambda door, [`lambda`], which births a callable no binder names as a one-node knot.
 
-use crate::elaborate::{Canonical, ParameterBinding, Registered, callable_type};
+use crate::elaborate::callable_type;
+use crate::scope::{Canonical, ParameterBinding, Registered};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, TypeSymbol};

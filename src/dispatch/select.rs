@@ -11,7 +11,7 @@
 //! its registration names for it — or packs every slot into `operands` — and carries each of its
 //! type parameters, by name, as the type the call solved it to.
 
-use crate::elaborate::{Canonical, ParameterBinding, Registered};
+use crate::scope::{Canonical, ParameterBinding, Registered};
 use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpVec, Writer};
 use crate::program::Contract;

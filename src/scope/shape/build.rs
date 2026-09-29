@@ -59,17 +59,21 @@ use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run,
 };
+use super::super::typed::Static;
 use super::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
-    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
-    Which, resolve_here,
+    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, TypeExpression,
+    Unit, UnitWork, Which, resolve_here,
 };
+use std::cell::Cell;
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
 
 mod locate;
 mod rewrite;
 mod surface;
+
+pub(in crate::scope) use locate::source_within;
 
 use rewrite::{Built, BuiltKind, chained};
 use surface::Surfaced;
@@ -524,6 +528,8 @@ struct Draft<'graph, 'x> {
     rhs: BumpVec<'x, (Slot, Site)>,
     /// `(binder, node)`: a type binder's whole declaration node, in program storage.
     declarations: BumpVec<'x, (Slot, &'graph KExpression<'graph>)>,
+    /// Each type expression the load pass types on its own, as met.
+    type_expressions: BumpVec<'x, Recorded<'graph>>,
     component_of: BumpVec<'x, ComponentIndex>,
     /// Every component's members, one run after another, each run sorted.
     members: BumpVec<'x, Slot>,
@@ -550,6 +556,14 @@ struct Draft<'graph, 'x> {
     /// The statement being walked when a nested draft was entered, and the class that path takes
     /// at this level.
     current: (u32, MentionClass),
+}
+
+/// A type expression a draft records: see [`TypeExpression`](super::TypeExpression).
+#[derive(Clone, Copy)]
+struct Recorded<'graph> {
+    part: &'graph ExpressionPart<'graph>,
+    statement: u32,
+    guard: Option<(Site, u32)>,
 }
 
 /// A component under construction: its run in [`Draft::members`].
@@ -827,6 +841,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             births: BumpVec::new_in(scratch),
             rhs: BumpVec::new_in(scratch),
             declarations: BumpVec::new_in(scratch),
+            type_expressions: BumpVec::new_in(scratch),
             nodes: BumpVec::new_in(scratch),
             frame: self.frame,
             held: &[],
@@ -1264,18 +1279,29 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 Role::Rhs => {
                     let draft = &mut self.chain[level];
+                    let mut declares_type = false;
                     if state == State::Root
                         && let Some(binder) = draft.statement_binders[statement as usize].first()
                     {
                         draft.rhs.push((binder, Site::of(part)));
                         self.parts.insert(Site::of(part), part);
+                        declares_type = draft.is_type_slot(binder);
                     }
-                    self.walk_part(level, statement, part, state)?
+                    // A type `LET`'s right-hand side is its declaration's definition, typed with
+                    // the binder rather than as a type expression of its own.
+                    if declares_type {
+                        self.typed(|builder| builder.walk_part(level, statement, part, state))?
+                    } else {
+                        self.walk_part(level, statement, part, state)?
+                    }
                 }
                 Role::Argument | Role::InPlace => {
                     self.walk_part(level, statement, part, State::Eager)?
                 }
                 Role::TypeExpression => {
+                    if self.in_type == 0 && !types_with_its_binder(form) {
+                        self.record_type(level, statement, part, None);
+                    }
                     self.typed(|builder| builder.walk_part(level, statement, part, State::Eager))?
                 }
                 Role::Signature | Role::Head => {
@@ -1300,7 +1326,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
         match part {
@@ -1331,12 +1357,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 self.walk_node(level, statement, node.reference(), state)
             }
-            ExpressionPart::SigiledTypeExpr(node) => self.typed(|builder| {
-                builder.walk_node(level, statement, node.reference(), State::Eager)
-            }),
-            ExpressionPart::RecordType(node) => self.typed(|builder| {
-                builder.walk_fields(level, statement, node.reference(), State::Eager)
-            }),
+            ExpressionPart::SigiledTypeExpr(node) => {
+                if self.in_type == 0 {
+                    self.record_type(level, statement, part, None);
+                }
+                self.typed(|builder| {
+                    builder.walk_node(level, statement, node.reference(), State::Eager)
+                })
+            }
+            ExpressionPart::RecordType(node) => {
+                if self.in_type == 0 {
+                    self.record_type(level, statement, part, None);
+                }
+                self.typed(|builder| {
+                    builder.walk_fields(level, statement, node.reference(), State::Eager)
+                })
+            }
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
                     self.walk_part(level, statement, item, state.constructor())?;
@@ -1417,7 +1453,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
     ) -> Result<(), ShapeError<'graph>> {
         match signature_run(part) {
             Some(run) => self.walk_fields(level, statement, run, State::Eager),
@@ -1433,7 +1469,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
         kind: DefinitionKind,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
@@ -1574,7 +1610,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
         let run = match part {
@@ -1774,8 +1810,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             && draft.tail
             && draft.statement_binders[statement as usize].is_empty()
             && statement + 1 == draft.statements;
-        for (guard, body_part) in arms.iter() {
+        for (index, (guard, body_part)) in arms.iter().enumerate() {
             let guard = (!guard.is_wildcard()).then_some(guard);
+            if heads == Heads::Types
+                && let Some(guard) = guard
+            {
+                self.record_type(level, statement, guard, Some((Site::of(part), index as u32)));
+            }
             if heads == Heads::Types
                 && let Some(written) = guard.and_then(quoted_body)
             {
@@ -2112,6 +2153,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// Whether `name` is a type parameter of a form enclosing the walk within the current draft.
     fn skips(&self, name: &TypeSymbol) -> bool {
         self.skip[self.skip_floor..].contains(name)
+    }
+
+    /// Record `part`, written in `statement` of the draft at `level`, as a type expression the load
+    /// pass types on its own — for a guard, beside its arm set's site and its place there.
+    fn record_type(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &'graph ExpressionPart<'graph>,
+        guard: Option<(Site, u32)>,
+    ) {
+        self.chain[level].type_expressions.push(Recorded {
+            part,
+            statement,
+            guard,
+        });
     }
 
     /// Run `walk` inside a type expression.
@@ -2715,6 +2772,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         candidates.sort_unstable_by_key(|(site, _)| *site);
         let mut required = draft.required;
         required.sort_unstable();
+        let mut recorded = draft.type_expressions;
+        recorded.sort_unstable_by_key(|recorded| Site::of(recorded.part));
+        let type_expressions = writer.fill(recorded.len(), |index| {
+            let recorded = recorded[index];
+            TypeExpression {
+                site: Site::of(recorded.part),
+                part: recorded.part,
+                statement: recorded.statement,
+                guard: recorded.guard,
+                typed: Cell::new(Static::Unknown),
+            }
+        });
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -2744,6 +2813,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 births: collect(writer, births.iter().copied()),
                 rhs: collect(writer, rhs.iter().copied()),
                 declarations: collect(writer, declarations.iter().copied()),
+                declared: writer.fill(declarations.len(), |_| Cell::new(Static::Unknown)),
                 units: collect(writer, draft.units.iter().copied()),
                 arm: draft.arm,
                 code_type: draft.code_type,
@@ -2753,7 +2823,34 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 rankings: collect(writer, draft.rankings.iter().copied()),
                 candidates: collect(writer, candidates.iter().copied()),
                 required: collect(writer, required.iter().copied()),
+                type_expressions,
+                registered: writer.fill(registrations.len(), |_| Cell::new(Static::Unknown)),
+                callable: resident_cell(writer, Static::Unknown),
+                typing_refusal: resident_cell(writer, None),
             },
         )
     }
+}
+
+/// Whether a form's type parts are typed with the callable it births or the binder it declares,
+/// rather than each as a type expression of its own: a signature, a head, a `FOR ALL` group, a
+/// declared name or definition, or a callable body.
+fn types_with_its_binder(form: &BuiltinShape) -> bool {
+    form.roles().any(|role| {
+        matches!(
+            role,
+            Role::Signature
+                | Role::Head
+                | Role::Quantifiers
+                | Role::Name
+                | Role::Definition(_)
+                | Role::Body(BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator)
+        )
+    })
+}
+
+/// One write-once cell laid down in program storage.
+fn resident_cell<T>(writer: crate::memory::Writer<'_>, value: T) -> &Cell<T> {
+    let mut value = Some(value);
+    &writer.fill(1, |_| Cell::new(value.take().expect("filled once")))[0]
 }

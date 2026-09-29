@@ -33,6 +33,7 @@ mod closure;
 mod groups;
 mod shape;
 mod signature;
+mod typed;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -48,5 +49,9 @@ pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
     QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
-    Which, spelled,
+    TypeExpression, Which, source_of, spelled,
+};
+pub use typed::{
+    Callable, Canonical, Elaboration, ElaborationDisplay, ParameterBinding, Registered, Static,
+    Variable, solutions,
 };

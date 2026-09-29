@@ -196,9 +196,9 @@ fn a_transparent_view_coerces_nothing() {
 
 /// Whether two values point at the same thing — a stronger claim than equality, and the one a
 /// transparent view makes.
-fn same_referent(
-    left: Value<'_, crate::knot::Knotted<'_, '_>>,
-    right: Value<'_, crate::knot::Knotted<'_, '_>>,
+fn same_referent<'graph>(
+    left: Value<'_, crate::knot::Knotted<'graph, '_>>,
+    right: Value<'_, crate::knot::Knotted<'graph, '_>>,
 ) -> bool {
     match (left, right) {
         (Value::List(left), Value::List(right)) => ptr::eq(left, right),

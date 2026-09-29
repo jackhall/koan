@@ -10,9 +10,8 @@ use crate::type_lattice::{
 };
 use crate::values::Value;
 
-use super::super::{
-    Canonical, Elaboration, ParameterBinding, callable_type, static_callable_type, type_expression,
-};
+use super::super::{callable_type, static_callable_type, type_expression};
+use crate::scope::{Canonical, Elaboration, ParameterBinding};
 use super::{Held, Program, nulls, scalars, with_program};
 
 /// The right-hand side of `LET <name> = <rhs>` on `line`.

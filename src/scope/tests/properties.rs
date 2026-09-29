@@ -242,11 +242,11 @@ fn self_reads(
 
 /// Check every planned scope's shape against its plan; `prefix` is the chain of shapes the root
 /// scope reads through.
-fn check(
+fn check<'graph>(
     symbols: &SymbolInterner,
     rendering: &Rendering<'_>,
-    located: &Located<'_>,
-    prefix: &[&BodyShape<'_>],
+    located: &Located<'graph>,
+    prefix: &[&BodyShape<'graph>],
 ) {
     let source = &rendering.source;
     for (index, rendered) in rendering.scopes.iter().enumerate() {

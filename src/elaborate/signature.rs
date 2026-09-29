@@ -12,66 +12,15 @@ use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    BodyShape, Builtins, IMPLICIT, Registration, Site, Which, is_equal, is_unequal,
+    BodyShape, Builtins, Callable, Canonical, Elaboration, IMPLICIT, ParameterBinding, Registered,
+    Registration, Site, Which, is_equal, is_unequal,
 };
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, GroupIntern, KType, TypeNode, TypeRegistry};
 use crate::values::Knotted;
 
-use super::Elaboration;
 use super::expression::{Elaborator, Groups, HeadElement, QuantifierGroup, walk_head};
 use super::reads::{BuiltinsOnly, Reads};
-
-/// Where a `FOR ALL` name the declaration wrote landed in a canonical group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Canonical {
-    /// The group's variable at this index: a call binds the name to what the group solves it to.
-    At(usize),
-    /// Dropped by canonical form: a call binds the name to its bound.
-    Dropped { bound: KType },
-}
-
-/// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
-/// canonical group — what a call needs to bind each type parameter to its solution.
-pub struct Callable<'x> {
-    pub ktype: KType,
-    /// Each `FOR ALL` name the declaration wrote, in written order, with where it landed in
-    /// `ktype`'s canonical group. Empty for an unquantified callable.
-    ///
-    /// The **name** is the key, not the position: a callee's type-parameter slots reach its frame
-    /// symbol-sorted, not in written order, and `ktype`'s own `quantifiers` cannot stand in for
-    /// this because alpha-variants intern to one node and it holds whichever spelling interned
-    /// first.
-    pub quantifier_map: &'x [(TypeSymbol, Canonical)],
-    /// What the registration the callable is born for puts in its bucket; `None` for a callable no
-    /// registration binds — a `FN`, or a combined statement's name.
-    pub registered: Option<Registered<'x>>,
-}
-
-/// What a registration's bucket holds of the function it binds, and what a keyworded call of it
-/// reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Registered<'x> {
-    /// The expression shape: the function type's parameters laid over the registration's key,
-    /// ranked by the registration's classes.
-    pub shape: KType,
-    /// Each `FOR ALL` name the declaration wrote, in written order, with where it landed in
-    /// `shape`'s canonical group — which numbers the variables by first occurrence in element
-    /// order, not as `ktype`'s does.
-    pub quantifier_map: &'x [(TypeSymbol, Canonical)],
-    pub parameters: ParameterBinding<'x>,
-}
-
-/// How a keyworded call builds the argument record from the shape's slots, in element order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ParameterBinding<'x> {
-    /// Slot `i` binds the `i`th name: an `EXPR` head's slot names as written, a binary `OP`'s
-    /// `left` and `right`, or a `UNARY OP`'s `operands` at its keyword-first key.
-    Named(&'x [BinderSymbol]),
-    /// Every slot, in order, packed into one list bound to `operands`: a `UNARY OP` at its binary
-    /// key.
-    Operands,
-}
 
 /// The type of the callable whose body sits in `form`, its signature's names read through
 /// `reader` — the activation the form runs in — born for `registration`, or for no registration.

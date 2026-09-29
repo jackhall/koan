@@ -16,14 +16,13 @@ use crate::parse::builtin_shapes::binder::{
 };
 use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BuiltinGroup, Component, Site, is_equality};
+use crate::scope::{BuiltinGroup, Component, Elaboration, Site, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, FoldDirection, KKind, KType, RecursiveGroupWindow, ReductionMode,
     RelativeSchema, SchemaDraft, TypeRegistry,
 };
 
-use super::Elaboration;
 use super::expression::{Elaborator, Fellow, Groups};
 use super::reads::Reads;
 use super::signature::operator_shape;

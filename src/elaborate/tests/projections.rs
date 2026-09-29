@@ -4,7 +4,8 @@
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 
-use super::super::{Elaboration, callable_type};
+use super::super::callable_type;
+use crate::scope::Elaboration;
 use super::{brought, declared};
 
 #[test]

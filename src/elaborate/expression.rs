@@ -1,13 +1,12 @@
 //! One type expression, part by part: a name read through the activation, a composite built from
 //! the handles its parts elaborate to.
 
-use super::Elaboration;
 use super::reads::Reads;
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Coordinate, Site, Slot, Target, pair_label};
+use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
