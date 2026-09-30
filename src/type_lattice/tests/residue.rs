@@ -190,6 +190,33 @@ fn a_solve_fails_only_where_its_pair_denotes_nothing() {
     );
 }
 
+/// The item's chain through a joined instance: a function generic over both its parameters lies
+/// under its instance at `Number | Str`, which lies under a function taking a number and a string —
+/// and the order reaches the last from the first in one step.
+#[test]
+fn the_order_closes_through_a_joined_instance() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let takes = |group: &[TypeSymbol], first: KType, second: KType| {
+        types
+            .function_type(region, group, &[(x, first), (y, second)], KType::NULL)
+            .handle
+    };
+    let variable = types.quantified(0, KType::ANY);
+    let generic = takes(&[elt], variable, variable);
+    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    let joined = takes(&[], number_or_str, number_or_str);
+    let split = takes(&[], KType::NUMBER, KType::STR);
+    assert!(is_subtype_of(&types, region, generic, joined));
+    assert!(is_subtype_of(&types, region, joined, split));
+    assert!(is_subtype_of(&types, region, generic, split));
+}
+
 /// Admit each of `arguments` into its slot of `slots` through one collector bounded by `bounds`,
 /// then solve. `Ok` carries the solution; `Err` carries the index of a variable whose pair denotes
 /// nothing, or `None` for a mismatch.

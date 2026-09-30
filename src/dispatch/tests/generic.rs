@@ -387,3 +387,57 @@ fn an_exact_argument_over_a_lexical_variable_is_no_solve_of_the_call_s_own() {
         "a call by name solves its group from the carried types"
     );
 }
+
+#[test]
+fn two_arguments_at_one_parameter_bind_the_join_of_their_types() {
+    let flat = "EXPR FOR ALL #[Elt] #(FLAT rows :(LIST OF (LIST OF Elt))) -> :(LIST OF Elt) = #(\n  \
+                PRINT Elt\n  \
+                []\n\
+                )\n";
+    assert_eq!(
+        run(&format!("{flat}PRINT (FLAT [[\"a\"], [1]])")),
+        ":(Str | Number)\n[]"
+    );
+    assert_eq!(
+        top(&format!("{flat}LET r = (FLAT [[\"a\"], [1]])"), "r"),
+        ":(LIST OF :(Str | Number))"
+    );
+}
+
+#[test]
+fn two_arguments_reaching_one_parameter_from_above_bind_the_meet_of_their_types() {
+    let first = "EXPR FOR ALL #[Elt] #(FIRST fs :(LIST OF (FN :{x :Elt} -> Null))) -> \
+                 :(FN :{x :Elt} -> Null) = #(FN :{x :Elt} -> Null = #(null))\n";
+    let apart = format!(
+        "{first}LET f = (FN :{{x :Number}} -> Null = #(null))\n\
+         LET g = (FN :{{x :Str}} -> Null = #(null))\n"
+    );
+    assert_eq!(
+        top(&format!("{apart}LET h = (FIRST [f, g])"), "h"),
+        ":(FN :{x :Never} -> Null)"
+    );
+    assert_eq!(
+        run(&format!("{apart}PRINT (FIRST [f, g])")),
+        ":(FN :{x :Never} -> Null)"
+    );
+    let overlapping = format!(
+        "{first}LET f = (FN :{{x :(Number | Str)}} -> Null = #(null))\n\
+         LET g = (FN :{{x :(Number | Bool)}} -> Null = #(null))\n"
+    );
+    assert_eq!(
+        top(&format!("{overlapping}LET h = (FIRST [f, g])"), "h"),
+        ":(FN :{x :Number} -> Null)"
+    );
+    assert_eq!(
+        run(&format!("{overlapping}PRINT (FIRST [f, g])")),
+        ":(FN :{x :Number} -> Null)"
+    );
+}
+
+#[test]
+fn a_generic_function_passes_to_a_slot_whose_parameters_differ() {
+    let source = "EXPR #(TAKE f :(FN :{x :Number, y :Str} -> Null)) -> Str = #(\"taken\")\n\
+                  LET g = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Null = #(null))\n\
+                  PRINT (TAKE g)";
+    assert_eq!(run(source), "taken");
+}

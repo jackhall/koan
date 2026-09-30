@@ -235,8 +235,8 @@ fn move_is_decided_by_its_second_class() {
 }
 
 /// `PAIR 1 WITH 2`: one variable beats two. Canonical form reads the two-variable head as
-/// `#(PAIR _ :Any WITH _ :Any)`; the one-variable head's `Elt`, solved from `x`, reads at `y` as an
-/// unknown type under that solution, which `Any` does not lie under.
+/// `#(PAIR _ :Any WITH _ :Any)`; the one-variable head's `Elt`, solved from `x`, reads at `y` as a
+/// stand-in over whatever a call binds it to, which `Any` does not lie under.
 #[test]
 fn pair_prefers_one_variable_to_two() {
     let bump = Bump::new();

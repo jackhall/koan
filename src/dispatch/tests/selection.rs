@@ -82,6 +82,16 @@ fn one_variable_over_both_slots_ranks_before_two_independent_ones() {
 }
 
 #[test]
+fn one_variable_in_two_classes_takes_its_type_from_the_first() {
+    let source = "EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str = #(\"p\")\n\
+                  PRINT (PAIR 1 WITH \"x\")";
+    assert_eq!(
+        run(source),
+        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits (Number, Str)"
+    );
+}
+
+#[test]
 fn a_variable_a_class_did_not_admit_reads_as_its_bound_later() {
     let source = "EXPR #(TAKE x :(Str | (LIST OF Number)) WITH y :Number) -> Str = #(\"mono\")\n\
                   EXPR FOR ALL #[Elt] #(TAKE x :(Number | (LIST OF Elt)) WITH y :Elt) -> Str = \
