@@ -13,7 +13,7 @@
 //! on is its receipt run.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
-//! `crate::memory` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads
+//! `crate::memory`, `crate::type_lattice` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads
 //! the source to hold it there. Neither `values` nor `knot` names this module, and `cellgraph`
 //! names neither it nor koan.
 //!

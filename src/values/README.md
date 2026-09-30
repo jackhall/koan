@@ -207,11 +207,12 @@ retyped value renders its cycle one level down. The retype restamps the top node
 alone, and its cells keep their own types; a read carries it down.
 
 **A value's type is its surface.** Every read of a record, list, dict or tagged
-value — a field read, `FROM`, `USING`, rendering, equality, the deep copy — goes
-through one door, which sees only the fields the carried type names and hands
-back each field, element or entry retyped to its type there, and a tagged
-value's payload retyped to its identity's representation, applied to its
-arguments. After `{x = 1, y = "a"} :! :{x :Number}`, the value has no field `y`
+value — a field read, `FROM`, `USING`, a frame binding its arguments, module
+coercion, rendering, equality, the deep copy — goes through one door,
+[surface.rs](surface.rs), which sees only the fields the carried type names and
+hands back each field, element or entry retyped to its type there, and a tagged
+value's payload retyped to its identity's [`representation`](admission.rs): a
+newtype's, or a family application's with its arguments substituted. After `{x = 1, y = "a"} :! :{x :Number}`, the value has no field `y`
 to any reader and prints `{x = 1}`, though its cells still hold `y`; a
 `LIST OF (LIST OF Any)` retype hands back each inner list as a `LIST OF Any`;
 and `(Point {x = 1, y = 2, z = 3})`, a `Point` over `{x :Number, y :Number}`,
@@ -221,6 +222,21 @@ walks nothing, and a nested part obeys it all the same, so downstream dispatch
 sees the contract at every depth rather than the contents' incidental
 precision. An element is read at the type its container names, so a literal
 whose join widens a record hides that record's extra fields.
+
+A read carries a `Seen`: a value beside the type the read sees it at — its own
+memo at the top of a read, and below it what the holder's seen type names for
+the part there, narrowed as a retype narrows. `Seen::surface` opens a container
+or tagged value at that type as a `Surface`, whose parts are each seen at their
+type there. A reader that only inspects a part — equality, rendering, a name, a
+function to consider — takes its value and writes nothing; a reader that hands a
+part on as a value of its own — `ATTR`, `USING`, a frame binding an argument,
+module coercion — restamps it at its seen type (`Seen::restamped`).
+`Value::retyped` is that pair at the top: the value seen at the declared type,
+then restamped. A resident's value-cell runs are private to `values`, so no
+reader outside it can step past the door; a data node's link runs stay public
+to the knot layer, which ties them. A construction holds its payload verbatim,
+at the payload's own type: the door hides what its representation does not
+name, and a copy drops it.
 
 The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
@@ -252,7 +268,9 @@ node's resident weighs only its own struct and links. Program storage a member
 holds weighs nothing past the pointer. A crossing reads the weight off the
 value rather than walking it; a plain retype shares the runs, so it shares the
 weight, and a laid-down data node is weighed as the plain door of its kind
-weighs the same cells.
+weighs the same cells. So a value whose type hides some of its cells weighs
+them all, while its copy lays down and weighs only what the type shows: the
+[verdict](#crossing) may over-price such a copy, and never under-prices one.
 
 ## Crossing
 
@@ -264,10 +282,16 @@ value the step may embed or its continuation capture. Both price the operand at
 its weight, and both build through `cross_view`, which turns one crossed operand
 into a value at the destination's brand: a **pinned** operand arrives there and
 embeds as it is, and a **copied** one is rebuilt by the deep copy — region
-parts written again through the destination's writer, memoized types and
-weights carried over unchanged, and a knot member's whole knot re-tied by its
-family. The deep copy reads through the same door as every reader, so it lays
-down only what a container's type names: a part a retype hid is dropped.
+parts written again through the destination's writer, and a knot member's whole
+knot re-tied by its family. The deep copy reads through
+[the door](#the-type-memo-and-satisfies) as every reader does: each part is laid
+down at the type it is seen at, holding only what that type names, and weighed
+by what it lays down, so a part a retype hid is dropped. A knot's data node seen
+at its own memo copies with its knot; one seen at another type is laid down as a
+plain value of its kind at that type, as a retype lays it down, its visible
+links resolved through it. The crossing doors therefore take the type registry
+the copy reads its types in, and the scheduler's step doors that cross a value
+take it from their callers.
 
 **The deep copy runs over an explicit stack**, in a bump of its own, since no
 step scratch reaches a birth's crossing; so a value of any depth copies without
@@ -279,7 +303,9 @@ asks for with its finished copy, in the order `held` listed them, so the knot is
 tied once, after everything it holds has a copy. A data node lists and rebuilds
 through `Circular::held` and `Circular::copied`: each value link through that
 copy, each edge verbatim — an edge names a node by index, so it means the same
-node in the copy — and its memo and weight carried over.
+node in the copy — and its memo and weight carried over. A re-tied knot keeps
+every cell its nodes hold, a field a tagged node's representation hides
+included, and the door still hides it there.
 
 **One copy per knot per placement.** A copy keys every knot it has re-tied by
 the knot's root member, so a second reference to that knot is the copy's member
@@ -374,9 +400,11 @@ two type values are equal when they name the same handle; two quotes' code
 compares as syntax, part by part with spans ignored and marks included, then
 the values its `$` names and its supplied holes bind, name by name, under the
 pair set circular values use below
-([quotes](../scope/README.md#equality-and-knots)). Containers compare their
-contents **only when their memoized types are related**, one satisfied by the
-other in either direction — an empty list of strings and an empty list of
+([quotes](../scope/README.md#equality-and-knots)). Each side compares at the
+type it is seen at, through [the door](#the-type-memo-and-satisfies): a record
+by the fields that type names, a tagged value's payload at its representation.
+Containers compare their contents **only when their seen types are related**,
+one satisfied by the other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
 
 **A module has no structural equality.** `equals` answers
@@ -392,16 +420,19 @@ descending, whatever it holds.
 **Circular values compare as a bisimulation.** A data node compares as the
 plain value of its kind would, its links resolved through it, so a node and a
 plain value of the same kind and contents are equal. Two nodes compare under a
-set of `(member, member)` pairs already entered: a pair is recorded before its
+set of pairs already entered, each member beside the type it is seen at, since
+one node reached at two seen types shows two surfaces: a pair is recorded before its
 cells are compared, and a pair met again while recorded counts as equal. That
 is the coinductive hypothesis — the greatest fixpoint, bisimilarity — and it is
 sound because every result is a conjunction: a hypothesis never turns an
 unequal pair equal, and every recorded pair is fully compared by the call that
 recorded it. So a one-node ring and a two-node ring with the same contents are
 equal. A node against a plain value records nothing, since the plain side is
-finite and bounds the descent. Plain and linked composites share one reading,
-the private `Composite` view in [circular.rs](circular.rs), so equality,
-rendering and the mark pass below are written once over both.
+finite and bounds the descent. A seen type always lies above the memo and is
+built from the types the program declares, so a cycle returns to a pair already
+entered. Plain values and data nodes share one reading, the door's `Surface`, so
+equality, rendering, the mark pass below and the deep copy are written once over
+both.
 
 **Every walk here runs over an explicit stack** in the scratch it is handed, so
 none grows the call stack with a value's depth. Equality pops pending pairs: a
@@ -414,7 +445,7 @@ compares recursively, since parsed syntax nests no deeper than the parser's
 
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
-`{x = 1}` in field-name order, a tagged value as its type's name around its
+`{x = 1}` in field-name order, a tagged value as its seen type's name around its
 payload, a type as its name, a quote as its body's surface with each mark as
 written and never what a name binds, a function, a module or a barrier as its
 type's name, which is a module's signature — its closure bindings or members
@@ -425,7 +456,9 @@ kind.
 data node the write meets that no earlier pass entered, entering each node
 once, and records every node reached again while it is still being entered;
 every cycle holds such a back edge, so every cycle holds a recorded target, and
-a plain value with no data node is walked once. The write labels a target at
+a plain value with no data node is walked once. A node is entered, marked and
+labelled beside the type it is seen at, so a narrow view of a node that holds no
+cycle never hides the cycle a wide view of it closes. The write labels a target at
 its first occurrence, `@0 = …`, and writes every later occurrence as `@0`, so
 it stops wherever a cycle closes: `LET a = (Ring {next = a})` prints
 `@0 = Ring({next = @0})`. Labels count from zero per render in order of first
@@ -491,12 +524,14 @@ over a fixture that owns program storage, a bump for the type registry, and a
 cell graph over that storage to run steps in. Circular values are exercised
 without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
-by hand, and the suites cover the `linked` doors, the construction rule and the
-seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
+by hand, and the suites cover the door over each kind, a payload seen at its
+representation and a retype as a seen type restamped
+([tests/surface.rs](tests/surface.rs)), the `linked` doors, the construction
+rule and the seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
 ([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
 ([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin,
-and two members of one ring crossing as one copy of it
-([tests/crossing.rs](tests/crossing.rs)), `satisfies` by a node's memo
+two members of one ring crossing as one copy of it, and a copy laying down only
+what each part's seen type shows ([tests/crossing.rs](tests/crossing.rs)), `satisfies` by a node's memo
 ([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
 hundred thousand deep rendered, compared and crossed on the default test
 thread ([tests/depth.rs](tests/depth.rs)). One test joins the koan
@@ -508,9 +543,6 @@ otherwise pair with are `cellgraph`'s own slate.
 
 ## Open work
 
-- [A value's type is its surface](../../roadmap/gradual-typing/type-is-the-surface.md)
-  — the one door every container read goes through, and a copy dropping what a
-  retype hid.
 - [A container literal's element type](../../roadmap/gradual-typing/container-literal-types.md)
   — a literal's element type that keeps every field its elements were written
   with.

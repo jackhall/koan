@@ -122,8 +122,9 @@ Where they differ, the arm is the declared type's:
   constructor beside `construction`: an abstract type records no representation
   to check a construction against, so what is checked is that the identity is a
   per-application mint and that the payload satisfies the source's own binding;
-- a list, dict or record — rebuilt cell by cell through its own public door and
-  re-stamped with the declared handle where the derived memo is not that one,
+- a list, dict or record — rebuilt part by part from what its type shows, a
+  record from the fields its slot declares and no other, through its own public
+  door and re-stamped with the declared handle where the derived memo is not that one,
   which is the empty container and the widened declaration; a dict's keys are
   untouched, so a key read back through the view carries the source's scalar
   type even where the dict's declared key type names a mint;

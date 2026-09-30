@@ -1,9 +1,10 @@
 //! The import boundary, the storage discipline and the step's public surface, as tests over this
 //! module's own source.
 //!
-//! `scheduler` may name `knot`, `memory`, `type_lattice` and `values` and nothing else in the crate — no
-//! `scope`, no `parse`, no `elaborate`; outside its tests it holds no owning heap type but its own
-//! runtime state, which is never a value in a region. A step names no handle and no carrier door.
+//! `scheduler` may name `knot`, `memory`, `type_lattice` and `values` and nothing else in the
+//! crate — no `scope`, no `parse`, no `elaborate`; outside its tests it holds no owning heap type
+//! but its own runtime state, which is never a value in a region. A step names no handle and no
+//! carrier door.
 
 /// The path prefixes `scheduler` may name.
 const PREFIXES: &[&str] = &[

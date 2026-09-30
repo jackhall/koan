@@ -18,8 +18,8 @@
 //! regions over the substrate's placement doors, rebuilding it under a copy, and [`verdict`] is the
 //! copy-or-pin policy a graph is built with. Every read of a container or tagged value — equality,
 //! rendering, the deep copy, a field read — goes through one door, [`Seen`] and [`Surface`], which
-//! shows only what the value's type names. [`working`] is the scheduler's per-dispatch expression form, built in the executing cell's
-//! region.
+//! shows only what the value's type names. [`working`] is the scheduler's per-dispatch copy of an
+//! expression, built in the executing cell's region.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::parse`, `crate::source` and `crate::type_lattice`, and nothing else in the crate;

@@ -105,15 +105,15 @@ impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, 'x, O, X> {
         Ok(())
     }
 
-    /// The mark pass from `seen`: enter every node it reaches that no earlier pass entered, and
-    /// record each node reached again while it is being entered.
-    fn mark<'a>(&mut self, seen: Seen<'a, X>) {
-        let Some((node, surface)) = self.entered(seen) else {
-            return;
-        };
+    /// The mark pass from `node`, opened as `surface`, which no earlier pass entered: enter every
+    /// node it reaches that no earlier pass entered, and record each node reached again while it is
+    /// being entered.
+    fn mark<'a>(&mut self, node: Node<X>, surface: Surface<'x, 'a, X>) {
+        self.marks.entered.insert(node);
+        self.marks.entering.insert(node);
         let (types, scratch) = (self.types, self.scratch);
         let mut frames = BumpVec::new_in(scratch);
-        frames.push((node, surface, 0));
+        frames.push((Some(node), surface, 0));
         while let Some((_, surface, next)) = frames.last_mut() {
             if *next < surface.len() {
                 let child = surface.child(*next, types, scratch);
@@ -168,7 +168,7 @@ impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, 'x, O, X> {
             if let Some(node) = surface.node() {
                 let node = (node, surface.ktype());
                 if !self.marks.entered.contains(&node) {
-                    self.mark(seen);
+                    self.mark(node, surface);
                 }
                 if self.marks.targets.contains(&node) {
                     if let Some(label) = self.labelled.get(&node) {

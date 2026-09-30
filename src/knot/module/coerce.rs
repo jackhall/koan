@@ -120,7 +120,7 @@ pub fn coerce<'graph, 'cell>(
             let surface = value.surface(cx.types, cx.scratch).expect("a list opens");
             let mut cells = BumpVec::with_capacity_in(list.len(), cx.scratch);
             for at in 0..surface.len() {
-                let cell = surface.child(at, cx.types, cx.scratch).restamped(cx.writer);
+                let cell = surface.child(at, cx.types, cx.scratch).value();
                 cells.push(coerce(cx, cell, element)?);
             }
             let built = List::new(cx.writer, cells.iter().copied(), cx.types, cx.scratch);
@@ -140,7 +140,7 @@ pub fn coerce<'graph, 'cell>(
             let surface = value.surface(cx.types, cx.scratch).expect("a dict opens");
             let mut entries = BumpVec::with_capacity_in(dict.len(), cx.scratch);
             for at in 0..surface.len() {
-                let cell = surface.child(at, cx.types, cx.scratch).restamped(cx.writer);
+                let cell = surface.child(at, cx.types, cx.scratch).value();
                 entries.push((*surface.key(at), coerce(cx, cell, cell_type)?));
             }
             let built = Dict::new(cx.writer, &entries, cx.types, cx.scratch);
@@ -159,7 +159,7 @@ pub fn coerce<'graph, 'cell>(
                 let cell = value
                     .field(binder.symbol(), cx.types, cx.scratch)
                     .expect("the record satisfies the slot, so it has every declared field")
-                    .restamped(cx.writer);
+                    .value();
                 built.push((binder, coerce(cx, cell, field_type)?));
             }
             let built = Record::new(cx.writer, &built, cx.types, cx.scratch);

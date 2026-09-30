@@ -1,6 +1,6 @@
 //! The type rules: the law every native's [rule](super::super::rules) obeys, checked for every
 //! builtin over drawn argument intervals and drawn names and code; and what `FROM`'s and `ATTR`'s
-//! rules make the load type and refuse, and the run retype.
+//! rules make the load type and refuse, and the run carry.
 //!
 //! A lower end the load computes is a type some value carries, or `Never`: never a union and never
 //! `Any`. The draws keep to such lower ends. `ATTR`'s need turns on whether its argument's lower

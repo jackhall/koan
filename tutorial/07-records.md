@@ -149,22 +149,23 @@ Point {x = "oops", y = 4}
 error: Point cannot wrap :{x :Str y :Number}: its representation is :{x :Number y :Number}
 ```
 
-The required fields are a *minimum*, though — a record may carry **more** fields
-than its type names. A `Point` shows only the fields its representation names,
-so the extra one is hidden:
+The required fields are a *minimum*, though — a record with **more** fields
+than the representation names still constructs a `Point`. This is *width
+subtyping*: a wider record (more fields) stands in wherever a narrower one is
+expected. The `Point` shows only the fields its representation names, so the
+extra one is out of reach, both when printed and when read:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
 LET p = (Point {x = 3, y = 4, z = 5})
+PRINT p
 PRINT p.z
 ```
 
 ```text
+Point({x = 3, y = 4})
 error: Point has no field z
 ```
-
-This is *width subtyping*: a wider record (more fields) stands in wherever a
-narrower one is expected.
 
 ## Records and dispatch
 
@@ -240,16 +241,18 @@ got xy
 
 The projection narrows the *type*, not the stored value — the other fields are
 still physically there, just invisible through the projected view. The narrowed
-type is the whole surface of the view, so a dropped field is out of reach of a
-field read as well as of dispatch:
+type is the whole surface of the view, so a dropped field is out of reach of
+printing and field reads as well as of dispatch:
 
 ```koan
 LET both = {x = 1, y = "a", z = "b"}
 LET view = (#[x y] FROM both)
+PRINT view
 PRINT view.y
 ```
 
 ```text
+{x = 1, y = a}
 a
 ```
 

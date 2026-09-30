@@ -291,7 +291,9 @@ member is a node of its binder's knot, which the tie never asks the evaluator
 for. A hole or a `\` mark names no binding, so neither is held.
 
 [`using`](code.rs) is `code USING src`: a new one-node knot whose holes a field
-of `src` names — a record's field or a module's member — are filled, and whose
+of `src` names — a record's field its type shows, read through
+[the door](../values/README.md#the-type-memo-and-satisfies) at the type the
+record's type names it at, or a module's member — are filled, and whose
 other holes stay holes. A keyworded hole takes the list of a module's
 registrations at its key, each key read off a function's registered shape, and
 stays open where the module has none; a module whose registrations at a hole's

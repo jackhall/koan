@@ -157,6 +157,10 @@ needs is the veneer's to perform, from the provenance the drain filled:
 - **A child's result is read, not redeemed.** `results` yields each slot of the
   receipt run as the consumer can use it: a scratch fill at `'scratch`, a
   carrier fill redeemed and crossed to `'here`.
+- **A copy reads the caller's types.** `results`, `finish` and `finish_in_home`
+  take the type registry from the step, since a
+  [deep copy](../values/README.md#crossing) lays each part down at the type it
+  is seen at.
 - **A result goes where the drain said.** The three `finish` ends below build
   or cross into the home the provenance names and fill the slot it names.
 
@@ -357,8 +361,10 @@ nothing naming it.
 ## The import rule
 
 Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
-`crate::memory` and `crate::values`, and nothing else in the crate. It does not
-name `scope`, `parse`, `elaborate` or `program`. `cellgraph` is reached only
+`crate::memory`, `crate::type_lattice` and `crate::values`, and nothing else in
+the crate. It does not name `scope`, `parse`, `elaborate` or `program`. It
+names the lattice for the type registry alone, which the step doors that cross
+a value take from their callers and hand to the deep copy. `cellgraph` is reached only
 through `memory`, and `cellgraph` itself depends on neither this module nor
 koan. `tests/boundary.rs` reads the source to hold the rule there; the ready
 stack and the request buffer are the owning heap types it blanks, because each

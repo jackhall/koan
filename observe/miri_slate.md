@@ -247,9 +247,9 @@ in a tenant's storage and crossed into the callee's birth.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-30: 307s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 293s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 231s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 531s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 199s — 25 tests, 0 leaks, 0 UB
-- 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

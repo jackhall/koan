@@ -30,7 +30,6 @@ the result: projecting `y` of `r = {x = 1, y = {z = 2, w = 3}}` onto `z` is
 
 **Requires:**
 
-- [A value's type is its surface](type-is-the-surface.md) — the shallow projection it nests.
 - [Code names](../metaprogramming/code-names.md) — the end of the metaprogramming project.
 
 **Unblocks:** none — a leaf.

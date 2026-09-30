@@ -86,23 +86,27 @@ overload ranks its slots in written order.
   of them is rewritten to, each returning a type value.
 - The overloads of the [builtin expression shapes](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
   whose slots dispatch evaluates, typed as their entries type them: `ATTR` over a
-  record or a tagged value over one, reading through every tagged layer to the
-  field; over a type, giving the type its record declares the field with, so
+  record or a tagged value over one, reading through every tagged layer at the
+  representation its identity names to the field, which it hands back at the
+  type the record's type names it at; over a type, giving the type its record declares the field with, so
   `Point.y` is `Str` and `v :Point.y` is a slot; over a union type labelled by a
   type name, giving the variant; and over a module, a fault until
-  [module programs](../../roadmap/rewrite/modules.md). `FROM` retypes a record
-  to the projection of its carried type onto the fields it names, each once; a
-  name that type does not name is an error value, as it is to `ATTR`. `EVAL`
+  [module programs](../../roadmap/rewrite/modules.md). `FROM` restamps a record
+  at the projection of its carried type onto the fields it names, each once,
+  sharing the record's runs; a name that type does not name is an error value,
+  as it is to `ATTR`. `EVAL`
   runs code (below), and `USING` fills a code's holes through the
   [`USING` door](../knot/README.md#a-quote).
 
 **Each native has a [type rule](rules.rs).** From its arguments' static types,
-read at both ends, and each name operand — written, at load; its value, at run —
-the rule gives the type each argument needs and the call's return interval. The
-load types every call of a builtin through its rule and judges the candidate
-against the needed types; the run
-[retypes](../values/README.md#the-type-memo-and-satisfies) the native's value to
-the rule's return over the carried types, where that return is exact. A native
+read at both ends, and each name operand as written, the rule gives the type
+each argument needs and the call's return interval. The load types every call
+of a builtin through its rule and judges the candidate against the needed
+types. The run reads no rule and retypes no native's value: a native reads its
+operands through [the door](../values/README.md#the-type-memo-and-satisfies),
+so what `ATTR` and `FROM` return already carries the type their rules give over
+the carried types, and the evaluator checks the carried type against the static
+one in debug builds. A native
 with no rule of its own takes its declared slots and a return at most its
 declared one. `FROM`'s rule is the [projection](#static-types) of its record's
 static type, `ATTR`'s over a record the named field's type there, and `EVAL`'s a
@@ -218,7 +222,7 @@ fixed:
   construction is at most `Any`;
 - `ATTR` over a record is the named field's type in the record's static type,
   read at each end: exactly that type where both ends name the field at one type
-  the retype makes exact, since the run retypes the field's value to it, and at
+  the retype makes exact, since the run reads the field's value at it, and at
   most the upper end's otherwise — `Any` where the upper end names no such field.
   A field's value keeps its own variant of a union, so an `ATTR` over an exact
   record is exact only where its field's type is. A lower end lacking the field
@@ -233,8 +237,8 @@ fixed:
   below, so a call over an exact record is exactly its projection. A lower end
   lacking a listed field makes the candidate *never*, so
   `EXPR #(GET r :{a :Number}) -> Any = #(#[b] FROM r)` refuses the load. Over a
-  list the load cannot read, `FROM` is at most `:{}`, and the run retypes its
-  value to the projection of the record's carried type;
+  list the load cannot read, `FROM` is at most `:{}`, and the run restamps its
+  record at the projection of the record's carried type;
 - an `EVAL` of code the load traces to a written quote — its operand, or a name
   `LET` binds to one — is at most the code's last statement's upper end as the
   code runs there, read through
@@ -502,7 +506,11 @@ return — by keyword, by name, in tail position — and one the load cannot sol
 exactly, and `FROM`'s projection over an exact record;
 [rules](tests/rules.rs) — the law every native's type rule obeys over drawn
 argument intervals, names and code, and what `FROM`'s and `ATTR`'s rules make
-the load type and refuse and the run retype; and [tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
+the load type and refuse and the run carry;
+[surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
+through a newtype or a family seeing only what the carried type names, one node
+seen at two types, a widened literal's element, and `FROM` sharing its record's
+runs; and [tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
 which is on the [Miri slate](../../observe/miri_slate.md). Every runnable
 tutorial snippet is checked against its shown output by
 `tools/verify_snippets.py` through the binary.
@@ -519,9 +527,6 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
-- [A value's type is its surface](../../roadmap/gradual-typing/type-is-the-surface.md)
-  — `ATTR` and `FROM` reading through the carried type, and `FROM` a retype to
-  its record's projection.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

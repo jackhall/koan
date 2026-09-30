@@ -7,7 +7,7 @@
 //! restamps the top node alone, so a read applies it on the way down, and a nested part obeys it
 //! all the same without the retype ever walking the value.
 //!
-//! [`Surface`] is a container or tagged value opened at the type it is seen at, plain or a knot'x
+//! [`Surface`] is a container or tagged value opened at the type it is seen at, plain or a knot's
 //! data node: a record shows only the fields its seen type names, and every part it hands back is
 //! seen at its type there. Equality, rendering, the mark pass and the deep copy walk it; a reader
 //! that hands a part on as a value of its own [restamps](Seen::restamped) it.
