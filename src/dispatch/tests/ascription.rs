@@ -207,17 +207,24 @@ fn an_ascription_that_can_never_hold_refuses_the_load() {
 }
 
 #[test]
-fn a_container_parameter_is_exact() {
+fn a_container_or_nominal_parameter_is_exact() {
     loaded(
         "NEWTYPE (Type AS Boxed)\n\
+         NEWTYPE Distance = Number\n\
+         UNION Maybe = #{Some: Number, None: Null}\n\
          LET f = (FN :{xs :(LIST OF Any), r :{x :Number}, d :(MAP Str -> Number), \
-         u :(Number | Str), b :(Boxed {Type = Number})} -> Any = #(xs))",
+         u :(Number | Str), b :(Boxed {Type = Number}), n :Distance, bb :Boxed, \
+         s :(Maybe.Some), m :Maybe} -> Any = #(xs))",
         |program| {
             let f = body(program, program.shape(), "f");
             for (name, declared) in [
                 ("xs", ":(LIST OF Any)"),
                 ("r", ":{x :Number}"),
                 ("d", ":(MAP Str -> Number)"),
+                ("b", ":(Boxed {Type = Number})"),
+                ("n", "Distance"),
+                ("bb", "Boxed"),
+                ("s", "Some"),
             ] {
                 let declared = declared.to_string();
                 assert_eq!(ends(program, f, name), (declared.clone(), declared));
@@ -228,11 +235,69 @@ fn a_container_parameter_is_exact() {
                 (never.clone(), ":(Number | Str)".to_string())
             );
             assert_eq!(
-                ends(program, f, "b"),
-                (never, ":(Boxed {Type = Number})".to_string()),
-                "a family application stays at most itself"
+                ends(program, f, "m"),
+                (never, ":(Some | None)".to_string()),
+                "a union keeps a variant's own type"
             );
         },
+    );
+}
+
+/// The `KIND` overloads a nominal test dispatches a boxed value through.
+const KIND: &str = "NEWTYPE (Type AS Boxed)\n\
+                    UNION Maybe = #{Some: Number, None: Null}\n\
+                    EXPR #(KIND x :(Boxed {Type = :(Number | Str)})) -> Str = #(\"number or str\")\n\
+                    EXPR #(KIND x :Boxed) -> Str = #(\"boxed\")\n";
+
+#[test]
+fn a_nominal_ascription_is_exact() {
+    let source = format!(
+        "{KIND}LET boxed = ((Boxed 7) :! Boxed)\n\
+         LET maybe = ((Maybe.Some 1) :! Maybe)\n\
+         LET kind = (KIND boxed)"
+    );
+    loaded(&source, |program| {
+        let top = program.shape();
+        let boxed = "Boxed".to_string();
+        assert_eq!(ends(program, top, "boxed"), (boxed.clone(), boxed));
+        assert_eq!(
+            ends(program, top, "maybe"),
+            ("Never".to_string(), ":(Some | None)".to_string()),
+            "a union keeps a variant's own type"
+        );
+        assert_eq!(
+            let_narrowing(program, top, "kind"),
+            "selected",
+            "the application overload is never over an exact bare family"
+        );
+    });
+}
+
+#[test]
+fn a_nominal_parameter_selects_at_load_and_a_union_keeps_its_variant() {
+    let source = format!(
+        "{KIND}EXPR #(PASS b :Boxed) -> Any = #(b)\n\
+         LET show = FN EXPR #(SHOW b :Boxed) -> Str = #(\n  \
+         LET kind = (KIND b)\n  \
+         kind\n\
+         )\n\
+         EXPR #(DESCRIBE x :(Maybe.Some)) -> Str = #(\"has a value\")\n\
+         EXPR #(DESCRIBE x :(Maybe.None)) -> Str = #(\"empty\")\n\
+         EXPR #(TAG m :Maybe) -> Any = #(m)\n"
+    );
+    loaded(&source, |program| {
+        let shown = body(program, program.shape(), "show");
+        assert_eq!(let_narrowing(program, shown, "kind"), "selected");
+    });
+    // `PASS`'s and `TAG`'s bodies finish with their parameter, so the run's check reads an exact
+    // `Boxed` and an at-most `Maybe` against what each carries.
+    assert_eq!(
+        run(&format!(
+            "{source}PRINT (SHOW (Boxed 7))\n\
+             PRINT (KIND (PASS (Boxed 7)))\n\
+             PRINT (DESCRIBE (TAG (Maybe.Some 1)))"
+        )),
+        "boxed\nboxed\nhas a value"
     );
 }
 

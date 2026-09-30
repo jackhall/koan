@@ -6,8 +6,9 @@
 //! [type channel's load pass](crate::elaborate::type_channel) fixed — a parameter's declared type
 //! is its reads', an ascription's type its own, a callee's declared return its calls', and a
 //! literal's, a container's, a construction's and a selected candidate's own type flow up. A
-//! parameter or an ascription is exactly its type where that is a list, dict or record type, since
-//! the run retypes the value to it, and at most its type otherwise. What the load cannot bound is
+//! parameter or an ascription is exactly its type where the retype makes it so — a list, dict or
+//! record type or a nominal one — since the run retypes the value to it, and at most its type
+//! otherwise. What the load cannot bound is
 //! `[Never, Any]`. A static type may hold the lexical variables of its **chain** — the shapes from
 //! the program or a quote's code down, numbered as the type channel numbers them — and a crossing
 //! into code, or an `EVAL` leaving it, is read through [`bound_above`], so no variable leaks across.
@@ -85,14 +86,17 @@ fn under(upper: KType) -> Interval {
     }
 }
 
-/// The static type of a value retyped to `declared` — an ascription's, a parameter's: exactly
-/// `declared` where it is a list, dict or record type, which every value of that kind is retyped
-/// to, and at most `declared` otherwise.
-fn exact_at_container(types: &TypeRegistry<'_>, declared: KType) -> Interval {
+/// The static type of a value retyped to `declared` (an ascription's, a parameter's, a frame's
+/// return): exactly `declared` where every value satisfying it is retyped to it — a list, dict or
+/// record type, a family or its application, a newtype or a union's variant — and at most
+/// `declared` otherwise; a union keeps each variant's own type.
+fn retyped_to(types: &TypeRegistry<'_>, declared: KType) -> Interval {
     match types.node(declared) {
-        TypeNode::List { .. } | TypeNode::Dict { .. } | TypeNode::Record { .. } => {
-            Interval::point(declared)
-        }
+        TypeNode::List { .. }
+        | TypeNode::Dict { .. }
+        | TypeNode::Record { .. }
+        | TypeNode::ConstructorApply { .. }
+        | TypeNode::SetMember { .. } => Interval::point(declared),
         _ => under(declared),
     }
 }
@@ -295,7 +299,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 TypeNode::KFunction { params, .. } => params.get(name.symbol()),
                 _ => None,
             });
-        exact_at_container(self.types, declared.unwrap_or(KType::ANY))
+        retyped_to(self.types, declared.unwrap_or(KType::ANY))
     }
 
     /// A callable body's function type as its body reads it: its own group instantiated at its
@@ -481,7 +485,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         if is_subtype_of(types, scratch, typed.upper, ascribed) {
             self.chain[level].settled.push(Site::of_node(node));
         }
-        Ok(exact_at_container(types, ascribed))
+        Ok(retyped_to(types, ascribed))
     }
 
     /// A leaf part: a literal's type, a name's binder's, a quote's code type, a type value's kind,
