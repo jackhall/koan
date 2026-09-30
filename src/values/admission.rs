@@ -30,7 +30,16 @@ pub fn satisfies<X: Knotted>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
-    let carried = value.ktype();
+    type_satisfies(slot, value.ktype(), types, scratch)
+}
+
+/// [`satisfies`] over the type a value is carried or seen at.
+pub(super) fn type_satisfies(
+    slot: KType,
+    carried: KType,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> bool {
     if types.contains_quantified(slot) {
         let mut collector = Collector::new(scratch, &[]);
         return admits_with(types, scratch, slot, carried, Variance::Co, &mut collector).is_ok();

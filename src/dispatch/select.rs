@@ -84,11 +84,13 @@ pub(super) fn selected<'x, 'graph, 'here>(
         match candidate {
             Candidate::One(coordinate) => consider(at.view.read(coordinate), verdict),
             Candidate::Spread(coordinate) => {
-                if let Some(functions) = at.view.read(coordinate).as_list() {
-                    functions
-                        .cells()
-                        .iter()
-                        .for_each(|function| consider(*function, Verdict::Maybe));
+                let spread = at.view.read(coordinate);
+                if let (Some(_), Some(functions)) =
+                    (spread.as_list(), spread.surface(types, scratch))
+                {
+                    for at in 0..functions.len() {
+                        consider(functions.child(at, types, scratch).value(), Verdict::Maybe);
+                    }
                 }
             }
         }
@@ -203,8 +205,8 @@ fn registered_shape(candidate: KValue<'_, '_>) -> Option<KType> {
     }
 }
 
-/// The argument record of a keyworded call of `registered`'x function over `operands`, with each
-/// type parameter the shape's group solved to `solution`, built in `writer`'x region.
+/// The argument record of a keyworded call of `registered`'s function over `operands`, with each
+/// type parameter the shape's group solved to `solution`, built in `writer`'s region.
 pub(super) fn arguments<'graph, 'here>(
     types: &TypeRegistry<'_>,
     writer: Writer<'here>,

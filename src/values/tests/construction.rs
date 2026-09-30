@@ -6,7 +6,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KKind, KType, TypeNode};
 use crate::values::{Key, KeyRejected, TypeValue, Weight};
 
-use super::{Dict, List, Record, Tagged, TypeSymbol, Value, pin, text, with_fixture};
+use super::{Dict, List, Record, Tagged, TypeSymbol, Value, entry, held, pin, text, with_fixture};
 
 const WORD: Weight = Weight::flat::<Value<'static>>();
 
@@ -19,7 +19,7 @@ fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
             let strings = [text(writer, "ab"), text(writer, "cde")];
             let list = List::new(writer, strings.into_iter(), types, scratch);
             assert_eq!(list.len(), 2);
-            assert_eq!(list.get(1).and_then(Value::as_str), Some("cde"));
+            assert_eq!(list.cells().get(1).and_then(Value::as_str), Some("cde"));
             assert_eq!(list.ktype(), types.list(KType::STR));
             assert_eq!(
                 list.weight(),
@@ -70,8 +70,8 @@ fn a_record_sorts_its_fields_and_memoizes_the_record_of_their_types() {
             let fields = [(y, text(writer, "b")), (x, Value::Number(1.0))];
             let record = Record::new(writer, &fields, types, scratch);
             assert!(record.names().is_sorted());
-            assert!(matches!(record.field(x.symbol()), Some(Value::Number(1.0))));
-            assert_eq!(record.field(y.symbol()).and_then(Value::as_str), Some("b"));
+            assert!(matches!(held(record, x.symbol()), Some(Value::Number(1.0))));
+            assert_eq!(held(record, y.symbol()).and_then(Value::as_str), Some("b"));
             assert_eq!(
                 record.ktype(),
                 types.record(scratch, &[(x, KType::NUMBER), (y, KType::STR)])
@@ -103,7 +103,7 @@ fn a_dict_keeps_the_last_of_a_repeated_key_and_reads_in_key_order() {
                 (Key::str("b"), Value::Number(5.0)),
             ];
             let dict = Dict::new(writer, &entries, types, scratch);
-            let keys: Vec<Key<'_>> = dict.entries().map(|(key, _)| *key).collect();
+            let keys: Vec<Key<'_>> = dict.keys().to_vec();
             assert_eq!(
                 keys,
                 [
@@ -113,8 +113,11 @@ fn a_dict_keeps_the_last_of_a_repeated_key_and_reads_in_key_order() {
                     Key::str("b")
                 ]
             );
-            assert!(matches!(dict.get(&Key::str("b")), Some(Value::Number(5.0))));
-            assert!(dict.get(&Key::str("c")).is_none());
+            assert!(matches!(
+                entry(dict, &Key::str("b")),
+                Some(Value::Number(5.0))
+            ));
+            assert!(entry(dict, &Key::str("c")).is_none());
             assert_eq!(dict.ktype(), {
                 let key = crate::type_lattice::join_iter(
                     types,
@@ -366,14 +369,14 @@ fn lowering_builds_nested_literals_and_refuses_names_and_quotes() {
                 panic!("a nested list literal lowers");
             };
             assert_eq!(outer.len(), 2);
-            let inner = outer.get(1).and_then(Value::as_list).unwrap();
-            assert_eq!(inner.get(0).and_then(Value::as_str), Some("a"));
+            let inner = outer.cells().get(1).and_then(Value::as_list).unwrap();
+            assert_eq!(inner.cells().first().and_then(Value::as_str), Some("a"));
             let Some(Value::Dict(dict)) = Value::lower_part(writer, &dict, types, scratch) else {
                 panic!("a dict literal of lowerable entries lowers");
             };
-            assert!(dict.get(&Key::str("k")).and_then(Value::as_str) == Some("s"));
+            assert!(entry(dict, &Key::str("k")).and_then(Value::as_str) == Some("s"));
             assert!(
-                dict.get(&Key::number(2.0).unwrap())
+                entry(dict, &Key::number(2.0).unwrap())
                     .and_then(Value::as_record)
                     .is_some()
             );

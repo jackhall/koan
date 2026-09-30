@@ -11,7 +11,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{COPY_RATIO, Key, ValueFamily, cross, cross_here, verdict};
 
-use super::{Dict, List, Record, Step, Tagged, Value, copy, pin, text, with_fixture};
+use super::{Dict, List, Record, Step, Tagged, Value, copy, entry, held, pin, text, with_fixture};
 
 #[test]
 fn a_copied_list_outlives_its_home() {
@@ -45,11 +45,11 @@ fn a_copied_list_outlives_its_home() {
                 let Value::List(outer) = context.read(&carrier).value() else {
                     panic!("the kept list redeems as a list");
                 };
-                let inner = outer.get(0).and_then(Value::as_list).unwrap();
-                assert_eq!(inner.get(1).and_then(Value::as_str), Some("beta"));
-                let dict = outer.get(1).and_then(Value::as_dict).unwrap();
+                let inner = outer.cells().first().and_then(Value::as_list).unwrap();
+                assert_eq!(inner.cells().get(1).and_then(Value::as_str), Some("beta"));
+                let dict = outer.cells().get(1).and_then(Value::as_dict).unwrap();
                 assert_eq!(
-                    dict.get(&Key::str("key")).and_then(Value::as_str),
+                    entry(dict, &Key::str("key")).and_then(Value::as_str),
                     Some("gamma")
                 );
             })
@@ -89,7 +89,7 @@ fn a_pinned_record_reads_after_its_home_seals() {
                     panic!("the kept record redeems as a record");
                 };
                 assert_eq!(
-                    record.field(name.symbol()).and_then(Value::as_str),
+                    held(record, name.symbol()).and_then(Value::as_str),
                     Some("koan")
                 );
             })
@@ -125,10 +125,7 @@ fn a_kept_value_redeems_in_a_later_step() {
                 let Value::Dict(dict) = context.read(&carrier).value() else {
                     panic!("the kept dict redeems as a dict");
                 };
-                let texts: Vec<&str> = dict
-                    .entries()
-                    .filter_map(|(_, cell)| cell.as_str())
-                    .collect();
+                let texts: Vec<&str> = dict.cells().iter().filter_map(Value::as_str).collect();
                 assert_eq!(texts, ["one", "two"]);
             })
             .unwrap();
@@ -160,7 +157,7 @@ fn crossing_here_brings_a_value_back_into_the_step() {
                     scratch,
                 );
                 assert_eq!(wrapped.ktype(), types.list(back.ktype()));
-                assert_eq!(back.get(0).and_then(Value::as_str), Some("here"));
+                assert_eq!(back.cells().first().and_then(Value::as_str), Some("here"));
             })
             .unwrap();
         graph.release(other, ReleaseAbsorption::IntoHolder).unwrap();
@@ -349,7 +346,10 @@ fn a_copy_lays_down_each_part_at_the_type_its_holder_names() {
                 let source = context.lift::<ValueFamily>(retyped);
                 let crossed = cross(context, dest, &source, types).unwrap();
                 let copied = context.read(&crossed).value().as_list().expect("a list");
-                let element = copied.get(0).and_then(Value::as_record).expect("a record");
+                let element = copied
+                    .cells().first()
+                    .and_then(Value::as_record)
+                    .expect("a record");
                 assert_eq!(element.cells().len(), 1);
                 assert_eq!(element.ktype(), narrow);
 
@@ -415,7 +415,7 @@ fn a_data_node_seen_at_another_type_copies_as_a_plain_value() {
                     .value()
                     .as_record()
                     .expect("a record");
-                let Some(Holding::Record(laid)) = copied.field(held.symbol()) else {
+                let Some(Holding::Record(laid)) = super::held(copied, held.symbol()) else {
                     panic!("the node copies as a plain record");
                 };
                 assert_eq!(laid.ktype(), narrow);

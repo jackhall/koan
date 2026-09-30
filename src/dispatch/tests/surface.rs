@@ -4,6 +4,10 @@
 
 use super::run;
 
+/// A function handing back its argument at `Any`, so the load no longer knows the argument's type
+/// and a read the load would refuse reaches the operator run.
+const HIDE: &str = "EXPR #(HIDE v :Any) -> Any = #(v)\n";
+
 #[test]
 fn a_retyped_record_prints_and_compares_at_its_type() {
     assert_eq!(
@@ -101,5 +105,41 @@ fn a_widened_literal_element_hides_its_extra_fields() {
         run("PRINT [{x = 1, y = 2}, {x = 3}]\n\
              PRINT ([{x = 1, y = 2}, {x = 3}] == [{x = 1, y = 9}, {x = 3}])"),
         "[{x = 1}, {x = 3}]\ntrue"
+    );
+}
+
+#[test]
+fn a_field_read_sees_only_the_fields_the_type_names() {
+    assert_eq!(
+        run(&format!(
+            "{HIDE}LET r = ({{x = 1, y = \"a\"}} :! :{{x :Number}})\n\
+             PRINT (ATTR (HIDE r) y)"
+        )),
+        "error: :{x :Number} has no field y"
+    );
+    assert_eq!(
+        run(&format!(
+            "{HIDE}LET n = ({{p = {{x = 1, y = 2}}}} :! :{{p :{{x :Number}}}})\n\
+             PRINT n.p\n\
+             PRINT (ATTR (HIDE n.p) y)"
+        )),
+        "{x = 1}\nerror: :{x :Number} has no field y"
+    );
+}
+
+#[test]
+fn a_field_read_through_a_tagged_value_sees_its_representation() {
+    assert_eq!(
+        run("NEWTYPE Point = :{x :Number, y :Number}\n\
+             LET p = (Point {x = 1, y = 2, z = 3})\n\
+             PRINT p.x\n\
+             PRINT p.z"),
+        "1\nerror: Point has no field z"
+    );
+    assert_eq!(
+        run("NEWTYPE (Type AS Boxed)\n\
+             LET b = ((Boxed {x = 1, y = 2}) :! (Boxed {Type = :{x :Number}}))\n\
+             PRINT b.y"),
+        "error: :(Boxed {Type = :{x :Number}}) has no field y"
     );
 }

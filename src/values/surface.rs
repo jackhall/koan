@@ -1,9 +1,9 @@
-//! The one door every read of a container or tagged value goes through: a value'x type is its
+//! The one door every read of a container or tagged value goes through: a value's type is its
 //! surface. See [README.md § The type memo and `satisfies`](README.md#the-type-memo-and-satisfies).
 //!
-//! A read sees a value at a type ([`Seen`]): at the top, the value'x own memo; below, what the
-//! holder'x seen type names for the part there — a field, element or entry type, or a tagged
-//! value'x [representation](super::representation) — narrowed as a retype narrows. A retype
+//! A read sees a value at a type ([`Seen`]): at the top, the value's own memo; below, what the
+//! holder's seen type names for the part there — a field, element or entry type, or a tagged
+//! value's [representation](super::representation) — narrowed as a retype narrows. A retype
 //! restamps the top node alone, so a read applies it on the way down, and a nested part obeys it
 //! all the same without the retype ever walking the value.
 //!
@@ -16,6 +16,7 @@ use crate::memory::{BumpAllocator, Writer};
 use crate::symbols::Symbol;
 use crate::type_lattice::{KType, TypeNode, TypeRegistry, is_subtype_of, meet};
 
+use super::admission::type_satisfies;
 use super::circular::{Circular, Resolved};
 use super::{Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Value, representation};
 
@@ -45,9 +46,20 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         self.ktype
     }
 
-    /// The value seen where a holder'x type names `declared` for it, after the caller has checked
-    /// it satisfies `declared`. The target is read member by member — `declared`'x members, or
-    /// `declared` alone — as the meet of the members of the value'x own kind that its seen type lies
+    /// Whether `slot` takes the value at the type it is seen at: [`satisfies`](super::satisfies)
+    /// over that type.
+    pub fn satisfies(
+        &self,
+        slot: KType,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+    ) -> bool {
+        type_satisfies(slot, self.ktype, types, scratch)
+    }
+
+    /// The value seen where a holder's type names `declared` for it, after the caller has checked
+    /// it satisfies `declared`. The target is read member by member — `declared`'s members, or
+    /// `declared` alone — as the meet of the members of the value's own kind that its seen type lies
     /// under: a list, dict or record node for a container, a node naming its constructor for a
     /// tagged value. Where `declared` has none, and for every other value, the seen type stands.
     pub fn seen_at(
@@ -101,7 +113,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     }
 
     /// The value handed on as a value of its own, restamped at its seen type: a plain value takes
-    /// it as its handle over the same cells; a knot'x data node, whose memo its knot cannot
+    /// it as its handle over the same cells; a knot's data node, whose memo its knot cannot
     /// restamp, is laid down as a plain value of its kind over its cells, each edge resolved to its
     /// sibling.
     pub fn restamped(self, writer: Writer<'cell>) -> Value<'cell, X> {
@@ -192,7 +204,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
         Seen::of(*self).surface(types, scratch)
     }
 
-    /// This value'x field `name`, read at its own memo: [`Seen::field`].
+    /// This value's field `name`, read at its own memo: [`Seen::field`].
     pub fn field(
         &self,
         name: Symbol,
@@ -241,7 +253,7 @@ pub(super) enum Parts<'x, 'a, X> {
         cells: Cells<'a, X>,
     },
     /// `fields` is what the seen type names, sorted by symbol as `names` is; `names` and `cells`
-    /// are the record'x whole runs.
+    /// are the record's whole runs.
     Record {
         fields: &'x [(Symbol, KType)],
         names: &'a [Symbol],
@@ -262,7 +274,7 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
     }
 
     /// How many parts it shows: its elements or entries, the fields its seen type names, or a
-    /// tagged value'x one payload.
+    /// tagged value's one payload.
     pub fn len(&self) -> usize {
         match self.parts {
             Parts::List { cells, .. } | Parts::Dict { cells, .. } => cells.len(),
@@ -313,7 +325,7 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
         }
     }
 
-    /// A record'x field name at `at`, in symbol order.
+    /// A record's field name at `at`, in symbol order.
     pub fn name(&self, at: usize) -> Symbol {
         match self.parts {
             Parts::Record { fields, .. } => fields[at].0,
@@ -321,7 +333,7 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
         }
     }
 
-    /// A dict'x key at `at`, in key order.
+    /// A dict's key at `at`, in key order.
     pub fn key(&self, at: usize) -> &'a Key<'a> {
         match self.parts {
             Parts::Dict { keys, .. } => &keys[at],
@@ -369,7 +381,7 @@ impl<'a, X: Knotted> Cells<'a, X> {
     }
 }
 
-/// A container or tagged value'x runs, before a type opens them.
+/// A container or tagged value's runs, before a type opens them.
 enum Raw<'a, X> {
     List(Cells<'a, X>),
     Dict(&'a [Key<'a>], Cells<'a, X>),
@@ -377,7 +389,7 @@ enum Raw<'a, X> {
     Tagged(Value<'a, X>),
 }
 
-/// `value`'x runs, beside the data node it is when it is one. `None` for a scalar, a string, a
+/// `value`'s runs, beside the data node it is when it is one. `None` for a scalar, a string, a
 /// type and every knot member but a data node.
 fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X>)> {
     let plain = match value {
@@ -413,7 +425,7 @@ enum Kind {
     Tagged,
 }
 
-/// `value`'x kind, plain or a data node; `None` for every other value.
+/// `value`'s kind, plain or a data node; `None` for every other value.
 fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
     let node = match value {
         Value::List(_) => return Some(Kind::List),
@@ -434,8 +446,8 @@ fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
     })
 }
 
-/// A knot'x data node laid down as a plain value of its kind under `target`: each cell resolved
-/// through `member`, so an edge becomes the sibling it names; a dict'x keys and a record'x names
+/// A knot's data node laid down as a plain value of its kind under `target`: each cell resolved
+/// through `member`, so an edge becomes the sibling it names; a dict's keys and a record's names
 /// shared with the node.
 fn laid_down<'cell, X: Knotted + 'cell>(
     writer: Writer<'cell>,

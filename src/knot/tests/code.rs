@@ -6,6 +6,7 @@ use std::ptr;
 
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::display_name;
+use crate::values::tests::parts;
 use crate::values::{Knotted as _, Link, Value};
 
 use super::super::{Knotted, UsingRefused, using};
@@ -225,9 +226,7 @@ fn using_fills_a_keyworded_hole_with_a_module_s_registrations_at_its_key() {
             };
             assert_eq!(*name, greet);
             assert_eq!(list.len(), 1, "the module's one registration at the key");
-            let registered = list
-                .get(0)
-                .expect("an item")
+            let registered = parts(Value::List(list), types, scratch)[0]
                 .as_callable()
                 .and_then(Knotted::function)
                 .and_then(|function| function.registered_shape())

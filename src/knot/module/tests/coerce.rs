@@ -6,7 +6,8 @@ use crate::knot::tests::{declared, pin, with_fixture};
 use crate::memory::ScopeId;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Members, TypeNode, specialize_schema};
-use crate::values::{Knotted as _, Resolved, Value};
+use crate::values::tests::parts;
+use crate::values::{Knotted as _, Record, Resolved, Value};
 
 use super::super::coerce::{Coercion, CoercionRefused, coerce};
 use super::super::view::{Ascription, Unascribable, ascribe};
@@ -19,6 +20,7 @@ SIG Bag = #[(TYPE Carrier) \
 (VAL none :(LIST OF Carrier)) \
 (VAL by_name :(MAP Str -> Carrier)) \
 (VAL pair :{a :Carrier, b :Number}) \
+(VAL wide :{a :Carrier}) \
 (VAL maybe :(Carrier | Null)) \
 (VAL step :(FN :{x :Carrier} -> Carrier)) \
 (VAL plain :Number)]
@@ -28,6 +30,7 @@ MODULE m = ((LET Carrier = Number) \
 (LET none = []) \
 (LET by_name = {\"a\": 1}) \
 (LET pair = {a = 1 b = 2}) \
+(LET wide = {a = 1 b = 2}) \
 (LET maybe = 3) \
 (LET step = (FN :{x :Number} -> Number = #(x))) \
 (LET plain = 7))";
@@ -65,7 +68,7 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
             };
             assert_eq!(many.ktype(), list_of_mint);
             assert_eq!(many.len(), 2);
-            for cell in many.cells() {
+            for cell in parts(Value::List(many), types, scratch) {
                 assert_eq!(cell.ktype(), mint);
             }
 
@@ -81,7 +84,7 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
                 panic!("a dict slot stays a dict");
             };
             assert_eq!(by_name.ktype(), types.dict(KType::STR, mint));
-            assert_eq!(by_name.cells()[0].ktype(), mint);
+            assert_eq!(parts(Value::Dict(by_name), types, scratch)[0].ktype(), mint);
 
             // A record coerces each field against its own declared type, so `b :Number` is
             // carried while `a :Carrier` seals.
@@ -90,8 +93,14 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
             };
             let a = fixture.name("a").symbol();
             let b = fixture.name("b").symbol();
-            assert_eq!(pair.field(a).expect("the field `a`").ktype(), mint);
-            assert_eq!(pair.field(b).expect("the field `b`").ktype(), KType::NUMBER);
+            let field = |name| {
+                Value::Record(pair)
+                    .field(name, types, scratch)
+                    .expect("the field")
+                    .value()
+            };
+            assert_eq!(field(a).ktype(), mint);
+            assert_eq!(field(b).ktype(), KType::NUMBER);
             assert_eq!(
                 pair.ktype(),
                 types.record(
@@ -102,6 +111,19 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
                     ]
                 )
             );
+
+            // A record coerces the fields its slot declares, and keeps no other.
+            let Value::Record(wide) = read("wide") else {
+                panic!("a record slot stays a record");
+            };
+            assert_eq!(
+                wide.ktype(),
+                types.record(scratch, &[(fixture.name("a"), mint)])
+            );
+            let fields = parts(Value::Record(wide), types, scratch);
+            assert_eq!(fields[0].ktype(), mint);
+            let alone = Record::new(writer, &[(fixture.name("a"), fields[0])], types, scratch);
+            assert_eq!(wide.weight(), alone.weight(), "`b` is not laid down");
 
             // A union coerces by the one declared member the value's type admits.
             let Value::Tagged(maybe) = read("maybe") else {

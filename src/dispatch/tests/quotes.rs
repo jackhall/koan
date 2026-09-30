@@ -133,3 +133,12 @@ fn a_named_hole_offered_by_eval_binds_where_the_eval_is_written() {
                   WITH_FIVE #(PRINT \\it)";
     assert_eq!(run(source), "5");
 }
+
+#[test]
+fn a_using_source_fills_only_the_fields_its_type_names() {
+    assert_eq!(
+        run("LET r = ({x = 1, y = 2} :! :{x :Number})\n\
+             EVAL (#(PRINT y) USING r)"),
+        "error: unbound name 'y'"
+    );
+}

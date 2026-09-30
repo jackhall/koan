@@ -2,8 +2,9 @@
 //!
 //! Under `:|` a view's abstract members are fresh mints, so a member declared at one of them no
 //! longer has the type it had in the source. The member is therefore not carried but rebuilt at
-//! the view's types: data is re-tagged through the admission barrier, a container is rebuilt cell
-//! by cell and re-stamped, a nested module is re-viewed, and a function is wrapped in a
+//! the view's types: data is re-tagged through the admission barrier, a container is rebuilt part
+//! by part from what its type shows — a record from the fields its slot declares, and no other —
+//! and re-stamped, a nested module is re-viewed, and a function is wrapped in a
 //! [barrier node](super::Coerced) a call will later go through.
 //!
 //! **The walk recurses on the declared type**, never on the two substituted types in lockstep. A
@@ -116,9 +117,11 @@ pub fn coerce<'graph, 'cell>(
             let Value::List(list) = value else {
                 return Err(CoercionRefused::Unsupported(declared));
             };
+            let surface = value.surface(cx.types, cx.scratch).expect("a list opens");
             let mut cells = BumpVec::with_capacity_in(list.len(), cx.scratch);
-            for cell in list.cells() {
-                cells.push(coerce(cx, *cell, element)?);
+            for at in 0..surface.len() {
+                let cell = surface.child(at, cx.types, cx.scratch).restamped(cx.writer);
+                cells.push(coerce(cx, cell, element)?);
             }
             let built = List::new(cx.writer, cells.iter().copied(), cx.types, cx.scratch);
             Ok(Value::List(if built.ktype() == dst {
@@ -134,9 +137,11 @@ pub fn coerce<'graph, 'cell>(
             let Value::Dict(dict) = value else {
                 return Err(CoercionRefused::Unsupported(declared));
             };
+            let surface = value.surface(cx.types, cx.scratch).expect("a dict opens");
             let mut entries = BumpVec::with_capacity_in(dict.len(), cx.scratch);
-            for (key, cell) in dict.entries() {
-                entries.push((*key, coerce(cx, *cell, cell_type)?));
+            for at in 0..surface.len() {
+                let cell = surface.child(at, cx.types, cx.scratch).restamped(cx.writer);
+                entries.push((*surface.key(at), coerce(cx, cell, cell_type)?));
             }
             let built = Dict::new(cx.writer, &entries, cx.types, cx.scratch);
             Ok(Value::Dict(if built.ktype() == dst {
@@ -146,15 +151,16 @@ pub fn coerce<'graph, 'cell>(
             }))
         }
         TypeNode::Record { fields } => {
-            let Value::Record(record) = value else {
+            if !matches!(value, Value::Record(_)) {
                 return Err(CoercionRefused::Unsupported(declared));
-            };
-            let mut built = BumpVec::with_capacity_in(record.len(), cx.scratch);
-            for (name, cell) in record.fields() {
-                let (binder, field_type) = fields
-                    .get_key_value(name)
-                    .expect("the record satisfies the slot, so it has every declared field");
-                built.push((binder, coerce(cx, *cell, field_type)?));
+            }
+            let mut built = BumpVec::with_capacity_in(fields.len(), cx.scratch);
+            for (binder, field_type) in fields.iter() {
+                let cell = value
+                    .field(binder.symbol(), cx.types, cx.scratch)
+                    .expect("the record satisfies the slot, so it has every declared field")
+                    .restamped(cx.writer);
+                built.push((binder, coerce(cx, cell, field_type)?));
             }
             let built = Record::new(cx.writer, &built, cx.types, cx.scratch);
             Ok(Value::Record(if built.ktype() == dst {

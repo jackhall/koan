@@ -40,12 +40,12 @@ use crate::scheduler::{
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{Canonical, Static};
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
-use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Collector, KType, TypeNode, TypeRegistry, Variance, admits_with, display_name,
     substitute_quantified,
 };
-use crate::values::{Link, List, TypeValue, Value, satisfies};
+use crate::values::{Link, List, TypeValue, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
@@ -302,10 +302,11 @@ pub fn eval<'graph, 'here>(
     if let Some(error) = shape.refusal() {
         return Err(CodeRefused::Shape(error));
     }
+    let scratch = Bump::new();
     let offers = |name: BinderSymbol| {
         offered
-            .as_record()
-            .is_some_and(|record| record.field(name.symbol()).is_some())
+            .field(name.symbol(), program.types(), &scratch)
+            .is_some()
     };
     for capture in shape.captures() {
         let bound = match capture.source {
@@ -485,7 +486,7 @@ fn frame<'graph, 'here>(
             ),
         )
     };
-    let record = arguments.as_record().ok_or_else(misnamed)?;
+    arguments.as_record().ok_or_else(misnamed)?;
     let shape = function.shape();
     let TypeNode::KFunction {
         quantifiers,
@@ -500,10 +501,11 @@ fn frame<'graph, 'here>(
     // nothing for having one in reach.
     let bump = Bump::new();
     let scratch = &bump;
+    let argument = |name: Symbol| arguments.field(name, types, scratch).ok_or_else(misnamed);
     let carried = |name: TypeSymbol| {
-        record
-            .field(name.symbol())
-            .and_then(|value| value.as_type())
+        arguments
+            .field(name.symbol(), types, scratch)
+            .and_then(|seen| seen.value().as_type())
             .map(|value| value.handle())
     };
     // The group's solution in canonical order. A keyworded call's selection carried it by name; a
@@ -526,7 +528,7 @@ fn frame<'graph, 'here>(
         CallKind::ByName => {
             let mut collector = Collector::new(scratch, bounds);
             for (parameter, declared) in params.iter() {
-                let argument = record.field(parameter.symbol()).ok_or_else(misnamed)?;
+                let argument = argument(parameter.symbol())?;
                 admits_with(
                     types,
                     scratch,
@@ -564,7 +566,7 @@ fn frame<'graph, 'here>(
             // parameter declares.
             BinderSymbol::Value(name) => {
                 parameters += 1;
-                let argument = *record.field(name.symbol()).ok_or_else(misnamed)?;
+                let argument = argument(name.symbol())?;
                 let declared = params
                     .get(name.symbol())
                     .expect("every value parameter is declared");
@@ -575,16 +577,16 @@ fn frame<'graph, 'here>(
                     _ => declared,
                 };
                 debug_assert!(
-                    satisfies(declared, &argument, types, scratch),
+                    argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
-                argument.retyped(writer, declared, types, scratch)
+                argument.seen_at(declared, types, scratch).restamped(writer)
             }
             // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
             // argument like any other, passed by keyword or by name.
             BinderSymbol::Type(name) if function.canonical_quantifier(name).is_none() => {
                 parameters += 1;
-                *record.field(name.symbol()).ok_or_else(misnamed)?
+                argument(name.symbol())?.value()
             }
             // A `FOR ALL` name is bound by **name**: the shape's type channel reaches here
             // symbol-sorted, not in the order the group was written, so a positional read would
@@ -613,7 +615,11 @@ fn frame<'graph, 'here>(
             .bind(slot, value)
             .expect("a fresh frame binds each parameter once");
     }
-    if parameters != record.len() {
+    if parameters
+        != arguments
+            .surface(types, scratch)
+            .map_or(0, |record| record.len())
+    {
         return Err(misnamed());
     }
     let returns = match &solution {
@@ -642,7 +648,7 @@ fn code_frame<'graph, 'here>(
     let member = code.as_code()?;
     let node = member.code()?;
     let shape = node.shape();
-    let record = offered.as_record()?;
+    offered.as_record()?;
     let find = |run: &[(BinderSymbol, Link<'here, Knotted<'graph, 'here>>)], name| {
         let at = run.binary_search_by_key(&name, |(held, _)| *held).ok()?;
         Some(run[at].1.resolve(member))
@@ -662,7 +668,9 @@ fn code_frame<'graph, 'here>(
                 }
                 None => return None,
             },
-            CaptureSource::Offered => *record.field(capture.name.symbol())?,
+            CaptureSource::Offered => offered
+                .field(capture.name.symbol(), program.types(), &bump)?
+                .value(),
         };
         links.push(Link::Value(value));
     }

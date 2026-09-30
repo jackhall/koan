@@ -15,6 +15,7 @@ use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome, Output};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::{Coordinate, Target};
 use crate::type_lattice::display_name;
+use crate::values::tests::parts;
 use crate::values::{Knotted as _, Link, Value};
 
 use evaluator::{Mini, record};
@@ -159,10 +160,10 @@ fn describe<'graph>(value: KValue<'graph, '_>, program: &'graph Program<'graph>)
         Value::Null => String::from("null"),
         Value::Str(text) => format!("{text:?}"),
         Value::List(list) => {
-            let cells: Vec<_> = list
-                .cells()
-                .iter()
-                .map(|cell| describe(*cell, program))
+            let scratch = Bump::new();
+            let cells: Vec<_> = parts(value, program.types(), &scratch)
+                .into_iter()
+                .map(|cell| describe(cell, program))
                 .collect();
             format!("[{}]@{:p}", cells.join(" "), list)
         }

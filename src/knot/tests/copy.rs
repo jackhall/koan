@@ -12,6 +12,7 @@ use std::ptr;
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::scope::{CaptureSlot, Slot};
 use crate::type_lattice::KType;
+use crate::values::tests::parts;
 use crate::values::{Circular, Link};
 use crate::values::{Knotted as _, Value, cross};
 
@@ -189,8 +190,8 @@ fn a_copied_knot_outlives_its_home() {
                 assert_eq!(captured_value(fixture, f, "greeting").as_str(), Some("hi"));
                 for holder in [f, g] {
                     let words = captured_value(fixture, holder, "words");
-                    let words = words.as_list().expect("`words` is a list");
-                    assert_eq!(words.get(1).and_then(Value::as_str), Some("beta"));
+                    let words = parts(words, fixture.types, fixture.scratch());
+                    assert_eq!(words[1].as_str(), Some("beta"));
                 }
             })
             .unwrap();
@@ -533,8 +534,8 @@ fn a_copied_module_outlives_its_home() {
                 let Value::Knotted(m) = context.read(&carrier).value() else {
                     panic!("the kept module redeems as a module");
                 };
-                let words = member(m, slots[0]).as_list().expect("a list member");
-                assert_eq!(words.get(1).and_then(Value::as_str), Some("beta"));
+                let words = parts(member(m, slots[0]), fixture.types, fixture.scratch());
+                assert_eq!(words[1].as_str(), Some("beta"));
                 let f = member(m, slots[1])
                     .as_callable()
                     .expect("a callable member");
@@ -588,7 +589,7 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                         let CrossedOperand::Copied { view, .. } = views[0] else {
                             panic!("the operand is copied");
                         };
-                        let cells = view.as_list().expect("a list").cells();
+                        let cells = parts(view, types, scratch);
                         let copies = copy_severed::<_, KnottedFamily, 2>(
                             writer,
                             &views[0],
@@ -603,15 +604,15 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                         )))
                     })
                     .unwrap();
-                let copied = context.read(&placed).value().as_list().expect("a list");
-                let [Value::Knotted(f), Value::Knotted(g)] = copied.cells() else {
+                let copied = parts(context.read(&placed).value(), types, scratch);
+                let [Value::Knotted(f), Value::Knotted(g)] = copied[..] else {
                     panic!("a list of two functions");
                 };
                 assert!(
                     f.member().knot() == g.member().knot(),
                     "one copy of the knot"
                 );
-                assert!(ptr::eq(captured_sibling(fixture, *f, "g").node(), g.node()));
+                assert!(ptr::eq(captured_sibling(fixture, f, "g").node(), g.node()));
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();

@@ -275,30 +275,6 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
         Self::from_runs(writer, self.keys, self.cells, ktype, self.weight)
     }
 
-    /// The cell under `key`, found by binary search; `key` may borrow anywhere.
-    pub fn get(&self, key: &Key<'_>) -> Option<&'cell C> {
-        let cells = self.cells;
-        self.keys
-            .binary_search_by(|probe| probe.cmp(key))
-            .ok()
-            .map(|at| &cells[at])
-    }
-
-    /// The entries in key order.
-    pub fn entries(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell C)> + use<'cell, X, C> {
-        self.keys.iter().zip(self.cells.iter())
-    }
-
-    pub fn keys(&self) -> &'cell [Key<'cell>] {
-        self.keys
-    }
-
-    pub fn cells(&self) -> &'cell [C] {
-        self.cells
-    }
-
     pub fn len(&self) -> usize {
         self.keys.len()
     }
@@ -313,5 +289,36 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
 
     pub fn weight(&self) -> Weight {
         self.weight
+    }
+}
+
+/// The runs a read outside `values` reaches only through [the door](super::surface).
+impl<'cell, X: Copy> Dict<'cell, X> {
+    pub(super) fn keys(&self) -> &'cell [Key<'cell>] {
+        self.keys
+    }
+
+    pub(super) fn cells(&self) -> &'cell [Value<'cell, X>] {
+        self.cells
+    }
+}
+
+/// A knot's data node's runs, which the knot layer ties and reads.
+impl<'cell, X: Copy> Dict<'cell, X, Link<'cell, X>> {
+    /// The cell under `key`, found by binary search; `key` may borrow anywhere.
+    pub fn get(&self, key: &Key<'_>) -> Option<&'cell Link<'cell, X>> {
+        let cells = self.cells;
+        self.keys
+            .binary_search_by(|probe| probe.cmp(key))
+            .ok()
+            .map(|at| &cells[at])
+    }
+
+    pub fn keys(&self) -> &'cell [Key<'cell>] {
+        self.keys
+    }
+
+    pub fn cells(&self) -> &'cell [Link<'cell, X>] {
+        self.cells
     }
 }

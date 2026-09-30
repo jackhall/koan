@@ -44,7 +44,7 @@ mod weight;
 pub mod working;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use admission::{
     ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,

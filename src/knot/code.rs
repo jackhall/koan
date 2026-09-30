@@ -306,7 +306,7 @@ pub fn using<'graph, 'cell>(
                 (!keyed.is_empty())
                     .then(|| Value::List(List::new(writer, keyed.iter().copied(), types, scratch)))
             }
-            name => super::field(source, name, types, scratch),
+            name => super::field(writer, source, name, types, scratch),
         };
         if let Some(value) = value {
             supplied.push((capture.name, Link::Value(value)));

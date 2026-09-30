@@ -92,14 +92,6 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
         Self::from_run(writer, self.cells, ktype, self.weight)
     }
 
-    pub fn cells(&self) -> &'cell [C] {
-        self.cells
-    }
-
-    pub fn get(&self, index: usize) -> Option<&'cell C> {
-        self.cells.get(index)
-    }
-
     pub fn len(&self) -> usize {
         self.cells.len()
     }
@@ -114,5 +106,19 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
 
     pub fn weight(&self) -> Weight {
         self.weight
+    }
+}
+
+/// The runs a read outside `values` reaches only through [the door](super::surface).
+impl<'cell, X: Copy> List<'cell, X> {
+    pub(super) fn cells(&self) -> &'cell [Value<'cell, X>] {
+        self.cells
+    }
+}
+
+/// A knot's data node's runs, which the knot layer ties and reads.
+impl<'cell, X: Copy> List<'cell, X, Link<'cell, X>> {
+    pub fn cells(&self) -> &'cell [Link<'cell, X>] {
+        self.cells
     }
 }

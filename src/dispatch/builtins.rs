@@ -27,7 +27,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSy
 use crate::type_lattice::{
     DispatchTokenElement, Interval, KType, TypeRegistry, builtin_types, meet,
 };
-use crate::values::{Circular, List, Record, TypeValue, Value};
+use crate::values::{Circular, List, Record, Seen, TypeValue, Value};
 
 use super::errors::Raised;
 use super::rules::{self, Given};
@@ -267,7 +267,7 @@ pub(super) fn run<'graph, 'here>(
     for operand in operands {
         let names: Option<&[BinderSymbol]> = match operand {
             Operand::Label(name) => Some(std::slice::from_ref(name)),
-            Operand::Value(value) => named(*value, scratch),
+            Operand::Value(value) => named(*value, program.types(), scratch),
         };
         given.push(Given {
             typed: Interval::point(operand.ktype()),
@@ -349,14 +349,20 @@ fn ran<'graph, 'here>(
         Native::Union => type_value(types.union_of(scratch, &[handle(value(0)), handle(value(1))])),
         Native::UnionOf => {
             let mut members = BumpVec::new_in(scratch);
-            members.extend(listed(value(0)).iter().map(|item| handle(*item)));
+            members.extend(
+                listed(value(0), types, scratch)
+                    .iter()
+                    .map(|item| handle(*item)),
+            );
             type_value(types.union_of(scratch, &members))
         }
         Native::Meet => type_value(meet(types, scratch, handle(value(0)), handle(value(1)))),
         Native::MeetOf => {
-            let met = listed(value(0)).iter().fold(KType::ANY, |met, item| {
-                meet(types, scratch, met, handle(*item))
-            });
+            let met = listed(value(0), types, scratch)
+                .iter()
+                .fold(KType::ANY, |met, item| {
+                    meet(types, scratch, met, handle(*item))
+                });
             type_value(met)
         }
         Native::ModuleMember => raise(Raised::ModuleMember),
@@ -373,7 +379,7 @@ fn ran<'graph, 'here>(
                     }),
                 });
             }
-            field(record, name).unwrap_or_else(|| {
+            field(record, name, writer, types, scratch).unwrap_or_else(|| {
                 raise(Raised::NoField {
                     of: record.ktype(),
                     field: name,
@@ -392,11 +398,11 @@ fn ran<'graph, 'here>(
         }
         Native::Project => {
             let record = value(1);
-            let names = listed(value(0));
+            let names = listed(value(0), types, scratch);
             let mut fields = BumpVec::with_capacity_in(names.len(), scratch);
             for name in names.iter() {
                 let name = label(Operand::Value(*name));
-                match field(record, name.symbol()) {
+                match field(record, name.symbol(), writer, types, scratch) {
                     Some(value) => fields.push((name, value)),
                     None => {
                         return Ran::Value(raise(Raised::NoField {
@@ -419,12 +425,18 @@ fn ran<'graph, 'here>(
     })
 }
 
-/// The cells of a list a slot admitted.
-fn listed<'graph, 'here>(value: KValue<'graph, 'here>) -> &'here [KValue<'graph, 'here>] {
-    value
-        .as_list()
-        .expect("a list slot admits lists alone")
-        .cells()
+/// The elements of a list a slot admitted, read through its surface into `scratch`.
+fn listed<'graph, 'here, 'x>(
+    value: KValue<'graph, 'here>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'x>,
+) -> &'x [KValue<'graph, 'here>] {
+    let list = value
+        .surface(types, scratch)
+        .expect("a list slot admits lists alone");
+    let mut elements = BumpVec::with_capacity_in(list.len(), scratch);
+    elements.extend((0..list.len()).map(|at| list.child(at, types, scratch).value()));
+    elements.leak()
 }
 
 /// The name a label is: a bare one as written, or the name a one-name quote's code is.
@@ -442,35 +454,46 @@ fn one_name(value: KValue<'_, '_>) -> Option<BinderSymbol> {
 }
 
 /// The names `value` holds: a one-name quote's code its name, and a list of them their names.
-fn named<'x>(value: KValue<'_, '_>, scratch: &'x Bump) -> Option<&'x [BinderSymbol]> {
+fn named<'x>(
+    value: KValue<'_, '_>,
+    types: &TypeRegistry<'_>,
+    scratch: &'x Bump,
+) -> Option<&'x [BinderSymbol]> {
     if let Some(name) = one_name(value) {
         return Some(std::slice::from_ref(scratch.alloc(name)));
     }
-    let cells = value.as_list()?.cells();
-    let mut names = BumpVec::with_capacity_in(cells.len(), scratch);
-    for cell in cells {
-        names.push(one_name(*cell)?);
+    value.as_list()?;
+    let mut names = BumpVec::new_in(scratch);
+    for element in listed(value, types, scratch) {
+        names.push(one_name(*element)?);
     }
     Some(names.leak())
 }
 
-/// The field `name` of `value`: a record's, read through every tagged layer over it, a knot's data
-/// node's included. `None` when no record holds it.
+/// The field `name` of `value`, restamped in `writer`'s region at the type it is seen at: a
+/// record's, read through every tagged layer over it — a knot's data node's included — at the
+/// representation that layer's identity names. `None` when the record under them does not show it.
 fn field<'graph, 'here>(
     value: KValue<'graph, 'here>,
     name: Symbol,
+    writer: Writer<'here>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'here>> {
+    let mut seen = Seen::of(value);
+    while tagged(seen.value()) {
+        let payload = seen.surface(types, scratch).expect("a tagged value opens");
+        seen = payload.child(0, types, scratch);
+    }
+    Some(seen.field(name, types, scratch)?.restamped(writer))
+}
+
+/// Whether `value` is tagged, a knot's data node included.
+fn tagged(value: KValue<'_, '_>) -> bool {
     match value {
-        Value::Record(record) => record.field(name).copied(),
-        Value::Tagged(tagged) => field(*tagged.payload(), name),
-        Value::Knotted(_) => match value.as_circular()? {
-            (holder, Circular::Record(record)) => {
-                record.field(name).map(|link| link.resolve(holder))
-            }
-            (holder, Circular::Tagged(tagged)) => field(tagged.payload().resolve(holder), name),
-            _ => None,
-        },
-        _ => None,
+        Value::Tagged(_) => true,
+        Value::Knotted(_) => matches!(value.as_circular(), Some((_, Circular::Tagged(_)))),
+        _ => false,
     }
 }
 
@@ -507,8 +530,9 @@ fn evaluated<'graph, 'here>(
                     match candidate {
                         Candidate::One(coordinate) => functions.push(at.view.read(*coordinate)),
                         Candidate::Spread(coordinate) => {
-                            if let Some(spread) = at.view.read(*coordinate).as_list() {
-                                functions.extend(spread.cells().iter().copied());
+                            let spread = at.view.read(*coordinate);
+                            if spread.as_list().is_some() {
+                                functions.extend(listed(spread, types, &scratch));
                             }
                         }
                     }

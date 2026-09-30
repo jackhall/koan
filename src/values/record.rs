@@ -127,38 +127,39 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
         Self::from_runs(writer, self.names, self.cells, ktype, self.weight)
     }
 
-    /// The cell under `name`, found by binary search.
-    pub fn field(&self, name: Symbol) -> Option<&'cell C> {
-        let cells = self.cells;
-        self.names.binary_search(&name).ok().map(|at| &cells[at])
-    }
-
-    /// The fields in symbol order.
-    pub fn fields(&self) -> impl ExactSizeIterator<Item = (Symbol, &'cell C)> + use<'cell, X, C> {
-        self.names.iter().copied().zip(self.cells.iter())
-    }
-
-    pub fn names(&self) -> &'cell [Symbol] {
-        self.names
-    }
-
-    pub fn cells(&self) -> &'cell [C] {
-        self.cells
-    }
-
-    pub fn len(&self) -> usize {
-        self.names.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
-    }
-
     pub fn ktype(&self) -> KType {
         self.ktype
     }
 
     pub fn weight(&self) -> Weight {
         self.weight
+    }
+}
+
+/// The runs a read outside `values` reaches only through [the door](super::surface).
+impl<'cell, X: Copy> Record<'cell, X> {
+    pub(super) fn names(&self) -> &'cell [Symbol] {
+        self.names
+    }
+
+    pub(super) fn cells(&self) -> &'cell [Value<'cell, X>] {
+        self.cells
+    }
+}
+
+/// A knot's data node's runs, which the knot layer ties and reads.
+impl<'cell, X: Copy> Record<'cell, X, Link<'cell, X>> {
+    /// The cell under `name`, found by binary search.
+    pub fn field(&self, name: Symbol) -> Option<&'cell Link<'cell, X>> {
+        let cells = self.cells;
+        self.names.binary_search(&name).ok().map(|at| &cells[at])
+    }
+
+    pub fn names(&self) -> &'cell [Symbol] {
+        self.names
+    }
+
+    pub fn cells(&self) -> &'cell [Link<'cell, X>] {
+        self.cells
     }
 }

@@ -214,7 +214,11 @@ impl<'graph> Program<'graph> {
             return None;
         }
         let field = BinderSymbol::declared("message", self.symbols)?.symbol();
-        tagged.payload().as_record()?.field(field)?.as_str()
+        let scratch = Bump::new();
+        let payload = value
+            .surface(self.types, &scratch)?
+            .child(0, self.types, &scratch);
+        payload.field(field, self.types, &scratch)?.value().as_str()
     }
 
     /// `value` held to `contract`: an error value passes unchanged, a value satisfying the

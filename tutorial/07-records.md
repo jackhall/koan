@@ -150,7 +150,8 @@ error: Point cannot wrap :{x :Str y :Number}: its representation is :{x :Number 
 ```
 
 The required fields are a *minimum*, though — a record may carry **more** fields
-than its type names, and the extras are kept and readable:
+than its type names. A `Point` shows only the fields its representation names,
+so the extra one is hidden:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
@@ -159,7 +160,7 @@ PRINT p.z
 ```
 
 ```text
-5
+error: Point has no field z
 ```
 
 This is *width subtyping*: a wider record (more fields) stands in wherever a
