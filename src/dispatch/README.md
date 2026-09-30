@@ -152,7 +152,7 @@ It gives every value expression and value binder a **static type**: an
 within which every type the run carries there lies — its upper end `Any` where
 the load cannot bound it from above, its lower end `Never` where it cannot bound
 it from below. A static type is **exact** where its ends meet: the run carries
-that very type. The pass reads each node through the evaluator's own reading of
+that very type, each lexical variable in it bound as the run binds it. The pass reads each node through the evaluator's own reading of
 it, so the load types a node as it evaluates, and it builds on what
 [the type channel's load pass](../elaborate/README.md#the-type-channel-at-load)
 fixed:
@@ -174,9 +174,15 @@ fixed:
   function; a union variant construction and `ATTR` over a record are at most
   `Any`;
 - an `EVAL` of code the load traces to a written quote — its operand, or a name
-  `LET` binds to one — is at most the code's last statement's upper end, read
-  through [`bound_above`](../type_lattice/README.md#substitute-then-ask) since
-  the code roots a chain of its own; any other `EVAL` is at most `Any`.
+  `LET` binds to one — is at most the code's last statement's upper end as the
+  code runs there, read through
+  [`bound_above`](../type_lattice/README.md#substitute-then-ask) since the code
+  roots a chain of its own; any other `EVAL` is at most `Any`. An `EVAL` fills
+  only the code's `\` keys, so an unmarked keyworded use's hole holds nothing
+  as the traced code runs, and the load types the code a second time that way:
+  after `LET q = #(1 + 2)`, `EVAL q` is `Number`, while the code's own cell,
+  which a `USING` may fill, keeps the hole as a candidate the load cannot read
+  and types `1 + 2` at most `Any`.
 
 "At most" leaves the lower end at `Never`. A static type whose upper end is
 `Number`, `Str`, `Bool` or `Null` is exact, since no value carries a type
@@ -189,9 +195,11 @@ variable, which holds every solution a call can reach, and its return is
 [read through the intervals](../type_lattice/README.md#substitute-then-ask): a
 variable's upper end at a covariant position, its lower end at a contravariant
 one. So under `EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)`, `ONLY 1` is
-`Number`. Where every argument whose slot names a variable is exact, the solve
-over the static types is the call's own, and each variable is solved to a
-point. A call binds each variable to one type, so it still solves its group from
+`Number`. Where every argument whose slot names a variable is exact and holds
+no lexical variable, the solve over the static types is the call's own, and
+each variable is solved to a point. An exact argument over a lexical variable
+is no such solve: the load solves through the variable's bound, where the call
+solves through the type the run binds it to. A call binds each variable to one type, so it still solves its group from
 the carried types.
 
 **Lexical variables.** A static type may hold the
@@ -211,7 +219,8 @@ own, so a static type crossing into it, a `$` name's, or leaving it, an
 - *always* — every class admits whatever the call carries within its
   arguments' static types: a slot that is a variable of its own class alone
   admits under the variable's bound, and a class whose arguments naming its own
-  variables are exact admits when its static solve does;
+  variables are exact and hold no lexical variable admits when its static
+  solve does;
 - *maybe* — any other, and every candidate the load cannot read.
 
 A slot naming a variable an earlier
@@ -364,15 +373,20 @@ Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
 The suites load whole programs under `Koan` and read back what they wrote to
 either sink, one line per write ([tests.rs](tests.rs)):
 [selection](tests/selection.rs) — every ranking example, ambiguity within and
-across scopes, the no-overload miss at load and at run, fall-through, builtin
+across scopes at load and at run, the no-overload miss at load and at run, fall-through, builtin
 tie-wins, shadowed `==` and `PRINT`, the overlap refusal at load and at `EVAL`,
 and a quantified candidate that may admit whose carried solve fails;
 [statics](tests/statics.rs) — the static type of each kind of node and binder,
-exact and bounded, a capture along a chain and across a quote's code, a generic
-call by keyword and by name and an `EVAL` typed at load, verdicts leaving one,
-several and no candidate, a *maybe* an *always* outranks dropped, a rigid use
-ranked at the call, the three load refusals in a program, an uncalled body and a
-quote's code, and an argument that never arrives;
+a capture along a chain, a generic call by keyword, verdicts leaving one,
+several and no candidate, the load refusals in a program, an uncalled body and
+a quote's code, and an argument that never arrives;
+[generic](tests/generic.rs) — generic code at load: a nested callable
+substituted by level and agreeing with its load-time type where it is born, a
+quote's code typed twice interning nothing, a nested group's parameters and
+return check, exact static types, crossings into and out of code, an `EVAL` of
+traced code, a quantified candidate selected only over exact arguments, a
+*maybe* an *always* outranks dropped, a use ranked at load and one ranked at the
+call, and returns read through a group's intervals, by keyword and by name;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
@@ -399,10 +413,6 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
-- [Static types of generic code](../../roadmap/gradual-typing/solving-from-static-types.md)
-  — static types with a lower end, a verdict per candidate, a use ranked at
-  load, a generic call and an `EVAL` typed at load, and generic code nested in
-  a `FOR ALL` body typed and selected at load.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

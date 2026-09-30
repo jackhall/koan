@@ -25,6 +25,10 @@ nonce for it, so two opaque views of one module never share a carrier.
 - A registration a `USING … SCOPE` operand surfaces is a candidate for a
   keyworded use in its body, and one as specific as a registration visible
   from outside the body makes the call an ambiguity error.
+- A `USING … SCOPE` body's static type, read where the body is written, holds
+  none of the body's own lexical variables. Sibling blocks number their names
+  alike, so one block's `Tt` never reaches a sibling that declares its own `Tt`
+  as that sibling's variable.
 - A coerced function member runs: calling the
   [barrier](../../src/knot/module/README.md#members-are-born-coerced) an opaque view
   holds rewrites each argument from the view's

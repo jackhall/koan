@@ -63,9 +63,6 @@ order itself:
 
 ## Dependencies
 
-**Requires:**
-
-- [Static types of generic code](solving-from-static-types.md) — the interval
-  law and its property tests.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

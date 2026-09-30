@@ -508,9 +508,12 @@ interns as the union of its three members.
 [`tests/channel.rs`](tests/channel.rs) runs the load pass over shaped programs
 and reads the cells it filled: a closed binder, ring and callable equal to what
 elaborating through an activation gives; a `FOR ALL` name at one level, in its
-callable's body and in a callable nested in it; a `:Type` parameter, an outer
-quantifier inside an inner group and a quote's hole each as a lexical variable;
-each spelling left unknown; a nominal over a
+callable's body and in a callable nested in it; sibling bodies numbering their
+own names alike; a nested `FOR ALL` callable rigid over its enclosing names,
+and one whose bound names a run-bound name left unknown; a `:Type` parameter,
+an outer quantifier inside an inner group, a quote's hole and a `$` name
+crossing into code each as a lexical variable; each spelling left unknown; a
+nominal over a
 run-bound type left unknown and a reader of it rigid; each repeated guard; and a
 refusal refusing the load, or kept on its quote's code shape.
 
@@ -519,8 +522,6 @@ refusal refusing the load, or kept on its quote's code shape.
 - [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound
   rather than to what the arguments solve it to.
-- [Static types of generic code](../../roadmap/gradual-typing/solving-from-static-types.md)
-  — a name a run binds read as a lexical variable.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates;
   a family's variance, which no declaration states; and a parameterized union

@@ -295,8 +295,9 @@ interval, class by class, beside each variable's interval:
   upper end with each earlier variable at its least instance; a slot that is a
   variable of its class alone, named by no other slot of the class, admits the
   argument's upper end under the variable's bound; and a class every slot of
-  which that names a variable of its own has an exact argument, and names only
-  earlier variables solved to a point, admits when its static solve does;
+  which that names a variable of its own has an exact argument holding no rigid
+  variable, and names only earlier variables solved to a point, admits when its
+  static solve does;
 - *maybe* — any other.
 
 Every rule reads a relation that holds of a lexical variable for every type a
@@ -446,8 +447,12 @@ own, as [dispatch](../dispatch/README.md#static-types) types an argument:
   the declared types name the variable at no covariant position, and `Never`
   elsewhere;
 - where every argument whose position names a variable is **exact** — its lower
-  end is its upper — the arguments a solve can meet are those very types, so
-  each variable's interval is its solution: solved to a point.
+  end is its upper — and holds no rigid variable, the arguments a solve can
+  meet are those very types, so each variable's interval is its solution:
+  solved to a point, which the caller asserts by passing `exact`. An argument
+  over a rigid variable is no such argument: a solve reads a carried rigid
+  variable through its bound, where a run binds it to one type under that
+  bound.
 
 An end is a bound and no solution, so it may be a join or a meet nobody wrote.
 
@@ -573,8 +578,12 @@ interned into a live registry ([tests/properties.rs](tests/properties.rs)). The
 order's reflexivity, antisymmetry and transitivity; join and meet's four laws;
 substitution's fixpoints; the digest's agreement with structural equality.
 Hand-written tests remain only where a law cannot express the shape
-([tests/residue.rs](tests/residue.rs), and a family's in
-[tests/families.rs](tests/families.rs)), and each says which.
+([tests/residue.rs](tests/residue.rs); a family's in
+[tests/families.rs](tests/families.rs), an interval's in
+[tests/intervals.rs](tests/intervals.rs) and a lexical variable's in
+[tests/levels.rs](tests/levels.rs)), and each says which. The interval and
+verdict laws draw their carried types within the static ones, binding each
+lexical variable as a run does.
 
 Beside them the suite pins three things a law would not catch: the import
 boundary ([tests/boundary.rs](tests/boundary.rs)), golden digests for the builtin
@@ -589,9 +598,6 @@ vocabulary so an identity move is visible in a diff
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.
-- [Static types of generic code](../../roadmap/gradual-typing/solving-from-static-types.md)
-  — the lexical variable and its substitution, the collector's bounds and
-  interval, a type read through intervals, and a candidate judged by class.
 - [Solving to the least instance](../../roadmap/gradual-typing/least-instance-solving.md)
   — a solve that joins its lower contributions and meets its upper ones, where
   it takes a maximum or fails.

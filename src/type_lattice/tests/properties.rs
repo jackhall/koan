@@ -918,6 +918,7 @@ proptest! {
         let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
             return Ok(());
         };
+        let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
         let uppers: Vec<KType> = arguments.iter().map(|argument| argument.upper).collect();
         let (Some(statics), Some(solution)) = (
             solve_jointly(&types, scratch, a, &uppers),
@@ -941,7 +942,7 @@ proptest! {
         );
         for (solved, interval) in solution.iter().zip(reported.iter()) {
             prop_assert!(
-                within(&types, scratch, *solved, carried_interval(&types, scratch, *interval, &draw)),
+                within(&types, scratch, *solved, run_interval(*interval)),
                 "a carried solution left its static interval",
             );
         }
@@ -961,9 +962,11 @@ proptest! {
         let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
             return Ok(());
         };
+        let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
         let judged = judge_by_class(&types, scratch, a, &arguments);
         // The run binds the candidate's lexical variables as it binds its arguments'.
-        let admitted = admit_by_class(&types, scratch, instance(&types, scratch, a, &draw), &carried);
+        let run_shape = instance(&types, scratch, a, &draw);
+        let admitted = admit_by_class(&types, scratch, run_shape, &carried);
         match judged.verdict {
             Verdict::Always => prop_assert!(admitted.is_some(), "an always candidate refused"),
             Verdict::Never => prop_assert!(admitted.is_none(), "a never candidate admitted"),
@@ -972,7 +975,7 @@ proptest! {
         if let (Some(reported), Some(solution)) = (judged.intervals, admitted) {
             for (solved, interval) in solution.iter().zip(reported) {
                 prop_assert!(
-                    within(&types, scratch, *solved, carried_interval(&types, scratch, *interval, &draw)),
+                    within(&types, scratch, *solved, run_interval(*interval)),
                     "a class-by-class solution left its judged interval",
                 );
             }

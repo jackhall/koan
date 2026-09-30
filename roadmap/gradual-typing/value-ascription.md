@@ -68,10 +68,7 @@ lies under that member.
 
 ## Dependencies
 
-**Requires:**
-
-- [Static types of generic code](solving-from-static-types.md) — exact static
-  types.
+**Requires:** none.
 
 **Unblocks:**
 

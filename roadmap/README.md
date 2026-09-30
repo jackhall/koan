@@ -59,8 +59,9 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
+- [Solving to the least instance](gradual-typing/least-instance-solving.md)
 - [Solving dropped type parameters](gradual-typing/solving-dropped-type-parameters.md)
-- [Static types of generic code](gradual-typing/solving-from-static-types.md)
+- [Value ascription](gradual-typing/value-ascription.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Modules](rewrite/modules.md)

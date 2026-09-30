@@ -54,8 +54,6 @@ again.
 
 **Requires:**
 
-- [Static types of generic code](solving-from-static-types.md) — the static
-  solve and its verdicts.
 - [Value ascription](value-ascription.md) — an ascribed argument's static type.
 
 **Unblocks:** none — a leaf.

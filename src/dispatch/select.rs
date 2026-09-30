@@ -7,10 +7,10 @@
 //! lone survivor runs; where several survive, a builtin among them wins, and otherwise the call is
 //! ambiguous, whichever scopes the survivors were declared in.
 //!
-//! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it kept:
-//! it admits each *maybe* one, takes each *always* one as admitted — solving only a quantified
-//! one's group — and ranks. Where it selected one, the call reads that candidate ([`chosen`]) and admits nothing, save to
-//! solve a quantified one's group from the carried types.
+//! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it
+//! kept: it admits each *maybe* one, takes each *always* one as admitted — solving only a
+//! quantified one's group — and ranks. Where it selected one, the call reads that candidate
+//! ([`chosen`]) and admits nothing, save to solve a quantified one's group from the carried types.
 //!
 //! A selected function is called by keyword: its argument record binds each slot to the parameter
 //! its registration names for it — or packs every slot into `operands` — and carries each of its

@@ -87,9 +87,9 @@ pub enum TypeNode<'run> {
     /// SIG slot or minted by opaque ascription.
     ///
     /// Named and editable where [`Self::Quantified`] is positional and alpha-equivalent, because
-    /// members are reached by name and schemas are edited by name. The three rigid variables — these
-    /// two and [`Self::Lexical`] — share the rigid rule in the order and the role of the rigid side
-    /// in a specificity check.
+    /// members are reached by name and schemas are edited by name. The three rigid variables —
+    /// these two and [`Self::Lexical`] — share the rigid rule in the order and the role of the
+    /// rigid side in a specificity check.
     ///
     /// `source` is the binder the member is named against. `nonce` is the generativity
     /// mechanism: `None` for a SIG-body declaration, `Some(<per-application module scope id>)`

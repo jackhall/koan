@@ -215,7 +215,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
     /// `operands` elaborated, and refused `Unknown` at `site` when one read a rigid variable: the
     /// operands of a spelling whose value over a rigid variable can differ from substituting first
     /// and elaborating after — a meet, a projection's owner, an application's head, a `NEEDING`
-    /// kind.
+    /// kind — and a bound, which holds no variable.
     fn closed_operands<T>(
         &self,
         site: Site,
