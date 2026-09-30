@@ -78,7 +78,10 @@ nonce for it, so two opaque views of one module never share a carrier.
   `TYPE` member, so the abstract member, its nonce and the signature meet over
   abstract members go. Ascription solves the head quantifier against the
   module's member types with the unifier a call solves a `FOR ALL` with, and
-  `ints :! (Ordered WITH {Carrier = …})` stays writable. Under `:!` the view's
+  `ints :! (Ordered WITH {Carrier = …})` stays writable. It takes the
+  [least instance](../../src/type_lattice/README.md#the-unifier-collects-it-does-not-bind)
+  a call does: a module whose members contribute `Number` and `Str` to a
+  covariant `Carrier` satisfies the signature at `Number | Str`. Under `:!` the view's
   `Carrier` is the solution; under `:|` it is an unbounded carrier, so no slot
   outside the view admits it and the value is hidden. The bound gates
   satisfaction and reveals nothing under `:|`. The

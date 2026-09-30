@@ -60,7 +60,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
-- [Solving to the least instance](gradual-typing/least-instance-solving.md)
 - [Solving dropped type parameters](gradual-typing/solving-dropped-type-parameters.md)
 - [Calls solved from their static types](gradual-typing/static-solutions.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)

@@ -301,7 +301,8 @@ arguments. A slot type stands for every type a call carries under it, so an
 earlier class fixes no point but an **interval** of them — `[Never, L]` where a
 covariant position names the variable, `[U, bound]` where only a contravariant
 one does — and each later class admits against a lexical variable between
-those ends. So a signature's view never promises a call its overload refuses:
+those ends. An interval whose ends meet, or a solution holding a rigid
+variable of the candidate's, is read as that point. So a signature's view never promises a call its overload refuses:
 in written order, `FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt)` does not lie
 under `#(PAIR x :(Number | Str) WITH y :(Number | Str))`, which admits
 `PAIR 1 WITH "s"`, while `FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Null) TO y :Elt)`
@@ -312,8 +313,8 @@ The classes order **ranking**. [`class_at_least`](ranking.rs) is the verdict
 "`a` is at least as specific as `b` at class `c`": `b`'s slots in class `c`
 admit `a`'s, with each variable an earlier class admitted read, as
 `admits_shape` reads it, as a lexical variable between the ends of its interval,
-and each one an earlier class did not admit read as its bound. It reads two shape handles and a class, so the registry records it in
-the verdict table (`Relation::ClassAtLeast`) the first time a pair meets.
+and each one an earlier class did not admit read as its bound. It reads two
+shape handles and a class, so the registry records it in the verdict table (`Relation::ClassAtLeast`) the first time a pair meets.
 [`select_by_class`](ranking.rs) eliminates over a candidate list class by
 class: every candidate another strictly beats at a class drops out, and a
 class that orders neither of two leaves both to the next. `shape_specificity`
@@ -627,10 +628,12 @@ The lattice is tested by its **laws**, as properties over generated type trees
 interned into a live registry ([tests/properties.rs](tests/properties.rs)). The
 order's reflexivity, antisymmetry and transitivity; join and meet's four laws;
 substitution's fixpoints; the digest's agreement with structural equality. A law
-stated by handle — antisymmetry, join and meet's laws — draws
-[concrete types](#concrete-types-and-binders), and one stated up to equivalence
-draws binders too; the generators put carried unions under quantified
-positions, where a solve joins and meets.
+two binders can break by handle — antisymmetry, and join and meet's
+commutativity, idempotence and associativity — draws types holding no binder
+([concrete types and binders](#concrete-types-and-binders)), and join and
+meet's laws among them have twins stated up to equivalence that draw binders
+too; the generators put carried unions
+under quantified positions, where a solve joins and meets.
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in
 [tests/families.rs](tests/families.rs), an interval's in
@@ -652,9 +655,6 @@ vocabulary so an identity move is visible in a diff
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.
-- [Solving to the least instance](../../roadmap/gradual-typing/least-instance-solving.md)
-  — a solve that joins its lower contributions and meets its upper ones, where
-  it takes a maximum or fails.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
   signature meet that bounds an abstract member by `Never`, which the
   closed-bound rule forbids.

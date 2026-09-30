@@ -13,8 +13,8 @@
 //! [priority classes](super::ranking).
 //!
 //! A construction collects through [`Collector::least`], whose unreached variables are bounded by
-//! `Never` rather than their declared bound: a family is covariant in its parameters, so its least instance is the
-//! one the payload asks for.
+//! `Never` rather than their declared bound: a family is covariant in its parameters, so its least
+//! instance is the one the payload asks for.
 //!
 //! [`intervals`] reads a solve over static types as an [`Interval`] per variable: where every
 //! solution a solve over arguments within those static types can reach lies.

@@ -271,7 +271,7 @@ src/
 │   ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
 │   ├── order.rs          is_subtype_of — the one order, as a single Lockstep instance — plus is_more_specific_than and satisfied_by
 │   ├── lattice.rs        join (subsumption-or-union, not a walk) and meet (the rebuilding Lockstep instance)
-│   ├── unify.rs          admits_with and the Collector: contributions solved by maximum, minimum, or the declared bound; the Interval a solve reports per variable
+│   ├── unify.rs          admits_with and the Collector: contributions solved to a pair of ends and bound at its least instance; the Interval a solve reports per variable
 │   ├── substitute.rs     the quantifier, level and member substitutions, a type read through intervals (bound_above among them), and the three slot_* relations that are each one of them composed with an ordinary relation
 │   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, meet_schemas, and shape_specificity
 │   ├── ranking.rs        priority classes — admit_by_class, the per-class verdict class_at_least the registry records, select_by_class, and judge_by_class's never/always/maybe over static types

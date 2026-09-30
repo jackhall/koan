@@ -276,6 +276,28 @@ site to say so, and the body can use `Elt` as an ordinary type name. A name your
 arguments never mention is refused when you define the function, because no call
 could ever work it out.
 
+Two arguments at one type parameter need not share a type: `Elt` becomes the
+smallest type holding both. A head's slots are read in **priority classes**,
+though — one class per slot, in written order, unless a declaration such as
+`EXPR #(BOTH 1 AND 1)` ranks them — and the first class that mentions `Elt`
+fixes it for the later ones. So a head in written order asks for one type
+across its slots, and ranking the slots alike lets them differ:
+
+```koan
+EXPR #(BOTH 1 AND 1)
+EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(PRINT Elt)
+BOTH 1 AND "x"
+BOTH 1 AND 2
+```
+
+```text
+:(Number | Str)
+Number
+```
+
+Without the first line, `BOTH 1 AND "x"` is refused: `1` fixes `Elt` to
+`Number`, and `"x"` does not lie under it.
+
 A signature can declare a quantified member the same way, and a module satisfies it
 with a single implementation:
 
