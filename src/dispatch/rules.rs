@@ -116,7 +116,7 @@ fn outside(
     needed: KType,
 ) -> bool {
     let lower = read_through(types, scratch, argument.lower, Side::Below, &mut |node| {
-        node.rigid_bound().map(Interval::within)
+        node.rigid_interval()
     });
     !is_subtype_of(types, scratch, lower, bound_above(types, scratch, needed))
 }

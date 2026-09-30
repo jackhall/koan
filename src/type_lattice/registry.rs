@@ -590,16 +590,47 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
-    /// The lexical variable at `level`, named `name`, bounded by `bound`.
+    /// The lexical variable at `level`, named `name`, bounded by `bound` and above `Never`.
     ///
     /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).
     pub fn lexical(&self, level: usize, name: TypeSymbol, bound: KType) -> KType {
+        self.intern_lexical(level, name, KType::NEVER, bound)
+    }
+
+    /// A lexical variable between `lower` and `bound`. Neither end holds a rigid variable, and a
+    /// `lower` other than `Never` lies strictly under `bound` — a converged pair is its point, never
+    /// a variable.
+    pub fn lexical_between(
+        &self,
+        scratch: BumpAllocator<'_>,
+        level: usize,
+        name: TypeSymbol,
+        lower: KType,
+        bound: KType,
+    ) -> KType {
+        debug_assert!(
+            !self.contains_rigid(lower),
+            "a rigid variable's lower end holds no rigid variable of its own",
+        );
+        debug_assert!(
+            lower == KType::NEVER || (lower != bound && is_subtype_of(self, scratch, lower, bound)),
+            "a lexical variable's lower end lies strictly under its bound",
+        );
+        self.intern_lexical(level, name, lower, bound)
+    }
+
+    fn intern_lexical(&self, level: usize, name: TypeSymbol, lower: KType, bound: KType) -> KType {
         debug_assert!(
             !self.contains_rigid(bound),
             "a rigid variable's bound holds no rigid variable of its own",
         );
-        self.intern_digested(digest::lexical_digest(level, name, bound), || {
-            TypeNode::Lexical { level, name, bound }
+        self.intern_digested(digest::lexical_digest(level, name, lower, bound), || {
+            TypeNode::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            }
         })
     }
 

@@ -223,7 +223,12 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
             ..
         } => shape_digest(quantifiers.len(), elements, classes, ret.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
-        TypeNode::Lexical { level, name, bound } => lexical_digest(*level, *name, *bound),
+        TypeNode::Lexical {
+            level,
+            name,
+            lower,
+            bound,
+        } => lexical_digest(*level, *name, *lower, *bound),
         TypeNode::Union { members } => union_digest(scratch, members),
         TypeNode::ConstructorApply {
             constructor,
@@ -386,10 +391,16 @@ pub(super) fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
 }
 
 /// A lexical variable: its level, its name and its bound — every field is identity.
-pub(super) fn lexical_digest(level: usize, name: TypeSymbol, bound: KType) -> TypeDigest {
+pub(super) fn lexical_digest(
+    level: usize,
+    name: TypeSymbol,
+    lower: KType,
+    bound: KType,
+) -> TypeDigest {
     DigestHasher::new(TAG_LEXICAL)
         .count(level)
         .symbol(name.symbol())
+        .digest(lower.digest())
         .digest(bound.digest())
         .finish()
 }

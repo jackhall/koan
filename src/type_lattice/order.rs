@@ -36,9 +36,9 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   member.
 /// - A signature is below another when [`sig_subtype`] accepts the pair.
 /// - A **rigid variable** — `Quantified`, `Lexical` or `AbstractType` — is a nominal identity
-///   bounded by its bound: below it are only itself and `Never`, above it itself and everything
-///   above its bound, a union included. The two clauses agree because a bound is a variable-free type, so nothing
-///   above a bound is itself rigid.
+///   between its lower end (`Never` but for a lexical variable's) and its bound: below it lie
+///   itself and whatever lies under its lower end, above it itself and everything above its bound,
+///   a union included. The clauses agree because both ends are variable-free types.
 /// - A quantified shape is below another shape, and a quantified function below another function,
 ///   when some instantiation of its variables, each under its bound, puts the instance below the
 ///   other with the other's variables rigid.
@@ -145,10 +145,10 @@ impl Lockstep for Order {
         _v: Variance,
     ) -> bool {
         let (na, nb) = (types.node(a), types.node(b));
-        // A rigid variable's down-set is checked first: below one are only itself — which the
-        // caller's equality guard already answered — and `Never`.
-        if nb.rigid_bound().is_some() {
-            return false;
+        // A rigid variable's down-set is checked first: below one lie only itself — which the
+        // caller's equality guard already answered — and whatever lies under its lower end.
+        if let Some(lower) = nb.rigid_lower() {
+            return is_subtype_of(types, scratch, a, lower);
         }
         match (na, nb) {
             (TypeNode::OfKind(x), TypeNode::OfKind(y)) => y.admits(x),

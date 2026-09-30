@@ -102,6 +102,53 @@ fn a_lexical_variable_is_ordered_as_a_rigid_variable() {
     }
 }
 
+/// A lexical variable with a lower end — what a class-by-class walk over static types mints: below
+/// it lie itself and what lies under its lower end, and a contravariant read takes that end.
+#[test]
+fn a_lexical_variable_with_a_lower_end() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let (types, region) = (&world.types, world.region);
+    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    let x = types.lexical_between(region, 0, world.name("Elt"), KType::NUMBER, number_or_str);
+    assert!(world.below(KType::NEVER, x));
+    assert!(world.below(KType::NUMBER, x));
+    assert!(!world.below(KType::STR, x));
+    assert!(world.below(x, number_or_str));
+    assert!(!world.below(x, KType::NUMBER));
+    assert_eq!(
+        bound_above(types, region, world.function(&[], "y", x, KType::NULL)),
+        world.function(&[], "y", KType::NUMBER, KType::NULL),
+    );
+    // A carried function over such a variable fills a declared parameter under its lower end.
+    let elt = types.quantified(0, KType::ANY);
+    let declared = world.function(&[], "y", types.list(elt), KType::NULL);
+    let w = types.lexical_between(
+        region,
+        0,
+        world.name("Elt"),
+        types.list(KType::NUMBER),
+        KType::LIST_OF_ANY,
+    );
+    let carried = world.function(&[], "y", w, KType::NULL);
+    let mut collector = Collector::new(region, &[KType::ANY]);
+    assert_eq!(
+        admits_with(
+            types,
+            region,
+            declared,
+            carried,
+            Variance::Co,
+            &mut collector
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        collector.solve(types).map(|solution| solution.to_vec()),
+        Ok(vec![KType::NUMBER])
+    );
+}
+
 #[test]
 fn no_solve_binds_a_lexical_variable() {
     let bump = Bump::new();

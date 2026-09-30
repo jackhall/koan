@@ -184,18 +184,17 @@ proptest! {
     }
 
     #[test]
-    fn a_rigid_variable_has_only_itself_and_never_below_it(a in one(), b in one()) {
+    fn below_a_rigid_variable_lie_itself_and_what_lies_under_its_lower_end(
+        a in one(),
+        b in one(),
+    ) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let rigid = matches!(
-            types.node(b),
-            TypeNode::Quantified { .. } | TypeNode::Lexical { .. } | TypeNode::AbstractType { .. }
-        );
-        if rigid {
+        if let Some(lower) = types.node(b).rigid_lower() {
             prop_assert_eq!(
                 is_subtype_of(&types, scratch, a, b),
-                a == b || a == KType::NEVER
+                a == b || is_subtype_of(&types, scratch, a, lower)
             );
         }
     }
@@ -814,14 +813,25 @@ fn draw() -> impl Strategy<Value = Draw> {
 }
 
 /// `kt` as the run carries it: each lexical variable replaced by the type the run binds its level
-/// to — its bound, `Never`, or the bound met with a pool type, as `draw` says.
+/// to — its bound, its lower end, or the bound met with a pool type and joined with the lower end,
+/// as `draw` says.
 fn instance(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType, draw: &Draw) -> KType {
     read_through(types, scratch, kt, Side::Above, &mut |node| match *node {
-        TypeNode::Lexical { level, bound, .. } => Some(Interval::point(
+        TypeNode::Lexical {
+            level,
+            lower,
+            bound,
+            ..
+        } => Some(Interval::point(
             match draw.instances.get(level).copied().unwrap_or(0) {
                 0 => bound,
-                1 => KType::NEVER,
-                _ => meet(types, scratch, bound, draw.pool[level % draw.pool.len()]),
+                1 => lower,
+                _ => join(
+                    types,
+                    scratch,
+                    lower,
+                    meet(types, scratch, bound, draw.pool[level % draw.pool.len()]),
+                ),
             },
         )),
         _ => None,

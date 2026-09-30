@@ -21,6 +21,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, Va
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
+use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::SchemaDraft;
@@ -221,17 +222,29 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
                 )
             })
         });
-    // A lexical variable: one of two levels, named from the type alphabet, over a ground bound.
+    // A lexical variable: one of two levels, named from the type alphabet, over a ground bound —
+    // and over the `Number | Str` ground, sometimes above a lower end of one of its members.
     let lexical_world = world.clone();
-    let lexical = (0..2usize, 0..world.type_names.len(), 0..grounds.len()).prop_map(
-        move |(level, name, bound)| {
-            lexical_world.types.lexical(
-                level,
-                lexical_world.type_names[name],
-                lexical_world.grounds()[bound],
-            )
-        },
-    );
+    let lexical = (
+        0..2usize,
+        0..world.type_names.len(),
+        0..grounds.len(),
+        0..3u8,
+    )
+        .prop_map(move |(level, name, bound, lower)| {
+            let (types, name) = (&lexical_world.types, lexical_world.type_names[name]);
+            let bound = lexical_world.grounds()[bound];
+            let spans = matches!(types.node(bound), TypeNode::Union { .. });
+            match lower {
+                1 if spans => with_scratch(|scratch| {
+                    types.lexical_between(scratch, level, name, KType::NUMBER, bound)
+                }),
+                2 if spans => with_scratch(|scratch| {
+                    types.lexical_between(scratch, level, name, KType::STR, bound)
+                }),
+                _ => types.lexical(level, name, bound),
+            }
+        });
     // A code kind needing names: a kind from three levels of the code tree, needing one to three
     // names of the binder alphabet.
     let needing_world = world.clone();

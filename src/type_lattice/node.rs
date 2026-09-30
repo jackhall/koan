@@ -21,6 +21,7 @@ use super::kind::KKind;
 use super::record::Record;
 use super::schema::SigSchema;
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
+use super::unify::Interval;
 
 /// The content of one interned type. Every child position is a [`KType`] handle and every run is a
 /// `'run` slice, so reading a node out of the registry copies its scalar payload and a few fat
@@ -178,7 +179,9 @@ pub enum TypeNode<'run> {
     /// A **lexical variable**: a name only a run binds — a `FOR ALL` or `:Type` parameter, a name a
     /// `USING` surfaces, a quote's hole, a type binder the load left unknown — read where the
     /// program loads. Positional by its `level` along the lexical chain of bodies that declares
-    /// it, bounded by `bound`, and named `name`. No binder captures it and no solve binds it: a run
+    /// it, lying between `lower` and `bound`, and named `name`. `lower` is `Never` for every name
+    /// the elaborator reads; a class-by-class walk over static types mints one with a higher lower
+    /// end ([`ranking`](super::ranking)). No binder captures it and no solve binds it: a run
     /// replaces it with the type bound at its level
     /// ([`substitute_levels`](super::substitute::substitute_levels)).
     ///
@@ -186,6 +189,7 @@ pub enum TypeNode<'run> {
     Lexical {
         level: usize,
         name: TypeSymbol,
+        lower: KType,
         bound: KType,
     },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
@@ -261,6 +265,24 @@ impl TypeNode<'_> {
             | TypeNode::AbstractType { bound, .. } => Some(*bound),
             _ => None,
         }
+    }
+
+    /// A rigid variable's lower end: a [`Self::Lexical`]'s own, `Never` for the other two, `None`
+    /// for any other node.
+    pub fn rigid_lower(&self) -> Option<KType> {
+        match self {
+            TypeNode::Lexical { lower, .. } => Some(*lower),
+            TypeNode::Quantified { .. } | TypeNode::AbstractType { .. } => Some(KType::NEVER),
+            _ => None,
+        }
+    }
+
+    /// A rigid variable's two ends as an interval, or `None` for any other node.
+    pub fn rigid_interval(&self) -> Option<Interval> {
+        Some(Interval {
+            lower: self.rigid_lower()?,
+            upper: self.rigid_bound()?,
+        })
     }
 }
 

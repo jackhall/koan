@@ -283,7 +283,7 @@ pub fn judge_by_class<'s>(
                 Side::Above,
                 &mut |node| match *node {
                     TypeNode::Quantified { index, bound } => Some(earlier(index, bound)),
-                    _ => node.rigid_bound().map(Interval::within),
+                    _ => node.rigid_interval(),
                 },
             );
             let upper = bound_above(types, scratch, arguments[slot].upper);
@@ -292,7 +292,7 @@ pub fn judge_by_class<'s>(
                 scratch,
                 arguments[slot].lower,
                 Side::Below,
-                &mut |node| node.rigid_bound().map(Interval::within),
+                &mut |node| node.rigid_interval(),
             );
             if meet(types, scratch, greatest, upper) == KType::NEVER
                 || !is_subtype_of(types, scratch, lower, greatest)

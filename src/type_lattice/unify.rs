@@ -445,15 +445,19 @@ impl Lockstep for Admits<'_, '_> {
         carried: KType,
         v: Variance,
     ) -> Admission {
-        let carried_node = types.node(carried);
-        // A carried rigid variable fills what its bound fills. Below one is only itself, so a
-        // contravariant position has nothing more to try.
-        if let Some(bound) = carried_node.rigid_bound()
-            && v == Variance::Co
-        {
-            return lockstep(types, scratch, declared, bound, v, self);
+        // A carried rigid variable fills, at a covariant position, what its bound fills, and at a
+        // contravariant one what its lower end fills: below one lie itself and what lies under its
+        // lower end.
+        let Some(ends) = types.node(carried).rigid_interval() else {
+            return Err(UnifyFailure::Mismatch);
+        };
+        match v {
+            Variance::Co => lockstep(types, scratch, declared, ends.upper, v, self),
+            Variance::Contra if ends.lower != KType::NEVER => {
+                lockstep(types, scratch, declared, ends.lower, v, self)
+            }
+            Variance::Contra => Err(UnifyFailure::Mismatch),
         }
-        Err(UnifyFailure::Mismatch)
     }
 
     fn set_wise(

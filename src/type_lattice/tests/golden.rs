@@ -236,6 +236,7 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::Lexical {
             level: 0,
             name,
+            lower: KType::NEVER,
             bound: KType::ANY,
         },
         TypeNode::Union { members: &members },

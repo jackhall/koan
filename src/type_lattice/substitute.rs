@@ -150,7 +150,7 @@ pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
 
 /// `kt` with each free variable — a `Quantified` under none of `kt`'s own binders, a `Lexical` or
 /// an `AbstractType` — read as the extreme that puts the result above every instance within the
-/// variables' bounds: its bound at a covariant position, `Never` at a contravariant one. The
+/// variables' ends: its bound at a covariant position, its lower end at a contravariant one. The
 /// variable-free type a load-time type is compared through where the run may bind its variables to
 /// anything under their bounds. A signature is opaque, as [`TypeRegistry::contains_rigid`] reads it.
 ///
@@ -158,7 +158,7 @@ pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
 /// the result *below* an instance whose variable is bound lower.
 pub fn bound_above(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
     read_through(types, scratch, kt, Side::Above, &mut |node| {
-        node.rigid_bound().map(Interval::within)
+        node.rigid_interval()
     })
 }
 
