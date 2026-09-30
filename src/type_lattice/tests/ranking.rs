@@ -12,6 +12,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::node::TypeNode;
+use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, select_by_class};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_name;
@@ -272,6 +273,47 @@ fn pair_prefers_one_variable_to_two() {
         shape_specificity(&world.types, world.region, one, one),
         Specificity::Equal
     );
+}
+
+/// The order's clause over static types: a later class reads an earlier variable at its reach
+/// interval, so `PAIR` in written order refuses a candidate whose second slot a call may fill with
+/// a type the first did not carry, and `APPLY` admits one whose second slot lies above the first's
+/// contravariant contribution.
+#[test]
+fn a_later_class_reads_an_earlier_variable_at_its_interval() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let below = |a, b| is_subtype_of(&world.types, world.region, a, b);
+    let number_or_str = world.union(&[KType::NUMBER, KType::STR]);
+    let pair = |group: &[&str], x, y, classes: &[u8]| {
+        world.head_to(
+            group,
+            &[Kw("PAIR"), Slot(x), Kw("WITH"), Slot(y)],
+            classes,
+            KType::STR,
+        )
+    };
+    let wide = pair(&[], number_or_str, number_or_str, &[]);
+    assert!(!below(
+        pair(&["Elt"], world.var(0), world.var(0), &[]),
+        wide
+    ));
+    assert!(below(
+        pair(&["Elt"], world.var(0), world.var(0), &[0, 0]),
+        pair(&[], number_or_str, number_or_str, &[0, 0]),
+    ));
+    let apply = |group: &[&str], f, y| {
+        world.head_to(
+            group,
+            &[Kw("APPLY"), Slot(f), Kw("TO"), Slot(y)],
+            &[],
+            KType::NULL,
+        )
+    };
+    assert!(below(
+        apply(&["Elt"], world.handler(world.var(0)), world.var(0)),
+        apply(&[], world.handler(KType::NUMBER), KType::NUMBER),
+    ));
 }
 
 /// `TAKE [1] WITH 1`: the first class admits neither way, so the generic head's `Elt` reads as its

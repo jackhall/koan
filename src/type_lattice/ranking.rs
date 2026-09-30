@@ -7,16 +7,17 @@
 //! class's slots, and every later class admits its arguments against that solution, which is
 //! [pinned](super::unify::Collector::pin) in the class's collector. So `FOR ALL #[Elt] #(PAIR x
 //! :Elt WITH y :Elt)` fixes `Elt` from `x` and then refuses a `y` that does not lie under it.
-//! [`admits_shape`](super::sig_relations) runs the same loop with a candidate shape's slot types as
-//! the arguments, so the order's instantiation clause and a keyworded call agree.
+//! [`admits_shape`](super::sig_relations) runs the same classes with a candidate shape's slot types
+//! as the arguments.
 //!
 //! [`class_at_least`] is the per-class specificity verdict dispatch ranks by, recorded in the
-//! registry's verdict table under [`Relation::ClassAtLeast`]. It differs from admission in how an
-//! earlier class's outcome reads later: a class that admitted leaves each variable it solved as an
-//! **unknown type under that solution** — a fresh rigid variable bounded by it, since at a call the
-//! variable solves to an argument's carried type, which can be anything under the candidate's slot
-//! — and a class that did not admit leaves each as its bound. A solution already holding a rigid
-//! variable of the other candidate stands for an unknown already and is kept. [`select_by_class`]
+//! registry's verdict table under [`Relation::ClassAtLeast`]. It and the order's clause differ from
+//! admission at a call in how an earlier class's outcome reads later: over static types, each
+//! stands for every type a call carries under it, so a class that admitted fixes each variable it
+//! solved to an **interval** of bindings, read later as a lexical variable between its ends
+//! (README § Priority classes); a class that did not admit leaves each as its
+//! bound. A solution already holding a rigid variable of the other candidate stands for an unknown
+//! already and is kept. [`select_by_class`]
 //! runs the elimination over a candidate list: at each class, every candidate another strictly
 //! beats there drops out, and the rest go on.
 //!
@@ -24,7 +25,7 @@
 //! an [`Interval`], and gives a candidate a [`Verdict`] the load can act on: *never*, *always* or
 //! *maybe*, beside each variable's interval.
 
-use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 
 use super::handle::KType;
@@ -171,6 +172,36 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
                 self.fixed[variable] = Some(read(variable));
             }
         }
+    }
+
+    /// Fix each variable `class` first mentions to what a later class reads it as where the
+    /// arguments are static types: the interval of bindings a call over types under them can make,
+    /// read by [`read_later`].
+    fn fix_to_intervals(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'s>,
+        class: u8,
+        solution: &[KType],
+    ) {
+        let declared = self.declared;
+        let mut positions = BumpVec::new_in(scratch);
+        positions.extend(
+            (0..self.slots.len())
+                .filter(|slot| class_of(declared.classes, *slot) == class)
+                .map(|slot| self.slots[slot]),
+        );
+        let reach = intervals(types, scratch, &positions, declared.bounds, solution, false);
+        self.fix(class, |variable| {
+            read_later(
+                types,
+                scratch,
+                declared,
+                variable,
+                reach[variable],
+                solution[variable],
+            )
+        });
     }
 
     /// Admit every class in order, fixing each class's variables to its solution, or `None` at the
@@ -389,8 +420,10 @@ pub fn judge_by_class<'s>(
 }
 
 /// Whether `declared` admits `candidate`'s slot types class by class — `declared`'s variables
-/// solved, `candidate`'s rigid — and `declared`'s return then lies under `candidate`'s. Both must be
-/// shapes under one key and one ranking; the caller checks that.
+/// solved, `candidate`'s rigid — and `declared`'s return then lies under `candidate`'s. A later
+/// class reads an earlier variable at its reach interval
+/// (README § Priority classes). Both must be shapes under one key and one ranking;
+/// the caller checks that.
 pub(super) fn admits_by_class<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
@@ -400,8 +433,12 @@ pub(super) fn admits_by_class<'run>(
     let mut walk = ClassWalk::new(types, scratch, declared);
     let mut arguments = BumpVec::new_in(scratch);
     arguments.extend(candidate.slots());
-    if walk.admit_all(types, scratch, &arguments).is_none() {
-        return false;
+    for class in 0..declared.class_count() {
+        let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
+        let Some(solution) = walk.admit_class(types, scratch, &arguments, class) else {
+            return false;
+        };
+        walk.fix_to_intervals(types, scratch, class, &solution);
     }
     let mut collector = walk.collector(scratch);
     admits_with(
@@ -417,8 +454,9 @@ pub(super) fn admits_by_class<'run>(
 }
 
 /// Whether `a` is at least as specific as `b` at `class`: `b`'s slots in that class admit `a`'s
-/// own, jointly, with each variable an earlier class admitted read as an unknown type under its
-/// solution and each one an earlier class refused read as its bound. `a`'s variables are rigid.
+/// own, jointly, with each variable an earlier class admitted read at its reach interval
+/// ([`read_later`]) and each one an earlier class refused read as its bound. `a`'s variables are
+/// rigid.
 ///
 /// A function of the two shape types and the class alone, so it is recorded in the verdict table;
 /// one pass computes every class's verdict for the pair and records them all.
@@ -453,36 +491,37 @@ pub fn class_at_least(
             answer = solution.is_some();
         }
         match solution {
-            Some(solution) => walk.fix(each, |variable| {
-                unknown_under(types, scratch, ranked_b, variable, solution[variable])
-            }),
+            Some(solution) => walk.fix_to_intervals(types, scratch, each, &solution),
             None => walk.fix(each, |variable| ranked_b.bound(variable)),
         }
     }
     answer
 }
 
-/// What a variable an earlier class solved to `solution` reads as in a later one: an unknown type
-/// under the solution, spelled as a rigid variable bounded by it. A solution that holds a rigid
-/// variable already names an unknown and is kept. The stand-in's nonce keeps it apart from every
-/// variable a signature member or an opaque ascription mints.
-fn unknown_under(
+/// The level of a class walk's stand-in, which no lexical variable the elaborator mints shares.
+const STAND_IN_LEVEL: usize = usize::MAX;
+
+/// What a variable an earlier class solved to `solution` reads as in a later one, over static
+/// types: `solution` itself where the reach interval converged or `solution` names a rigid variable
+/// of the other side — which stands for one unknown already — and otherwise a lexical variable
+/// between the interval's ends.
+fn read_later(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     shape: Ranked<'_>,
     variable: usize,
+    reach: Interval,
     solution: KType,
 ) -> KType {
-    if types.contains_rigid(solution) {
+    if reach.is_exact() || types.contains_rigid(solution) {
         return solution;
     }
-    types.abstract_type(
+    types.lexical_between(
         scratch,
-        ScopeId::SENTINEL,
+        STAND_IN_LEVEL,
         shape.quantifiers[variable],
-        &[],
-        Some(ScopeId::SENTINEL),
-        solution,
+        reach.lower,
+        reach.upper,
     )
 }
 

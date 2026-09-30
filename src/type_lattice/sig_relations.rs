@@ -36,13 +36,15 @@ use super::walk::Variance;
 /// `candidate`'s rigid — then `declared`'s return under `candidate`'s: the order's instantiation
 /// clause for two shapes.
 ///
-/// It admits as a keyworded call does ([`admit_by_class`](super::ranking::admit_by_class)). Prenex instantiation through
-/// the collector: each slot pair asks the candidate's slot to lie under the declared one
-/// (covariant for the collector, since a slot's own polarity is contravariant), class by class,
-/// then the return pair asks the declared return to lie under the candidate's. The candidate's
-/// `Quantified` nodes fall to the rigid rule automatically, because the collector only ever solves
-/// declared-side variables and the carried side is never substituted. Two things that are not both
-/// shapes under one key and one ranking admit nothing.
+/// Prenex instantiation through the collector: each slot pair asks the candidate's slot to lie
+/// under the declared one (covariant for the collector, since a slot's own polarity is
+/// contravariant), class by class, then the return pair asks the declared return to lie under the
+/// candidate's. Since each candidate slot stands for every type a call carries under it, a later
+/// class reads an earlier variable at its reach interval, not at the point a call would pin
+/// (README § Priority classes). The candidate's `Quantified` nodes fall to the rigid rule
+/// automatically, because the collector only ever solves declared-side variables and the carried
+/// side is never substituted. Two things that are not both shapes under one key and one ranking
+/// admit nothing.
 pub(super) fn admits_shape(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
