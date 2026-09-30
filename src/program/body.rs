@@ -150,7 +150,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             }
             Err(message) => {
                 let error = program.error(step.writer(), message);
-                return step.finish(error);
+                return step.finish(error, program.types());
             }
         },
         KState::Born(KBirth::Eval {
@@ -684,7 +684,10 @@ fn woken<'graph, 'here, 'scratch>(
     match runner.stage {
         Stage::Next => unreachable!("a runner parks only with an evaluation in flight"),
         Stage::Evaluation => {
-            let received = step.results().next().ok_or(StepError::Unredeemable)??;
+            let received = step
+                .results(runner.program.types())
+                .next()
+                .ok_or(StepError::Unredeemable)??;
             match received {
                 Received::Here(value) => runner.check(&value)?,
                 Received::Scratch(value) => runner.check(&value)?,
@@ -720,7 +723,7 @@ fn woken<'graph, 'here, 'scratch>(
             let local = Bump::new();
             let mut supplied: BumpVec<'_, (Site, KValue<'graph, 'here>)> =
                 BumpVec::with_capacity_in(sites.len(), &local);
-            for (site, received) in sites.iter().zip(step.results()) {
+            for (site, received) in sites.iter().zip(step.results(runner.program.types())) {
                 let Received::Here(value) = received? else {
                     unreachable!("an eager part is asked for with `Keeps`")
                 };
@@ -1049,10 +1052,10 @@ fn ended<'graph, 'here>(
             program: runner.program,
             view: runner.activation.view(),
         }),
-        (Level::Frame | Level::Block, None) => step.finish(value),
+        (Level::Frame | Level::Block, None) => step.finish(value, runner.program.types()),
         (Level::Frame | Level::Block, Some(contract)) => {
             let value = runner.program.fulfilled(step.writer(), value, contract);
-            step.finish(value)
+            step.finish(value, runner.program.types())
         }
     }
 }
@@ -1081,7 +1084,7 @@ fn stop<'graph, 'here>(
         }
         Level::Frame | Level::Block => {
             let error = program.error(step.writer(), message);
-            step.finish(error)
+            step.finish(error, program.types())
         }
     }
 }

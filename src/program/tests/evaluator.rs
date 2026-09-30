@@ -210,7 +210,10 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             let member = quote(step.writer(), &view, part, &scratch);
             return {
                 let writer = step.writer();
-                step.finish(held(program, contract, writer, Value::Knotted(member)))
+                step.finish(
+                    held(program, contract, writer, Value::Knotted(member)),
+                    program.types(),
+                )
             };
         }
         // A Type-class name reads through the activation like any other mention: a frame binds
@@ -230,7 +233,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             }
             return {
                 let writer = step.writer();
-                step.finish(held(program, contract, writer, value))
+                step.finish(held(program, contract, writer, value), program.types())
             };
         }
         Form::Leaf(ExpressionPart::ListLiteral(items)) => {
@@ -268,7 +271,10 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             // Built here and crossed into the home at the verdict's price.
             let list = List::new(writer, cells.into_iter(), types, &scratch);
             record(format!("built {:p}", list));
-            return step.finish(held(program, contract, writer, Value::List(list)));
+            return step.finish(
+                held(program, contract, writer, Value::List(list)),
+                program.types(),
+            );
         }
         Form::Leaf(_) => return step.failed(StepError::Refused),
         Form::Lambda(node) => {
@@ -278,7 +284,10 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 return step.failed(StepError::Refused);
             };
             record(format!("born {}", born(member, program)));
-            return step.finish(held(program, contract, writer, Value::Knotted(member)));
+            return step.finish(
+                held(program, contract, writer, Value::Knotted(member)),
+                program.types(),
+            );
         }
         Form::Call(parts) => parts,
     };
@@ -290,7 +299,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 1)
         }
         ([_, _, _, taken, _, other], 1) => {
-            let Some(Ok(condition)) = step.results().next() else {
+            let Some(Ok(condition)) = step.results(program.types()).next() else {
                 return step.failed(StepError::Unredeemable);
             };
             let holds = match condition {
@@ -312,7 +321,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
         }
         ([_, _, _], 1) => {
             let operands: Vec<Option<f64>> = step
-                .results()
+                .results(program.types())
                 .map(|received| received.ok().and_then(number))
                 .collect();
             let [Some(left), Some(right)] = operands[..] else {
@@ -331,12 +340,15 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             match list.cells().first() {
                 Some(Link::Edge(edge)) => {
                     let writer = step.writer();
-                    step.finish(held(
-                        program,
-                        contract,
-                        writer,
-                        Value::Knotted(holder.sibling(*edge)),
-                    ))
+                    step.finish(
+                        held(
+                            program,
+                            contract,
+                            writer,
+                            Value::Knotted(holder.sibling(*edge)),
+                        ),
+                        program.types(),
+                    )
                 }
                 _ => step.failed(StepError::Refused),
             }
@@ -346,7 +358,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 3)
         }
         ([_, operand], 3) => {
-            let Some(Ok(Received::Here(code))) = step.results().next() else {
+            let Some(Ok(Received::Here(code))) = step.results(program.types()).next() else {
                 return step.failed(StepError::Unredeemable);
             };
             let Some(code) = code.as_code() else {
@@ -371,7 +383,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                     let message = refused.display(program.symbols(), types).to_string();
                     record(format!("refused {message}"));
                     let error = program.error(step.writer(), message);
-                    step.finish(error)
+                    step.finish(error, program.types())
                 }
             }
         }
@@ -380,7 +392,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 1)
         }
         ([head, _], 1) => {
-            let Some(Ok(Received::Here(argument))) = step.results().next() else {
+            let Some(Ok(Received::Here(argument))) = step.results(program.types()).next() else {
                 return step.failed(StepError::Unredeemable);
             };
             let Some(callee) = read(&view, &head.value) else {
@@ -411,11 +423,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 2)
         }
         (_, 2) => {
-            let received = step.results().next();
+            let received = step.results(program.types()).next();
             match received {
                 Some(Ok(Received::Here(value))) => {
                     let writer = step.writer();
-                    step.finish(held(program, contract, writer, value))
+                    step.finish(held(program, contract, writer, value), program.types())
                 }
                 _ => step.failed(StepError::Unredeemable),
             }

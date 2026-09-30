@@ -206,15 +206,21 @@ and a dict's keys or a record's names shared: O(width) per retype, and the
 retyped value renders its cycle one level down. The retype restamps the top node
 alone, and its cells keep their own types; a read carries it down.
 
-**A value's type is its surface.** Every read of a record, list or dict — a
-field read, `FROM`, rendering, equality, the deep copy — goes through one door,
-which sees only the fields the carried type names and hands back each field,
-element or entry retyped to its type there. After
-`{x = 1, y = "a"} :! :{x :Number}`, the value has no field `y` to any reader and
-prints `{x = 1}`, though its cells still hold `y`; a `LIST OF (LIST OF Any)`
-retype hands back each inner list as a `LIST OF Any`. A retype walks nothing, and a nested part obeys it all the same,
-so downstream dispatch sees the contract at every depth rather than the
-contents' incidental precision.
+**A value's type is its surface.** Every read of a record, list, dict or tagged
+value — a field read, `FROM`, `USING`, rendering, equality, the deep copy — goes
+through one door, which sees only the fields the carried type names and hands
+back each field, element or entry retyped to its type there, and a tagged
+value's payload retyped to its identity's representation, applied to its
+arguments. After `{x = 1, y = "a"} :! :{x :Number}`, the value has no field `y`
+to any reader and prints `{x = 1}`, though its cells still hold `y`; a
+`LIST OF (LIST OF Any)` retype hands back each inner list as a `LIST OF Any`;
+and `(Point {x = 1, y = 2, z = 3})`, a `Point` over `{x :Number, y :Number}`,
+prints `Point({x = 1, y = 2})`. An identity with no representation, such as an
+opaque view's mint, hands its payload back at the payload's own type. A retype
+walks nothing, and a nested part obeys it all the same, so downstream dispatch
+sees the contract at every depth rather than the contents' incidental
+precision. An element is read at the type its container names, so a literal
+whose join widens a record hides that record's extra fields.
 
 The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
@@ -505,6 +511,9 @@ otherwise pair with are `cellgraph`'s own slate.
 - [A value's type is its surface](../../roadmap/gradual-typing/type-is-the-surface.md)
   — the one door every container read goes through, and a copy dropping what a
   retype hid.
+- [A container literal's element type](../../roadmap/gradual-typing/container-literal-types.md)
+  — a literal's element type that keeps every field its elements were written
+  with.
 - [Slicing and splicing](../../roadmap/metaprogramming/slicing-and-splicing.md) — views
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,

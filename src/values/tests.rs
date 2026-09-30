@@ -9,6 +9,7 @@ mod depth;
 mod equality;
 mod render;
 mod satisfaction;
+mod surface;
 mod working;
 
 use crate::memory::{

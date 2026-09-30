@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep};
+use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, with_types};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
 use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Use, Work};
 
@@ -71,7 +71,7 @@ fn turn<'graph>(
 
 /// The caller, woken by the loop's last cell.
 fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let first = step.results().next();
+    let first = with_types(|types| step.results(types).next());
     match first {
         Some(Ok(Received::Scratch(KValue::Number(length)))) => record(length.to_string()),
         _ => return step.failed(StepError::Unredeemable),

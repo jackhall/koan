@@ -26,6 +26,7 @@ use crate::scheduler::continuation::{
     StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::type_lattice::TypeRegistry;
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -344,18 +345,19 @@ where
     }
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
-    /// fill at `'scratch`, a carrier fill redeemed and crossed to `'here`. Each slot is taken as it
-    /// is read, so a second pass finds it empty.
+    /// fill at `'scratch`, a carrier fill redeemed and crossed to `'here`, a copy reading its
+    /// types in `types`. Each slot is taken as it is read, so a second pass finds it empty.
     pub fn results(
         &mut self,
+        types: &TypeRegistry<'_>,
     ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> {
         let context = &mut *self.context;
         let count = context.receipt_count().unwrap_or(0);
         (0..count).map(move |slot| match context.receipt(slot) {
             Ok(Receipt::Value(value)) => Ok(Received::Scratch(value)),
-            Ok(Receipt::Carrier(Ok(carrier))) => {
-                Ok(Received::Here(crate::values::cross_here(context, &carrier)))
-            }
+            Ok(Receipt::Carrier(Ok(carrier))) => Ok(Received::Here(crate::values::cross_here(
+                context, &carrier, types,
+            ))),
             _ => Err(StepError::Unredeemable),
         })
     }
@@ -449,10 +451,12 @@ where
 
     /// Finish with a result built by `build` over `operands`, values this step holds, in this
     /// cell's home, and deliver it as a carrier. Each operand reaches the build pinned or copied as
-    /// the verdict ruled, at the home's brand. Every `Use` takes this door: a build over operands
-    /// never goes through scratch, where what it embeds could not follow.
+    /// the verdict ruled, at the home's brand, a copy reading its types in `types`. Every `Use`
+    /// takes this door: a build over operands never goes through scratch, where what it embeds
+    /// could not follow.
     pub fn finish_in_home<const N: usize>(
         self,
+        types: &TypeRegistry<'_>,
         operands: [KValue<'graph, 'here>; N],
         build: impl for<'their> FnOnce(
             Writer<'their>,
@@ -475,8 +479,9 @@ where
             self.provenance.home,
             &crossing,
             |writer, views| {
-                let values =
-                    std::array::from_fn(|index| crate::values::cross_view(writer, &views[index]));
+                let values = std::array::from_fn(|index| {
+                    crate::values::cross_view(writer, &views[index], types)
+                });
                 build(writer, values, &&())
             },
         );
@@ -485,8 +490,12 @@ where
 
     /// Finish with `value`, crossed into this cell's home at the verdict's price, and deliver it as
     /// a carrier.
-    pub fn finish(self, value: KValue<'graph, 'here>) -> Action<'graph, B> {
-        self.finish_in_home([value], |_, [value], _| Active::new(value))
+    pub fn finish(
+        self,
+        value: KValue<'graph, 'here>,
+        types: &TypeRegistry<'_>,
+    ) -> Action<'graph, B> {
+        self.finish_in_home(types, [value], |_, [value], _| Active::new(value))
     }
 
     /// End a root work by leaving `birth` at rest in its home — the cell it was born under — for

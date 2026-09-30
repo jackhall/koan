@@ -3,7 +3,7 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph};
+use crate::scheduler::tests::bundle::{Native, TestGraph, with_types};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
 use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Step, StepError, Use};
 
@@ -31,7 +31,7 @@ fn descend<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 
 /// The count the level below delivered.
 fn below(step: &mut Step<'_, '_, '_, '_, '_, Native>) -> Option<f64> {
-    match step.results().next() {
+    match with_types(|types| step.results(types).next()) {
         Some(Ok(Received::Scratch(KValue::Number(count)))) => Some(count),
         _ => None,
     }

@@ -1,7 +1,7 @@
 //! The import boundary, the storage discipline and the step's public surface, as tests over this
 //! module's own source.
 //!
-//! `scheduler` may name `knot`, `memory` and `values` and nothing else in the crate — no
+//! `scheduler` may name `knot`, `memory`, `type_lattice` and `values` and nothing else in the crate — no
 //! `scope`, no `parse`, no `elaborate`; outside its tests it holds no owning heap type but its own
 //! runtime state, which is never a value in a region. A step names no handle and no carrier door.
 
@@ -13,6 +13,7 @@ const PREFIXES: &[&str] = &[
     "crate::tests::allocation_count",
     "crate::tests::boundary",
     "crate::tests::case_share",
+    "crate::type_lattice",
     "crate::values",
 ];
 

@@ -75,7 +75,7 @@ fn a_chain_deeper_than_the_stack_crosses() {
             .enter(home, |context| {
                 let chain = fixture.chain(context.writer(), node, DEPTH);
                 let source = context.lift::<crate::values::ValueFamily>(chain);
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 context.keep(crossed)
             })
             .unwrap();

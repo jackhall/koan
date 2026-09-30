@@ -78,7 +78,7 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                 let activation = fixture.run(context.writer(), &lines, &[]);
                 let g = callable(fixture, activation, "g");
                 let source = context.lift::<KValueFamily>(Value::Knotted(g));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 let Value::Knotted(copied) = context.read(&crossed).value() else {
                     panic!("a callable crosses as a callable");
                 };
@@ -173,7 +173,7 @@ fn a_copied_knot_outlives_its_home() {
                 let activation = fixture.run(context.writer(), &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 context.keep(crossed)
             })
             .unwrap();
@@ -209,7 +209,7 @@ fn a_copied_builtin_keeps_its_record() {
         let dormant = graph
             .enter(home, |context| {
                 let source = context.lift::<KValueFamily>(Value::Knotted(original));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 context.keep(crossed)
             })
             .unwrap();
@@ -251,7 +251,7 @@ fn a_copied_quote_outlives_its_home() {
                 let activation = fixture.run(context.writer(), &lines, &[]);
                 let echo = bound(fixture, activation, "echo");
                 let source = context.lift::<KValueFamily>(echo);
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 let copied = context.read(&crossed).value();
                 assert!(!ptr::eq(
                     copied.as_code().expect("code crosses as code").node(),
@@ -329,7 +329,7 @@ fn a_copied_ring_is_the_same_graph_rebuilt() {
                 let ring = declared(fixture, activation, "Ring");
                 let f = callable(fixture, activation, "f");
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 let Value::Knotted(copied_f) = context.read(&crossed).value() else {
                     panic!("a callable crosses as a callable");
                 };
@@ -389,7 +389,7 @@ fn a_copied_ring_outlives_its_home() {
                 let activation = fixture.run(context.writer(), &lines, &[]);
                 let a = super::bound(fixture, activation, "a");
                 let source = context.lift::<KValueFamily>(a);
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 context.keep(crossed)
             })
             .unwrap();
@@ -467,7 +467,7 @@ fn a_copied_module_is_the_same_members_rebuilt() {
                     .as_module()
                     .expect("`m` is a module");
                 let source = context.lift::<KValueFamily>(Value::Knotted(m));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 let Value::Knotted(copied) = context.read(&crossed).value() else {
                     panic!("a module crosses as a module");
                 };
@@ -522,7 +522,7 @@ fn a_copied_module_outlives_its_home() {
                     .as_module()
                     .expect("`m` is a module");
                 let source = context.lift::<KValueFamily>(Value::Knotted(m));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 (context.keep(crossed), slots)
             })
             .unwrap();
@@ -593,6 +593,7 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                             writer,
                             &views[0],
                             [&cells[0], &cells[1]],
+                            fixture.types,
                         );
                         Active::new(Value::List(List::new(
                             writer,
@@ -637,7 +638,7 @@ fn a_copied_barrier_outlives_its_home() {
                 let knot = Coerced::tie(writer, f, f.ktype(), f.ktype(), f.ktype(), f.ktype());
                 let barrier = Knotted::of(knot, 0);
                 let source = context.lift::<KValueFamily>(Value::Knotted(barrier));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, fixture.types).unwrap();
                 (context.keep(crossed), f.ktype())
             })
             .unwrap();

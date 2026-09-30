@@ -389,7 +389,7 @@ proptest! {
 
                     for original in tied {
                         let carrier = context.lift::<KValueFamily>(Value::Knotted(original));
-                        let crossed = cross(context, dest, &carrier).unwrap();
+                        let crossed = cross(context, dest, &carrier, fixture.types).unwrap();
                         let Value::Knotted(copied) = context.read(&crossed).value() else {
                             panic!("a knot member crosses as a knot member");
                         };

@@ -680,7 +680,7 @@ fn gathered<'x, 'graph, 'here>(
         }
     }
     let mut received = BumpVec::new_in(scratch);
-    for result in step.results() {
+    for result in step.results(at.program.types()) {
         match result {
             Ok(Received::Here(value)) => {
                 if at.program.message(&value).is_some() {
@@ -724,7 +724,7 @@ fn unready<'graph, 'here>(
 ) -> Action<'graph, KBundle> {
     match gathered {
         Gathered::Asked(asked) => park(step, at, asked, GATHERED),
-        Gathered::Raised(error) => step.finish(error),
+        Gathered::Raised(error) => step.finish(error, at.program.types()),
         Gathered::Broken(error) => step.failed(error),
         Gathered::Ready(_) => unreachable!("a ready gathering is not unready"),
     }
@@ -753,7 +753,7 @@ fn finishing<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_>,
     at: &Evaluation<'graph, 'here>,
 ) -> Action<'graph, KBundle> {
-    let received = step.results().next();
+    let received = step.results(at.program.types()).next();
     match received {
         Some(Ok(Received::Here(value))) => finish(step, at, value),
         _ => step.failed(StepError::Unredeemable),
@@ -772,5 +772,5 @@ fn finish<'graph, 'here>(
         Some(contract) => at.program.fulfilled(step.writer(), value, contract),
         None => value,
     };
-    step.finish(value)
+    step.finish(value, at.program.types())
 }

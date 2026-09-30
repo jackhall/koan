@@ -1,8 +1,9 @@
 //! Structural value equality — what `==` means over data values.
 //!
-//! Containers compare their contents only when their memoized types are related, one satisfied by
-//! the other in either direction; an unrelated pair is unequal without descending. That makes `==`
-//! intransitive across ascriptions by design.
+//! A value compares at the type it is seen at, through [the door](super::surface): a record by the
+//! fields that type names, each part at its type there. Containers compare their contents only
+//! when their seen types are related, one satisfied by the other in either direction; an unrelated
+//! pair is unequal without descending. That makes `==` intransitive across ascriptions by design.
 //!
 //! A value sealed behind an opaque view compares as its payload wherever the seal's bound reveals
 //! the payload's kind ([`unsealed`]), so a sealed number behind a `Number`-bounded member equals
@@ -13,8 +14,8 @@
 //! identity — one per `FN`, `EXPR` or `OP` written — and its closure bindings; a quote's code by its
 //! syntax, marks included, and the values its `$` names and its supplied holes bind.
 //!
-//! Two knot members compare as a bisimulation: a member pair is recorded before what it holds is
-//! compared, and a recorded pair met again counts as equal. See
+//! Two knot members compare as a bisimulation: a member pair, each beside the type it is seen at,
+//! is recorded before what it holds is compared, and a recorded pair met again counts as equal. See
 //! [README.md § Equality and rendering](README.md#equality-and-rendering) for why that is sound.
 //!
 //! The comparison runs over an explicit stack of pending pairs, so the stack it uses does not grow
@@ -29,15 +30,20 @@ use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::type_lattice::{KType, TypeRegistry, satisfied_by};
 
-use super::circular::{CodeView, Composite, Resolved};
-use super::{Knotted, Value, unsealed};
+use super::circular::{CodeView, Resolved};
+use super::surface::Parts;
+use super::{Knotted, Seen, Surface, Value, unsealed};
 
 /// A comparison reached a module or a barrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Incomparable;
 
-/// The pairs a comparison has yet to compare.
-type Pending<'x, 'left, 'right, X, Y> = BumpVec<'x, (Value<'left, X>, Value<'right, Y>)>;
+/// The pairs a comparison has yet to compare, each value beside the type it is seen at.
+type Pending<'x, 'left, 'right, X, Y> = BumpVec<'x, (Seen<'left, X>, Seen<'right, Y>)>;
+
+/// The member pairs a comparison has entered, each member beside the type it is seen at: one node
+/// seen at two types shows two surfaces.
+type Entered<'x, X, Y> = BumpBackedSet<'x, ((X, KType), (Y, KType))>;
 
 impl<'left, X: Knotted> Value<'left, X> {
     /// Whether two values are equal. Numbers follow IEEE (`NaN != NaN`, `-0 == 0`); a tagged value
@@ -46,10 +52,12 @@ impl<'left, X: Knotted> Value<'left, X> {
     /// they are the same handle; a knot's data node compares as the plain value of its kind would,
     /// its cells read through it; two functions by identity, then their closure bindings; two
     /// quotes' code as syntax, part by part with spans ignored, then the values their names bind.
-    /// The two sides may live at unrelated lifetimes. A module or a barrier on either side is
-    /// [`Incomparable`], and so is a pair whose contents reach one; a container pair with unrelated
-    /// types is unequal without descending, whatever it holds. The pending pairs and the member
-    /// pairs a comparison has entered are staged over `scratch`.
+    /// Each side compares at the type it is seen at: a record by the fields that type names, a
+    /// tagged value's payload at its representation. The two sides may live at unrelated
+    /// lifetimes. A module or a barrier on either side is [`Incomparable`], and so is a pair whose
+    /// contents reach one; a container pair with unrelated types is unequal without descending,
+    /// whatever it holds. The pending pairs and the member pairs a comparison has entered are
+    /// staged over `scratch`.
     pub fn equals<'right, Y: Knotted>(
         &self,
         other: &Value<'right, Y>,
@@ -58,7 +66,7 @@ impl<'left, X: Knotted> Value<'left, X> {
     ) -> Result<bool, Incomparable> {
         let mut seen = bump_set(scratch);
         let mut pending: Pending<'_, 'left, 'right, X, Y> = BumpVec::new_in(scratch);
-        pending.push((*self, *other));
+        pending.push((Seen::of(*self), Seen::of(*other)));
         let mut equal = true;
         while let Some((left, right)) = pending.pop() {
             equal &= pair_equal(left, right, types, scratch, &mut seen, &mut pending)?;
@@ -67,23 +75,38 @@ impl<'left, X: Knotted> Value<'left, X> {
     }
 }
 
-/// One pair's own answer — its gate or its leaf — with the children a passed gate pushes onto
-/// `pending`. A pair of knot members already entered answers `true` and pushes nothing.
-fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
-    left: Value<'left, X>,
-    right: Value<'right, Y>,
+/// `seen` read through its seal where [`unsealed`] reads through it: the payload, at its own memo.
+fn unsealed_seen<'cell, X: Knotted>(
+    seen: Seen<'cell, X>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    seen: &mut BumpBackedSet<'_, (X, Y)>,
+) -> Seen<'cell, X> {
+    match (seen.value(), unsealed(seen.value(), types, scratch)) {
+        (Value::Tagged(sealed), Value::Tagged(read)) if std::ptr::eq(sealed, read) => seen,
+        (Value::Tagged(_), payload) => Seen::of(payload),
+        _ => seen,
+    }
+}
+
+/// One pair's own answer — its gate or its leaf — with the children a passed gate pushes onto
+/// `pending`. A pair of knot members already entered at the same seen types answers `true` and
+/// pushes nothing.
+fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
+    left: Seen<'left, X>,
+    right: Seen<'right, Y>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    seen: &mut Entered<'_, X, Y>,
     pending: &mut Pending<'_, 'left, 'right, X, Y>,
 ) -> Result<bool, Incomparable> {
     // A seal whose bound reveals its payload's kind is read through, on either side.
-    let this = unsealed(left, types, scratch);
-    let that = unsealed(right, types, scratch);
-    if this.as_opaque().is_some() || that.as_opaque().is_some() {
+    let this = unsealed_seen(left, types, scratch);
+    let that = unsealed_seen(right, types, scratch);
+    if this.value().as_opaque().is_some() || that.value().as_opaque().is_some() {
         return Err(Incomparable);
     }
-    if let (Value::Knotted(left), Value::Knotted(right)) = (this, that) {
+    if let (Value::Knotted(left), Value::Knotted(right)) = (this.value(), that.value()) {
+        let entered = ((left, this.ktype()), (right, that.ktype()));
         match (left.resolve(), right.resolve()) {
             (
                 Resolved::Function { identity, closure },
@@ -92,22 +115,19 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
                     closure: others,
                 },
             ) => {
-                if !seen.insert((left, right)) {
+                if !seen.insert(entered) {
                     return Ok(true);
                 }
                 if identity != other || closure.len() != others.len() {
                     return Ok(false);
                 }
-                pending.extend(
-                    closure
-                        .iter()
-                        .zip(others)
-                        .map(|(this, that)| (this.resolve(left), that.resolve(right))),
-                );
+                pending.extend(closure.iter().zip(others).map(|(this, that)| {
+                    (Seen::of(this.resolve(left)), Seen::of(that.resolve(right)))
+                }));
                 return Ok(true);
             }
             (Resolved::Code(code), Resolved::Code(other)) => {
-                if !seen.insert((left, right)) {
+                if !seen.insert(entered) {
                     return Ok(true);
                 }
                 return Ok(code_gate((code, left), (other, right), pending));
@@ -115,71 +135,62 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
             _ => {}
         }
     }
-    Ok(match (this.composite(), that.composite()) {
-        (Some((left_node, left)), Some((right_node, right))) => {
-            if let (Some(left_node), Some(right_node)) = (left_node, right_node)
-                && !seen.insert((left_node, right_node))
-            {
-                return Ok(true);
+    Ok(
+        match (this.surface(types, scratch), that.surface(types, scratch)) {
+            (Some(left), Some(right)) => {
+                if let (Some(left_node), Some(right_node)) = (left.node(), right.node())
+                    && !seen.insert(((left_node, left.ktype()), (right_node, right.ktype())))
+                {
+                    return Ok(true);
+                }
+                if !surface_gate(&left, &right, types, scratch) {
+                    return Ok(false);
+                }
+                pending.extend((0..left.len()).map(|at| {
+                    (
+                        left.child(at, types, scratch),
+                        right.child(at, types, scratch),
+                    )
+                }));
+                true
             }
-            if !composite_gate(&left, &right, types, scratch) {
-                return Ok(false);
-            }
-            pending.extend((0..left.len()).map(|at| (left.child(at), right.child(at))));
-            true
-        }
-        (Some(_), None) | (None, Some(_)) => false,
-        (None, None) => match (&this, &that) {
-            (Value::Number(left), Value::Number(right)) => left == right,
-            (Value::Bool(left), Value::Bool(right)) => left == right,
-            (Value::Null, Value::Null) => true,
-            (Value::Str(left), Value::Str(right)) => left == right,
-            (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
-            _ => false,
+            (Some(_), None) | (None, Some(_)) => false,
+            (None, None) => match (this.value(), that.value()) {
+                (Value::Number(left), Value::Number(right)) => left == right,
+                (Value::Bool(left), Value::Bool(right)) => left == right,
+                (Value::Null, Value::Null) => true,
+                (Value::Str(left), Value::Str(right)) => left == right,
+                (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
+                _ => false,
+            },
         },
-    })
+    )
 }
 
-/// Whether two composites may be equal before their children are compared: one kind, related
-/// types, then the same keys, names or identity, and as many children.
-fn composite_gate<X: Knotted, Y: Knotted>(
-    left: &Composite<'_, X>,
-    right: &Composite<'_, Y>,
+/// Whether two surfaces may be equal before their parts are compared: one kind, related seen
+/// types, then the same keys, visible names or identity, and as many parts.
+fn surface_gate<X: Knotted, Y: Knotted>(
+    left: &Surface<'_, '_, X>,
+    right: &Surface<'_, '_, Y>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
     let related = |left: KType, right: KType| {
         satisfied_by(types, scratch, left, right) || satisfied_by(types, scratch, right, left)
     };
-    match (left, right) {
-        (
-            Composite::List { ktype, cells },
-            Composite::List {
-                ktype: other,
-                cells: others,
-            },
-        ) => related(*ktype, *other) && cells.len() == others.len(),
-        (
-            Composite::Dict { ktype, keys, cells },
-            Composite::Dict {
-                ktype: other,
-                keys: other_keys,
-                cells: others,
-            },
-        ) => related(*ktype, *other) && keys == other_keys && cells.len() == others.len(),
-        (
-            Composite::Record {
-                ktype,
-                names,
-                cells,
-            },
-            Composite::Record {
-                ktype: other,
-                names: other_names,
-                cells: others,
-            },
-        ) => related(*ktype, *other) && names == other_names && cells.len() == others.len(),
-        (Composite::Tagged { ktype, .. }, Composite::Tagged { ktype: other, .. }) => ktype == other,
+    let (ktype, other) = (left.ktype(), right.ktype());
+    let length = left.len() == right.len();
+    match (left.parts(), right.parts()) {
+        (Parts::List { .. }, Parts::List { .. }) => related(ktype, other) && length,
+        (Parts::Dict { keys, .. }, Parts::Dict { keys: others, .. }) => {
+            related(ktype, other) && keys == others && length
+        }
+        (Parts::Record { .. }, Parts::Record { .. }) => {
+            related(ktype, other)
+                && length
+                && (0..left.len()).all(|at| left.name(at) == right.name(at))
+        }
+        (Parts::Tagged { .. }, Parts::Tagged { .. }) => ktype == other,
         _ => false,
     }
 }
@@ -205,11 +216,12 @@ fn code_gate<'left, 'right, X: Knotted, Y: Knotted>(
         return false;
     }
     for (left, right) in [(left.bound, right.bound), (left.supplied, right.supplied)] {
-        pending.extend(
-            left.iter()
-                .zip(right)
-                .map(|(left, right)| (left.1.resolve(holder), right.1.resolve(other))),
-        );
+        pending.extend(left.iter().zip(right).map(|(left, right)| {
+            (
+                Seen::of(left.1.resolve(holder)),
+                Seen::of(right.1.resolve(other)),
+            )
+        }));
     }
     true
 }

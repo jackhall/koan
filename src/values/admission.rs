@@ -15,7 +15,7 @@ use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with,
-    is_subtype_of, join, satisfied_by,
+    is_subtype_of, join, satisfied_by, substitute_quantified,
 };
 
 use super::{Knotted, Resolved, Value, WorkingPart};
@@ -119,6 +119,51 @@ pub fn construction(
         }
         _ => Err(ConstructionRefused::NotConstructible(head)),
     }
+}
+
+/// The type a tagged value's payload is read at: its identity's representation — a newtype's, a
+/// family application's with its arguments substituted, a bare family's with each parameter at
+/// `Any`. `None` for an identity with none: an opaque view's mint, a family that constructs
+/// nothing.
+pub fn representation(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    identity: KType,
+) -> Option<KType> {
+    let (family, arguments) = match types.node(identity) {
+        TypeNode::SetMember {
+            schema: NodeSchema::NewType(representation),
+            ..
+        } => return Some(representation),
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => (constructor, Some(arguments)),
+        _ => (identity, None),
+    };
+    let TypeNode::SetMember {
+        schema:
+            NodeSchema::TypeConstructor {
+                representation: Some(representation),
+                param_names,
+            },
+        ..
+    } = types.node(family)
+    else {
+        return None;
+    };
+    let mut bindings = BumpVec::with_capacity_in(param_names.len(), scratch);
+    bindings.extend(param_names.iter().map(|name| {
+        arguments
+            .and_then(|arguments| arguments.get(name.symbol()))
+            .unwrap_or(KType::ANY)
+    }));
+    Some(substitute_quantified(
+        types,
+        scratch,
+        representation,
+        &bindings,
+    ))
 }
 
 /// Whether a construction through `head` solves its identity from its payload — `head` names a

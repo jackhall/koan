@@ -11,7 +11,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{COPY_RATIO, Key, ValueFamily, cross, cross_here, verdict};
 
-use super::{Dict, List, Record, Step, Value, copy, pin, text, with_fixture};
+use super::{Dict, List, Record, Step, Tagged, Value, copy, pin, text, with_fixture};
 
 #[test]
 fn a_copied_list_outlives_its_home() {
@@ -30,7 +30,7 @@ fn a_copied_list_outlives_its_home() {
                 let cells = [Value::List(inner), Value::Dict(dict)];
                 let outer = List::new(writer, cells.into_iter(), types, scratch);
                 let source = context.lift::<ValueFamily>(Value::List(outer));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, types).unwrap();
                 let Value::List(copied) = context.read(&crossed).value() else {
                     panic!("a list crosses as a list");
                 };
@@ -73,7 +73,7 @@ fn a_pinned_record_reads_after_its_home_seals() {
                 let fields = [(name, text(writer, "koan"))];
                 let record = Record::new(writer, &fields, types, scratch);
                 let source = context.lift::<ValueFamily>(Value::Record(record));
-                let crossed = cross(context, holder, &source).unwrap();
+                let crossed = cross(context, holder, &source, types).unwrap();
                 let Value::Record(pinned) = context.read(&crossed).value() else {
                     panic!("a record crosses as a record");
                 };
@@ -148,8 +148,8 @@ fn crossing_here_brings_a_value_back_into_the_step() {
                 let writer = context.writer();
                 let list = List::new(writer, [text(writer, "here")].into_iter(), types, scratch);
                 let source = context.lift::<ValueFamily>(Value::List(list));
-                let away = cross(context, other, &source).unwrap();
-                let Value::List(back) = cross_here(context, &away) else {
+                let away = cross(context, other, &source, types).unwrap();
+                let Value::List(back) = cross_here(context, &away, types) else {
                     panic!("a list crosses as a list");
                 };
                 // The copy is built through this step's writer, so it embeds in what the step builds.
@@ -210,7 +210,7 @@ fn a_circular_value_copies_as_the_same_graph_and_pins_as_the_same_node() {
                     let source = ring(fixture, writer, KType::STR, &[Some(text_in(writer)), None]);
                     let carrier =
                         context.lift::<ValueFamily<NodeFamily>>(Holding::Knotted(source[0]));
-                    let crossed = cross(context, dest, &carrier).unwrap();
+                    let crossed = cross(context, dest, &carrier, types).unwrap();
                     let Holding::Knotted(copied) = context.read(&crossed).value() else {
                         panic!("a knot member crosses as a knot member");
                     };
@@ -262,7 +262,7 @@ fn two_members_of_one_knot_cross_as_members_of_one_copy() {
                 let pair = [Holding::Knotted(source[0]), Holding::Knotted(source[1])];
                 let list = crate::values::List::new(writer, pair.into_iter(), types, scratch);
                 let carrier = context.lift::<ValueFamily<NodeFamily>>(Holding::List(list));
-                let crossed = cross(context, dest, &carrier).unwrap();
+                let crossed = cross(context, dest, &carrier, types).unwrap();
                 let copied = context.read(&crossed).value().as_list().expect("a list");
                 let [Holding::Knotted(first), Holding::Knotted(second)] = copied.cells() else {
                     panic!("a list of two knot members");
@@ -281,4 +281,149 @@ fn two_members_of_one_knot_cross_as_members_of_one_copy() {
 
 fn text_in<'cell>(writer: crate::memory::Writer<'cell>) -> super::Holding<'cell> {
     crate::values::text(writer, "held")
+}
+
+#[test]
+fn a_copy_lays_down_only_what_a_retype_shows() {
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let x = BinderSymbol::declared("x", symbols).unwrap();
+        let y = BinderSymbol::declared("y", symbols).unwrap();
+        let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
+        for (verdict, copies) in [(copy as fn(Prices) -> Verdict, true), (pin, false)] {
+            let mut graph: CellGraph<'_, Step> = CellGraph::new(2, verdict);
+            let home = graph.create(None).unwrap();
+            let dest = graph.create(None).unwrap();
+            graph
+                .enter(home, |context| {
+                    let writer = context.writer();
+                    let fields = [(x, Value::Number(1.0)), (y, text(writer, "a"))];
+                    let record = Record::new(writer, &fields, types, scratch);
+                    let retyped = Value::Record(record).retyped(writer, narrow, types, scratch);
+                    let source = context.lift::<ValueFamily>(retyped);
+                    let crossed = cross(context, dest, &source, types).unwrap();
+                    let Value::Record(copied) = context.read(&crossed).value() else {
+                        panic!("a record crosses as a record");
+                    };
+                    let mut rendered = String::new();
+                    Value::Record(copied)
+                        .render(&mut rendered, types, symbols, scratch)
+                        .unwrap();
+                    assert_eq!(rendered, "{x = 1}");
+                    if !copies {
+                        assert!(ptr::eq(copied, retyped.as_record().unwrap()));
+                        return;
+                    }
+                    assert_eq!(copied.names().len(), 1);
+                    assert_eq!(copied.ktype(), narrow);
+                    let fresh = Record::new(writer, &[(x, Value::Number(1.0))], types, scratch);
+                    assert_eq!(copied.weight(), fresh.weight());
+                })
+                .unwrap();
+            graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+            graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+            assert!(graph.is_empty());
+        }
+    });
+}
+
+#[test]
+fn a_copy_lays_down_each_part_at_the_type_its_holder_names() {
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let field = |name| BinderSymbol::declared(name, symbols).unwrap();
+        let (x, y, z) = (field("x"), field("y"), field("z"));
+        let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
+        let representation = types.record(scratch, &[(x, KType::NUMBER), (y, KType::NUMBER)]);
+        let point = fixture.newtype("Point", representation);
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        graph
+            .enter(home, |context| {
+                let writer = context.writer();
+                let fields = [(x, Value::Number(1.0)), (y, Value::Number(2.0))];
+                let element = Value::Record(Record::new(writer, &fields, types, scratch));
+                let list = List::new(writer, [element].into_iter(), types, scratch);
+                let retyped = Value::List(list).retyped(writer, types.list(narrow), types, scratch);
+                let source = context.lift::<ValueFamily>(retyped);
+                let crossed = cross(context, dest, &source, types).unwrap();
+                let copied = context.read(&crossed).value().as_list().expect("a list");
+                let element = copied.get(0).and_then(Value::as_record).expect("a record");
+                assert_eq!(element.cells().len(), 1);
+                assert_eq!(element.ktype(), narrow);
+
+                let fields = [
+                    (x, Value::Number(1.0)),
+                    (y, Value::Number(2.0)),
+                    (z, Value::Number(3.0)),
+                ];
+                let payload = Value::Record(Record::new(writer, &fields, types, scratch));
+                let tagged = Value::Tagged(Tagged::hold(writer, payload, point));
+                let source = context.lift::<ValueFamily>(tagged);
+                let crossed = cross(context, dest, &source, types).unwrap();
+                let Value::Tagged(copied) = context.read(&crossed).value() else {
+                    panic!("a tagged value crosses as a tagged value");
+                };
+                assert_eq!(copied.ktype(), point);
+                let payload = copied.payload().as_record().expect("a record payload");
+                assert_eq!(payload.cells().len(), 2);
+                assert_eq!(payload.ktype(), representation);
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+/// A data node seen at a type other than its memo copies as a plain value of its kind at that
+/// type, as a retype lays it down, not as a member of a copy of its knot.
+#[test]
+fn a_data_node_seen_at_another_type_copies_as_a_plain_value() {
+    use super::{Holding, Link, NodeFamily, tie};
+    use crate::values::Circular;
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let field = |name| BinderSymbol::declared(name, symbols).unwrap();
+        let (next, value, held) = (field("next"), field("value"), field("held"));
+        let memo = types.record(scratch, &[(next, KType::ANY), (value, KType::NUMBER)]);
+        let narrow = types.record(scratch, &[(value, KType::NUMBER)]);
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        graph
+            .enter(home, |context| {
+                let writer = context.writer();
+                let node = tie(writer, 1, |_, edges| {
+                    let fields = [
+                        (next, Link::Edge(edges[0])),
+                        (value, Link::Value(Holding::Number(1.0))),
+                    ];
+                    Circular::Record(crate::values::Record::linked(
+                        writer, &fields, memo, scratch,
+                    ))
+                })[0];
+                let fields = [(held, Holding::Knotted(node))];
+                let holder = crate::values::Record::new(writer, &fields, types, scratch);
+                let shown = types.record(scratch, &[(held, narrow)]);
+                let retyped = Holding::Record(holder).retyped(writer, shown, types, scratch);
+                let source = context.lift::<ValueFamily<NodeFamily>>(retyped);
+                let crossed = cross(context, dest, &source, types).unwrap();
+                let copied = context
+                    .read(&crossed)
+                    .value()
+                    .as_record()
+                    .expect("a record");
+                let Some(Holding::Record(laid)) = copied.field(held.symbol()) else {
+                    panic!("the node copies as a plain record");
+                };
+                assert_eq!(laid.ktype(), narrow);
+                assert_eq!(laid.names(), &[value.symbol()]);
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
 }

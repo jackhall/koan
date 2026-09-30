@@ -220,7 +220,7 @@ fn a_view_copies_across_a_cell_like_any_module() {
                     panic!("`Carrier` is a type member");
                 };
                 let source = context.lift::<KValueFamily>(Value::Knotted(view));
-                let crossed = cross(context, dest, &source).unwrap();
+                let crossed = cross(context, dest, &source, types).unwrap();
                 (context.keep(crossed), carrier.handle())
             })
             .unwrap();

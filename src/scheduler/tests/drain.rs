@@ -3,7 +3,7 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph};
+use crate::scheduler::tests::bundle::{Native, TestGraph, with_types};
 use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
@@ -215,7 +215,7 @@ fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
         return step.failed(StepError::Stale);
     };
     let mut leaves = 0.0;
-    for received in step.results().collect::<Vec<_>>() {
+    for received in with_types(|types| step.results(types).collect::<Vec<_>>()) {
         let Ok(Received::Scratch(KValue::Number(count))) = received else {
             return step.failed(StepError::Unredeemable);
         };
@@ -272,7 +272,7 @@ fn sibling<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 
 /// The spawner, woken: count what arrived.
 fn count_them<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let arrived = step.results().filter(Result::is_ok).count();
+    let arrived = with_types(|types| step.results(types).filter(Result::is_ok).count());
     record(format!("{arrived} arrived"));
     step.done()
 }

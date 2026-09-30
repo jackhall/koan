@@ -139,8 +139,12 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     kind,
                     owed,
                 } => {
-                    let [callee, arguments] =
-                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&callee, &arguments]);
+                    let [callee, arguments] = copy_severed::<_, KnottedFamily, 2>(
+                        writer,
+                        view,
+                        [&callee, &arguments],
+                        program.types(),
+                    );
                     KBirth::Call {
                         program,
                         callee,
@@ -154,8 +158,12 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     code,
                     offered,
                 } => {
-                    let [code, offered] =
-                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&code, &offered]);
+                    let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
+                        writer,
+                        view,
+                        [&code, &offered],
+                        program.types(),
+                    );
                     KBirth::Eval {
                         program,
                         code,

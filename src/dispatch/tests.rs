@@ -10,6 +10,7 @@ mod rankings;
 mod rules;
 mod selection;
 mod statics;
+mod surface;
 mod tail;
 
 use std::cell::RefCell;

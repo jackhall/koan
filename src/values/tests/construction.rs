@@ -629,3 +629,48 @@ fn a_member_seals_under_a_mint_its_source_binding_admits() {
         })
     });
 }
+
+#[test]
+fn a_payload_is_read_at_its_identitys_representation() {
+    use crate::memory::ScopeId;
+    use crate::values::representation;
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let distance = fixture.newtype("Distance", KType::NUMBER);
+        assert_eq!(
+            representation(types, scratch, distance),
+            Some(KType::NUMBER)
+        );
+
+        let key = BinderSymbol::declared("key", symbols).unwrap();
+        let parameter = |names: &[TypeSymbol], name| {
+            let index = names
+                .iter()
+                .position(|found| *found == TypeSymbol::declared(name, symbols).unwrap())
+                .expect("a declared parameter");
+            types.quantified(index, KType::ANY)
+        };
+        let boxed = fixture.family("Boxed", &["Type"], |names| {
+            Some(types.record(scratch, &[(key, parameter(names, "Type"))]))
+        });
+        let type_name = BinderSymbol::Type(TypeSymbol::declared("Type", symbols).unwrap());
+        let applied = types.constructor_apply(scratch, boxed, &[(type_name, KType::NUMBER)]);
+        assert_eq!(
+            representation(types, scratch, applied),
+            Some(types.record(scratch, &[(key, KType::NUMBER)])),
+            "an application substitutes its arguments"
+        );
+        assert_eq!(
+            representation(types, scratch, boxed),
+            Some(types.record(scratch, &[(key, KType::ANY)])),
+            "a bare family reads each parameter at `Any`"
+        );
+
+        let silent = fixture.family("Silent", &["Type"], |_| None);
+        assert_eq!(representation(types, scratch, silent), None);
+        let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
+        let nonce = ScopeId::next();
+        let mint = types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), KType::ANY);
+        assert_eq!(representation(types, scratch, mint), None);
+    });
+}
