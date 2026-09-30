@@ -96,7 +96,9 @@ fn a_frame_s_value_carries_its_declared_return() {
 #[test]
 fn a_return_that_misses_its_declared_type_is_an_error_value() {
     assert_eq!(
-        run("LET r = {v = \"s\"}\nEXPR #(BAD) -> Number = #(r.v)\nPRINT (BAD)\nPRINT \"after\""),
+        run(
+            "LET r = ({v = \"s\"} :! :{v :Any})\nEXPR #(BAD) -> Number = #(r.v)\nPRINT (BAD)\nPRINT \"after\""
+        ),
         "error: :(FN :{} -> Number) returned Str, which does not satisfy Number"
     );
     assert_eq!(
@@ -122,11 +124,19 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
                   PRINT (ATTR p y)\n\
                   PRINT p.y\n\
                   LET which = #(y)\n\
-                  PRINT (ATTR p (which))\n\
-                  PRINT (ATTR p z)";
+                  PRINT (ATTR p (which))";
+    assert_eq!(run(source), "a\na\na");
     assert_eq!(
-        run(source),
-        "a\na\na\nerror: :{x :Number y :Str} has no field z"
+        run("LET p = {x = 1, y = \"a\"}\nPRINT (ATTR p z)"),
+        "load: <test>:2:7: :{x :Number y :Str} has no field z",
+        "every record `p` can carry lacks `z`"
+    );
+    assert_eq!(
+        run("EXPR #(HIDE x :Any) -> Any = #(x)\n\
+             LET p = {x = 1, y = \"a\"}\n\
+             PRINT (ATTR (HIDE p) z)"),
+        "error: :{x :Number y :Str} has no field z",
+        "a record the load cannot read faults at run"
     );
     assert_eq!(
         run("LET p = {y = 1}\nPRINT (ATTR p \"y\")"),
@@ -196,11 +206,19 @@ fn from_projects_a_record_to_the_fields_it_names() {
                   EXPR #(PICK r :{x :Number, z :Str}) -> Str = #(\"got xz\")\n\
                   LET both = {x = 1, y = \"a\", z = \"b\"}\n\
                   PRINT (#[x y] FROM both)\n\
-                  PRINT (PICK (#[x y] FROM both))\n\
-                  PRINT (#[x q] FROM both)";
+                  PRINT (PICK (#[x y] FROM both))";
+    assert_eq!(run(source), "{x = 1, y = a}\ngot xy");
     assert_eq!(
-        run(source),
-        "{x = 1, y = a}\ngot xy\nerror: :{x :Number y :Str z :Str} has no field q"
+        run("LET both = {x = 1, y = \"a\", z = \"b\"}\nPRINT (#[x q] FROM both)"),
+        "load: <test>:2:7: :{x :Number y :Str z :Str} has no field q",
+        "every record `both` can carry lacks `q`"
+    );
+    assert_eq!(
+        run("EXPR #(HIDE x :Any) -> Any = #(x)\n\
+             LET both = {x = 1, y = \"a\", z = \"b\"}\n\
+             PRINT (#[x q] FROM (HIDE both))"),
+        "error: :{x :Number y :Str z :Str} has no field q",
+        "a record the load cannot read faults at run"
     );
 }
 
@@ -228,7 +246,9 @@ fn eval_over_a_number_refuses_the_load() {
 #[test]
 fn an_uncaught_error_ends_the_program_with_its_message() {
     assert_eq!(
-        run("LET r = {v = \"a\"}\nPRINT \"before\"\nPRINT (1 + r.v)\nPRINT \"after\""),
+        run(
+            "LET r = ({v = \"a\"} :! :{v :Any})\nPRINT \"before\"\nPRINT (1 + r.v)\nPRINT \"after\""
+        ),
         "before\nerror: no overload of _ + _ admits (Number, Str)"
     );
 }
@@ -236,13 +256,15 @@ fn an_uncaught_error_ends_the_program_with_its_message() {
 #[test]
 fn every_evaluation_passes_an_error_it_receives_through_unchanged() {
     assert_eq!(
-        run("LET r = {v = \"s\"}\n\
+        run("LET r = ({v = \"s\"} :! :{v :Any})\n\
              EXPR #(ONE x :Number) -> Number = #(x)\n\
              PRINT [1, (ONE (ONE r.v))]"),
         "error: no overload of ONE _ admits (Str)"
     );
     assert_eq!(
-        run("LET r = {v = \"a\"}\nEXPR #(DEEP) -> Number = #(1 + r.v)\nPRINT {n = (DEEP)}"),
+        run(
+            "LET r = ({v = \"a\"} :! :{v :Any})\nEXPR #(DEEP) -> Number = #(1 + r.v)\nPRINT {n = (DEEP)}"
+        ),
         "error: no overload of _ + _ admits (Number, Str)",
         "through a frame's contract"
     );

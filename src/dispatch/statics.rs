@@ -18,15 +18,18 @@
 //! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
 //! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
 //! first, is **selected** and runs without admitting; where they rank none first, the load refuses
-//! the certain ambiguity. A quantified candidate's return is read through its group's intervals.
-//! A call whose callee and solve the load knows exactly — a selected candidate, or a call by name
-//! of an exact callee — is exactly the return its frame retypes to; a call in tail position never
-//! finishes, and is typed as any other. An `EVAL` of code the load traces to a written quote is at
-//! most that code's last statement's type, and `FROM` at most the projection of its record. A
-//! callable body whose static type meets its declared return at `Never` refuses the load
-//! too, as does an ascription whose operand's static type meets its type at `Never`; one whose
-//! operand's static upper end lies under its type is **settled**, and the run checks nothing. What
-//! the pass fixes rests in each shape's write-once [`Statics`] cell, which
+//! the certain ambiguity. A builtin candidate is judged through its native's [type rule](super::rules)
+//! too: an argument whose lower end lies outside the type the rule needs drops it, and a use whose
+//! last candidate a need dropped is refused in the native's words. A builtin's call is the return
+//! its rule gives — `FROM`'s the projection of its record, `ATTR`'s the named field's type, and an
+//! `EVAL`'s of code the load traces to a written quote that code's last statement's type. A
+//! quantified candidate's return is read through its group's intervals. A call whose callee and
+//! solve the load knows exactly — a selected registration, or a call by name of an exact callee —
+//! is exactly the return its frame retypes to; a call in tail position never finishes, and is
+//! typed as any other. A callable body whose static type meets its declared return at `Never`
+//! refuses the load too, as does an ascription whose operand's static type meets its type at
+//! `Never`; one whose operand's static upper end lies under its type is **settled**, and the run
+//! checks nothing. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
 //! [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
@@ -55,6 +58,8 @@ use crate::values::{ConstructionRefused, Value, construction, dict_type, list_ty
 
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
+use super::one_name;
+use super::rules::{self, Given};
 
 /// Give every value expression and value binder of `root`, and of every shape nested in it, a
 /// static type, and narrow every keyworded use's candidates; refuse a use no candidate can admit.
@@ -141,14 +146,15 @@ enum Known {
     Unknown,
 }
 
-/// One candidate a keyworded use kept: what the load knows of it, its verdict, and its group's
-/// intervals where the static solve succeeded.
+/// One candidate a keyworded use kept: what the load knows of it, its verdict, its group's
+/// intervals where the static solve succeeded, and a builtin's return as its rule gives it.
 #[derive(Clone, Copy)]
 struct Judgement<'x> {
     candidate: Candidate,
     known: Known,
     verdict: Verdict,
     intervals: Option<&'x [Interval]>,
+    ruled: Option<Interval>,
 }
 
 impl<'p, 'graph> Pass<'p, '_, 'graph> {
@@ -770,10 +776,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// A keyworded use: its arguments typed, each candidate judged against them, and the use
-    /// narrowed — or a candidate selected, where no *maybe* one is left and one ranks first. Its
-    /// static type is the selected candidate's return — exactly a return the retype makes exact
-    /// where the solve is the load's — or at most the join of what is left's returns.
+    /// A keyworded use: its arguments typed, each candidate judged against them — a builtin through
+    /// its rule too, over what each slot holds as written — and the use narrowed, or a candidate
+    /// selected, where no *maybe* one is left and one ranks first. Its static type is the selected
+    /// candidate's [return](Self::candidate_return), or at most the join of what is left's returns.
     fn narrow(
         &mut self,
         level: usize,
@@ -783,16 +789,25 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let (types, scratch) = (self.types, self.scratch);
         let wanted = slots(node, scratch);
         let mut arguments = BumpVec::with_capacity_in(wanted.len(), scratch);
-        let mut operand = None;
+        let mut given = BumpVec::with_capacity_in(wanted.len(), scratch);
         for wanted in wanted.iter() {
-            arguments.push(match wanted {
-                Wanted::Label(BinderSymbol::Type(_)) => Interval::point(KType::TYPE_NAME_TOKEN),
-                Wanted::Label(_) => Interval::point(KType::IDENTIFIER),
-                Wanted::Evaluated(part) => {
-                    operand = operand.or(Some(*part));
-                    self.part(level, part)?
-                }
-            });
+            let each = match wanted {
+                Wanted::Label(name) => Given {
+                    typed: Interval::point(match name {
+                        BinderSymbol::Type(_) => KType::TYPE_NAME_TOKEN,
+                        _ => KType::IDENTIFIER,
+                    }),
+                    names: Some(std::slice::from_ref(scratch.alloc(*name))),
+                    code: None,
+                },
+                Wanted::Evaluated(part) => Given {
+                    typed: self.part(level, part)?,
+                    names: written_names(part, scratch),
+                    code: self.traced(level, part),
+                },
+            };
+            arguments.push(each.typed);
+            given.push(each);
         }
         let shape = self.chain[level].shape;
         let index = shape
@@ -809,33 +824,55 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let uppers = || collect(self.writer, arguments.iter().map(|argument| argument.upper));
 
         let mut judged = BumpVec::with_capacity_in(list.candidates.len(), scratch);
+        // The first argument a builtin's need dropped a candidate over, beside that need.
+        let mut dropped = None;
         for candidate in list.candidates {
             // Unfilled code holds no function at an unmarked key's hole.
             if self.unfilled && self.hole(level, *candidate) {
                 continue;
             }
             let known = self.candidate(level, *candidate);
-            let (verdict, intervals) = match known {
+            let (mut verdict, intervals) = match known {
                 Known::Closed(registered) | Known::Rigid(registered) => {
                     let judged = judge_by_class(types, scratch, registered, &arguments);
                     (judged.verdict, judged.intervals)
                 }
                 Known::Unknown => (Verdict::Maybe, None),
             };
+            let builtin = self.builtin(*candidate);
+            let mut ruled = None;
+            if let Some(builtin) = builtin.filter(|_| verdict != Verdict::Never) {
+                let native = Native::of(builtin.id());
+                let typed = rules::typed(native, builtin.ktype(), &given, types, scratch);
+                if let Some(slot) = typed.dropped {
+                    verdict = Verdict::Never;
+                    dropped = dropped.or(Some((arguments[slot].lower, typed.needs[slot])));
+                }
+                ruled = Some(typed.returns);
+            }
             if verdict != Verdict::Never {
                 judged.push(Judgement {
                     candidate: *candidate,
                     known,
                     verdict,
                     intervals,
+                    ruled,
                 });
             }
         }
         if judged.is_empty() {
-            return Err(ShapeError::NoAdmittingCandidate {
-                key: list.elements,
-                arguments: uppers(),
-                at: node.source,
+            let missing = dropped.and_then(|(lower, need)| self.missing(lower, need));
+            return Err(match missing {
+                Some((of, field)) => ShapeError::NoField {
+                    of,
+                    field,
+                    at: node.source,
+                },
+                None => ShapeError::NoAdmittingCandidate {
+                    key: list.elements,
+                    arguments: uppers(),
+                    at: node.source,
+                },
             });
         }
         // A *maybe* an *always* one strictly outranks at the first class never runs: wherever it
@@ -904,14 +941,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     unreachable!("an always candidate is no spread");
                 };
                 self.chain[level].narrowings[index] = Narrowing::Selected(coordinate);
-                // A frame retypes its value to this return, and a builtin's return is one the
-                // retype leaves alone.
-                let (returned, solved) = self.candidate_return(level, chosen, operand, &arguments);
-                return Ok(if solved {
-                    retyped_to(types, returned)
-                } else {
-                    under(returned)
-                });
+                return Ok(self.candidate_return(chosen));
             }
         }
         if judged.len() < list.candidates.len()
@@ -932,89 +962,54 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if let Known::Unknown = judgement.known {
                 return Ok(under(KType::ANY));
             }
-            returns.push(
-                self.candidate_return(level, *judgement, operand, &arguments)
-                    .0,
-            );
+            returns.push(self.candidate_return(*judgement).upper);
         }
         Ok(under(join_iter(types, scratch, returns.iter().copied())))
     }
 
-    /// What a judged candidate returns: its shape's return read through its group's intervals; for
-    /// `EVAL` of code the load traces through `operand`, that code's last statement's type as it
-    /// runs unfilled — traced code is written, so nothing composed or `USING` filled it; for
-    /// `FROM`, the [projection](Self::projected) of its record's static type. Beside it, whether it
-    /// is the shape's own return and the solve is the call's: the group empty, or every interval a
-    /// point.
-    fn candidate_return(
-        &self,
-        level: usize,
-        judgement: Judgement<'_>,
-        operand: Option<&'graph ExpressionPart<'graph>>,
-        arguments: &[Interval],
-    ) -> (KType, bool) {
+    /// What a judged candidate returns: a builtin's return as its [rule](super::rules) gives it; a
+    /// registration's shape's return read through its group's intervals — exactly that return where
+    /// the retype makes it so and the solve is the call's, the group empty or every interval a
+    /// point, since its frame retypes its value to it, and at most it otherwise.
+    fn candidate_return(&self, judgement: Judgement<'_>) -> Interval {
+        if let Some(ruled) = judgement.ruled {
+            return ruled;
+        }
         let registered = match judgement.known {
             Known::Closed(registered) | Known::Rigid(registered) => registered,
-            Known::Unknown => return (KType::ANY, false),
+            Known::Unknown => return under(KType::ANY),
         };
-        let native = self
-            .builtin(judgement.candidate)
-            .map(|builtin| Native::of(builtin.id()));
-        if native == Some(Native::Project) {
-            let record = arguments.get(1).expect("`FROM` takes a record second");
-            return (self.projected(operand, record.upper), false);
-        }
-        let evaluates = native == Some(Native::Eval);
-        let traced = operand
-            .filter(|_| evaluates)
-            .and_then(|operand| self.traced_code(level, operand))
-            .and_then(|code| {
-                let ran = self.ran.iter().find(|(ran, _)| std::ptr::eq(*ran, code));
-                ran.map(|(_, last)| *last)
-            });
-        match traced {
-            Some(typed) => (bound_above(self.types, self.scratch, typed.upper), false),
-            None => (
-                self.returned(registered, judgement.intervals),
-                judgement
-                    .intervals
-                    .is_some_and(|all| all.iter().all(|interval| interval.is_exact())),
-            ),
+        let returned = self.returned(registered, judgement.intervals);
+        let solved =
+            (judgement.intervals).is_some_and(|all| all.iter().all(|each| each.is_exact()));
+        if solved {
+            retyped_to(self.types, returned)
+        } else {
+            under(returned)
         }
     }
 
-    /// What `FROM` returns over the field list `listed` and a record at most `record`: the record
-    /// of the fields a written list names, each at its type in `record`, where `record` is a record
-    /// type holding each; `:{}` elsewhere. The native builds its record from the field values, each
-    /// under its field's type, so the call is at most this and never exact.
-    fn projected(&self, listed: Option<&'graph ExpressionPart<'graph>>, record: KType) -> KType {
+    /// Where a builtin's need `need` dropped a candidate over an argument whose lower end is
+    /// `lower`, both records: that end, read through its bounds, and the first field the need names
+    /// that it lacks.
+    fn missing(&self, lower: KType, need: KType) -> Option<(KType, BinderSymbol)> {
         let (types, scratch) = (self.types, self.scratch);
-        let (Some(ExpressionPart::ListLiteral(items)), TypeNode::Record { fields }) =
-            (listed, types.node(record))
+        let (TypeNode::Record { fields: has }, TypeNode::Record { fields: needs }) =
+            (types.node(lower), types.node(need))
         else {
-            return KType::EMPTY_RECORD;
+            return None;
         };
-        let mut projected = BumpVec::with_capacity_in(items.len(), scratch);
-        for item in items.iter() {
-            let ExpressionPart::QuotedExpression(node) = item else {
-                return KType::EMPTY_RECORD;
-            };
-            let name = match node.reference().parts {
-                [only] => match only.value {
-                    ExpressionPart::Identifier(name) => BinderSymbol::Value(name),
-                    ExpressionPart::Type(name) => BinderSymbol::Type(name),
-                    _ => return KType::EMPTY_RECORD,
-                },
-                _ => return KType::EMPTY_RECORD,
-            };
-            let Some(field) = fields.get(name.symbol()) else {
-                return KType::EMPTY_RECORD;
-            };
-            if !projected.iter().any(|(named, _)| *named == name) {
-                projected.push((name, field));
-            }
-        }
-        record_type(types, scratch, projected.into_iter())
+        let field = needs.keys().find(|name| has.get(name.symbol()).is_none())?;
+        Some((bound_above(types, scratch, lower), field))
+    }
+
+    /// The type of the code the part `operand` runs, where the load traces it to a written quote:
+    /// its last statement's upper end as it runs unfilled, read through its bounds — traced code is
+    /// written, so nothing composed or `USING` filled it.
+    fn traced(&self, level: usize, operand: &'graph ExpressionPart<'graph>) -> Option<KType> {
+        let code = self.traced_code(level, operand)?;
+        let (_, last) = self.ran.iter().find(|(ran, _)| std::ptr::eq(*ran, code))?;
+        Some(bound_above(self.types, self.scratch, last.upper))
     }
 
     /// The code shape the part `operand` runs, where the load traces it to a written quote: the
@@ -1098,6 +1093,28 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             Static::Unknown => Known::Unknown,
         }
     }
+}
+
+/// The names the part `part` holds as written: a one-name quote's name, or a list literal of
+/// one-name quotes' names. `None` for anything else, which the load cannot read.
+fn written_names<'x>(
+    part: &ExpressionPart<'_>,
+    scratch: BumpAllocator<'x>,
+) -> Option<&'x [BinderSymbol]> {
+    let quoted = |part: &ExpressionPart<'_>| match part {
+        ExpressionPart::QuotedExpression(node) => one_name(node.reference()),
+        _ => None,
+    };
+    let mut names = BumpVec::new_in(scratch);
+    match part {
+        ExpressionPart::ListLiteral(items) => {
+            for item in items.iter() {
+                names.push(quoted(item)?);
+            }
+        }
+        part => names.push(quoted(part)?),
+    }
+    Some(names.leak())
 }
 
 /// Whether the pass has typed `nested`, or need not: a quote's code the load refused is left.

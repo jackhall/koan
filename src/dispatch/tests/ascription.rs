@@ -5,17 +5,14 @@
 
 use crate::parse::ExpressionPart;
 use crate::program::Program;
-use crate::scope::BuiltinIndex;
 use crate::scope::{BodyShape, Site};
-use crate::type_lattice::{display_name, shape_return};
+use crate::type_lattice::display_name;
 
-use super::super::builtins::Native;
-use super::super::statics::{retyped_to, under};
 use super::run;
 use super::statics::{body, let_narrowing, loaded, slot};
 
 /// Both ends of the static type of the binder `name` in `shape`, rendered.
-fn ends(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> (String, String) {
+pub(super) fn ends(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> (String, String) {
     let typed = shape
         .binder_type(slot(program, shape, name))
         .expect("the load typed the shape");
@@ -33,7 +30,7 @@ fn settled(program: &Program<'_>, name: &str) -> bool {
 }
 
 /// The `WHICH` overloads each test dispatches the retyped value through.
-const WHICH: &str = "EXPR #(WHICH x :(LIST OF Number)) -> Str = #(\"numbers\")\n\
+pub(super) const WHICH: &str = "EXPR #(WHICH x :(LIST OF Number)) -> Str = #(\"numbers\")\n\
                      EXPR #(WHICH x :(LIST OF (Number | Str))) -> Str = #(\"number or str\")\n\
                      EXPR #(WHICH x :(LIST OF Any)) -> Str = #(\"any\")\n";
 
@@ -57,7 +54,9 @@ fn an_ascription_retypes_its_value() {
 #[test]
 fn an_ascription_a_value_misses_is_a_fault() {
     assert_eq!(
-        run("LET r = {v = [1, \"a\"]}\nPRINT (r.v :! (LIST OF Number))\nPRINT \"after\""),
+        run(
+            "LET r = ({v = [1, \"a\"]} :! :{v :Any})\nPRINT (r.v :! (LIST OF Number))\nPRINT \"after\""
+        ),
         "error: :(LIST OF :(Number | Str)) does not satisfy its ascription :(LIST OF Number)"
     );
 }
@@ -144,7 +143,7 @@ fn a_tail_chain_returns_at_the_outermost_contract() {
     );
     assert_eq!(run(&source), "any\nnumbers\nany");
     assert_eq!(
-        run("LET r = {v = \"s\"}\n\
+        run("LET r = ({v = \"s\"} :! :{v :Any})\n\
              EXPR #(INNER) -> Number = #(r.v)\n\
              EXPR #(OUTER) -> Any = #(INNER)\n\
              PRINT (OUTER)"),
@@ -180,7 +179,7 @@ fn an_ascription_has_its_type_at_load() {
 fn an_ascription_the_load_can_decide_is_settled() {
     let source = format!(
         "{ALIASES}\
-         LET r = {{v = [1, \"a\"]}}\n\
+         LET r = ({{v = [1, \"a\"]}} :! :{{v :Any}})\n\
          LET decided = ([1] :! Loose)\n\
          LET checked = (r.v :! (LIST OF Number))"
     );
@@ -228,7 +227,7 @@ fn an_exact_argument_a_slot_does_not_admit_drops_its_candidate() {
 #[test]
 fn a_slot_above_no_type_an_argument_can_carry_refuses_the_load() {
     assert_eq!(
-        run("LET r = {v = 1}\n\
+        run("LET r = ({v = 1} :! :{v :Any})\n\
              LET rec = {a = r.v}\n\
              EXPR #(GET x :{b :Number}) -> Any = #(x)\n\
              PRINT (GET rec)"),
@@ -457,54 +456,21 @@ fn a_generic_use_over_an_exact_parameter_is_selected_at_load() {
 }
 
 #[test]
-fn a_projection_is_at_most_its_record_s_named_fields() {
+fn a_projection_over_an_exact_record_is_exact() {
     let source = "EXPR #(PICK r :{x :Number, y :Str}) -> Str = #(\"got xy\")\n\
                   EXPR #(PICK r :{x :Number, z :Str}) -> Str = #(\"got xz\")\n\
                   LET both = {x = 1, y = \"a\", z = \"b\"}\n\
                   LET picked = (#[x y] FROM both)\n\
-                  LET unknown = (#[x q] FROM both)\n\
                   LET which = (PICK picked)";
     loaded(source, |program| {
         let top = program.shape();
-        let never = "Never".to_string();
-        assert_eq!(
-            ends(program, top, "picked"),
-            (never.clone(), ":{x :Number y :Str}".to_string())
-        );
-        assert_eq!(
-            ends(program, top, "unknown"),
-            (never, ":{}".to_string()),
-            "a field the record's type lacks leaves the record top"
-        );
+        let exact = ":{x :Number y :Str}".to_string();
+        assert_eq!(ends(program, top, "picked"), (exact.clone(), exact));
         assert_eq!(
             let_narrowing(program, top, "which"),
-            "kept maybe always",
-            "a record at most `{{x, y}}` may carry `z` too"
+            "selected",
+            "the `{{x, z}}` overload is never: `picked` carries no `z`"
         );
     });
-    let runs = source.replace("LET unknown = (#[x q] FROM both)\n", "");
-    assert_eq!(run(&format!("{runs}\nPRINT which")), "got xy");
-}
-
-/// A native is never retyped, so a selected builtin's call is exact only where its declared return
-/// is exact already: no builtin declares a return the retype makes exact. `FROM`'s `:{}` is exempt:
-/// the load computes its return, at most a projection.
-#[test]
-fn no_builtin_declares_a_return_the_retype_makes_exact() {
-    loaded("LET n = 1", |program| {
-        let (builtins, types) = (program.builtins(), program.types());
-        let offending: Vec<String> = (0..builtins.len())
-            .filter_map(|index| {
-                let value = builtins.get(BuiltinIndex(index as u32));
-                let builtin = value.as_callable().and_then(|member| member.builtin())?;
-                if Native::of(builtin.id()) == Native::Project {
-                    return None;
-                }
-                let ret = shape_return(builtin.ktype(), types)?;
-                (retyped_to(types, ret) != under(ret))
-                    .then(|| display_name(ret, types, program.symbols()).to_string())
-            })
-            .collect();
-        assert!(offending.is_empty(), "declared returns: {offending:?}");
-    });
+    assert_eq!(run(&format!("{source}\nPRINT which")), "got xy");
 }

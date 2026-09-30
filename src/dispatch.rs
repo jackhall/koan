@@ -14,6 +14,7 @@
 //! - [`builtins`] lays the table down and runs the natives.
 //! - [`evaluate`] is the step: what a node is, and how its value is reached.
 //! - [`select`] admits and ranks a call's candidates.
+//! - [`rules`] gives each native's type rule: what its call's arguments need and what it returns.
 //! - [`check`] refuses a registration that overlaps a builtin overload.
 //! - [`statics`] types every value expression and binder where the program loads, and narrows and
 //!   selects each keyworded use's candidates by those types.
@@ -33,6 +34,7 @@ mod builtins;
 mod check;
 mod errors;
 mod evaluate;
+mod rules;
 mod select;
 mod statics;
 
@@ -41,6 +43,7 @@ mod tests;
 
 use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{BumpAllocator, Writer};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program};
 use crate::scheduler::NativeStep;
 use crate::scope::{BodyShape, ShapeError};
@@ -111,5 +114,17 @@ impl<'graph, 'here> Operand<'graph, 'here> {
             Operand::Value(value) => Some(*value),
             Operand::Label(_) => None,
         }
+    }
+}
+
+/// The name one-name code is — its lone part a value or a type name — as a quote's `node` holds it.
+fn one_name(node: &KExpression<'_>) -> Option<BinderSymbol> {
+    match node.parts {
+        [only] => match only.value {
+            ExpressionPart::Identifier(name) => Some(BinderSymbol::Value(name)),
+            ExpressionPart::Type(name) => Some(BinderSymbol::Type(name)),
+            _ => None,
+        },
+        _ => None,
     }
 }

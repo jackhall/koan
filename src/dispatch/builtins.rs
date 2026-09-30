@@ -12,7 +12,8 @@
 //! as their [`BUILTIN_SHAPES`] entry types it. Every overload ranks its slots in written order.
 //!
 //! A native runs over operands its overload's shape admitted, so it reads each one as the type its
-//! slot declares. What it refuses of a value it admitted is an error value.
+//! slot declares. What it refuses of a value it admitted is an error value. What it returns is
+//! retyped to its [type rule](super::rules)'s return over the carried types, where that is exact.
 
 use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
 use crate::knot::{KBuiltins, KValue, UsingRefused, builtin, using};
@@ -23,10 +24,13 @@ use crate::program::{KBundle, eval};
 use crate::scheduler::{Request, Use};
 use crate::scope::{Builtins, Candidate, Offer, Site};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
-use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry, builtin_types, meet};
+use crate::type_lattice::{
+    DispatchTokenElement, Interval, KType, TypeRegistry, builtin_types, meet,
+};
 use crate::values::{Circular, List, Record, TypeValue, Value};
 
 use super::errors::Raised;
+use super::rules::{self, Given};
 use super::{Evaluation, Operand, check};
 
 /// What one builtin overload runs. Its discriminant is the overload's `id`.
@@ -236,18 +240,61 @@ pub(super) enum Ran<'graph, 'here> {
     Frame(Request<'graph, 'here, KBundle>),
 }
 
-/// Run `native` over the operands its overload admitted, for the call `node` evaluated through
-/// `at`, building in `writer`'s region.
+/// Run `native`, its overload declared as the shape `declared`, over the operands the overload
+/// admitted, for the call `node` evaluated through `at`, building in `writer`'s region and taking
+/// transients from `scratch`. A value that is no error value is retyped to its native's
+/// [rule](super::rules)'s return over the carried types and the names the operands hold, where
+/// that return is exact.
 pub(super) fn run<'graph, 'here>(
+    native: Native,
+    declared: KType,
+    at: &Evaluation<'graph, 'here>,
+    writer: Writer<'here>,
+    node: &'graph KExpression<'graph>,
+    operands: &[Operand<'graph, 'here>],
+    scratch: &Bump,
+) -> Ran<'graph, 'here> {
+    let value = match ran(native, at, writer, node, operands, scratch) {
+        Ran::Value(value) => value,
+        frame => return frame,
+    };
+    let program = at.program;
+    if !rules::retypes(native) || program.message(&value).is_some() {
+        return Ran::Value(value);
+    }
+    let types = program.types();
+    let mut given = BumpVec::with_capacity_in(operands.len(), scratch);
+    for operand in operands {
+        let names: Option<&[BinderSymbol]> = match operand {
+            Operand::Label(name) => Some(std::slice::from_ref(name)),
+            Operand::Value(value) => named(*value, scratch),
+        };
+        given.push(Given {
+            typed: Interval::point(operand.ktype()),
+            names,
+            code: None,
+        });
+    }
+    let returns = rules::returns(native, declared, &given, types, scratch);
+    // A retype may hide a field the native still reads, which the rule over it reads as `Never`.
+    Ran::Value(if returns.is_exact() && returns.upper != KType::NEVER {
+        value.retyped(writer, returns.upper, types, scratch)
+    } else {
+        value
+    })
+}
+
+/// What `native` comes to over `operands`.
+fn ran<'graph, 'here>(
     native: Native,
     at: &Evaluation<'graph, 'here>,
     writer: Writer<'here>,
     node: &'graph KExpression<'graph>,
     operands: &[Operand<'graph, 'here>],
+    scratch: &Bump,
 ) -> Ran<'graph, 'here> {
     let program = at.program;
     let types = program.types();
-    let scratch = Bump::new();
     let value = |index: usize| {
         operands[index]
             .value()
@@ -273,7 +320,7 @@ pub(super) fn run<'graph, 'here>(
         Native::Print => {
             let mut prose = writer.prose();
             value(0)
-                .render(&mut prose, types, program.symbols(), &scratch)
+                .render(&mut prose, types, program.symbols(), scratch)
                 .expect("writing into a region does not fail");
             let text = prose.finish();
             (program.output().print)(text);
@@ -291,7 +338,7 @@ pub(super) fn run<'graph, 'here>(
         Native::Not => Value::Bool(!flag(0)),
         Native::Equal => {
             let (left, right) = (value(0), value(1));
-            match left.equals(&right, types, &scratch) {
+            match left.equals(&right, types, scratch) {
                 Ok(equal) => Value::Bool(equal),
                 Err(_) => raise(Raised::Incomparable {
                     left: left.ktype(),
@@ -299,18 +346,16 @@ pub(super) fn run<'graph, 'here>(
                 }),
             }
         }
-        Native::Union => {
-            type_value(types.union_of(&scratch, &[handle(value(0)), handle(value(1))]))
-        }
+        Native::Union => type_value(types.union_of(scratch, &[handle(value(0)), handle(value(1))])),
         Native::UnionOf => {
-            let mut members = BumpVec::new_in(&scratch);
+            let mut members = BumpVec::new_in(scratch);
             members.extend(listed(value(0)).iter().map(|item| handle(*item)));
-            type_value(types.union_of(&scratch, &members))
+            type_value(types.union_of(scratch, &members))
         }
-        Native::Meet => type_value(meet(types, &scratch, handle(value(0)), handle(value(1)))),
+        Native::Meet => type_value(meet(types, scratch, handle(value(0)), handle(value(1)))),
         Native::MeetOf => {
             let met = listed(value(0)).iter().fold(KType::ANY, |met, item| {
-                meet(types, &scratch, met, handle(*item))
+                meet(types, scratch, met, handle(*item))
             });
             type_value(met)
         }
@@ -320,7 +365,7 @@ pub(super) fn run<'graph, 'here>(
             // A type's field is the type its record declares the field with, as `:(Point.y)` reads.
             if let Some(owner) = record.as_type() {
                 let owner = owner.handle();
-                return Ran::Value(match declared_field(types, &scratch, owner, name) {
+                return Ran::Value(match declared_field(types, scratch, owner, name) {
                     Some(declared) => type_value(declared),
                     None => raise(Raised::NoField {
                         of: owner,
@@ -348,7 +393,7 @@ pub(super) fn run<'graph, 'here>(
         Native::Project => {
             let record = value(1);
             let names = listed(value(0));
-            let mut fields = BumpVec::with_capacity_in(names.len(), &scratch);
+            let mut fields = BumpVec::with_capacity_in(names.len(), scratch);
             for name in names.iter() {
                 let name = label(Operand::Value(*name));
                 match field(record, name.symbol()) {
@@ -361,12 +406,12 @@ pub(super) fn run<'graph, 'here>(
                     }
                 }
             }
-            Value::Record(Record::new(writer, &fields, types, &scratch))
+            Value::Record(Record::new(writer, &fields, types, scratch))
         }
         Native::Eval => return evaluated(at, writer, node, value(0)),
         Native::Using => {
             let code = value(0).as_code().expect("a `Code` slot admits code alone");
-            match using(writer, code, value(1), types, &scratch) {
+            match using(writer, code, value(1), types, scratch) {
                 Ok(filled) => Value::Knotted(filled),
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
             }
@@ -384,21 +429,29 @@ fn listed<'graph, 'here>(value: KValue<'graph, 'here>) -> &'here [KValue<'graph,
 
 /// The name a label is: a bare one as written, or the name a one-name quote's code is.
 fn label(operand: Operand<'_, '_>) -> BinderSymbol {
-    let code = match operand {
-        Operand::Label(name) => return name,
-        Operand::Value(value) => value
-            .as_code()
-            .and_then(|member| member.code())
-            .expect("a name slot admits a quote's code alone"),
-    };
-    match code.body().reference().parts {
-        [only] => match only.value {
-            ExpressionPart::Identifier(name) => BinderSymbol::Value(name),
-            ExpressionPart::Type(name) => BinderSymbol::Type(name),
-            _ => unreachable!("a name slot admits one-name code alone"),
-        },
-        _ => unreachable!("a name slot admits one-name code alone"),
+    match operand {
+        Operand::Label(name) => name,
+        Operand::Value(value) => one_name(value).expect("a name slot admits one-name code alone"),
     }
+}
+
+/// The name `value` is, where it is a one-name quote's code.
+fn one_name(value: KValue<'_, '_>) -> Option<BinderSymbol> {
+    let code = value.as_code().and_then(|member| member.code())?;
+    super::one_name(code.body().reference())
+}
+
+/// The names `value` holds: a one-name quote's code its name, and a list of them their names.
+fn named<'x>(value: KValue<'_, '_>, scratch: &'x Bump) -> Option<&'x [BinderSymbol]> {
+    if let Some(name) = one_name(value) {
+        return Some(std::slice::from_ref(scratch.alloc(name)));
+    }
+    let cells = value.as_list()?.cells();
+    let mut names = BumpVec::with_capacity_in(cells.len(), scratch);
+    for cell in cells {
+        names.push(one_name(*cell)?);
+    }
+    Some(names.leak())
 }
 
 /// The field `name` of `value`: a record's, read through every tagged layer over it, a knot's data

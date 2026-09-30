@@ -203,10 +203,18 @@ order. A plain value takes the target as its handle over the same shared runs.
 A knot's data node, whose memo its knot cannot restamp, is laid down as a plain
 value of its kind over its cells, each edge resolved to the sibling it names
 and a dict's keys or a record's names shared: O(width) per retype, and the
-retyped value renders its cycle one level down. The retype is shallow: the top
-node's type changes, and its cells keep their own, so a `LIST OF (LIST OF Any)`
-retype leaves each inner list as precise as it was. Downstream dispatch then
-sees the contract rather than the contents' incidental precision.
+retyped value renders its cycle one level down. The retype restamps the top node
+alone, and its cells keep their own types; a read carries it down.
+
+**A value's type is its surface.** Every read of a record, list or dict — a
+field read, `FROM`, rendering, equality, the deep copy — goes through one door,
+which sees only the fields the carried type names and hands back each field,
+element or entry retyped to its type there. After
+`{x = 1, y = "a"} :! :{x :Number}`, the value has no field `y` to any reader and
+prints `{x = 1}`, though its cells still hold `y`; a `LIST OF (LIST OF Any)`
+retype hands back each inner list as a `LIST OF Any`. A retype walks nothing, and a nested part obeys it all the same,
+so downstream dispatch sees the contract at every depth rather than the
+contents' incidental precision.
 
 The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
@@ -252,7 +260,8 @@ into a value at the destination's brand: a **pinned** operand arrives there and
 embeds as it is, and a **copied** one is rebuilt by the deep copy — region
 parts written again through the destination's writer, memoized types and
 weights carried over unchanged, and a knot member's whole knot re-tied by its
-family.
+family. The deep copy reads through the same door as every reader, so it lays
+down only what a container's type names: a part a retype hid is dropped.
 
 **The deep copy runs over an explicit stack**, in a bump of its own, since no
 step scratch reaches a birth's crossing; so a value of any depth copies without
@@ -493,6 +502,9 @@ otherwise pair with are `cellgraph`'s own slate.
 
 ## Open work
 
+- [A value's type is its surface](../../roadmap/gradual-typing/type-is-the-surface.md)
+  — the one door every container read goes through, and a copy dropping what a
+  retype hid.
 - [Slicing and splicing](../../roadmap/metaprogramming/slicing-and-splicing.md) — views
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,

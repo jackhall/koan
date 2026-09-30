@@ -266,6 +266,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::NoAdmittingCandidate { key, arguments, .. } => {
             E::NoAdmittingCandidate { key, arguments, at }
         }
+        E::NoField { of, field, .. } => E::NoField { of, field, at },
         E::Ambiguous {
             key,
             arguments,

@@ -236,7 +236,7 @@ fn a_use_several_candidates_may_admit_joins_their_returns() {
     let source = format!("{AREAS}LET a = (AREA (EITHER))");
     assert_eq!(narrowing(&source, "a"), "full");
     assert_eq!(top(&source, "a"), ":(Str | Number)");
-    let source = format!("{AREAS}LET r = {{v = 1}}\nLET a = (AREA r.v)");
+    let source = format!("{AREAS}LET r = ({{v = 1}} :! :{{v :Any}})\nLET a = (AREA r.v)");
     assert_eq!(narrowing(&source, "a"), "full");
     assert_eq!(top(&source, "a"), ":(Str | Number)");
 }
@@ -304,7 +304,7 @@ fn a_body_that_can_never_meet_its_return_refuses_the_load() {
     );
     assert_eq!(run("EXPR #(OK) -> (Number | Str) = #(1)\nPRINT (OK)"), "1");
     assert_eq!(
-        run("LET r = {v = 1}\nEXPR #(LATE) -> Str = #(r.v)\nPRINT \"loaded\""),
+        run("LET r = ({v = 1} :! :{v :Any})\nEXPR #(LATE) -> Str = #(r.v)\nPRINT \"loaded\""),
         "loaded"
     );
     assert_eq!(
@@ -324,7 +324,7 @@ fn a_body_that_can_never_meet_its_return_refuses_the_load() {
         "a body that never arrives is not checked"
     );
     assert_eq!(
-        run("LET r = {v = 1}\nEXPR #(DIE) -> Never = #(r.v)"),
+        run("LET r = ({v = 1} :! :{v :Any})\nEXPR #(DIE) -> Never = #(r.v)"),
         "load: <test>:2:25: this body returns Any, which can never satisfy its declared return \
          Never",
         "a declared `Never` is met only by a body that never arrives"

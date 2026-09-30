@@ -7,6 +7,7 @@ mod generic;
 mod programs;
 mod quotes;
 mod rankings;
+mod rules;
 mod selection;
 mod statics;
 mod tail;

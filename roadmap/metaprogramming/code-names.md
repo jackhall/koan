@@ -55,4 +55,6 @@ and a `SIG` has no member for code.
 
 - [Code splicing](code-splicing.md) — a shape built at run time for code the builder cannot trace.
 
-**Unblocks:** none — a leaf.
+**Unblocks:**
+
+- [A nested projection](../gradual-typing/nested-projection.md) — a schema of names as data.

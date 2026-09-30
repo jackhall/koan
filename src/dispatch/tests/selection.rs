@@ -97,14 +97,14 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
     assert_eq!(
         run("EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
              EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
-             LET r = {v = 1}\n\
+             LET r = ({v = 1} :! :{v :Any})\n\
              PRINT (PICK r.v)"),
         expected,
         "one scope"
     );
     assert_eq!(
         run("EXPR #(PICK x :Number) -> Str = #(\"outer\")\n\
-             LET r = {v = 1}\n\
+             LET r = ({v = 1} :! :{v :Any})\n\
              EXPR #(INNER) -> Str = #(\n  \
              EXPR #(PICK x :Number) -> Str = #(\"inner\")\n  \
              PICK r.v\n\
@@ -141,7 +141,7 @@ fn a_certain_ambiguity_refuses_the_load() {
 #[test]
 fn no_admitting_candidate_is_a_miss_naming_the_argument_types() {
     assert_eq!(
-        run("LET r = {v = \"a\"}\nPRINT (r.v + 1)"),
+        run("LET r = ({v = \"a\"} :! :{v :Any})\nPRINT (r.v + 1)"),
         "error: no overload of _ + _ admits (Str, Number)"
     );
     assert_eq!(

@@ -990,6 +990,13 @@ pub enum ShapeError<'graph> {
         arguments: &'graph [KType],
         at: SourceRef,
     },
+    /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
+    /// type `of` naming no field `field` the rule needs.
+    NoField {
+        of: KType,
+        field: BinderSymbol,
+        at: SourceRef,
+    },
     /// A keyworded use every candidate of which always admits its arguments' static types, none of
     /// which ranks first, and no builtin among them.
     Ambiguous {
@@ -1092,6 +1099,7 @@ impl ShapeError<'_> {
             | ShapeError::NoCandidate { at, .. }
             | ShapeError::Overlaps { at, .. }
             | ShapeError::NoAdmittingCandidate { at, .. }
+            | ShapeError::NoField { at, .. }
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::AscriptionNeverSatisfied { at, .. }
@@ -1243,6 +1251,12 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 write!(f, "no overload of `{}` admits ", self.key(key))?;
                 self.arguments(f, arguments)
             }
+            ShapeError::NoField { of, field, .. } => write!(
+                f,
+                "{} has no field {}",
+                display_name(*of, self.types, self.symbols),
+                name(field)
+            ),
             ShapeError::Ambiguous {
                 key,
                 arguments,

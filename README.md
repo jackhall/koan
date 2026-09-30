@@ -126,8 +126,8 @@ storage, the interner, the type registry and the cell graph over them — and th
 body runner that performs it — see
 [src/program/README.md](src/program/README.md)),
 [dispatch/](src/dispatch.rs) (the language koan's programs run under: the
-builtin table, the evaluator and keyword selection, the overlap check, and
-static selection — see
+builtin table and each builtin's type rule, the evaluator and keyword selection,
+the overlap check, and static selection — see
 [src/dispatch/README.md](src/dispatch/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned

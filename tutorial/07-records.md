@@ -194,8 +194,8 @@ ada
 36
 ```
 
-Naming a field the record doesn't carry is an error that names the field and the
-record's type:
+Naming a field the record's type doesn't carry refuses the program when it
+loads, naming the field and the record's type:
 
 ```koan
 LET person = {name = "ada", age = 36}
@@ -203,7 +203,7 @@ PRINT person.email
 ```
 
 ```text
-error: :{name :Str age :Number} has no field email
+error: <input>:2:7: :{name :Str age :Number} has no field email
 ```
 
 Width subtyping has a cost in dispatch: a wide record can satisfy two different
@@ -246,12 +246,22 @@ field read as well as of dispatch:
 LET both = {x = 1, y = "a", z = "b"}
 LET view = (#[x y] FROM both)
 PRINT view.y
-PRINT view.z
 ```
 
 ```text
 a
-error: :{x :Number y :Str} has no field z
+```
+
+Reading `view.z` refuses the program when it loads, just as `person.email` did:
+
+```koan
+LET both = {x = 1, y = "a", z = "b"}
+LET view = (#[x y] FROM both)
+PRINT view.z
+```
+
+```text
+error: <input>:3:7: :{x :Number y :Str} has no field z
 ```
 
 When you bind a projection, wrap the whole right-hand side:

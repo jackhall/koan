@@ -90,17 +90,28 @@ overload ranks its slots in written order.
   field; over a type, giving the type its record declares the field with, so
   `Point.y` is `Str` and `v :Point.y` is a slot; over a union type labelled by a
   type name, giving the variant; and over a module, a fault until
-  [module programs](../../roadmap/rewrite/modules.md). `FROM` projects a record
-  to the fields it names. `EVAL` runs code (below), and `USING` fills a code's
-  holes through the [`USING` door](../knot/README.md#a-quote).
+  [module programs](../../roadmap/rewrite/modules.md). `FROM` retypes a record
+  to the projection of its carried type onto the fields it names, each once; a
+  name that type does not name is an error value, as it is to `ATTR`. `EVAL`
+  runs code (below), and `USING` fills a code's holes through the
+  [`USING` door](../knot/README.md#a-quote).
 
-**A native is never retyped.** No builtin declares a return the
-[retype](../values/README.md#the-type-memo-and-satisfies) makes exact — a list,
-dict or record type or a nominal one — so a selected builtin's call is exact
-at its return only where that return is exact already, and the run pays no
-retype for it. `FROM`, which declares `:{}`, is the exception: the load
-computes its return, at most the [projection](#static-types) of its record. A
-test over the table pins the rule and its one exception.
+**Each native has a [type rule](rules.rs).** From its arguments' static types,
+read at both ends, and each name operand — written, at load; its value, at run —
+the rule gives the type each argument needs and the call's return interval. The
+load types every call of a builtin through its rule and judges the candidate
+against the needed types; the run
+[retypes](../values/README.md#the-type-memo-and-satisfies) the native's value to
+the rule's return over the carried types, where that return is exact. A native
+with no rule of its own takes its declared slots and a return at most its
+declared one. `FROM`'s rule is the [projection](#static-types) of its record's
+static type, `ATTR`'s over a record the named field's type there, and `EVAL`'s a
+traced code's type. A property law pins every rule: over argument intervals
+within others, its return lies within theirs; handed no names or traced code,
+its return lies around its return over any; and over its declared slots, its
+return lies under its declared return. A return whose upper end is `Never` lies
+within every interval, and a rule over an argument whose lower end lies outside
+its need returns `Never`.
 
 **A shadowable builtin is derived, not listed.** A builtin whose operands are
 all `Any` — `==` and `PRINT` — admits every argument, so any user overload
@@ -192,7 +203,8 @@ fixed:
   makes it so and at most `T` otherwise. An operand whose static type is `Never`
   never arrives, and the ascription is `Never`; a type the load leaves unknown
   makes it at most `Any`;
-- a keyworded call is its selected candidate's return — exactly that return
+- a keyworded call is its selected candidate's return — a builtin's as its
+  [rule](#the-builtin-table) gives it, and a registration's exactly its return
   where the retype makes it so and the group is unquantified or solved to
   points, since the frame retypes its value to it, and at most it otherwise —
   or at most the join of every kept candidate's return: `Any` where one of them
@@ -203,13 +215,26 @@ fixed:
   exact by the same rule where the callee's static type is exact, and at most
   that return otherwise, since a parameter of function type may bind a function
   declaring a smaller return, and no function is retyped; a union variant
-  construction and `ATTR` over a record are at most `Any`;
+  construction is at most `Any`;
+- `ATTR` over a record is the named field's type in the record's static type,
+  read at each end: exactly that type where both ends name the field at one type
+  the retype makes exact, since the run retypes the field's value to it, and at
+  most the upper end's otherwise — `Any` where the upper end names no such field.
+  A field's value keeps its own variant of a union, so an `ATTR` over an exact
+  record is exact only where its field's type is. A lower end lacking the field
+  makes the candidate *never*, since every record the run can carry lacks it
+  too;
 - a call in tail position is typed as any other call: its node never finishes,
   since the frame it tails into returns at the enclosing contract, so no
   carried type is read against it;
-- `FROM` over a written field list and an argument at most a record type holding
-  each field is at most the record of those fields at their types there, and
-  at most `:{}` otherwise;
+- `FROM` over a written field list is the projection of its record's static
+  type, read at each end: the record of the listed fields at the upper end's
+  types, `Any` where it names none, above, and the same over the lower end's
+  below, so a call over an exact record is exactly its projection. A lower end
+  lacking a listed field makes the candidate *never*, so
+  `EXPR #(GET r :{a :Number}) -> Any = #(#[b] FROM r)` refuses the load. Over a
+  list the load cannot read, `FROM` is at most `:{}`, and the run retypes its
+  value to the projection of the record's carried type;
 - an `EVAL` of code the load traces to a written quote — its operand, or a name
   `LET` binds to one — is at most the code's last statement's upper end as the
   code runs there, read through
@@ -280,6 +305,13 @@ left with no candidate refuses the load (`ShapeError::NoAdmittingCandidate`):
 
 ```text
 no overload of `_ + _` admits (Str, Number)
+```
+
+A use whose last candidate a builtin's need dropped refuses it in the native's
+own words (`ShapeError::NoField`):
+
+```text
+:{a :Number} has no field b
 ```
 
 A use left with no *maybe* candidate, holding one candidate or only closed
@@ -467,8 +499,10 @@ container or nominal parameter's exact type, a union's kept at most, a settled
 ascription, a refused one, a generic use over an exact parameter selected, a
 candidate *never* over an argument's lower end, a call exact at its callee's
 return — by keyword, by name, in tail position — and one the load cannot solve
-exactly, `FROM`'s projection, and the builtin table's returns; and
-[tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
+exactly, and `FROM`'s projection over an exact record;
+[rules](tests/rules.rs) — the law every native's type rule obeys over drawn
+argument intervals, names and code, and what `FROM`'s and `ATTR`'s rules make
+the load type and refuse and the run retype; and [tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
 which is on the [Miri slate](../../observe/miri_slate.md). Every runnable
 tutorial snippet is checked against its shown output by
 `tools/verify_snippets.py` through the binary.
@@ -485,9 +519,9 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
-- [An exact projection](../../roadmap/gradual-typing/exact-projection.md) —
-  `FROM` retyping its result, so the load types it exactly and the builtin
-  table's test exempts nothing.
+- [A value's type is its surface](../../roadmap/gradual-typing/type-is-the-surface.md)
+  — `ATTR` and `FROM` reading through the carried type, and `FROM` a retype to
+  its record's projection.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.
