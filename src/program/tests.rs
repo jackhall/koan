@@ -101,6 +101,30 @@ fn type_back(substrate: &mut CellSubstrate, name: &str) -> String {
     evaluator::recorded().concat()
 }
 
+/// The weight in bytes of the top-level binding `name`, read as [`type_back`] reads its type. Any
+/// evaluator's program may be read so, dispatch's included.
+pub(crate) fn weight_back(substrate: &mut CellSubstrate, name: &str) -> String {
+    evaluator::reset();
+    WANTED.with(|wanted| *wanted.borrow_mut() = vec![name.to_string()]);
+    substrate.with(|running| {
+        running
+            .inspect(weighing)
+            .expect("the inspection runs to completion")
+    });
+    evaluator::recorded().concat()
+}
+
+/// [`typing`]'s sibling: it records the wanted binding's weight.
+fn weighing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+    let (step, state) = step.state();
+    let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
+        return step.failed(StepError::Refused);
+    };
+    let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
+    record(wanted(program, &view, &name).weight().bytes().to_string());
+    step.leave(birth)
+}
+
 /// [`inspecting`]'s sibling: it records the wanted binding's type.
 fn typing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();

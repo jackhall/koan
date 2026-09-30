@@ -26,7 +26,7 @@ mod record;
 mod substrate;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use body::{CodeRefused, Runner, block, call, eval, placement_of, run};
 pub use bundle::{KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily};

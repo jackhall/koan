@@ -347,7 +347,8 @@ fn a_copy_lays_down_each_part_at_the_type_its_holder_names() {
                 let crossed = cross(context, dest, &source, types).unwrap();
                 let copied = context.read(&crossed).value().as_list().expect("a list");
                 let element = copied
-                    .cells().first()
+                    .cells()
+                    .first()
                     .and_then(Value::as_record)
                     .expect("a record");
                 assert_eq!(element.cells().len(), 1);

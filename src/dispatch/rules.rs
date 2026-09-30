@@ -2,13 +2,13 @@
 //! at both ends, the names a slot holds and the code it runs — the type each argument needs and the
 //! call's return interval.
 //!
-//! One rule serves the load and the run. [`statics`](super::statics) hands it each slot's static
-//! type and what the slot holds as written, types a builtin's call at [`typed`]'s return, and drops
-//! a candidate an argument's lower end lies outside a need of. [`builtins`](super::builtins) hands
-//! it the carried types and the names the operands hold, and retypes the native's value to
-//! [`returns`] where that return is exact. `FROM`, `ATTR` over a record and `EVAL` have rules of
-//! their own; every other native takes its declared slots as its needs and a return at most its
-//! declared one.
+//! The rule types a call at the load. [`statics`](super::statics) hands it each slot's static type
+//! and what the slot holds as written, types a builtin's call at [`typed`]'s return, and drops a
+//! candidate an argument's lower end lies outside a need of. The run reads no rule: each native
+//! reads its operands through [the door](crate::values::Surface), so its value carries its rule's
+//! exact return, which the evaluator checks against the static type in debug builds. `FROM`,
+//! `ATTR` over a record and `EVAL` have rules of their own; every other native takes its declared
+//! slots as its needs and a return at most its declared one.
 //!
 //! Every rule obeys a law, which `tests::rules` checks for every builtin: over argument intervals
 //! within others, its return lies within theirs; handed no names or traced code, its return lies
@@ -31,14 +31,13 @@ use super::statics::{retyped_to, under};
 /// What a rule reads of one slot of a call.
 #[derive(Clone, Copy)]
 pub(super) struct Given<'x> {
-    /// The argument's static type; at run, a point at its carried type. A bare label's is its code
-    /// kind.
+    /// The argument's static type. A bare label's is its code kind.
     pub typed: Interval,
-    /// The names the slot holds — a label, a one-name quote, or a list of one-name quotes — as
-    /// written at load and as held at run. `None` where the load cannot read them.
+    /// The names the slot holds as written — a label, a one-name quote, or a list of one-name
+    /// quotes. `None` where the load cannot read them.
     pub names: Option<&'x [BinderSymbol]>,
     /// The type of the code the slot runs, where the load traces it to a written quote: its last
-    /// statement's type as it runs there, read through its bounds. Always `None` at run.
+    /// statement's type as it runs there, read through its bounds.
     pub code: Option<KType>,
 }
 
@@ -75,8 +74,8 @@ pub(super) fn typed<'x>(
     }
 }
 
-/// The return of `native`'s call over `given`, with no need checked: the run's entry point.
-pub(super) fn returns(
+/// The return of `native`'s call over `given`, with no need checked.
+fn returns(
     native: Native,
     declared: KType,
     given: &[Given<'_>],
@@ -114,14 +113,6 @@ pub(super) fn returns(
         ),
         _ => under(declared_return(declared, types)),
     }
-}
-
-/// Whether `native`'s rule can give a return the retype changes a value by: `FROM`'s and `ATTR`'s.
-/// Every other native's return at run is at most its declared one — exact only where that is a
-/// scalar its value already carries — or, an `EVAL`'s, at most `Any`. A load claiming an exact
-/// return the run skips is caught by the evaluator's check of the carried type.
-pub(super) fn retypes(native: Native) -> bool {
-    matches!(native, Native::Project | Native::Field)
 }
 
 /// Whether `argument`'s lower end, read below its rigid variables as a candidate's judgement reads
@@ -182,7 +173,10 @@ fn named<'x>(given: &[Given<'x>], native: Native) -> Option<&'x [BinderSymbol]> 
 }
 
 /// `names`, each once, in the order first listed.
-fn distinct<'x>(names: &[BinderSymbol], scratch: BumpAllocator<'x>) -> BumpVec<'x, BinderSymbol> {
+pub(super) fn distinct<'x>(
+    names: &[BinderSymbol],
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, BinderSymbol> {
     let mut distinct = BumpVec::with_capacity_in(names.len(), scratch);
     for name in names {
         if !distinct.contains(name) {

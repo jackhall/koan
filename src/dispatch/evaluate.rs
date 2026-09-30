@@ -423,15 +423,7 @@ fn call<'graph, 'here>(
     let raised = match selection {
         Selection::Builtin(builtin) => {
             let native = Native::of(builtin.id());
-            let ran = builtins::run(
-                native,
-                builtin.ktype(),
-                at,
-                writer,
-                node,
-                &operands,
-                &scratch,
-            );
+            let ran = builtins::run(native, at, writer, node, &operands, &scratch);
             return match ran {
                 Ran::Value(value) => finish(step, at, value),
                 Ran::Frame(request) => {

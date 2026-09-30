@@ -2,7 +2,11 @@
 //! field read, `FROM`, a `USING` source — sees only what the value's carried type names, at the
 //! type it names it, at every depth.
 
-use super::run;
+use crate::program::tests::weight_back;
+use crate::program::{CellSubstrate, Outcome};
+
+use super::super::Koan;
+use super::{output, run};
 
 /// A function handing back its argument at `Any`, so the load no longer knows the argument's type
 /// and a read the load would refuse reaches the operator run.
@@ -141,5 +145,35 @@ fn a_field_read_through_a_tagged_value_sees_its_representation() {
              LET b = ((Boxed {x = 1, y = 2}) :! (Boxed {Type = :{x :Number}}))\n\
              PRINT b.y"),
         "error: :(Boxed {Type = :{x :Number}}) has no field y"
+    );
+}
+
+#[test]
+fn a_projection_reads_only_the_fields_the_type_names() {
+    assert_eq!(
+        run(&format!(
+            "{HIDE}LET r = ({{x = 1, y = \"a\"}} :! :{{x :Number}})\n\
+             PRINT (#[y] FROM (HIDE r))"
+        )),
+        "error: :{x :Number} has no field y"
+    );
+    assert_eq!(
+        run("LET r = {x = 1, y = 2}\nPRINT (#[x y x] FROM r)"),
+        "{x = 1, y = 2}"
+    );
+}
+
+/// A projection is a restamp: it shares its record's runs, so it weighs what the record does.
+#[test]
+fn a_projection_shares_its_records_runs() {
+    let source = "LET r = {x = 1, y = \"a\"}\nLET p = (#[x] FROM r)";
+    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 8, output()).unwrap();
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Completed)
+    );
+    assert_eq!(
+        weight_back(&mut substrate, "p"),
+        weight_back(&mut substrate, "r")
     );
 }
