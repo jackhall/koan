@@ -1390,15 +1390,16 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // <module> :! <Sig> — the transparent ascription: a view at the source's own bindings.
+    // <value> :! <Type> — ascription: the value checked against the type and viewed at it; a
+    // module's view is modules'.
     BuiltinShape {
         id: BuiltinShapeId::AscribeTransparent,
         elements: &[
-            slot(Argument, &[MODULE]),
+            slot(Argument, &[ANY]),
             Kw(&KEYWORDS.transparent),
-            slot(Te, &[SIGNATURE_KIND]),
+            slot(Te, &[ANY_TYPE]),
         ],
-        returns: &[MODULE],
+        returns: &[ANY],
         binder: None,
         reserved: false,
     },

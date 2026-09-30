@@ -207,6 +207,9 @@ pub struct Statics<'graph> {
     pub binders: &'graph [Interval],
     /// Each keyworded use's narrowing, parallel to the shape's candidate lists.
     pub narrowings: &'graph [Narrowing<'graph>],
+    /// Each `:!` whose operand's static upper end lies under its type, sorted by site: the run
+    /// checks nothing there.
+    pub settled: &'graph [Site],
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

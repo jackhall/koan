@@ -280,6 +280,13 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::ReturnNeverSatisfied { body, returns, .. } => {
             E::ReturnNeverSatisfied { body, returns, at }
         }
+        E::AscriptionNeverSatisfied {
+            value, ascribed, ..
+        } => E::AscriptionNeverSatisfied {
+            value,
+            ascribed,
+            at,
+        },
         E::Type { error, .. } => E::Type { error, at },
         E::RepeatedGuard { guard, .. } => E::RepeatedGuard {
             guard,

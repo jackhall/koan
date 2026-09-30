@@ -761,6 +761,14 @@ impl<'graph> BodyShape<'graph> {
             .unwrap_or(Narrowing::Full)
     }
 
+    /// Whether the load settled the ascription at `site`: its operand's static upper end lies under
+    /// its type, so the run checks nothing. `false` where the load fixed nothing.
+    pub fn settled(&self, site: Site) -> bool {
+        self.statics
+            .get()
+            .is_some_and(|statics| statics.settled.binary_search(&site).is_ok())
+    }
+
     /// Written once, by the language's load pass.
     pub fn fix_statics(&self, statics: Statics<'graph>) {
         debug_assert!(self.statics.get().is_none());
@@ -996,6 +1004,12 @@ pub enum ShapeError<'graph> {
         returns: KType,
         at: SourceRef,
     },
+    /// An ascription whose operand's static type can never satisfy its type.
+    AscriptionNeverSatisfied {
+        value: KType,
+        ascribed: KType,
+        at: SourceRef,
+    },
     /// A closed type that does not elaborate.
     Type { error: Elaboration, at: SourceRef },
     /// Two guards of one `MATCH … WITH` arm set that type to one handle, `guard`; `at` is the
@@ -1080,6 +1094,7 @@ impl ShapeError<'_> {
             | ShapeError::NoAdmittingCandidate { at, .. }
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
+            | ShapeError::AscriptionNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
             | ShapeError::RepeatedGuard { at, .. } => *at,
         }
@@ -1247,6 +1262,14 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "this body returns {}, which can never satisfy its declared return {}",
                 display_name(*body, self.types, self.symbols),
                 display_name(*returns, self.types, self.symbols)
+            ),
+            ShapeError::AscriptionNeverSatisfied {
+                value, ascribed, ..
+            } => write!(
+                f,
+                "this value is {}, which can never satisfy its ascription {}",
+                display_name(*value, self.types, self.symbols),
+                display_name(*ascribed, self.types, self.symbols)
             ),
             ShapeError::Type { error, .. } => {
                 write!(f, "{}", error.display(self.symbols, self.types))

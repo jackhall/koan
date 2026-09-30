@@ -4,8 +4,10 @@
 //! A static type is an [`Interval`]: every type the run carries at that expression lies within it.
 //! An exact one is a point. The pass is local and bidirectional over what the
 //! [type channel's load pass](crate::elaborate::type_channel) fixed — a parameter's declared type
-//! is its reads', a callee's declared return its calls', and a literal's, a container's, a
-//! construction's and a selected candidate's own type flow up. What the load cannot bound is
+//! is its reads', an ascription's type its own, a callee's declared return its calls', and a
+//! literal's, a container's, a construction's and a selected candidate's own type flow up. A
+//! parameter or an ascription is exactly its type where that is a list, dict or record type, since
+//! the run retypes the value to it, and at most its type otherwise. What the load cannot bound is
 //! `[Never, Any]`. A static type may hold the lexical variables of its **chain** — the shapes from
 //! the program or a quote's code down, numbered as the type channel numbers them — and a crossing
 //! into code, or an `EVAL` leaving it, is read through [`bound_above`], so no variable leaks across.
@@ -18,7 +20,8 @@
 //! the certain ambiguity. A quantified candidate's return is read through its group's intervals,
 //! and an `EVAL` of code the load traces to a written quote returns that code's last statement's
 //! type. A callable body whose static type meets its declared return at `Never` refuses the load
-//! too. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
+//! too, as does an ascription whose operand's static type meets its type at `Never`; one whose
+//! operand's static upper end lies under its type is **settled**, and the run checks nothing. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
 //! [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
@@ -39,8 +42,9 @@ use crate::scope::{
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, Interval, KType, Record, Side, TypeNode, TypeRegistry, Variance, Verdict,
-    admits_with, bound_above, class_at_least, instantiate_quantified, intervals, join_iter,
-    judge_by_class, meet, quantifier_bounds, read_through, select_by_class, shape_return,
+    admits_with, bound_above, class_at_least, instantiate_quantified, intervals, is_subtype_of,
+    join_iter, judge_by_class, meet, quantifier_bounds, read_through, select_by_class,
+    shape_return,
 };
 use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
 
@@ -80,6 +84,18 @@ fn under(upper: KType) -> Interval {
     }
 }
 
+/// The static type of a value retyped to `declared` — an ascription's, a parameter's: exactly
+/// `declared` where it is a list, dict or record type, which every value of that kind is retyped to,
+/// and at most `declared` otherwise.
+fn exact_at_container(types: &TypeRegistry<'_>, declared: KType) -> Interval {
+    match types.node(declared) {
+        TypeNode::List { .. } | TypeNode::Dict { .. } | TypeNode::Record { .. } => {
+            Interval::point(declared)
+        }
+        _ => under(declared),
+    }
+}
+
 /// One shape on the chain, innermost last, with what the pass has typed of it so far.
 struct Level<'p, 'graph> {
     shape: &'graph BodyShape<'graph>,
@@ -89,6 +105,8 @@ struct Level<'p, 'graph> {
     statements: BumpVec<'p, Interval>,
     binders: BumpVec<'p, Interval>,
     narrowings: BumpVec<'p, Narrowing<'graph>>,
+    /// Each `:!` whose operand's static upper end lies under its type.
+    settled: BumpVec<'p, Site>,
 }
 
 /// The walk's state: the chain of enclosing shapes.
@@ -142,6 +160,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             statements,
             binders,
             narrowings,
+            settled: BumpVec::new_in(scratch),
         });
     }
 
@@ -228,6 +247,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let (writer, types) = (self.writer, self.types);
         let at = &mut self.chain[level];
         at.parts.sort_unstable_by_key(|(site, _)| *site);
+        at.settled.sort_unstable();
         debug_assert!(
             (at.parts.iter().map(|(_, typed)| typed))
                 .chain(at.statements.iter())
@@ -241,6 +261,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             statements: collect(writer, at.statements.iter().copied()),
             binders: collect(writer, at.binders.iter().copied()),
             narrowings: collect(writer, at.narrowings.iter().copied()),
+            settled: collect(writer, at.settled.iter().copied()),
         });
     }
 
@@ -273,7 +294,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 TypeNode::KFunction { params, .. } => params.get(name.symbol()),
                 _ => None,
             });
-        under(declared.unwrap_or(KType::ANY))
+        exact_at_container(self.types, declared.unwrap_or(KType::ANY))
     }
 
     /// A callable body's function type as its body reads it: its own group instantiated at its
@@ -413,10 +434,53 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 .and_then(|site| shape.nested(site))
                 .map_or(under(KType::ANY), callable),
             Form::Declaration => Interval::point(KType::NULL),
+            Form::Ascribe(node) => self.ascribe(level, node)?,
             Form::Call(node, list) => self.narrow(level, node, list)?,
             Form::Apply(head, argument) => self.apply(level, head, argument)?,
             Form::Unevaluable(_) => under(KType::ANY),
         })
+    }
+
+    /// `<value> :! <Type>`: its type, exactly where that is a list, dict or record type. Where the
+    /// operand's static upper end lies under the type the ascription is settled, and the run checks
+    /// nothing; where the two meet at `Never` the load is refused.
+    fn ascribe(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let [operand, _, ascribed] = node.parts else {
+            unreachable!("an ascription has an operand, its keyword and a type")
+        };
+        let typed = self.part(level, &operand.value)?;
+        // An operand that never arrives has no value to check.
+        if typed.upper == KType::NEVER {
+            return Ok(Interval::point(KType::NEVER));
+        }
+        let ascribed = match self.chain[level]
+            .shape
+            .typed_expression(Site::of(&ascribed.value))
+        {
+            Static::Closed(handle) | Static::Rigid { value: handle, .. } => handle,
+            Static::Unknown => return Ok(under(KType::ANY)),
+        };
+        let (types, scratch) = (self.types, self.scratch);
+        // Compared, and named, through their bounds: a variable's name is its binder's.
+        let (value, bounded) = (
+            bound_above(types, scratch, typed.upper),
+            bound_above(types, scratch, ascribed),
+        );
+        if meet(types, scratch, value, bounded) == KType::NEVER {
+            return Err(ShapeError::AscriptionNeverSatisfied {
+                value,
+                ascribed: bounded,
+                at: node.source,
+            });
+        }
+        if is_subtype_of(types, scratch, typed.upper, ascribed) {
+            self.chain[level].settled.push(Site::of_node(node));
+        }
+        Ok(exact_at_container(types, ascribed))
     }
 
     /// A leaf part: a literal's type, a name's binder's, a quote's code type, a type value's kind,

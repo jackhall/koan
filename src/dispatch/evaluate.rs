@@ -8,6 +8,8 @@
 //! - a **block** a pairwise operator run was rewritten into, run through the
 //!   [block door](crate::program::block) with its last statement's value its own;
 //! - a `FN`, born through the [lambda door](crate::knot::lambda);
+//! - an **ascription** `<value> :! <Type>`: its operand checked against the type, unless the load
+//!   settled it, and retyped to it; a module operand is an error until modules arrive;
 //! - a bucket declaration, which is `Null`;
 //! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks
 //!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
@@ -37,10 +39,10 @@ use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, bloc
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{BodyShape, CandidateList, Narrowing, ShapeKind, Site};
+use crate::scope::{BodyShape, CandidateList, Elaboration, Narrowing, ShapeKind, Site};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{TypeNode, Verdict, bound_above, satisfied_by, substitute_levels};
-use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value};
+use crate::type_lattice::{KType, TypeNode, Verdict, bound_above, satisfied_by, substitute_levels};
+use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native, Ran};
 use super::errors::Raised;
@@ -63,6 +65,8 @@ pub(super) enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
     Block(&'graph BodyShape<'graph>),
     Lambda(&'graph KExpression<'graph>),
+    /// `<value> :! <Type>`.
+    Ascribe(&'graph KExpression<'graph>),
     Declaration,
     Call(&'graph KExpression<'graph>, &'graph CandidateList<'graph>),
     Apply(
@@ -137,6 +141,7 @@ pub(super) fn evaluate<'graph>(
             finish(step, &at, value)
         }
         Form::Declaration => finish(step, &at, Value::Null),
+        Form::Ascribe(node) => ascribe(step, &at, node, stage),
         Form::Call(node, list) => call(step, &at, node, list, stage),
         Form::Apply(head, argument) => apply(step, &at, head, argument, stage),
         Form::Unevaluable(node) => {
@@ -181,6 +186,7 @@ pub(super) fn of_node<'graph>(
         Some(BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda) => {
             return Form::Lambda(node);
         }
+        Some(BuiltinShapeId::AscribeTransparent) => return Form::Ascribe(node),
         Some(BuiltinShapeId::BucketDeclaration) => return Form::Declaration,
         _ => {}
     }
@@ -221,19 +227,7 @@ fn leaf<'graph, 'here>(
         },
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
-            // The load fixed the type where it could; only what it left unknown is elaborated here.
-            let loaded = at.view.shape().typed_expression(Site::of(part)).solved(
-                &at.view,
-                &scratch,
-                |value, bindings| substitute_levels(types, &scratch, value, bindings),
-            );
-            debug_assert!(
-                loaded.is_none() || loaded == type_expression(part, &at.view, types, &scratch).ok(),
-                "the load-time type agrees with elaborating where it runs"
-            );
-            let value = match loaded
-                .map_or_else(|| type_expression(part, &at.view, types, &scratch), Ok)
-            {
+            let value = match denoted(at, part, &scratch) {
                 Ok(handle) => Value::Type(TypeValue::new(writer, handle, types)),
                 Err(refused) => program.error(writer, refused.display(program.symbols(), types)),
             };
@@ -246,6 +240,74 @@ fn leaf<'graph, 'here>(
         | ExpressionPart::Expression(_)
         | ExpressionPart::MarkedUse(..) => step.failed(StepError::Refused),
     }
+}
+
+/// The type a type part denotes: the load fixed it where it could, and only what it left unknown is
+/// elaborated here.
+fn denoted<'graph>(
+    at: &Evaluation<'graph, '_>,
+    part: &'graph ExpressionPart<'graph>,
+    scratch: &Bump,
+) -> Result<KType, Elaboration> {
+    let types = at.program.types();
+    let loaded = at.view.shape().typed_expression(Site::of(part)).solved(
+        &at.view,
+        scratch,
+        |value, bindings| substitute_levels(types, scratch, value, bindings),
+    );
+    debug_assert!(
+        loaded.is_none() || loaded == type_expression(part, &at.view, types, scratch).ok(),
+        "the load-time type agrees with elaborating where it runs"
+    );
+    loaded.map_or_else(|| type_expression(part, &at.view, types, scratch), Ok)
+}
+
+/// `<value> :! <Type>`: the operand checked against the type — where the load did not settle it —
+/// and retyped to it. A module's view arrives with modules.
+fn ascribe<'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_>,
+    at: &Evaluation<'graph, 'here>,
+    node: &'graph KExpression<'graph>,
+    stage: u32,
+) -> Action<'graph, KBundle> {
+    let program = at.program;
+    let types = program.types();
+    let scratch = Bump::new();
+    let [operand, _, ascribed] = node.parts else {
+        unreachable!("an ascription has an operand, its keyword and a type")
+    };
+    let wanted = [Wanted::Evaluated(&operand.value)];
+    let operands = match gathered(&mut step, at, &wanted, stage, &scratch) {
+        Gathered::Ready(operands) => operands,
+        other => return unready(step, at, other),
+    };
+    let [Operand::Value(value)] = operands[..] else {
+        unreachable!("an ascription's operand is evaluated")
+    };
+    let writer = step.writer();
+    if value.as_module().is_some() {
+        return finish(step, at, Raised::ModuleAscription.raise(program, writer));
+    }
+    let ascribed = match denoted(at, &ascribed.value, &scratch) {
+        Ok(ascribed) => ascribed,
+        Err(refused) => {
+            let error = program.error(writer, refused.display(program.symbols(), types));
+            return finish(step, at, error);
+        }
+    };
+    if at.view.shape().settled(Site::of_node(node)) {
+        debug_assert!(
+            satisfies(ascribed, &value, types, &scratch),
+            "a settled ascription's operand satisfies it"
+        );
+    } else if !satisfies(ascribed, &value, types, &scratch) {
+        let raised = Raised::Unascribable {
+            value: value.ktype(),
+            ascribed,
+        };
+        return finish(step, at, raised.raise(program, writer));
+    }
+    finish(step, at, value.retyped(writer, ascribed, types, &scratch))
 }
 
 /// A list, dict or record literal: lowered whole when every part is a literal, and otherwise built
