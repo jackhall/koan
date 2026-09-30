@@ -15,12 +15,15 @@ on its arguments' contents rather than on its declarations. Beside
 `EXPR #(WHICH x :(LIST OF Any)) -> Str = #("any")`, a function
 `EXPR #(SHOW x :(LIST OF Any)) -> Str = #(WHICH x)` answers `SHOW [1]` with
 `"numbers"`. At load a parameter is at most its declared type, never exactly it.
+A frame one tail hop reaches ends under its own callee's return, so after
+`EXPR #(INNER) -> :(LIST OF Number) = #([1])` and
+`EXPR #(OUTER) -> :(LIST OF Any) = #(INNER)`, `OUTER` carries `LIST OF Number`.
 
 [`Value::retyped`](../../src/values.rs) stamps a container only against a node
 of its own kind, so a union never retypes one: a declared
 `(LIST OF Any) | Null` leaves `[1]` at `LIST OF Number`. A tagged value against
 a union takes the first member naming its constructor, whether or not the value
-lies under that member.
+lies under that member. A knot's data node is never retyped.
 
 **Acceptance criteria.**
 
@@ -37,9 +40,14 @@ lies under that member.
   `LIST OF (Number | Str)`, and `[1] :! Any` carries `LIST OF Number`.
 - A tagged value ascribed to a union of two applications of its family carries
   the application it lies under.
+- A knot's data node is retyped as a plain value of its kind over its cells, so
+  a cyclic list passed to `SHOW` answers `"any"`.
 - A declared parameter is an ascription: a keyworded call and a call by name
   retype each argument to its parameter's declared type, with the call's
   type-parameter solution substituted, so `SHOW [1]` above answers `"any"`.
+- A frame's value is checked against its own callee's return and retyped to the
+  outermost return of the tail hops that reached it, so `OUTER` above carries
+  `LIST OF Any`, and a miss still names the innermost callee.
 - At load, `e :! T` and a parameter declared `T` are exactly `T` where `T` is a
   list, dict or record type, and at most `T` otherwise. Under
   `EXPR FOR ALL #[Elt] #(FLAT rows :(LIST OF (LIST OF Elt))) -> :(LIST OF Elt) = #(…)`,
@@ -57,7 +65,16 @@ lies under that member.
   the declaration is the contract, and the contents' further precision is
   incidental, so a body dispatches on what its parameters declare. A parameter
   declared `Any` keeps its argument's type, since `Any` has no member of a
-  value's kind.
+  value's kind. A module argument is viewed at its parameter's signature, as
+  `:!` views it; that view door is [modules](../rewrite/modules.md)'s.
+- *A tail chain returns at the outermost contract — decided.* A tail hop hands
+  the frame it reaches the contract it owes, since the caller asked for the
+  outermost callee's return. The innermost callee's own return is still what the
+  value is checked against.
+- *A data node retypes as a plain value — decided.* A knot cannot restamp its
+  node, so the retype lays the node's top down as a plain container over its
+  resolved cells: O(width), paid once per value per target. A retyped cyclic
+  value prints its cycle one level down.
 - *A retype reads a union member by member — decided.* A retype's target is
   fixed by the value and `T` alone, never by member order, and lies between the
   value's type and `T`. A `T` of the value's kind is the one-member case, and a
