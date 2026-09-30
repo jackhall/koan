@@ -17,6 +17,9 @@
 //! the error sink, marks the run uncaught, and leaves its view at rest as it always does.
 //! [`StepError::Refused`] is left for invariant breaks alone.
 //!
+//! **A declared parameter is an ascription.** A frame binds each value parameter to its argument
+//! retyped to the parameter's declared type, with the call's solution substituted.
+//!
 //! **Frames end under a contract.** A called frame owes its caller a value satisfying its declared
 //! return, with its own type-parameter solution substituted, retyped to it; a miss is an error
 //! value. When the frame's last unit is a statement that binds nothing, the runner **tails** into
@@ -41,7 +44,7 @@ use crate::type_lattice::{
     Collector, KType, TypeNode, TypeRegistry, Variance, admits_with, display_name,
     substitute_quantified,
 };
-use crate::values::{Link, List, TypeValue, Value};
+use crate::values::{Link, List, TypeValue, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle, KState};
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
@@ -421,8 +424,9 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     }
 }
 
-/// A frame's activation, laid down for `callee` with every value parameter bound from `arguments`
-/// and every type parameter bound to its solution — the one a keyworded call's selection carried in
+/// A frame's activation, laid down for `callee` with every value parameter bound from `arguments`,
+/// retyped to its declared type with the call's solution substituted, and every type parameter
+/// bound to its solution — the one a keyworded call's selection carried in
 /// `arguments`, or, for a call by name, the one solved here while each argument is admitted against
 /// its parameter's declared type — beside the contract the frame ends under. The error value's
 /// message when the callee is no function, the arguments do not name its parameters exactly, an
@@ -550,9 +554,26 @@ fn frame<'graph, 'here>(
             continue;
         }
         let value = match name {
+            // A declared parameter is an ascription: the argument is retyped to its declared
+            // type, with the call's solution substituted, so the body dispatches on what the
+            // parameter declares.
             BinderSymbol::Value(name) => {
                 parameters += 1;
-                *record.field(name.symbol()).ok_or_else(misnamed)?
+                let argument = *record.field(name.symbol()).ok_or_else(misnamed)?;
+                let declared = params
+                    .get(name.symbol())
+                    .expect("every value parameter is declared");
+                let declared = match &solution {
+                    Some(solution) if types.contains_quantified(declared) => {
+                        substitute_quantified(types, scratch, declared, solution)
+                    }
+                    _ => declared,
+                };
+                debug_assert!(
+                    satisfies(declared, &argument, types, scratch),
+                    "a frame binds an argument its parameter admits"
+                );
+                argument.retyped(writer, declared, types, scratch)
             }
             // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
             // argument like any other, passed by keyword or by name.

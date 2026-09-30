@@ -680,6 +680,17 @@ fn a_frame_s_value_is_retyped_to_its_declared_return() {
 }
 
 #[test]
+fn a_frame_retypes_each_argument_to_its_declared_type() {
+    // A declared return of `Any` keeps the value's own type, so what `r` carries is the argument's.
+    let mut substrate = loaded(
+        "LET f = (FN :{xs :(LIST OF Any)} -> Any = #(xs))\nLET r = (f [1 2])",
+        2,
+    );
+    run_and_read(&mut substrate, &[]);
+    assert_eq!(type_back(&mut substrate, "r"), ":(LIST OF Any)");
+}
+
+#[test]
 fn a_return_that_misses_its_declared_type_is_an_error_value() {
     for body in ["#(n)", "#((LET m = n))"] {
         let mut substrate = loaded(
