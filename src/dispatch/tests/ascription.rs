@@ -1,6 +1,7 @@
 //! Ascription: `:!` over a value, a declared parameter as one, and a tail chain returning at the
 //! outermost contract — what each retypes a value to, what the run checks, and what the load
-//! types, settles and refuses.
+//! types, settles and refuses; and what the load types exactly because of the retype: an exact
+//! argument a slot does not admit, a call at its callee's return, a nominal type.
 
 use crate::parse::ExpressionPart;
 use crate::program::Program;
@@ -207,6 +208,135 @@ fn an_ascription_that_can_never_hold_refuses_the_load() {
             );
         },
     );
+}
+
+#[test]
+fn an_exact_argument_a_slot_does_not_admit_drops_its_candidate() {
+    let source = format!(
+        "{WHICH}LET show = FN EXPR #(SHOW x :(LIST OF Any)) -> Str = #(\n  \
+         LET which = (WHICH x)\n  \
+         which\n\
+         )\n"
+    );
+    loaded(&source, |program| {
+        let shown = body(program, program.shape(), "show");
+        assert_eq!(let_narrowing(program, shown, "which"), "selected");
+    });
+    assert_eq!(run(&format!("{source}PRINT (SHOW [1])")), "any");
+}
+
+#[test]
+fn a_slot_above_no_type_an_argument_can_carry_refuses_the_load() {
+    assert_eq!(
+        run("LET r = {v = 1}\n\
+             LET rec = {a = r.v}\n\
+             EXPR #(GET x :{b :Number}) -> Any = #(x)\n\
+             PRINT (GET rec)"),
+        "load: <test>:4:7: no overload of `GET _` admits (:{a :Any})"
+    );
+}
+
+#[test]
+fn a_call_is_exact_at_its_callee_s_return() {
+    let source = format!(
+        "{WHICH}EXPR #(ANYS) -> :(LIST OF Any) = #([1])\n\
+         LET anys = (FN :{{}} -> :(LIST OF Any) = #([1]))\n\
+         EXPR FOR ALL #[Elt] #(SAME xs :(LIST OF Elt)) -> :(LIST OF Elt) = #(xs)\n\
+         LET same = (FN FOR ALL #[Elt] :{{xs :(LIST OF Elt)}} -> :(LIST OF Elt) = #(xs))\n\
+         LET ys = ([1] :! (LIST OF (Number | Str)))\n\
+         NEWTYPE (Type AS Boxed)\n\
+         EXPR #(BOX) -> Boxed = #((Boxed 7))\n\
+         LET keyworded = (ANYS)\n\
+         LET by_name = (anys {{}})\n\
+         LET solved = (SAME ys)\n\
+         LET named = (same {{xs = ys}})\n\
+         LET which = (WHICH keyworded)\n\
+         LET box = (BOX)\n"
+    );
+    loaded(&source, |program| {
+        let top = program.shape();
+        let point = |rendered: &str| (rendered.to_string(), rendered.to_string());
+        assert_eq!(ends(program, top, "keyworded"), point(":(LIST OF Any)"));
+        assert_eq!(ends(program, top, "by_name"), point(":(LIST OF Any)"));
+        let numbers_or_strs = point(":(LIST OF :(Number | Str))");
+        assert_eq!(ends(program, top, "solved"), numbers_or_strs);
+        assert_eq!(
+            ends(program, top, "named"),
+            numbers_or_strs,
+            "a call by name whose solve is points is exact"
+        );
+        assert_eq!(let_narrowing(program, top, "which"), "selected");
+        assert_eq!(
+            ends(program, top, "box"),
+            point("Boxed"),
+            "a call is exact at a nominal return"
+        );
+    });
+    assert_eq!(
+        run(&format!(
+            "{source}PRINT (WHICH (ANYS))\n\
+             PRINT (WHICH (anys {{}}))\n\
+             PRINT (WHICH (SAME ys))"
+        )),
+        "any\nany\nnumber or str"
+    );
+}
+
+#[test]
+fn a_call_the_load_cannot_solve_exactly_is_at_most_its_return() {
+    let source = "EXPR FOR ALL #[Elt] #(SINGLE x :Elt) -> :(LIST OF Elt) = #([x])\n\
+                  LET use = FN EXPR #(USE u :(Number | Str) WITH f :(FN :{} -> :(LIST OF Any))) \
+                  -> Any = #(\n  \
+                  LET single = (SINGLE u)\n  \
+                  LET called = (f {})\n  \
+                  single\n\
+                  )\n";
+    loaded(source, |program| {
+        let used = body(program, program.shape(), "use");
+        let never = "Never".to_string();
+        assert_eq!(
+            ends(program, used, "single"),
+            (never.clone(), ":(LIST OF :(Number | Str))".to_string()),
+            "`Elt` solves to an interval that is no point"
+        );
+        assert_eq!(let_narrowing(program, used, "single"), "selected");
+        assert_eq!(
+            ends(program, used, "called"),
+            (never, ":(LIST OF Any)".to_string()),
+            "a parameter's function may declare a smaller return"
+        );
+    });
+    // Each node carries `LIST OF Number`, which the run's check reads against its static type.
+    assert_eq!(
+        run(&format!(
+            "{source}PRINT (USE 1 WITH (FN :{{}} -> :(LIST OF Number) = #([1])))"
+        )),
+        "[1]"
+    );
+}
+
+#[test]
+fn a_call_in_tail_position_is_typed_as_any_call() {
+    let source = format!(
+        "{WHICH}EXPR #(INNER) -> :(LIST OF Number) = #([1])\n\
+         LET outer = FN EXPR #(OUTER) -> :(LIST OF Any) = #(INNER)\n\
+         LET which = (WHICH (OUTER))\n"
+    );
+    loaded(&source, |program| {
+        let top = program.shape();
+        let tail = body(program, top, "outer")
+            .statement_type(0)
+            .expect("the load typed the tail");
+        let render = |handle| display_name(handle, program.types(), program.symbols()).to_string();
+        let numbers = ":(LIST OF Number)".to_string();
+        assert_eq!(
+            (render(tail.lower), render(tail.upper)),
+            (numbers.clone(), numbers),
+            "the node never finishes, so nothing contradicts its callee's return"
+        );
+        assert_eq!(let_narrowing(program, top, "which"), "selected");
+    });
+    assert_eq!(run(&format!("{source}PRINT which")), "any");
 }
 
 #[test]
