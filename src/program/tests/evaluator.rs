@@ -391,19 +391,23 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             };
             let writer = step.writer();
             let arguments = Record::new(writer, &[(parameter, argument)], types, &scratch);
-            let request = call(
-                program,
-                callee,
-                Value::Record(arguments),
-                CallKind::ByName,
-                Use::Forwards,
-            );
+            let request = |owed| {
+                call(
+                    program,
+                    callee,
+                    Value::Record(arguments),
+                    CallKind::ByName,
+                    owed,
+                    Use::Forwards,
+                )
+            };
             if let Some(contract) = contract
                 && keeps(program, callee, contract)
             {
+                let request = request(Some(contract));
                 return step.tail(request.placement, request.work);
             }
-            let asked = step.spawn(request);
+            let asked = step.spawn(request(None));
             park(step, asked, birth, 2)
         }
         (_, 2) => {

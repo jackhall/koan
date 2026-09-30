@@ -25,12 +25,14 @@ pub enum KBirth<'graph, 'cell> {
     /// The top level's root work.
     Program { program: &'graph Program<'graph> },
     /// A call: the frame's first step lays its activation down and binds the parameters from
-    /// `arguments`, a record of them by name, checked as `kind` says.
+    /// `arguments`, a record of them by name, checked as `kind` says. `owed` is the contract of
+    /// the evaluation that tailed into this frame: `None` when the frame was spawned.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
         arguments: KValue<'graph, 'cell>,
         kind: CallKind,
+        owed: Option<Contract>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
     /// carries and the names `offered`, a record of them by name, supplies.
@@ -135,6 +137,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     callee,
                     arguments,
                     kind,
+                    owed,
                 } => {
                     let [callee, arguments] =
                         copy_severed::<_, KnottedFamily, 2>(writer, view, [&callee, &arguments]);
@@ -143,6 +146,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         callee,
                         arguments,
                         kind,
+                        owed,
                     }
                 }
                 KBirth::Eval {

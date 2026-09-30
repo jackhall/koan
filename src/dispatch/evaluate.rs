@@ -375,19 +375,23 @@ fn call<'graph, 'here>(
         } => {
             let arguments =
                 select::arguments(types, writer, registered, &operands, solution, &scratch);
-            let request = crate::program::call(
-                program,
-                callee,
-                arguments,
-                CallKind::Keyworded,
-                Use::Forwards,
-            );
+            let call = |owed| {
+                crate::program::call(
+                    program,
+                    callee,
+                    arguments,
+                    CallKind::Keyworded,
+                    owed,
+                    Use::Forwards,
+                )
+            };
             if let Some(contract) = at.contract
                 && select::keeps(types, registered.shape, solution, contract)
             {
+                let request = call(Some(contract));
                 return step.tail(request.placement, request.work);
             }
-            let asked = step.spawn(request);
+            let asked = step.spawn(call(None));
             return park(step, at, asked, FINISHING);
         }
         Selection::NoOverload => Raised::NoOverload {
@@ -467,13 +471,23 @@ fn apply<'graph, 'here>(
         };
         return finish(step, at, value);
     }
-    let request = crate::program::call(program, head, argument, CallKind::ByName, Use::Forwards);
+    let call = |owed| {
+        crate::program::call(
+            program,
+            head,
+            argument,
+            CallKind::ByName,
+            owed,
+            Use::Forwards,
+        )
+    };
     if let Some(contract) = at.contract
         && returns_within(program, head, contract.returns)
     {
+        let request = call(Some(contract));
         return step.tail(request.placement, request.work);
     }
-    let asked = step.spawn(request);
+    let asked = step.spawn(call(None));
     park(step, at, asked, FINISHING)
 }
 

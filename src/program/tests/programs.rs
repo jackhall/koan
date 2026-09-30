@@ -691,6 +691,20 @@ fn a_frame_retypes_each_argument_to_its_declared_type() {
 }
 
 #[test]
+fn a_tail_chain_returns_at_the_outermost_contract() {
+    // `outer`'s last statement calls `inner`, whose return lies within `outer`'s, so `outer`'s
+    // frame tails into `inner`'s, which is checked against its own return and retyped to `outer`'s.
+    let mut substrate = loaded(
+        "LET inner = (FN :{n :Number} -> (LIST OF Number) = #([1 2]))\n\
+         LET outer = (FN :{n :Number} -> (LIST OF Any) = #(inner n))\n\
+         LET r = (outer 0)",
+        3,
+    );
+    run_and_read(&mut substrate, &[]);
+    assert_eq!(type_back(&mut substrate, "r"), ":(LIST OF Any)");
+}
+
+#[test]
 fn a_return_that_misses_its_declared_type_is_an_error_value() {
     for body in ["#(n)", "#((LET m = n))"] {
         let mut substrate = loaded(

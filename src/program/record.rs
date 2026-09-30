@@ -73,12 +73,15 @@ pub enum Outcome {
 }
 
 /// What the evaluation finishing a frame owes it: a value satisfying `returns`, the frame's
-/// declared return with its own type-parameter solution substituted, retyped to it. `callee` is
-/// the frame's function type, which a miss names.
+/// declared return with its own type-parameter solution substituted, retyped to `retype`. `callee`
+/// is the frame's function type, which a miss names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contract {
     pub callee: KType,
     pub returns: KType,
+    /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
+    /// that frame's caller asked for it.
+    pub retype: KType,
 }
 
 /// How a call reached its callee. A keyworded call's arguments were admitted by the selection that
@@ -215,7 +218,8 @@ impl<'graph> Program<'graph> {
     }
 
     /// `value` held to `contract`: an error value passes unchanged, a value satisfying the
-    /// contract's return is retyped to it, and anything else is the error naming the miss.
+    /// contract's return is retyped to its `retype`, and anything else is the error naming the
+    /// miss.
     pub fn fulfilled<'cell>(
         &self,
         writer: Writer<'cell>,
@@ -227,7 +231,7 @@ impl<'graph> Program<'graph> {
         }
         let scratch = Bump::new();
         if satisfies(contract.returns, &value, self.types, &scratch) {
-            return value.retyped(writer, contract.returns, self.types, &scratch);
+            return value.retyped(writer, contract.retype, self.types, &scratch);
         }
         let name = |handle| display_name(handle, self.types, self.symbols);
         self.error(

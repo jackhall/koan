@@ -23,8 +23,9 @@
 //! **Frames end under a contract.** A called frame owes its caller a value satisfying its declared
 //! return, with its own type-parameter solution substituted, retyped to it; a miss is an error
 //! value. When the frame's last unit is a statement that binds nothing, the runner **tails** into
-//! the evaluator with that [`Contract`], and the evaluation owes it instead. An `EVAL`'s frame tails
-//! with none; a block never tails.
+//! the evaluator with that [`Contract`], and the evaluation owes it instead. A frame a tail hop
+//! reached is checked against its own return and retyped to the one the hop owed, so a chain of
+//! hops returns at the outermost contract. An `EVAL`'s frame tails with none; a block never tails.
 
 use std::fmt;
 
@@ -142,7 +143,8 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             callee,
             arguments,
             kind,
-        }) => match frame(&step, program, callee, arguments, kind) {
+            owed,
+        }) => match frame(&step, program, callee, arguments, kind, owed) {
             Ok((activation, contract)) => {
                 Runner::at(program, activation, Level::Frame, Some(contract))
             }
@@ -187,6 +189,7 @@ pub fn call<'graph, 'here>(
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
+    owed: Option<Contract>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
     let returns =
@@ -207,6 +210,7 @@ pub fn call<'graph, 'here>(
                 callee,
                 arguments,
                 kind,
+                owed,
             },
         },
     }
@@ -437,6 +441,7 @@ fn frame<'graph, 'here>(
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
+    owed: Option<Contract>,
 ) -> Result<(&'here KActivation<'graph, 'here>, Contract), &'here str> {
     let types = program.types();
     let writer = step.writer();
@@ -618,6 +623,7 @@ fn frame<'graph, 'here>(
     let contract = Contract {
         callee: function.ktype(),
         returns,
+        retype: owed.map_or(returns, |outer| outer.retype),
     };
     Ok((activation, contract))
 }
