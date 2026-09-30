@@ -101,8 +101,8 @@ identity the tagged value takes, or a `ConstructionRefused`:
   parameter the payload does not reach is `Never`, and a construction of
   `Result.Ok` over a number carries `:(Result.Ok {Ok = Number, Error = Never})`,
   which lies under every `Result` whose `Ok` admits a number. A payload the
-  representation cannot be solved against — a structural misfit, or two
-  contributions to one parameter with no maximum — is `Unsolved`, naming the
+  representation cannot be solved against — a structural misfit, or
+  contributions to one parameter joining outside its bound — is `Unsolved`, naming the
   family and the payload's type;
 - any other head is `NotConstructible`: a scalar type, a family that constructs
   nothing, and an applied family, whose arguments a construction does not take

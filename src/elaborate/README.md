@@ -366,8 +366,8 @@ callable's `FOR ALL` parameter, a `:Type` parameter, a name
 quote's hole, `\` mark or `$` name whose source is not closed, and a type binder
 the load left unknown. The load-time reader answers each with a **lexical
 variable**, a [rigid node](../type_lattice/README.md#the-node-vocabulary) of its
-own: positional by its **level**, named as the name is, and bounded by its bound
-where it is a `FOR ALL` name and by `Any` otherwise. A name takes its level where
+own: positional by its **level**, named as the name is, and lying between
+`Never` and its bound where it is a `FOR ALL` name and `Any` otherwise. A name takes its level where
 it is declared, along the lexical chain of bodies: the names of every enclosing
 body first, then the body's own — a callable's own `FOR ALL` group first, in its
 canonical order, then its other names in slot order. So a name has one level in

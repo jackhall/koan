@@ -127,6 +127,12 @@ subtree.
   one that names no variable and is not `Never` — and lies under its bound and
   under everything above it, a union included: a variable bounded by
   `Number | Str` lies under `Number | Str | Bool`, though under neither member.
+  A lexical variable has a **lower end** too, a closed type under its bound:
+  below it lie itself and whatever lies under that end, where below
+  `Quantified` and `AbstractType` lie only themselves and `Never`. A name a
+  `FOR ALL` declares has the lower end `Never`; a later priority class reads an
+  earlier one's variable as a lexical variable between two ends
+  ([priority classes](#priority-classes)).
 - **`Signature`** — owned interface content. A `SIG`-declared interface, a
   module's self-sig, and the empty signature that `:Module` lowers to are all
   this one node, distinguished only by the schema. It carries no binder and no
@@ -184,7 +190,8 @@ heap nowhere — a bracket the suite asserts directly ([tests/heap.rs](tests/hea
 
 ## The relations
 
-[`is_subtype_of`](order.rs) is **one reflexive partial order**, memoized through
+[`is_subtype_of`](order.rs) is **one order**, reflexive and transitive, and
+antisymmetric over [concrete types](#concrete-types-and-binders), memoized through
 the registry's verdict edges. There are no tie-break tiers: nothing ranks a token
 leaf against `Str`, a nominal slot against a kind slot, or a constrained slot
 against an unconstrained one. Those are not subtype facts, and a dispatch that
@@ -213,7 +220,8 @@ A union meets member by member, each member against the other side *whole*, so
 a variable whose bound spans several members survives: with `Elt` bounded by
 `Number | Str`, `(Elt | Bool) & (Number | Str)` is `Elt`. The four
 laws — commutativity, associativity, idempotence and absorption — hold over every
-node kind, and that is what fixes both operations.
+node kind, by handle over concrete types and up to equivalence over a type
+holding a binder, and that is what fixes both operations.
 
 [`sig_subtype`](sig_relations.rs) is the relation over two signature schemas:
 `sub <: sup` iff `sub` supplies every member `sup` names, with each manifest
@@ -235,10 +243,12 @@ bound, must put the instance below the other with the other's variables rigid.
 position; [`admits_function`](sig_relations.rs) is its twin for two function
 types, name by name — each parameter pair asking the candidate's parameter to
 lie under the declared one and the return pair the reverse, then one `solve`.
+The solve asks only that each variable's pair of ends denote some type
+([the unifier](#the-unifier-collects-it-does-not-bind)); it picks no instance.
 Width is the order's own either way: a function subtype asks for no name its
 supertype does not.
 
-**Canonical form is what makes that order antisymmetric.** Both interning
+**A binder is interned in canonical form.** Both interning
 doors — [`shape_type`](registry.rs) and [`function_type`](registry.rs) — run
 one canonicalizer over the positions the binder binds: a variable with no
 occurrence is dropped, one that occurs exactly once is replaced by its bound at
@@ -250,6 +260,20 @@ surviving names are render-only and the digest feeds the group's arity, so two
 alpha-variants are one handle; the door hands its caller back the
 declaration-index → canonical-index map alongside the handle, which is what a
 call needs to bind each type parameter to its solution.
+
+### Concrete types and binders
+
+A type is **concrete** when it holds no quantified binder and no free variable.
+A binder is abstract while it is solved: it stands for its instances, and
+becomes concrete only once a solve picks one, at load where each variable's
+pair meets at a point and at run otherwise. Over concrete types the order is
+antisymmetric, one handle per type, and the laws hold by handle. Over a type
+holding a binder they hold up to equivalence, since two handles may lie under
+each other: `∀Elt :{x :Elt, y :Elt} -> Elt` and `∀A B :{x :A, y :B} -> A | B`
+do, the first at its instance over `A | B`. Canonical form gives many such pairs
+one handle, but no rule here depends on it doing so. A union and an overload set
+keep the first of two members that lie under each other, and
+[`unsubsumed`](order.rs) is where they do.
 
 ### Priority classes
 
@@ -266,18 +290,29 @@ treat two shapes of unequal rankings as unrelated.
 The classes order **admission**. [`admit_by_class`](ranking.rs) solves a
 quantified group one class at a time: the first class whose slots mention a
 variable solves it, jointly over that class's slots and every position inside
-them, and each later class admits its arguments against that solution. So
+them, and each later class admits its arguments against the least instance of
+that pair. So
 `FOR ALL #[Elt] #(PAIR x :(LIST OF Elt) WITH y :(LIST OF Elt))` fixes `Elt`
 from `x` and refuses a `y` that does not lie under it, while one class over both
 slots — or a call by name, whose record has no order — solves them jointly.
+
 `admits_shape` runs the same loop with a candidate shape's slot types as the
-arguments, so a signature's view never promises a call its overload refuses.
+arguments. A slot type stands for every type a call carries under it, so an
+earlier class fixes no point but an **interval** of them — `[Never, L]` where a
+covariant position names the variable, `[U, bound]` where only a contravariant
+one does — and each later class admits against a lexical variable between
+those ends. So a signature's view never promises a call its overload refuses:
+in written order, `FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt)` does not lie
+under `#(PAIR x :(Number | Str) WITH y :(Number | Str))`, which admits
+`PAIR 1 WITH "s"`, while `FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Null) TO y :Elt)`
+lies under `#(APPLY f :(FN :{x :Number} -> Null) TO y :Number)`, since a call
+binds `Elt` at or above `Number`.
 
 The classes order **ranking**. [`class_at_least`](ranking.rs) is the verdict
 "`a` is at least as specific as `b` at class `c`": `b`'s slots in class `c`
-admit `a`'s, with each variable an earlier class admitted read as an unknown
-type under its solution and each one an earlier class did not admit read as its
-bound. It reads two shape handles and a class, so the registry records it in
+admit `a`'s, with each variable an earlier class admitted read, as
+`admits_shape` reads it, as a lexical variable between the ends of its interval,
+and each one an earlier class did not admit read as its bound. It reads two shape handles and a class, so the registry records it in
 the verdict table (`Relation::ClassAtLeast`) the first time a pair meets.
 [`select_by_class`](ranking.rs) eliminates over a candidate list class by
 class: every candidate another strictly beats at a class drops out, and a
@@ -402,7 +437,8 @@ at a contravariant one, which gives the type above every instance; read from
 below, the reverse, which gives the type below every instance. A signature is
 left opaque. `bound_above` is the read from above with every free variable — a
 `Quantified` under none of the type's own binders, every `AbstractType` and
-every lexical variable — at `[Never, bound]`, which is what a load-time type is
+every lexical variable — at `[Never, bound]`, a lexical variable at its own
+two ends, which is what a load-time type is
 compared through where a run may bind its variables to anything under their
 bounds. `erase_rigid`, which reads a variable as its bound everywhere, can put a
 contravariant position below an instance.
@@ -413,31 +449,43 @@ contravariant position below an instance.
 collects what would solve the quantified positions. Instead of binding a variable
 to the first argument it meets, it records **every** argument type that reaches
 the variable as a lower contribution (covariant position) or an upper one
-(contravariant). `Collector::solve` then takes, per variable, the maximum of the
-lower contributions, else the minimum of the upper ones, else the declared bound.
+(contravariant). `Collector::solve` then bounds each variable by a **pair**:
+below by the join of its lower contributions, above by the meet of its upper
+contributions and its declared bound. The solve fails only where the set the
+pair denotes is empty — where the lower end lies above an upper contribution or
+above the bound. A contribution set with a maximum joins to that maximum, and
+one with a minimum meets to that minimum; admission cannot depend on the order
+the slots are read.
+
+While it is solved, a variable can slide between its ends, so the solve picks
+no point, and the order's instantiation clause asks only that each pair denote
+some type. A point is taken where something needs one: a call binds each
+variable to its pair's **least instance**, the lower end where a lower
+contribution reached the variable and the upper end otherwise. So
+`(f _ :Elt _ :Elt)` binds `Elt` to `Number` over `(1, 2)` and to
+`Number | Str` over `(1, "x")`. A list holding a `FN :{x :(Number | Str)} -> Null`
+and a `FN :{x :(Number | Bool)} -> Null` binds `LIST OF (FN :{x :Elt} -> Null)`'s
+`Elt` to `Number`, and one holding functions over `Number` and over `Str` binds
+it to `Never`: a function no argument may be passed to. A same-type check across
+slots is what [priority classes](#priority-classes) are for.
 
 A **carried** rigid variable fills, at a covariant position, whatever its bound
 fills: a `Held` bounded by `LIST OF Number` fills `LIST OF Elt`, solving `Elt` to
 `Number`, just as the monomorphic instance between the two would. Below a rigid
 variable is only itself, so at a contravariant position it fills nothing more.
 
-A contribution set with no maximum is a **failure, not a join**: the solver never
-mints a union nobody wrote, and admission cannot depend on the order the slots
-are read. So `(f _ :Elt _ :Elt)` admits `(1, 2)` with `Elt = Number` and
-`(1, (1 | "x"))` with `Elt = (Number | Str)`, and rejects `(1, "x")`. A caller
-who wants mixed arguments writes the union in the slot type or in the bound.
-
 A **construction** collects through `Collector::least`, under which a variable
-no contribution reaches solves to `Never` rather than its bound: a family is
+no contribution reaches is bounded by `Never` rather than its bound: a family is
 covariant in its parameters, so its least instance is the one the payload asks
 for.
 
-A variable no contribution reaches solves to its declared bound: a collector
-holds the group's bounds from the start (`Collector::new`).
+A variable no contribution reaches has the pair `[Never, bound]`, so a call
+binds it to its declared bound: a collector holds the group's bounds from the
+start (`Collector::new`).
 
-**A solution does not grow with its arguments; an interval does.** Beside the
-solution, the unifier reports an **interval** per variable
-([`intervals`](unify.rs)), holding every solution a solve can reach over
+**A binding does not grow with its arguments; an interval does.** Beside the
+pair, the unifier reports an **interval** per variable
+([`intervals`](unify.rs)), holding every least instance a call can bind over
 arguments lying within the static types it collected — each an interval of its
 own, as [dispatch](../dispatch/README.md#static-types) types an argument:
 
@@ -450,13 +498,13 @@ own, as [dispatch](../dispatch/README.md#static-types) types an argument:
   elsewhere;
 - where every argument whose position names a variable is **exact** — its lower
   end is its upper — and holds no rigid variable, the arguments a solve can
-  meet are those very types, so each variable's interval is its solution:
-  solved to a point, which the caller asserts by passing `exact`. An argument
+  meet are those very types, so each variable's interval is its least
+  instance: solved to a point, which the caller asserts by passing `exact`. An argument
   over a rigid variable is no such argument: a solve reads a carried rigid
   variable through its bound, where a run binds it to one type under that
   bound.
 
-An end is a bound and no solution, so it may be a join or a meet nobody wrote.
+An end bounds what a call can bind; it is not itself a binding.
 
 ## Records and schemas
 
@@ -578,7 +626,11 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 The lattice is tested by its **laws**, as properties over generated type trees
 interned into a live registry ([tests/properties.rs](tests/properties.rs)). The
 order's reflexivity, antisymmetry and transitivity; join and meet's four laws;
-substitution's fixpoints; the digest's agreement with structural equality.
+substitution's fixpoints; the digest's agreement with structural equality. A law
+stated by handle — antisymmetry, join and meet's laws — draws
+[concrete types](#concrete-types-and-binders), and one stated up to equivalence
+draws binders too; the generators put carried unions under quantified
+positions, where a solve joins and meets.
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in
 [tests/families.rs](tests/families.rs), an interval's in
