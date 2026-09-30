@@ -342,10 +342,10 @@ src/
 ├── dispatch.rs       pub mod dispatch — Koan, the Language programs run under, and the vocabulary its submodules share
 ├── dispatch/
 │   ├── builtins.rs       the builtin table — the lattice's types, Error and every overload as a builtin node — and the natives the overloads run
-│   ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, an ascription, a keyworded call, an application, and finishing under a contract
+│   ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
 │   ├── select.rs         admission and selection over a candidate list, a keyworded call's argument record, and whether a call keeps a contract
 │   ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
-│   ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return and ascription checks
+│   ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription and EVAL checks
 │   └── errors.rs         the messages of the error values dispatch raises
 ├── machine.rs           pub mod core / model / execute
 └── machine/

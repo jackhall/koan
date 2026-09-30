@@ -49,6 +49,10 @@ pub(super) enum Raised<'a> {
         value: KType,
         ascribed: KType,
     },
+    /// An `EVAL` whose operand is no code.
+    NotCode {
+        value: KType,
+    },
     /// A `USING` whose module ranks `key` other than the code's own candidates do.
     RankedTwice {
         key: KeySymbol,
@@ -141,6 +145,9 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_> {
                 ktype(value),
                 ktype(ascribed)
             ),
+            Raised::NotCode { value } => {
+                write!(f, "{} is not code for `EVAL` to run", ktype(value))
+            }
             Raised::RankedTwice { key } => {
                 write!(
                     f,

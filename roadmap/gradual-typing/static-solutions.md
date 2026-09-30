@@ -19,7 +19,7 @@ again.
 - Each argument of a keyworded call contributes to its group's solve the upper
   end of its static type, or its carried type where that upper end is `Any`.
 - `PAIR a WITH b` above runs with `Elt` bound to `Number | Str`, and
-  `PAIR a WITH e`, where `e` is an `EVAL` the load types `Any`, runs where `e`
+  `PAIR a WITH e`, where `e` is an `EVAL` declared `-> Any`, runs where `e`
   yields a `Str` and faults where it yields a `Bool`.
 - A use none of whose arguments contributes its carried type is judged from its
   static solve alone: `PAIR a WITH b` is *always*, and selected at load as its

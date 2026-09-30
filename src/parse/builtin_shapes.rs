@@ -209,7 +209,7 @@ impl BuiltinShape {
     }
 
     /// True for a bucket whose every slot is an operand dispatch evaluates or a label it reads —
-    /// `ATTR`, `FROM`, `EVAL` and `USING` over code. A use of one selects among the builtin
+    /// `ATTR`, `FROM` and `USING` over code. A use of one selects among the builtin
     /// overloads at its key, which the bucket being closed keeps the only ones.
     pub fn dispatched(&self) -> bool {
         self.roles()
@@ -1449,12 +1449,25 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // EVAL <code> — runs code.
+    // EVAL <code> -> <return type> — runs code, its value held to the declared return as a
+    // frame's is. Its binder facts are here for the type slot alone, as `FN`'s are, so a bare
+    // `(…)` return spelling rewrites to a sigiled type expression.
     BuiltinShape {
         id: BuiltinShapeId::Eval,
-        elements: &[Kw(&KEYWORDS.eval), slot(Argument, &[ANY_CODE])],
+        elements: &[
+            Kw(&KEYWORDS.eval),
+            slot(Argument, &[ANY_CODE]),
+            Kw(&KEYWORDS.arrow),
+            slot(Te, &[ANY_TYPE]),
+        ],
         returns: &[ANY],
-        binder: None,
+        binder: Some(BinderFacts {
+            names: &[],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: None,
+            type_slots: &[3],
+        }),
         reserved: false,
     },
     // <code> USING <source> — fills the code's holes from a record's fields or a module's members.

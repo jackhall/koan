@@ -25,7 +25,8 @@
 //! value. When the frame's last unit is a statement that binds nothing, the runner **tails** into
 //! the evaluator with that [`Contract`], and the evaluation owes it instead. A frame a tail hop
 //! reached is checked against its own return and retyped to the one the hop owed, so a chain of
-//! hops returns at the outermost contract. An `EVAL`'s frame tails with none; a block never tails.
+//! hops returns at the outermost contract. An `EVAL`'s frame owes the `EVAL`'s declared return as a
+//! called frame owes its own; a block never tails.
 
 use std::fmt;
 
@@ -63,7 +64,7 @@ pub struct Runner<'graph, 'cell> {
     /// The enclosing bodies of a module body being run inline, innermost first.
     outer: Option<&'cell Outer<'graph, 'cell>>,
     level: Level,
-    /// What a called frame owes its caller; `None` everywhere else.
+    /// What a called frame or an `EVAL`'s owes; `None` everywhere else.
     contract: Option<Contract>,
     stage: Stage,
 }
@@ -157,8 +158,9 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             program,
             code,
             offered,
+            contract,
         }) => match code_frame(&step, program, code, offered) {
-            Some(activation) => Runner::at(program, activation, Level::Frame, None),
+            Some(activation) => Runner::at(program, activation, Level::Frame, Some(contract)),
             None => return step.failed(StepError::Refused),
         },
         KState::Born(KBirth::Block {
@@ -289,12 +291,14 @@ impl fmt::Display for CodeRefusedDisplay<'_, '_, '_> {
 /// the `EVAL` offers — a key's field a list of its functions: a frame running the code's shape,
 /// which shares its operands' storage. Refused before anything is spawned when the code's shape
 /// kept an error, or a name it reads — or a keyworded hole some use of it selects from alone — is
-/// bound neither by a `USING` nor by `offered`. Nothing builds a shape here: the code's was built
+/// bound neither by a `USING` nor by `offered`. The frame owes `returns`, the type the `EVAL`
+/// declares, as a called frame owes its own. Nothing builds a shape here: the code's was built
 /// where the program loaded.
 pub fn eval<'graph, 'here>(
     program: &'graph Program<'graph>,
     code: Knotted<'graph, 'here>,
     offered: KValue<'graph, 'here>,
+    returns: KType,
     use_: Use,
 ) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'graph>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
@@ -332,6 +336,11 @@ pub fn eval<'graph, 'here>(
                 program,
                 code: Value::Knotted(code),
                 offered,
+                contract: Contract {
+                    callee: None,
+                    returns,
+                    retype: returns,
+                },
             },
         },
     })
@@ -627,7 +636,7 @@ fn frame<'graph, 'here>(
         None => ret,
     };
     let contract = Contract {
-        callee: function.ktype(),
+        callee: Some(function.ktype()),
         returns,
         retype: owed.map_or(returns, |outer| outer.retype),
     };
@@ -1048,8 +1057,8 @@ fn left<'graph, 'here>(
 }
 
 /// The body's end: the top level leaves its activation's view at rest for a later root work, a
-/// called frame finishes with its value held to its contract, and an `EVAL`'s frame or a block
-/// with its value.
+/// called frame or an `EVAL`'s finishes with its value held to its contract, and a block with its
+/// value.
 fn ended<'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_>,
     runner: Runner<'graph, 'here>,

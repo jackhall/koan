@@ -55,7 +55,7 @@ the link in each section to the relevant chapter.
 |---------------|------------------------------------------------------|
 | `#(<expr>)`   | Quote: capture an expression as a value, unevaluated. |
 | `#[<element> ...]`, `#{<key>: <value>, ...}` | A list or dict literal with every element quoted; a `_` key stays bare. |
-| `EVAL <code>` | Run a quote's code. Its names bind only as the quote says, never in the scope `EVAL` is written in. |
+| `EVAL <code> -> <Type>` | Run a quote's code, its value checked against the declared return as a function's is (`-> Any` declares nothing). Its names bind only as the quote says, never in the scope `EVAL` is written in. |
 | `x` inside a quote | A hole: binds only to a builtin, a binder in the quote's own code, or a name `USING` supplies. |
 | `$x`, `$(<keyworded use>)` inside a quote | Resolve the name, or the one keyworded use, where the quote is written. |
 | `\x`, `\(<keyworded use>)` inside a quote | Resolve where the code is run, from what the code parameter's type offers. |

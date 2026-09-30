@@ -10,6 +10,8 @@
 //! - a `FN`, born through the [lambda door](crate::knot::lambda);
 //! - an **ascription** `<value> :! <Type>`: its operand checked against the type, unless the load
 //!   settled it, and retyped to it; a module operand is an error until modules arrive;
+//! - an **`EVAL`** `<code> -> <Type>`: its code run in a frame that owes the declared type, as a
+//!   called frame owes its return;
 //! - a bucket declaration, which is `Null`;
 //! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks
 //!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
@@ -31,7 +33,7 @@
 
 use crate::elaborate::type_expression;
 use crate::knot::{KValue, Knotted, lambda, quote, refused_construction};
-use crate::memory::{Bump, BumpVec};
+use crate::memory::{Bump, BumpVec, Writer};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::Role;
 use crate::parse::{ExpressionPart, KExpression};
@@ -39,15 +41,17 @@ use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, bloc
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{BodyShape, CandidateList, Elaboration, Narrowing, ShapeKind, Site};
+use crate::scope::{
+    BodyShape, Candidate, CandidateList, Elaboration, Narrowing, Offer, ShapeKind, Site,
+};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode, Verdict, bound_above, satisfied_by, substitute_levels};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
-use super::builtins::{self, Native, Ran};
+use super::builtins::{self, Native};
 use super::errors::Raised;
 use super::select::{self, Selection};
-use super::{Evaluation, Operand};
+use super::{Evaluation, Operand, check};
 
 /// Where an evaluation parked.
 const BORN: u32 = 0;
@@ -67,6 +71,8 @@ pub(super) enum Form<'graph> {
     Lambda(&'graph KExpression<'graph>),
     /// `<value> :! <Type>`.
     Ascribe(&'graph KExpression<'graph>),
+    /// `EVAL <code> -> <Type>`.
+    Eval(&'graph KExpression<'graph>),
     Declaration,
     Call(&'graph KExpression<'graph>, &'graph CandidateList<'graph>),
     Apply(
@@ -142,6 +148,7 @@ pub(super) fn evaluate<'graph>(
         }
         Form::Declaration => finish(step, &at, Value::Null),
         Form::Ascribe(node) => ascribe(step, &at, node, stage),
+        Form::Eval(node) => evaluated(step, &at, node, stage),
         Form::Call(node, list) => call(step, &at, node, list, stage),
         Form::Apply(head, argument) => apply(step, &at, head, argument, stage),
         Form::Unevaluable(node) => {
@@ -187,6 +194,7 @@ pub(super) fn of_node<'graph>(
             return Form::Lambda(node);
         }
         Some(BuiltinShapeId::AscribeTransparent) => return Form::Ascribe(node),
+        Some(BuiltinShapeId::Eval) => return Form::Eval(node),
         Some(BuiltinShapeId::BucketDeclaration) => return Form::Declaration,
         _ => {}
     }
@@ -310,6 +318,99 @@ fn ascribe<'graph, 'here>(
     finish(step, at, value.retyped(writer, ascribed, types, &scratch))
 }
 
+/// `EVAL <code> -> <Type>`: the code's shape checked for overlaps as a loaded program's is, then
+/// run in a frame over the names and keys the `EVAL` offers, owing the declared type as a called
+/// frame owes its return. An operand that is no code, and every refusal, is an error value.
+fn evaluated<'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_>,
+    at: &Evaluation<'graph, 'here>,
+    node: &'graph KExpression<'graph>,
+    stage: u32,
+) -> Action<'graph, KBundle> {
+    let program = at.program;
+    let (types, symbols) = (program.types(), program.symbols());
+    let scratch = Bump::new();
+    let [_, operand, _, declared] = node.parts else {
+        unreachable!("an `EVAL` has its keyword, its code, `->` and a type")
+    };
+    let wanted = [Wanted::Evaluated(&operand.value)];
+    let operands = match gathered(&mut step, at, &wanted, stage, &scratch) {
+        Gathered::Ready(operands) => operands,
+        other => return unready(step, at, other),
+    };
+    let [Operand::Value(value)] = operands[..] else {
+        unreachable!("an `EVAL`'s operand is evaluated")
+    };
+    let writer = step.writer();
+    let Some(code) = value.as_code() else {
+        let raised = Raised::NotCode {
+            value: value.ktype(),
+        };
+        return finish(step, at, raised.raise(program, writer));
+    };
+    let returns = match denoted(at, &declared.value, &scratch) {
+        Ok(returns) => returns,
+        Err(refused) => {
+            let error = program.error(writer, refused.display(symbols, types));
+            return finish(step, at, error);
+        }
+    };
+    let shape = code.code().expect("a quote's code").shape();
+    if let Err(error) = check::overlaps(shape, program.builtins(), types, &scratch) {
+        return finish(
+            step,
+            at,
+            program.error(writer, error.display(symbols, types)),
+        );
+    }
+    let offered = offered(at, writer, &operand.value, &scratch);
+    match crate::program::eval(program, code, offered, returns, Use::Forwards) {
+        Ok(request) => {
+            let asked = step.spawn(request);
+            park(step, at, asked, FINISHING)
+        }
+        Err(refused) => {
+            let error = program.error(writer, refused.display(symbols, types));
+            finish(step, at, error)
+        }
+    }
+}
+
+/// The record of the names and keys an `EVAL` offers the code `operand` holds — a key as the list
+/// of its functions, as a use at the key written at the `EVAL` resolves it.
+fn offered<'graph, 'here>(
+    at: &Evaluation<'graph, 'here>,
+    writer: Writer<'here>,
+    operand: &'graph ExpressionPart<'graph>,
+    scratch: &Bump,
+) -> KValue<'graph, 'here> {
+    let types = at.program.types();
+    let offers = at.view.shape().offers(Site::of(operand));
+    let mut fields = BumpVec::with_capacity_in(offers.len(), scratch);
+    for (name, offer) in offers {
+        let offered = match offer {
+            Offer::Name(coordinate) => at.view.read(*coordinate),
+            Offer::Key(list) => {
+                let mut functions = BumpVec::new_in(scratch);
+                for candidate in list.candidates {
+                    match candidate {
+                        Candidate::One(coordinate) => functions.push(at.view.read(*coordinate)),
+                        Candidate::Spread(coordinate) => {
+                            let spread = at.view.read(*coordinate);
+                            if spread.as_list().is_some() {
+                                functions.extend(builtins::listed(spread, types, scratch));
+                            }
+                        }
+                    }
+                }
+                Value::List(List::new(writer, functions.iter().copied(), types, scratch))
+            }
+        };
+        fields.push((*name, offered));
+    }
+    Value::Record(Record::new(writer, &fields, types, scratch))
+}
+
 /// A list, dict or record literal: lowered whole when every part is a literal, and otherwise built
 /// from its parts' values.
 fn container<'graph, 'here>(
@@ -423,14 +524,8 @@ fn call<'graph, 'here>(
     let raised = match selection {
         Selection::Builtin(builtin) => {
             let native = Native::of(builtin.id());
-            let ran = builtins::run(native, at, writer, node, &operands, &scratch);
-            return match ran {
-                Ran::Value(value) => finish(step, at, value),
-                Ran::Frame(request) => {
-                    let asked = step.spawn(request);
-                    park(step, at, asked, FINISHING)
-                }
-            };
+            let value = builtins::run(native, at, writer, &operands, &scratch);
+            return finish(step, at, value);
         }
         Selection::Function {
             callee,

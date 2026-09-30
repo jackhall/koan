@@ -414,8 +414,8 @@ fn a_keyworded_definition_or_declaration_is_refused_where_it_cannot_register() {
             "`LET _ = _` is a builtin expression shape, which no definition adds to",
         ),
         (
-            "EXPR #(EVAL 1)",
-            "`EVAL _` is a builtin expression shape, which no definition adds to",
+            "EXPR #(EVAL 1 -> 2)",
+            "`EVAL _ -> _` is a builtin expression shape, which no definition adds to",
         ),
         (
             "EXPR #(x :Number) -> Number = #(x)",
@@ -460,13 +460,13 @@ fn a_parenthesized_binder_is_its_statements_own() {
 
 #[test]
 fn a_builtin_shape_dispatch_evaluates_selects_among_its_own_overloads() {
-    built("LET v = 1\nLET a = (EVAL v)", |_, shape| {
+    built("LET v = 1\nLET a = (#[x] FROM v)", |_, shape| {
         let list = candidates(shape, node(&shape.body()[1].parts[3].value));
         assert!(
             list.candidates.is_empty(),
-            "the suites' table holds no `EVAL`"
+            "the suites' table holds no `FROM`"
         );
-        assert_eq!(list.classes, [0]);
+        assert_eq!(list.classes, [0, 1]);
     });
 }
 

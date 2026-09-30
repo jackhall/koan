@@ -8,7 +8,7 @@
 //! The library is `PRINT`; `+ - * /` over `Number`; `< <= > >=` over `Number`, returning `Bool`;
 //! `AND` and `NOT` over `Bool`; `==` over `Any`; `|` and `&` over types, as the infix pair and the
 //! unary list form an operator run of them is rewritten to; and each overload of the builtin
-//! expression shapes whose slots dispatch evaluates — `ATTR`, `FROM`, `EVAL` and `USING` — typed
+//! expression shapes whose slots dispatch evaluates — `ATTR`, `FROM` and `USING` — typed
 //! as their [`BUILTIN_SHAPES`] entry types it. Every overload ranks its slots in written order.
 //!
 //! A native runs over operands its overload's shape admitted, so it reads each one as the type its
@@ -22,19 +22,16 @@ use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
 use crate::knot::{KBuiltins, KValue, UsingRefused, builtin, using};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId, ShapeElement};
-use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{KBundle, eval};
-use crate::scheduler::{Request, Use};
-use crate::scope::{Builtins, Candidate, Offer, Site};
+use crate::scope::Builtins;
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, KType, TypeNode, TypeRegistry, builtin_types, meet,
 };
-use crate::values::{Circular, List, Record, Seen, TypeValue, Value, record_type};
+use crate::values::{Circular, Seen, TypeValue, Value, record_type};
 
 use super::errors::Raised;
 use super::rules;
-use super::{Evaluation, Operand, check};
+use super::{Evaluation, Operand};
 
 /// What one builtin overload runs. Its discriminant is the overload's `id`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,13 +62,12 @@ pub(super) enum Native {
     Variant,
     /// `FROM`.
     Project,
-    Eval,
     Using,
 }
 
 impl Native {
     /// Every native, at its discriminant.
-    const ALL: [Native; 22] = [
+    const ALL: [Native; 21] = [
         Native::Print,
         Native::Add,
         Native::Subtract,
@@ -92,7 +88,6 @@ impl Native {
         Native::Field,
         Native::Variant,
         Native::Project,
-        Native::Eval,
         Native::Using,
     ];
 
@@ -181,7 +176,6 @@ fn natives_of(id: BuiltinShapeId) -> &'static [Native] {
     match id {
         BuiltinShapeId::Attribute => &[Native::ModuleMember, Native::Field, Native::Variant],
         BuiltinShapeId::Projection => &[Native::Project],
-        BuiltinShapeId::Eval => &[Native::Eval],
         BuiltinShapeId::UsingCode => &[Native::Using, Native::Using],
         other => unreachable!("dispatch runs no overload of {other:?}"),
     }
@@ -237,22 +231,15 @@ pub(super) fn table<'graph>(
     Builtins::new(writer, scratch, &[], &names, &overloads)
 }
 
-/// What a native came to: a value, or — an `EVAL` — the frame it asks for.
-pub(super) enum Ran<'graph, 'here> {
-    Value(KValue<'graph, 'here>),
-    Frame(Request<'graph, 'here, KBundle>),
-}
-
-/// Run `native` over the operands its overload admitted, for the call `node` evaluated through
-/// `at`, building in `writer`'s region and taking transients from `scratch`.
+/// Run `native` over the operands its overload admitted, for a call evaluated through `at`,
+/// building in `writer`'s region and taking transients from `scratch`.
 pub(super) fn run<'graph, 'here>(
     native: Native,
     at: &Evaluation<'graph, 'here>,
     writer: Writer<'here>,
-    node: &'graph KExpression<'graph>,
     operands: &[Operand<'graph, 'here>],
     scratch: &Bump,
-) -> Ran<'graph, 'here> {
+) -> KValue<'graph, 'here> {
     let program = at.program;
     let types = program.types();
     let value = |index: usize| {
@@ -276,7 +263,7 @@ pub(super) fn run<'graph, 'here>(
     };
     let type_value = |handle| Value::Type(TypeValue::new(writer, handle, types));
     let raise = |raised: Raised<'_>| raised.raise(program, writer);
-    Ran::Value(match native {
+    match native {
         Native::Print => {
             let mut prose = writer.prose();
             value(0)
@@ -331,13 +318,13 @@ pub(super) fn run<'graph, 'here>(
             // A type's field is the type its record declares the field with, as `:(Point.y)` reads.
             if let Some(owner) = record.as_type() {
                 let owner = owner.handle();
-                return Ran::Value(match declared_field(types, scratch, owner, name) {
+                return match declared_field(types, scratch, owner, name) {
                     Some(declared) => type_value(declared),
                     None => raise(Raised::NoField {
                         of: owner,
                         field: name,
                     }),
-                });
+                };
             }
             field(record, name, writer, types, scratch).unwrap_or_else(|| {
                 raise(Raised::NoField {
@@ -374,17 +361,16 @@ pub(super) fn run<'graph, 'here>(
                 match fields.get(name.symbol()) {
                     Some(ktype) => projected.push((name, ktype)),
                     None => {
-                        return Ran::Value(raise(Raised::NoField {
+                        return raise(Raised::NoField {
                             of: record.ktype(),
                             field: name.symbol(),
-                        }));
+                        });
                     }
                 }
             }
             let shown = record_type(types, scratch, projected.iter().copied());
             record.retyped(writer, shown, types, scratch)
         }
-        Native::Eval => return evaluated(at, writer, node, value(0)),
         Native::Using => {
             let code = value(0).as_code().expect("a `Code` slot admits code alone");
             match using(writer, code, value(1), types, scratch) {
@@ -392,11 +378,11 @@ pub(super) fn run<'graph, 'here>(
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
             }
         }
-    })
+    }
 }
 
 /// The elements of a list a slot admitted, read through its surface into `scratch`.
-fn listed<'graph, 'here, 'x>(
+pub(super) fn listed<'graph, 'here, 'x>(
     value: KValue<'graph, 'here>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
@@ -447,62 +433,5 @@ fn tagged(value: KValue<'_, '_>) -> bool {
         Value::Tagged(_) => true,
         Value::Knotted(_) => matches!(value.as_circular(), Some((_, Circular::Tagged(_)))),
         _ => false,
-    }
-}
-
-/// `EVAL code`: the code's shape checked for overlaps as a loaded program's is, then run in a frame
-/// over the names and keys the `EVAL` offers — a key as the list of its functions, as a use at the
-/// key written at the `EVAL` resolves it. A refusal is an error value.
-fn evaluated<'graph, 'here>(
-    at: &Evaluation<'graph, 'here>,
-    writer: Writer<'here>,
-    node: &'graph KExpression<'graph>,
-    code: KValue<'graph, 'here>,
-) -> Ran<'graph, 'here> {
-    let program = at.program;
-    let (types, symbols) = (program.types(), program.symbols());
-    let scratch = Bump::new();
-    let code = code.as_code().expect("a `Code` slot admits code alone");
-    let shape = code.code().expect("a quote's code").shape();
-    if let Err(error) = check::overlaps(shape, program.builtins(), types, &scratch) {
-        return Ran::Value(program.error(writer, error.display(symbols, types)));
-    }
-    let operand = node
-        .parts
-        .iter()
-        .find(|part| !matches!(part.value, ExpressionPart::Keyword(_)))
-        .expect("`EVAL` has an operand");
-    let offers = at.view.shape().offers(Site::of(&operand.value));
-    let mut fields = BumpVec::with_capacity_in(offers.len(), &scratch);
-    for (name, offer) in offers {
-        let offered = match offer {
-            Offer::Name(coordinate) => at.view.read(*coordinate),
-            Offer::Key(list) => {
-                let mut functions = BumpVec::new_in(&scratch);
-                for candidate in list.candidates {
-                    match candidate {
-                        Candidate::One(coordinate) => functions.push(at.view.read(*coordinate)),
-                        Candidate::Spread(coordinate) => {
-                            let spread = at.view.read(*coordinate);
-                            if spread.as_list().is_some() {
-                                functions.extend(listed(spread, types, &scratch));
-                            }
-                        }
-                    }
-                }
-                Value::List(List::new(
-                    writer,
-                    functions.iter().copied(),
-                    types,
-                    &scratch,
-                ))
-            }
-        };
-        fields.push((*name, offered));
-    }
-    let offered = Value::Record(Record::new(writer, &fields, types, &scratch));
-    match eval(program, code, offered, Use::Forwards) {
-        Ok(request) => Ran::Frame(request),
-        Err(refused) => Ran::Value(program.error(writer, refused.display(symbols, types))),
     }
 }

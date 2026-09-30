@@ -1,5 +1,5 @@
 //! Static types of generic code: lexical variables in a body's static types, intervals, verdicts,
-//! ranking at load, `EVAL` of traced code, and returns read through a group's intervals.
+//! ranking at load, an `EVAL`'s declared type, and returns read through a group's intervals.
 
 use crate::program::Program;
 use crate::scope::{BodyShape, ShapeKind, Site, Static};
@@ -202,17 +202,15 @@ fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
         },
     );
     assert_eq!(
-        top(
-            "LET q = #(FN :{t :Tee} -> Tee = #(t))\nLET f = (EVAL q)",
-            "f"
-        ),
-        ":(FN :{t :Never} -> Any)"
+        run("LET q = #(FN :{t :Tee} -> Tee = #(t))\nLET f = (EVAL q -> Number)"),
+        "load: <test>:2:9: this `EVAL`'s code returns :(FN :{t :Never} -> Any), which can never \
+         satisfy its declared return Number"
     );
 }
 
 #[test]
-fn eval_of_traced_code_has_the_code_s_type() {
-    let named = "LET q = #(1 + 2)\nLET m = ((EVAL q) + 1)";
+fn eval_is_its_declared_type() {
+    let named = "LET q = #(1 + 2)\nLET m = ((EVAL q -> Number) + 1)";
     loaded(named, |program| {
         assert_eq!(let_narrowing(program, program.shape(), "m"), "selected");
         assert_eq!(
@@ -224,11 +222,25 @@ fn eval_of_traced_code_has_the_code_s_type() {
         );
     });
     assert_eq!(run(&format!("{named}\nPRINT m")), "4");
-    let written = "LET m = ((EVAL #(1 + 2)) + 1)";
-    loaded(written, |program| {
-        assert_eq!(let_narrowing(program, program.shape(), "m"), "selected");
-    });
-    assert_eq!(run(&format!("{written}\nPRINT m")), "4");
+    loaded(
+        "LET q = #(1 + 2)\nLET m = ((EVAL q -> Any) + 1)",
+        |program| {
+            assert_eq!(
+                let_narrowing(program, program.shape(), "m"),
+                "full",
+                "the traced code's `Number` no longer types the `EVAL`"
+            );
+        },
+    );
+    assert!(exact(
+        "LET l = (EVAL #([1]) -> :(LIST OF (Number | Str)))",
+        "l"
+    ));
+    assert!(
+        !exact("LET u = (EVAL #(1) -> (Number | Str))", "u"),
+        "a union is not exact"
+    );
+    assert_eq!(top("LET q = #(1)\nLET f = (EVAL q -> Any)", "f"), "Any");
 }
 
 #[test]

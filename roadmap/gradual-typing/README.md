@@ -3,10 +3,11 @@
 Generic code typed as far as its static types reach, and checked by the call
 for the rest. The load fixes what the declarations decide — a call's type
 parameters solved, a candidate selected, a mismatch refused — and where the
-load knows only `Any`, as it does of an `EVAL` or an argument nothing
-ascribed, the run carries the check. What it buys the language: a program that
-states its types is refused early where they decide it, and a program that
-leaves them out still runs, each call checking what the load could not.
+load knows only `Any`, as it does of an argument nothing ascribed or an `EVAL`
+declared `-> Any`, the run carries the check. What it buys the language: a
+program that states its types is refused early where they decide it, and a
+program that leaves them out still runs, each call checking what the load could
+not.
 
 The pieces sit in the [type lattice](../../src/type_lattice/README.md), the
 [elaborator](../../src/elaborate/README.md) and

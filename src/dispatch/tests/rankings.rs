@@ -75,7 +75,7 @@ fn rankings_that_disagree_are_refused_where_they_meet() {
         run("MODULE m = (EXPR #(MOVE x :Any TO y :Any) -> Any = #(y))\n\
              LET q = #((EXPR #(MOVE 2 TO 1)) (EXPR #(MOVE x :Str TO y :Str) -> Any = #(x)) \
              (MOVE 1 TO 2))\n\
-             PRINT (EVAL (q USING m))"),
+             PRINT (EVAL (q USING m) -> Any)"),
         "error: MOVE _ TO _ is ranked two ways",
         "a `USING` fill"
     );

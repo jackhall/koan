@@ -73,11 +73,11 @@ pub enum Outcome {
 }
 
 /// What the evaluation finishing a frame owes it: a value satisfying `returns`, the frame's
-/// declared return with its own type-parameter solution substituted, retyped to `retype`. `callee`
-/// is the frame's function type, which a miss names.
+/// declared return with its own type-parameter solution substituted, retyped to `retype`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contract {
-    pub callee: KType,
+    /// The frame's function type, which a miss names; `None` for the frame an `EVAL` runs.
+    pub callee: Option<KType>,
     pub returns: KType,
     /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
     /// that frame's caller asked for it.
@@ -238,15 +238,20 @@ impl<'graph> Program<'graph> {
             return value.retyped(writer, contract.retype, self.types, &scratch);
         }
         let name = |handle| display_name(handle, self.types, self.symbols);
-        self.error(
-            writer,
-            format_args!(
-                "{} returned {}, which does not satisfy {}",
-                name(contract.callee),
-                name(value.ktype()),
-                name(contract.returns)
+        let (value, returns) = (name(value.ktype()), name(contract.returns));
+        match contract.callee {
+            Some(callee) => self.error(
+                writer,
+                format_args!(
+                    "{} returned {value}, which does not satisfy {returns}",
+                    name(callee)
+                ),
             ),
-        )
+            None => self.error(
+                writer,
+                format_args!("`EVAL`'s code returned {value}, which does not satisfy {returns}"),
+            ),
+        }
     }
 
     /// The top-level slot `name` binds, if the program declares it.

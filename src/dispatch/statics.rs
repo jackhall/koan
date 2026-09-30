@@ -21,8 +21,9 @@
 //! the certain ambiguity. A builtin candidate is judged through its native's [type rule](super::rules)
 //! too: an argument whose lower end lies outside the type the rule needs drops it, and a use whose
 //! last candidate a need dropped is refused in the native's words. A builtin's call is the return
-//! its rule gives — `FROM`'s the projection of its record, `ATTR`'s the named field's type, and an
-//! `EVAL`'s of code the load traces to a written quote that code's last statement's type. A
+//! its rule gives — `FROM`'s the projection of its record and `ATTR`'s the named field's type. An
+//! `EVAL` is its declared type, as a registration's call is, and code the load traces to a written
+//! quote is checked against it as a body is checked against its return. A
 //! quantified candidate's return is read through its group's intervals. A call whose callee and
 //! solve the load knows exactly — a selected registration, or a call by name of an exact callee —
 //! is exactly the return its frame retypes to; a call in tail position never finishes, and is
@@ -449,6 +450,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 .map_or(under(KType::ANY), callable),
             Form::Declaration => Interval::point(KType::NULL),
             Form::Ascribe(node) => self.ascribe(level, node)?,
+            Form::Eval(node) => self.eval(level, node)?,
             Form::Call(node, list) => self.narrow(level, node, list)?,
             Form::Apply(head, argument) => self.apply(level, head, argument)?,
             Form::Unevaluable(_) => under(KType::ANY),
@@ -471,12 +473,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         if typed.upper == KType::NEVER {
             return Ok(Interval::point(KType::NEVER));
         }
-        let ascribed = match self.chain[level]
-            .shape
-            .typed_expression(Site::of(&ascribed.value))
-        {
-            Static::Closed(handle) | Static::Rigid { value: handle, .. } => handle,
-            Static::Unknown => return Ok(under(KType::ANY)),
+        let Some(ascribed) = self.declared(level, &ascribed.value) else {
+            return Ok(under(KType::ANY));
         };
         let (types, scratch) = (self.types, self.scratch);
         // Compared, and named, through their bounds: a variable's name is its binder's.
@@ -495,6 +493,57 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             self.chain[level].settled.push(Site::of_node(node));
         }
         Ok(retyped_to(types, ascribed))
+    }
+
+    /// `EVAL <code> -> <Type>`: its declared type, exactly where the retype makes it so
+    /// ([`retyped_to`]), as a registration's call is. An operand that can never be code refuses the
+    /// load, and so does traced code whose type meets the declared one at `Never`.
+    fn eval(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let [_, operand, _, declared] = node.parts else {
+            unreachable!("an `EVAL` has its keyword, its code, `->` and a type")
+        };
+        let typed = self.part(level, &operand.value)?;
+        // An operand that never arrives runs nothing.
+        if typed.upper == KType::NEVER {
+            return Ok(Interval::point(KType::NEVER));
+        }
+        let (types, scratch) = (self.types, self.scratch);
+        let value = bound_above(types, scratch, typed.upper);
+        if meet(types, scratch, value, KType::ANY_CODE) == KType::NEVER {
+            return Err(ShapeError::NotCode {
+                value,
+                at: node.source,
+            });
+        }
+        let Some(declared) = self.declared(level, &declared.value) else {
+            return Ok(under(KType::ANY));
+        };
+        // Code that never arrives returns nothing to check.
+        if let Some(code) = self.traced(level, &operand.value)
+            && code != KType::NEVER
+        {
+            let returns = bound_above(types, scratch, declared);
+            if meet(types, scratch, code, returns) == KType::NEVER {
+                return Err(ShapeError::EvalNeverSatisfied {
+                    code,
+                    returns,
+                    at: node.source,
+                });
+            }
+        }
+        Ok(retyped_to(types, declared))
+    }
+
+    /// The type the type part `part` of the shape at `level` denotes, where the load knows it.
+    fn declared(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<KType> {
+        match self.chain[level].shape.typed_expression(Site::of(part)) {
+            Static::Closed(handle) | Static::Rigid { value: handle, .. } => Some(handle),
+            Static::Unknown => None,
+        }
     }
 
     /// A leaf part: a literal's type, a name's binder's, a quote's code type, a type value's kind,
@@ -798,12 +847,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                         _ => KType::IDENTIFIER,
                     }),
                     names: Some(std::slice::from_ref(scratch.alloc(*name))),
-                    code: None,
                 },
                 Wanted::Evaluated(part) => Given {
                     typed: self.part(level, part)?,
                     names: written_names(part, scratch),
-                    code: self.traced(level, part),
                 },
             };
             arguments.push(each.typed);

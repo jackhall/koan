@@ -12,8 +12,8 @@ without bound.
 
 **Acceptance criteria.**
 
-- With `stmts` bound to `[#(LET x = 4) #(PRINT x)]`, `EVAL #($..stmts)` prints
-  `4`, and a `$` name in a spliced part keeps the binding its own quote gave it.
+- With `stmts` bound to `[#(LET x = 4) #(PRINT x)]`, `EVAL #($..stmts) -> Any`
+  prints `4`, and a `$` name in a spliced part keeps the binding its own quote gave it.
 - `$..xs` makes the elements of `xs` the quote's syntax where the quote is
   written, and `..$xs` binds `xs` there and spreads its value when the code
   runs.

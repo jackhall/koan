@@ -209,7 +209,7 @@ fn a_user_operator_is_admitted_beside_a_builtin_it_does_not_overlap() {
 fn code_an_eval_runs_is_checked_for_overlaps_where_it_runs() {
     let source = "LET q = #((OP #(+) OVER Number = #(0)) (1 + 2))\n\
                   PRINT \"loaded\"\n\
-                  EVAL q";
+                  EVAL q -> Any";
     assert_eq!(
         run(source),
         "loaded\nerror: <test>:1:11: this overload of `_ + _` takes operands the builtin \

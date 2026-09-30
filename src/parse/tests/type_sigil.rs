@@ -66,6 +66,16 @@ fn a_binder_forms_type_slot_admits_the_bare_parenthesized_spelling() {
     );
 }
 
+/// `EVAL`'s return is a type slot as a `FN`'s is, so its bare spelling is a type expression too.
+#[test]
+fn an_eval_s_return_admits_the_bare_parenthesized_spelling() {
+    use super::top;
+    assert_eq!(
+        top("EVAL q -> (LIST OF Number)").unwrap(),
+        top("EVAL q -> :(LIST OF Number)").unwrap(),
+    );
+}
+
 /// The flip is keyed on the whole binder key, not on the paren shape: a run spelling the same
 /// arity and the same `-> … = …` keywords under a different head is an ordinary call, and every
 /// one of its `(…)` slots stays code.

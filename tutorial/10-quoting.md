@@ -23,19 +23,36 @@ The `PRINT "hi"` never executed; `action` just holds it as data.
 
 ## Running code with `EVAL`
 
-`EVAL <code>` runs a quote's code. Pairing the two, the captured action runs
-only when evaluated:
+`EVAL <code> -> <Type>` runs a quote's code. Pairing the two, the captured
+action runs only when evaluated:
 
 ```koan
 LET action = #(PRINT "hi")
 PRINT "about to run it"
-EVAL action
+EVAL action -> Str
 ```
 
 ```text
 about to run it
 hi
 ```
+
+The type after `->` is what the code returns, written as a function's return
+is — `Str` here, since `PRINT` returns the string it printed. It works like a
+function's return too: the value the code returns is checked against it and
+carries it, so the rest of the program knows what the `EVAL` produces, and code
+whose type can never match it is refused before the program runs:
+
+```koan
+LET sum = #(1 + 2)
+PRINT (EVAL sum -> Str)
+```
+
+```text
+error: <input>:2:7: this `EVAL`'s code returns Number, which can never satisfy its declared return Str
+```
+
+Write `-> Any` to declare nothing. The `->` is required, as a function's is.
 
 Together, `#` and `EVAL` let you move a piece of unevaluated code through
 positions that would otherwise run it eagerly, and run it where you choose.
@@ -52,7 +69,7 @@ right beside it:
 
 ```koan
 LET x = 7
-EVAL #(PRINT x)
+EVAL #(PRINT x) -> Str
 ```
 
 To take a name from where the quote is written, mark it with `$`. `$x` binds
@@ -61,7 +78,7 @@ To take a name from where the quote is written, mark it with `$`. `$x` binds
 ```koan
 LET x = 7
 LET show = #(PRINT $x)
-EVAL show
+EVAL show -> Str
 ```
 
 ```text
@@ -81,7 +98,7 @@ field that names no hole is ignored, so one record can serve several quotes:
 
 ```koan
 LET greet = #(PRINT name)
-EVAL (greet USING {name = "bob"})
+EVAL (greet USING {name = "bob"}) -> Str
 ```
 
 ```text
@@ -104,8 +121,8 @@ statement — and is called with a quote:
 
 ```koan
 EXPR #(TWICE body :Expression) -> Any = #(
-  EVAL body
-  EVAL body
+  EVAL body -> Any
+  EVAL body -> Any
 )
 TWICE #(PRINT "hi")
 ```
@@ -115,7 +132,8 @@ hi
 hi
 ```
 
-`body` receives the quoted expression as a value; each `EVAL body` runs it. Any
+`body` receives the quoted expression as a value; each `EVAL body -> Any` runs
+it. Any
 expression that produces a quoted-expression value fills the slot just as well
 — a name bound to a quote, or a call that returns one — because the slot takes
 a value, not a spelling.
@@ -127,8 +145,8 @@ anything runs, so `hi` is never printed:
 
 ```koan
 EXPR #(TWICE body :Expression) -> Any = #(
-  EVAL body
-  EVAL body
+  EVAL body -> Any
+  EVAL body -> Any
 )
 TWICE (PRINT "hi")
 ```
@@ -141,8 +159,8 @@ The same happens to a name — its value, not its code, reaches the slot:
 
 ```koan
 EXPR #(TWICE body :Expression) -> Any = #(
-  EVAL body
-  EVAL body
+  EVAL body -> Any
+  EVAL body -> Any
 )
 LET greeting = "hi"
 TWICE greeting
@@ -174,7 +192,7 @@ that parameter supplies each of them as it stands where the `EVAL` is written:
 ```koan
 EXPR #(WITH_FIVE body :(Expression NEEDING #[it])) -> Any = #(
   LET it = 5
-  EVAL body
+  EVAL body -> Any
 )
 WITH_FIVE #(PRINT \it)
 ```

@@ -1,5 +1,5 @@
 //! The type rules: the law every native's [rule](super::super::rules) obeys, checked for every
-//! builtin over drawn argument intervals and drawn names and code; and what `FROM`'s and `ATTR`'s
+//! builtin over drawn argument intervals and drawn names; and what `FROM`'s and `ATTR`'s
 //! rules make the load type and refuse, and the run carry.
 //!
 //! A lower end the load computes is a type some value carries, or `Never`: never a union and never
@@ -129,13 +129,12 @@ fn levels() -> impl Strategy<Value = [u8; 4]> {
 
 /// One slot as drawn: pinned at most its declared type in both intervals, or a chain `J.lower ≤
 /// I.lower ≤ I.upper ≤ J.upper`, a lower end the load never computes read as `Never`; and the
-/// names and code it holds.
+/// names it holds.
 #[derive(Clone, Debug)]
 struct Slot {
     pinned: bool,
     chain: [Desc; 4],
     names: Vec<u8>,
-    code: Desc,
 }
 
 fn slot() -> impl Strategy<Value = Slot> {
@@ -146,13 +145,11 @@ fn slot() -> impl Strategy<Value = Slot> {
             2 => prop::collection::vec(0..2u8, 1..2),
             1 => prop::collection::vec(0..3u8, 1..4),
         ],
-        desc(),
     )
-        .prop_map(|(pinned, chain, names, code)| Slot {
+        .prop_map(|(pinned, chain, names)| Slot {
             pinned,
             chain,
             names,
-            code,
         })
 }
 
@@ -226,17 +223,14 @@ struct Drawn<'x> {
     inner: Interval,
     outer: Interval,
     names: &'x [BinderSymbol],
-    code: KType,
 }
 
 impl<'x> Drawn<'x> {
-    /// What the slot gives a rule at `typed`: the names and code it holds where `named` and
-    /// `traced`, and none where not.
-    fn given(&self, typed: Interval, named: bool, traced: bool) -> Given<'x> {
+    /// What the slot gives a rule at `typed`: the names it holds where `named`, and none where not.
+    fn given(&self, typed: Interval, named: bool) -> Given<'x> {
         Given {
             typed,
             names: named.then_some(self.names),
-            code: traced.then_some(self.code),
         }
     }
 }
@@ -279,16 +273,16 @@ fn law(
     };
     let declared_slots: Vec<KType> = shape_slots(declared, world.types).collect();
     let drawn = draw(&world, slots, &declared_slots);
-    let over = |pick: &dyn Fn(usize, &Drawn<'_>) -> Interval, named, traced| {
+    let over = |pick: &dyn Fn(usize, &Drawn<'_>) -> Interval, named| {
         let given: Vec<Given<'_>> = (drawn.iter().enumerate())
-            .map(|(index, slot)| slot.given(pick(index, slot), named, traced))
+            .map(|(index, slot)| slot.given(pick(index, slot), named))
             .collect();
         typed(native, declared, &given, world.types, &scratch).returns
     };
 
     for named in [true, false] {
-        let inner = over(&|_, slot| slot.inner, named, true);
-        let outer = over(&|_, slot| slot.outer, named, true);
+        let inner = over(&|_, slot| slot.inner, named);
+        let outer = over(&|_, slot| slot.outer, named);
         prop_assert!(
             world.within(inner, outer),
             "over I, {} lies outside {} over J",
@@ -297,27 +291,16 @@ fn law(
         );
     }
 
-    let inner = over(&|_, slot| slot.inner, true, true);
-    let unnamed = over(&|_, slot| slot.inner, false, true);
+    let inner = over(&|_, slot| slot.inner, true);
+    let unnamed = over(&|_, slot| slot.inner, false);
     prop_assert!(
         world.within(inner, unnamed),
         "{} over names lies outside {} over none",
         world.render(inner),
         world.render(unnamed)
     );
-    let untraced = over(&|_, slot| slot.inner, true, false);
-    prop_assert!(
-        world.within(inner, untraced),
-        "{} over code lies outside {} over none",
-        world.render(inner),
-        world.render(untraced)
-    );
 
-    let returns = over(
-        &|index, _| Interval::within(declared_slots[index]),
-        true,
-        true,
-    );
+    let returns = over(&|index, _| Interval::within(declared_slots[index]), true);
     let ret = shape_return(declared, world.types).expect("a builtin is a shape");
     prop_assert!(
         world.below(returns.upper, ret),
@@ -336,7 +319,6 @@ fn draw<'x>(world: &World<'x, '_>, slots: &[Slot], declared: &[KType]) -> Vec<Dr
         let names = &*world
             .scratch
             .alloc_slice_fill_iter(slot.names.iter().map(|index| world.name(*index)));
-        let code = world.intern(&slot.code, KType::ANY);
         let (inner, outer) = if slot.pinned {
             (Interval::within(*declared), Interval::within(*declared))
         } else {
@@ -359,7 +341,6 @@ fn draw<'x>(world: &World<'x, '_>, slots: &[Slot], declared: &[KType]) -> Vec<Dr
             inner,
             outer,
             names,
-            code,
         });
     }
     drawn

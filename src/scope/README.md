@@ -362,7 +362,7 @@ its full bucket key, in table order, then each registration at that key visible
 to the use, the enclosing bodies innermost first. The key is the whole key, so a
 registration at `MOVE _ TO _` is no candidate for `MOVE _`, and a lone keyword
 `(NOW)` is a use of the key `NOW`. A builtin expression shape whose slots
-dispatch evaluates — `ATTR`, `FROM`, `EVAL`, `USING` — is closed and lists its
+dispatch evaluates — `ATTR`, `FROM`, `USING` — is closed and lists its
 own overloads alone, and so does the `NOT` a `!=` is rewritten to. A keyworded
 node inside a type expression is no use.
 
@@ -621,7 +621,7 @@ the quote of `f (a + b) c`. A quote of splices alone is at statement level, so
 
 ```koan
 LET stmts = [#(LET x = 4) #(PRINT x)]
-EVAL #($..stmts)
+EVAL #($..stmts) -> Any
 ```
 
 prints `4`. Lowering makes a layout line that is one splice atom the splice
@@ -649,7 +649,7 @@ A shape is built from code in two places, and each fills different names.
   and scope fill only its `\` marks. Code named as the body of a callable with
   parameters `w` and `h` is written `#(\w * \h)`, and a hole left in it is
   refused as [unbound](#errors) where the callable is built.
-- **`EVAL`.** `EVAL code` runs a shape built from the code alone. The shape
+- **`EVAL`.** `EVAL code -> <Type>` runs a shape built from the code alone. The shape
   depends on nothing else, since a `\` mark is filled by what the `EVAL`
   offers, so a written quote's is built once, where the program loads, and every
   `EVAL` of that quote runs it; code composed at run time builds its own once,
@@ -665,8 +665,8 @@ A shape is built from code in two places, and each fills different names.
 ```koan
 EXPR #(GREET who :Str) -> Str = #(PRINT who)
 EXPR #(TWICE body :Expression) -> Any = #(
-  EVAL body
-  EVAL body
+  EVAL body -> Any
+  EVAL body -> Any
 )
 TWICE #($(GREET "bob"))
 ```

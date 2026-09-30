@@ -396,7 +396,7 @@ fn a_quote_reading_its_own_binder_is_a_one_member_knot() {
 #[test]
 fn an_eval_of_a_parameter_needing_names_offers_them_where_it_is_written() {
     shaped(
-        "LET twice = (FN :{body :(Expression NEEDING #[it])} -> Any = #((LET it = 5) (EVAL body)))",
+        "LET twice = (FN :{body :(Expression NEEDING #[it])} -> Any = #((LET it = 5) (EVAL body -> Any)))",
         |fixture, shape| {
             let shape = shape.expect("the program shapes");
             let lambda = node(&shape.body()[0].parts[3].value);
@@ -424,7 +424,7 @@ fn an_eval_of_a_parameter_needing_names_offers_them_where_it_is_written() {
         },
     );
     shaped(
-        "LET twice = (FN :{body :(Expression NEEDING #[it])} -> Any = #(EVAL body))",
+        "LET twice = (FN :{body :(Expression NEEDING #[it])} -> Any = #(EVAL body -> Any))",
         |fixture, shape| {
             let error = shape.err().expect("`it` is visible nowhere at the `EVAL`");
             assert!(matches!(
@@ -435,7 +435,7 @@ fn an_eval_of_a_parameter_needing_names_offers_them_where_it_is_written() {
     );
     // A parameter needing nothing offers nothing.
     shaped(
-        "LET twice = (FN :{body :Expression} -> Any = #(EVAL body))",
+        "LET twice = (FN :{body :Expression} -> Any = #(EVAL body -> Any))",
         |_, shape| {
             let shape = shape.expect("the program shapes");
             let lambda = node(&shape.body()[0].parts[3].value);

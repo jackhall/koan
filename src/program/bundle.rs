@@ -35,11 +35,13 @@ pub enum KBirth<'graph, 'cell> {
         owed: Option<Contract>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
-    /// carries and the names `offered`, a record of them by name, supplies.
+    /// carries and the names `offered`, a record of them by name, supplies — and `contract`, the
+    /// `EVAL`'s declared return, which the frame owes.
     Eval {
         program: &'graph Program<'graph>,
         code: KValue<'graph, 'cell>,
         offered: KValue<'graph, 'cell>,
+        contract: Contract,
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     /// A frame's tail hands its last statement over with the frame's `contract`, which the
@@ -157,6 +159,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     program,
                     code,
                     offered,
+                    contract,
                 } => {
                     let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
                         writer,
@@ -168,6 +171,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         program,
                         code,
                         offered,
+                        contract,
                     }
                 }
                 // Only a forced copy reaches here with a view: a `Fresh` hop's successor, a sibling

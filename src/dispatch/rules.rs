@@ -1,19 +1,19 @@
 //! Each native's **type rule**: from what a call's slots hold — each argument's static type, read
-//! at both ends, the names a slot holds and the code it runs — the type each argument needs and the
-//! call's return interval.
+//! at both ends, and the names a slot holds — the type each argument needs and the call's return
+//! interval.
 //!
 //! The rule types a call at the load. [`statics`](super::statics) hands it each slot's static type
 //! and what the slot holds as written, types a builtin's call at [`typed`]'s return, and drops a
 //! candidate an argument's lower end lies outside a need of. The run reads no rule: each native
 //! reads its operands through [the door](crate::values::Surface), so its value carries its rule's
-//! exact return, which the evaluator checks against the static type in debug builds. `FROM`,
-//! `ATTR` over a record and `EVAL` have rules of their own; every other native takes its declared
-//! slots as its needs and a return at most its declared one.
+//! exact return, which the evaluator checks against the static type in debug builds. `FROM` and
+//! `ATTR` over a record have rules of their own; every other native takes its declared slots as its
+//! needs and a return at most its declared one.
 //!
 //! Every rule obeys a law, which `tests::rules` checks for every builtin: over argument intervals
-//! within others, its return lies within theirs; handed no names or traced code, its return lies
-//! around its return over any; and over its declared slots, its return lies under its declared
-//! return. A return whose upper end is `Never` lies within every interval.
+//! within others, its return lies within theirs; handed no names, its return lies around its return
+//! over any; and over its declared slots, its return lies under its declared return. A return whose
+//! upper end is `Never` lies within every interval.
 //!
 //! See [README.md § The builtin table](README.md#the-builtin-table).
 
@@ -36,9 +36,6 @@ pub(super) struct Given<'x> {
     /// The names the slot holds as written — a label, a one-name quote, or a list of one-name
     /// quotes. `None` where the load cannot read them.
     pub names: Option<&'x [BinderSymbol]>,
-    /// The type of the code the slot runs, where the load traces it to a written quote: its last
-    /// statement's type as it runs there, read through its bounds.
-    pub code: Option<KType>,
 }
 
 /// What a rule gives one call.
@@ -106,11 +103,6 @@ fn returns(
                 under(upper)
             }
         }
-        (Native::Eval, _) => under(
-            given[0]
-                .code
-                .unwrap_or_else(|| declared_return(declared, types)),
-        ),
         _ => under(declared_return(declared, types)),
     }
 }

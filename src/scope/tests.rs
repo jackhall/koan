@@ -288,6 +288,8 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             ascribed,
             at,
         },
+        E::NotCode { value, .. } => E::NotCode { value, at },
+        E::EvalNeverSatisfied { code, returns, .. } => E::EvalNeverSatisfied { code, returns, at },
         E::Type { error, .. } => E::Type { error, at },
         E::RepeatedGuard { guard, .. } => E::RepeatedGuard {
             guard,

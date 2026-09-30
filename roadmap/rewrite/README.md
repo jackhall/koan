@@ -77,6 +77,17 @@ as surprises, not scheduled.
   because at its instantiated operand type a builtin is chosen first. The second is a
   keyworded use written unmarked in a quote ([holes](../../src/scope/README.md#holes-and-marks)), whose key has registrations
   visible where it is written that the quote will not see.
+- **A type value's static type is only its kind.** The load types a type
+  value at the kind of the type it denotes, never at that type
+  ([static types](../../src/dispatch/README.md#static-types)), so once a type
+  passes through a name or a call no builtin's type rule can tell `Number` from
+  `Str`: `ATTR` over a type (`Point.y` read as a value) and `|` and `&` over
+  type values type their values no better than their declared kinds, and `:!`
+  and `EVAL <code> -> <Type>` read their written types through node readings of
+  their own rather than as operands of a builtin overload. A singleton static
+  type for a type value — the type whose one value is the type value `Number` —
+  would carry the denoted type through ordinary static typing. It is a
+  [type lattice](../../src/type_lattice/README.md) change.
 - **`CLOSE OVER` limits what an `EVAL` can see.** The scope builder reports
   `CLOSE` and `CLOSE OVER` unsupported; which item gives them their rewrite
   home is undecided.

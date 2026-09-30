@@ -1,7 +1,8 @@
 //! The miniature evaluator the program suites supply as their [`Language`]: not dispatch, and kept
 //! small. Its builtin table is `origin = 0` and the scalar types, and it evaluates exactly a
 //! literal, a quote — born through the [quote door](crate::knot::quote) — a name, marked or not, a
-//! list of literals, names and quotes, `(EVAL code)` through the [`EVAL` door](crate::program::eval),
+//! list of literals, names and quotes, `(EVAL code -> <Type>)` through the
+//! [`EVAL` door](crate::program::eval), whose declared type it does not read,
 //! `(WHEN c THEN a ELSE b)`,
 //! `(a MINUS b)`, `(FIRST xs)` over a list data node whose first cell is an edge, a call `(f x)` of a function with one
 //! parameter, and a `FN`, born through the [lambda door](crate::knot::lambda). `WHEN`, `THEN`,
@@ -353,11 +354,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 _ => step.failed(StepError::Refused),
             }
         }
-        ([head, operand], 0) if keyword(head, "EVAL") => {
+        ([head, operand, _, _], 0) if keyword(head, "EVAL") => {
             let asked = ask(&mut step, birth, &operand.value, Use::Keeps);
             park(step, asked, birth, 3)
         }
-        ([_, operand], 3) => {
+        ([_, operand, _, _], 3) => {
             let Some(Ok(Received::Here(code))) = step.results(program.types()).next() else {
                 return step.failed(StepError::Unredeemable);
             };
@@ -374,7 +375,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 })
                 .collect();
             let offered = Record::new(step.writer(), &fields, types, &scratch);
-            match eval(program, code, Value::Record(offered), Use::Forwards) {
+            match eval(
+                program,
+                code,
+                Value::Record(offered),
+                KType::ANY,
+                Use::Forwards,
+            ) {
                 Ok(request) => {
                     let asked = step.spawn(request);
                     park(step, asked, birth, 2)

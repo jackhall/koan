@@ -1017,6 +1017,14 @@ pub enum ShapeError<'graph> {
         ascribed: KType,
         at: SourceRef,
     },
+    /// An `EVAL` whose operand's static type can never be code.
+    NotCode { value: KType, at: SourceRef },
+    /// An `EVAL` of traced code whose static type can never satisfy the type the `EVAL` declares.
+    EvalNeverSatisfied {
+        code: KType,
+        returns: KType,
+        at: SourceRef,
+    },
     /// A closed type that does not elaborate.
     Type { error: Elaboration, at: SourceRef },
     /// Two guards of one `MATCH … WITH` arm set that type to one handle, `guard`; `at` is the
@@ -1103,6 +1111,8 @@ impl ShapeError<'_> {
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::AscriptionNeverSatisfied { at, .. }
+            | ShapeError::NotCode { at, .. }
+            | ShapeError::EvalNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
             | ShapeError::RepeatedGuard { at, .. } => *at,
         }
@@ -1284,6 +1294,17 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "this value is {}, which can never satisfy its ascription {}",
                 display_name(*value, self.types, self.symbols),
                 display_name(*ascribed, self.types, self.symbols)
+            ),
+            ShapeError::NotCode { value, .. } => write!(
+                f,
+                "this value is {}, which can never be code for `EVAL` to run",
+                display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::EvalNeverSatisfied { code, returns, .. } => write!(
+                f,
+                "this `EVAL`'s code returns {}, which can never satisfy its declared return {}",
+                display_name(*code, self.types, self.symbols),
+                display_name(*returns, self.types, self.symbols)
             ),
             ShapeError::Type { error, .. } => {
                 write!(f, "{}", error.display(self.symbols, self.types))

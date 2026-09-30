@@ -238,8 +238,8 @@ fn a_type_headed_application_is_a_construction() {
 #[test]
 fn eval_over_a_number_refuses_the_load() {
     assert_eq!(
-        run("LET n = 1\nPRINT (EVAL n)"),
-        "load: <test>:2:7: no overload of `EVAL _` admits (Number)"
+        run("LET n = 1\nPRINT (EVAL n -> Any)"),
+        "load: <test>:2:7: this value is Number, which can never be code for `EVAL` to run"
     );
 }
 
@@ -411,7 +411,7 @@ fn a_closed_type_that_does_not_elaborate_refuses_the_load() {
         "in the body of a callable no one calls"
     );
     assert_eq!(
-        run("LET q = #(PRINT :(Number.z))\nPRINT \"loaded\"\nEVAL q"),
+        run("LET q = #(PRINT :(Number.z))\nPRINT \"loaded\"\nEVAL q -> Any"),
         "loaded\nerror: <test>:1:17: Number has no member z",
         "in a quote's code, reported by the `EVAL` that runs it"
     );

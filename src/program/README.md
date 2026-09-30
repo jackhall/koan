@@ -116,9 +116,10 @@ a program's steps run over, with its three families:
 
 - **`KBirth`**, what a cell is born holding, which crosses and is covariant:
   `Program`, the top level's root work; `Call`, a callee, a record of its
-  arguments by name and how the call reached it — by keyword or by name; `Eval`, a quote's code and a record of the names its
-  `EVAL` offers; `Evaluate`, a node, the view it is read through and the
-  [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
+  arguments by name and how the call reached it — by keyword or by name;
+  `Eval`, a quote's code, a record of the names its `EVAL` offers and the
+  contract its declared return makes; `Evaluate`, a node, the view it is read
+  through and the [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
   synthesized block's shape and the view it sits in; and `Inspect`, the view
   the top level leaves at rest. The family's `covariant!`
   witness is what checks that an activation's view is covariant in its brand.
@@ -286,8 +287,10 @@ and the caller asked for the outermost callee's return: that frame's value is
 checked against its own callee's return, which a miss names, and retyped to the
 outermost return of the chain — the contract's `retype`. So beside
 `INNER -> :(LIST OF Number)`, an `OUTER -> :(LIST OF Any)` tailing into it
-returns a `LIST OF Any`. An `EVAL`'s frame owes no contract, and a block never
-tails.
+returns a `LIST OF Any`. An `EVAL`'s frame owes the type the `EVAL` declares
+as a called frame owes its return; its contract names no callee, so a miss
+names the `EVAL`'s code (`` `EVAL`'s code returned Str, which does not satisfy
+Number ``). A block never tails.
 
 ### Faults and output
 
@@ -343,11 +346,11 @@ before anything is spawned, with a `CodeRefused`: `Shape` for code whose shape
 kept an error, and `Unbound` for the first name hole no `USING` filled, `\` name
 the `EVAL` does not offer, or keyworded hole some use in the code selects from
 alone. A keyworded hole nothing filled that every use of it can do without binds
-the empty list of functions. That the operand is code at all is what `EVAL`'s
-overload admitted. The frame
-reads nothing of the scope the `EVAL` is written in but those names, so code
-fills no hole from the frame that runs it
-([building code](../scope/README.md#building-code)).
+the empty list of functions. That the operand is code at all is what the
+evaluator checks. The frame owes the type the `EVAL` declares, as a called
+frame owes its return ([frames](#frames-contracts-and-tails)), and reads
+nothing of the scope the `EVAL` is written in but those names, so code fills no
+hole from the frame that runs it ([building code](../scope/README.md#building-code)).
 
 ## The scheduler is a view
 

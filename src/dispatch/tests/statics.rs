@@ -277,7 +277,7 @@ fn a_use_no_candidate_can_admit_refuses_the_load() {
 #[test]
 fn a_refusal_in_a_quote_s_code_is_reported_by_its_eval() {
     assert_eq!(
-        run("LET q = #(PRINT $(\"a\" + 1))\nPRINT \"loaded\"\nEVAL q"),
+        run("LET q = #(PRINT $(\"a\" + 1))\nPRINT \"loaded\"\nEVAL q -> Any"),
         "loaded\nerror: <test>:1:18: no overload of `_ + _` admits (Str, Number)"
     );
 }
@@ -330,9 +330,31 @@ fn a_body_that_can_never_meet_its_return_refuses_the_load() {
         "a declared `Never` is met only by a body that never arrives"
     );
     assert_eq!(
-        run("LET q = #((EXPR #(BAD) -> Str = #(1)) (PRINT 2))\nPRINT \"loaded\"\nEVAL q"),
+        run("LET q = #((EXPR #(BAD) -> Str = #(1)) (PRINT 2))\nPRINT \"loaded\"\nEVAL q -> Any"),
         "loaded\nerror: <test>:1:34: this body returns Number, which can never satisfy its \
          declared return Str"
+    );
+}
+
+#[test]
+fn an_eval_whose_code_can_never_meet_its_return_refuses_the_load() {
+    assert_eq!(
+        run("LET q = #(\"a\")\nEVAL q -> Number"),
+        "load: <test>:2:1: this `EVAL`'s code returns Str, which can never satisfy its declared \
+         return Number"
+    );
+    assert_eq!(
+        run("EVAL #(\"a\") -> Number"),
+        "load: <test>:1:1: this `EVAL`'s code returns Str, which can never satisfy its declared \
+         return Number"
+    );
+    assert_eq!(run("LET q = #(1)\nPRINT (EVAL q -> (Number | Str))"), "1");
+    assert_eq!(
+        run(&format!(
+            "{DIE}LET q = #($(DIE))\nEXPR #(USE) -> Str = #(EVAL q -> Str)\nPRINT \"loaded\""
+        )),
+        "loaded",
+        "code that never arrives is not checked"
     );
 }
 

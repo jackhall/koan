@@ -133,7 +133,7 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::Close, &[]),
     (BuiltinShapeId::Projection, &[]),
     (BuiltinShapeId::Attribute, &[(2, L)]),
-    (BuiltinShapeId::Eval, &[]),
+    (BuiltinShapeId::Eval, &[(3, B)]),
     (BuiltinShapeId::UsingCode, &[]),
 ];
 

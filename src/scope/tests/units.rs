@@ -104,13 +104,13 @@ fn a_component_is_one_unit() {
 #[test]
 fn an_eval_waits_on_nothing_it_does_not_read() {
     shaped(
-        "LET f = (FN :{} -> Number = #(g))\n(EVAL #(origin))\nLET g = 5",
+        "LET f = (FN :{} -> Number = #(g))\n(EVAL #(origin) -> Any)\nLET g = 5",
         |_, shape| assert_eq!(order(shape), [1, 2, 0]),
     );
     for source in [
-        "LET f = (FN :{} -> Number = #(g))\nLET g = (EVAL #(origin))",
+        "LET f = (FN :{} -> Number = #(g))\nLET g = (EVAL #(origin) -> Any)",
         // Through a binder between them.
-        "LET f = (FN :{} -> Number = #(h))\nLET h = (FN :{} -> Number = #(g))\nLET g = (EVAL #(origin))",
+        "LET f = (FN :{} -> Number = #(h))\nLET h = (FN :{} -> Number = #(g))\nLET g = (EVAL #(origin) -> Any)",
     ] {
         shaped(source, |_, shape| {
             let order = order(shape);

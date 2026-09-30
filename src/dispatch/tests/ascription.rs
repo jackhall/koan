@@ -153,6 +153,40 @@ fn a_tail_chain_returns_at_the_outermost_contract() {
 }
 
 #[test]
+fn eval_holds_its_value_to_its_declared_return() {
+    assert_eq!(
+        run(&format!(
+            "{WHICH}PRINT (WHICH (EVAL #([1]) -> :(LIST OF (Number | Str))))"
+        )),
+        "number or str",
+        "the value is retyped to the declared return"
+    );
+    assert_eq!(
+        run("PRINT (EVAL (#(x) USING {x = \"a\"}) -> Number)"),
+        "error: `EVAL`'s code returned Str, which does not satisfy Number"
+    );
+    assert_eq!(
+        run(&format!(
+            "{WHICH}EXPR #(INNER) -> :(LIST OF Number) = #([1])\n\
+             PRINT (WHICH (EVAL #($(INNER)) -> :(LIST OF (Number | Str))))"
+        )),
+        "number or str",
+        "a tail out of the code hands the `EVAL`'s contract on"
+    );
+    assert_eq!(
+        run("EXPR #(RUN c :Any) -> Any = #(EVAL c -> Any)\nPRINT \"loaded\"\nRUN 1"),
+        "loaded\nerror: Number is not code for `EVAL` to run"
+    );
+    let run_at = "EXPR FOR ALL #[Elt] #(RUN c :Code AT x :Elt) -> Elt = #(EVAL c -> Elt)\n";
+    assert_eq!(run(&format!("{run_at}PRINT (RUN #(1) AT 2)")), "1");
+    assert_eq!(
+        run(&format!("{run_at}PRINT (RUN #(\"a\") AT 2)")),
+        "error: `EVAL`'s code returned Str, which does not satisfy Number",
+        "the declared return is read under the call's solution"
+    );
+}
+
+#[test]
 fn an_ascription_has_its_type_at_load() {
     let source = format!(
         "{ALIASES}\

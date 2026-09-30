@@ -28,8 +28,9 @@ fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> 
 ///
 /// The silent entries are the SIG **declaration** forms — `VAL` and the three bodyless operator
 /// heads, each recording into the decl scope's own collectors rather than into a binding map — plus
-/// the two lambdas, which have neither a name nor a head to key a bucket on and are listed only for
-/// their type slot. Anything else appearing here means a binder builtin lost its extractor.
+/// the two lambdas and `EVAL`, which have neither a name nor a head to key a bucket on and are
+/// listed only for their type slot. Anything else appearing here means a binder builtin lost its
+/// extractor.
 #[test]
 fn binder_channels_cover_every_installing_form() {
     let silent: Vec<Vec<String>> = binder_forms()
@@ -45,6 +46,7 @@ fn binder_channels_cover_every_installing_form() {
             vec!["OP", "_", "OVER", "_"],
             vec!["OP", "_", "OVER", "_", "->", "_"],
             vec!["UNARY", "OP", "_", "OVER", "_", "->", "_"],
+            vec!["EVAL", "_", "->", "_"],
         ],
     );
 }
