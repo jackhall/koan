@@ -498,9 +498,13 @@ fn a_lexical_slot_admits_what_lies_under_it() {
 fn a_slot_above_no_type_an_argument_can_carry_is_never() {
     let bump = Bump::new();
     let world = World::new(&bump);
-    let field = |text: &str| BinderSymbol::declared(text, &world.symbols).expect("a bindable token");
+    let field =
+        |text: &str| BinderSymbol::declared(text, &world.symbols).expect("a bindable token");
     let record = |fields: &[(BinderSymbol, KType)]| world.types.record(world.region, fields);
-    let (numbers, anys) = (world.types.list(KType::NUMBER), world.types.list(KType::ANY));
+    let (numbers, anys) = (
+        world.types.list(KType::NUMBER),
+        world.types.list(KType::ANY),
+    );
 
     let which = world.head(&[], &[Kw("WHICH"), Slot(numbers)], &[]);
     let verdict = |argument: Interval| world.judge(which, &[argument]).0;
@@ -528,12 +532,16 @@ fn a_slot_above_no_type_an_argument_can_carry_is_never() {
     let needs_b = world.head(&[], &[Kw("GET"), Slot(record(&[(b, KType::NUMBER)]))], &[]);
     let has_a = world.head(&[], &[Kw("GET"), Slot(record(&[(a, KType::NUMBER)]))], &[]);
     assert_eq!(
-        world.judge(strs, &[Interval::point(world.types.list(elt))]).0,
+        world
+            .judge(strs, &[Interval::point(world.types.list(elt))])
+            .0,
         Verdict::Maybe,
         "the lower end read below `Elt` is `LIST OF Never`"
     );
     assert_eq!(
-        world.judge(needs_b, &[Interval::point(record(&[(a, elt)]))]).0,
+        world
+            .judge(needs_b, &[Interval::point(record(&[(a, elt)]))])
+            .0,
         Verdict::Never
     );
     let bounded_below = Interval {

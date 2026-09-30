@@ -4,9 +4,12 @@
 
 use crate::parse::ExpressionPart;
 use crate::program::Program;
+use crate::scope::BuiltinIndex;
 use crate::scope::{BodyShape, Site};
-use crate::type_lattice::display_name;
+use crate::type_lattice::{display_name, shape_return};
 
+use super::super::builtins::Native;
+use super::super::statics::{retyped_to, under};
 use super::run;
 use super::statics::{body, let_narrowing, loaded, slot};
 
@@ -321,4 +324,57 @@ fn a_generic_use_over_an_exact_parameter_is_selected_at_load() {
         ":(Number | Str)\n[]",
         "the argument was retyped: without it, `Elt` solves to `Number`"
     );
+}
+
+#[test]
+fn a_projection_is_at_most_its_record_s_named_fields() {
+    let source = "EXPR #(PICK r :{x :Number, y :Str}) -> Str = #(\"got xy\")\n\
+                  EXPR #(PICK r :{x :Number, z :Str}) -> Str = #(\"got xz\")\n\
+                  LET both = {x = 1, y = \"a\", z = \"b\"}\n\
+                  LET picked = (#[x y] FROM both)\n\
+                  LET unknown = (#[x q] FROM both)\n\
+                  LET which = (PICK picked)";
+    loaded(source, |program| {
+        let top = program.shape();
+        let never = "Never".to_string();
+        assert_eq!(
+            ends(program, top, "picked"),
+            (never.clone(), ":{x :Number y :Str}".to_string())
+        );
+        assert_eq!(
+            ends(program, top, "unknown"),
+            (never, ":{}".to_string()),
+            "a field the record's type lacks leaves the record top"
+        );
+        assert_eq!(
+            let_narrowing(program, top, "which"),
+            "kept maybe always",
+            "a record at most `{{x, y}}` may carry `z` too"
+        );
+    });
+    let runs = source.replace("LET unknown = (#[x q] FROM both)\n", "");
+    assert_eq!(run(&format!("{runs}\nPRINT which")), "got xy");
+}
+
+/// A native is never retyped, so a selected builtin's call is exact only where its declared return
+/// is exact already: no builtin declares a return the retype makes exact. `FROM`'s `:{}` is exempt:
+/// the load computes its return, at most a projection.
+#[test]
+fn no_builtin_declares_a_return_the_retype_makes_exact() {
+    loaded("LET n = 1", |program| {
+        let (builtins, types) = (program.builtins(), program.types());
+        let offending: Vec<String> = (0..builtins.len())
+            .filter_map(|index| {
+                let value = builtins.get(BuiltinIndex(index as u32));
+                let builtin = value.as_callable().and_then(|member| member.builtin())?;
+                if Native::of(builtin.id()) == Native::Project {
+                    return None;
+                }
+                let ret = shape_return(builtin.ktype(), types)?;
+                (retyped_to(types, ret) != under(ret))
+                    .then(|| display_name(ret, types, program.symbols()).to_string())
+            })
+            .collect();
+        assert!(offending.is_empty(), "declared returns: {offending:?}");
+    });
 }

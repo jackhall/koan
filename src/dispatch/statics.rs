@@ -18,8 +18,10 @@
 //! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
 //! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
 //! first, is **selected** and runs without admitting; where they rank none first, the load refuses
-//! the certain ambiguity. A quantified candidate's return is read through its group's intervals,
-//! and an `EVAL` of code the load traces to a written quote returns that code's last statement's
+//! the certain ambiguity. A quantified candidate's return is read through its group's intervals.
+//! A call whose callee and solve the load knows exactly — a selected candidate, or a call by name
+//! of an exact callee — is exactly the return its frame retypes to; a call in tail position never
+//! finishes, and is typed as any other. An `EVAL` of code the load traces to a written quote returns that code's last statement's
 //! type. A callable body whose static type meets its declared return at `Never` refuses the load
 //! too, as does an ascription whose operand's static type meets its type at `Never`; one whose
 //! operand's static upper end lies under its type is **settled**, and the run checks nothing. What
@@ -79,7 +81,7 @@ pub(super) fn statics<'graph>(
 
 /// A static type under `upper` and bounded below by nothing — exact where `upper` is `Number`,
 /// `Str`, `Bool` or `Null`, since no value carries a type strictly under one.
-fn under(upper: KType) -> Interval {
+pub(super) fn under(upper: KType) -> Interval {
     match upper {
         KType::NUMBER | KType::STR | KType::BOOL | KType::NULL => Interval::point(upper),
         _ => Interval::within(upper),
@@ -90,7 +92,7 @@ fn under(upper: KType) -> Interval {
 /// return): exactly `declared` where every value satisfying it is retyped to it — a list, dict or
 /// record type, a family or its application, a newtype or a union's variant — and at most
 /// `declared` otherwise; a union keeps each variant's own type.
-fn retyped_to(types: &TypeRegistry<'_>, declared: KType) -> Interval {
+pub(super) fn retyped_to(types: &TypeRegistry<'_>, declared: KType) -> Interval {
     match types.node(declared) {
         TypeNode::List { .. }
         | TypeNode::Dict { .. }
@@ -621,7 +623,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
 
     /// `(head argument)`: a construction's identity when the head is a type the load knows, the
     /// callee's declared return read through the group the argument solves when the head is a
-    /// function, else `[Never, Any]`.
+    /// function, else `[Never, Any]`. The call is exactly a return the retype makes exact where the
+    /// callee is exact and its solve is the load's.
     fn apply(
         &mut self,
         level: usize,
@@ -648,25 +651,41 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 params,
                 ret,
                 ..
-            } => under(self.called(bounds, params, ret, payload)),
+            } => {
+                let (returned, solved) = self.called(bounds, params, ret, payload);
+                // Only an exact callee: a function is never retyped, so one at most its type may
+                // return less.
+                if callee.is_exact() && solved {
+                    retyped_to(types, returned)
+                } else {
+                    under(returned)
+                }
+            }
             _ => under(KType::ANY),
         })
     }
 
     /// What a call by name of a function over `params` returning `ret`, its group bounded by
     /// `bounds`, returns for an argument of the static type `payload`: `ret` read through the
-    /// intervals the argument's fields solve the group to, or its bounds where they do not.
-    fn called(&self, bounds: &[KType], params: Record<'_>, ret: KType, payload: Interval) -> KType {
+    /// intervals the argument's fields solve the group to, or its bounds where they do not; beside
+    /// whether that solve is the call's — the group empty, or every interval a point.
+    fn called(
+        &self,
+        bounds: &[KType],
+        params: Record<'_>,
+        ret: KType,
+        payload: Interval,
+    ) -> (KType, bool) {
         let (types, scratch) = (self.types, self.scratch);
         if bounds.is_empty() {
-            return ret;
+            return (ret, true);
         }
         let fields = |typed| match types.node(typed) {
             TypeNode::Record { fields } => Some(fields),
             _ => None,
         };
         let Some(upper) = fields(payload.upper) else {
-            return self.through(ret, None);
+            return (self.through(ret, None), false);
         };
         let lower = fields(payload.lower);
         let mut collector = Collector::new(scratch, bounds);
@@ -674,10 +693,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let mut exact = true;
         for (name, param) in params.iter() {
             let Some(field) = upper.get(name.symbol()) else {
-                return self.through(ret, None);
+                return (self.through(ret, None), false);
             };
             if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
-                return self.through(ret, None);
+                return (self.through(ret, None), false);
             }
             if types.contains_quantified(param) {
                 // As a keyworded use judges it: a rigid variable makes no solve the call's.
@@ -689,9 +708,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         match collector.solve(types) {
             Ok(solution) => {
                 let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
-                self.through(ret, Some(&solved))
+                (self.through(ret, Some(&solved)), exact)
             }
-            Err(_) => self.through(ret, None),
+            Err(_) => (self.through(ret, None), false),
         }
     }
 
@@ -752,7 +771,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
 
     /// A keyworded use: its arguments typed, each candidate judged against them, and the use
     /// narrowed — or a candidate selected, where no *maybe* one is left and one ranks first. Its
-    /// static type is the selected candidate's return, or the join of what is left's returns.
+    /// static type is the selected candidate's return — exactly a return the retype makes exact
+    /// where the solve is the load's — or at most the join of what is left's returns.
     fn narrow(
         &mut self,
         level: usize,
@@ -883,7 +903,14 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     unreachable!("an always candidate is no spread");
                 };
                 self.chain[level].narrowings[index] = Narrowing::Selected(coordinate);
-                return Ok(under(self.candidate_return(level, chosen, operand)));
+                // A frame retypes its value to this return, and a builtin's return is one the
+                // retype leaves alone.
+                let (returned, solved) = self.candidate_return(level, chosen, operand, &arguments);
+                return Ok(if solved {
+                    retyped_to(types, returned)
+                } else {
+                    under(returned)
+                });
             }
         }
         if judged.len() < list.candidates.len()
@@ -904,27 +931,40 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if let Known::Unknown = judgement.known {
                 return Ok(under(KType::ANY));
             }
-            returns.push(self.candidate_return(level, *judgement, operand));
+            returns.push(
+                self.candidate_return(level, *judgement, operand, &arguments)
+                    .0,
+            );
         }
         Ok(under(join_iter(types, scratch, returns.iter().copied())))
     }
 
-    /// What a judged candidate returns: its shape's return read through its group's intervals, or,
-    /// for `EVAL` of code the load traces through `operand`, that code's last statement's type as
-    /// it runs unfilled — traced code is written, so nothing composed or `USING` filled it.
+    /// What a judged candidate returns: its shape's return read through its group's intervals; for
+    /// `EVAL` of code the load traces through `operand`, that code's last statement's type as it
+    /// runs unfilled — traced code is written, so nothing composed or `USING` filled it; for
+    /// `FROM`, the [projection](Self::projected) of its record's static type. Beside it, whether it
+    /// is the shape's own return and the solve is the call's: the group empty, or every interval a
+    /// point.
     fn candidate_return(
         &self,
         level: usize,
         judgement: Judgement<'_>,
         operand: Option<&'graph ExpressionPart<'graph>>,
-    ) -> KType {
+        arguments: &[Interval],
+    ) -> (KType, bool) {
         let registered = match judgement.known {
             Known::Closed(registered) | Known::Rigid(registered) => registered,
-            Known::Unknown => return KType::ANY,
+            Known::Unknown => return (KType::ANY, false),
         };
-        let evaluates = self
+        let native = self
             .builtin(judgement.candidate)
-            .is_some_and(|builtin| Native::of(builtin.id()) == Native::Eval);
+            .map(|builtin| Native::of(builtin.id()));
+        if native == Some(Native::Project)
+            && let Some(record) = arguments.get(1)
+        {
+            return (self.projected(operand, record.upper), false);
+        }
+        let evaluates = native == Some(Native::Eval);
         let traced = operand
             .filter(|_| evaluates)
             .and_then(|operand| self.traced_code(level, operand))
@@ -933,9 +973,48 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 ran.map(|(_, last)| *last)
             });
         match traced {
-            Some(typed) => bound_above(self.types, self.scratch, typed.upper),
-            None => self.returned(registered, judgement.intervals),
+            Some(typed) => (bound_above(self.types, self.scratch, typed.upper), false),
+            None => (
+                self.returned(registered, judgement.intervals),
+                judgement
+                    .intervals
+                    .is_some_and(|all| all.iter().all(|interval| interval.is_exact())),
+            ),
         }
+    }
+
+    /// What `FROM` returns over the field list `listed` and a record at most `record`: the record
+    /// of the fields a written list names, each at its type in `record`, where `record` is a record
+    /// type holding each; `:{}` elsewhere. The native builds its record from the field values, each
+    /// under its field's type, so the call is at most this and never exact.
+    fn projected(&self, listed: Option<&'graph ExpressionPart<'graph>>, record: KType) -> KType {
+        let (types, scratch) = (self.types, self.scratch);
+        let (Some(ExpressionPart::ListLiteral(items)), TypeNode::Record { fields }) =
+            (listed, types.node(record))
+        else {
+            return KType::EMPTY_RECORD;
+        };
+        let mut projected = BumpVec::with_capacity_in(items.len(), scratch);
+        for item in items.iter() {
+            let ExpressionPart::QuotedExpression(node) = item else {
+                return KType::EMPTY_RECORD;
+            };
+            let name = match node.reference().parts {
+                [only] => match only.value {
+                    ExpressionPart::Identifier(name) => BinderSymbol::Value(name),
+                    ExpressionPart::Type(name) => BinderSymbol::Type(name),
+                    _ => return KType::EMPTY_RECORD,
+                },
+                _ => return KType::EMPTY_RECORD,
+            };
+            let Some(field) = fields.get(name.symbol()) else {
+                return KType::EMPTY_RECORD;
+            };
+            if !projected.iter().any(|(named, _)| *named == name) {
+                projected.push((name, field));
+            }
+        }
+        record_type(types, scratch, projected.into_iter())
     }
 
     /// The code shape the part `operand` runs, where the load traces it to a written quote: the

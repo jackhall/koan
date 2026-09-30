@@ -173,11 +173,11 @@ fn a_static_type_is_exact_where_the_load_knows_the_carried_type() {
         assert!(exact_in(program, g, "x"), "a scalar is");
     });
     assert!(
-        !exact(
+        exact(
             "EXPR #(NUMBERS) -> :(LIST OF Number) = #([1])\nLET l = (NUMBERS)",
             "l"
         ),
-        "a call's return is not"
+        "a call running a frame is exact at its return"
     );
 }
 
