@@ -62,8 +62,8 @@ pub use working::{WorkingExpression, WorkingPart};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
-use crate::memory::{DropFree, Edge, Ready, Writer, covariant, reattachable};
-use crate::type_lattice::{KType, TypeNode, TypeRegistry};
+use crate::memory::{BumpAllocator, DropFree, Edge, Ready, Writer, covariant, reattachable};
+use crate::type_lattice::{KType, TypeNode, TypeRegistry, is_subtype_of, meet};
 
 /// What `values` asks of a knot member at one region lifetime — a function or a data node of a
 /// knot: its memoized type, what rebuilding its knot at a destination writes, the fellow member an
@@ -265,48 +265,117 @@ impl<'cell, X: Knotted> Value<'cell, X> {
         }
     }
 
-    /// Ascription stamping at an annotated boundary, after the caller has checked the value
-    /// satisfies `declared`. A container against a declared node of its own kind takes `declared`
-    /// as its handle over the same cells, so downstream dispatch sees the contract rather than the
-    /// contents' incidental precision. A tagged value against a union takes the member it inhabits —
-    /// the member naming the same constructor — and keeps its own handle when the union declares
-    /// none. Everything else, and a value already of the declared type, passes through unwritten —
-    /// a knot member among them: a knot never grows a node, so a data node is never restamped.
+    /// The value viewed at `declared`, after the caller has checked it satisfies `declared`: an
+    /// ascription, a parameter binding its argument, a frame returning under its contract. The
+    /// target is read member by member — `declared`'s members, or `declared` alone — as the meet
+    /// of the members of the value's own kind that it lies under: a list, dict or record node for
+    /// a container, a node naming its constructor for a tagged value. Where `declared` has none,
+    /// and for every other value, the value keeps its own type. A plain value takes the target as
+    /// its handle over the same cells; a knot's data node, whose memo its knot cannot restamp, is
+    /// laid down as a plain value of its kind over its cells, each edge resolved to its sibling.
     pub fn retyped(
         self,
         writer: Writer<'cell>,
         declared: KType,
         types: &TypeRegistry<'_>,
-    ) -> Value<'cell, X> {
-        if declared == self.ktype() {
+        scratch: BumpAllocator<'_>,
+    ) -> Value<'cell, X>
+    where
+        X: 'cell,
+    {
+        let own = self.ktype();
+        if declared == own {
             return self;
         }
-        match (self, types.node(declared)) {
-            (Value::List(list), TypeNode::List { .. }) => {
-                Value::List(list.with_type(writer, declared))
-            }
-            (Value::Dict(dict), TypeNode::Dict { .. }) => {
-                Value::Dict(dict.with_type(writer, declared))
-            }
-            (Value::Record(record), TypeNode::Record { .. }) => {
-                Value::Record(record.with_type(writer, declared))
-            }
-            (Value::Tagged(tagged), TypeNode::Union { members }) => {
-                let constructor = |handle: KType| match types.node(handle) {
-                    TypeNode::ConstructorApply { constructor, .. } => constructor,
-                    _ => handle,
-                };
-                let inhabited = constructor(tagged.ktype());
-                match members
-                    .iter()
-                    .find(|member| constructor(**member) == inhabited)
-                {
-                    Some(member) => Value::Tagged(tagged.with_type(writer, *member)),
-                    None => self,
+        let circular = self.as_circular();
+        let kind = match (self, circular) {
+            (Value::List(_), _) | (_, Some((_, Circular::List(_)))) => Kind::List,
+            (Value::Dict(_), _) | (_, Some((_, Circular::Dict(_)))) => Kind::Dict,
+            (Value::Record(_), _) | (_, Some((_, Circular::Record(_)))) => Kind::Record,
+            (Value::Tagged(_), _) | (_, Some((_, Circular::Tagged(_)))) => Kind::Tagged,
+            _ => return self,
+        };
+        let constructor = |handle: KType| match types.node(handle) {
+            TypeNode::ConstructorApply { constructor, .. } => constructor,
+            _ => handle,
+        };
+        let of_kind = |member: KType| match (kind, types.node(member)) {
+            (Kind::List, TypeNode::List { .. })
+            | (Kind::Dict, TypeNode::Dict { .. })
+            | (Kind::Record, TypeNode::Record { .. }) => true,
+            (Kind::Tagged, _) => constructor(member) == constructor(own),
+            _ => false,
+        };
+        let members = match types.node(declared) {
+            TypeNode::Union { members } => members,
+            _ => std::slice::from_ref(&declared),
+        };
+        let target = members
+            .iter()
+            .copied()
+            .filter(|member| of_kind(*member) && is_subtype_of(types, scratch, own, *member))
+            .reduce(|lower, member| {
+                if is_subtype_of(types, scratch, lower, member) {
+                    lower
+                } else if is_subtype_of(types, scratch, member, lower) {
+                    member
+                } else {
+                    meet(types, scratch, lower, member)
                 }
-            }
-            (other, _) => other,
+            });
+        let Some(target) = target.filter(|target| *target != own) else {
+            return self;
+        };
+        match (self, circular) {
+            (Value::List(list), _) => Value::List(list.with_type(writer, target)),
+            (Value::Dict(dict), _) => Value::Dict(dict.with_type(writer, target)),
+            (Value::Record(record), _) => Value::Record(record.with_type(writer, target)),
+            (Value::Tagged(tagged), _) => Value::Tagged(tagged.with_type(writer, target)),
+            (_, Some((member, node))) => laid_down(writer, member, node, target),
+            _ => unreachable!("only a value of a kind is retyped"),
         }
+    }
+}
+
+/// The kinds of value a retype reads `declared`'s members for.
+#[derive(Clone, Copy)]
+enum Kind {
+    List,
+    Dict,
+    Record,
+    Tagged,
+}
+
+/// A knot's data node laid down as a plain value of its kind under `target`: each cell resolved
+/// through `member`, so an edge becomes the sibling it names; a dict's keys and a record's names
+/// shared with the node.
+fn laid_down<'cell, X: Knotted + 'cell>(
+    writer: Writer<'cell>,
+    member: X,
+    node: Circular<'cell, X>,
+    target: KType,
+) -> Value<'cell, X> {
+    let resolved =
+        |cells: &[Link<'cell, X>]| writer.fill(cells.len(), |at| cells[at].resolve(member));
+    match node {
+        Circular::List(list) => Value::List(List::weighed(writer, resolved(list.cells()), target)),
+        Circular::Dict(dict) => Value::Dict(Dict::weighed(
+            writer,
+            dict.keys(),
+            resolved(dict.cells()),
+            target,
+        )),
+        Circular::Record(record) => Value::Record(Record::weighed(
+            writer,
+            record.names(),
+            resolved(record.cells()),
+            target,
+        )),
+        Circular::Tagged(tagged) => Value::Tagged(Tagged::hold(
+            writer,
+            tagged.payload().resolve(member),
+            target,
+        )),
     }
 }
 

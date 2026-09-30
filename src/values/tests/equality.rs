@@ -56,11 +56,11 @@ fn containers_compare_contents_only_under_related_types() {
             // does not.
             assert!(equal(
                 one_two,
-                one_two.retyped(writer, KType::LIST_OF_ANY, types)
+                one_two.retyped(writer, KType::LIST_OF_ANY, types, scratch)
             ));
             let empty = Value::List(List::new(writer, [].into_iter(), types, scratch));
-            let empty_strings = empty.retyped(writer, types.list(KType::STR), types);
-            let empty_numbers = empty.retyped(writer, types.list(KType::NUMBER), types);
+            let empty_strings = empty.retyped(writer, types.list(KType::STR), types, scratch);
+            let empty_numbers = empty.retyped(writer, types.list(KType::NUMBER), types, scratch);
             assert!(!equal(empty_strings, empty_numbers));
 
             let dict = |entries: &[_]| Value::Dict(Dict::new(writer, entries, types, scratch));
@@ -174,10 +174,18 @@ fn a_function_compares_by_identity_and_a_barrier_is_incomparable() {
                 Err(Incomparable),
                 "an unequal pair before the barrier does not decide"
             );
-            let numbers =
-                list(&[Holding::Number(1.0)]).retyped(writer, types.list(KType::NUMBER), types);
-            let bools =
-                list(&[Holding::Bool(true)]).retyped(writer, types.list(KType::BOOL), types);
+            let numbers = list(&[Holding::Number(1.0)]).retyped(
+                writer,
+                types.list(KType::NUMBER),
+                types,
+                scratch,
+            );
+            let bools = list(&[Holding::Bool(true)]).retyped(
+                writer,
+                types.list(KType::BOOL),
+                types,
+                scratch,
+            );
             assert_eq!(
                 numbers.equals(&bools, types, scratch),
                 Ok(false),

@@ -167,17 +167,8 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let kept = kept_entries(entries, scratch);
-        let mut weight = Weight::flat::<Self>();
-        let keys = writer.fill(kept.len(), |at| {
-            let key = entries[kept[at]].0;
-            weight = weight.plus(key.weight());
-            key.rehomed(writer)
-        });
-        let cells = writer.fill(kept.len(), |at| {
-            let cell = entries[kept[at]].1;
-            weight = weight.plus(cell.weight());
-            cell
-        });
+        let keys = writer.fill(kept.len(), |at| entries[kept[at]].0.rehomed(writer));
+        let cells = writer.fill(kept.len(), |at| entries[kept[at]].1);
         let ktype = dict_type(
             types,
             scratch,
@@ -185,6 +176,23 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
                 .zip(cells)
                 .map(|(key, cell)| (key.ktype(), cell.ktype())),
         );
+        Self::weighed(writer, keys, cells, ktype)
+    }
+
+    /// A dict over sorted keys and aligned value cells already resident in `writer`'s region under
+    /// `ktype`, weighed as [`new`](Self::new) weighs them — a retyped data node's arm.
+    pub(crate) fn weighed(
+        writer: Writer<'cell>,
+        keys: &'cell [Key<'cell>],
+        cells: &'cell [Value<'cell, X>],
+        ktype: KType,
+    ) -> &'cell Self {
+        let weight = keys.iter().fold(Weight::flat::<Self>(), |weight, key| {
+            weight.plus(key.weight())
+        });
+        let weight = cells
+            .iter()
+            .fold(weight, |weight, cell| weight.plus(cell.weight()));
         Self::from_runs(writer, keys, cells, ktype, weight)
     }
 }

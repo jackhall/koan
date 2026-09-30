@@ -33,21 +33,28 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
         let order = symbol_order(fields, scratch);
-        let mut weight = Weight::flat::<Self>();
-        let names = writer.fill(order.len(), |at| {
-            weight = weight.plus(Weight::flat::<Symbol>());
-            fields[order[at]].0.symbol()
-        });
-        let cells = writer.fill(order.len(), |at| {
-            let cell = fields[order[at]].1;
-            weight = weight.plus(cell.weight());
-            cell
-        });
+        let names = writer.fill(order.len(), |at| fields[order[at]].0.symbol());
+        let cells = writer.fill(order.len(), |at| fields[order[at]].1);
         let ktype = record_type(
             types,
             scratch,
             fields.iter().map(|(name, cell)| (*name, cell.ktype())),
         );
+        Self::weighed(writer, names, cells, ktype)
+    }
+
+    /// A record over sorted names and aligned value cells already resident in `writer`'s region
+    /// under `ktype`, weighed as [`new`](Self::new) weighs them — a retyped data node's arm.
+    pub(crate) fn weighed(
+        writer: Writer<'cell>,
+        names: &'cell [Symbol],
+        cells: &'cell [Value<'cell, X>],
+        ktype: KType,
+    ) -> &'cell Self {
+        let weight = Weight::flat::<Self>().plus(Weight::run::<Symbol>(names.len()));
+        let weight = cells
+            .iter()
+            .fold(weight, |weight, cell| weight.plus(cell.weight()));
         Self::from_runs(writer, names, cells, ktype, weight)
     }
 }

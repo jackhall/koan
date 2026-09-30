@@ -28,15 +28,25 @@ impl<'cell, X: Knotted> List<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell List<'cell, X> {
         let mut items = items;
-        let mut weight = Weight::flat::<Self>();
         let cells = writer.fill(items.len(), |_| {
-            let cell = items
+            items
                 .next()
-                .expect("an exact-size iterator yields its reported length");
-            weight = weight.plus(cell.weight());
-            cell
+                .expect("an exact-size iterator yields its reported length")
         });
         let ktype = list_type(types, scratch, cells.iter().map(Value::ktype));
+        Self::weighed(writer, cells, ktype)
+    }
+
+    /// A list over value cells already resident in `writer`'s region under `ktype`, weighed as
+    /// [`new`](Self::new) weighs them — a retyped data node's arm.
+    pub(crate) fn weighed(
+        writer: Writer<'cell>,
+        cells: &'cell [Value<'cell, X>],
+        ktype: KType,
+    ) -> &'cell Self {
+        let weight = cells.iter().fold(Weight::flat::<Self>(), |weight, cell| {
+            weight.plus(cell.weight())
+        });
         Self::from_run(writer, cells, ktype, weight)
     }
 }

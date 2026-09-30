@@ -199,7 +199,8 @@ fn retyping_swaps_the_handle_over_the_same_cells() {
             let (types, scratch) = (fixture.types, fixture.scratch());
             let numbers = [Value::Number(1.0), Value::Number(2.0)];
             let list = List::new(writer, numbers.into_iter(), types, scratch);
-            let Value::List(retyped) = Value::List(list).retyped(writer, KType::LIST_OF_ANY, types)
+            let Value::List(retyped) =
+                Value::List(list).retyped(writer, KType::LIST_OF_ANY, types, scratch)
             else {
                 panic!("a list retypes to a list");
             };
@@ -207,7 +208,8 @@ fn retyping_swaps_the_handle_over_the_same_cells() {
             assert!(ptr::eq(retyped.cells(), list.cells()));
             assert_eq!(retyped.weight(), list.weight());
             // A declared node of another kind leaves the value alone.
-            let Value::List(same) = Value::List(list).retyped(writer, KType::ANY, types) else {
+            let Value::List(same) = Value::List(list).retyped(writer, KType::ANY, types, scratch)
+            else {
                 panic!("a list stays a list");
             };
             assert!(ptr::eq(same, list));
@@ -216,23 +218,136 @@ fn retyping_swaps_the_handle_over_the_same_cells() {
 }
 
 #[test]
-fn a_tagged_value_retyped_against_a_union_takes_the_member_it_inhabits() {
+fn a_tagged_value_takes_the_member_naming_its_constructor_it_lies_under() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let types = fixture.types;
-            let union = types.union_of(fixture.scratch(), &[KType::NUMBER, KType::STR]);
+            let (types, scratch) = (fixture.types, fixture.scratch());
+            let union = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
             let tagged = Tagged::hold(writer, Value::Number(1.0), KType::STR);
-            let Value::Tagged(stamped) = Value::Tagged(tagged).retyped(writer, union, types) else {
+            let Value::Tagged(stamped) =
+                Value::Tagged(tagged).retyped(writer, union, types, scratch)
+            else {
                 panic!("a tagged value stays tagged");
             };
             assert_eq!(stamped.ktype(), KType::STR);
             let outside = Tagged::hold(writer, Value::Number(1.0), KType::BOOL);
-            let Value::Tagged(kept) = Value::Tagged(outside).retyped(writer, union, types) else {
+            let Value::Tagged(kept) = Value::Tagged(outside).retyped(writer, union, types, scratch)
+            else {
                 panic!("a tagged value stays tagged");
             };
             assert!(ptr::eq(kept, outside));
         })
+    });
+}
+
+#[test]
+fn a_retype_reads_a_union_member_by_member() {
+    with_fixture(|fixture| {
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let (types, scratch) = (fixture.types, fixture.scratch());
+            let union = |members: &[KType]| types.union_of(scratch, members);
+            let number_or_str = union(&[KType::NUMBER, KType::STR]);
+            let wider = |third| union(&[KType::NUMBER, KType::STR, third]);
+
+            let list = List::new(writer, [Value::Number(1.0)].into_iter(), types, scratch);
+            let loose = union(&[KType::LIST_OF_ANY, KType::NULL]);
+            let Value::List(any) = Value::List(list).retyped(writer, loose, types, scratch) else {
+                panic!("a list retypes to a list");
+            };
+            assert_eq!(any.ktype(), KType::LIST_OF_ANY);
+            assert!(ptr::eq(any.cells(), list.cells()));
+            let wide = union(&[
+                types.list(wider(KType::BOOL)),
+                types.list(wider(KType::NULL)),
+            ]);
+            assert_eq!(
+                Value::List(list)
+                    .retyped(writer, wide, types, scratch)
+                    .ktype(),
+                types.list(number_or_str),
+                "two unordered members it lies under meet"
+            );
+            let Value::List(same) = Value::List(list).retyped(writer, KType::ANY, types, scratch)
+            else {
+                panic!("a list stays a list");
+            };
+            assert!(ptr::eq(same, list), "`Any` has no member of its kind");
+            let dict = Dict::new(
+                writer,
+                &[(Key::str("k"), Value::Number(1.0))],
+                types,
+                scratch,
+            );
+            let wide = union(&[
+                types.dict(KType::STR, wider(KType::BOOL)),
+                types.dict(KType::STR, wider(KType::NULL)),
+            ]);
+            assert_eq!(
+                Value::Dict(dict)
+                    .retyped(writer, wide, types, scratch)
+                    .ktype(),
+                types.dict(KType::STR, number_or_str)
+            );
+
+            let x = BinderSymbol::declared("x", fixture.symbols).unwrap();
+            let record = Record::new(writer, &[(x, Value::Number(1.0))], types, scratch);
+            let wide = union(&[
+                types.record(scratch, &[(x, wider(KType::BOOL))]),
+                types.record(scratch, &[(x, wider(KType::NULL))]),
+            ]);
+            assert_eq!(
+                Value::Record(record)
+                    .retyped(writer, wide, types, scratch)
+                    .ktype(),
+                types.record(scratch, &[(x, number_or_str)])
+            );
+        })
+    });
+}
+
+#[test]
+fn a_tagged_value_takes_the_application_it_lies_under() {
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let boxed = fixture.family("Boxed", &["Type"], |names| {
+            Some(
+                types.quantified(
+                    names
+                        .iter()
+                        .position(|found| *found == TypeSymbol::declared("Type", symbols).unwrap())
+                        .expect("a declared parameter"),
+                    KType::ANY,
+                ),
+            )
+        });
+        let applied = |argument| {
+            let name = TypeSymbol::declared("Type", symbols).unwrap();
+            types.constructor_apply(scratch, boxed, &[(BinderSymbol::Type(name), argument)])
+        };
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let head = TypeValue::new(writer, boxed, types);
+            let built =
+                Tagged::construct(writer, head, Value::Number(7.0), types, scratch).unwrap();
+            assert_eq!(built.ktype(), applied(KType::NUMBER));
+            let number_or_str = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
+            let union = types.union_of(scratch, &[applied(KType::BOOL), applied(number_or_str)]);
+            assert_eq!(
+                Value::Tagged(built)
+                    .retyped(writer, union, types, scratch)
+                    .ktype(),
+                applied(number_or_str)
+            );
+            assert_eq!(
+                Value::Tagged(built)
+                    .retyped(writer, boxed, types, scratch)
+                    .ktype(),
+                boxed,
+                "a bare family names its own constructor"
+            );
+        });
     });
 }
 

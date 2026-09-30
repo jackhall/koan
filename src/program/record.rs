@@ -227,7 +227,7 @@ impl<'graph> Program<'graph> {
         }
         let scratch = Bump::new();
         if satisfies(contract.returns, &value, self.types, &scratch) {
-            return value.retyped(writer, contract.returns, self.types);
+            return value.retyped(writer, contract.returns, self.types, &scratch);
         }
         let name = |handle| display_name(handle, self.types, self.symbols);
         self.error(
