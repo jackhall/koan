@@ -12,7 +12,7 @@ use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
-use crate::type_lattice::lattice::{join, meet};
+use crate::type_lattice::lattice::{join, join_iter, meet};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::order::{is_more_specific_than, is_subtype_of, satisfied_by};
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class};
@@ -30,7 +30,7 @@ use crate::type_lattice::substitute::{
     quantifier_bounds, read_through, slot_more_specific_or_equal, slot_satisfied_by,
     slot_types_equal, substitute_quantified, substitute_sig_members,
 };
-use crate::type_lattice::unify::{Collector, Interval, admits_with, intervals};
+use crate::type_lattice::unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::walk::unary::{LEAF, Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
@@ -701,7 +701,7 @@ proptest! {
     }
 
     #[test]
-    fn a_solution_is_the_extremum_of_its_contributions(a in shape(), b in shape()) {
+    fn a_solution_is_the_least_instance_of_its_contributions(a in shape(), b in shape()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -720,8 +720,14 @@ proptest! {
                 return Ok(());
             }
         }
-        let Ok(solution) = collector.solve(&types) else {
-            return Ok(());
+        let solution = match collector.solve(&types) {
+            Ok(solution) => solution,
+            // A solve fails only where the set its pair denotes is empty.
+            Err(UnifyFailure::Disagree { lower, upper, .. }) => {
+                prop_assert!(!is_subtype_of(&types, scratch, lower, upper));
+                return Ok(());
+            }
+            Err(UnifyFailure::Mismatch) => return Ok(()),
         };
         // Substituting the solution into the declared slots yields positions the arguments fill.
         for (slot, argument) in slots.iter().zip(arguments.iter()) {
@@ -741,29 +747,36 @@ proptest! {
         for (index, solved) in solution.iter().enumerate() {
             let (lower, upper) = collector.contributions(index);
             let bound = collector.bound(index);
-            // The solution is always a contribution or the declared bound — never a type the
-            // arguments and the declaration did not already spell between them.
-            prop_assert!(
-                lower.contains(solved) || upper.contains(solved) || *solved == bound,
-                "the solver minted a type nobody wrote",
-            );
-            // And it is the extremum of the set that constrains it: the maximum of the lower
-            // contributions where there are any, else the minimum of the upper ones. That is what
-            // "lies under every other solution that also admits" means for a lower-constrained
-            // variable — every admitting alternative is above every lower contribution, and the
-            // solution *is* one of them.
+            let equivalent = |x: KType, y: KType| {
+                is_subtype_of(&types, scratch, x, y) && is_subtype_of(&types, scratch, y, x)
+            };
+            // The least instance of the pair: its lower end where a lower contribution reached the
+            // variable, and its upper end otherwise. An end is the extremum of its contributions
+            // where they have one — up to equivalence, since two binders may be equivalent handles.
             if !lower.is_empty() {
-                prop_assert!(lower.contains(solved));
-                for contribution in lower {
-                    prop_assert!(is_subtype_of(&types, scratch, *contribution, *solved));
+                prop_assert_eq!(*solved, join_iter(&types, scratch, lower.iter().copied()));
+                for ceiling in upper.iter().chain([&bound]) {
+                    prop_assert!(is_subtype_of(&types, scratch, *solved, *ceiling));
                 }
-            } else if !upper.is_empty() {
-                prop_assert!(upper.contains(solved));
-                for contribution in upper {
-                    prop_assert!(is_subtype_of(&types, scratch, *solved, *contribution));
+                let maximum = lower.iter().find(|candidate| {
+                    lower.iter().all(|other| is_subtype_of(&types, scratch, *other, **candidate))
+                });
+                if let Some(maximum) = maximum {
+                    prop_assert!(equivalent(*solved, *maximum));
                 }
             } else {
-                prop_assert_eq!(*solved, bound);
+                let met = upper
+                    .iter()
+                    .fold(bound, |met, each| meet(&types, scratch, met, *each));
+                prop_assert_eq!(*solved, met);
+                let minimum = upper.iter().find(|candidate| {
+                    upper.iter().chain([&bound]).all(|other| {
+                        is_subtype_of(&types, scratch, **candidate, *other)
+                    })
+                });
+                if let Some(minimum) = minimum {
+                    prop_assert!(equivalent(*solved, *minimum));
+                }
             }
             // Every solution lies under its variable's declared bound.
             prop_assert!(is_subtype_of(&types, scratch, *solved, bound));

@@ -559,12 +559,11 @@ fn a_family_construction_takes_the_application_its_payload_solves() {
             Some(types.record(scratch, &[(a, elem), (b, elem)]))
         });
         let mixed = types.record(scratch, &[(a, KType::NUMBER), (b, KType::STR)]);
+        // Two unrelated types at one parameter join.
+        let either = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
         assert_eq!(
             construction(types, scratch, same, mixed),
-            Err(ConstructionRefused::Unsolved {
-                family: same,
-                payload: mixed
-            })
+            Ok(applied(same, &[("Elem", either)]))
         );
 
         let silent = fixture.family("Silent", &["Key", "Val"], |_| None);

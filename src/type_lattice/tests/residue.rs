@@ -65,10 +65,10 @@ fn the_empty_schema_digest_is_the_module_top() {
     }
 }
 
-/// The **edge** of the solving law, not the law: the two worked examples the design states, which
-/// fix which side of "no maximum" each falls on.
+/// The **edge** of the solving law, not the law: the worked examples the design states for a
+/// variable two slots reach from below.
 #[test]
-fn a_twice_used_variable_takes_the_maximum_or_fails() {
+fn a_twice_used_variable_takes_the_join() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
@@ -90,47 +90,140 @@ fn a_twice_used_variable_takes_the_maximum_or_fails() {
         )
         .handle;
     let slots: Vec<KType> = shape_slots(shape, &types).collect();
-    // `Ok` carries the solution; `Err` carries the index of a variable with no maximum, or `None`
-    // for any other failure.
-    let solve = |arguments: [KType; 2]| {
-        let mut collector = Collector::new(region, &[KType::ANY]);
-        for (slot, argument) in slots.iter().zip(arguments.iter()) {
-            if admits_with(
-                &types,
-                region,
-                *slot,
-                *argument,
-                Variance::Co,
-                &mut collector,
-            )
-            .is_err()
-            {
-                return Err(None);
-            }
-        }
-        collector
-            .solve(&types)
-            .map(|solution| solution.to_vec())
-            .map_err(|failure| match failure {
-                UnifyFailure::NoMaximum { index, .. } => Some(index),
-                _ => None,
-            })
-    };
     let mixed = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    // Two arguments of one type solve to that type; an argument and a union it lies inside solve to
-    // the union, because the union *is* the maximum of the two contributions.
+    // Two arguments of one type solve to that type; any two others to their join, whether or not
+    // either lies under the other.
     assert_eq!(
-        solve([KType::NUMBER, KType::NUMBER]),
+        solve_over(
+            &types,
+            region,
+            &slots,
+            &[KType::ANY],
+            &[KType::NUMBER, KType::NUMBER]
+        ),
         Ok(vec![KType::NUMBER])
     );
-    assert_eq!(solve([KType::NUMBER, mixed]), Ok(vec![mixed]));
-    // Two unrelated arguments have no maximum, and the solver refuses to mint their union.
-    assert_eq!(solve([KType::NUMBER, KType::STR]), Err(Some(0)));
+    assert_eq!(
+        solve_over(
+            &types,
+            region,
+            &slots,
+            &[KType::ANY],
+            &[KType::NUMBER, mixed]
+        ),
+        Ok(vec![mixed])
+    );
+    assert_eq!(
+        solve_over(
+            &types,
+            region,
+            &slots,
+            &[KType::ANY],
+            &[KType::NUMBER, KType::STR]
+        ),
+        Ok(vec![mixed])
+    );
 }
 
-/// The **edge** of the canonical-form law: which replacement a single occurrence takes is decided
-/// by its polarity, and the law that canonical form is a fixed point cannot say which of the two it
-/// settled on.
+/// The edge of the solving law's dual: a variable two function-typed slots reach from above takes
+/// the meet of what they contribute, which may be `Never`.
+#[test]
+fn a_variable_reached_from_above_takes_the_meet() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let takes = |t: KType| {
+        types
+            .function_type(region, &[], &[(x, t)], KType::NULL)
+            .handle
+    };
+    let position = takes(types.quantified(0, KType::ANY));
+    let slots = [position, position];
+    let solve = |a: KType, b: KType| {
+        solve_over(&types, region, &slots, &[KType::ANY], &[takes(a), takes(b)])
+    };
+    assert_eq!(solve(KType::NUMBER, KType::STR), Ok(vec![KType::NEVER]));
+    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    let number_or_bool = types.union_of(region, &[KType::NUMBER, KType::BOOL]);
+    assert_eq!(
+        solve(number_or_str, number_or_bool),
+        Ok(vec![KType::NUMBER])
+    );
+}
+
+/// The edge of the failure rule: a solve fails only where its lower end lies above a ceiling, and
+/// a contribution from above wider than the bound leaves the bound as the upper end.
+#[test]
+fn a_solve_fails_only_where_its_pair_denotes_nothing() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let variable = types.quantified(0, KType::NUMBER);
+    assert_eq!(
+        solve_over(
+            &types,
+            region,
+            &[variable, variable],
+            &[KType::NUMBER],
+            &[KType::NUMBER, KType::STR]
+        ),
+        Err(Some(0))
+    );
+    let takes = |t: KType| {
+        types
+            .function_type(region, &[], &[(x, t)], KType::NULL)
+            .handle
+    };
+    assert_eq!(
+        solve_over(
+            &types,
+            region,
+            &[takes(variable)],
+            &[KType::NUMBER],
+            &[takes(KType::ANY)]
+        ),
+        Ok(vec![KType::NUMBER])
+    );
+}
+
+/// Admit each of `arguments` into its slot of `slots` through one collector bounded by `bounds`,
+/// then solve. `Ok` carries the solution; `Err` carries the index of a variable whose pair denotes
+/// nothing, or `None` for a mismatch.
+fn solve_over(
+    types: &TypeRegistry<'_>,
+    region: &Bump,
+    slots: &[KType],
+    bounds: &[KType],
+    arguments: &[KType],
+) -> Result<Vec<KType>, Option<usize>> {
+    let mut collector = Collector::new(region, bounds);
+    for (slot, argument) in slots.iter().zip(arguments) {
+        if admits_with(
+            types,
+            region,
+            *slot,
+            *argument,
+            Variance::Co,
+            &mut collector,
+        )
+        .is_err()
+        {
+            return Err(None);
+        }
+    }
+    collector
+        .solve(types)
+        .map(|solution| solution.to_vec())
+        .map_err(|failure| match failure {
+            UnifyFailure::Disagree { index, .. } => Some(index),
+            UnifyFailure::Mismatch => None,
+        })
+}
+
 #[test]
 fn a_single_occurrence_takes_its_bound_or_never() {
     let symbols = SymbolInterner::new();

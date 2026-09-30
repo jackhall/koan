@@ -3,17 +3,17 @@
 //!
 //! Instead of binding a variable to the first argument it meets, the walk records **every**
 //! argument type that reaches the variable as a lower contribution (covariant position) or an
-//! upper one (contravariant). [`Collector::solve`] then takes, per variable, the maximum of the
-//! lower contributions, else the minimum of the upper ones, else the declared bound. A contribution
-//! set with no maximum is a failure, not a join: the solver never mints a union nobody wrote, and
+//! upper one (contravariant). [`Collector::solve`] bounds each variable by a pair — below by the
+//! join of its lower contributions, above by the meet of its upper ones and its bound — and binds
+//! the pair's least instance. A solve fails only where the set the pair denotes is empty, and
 //! admission cannot depend on the order the slots are read.
 //!
-//! So `(f _ :Elt _ :Elt)` admits `(1, 2)` with `Elt = Number` and `(1, (1 | "x"))` with
-//! `Elt = (Number | Str)`, and rejects `(1, "x")`. A caller who wants mixed arguments writes the
-//! union in the slot type or in the bound.
+//! So `(f _ :Elt _ :Elt)` admits `(1, 2)` with `Elt = Number` and `(1, "x")` with
+//! `Elt = (Number | Str)`. A head that wants one type across slots puts them in separate
+//! [priority classes](super::ranking).
 //!
-//! A construction collects through [`Collector::least`], whose unreached variables solve to `Never`
-//! rather than their bound: a family is covariant in its parameters, so its least instance is the
+//! A construction collects through [`Collector::least`], whose unreached variables are bounded by
+//! `Never` rather than their declared bound: a family is covariant in its parameters, so its least instance is the
 //! one the payload asks for.
 //!
 //! [`intervals`] reads a solve over static types as an [`Interval`] per variable: where every
@@ -22,36 +22,22 @@
 use crate::memory::{BumpAllocator, BumpVec};
 
 use super::handle::KType;
+use super::lattice::{join_iter, meet};
 use super::node::TypeNode;
-use super::order::{dominant, is_subtype_of};
+use super::order::is_subtype_of;
 use super::registry::TypeRegistry;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 use super::walk::unary::{LEAF, Visit, visit_in};
 
-/// Why a carried type does not fill a declared position. A contribution set rides as a slice of
-/// the collector that held it.
+/// Why a carried type does not fill a declared position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnifyFailure<'c> {
+pub enum UnifyFailure {
     /// The two types disagree structurally, or a leaf position is not satisfied — the ordinary type
     /// mismatch.
     Mismatch,
-    /// The lower contributions to a variable have no maximum among them. Since [`join`] is
-    /// subsumption-or-union, "no maximum" and "the join is a union none of them wrote" are the same
-    /// condition.
-    ///
-    /// [`join`]: super::lattice::join
-    NoMaximum {
-        index: usize,
-        contributions: &'c [KType],
-    },
-    /// The upper contributions to a variable have no minimum among them — the dual, which is what
-    /// forbids an anonymous record or function.
-    NoMinimum {
-        index: usize,
-        contributions: &'c [KType],
-    },
-    /// A variable's lower solution does not lie under its upper one.
+    /// A variable's lower end — the join of its lower contributions — lies above `upper`, one of its
+    /// upper contributions or its bound: the set its pair denotes is empty.
     Disagree {
         index: usize,
         lower: KType,
@@ -210,7 +196,7 @@ impl<'s> Collector<'s> {
     /// One empty cell per quantifier, each bounded by [`KType::NEVER`] until a contribution reaches
     /// it — what a construction collects a payload into. A family is covariant in its parameters,
     /// so its least instance is the one the payload asks for, and a parameter the payload never
-    /// reaches solves to `Never`.
+    /// reaches is bounded by `Never`.
     pub fn least(scratch: BumpAllocator<'s>, arity: usize) -> Self {
         Self::over(scratch, std::iter::repeat_n(KType::NEVER, arity))
     }
@@ -306,87 +292,45 @@ impl<'s> Collector<'s> {
         self.bounds.get(index).copied().unwrap_or(KType::ANY)
     }
 
-    /// The solution, in canonical quantifier order: per variable the maximum of its lower
-    /// contributions, else the minimum of its upper ones, else its declared bound — checked to lie
-    /// under both the upper side and the bound. Built in the collector's own scratch.
-    ///
-    /// Every solution is a contribution or a bound. Nothing here builds a type.
-    pub fn solve(&self, types: &TypeRegistry<'_>) -> Result<BumpVec<'s, KType>, UnifyFailure<'_>> {
+    /// The solution, in canonical quantifier order: per variable the least instance of its pair —
+    /// the join of its lower contributions where any reached it, else the meet of its upper ones
+    /// and its bound. The join must lie under each upper contribution and the bound, or the set the
+    /// pair denotes is empty. Built in the collector's own scratch.
+    pub fn solve(&self, types: &TypeRegistry<'_>) -> Result<BumpVec<'s, KType>, UnifyFailure> {
         let scratch = self.scratch;
         let mut solution = BumpVec::with_capacity_in(self.bounds.len(), scratch);
         for index in 0..self.bounds.len() {
             let bound = self.bounds[index];
-            let lower = extremum(types, scratch, &self.lower[index], Bound::Maximum).ok_or(
-                UnifyFailure::NoMaximum {
-                    index,
-                    contributions: &self.lower[index],
-                },
-            )?;
-            let upper = extremum(types, scratch, &self.upper[index], Bound::Minimum).ok_or(
-                UnifyFailure::NoMinimum {
-                    index,
-                    contributions: &self.upper[index],
-                },
-            )?;
-            if let (Some(lower), Some(upper)) = (lower, upper)
-                && !is_subtype_of(types, scratch, lower, upper)
-            {
-                return Err(UnifyFailure::Disagree {
-                    index,
-                    lower,
-                    upper,
-                });
-            }
-            let solved = lower.or(upper).unwrap_or(bound);
-            if !is_subtype_of(types, scratch, solved, bound) {
-                return Err(UnifyFailure::Mismatch);
-            }
+            let (lower, upper) = (&self.lower[index], &self.upper[index]);
+            let solved = if lower.is_empty() {
+                upper
+                    .iter()
+                    .fold(bound, |met, each| meet(types, scratch, met, *each))
+            } else {
+                let joined = join_iter(types, scratch, lower.iter().copied());
+                // Each ceiling on its own: a meet may land below the greatest lower bound.
+                for ceiling in upper.iter().copied().chain([bound]) {
+                    if !is_subtype_of(types, scratch, joined, ceiling) {
+                        return Err(UnifyFailure::Disagree {
+                            index,
+                            lower: joined,
+                            upper: ceiling,
+                        });
+                    }
+                }
+                joined
+            };
             solution.push(solved);
         }
         Ok(solution)
     }
 }
 
-/// Which end of a contribution set is being taken.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Bound {
-    Maximum,
-    Minimum,
-}
-
-/// The one member of `contributions` every other member lies under (or over). `Ok(None)` for an
-/// empty set, `Err`-worthy `None` when the set has no such member.
-fn extremum(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    contributions: &[KType],
-    end: Bound,
-) -> Option<Option<KType>> {
-    if contributions.is_empty() {
-        return Some(None);
-    }
-    dominant(contributions.len(), |candidate, other| match end {
-        Bound::Maximum => is_subtype_of(
-            types,
-            scratch,
-            contributions[other],
-            contributions[candidate],
-        ),
-        Bound::Minimum => is_subtype_of(
-            types,
-            scratch,
-            contributions[candidate],
-            contributions[other],
-        ),
-    })
-    .map(|found| Some(contributions[found]))
-}
-
 /// Does `carried` fill the position `declared`, and what does it contribute to the variables there?
 ///
 /// A declared type holding no free quantifier answers in one step through the ordinary order, which
 /// is what keeps every unquantified slot off this walk entirely. Admission itself only ever fails
-/// with [`UnifyFailure::Mismatch`]; the contribution-set failures are [`Collector::solve`]'s.
+/// with [`UnifyFailure::Mismatch`]; [`UnifyFailure::Disagree`] is [`Collector::solve`]'s.
 pub fn admits_with(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -394,7 +338,7 @@ pub fn admits_with(
     carried: KType,
     variance: Variance,
     collector: &mut Collector<'_>,
-) -> Result<(), UnifyFailure<'static>> {
+) -> Result<(), UnifyFailure> {
     lockstep(
         types,
         scratch,
@@ -408,10 +352,9 @@ pub fn admits_with(
 /// The declared members of a union in the order they are tried against one carried member: an exact
 /// match first, then the members with nothing to solve, then the rest.
 ///
-/// Binding is the last resort. A member that admits without touching a variable makes the stronger
-/// claim, and trying a free variable first would let it swallow a member that matches exactly —
-/// which is what would make `(Elt | Number)` fail to admit itself, since `Elt` would take the
-/// `Number` contribution and leave the variable with two contributions and no maximum.
+/// Binding is the last resort. A member that admits without touching a variable gives a smaller
+/// least instance: trying a free variable first would let it swallow a member that matches exactly,
+/// so `(Elt | Number)` admitting `Number` would bind `Elt` larger than it needs to be.
 fn most_determined_first<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
@@ -442,7 +385,7 @@ struct Admits<'c, 's> {
     collector: &'c mut Collector<'s>,
 }
 
-type Admission = Result<(), UnifyFailure<'static>>;
+type Admission = Result<(), UnifyFailure>;
 
 impl Admits<'_, '_> {
     /// Whether some member of `declared` admits the one carried type `one`, tried most determined

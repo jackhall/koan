@@ -18,11 +18,11 @@
 //! a slot's side. [`join`] is the least upper bound — the larger operand when the two are ordered,
 //! their canonical union otherwise — and [`meet`] the greatest lower bound. [`admits_with`] walks a
 //! declared type against a carried one and collects what would solve the quantified positions;
-//! [`Collector::solve`] takes a maximum, a minimum, or the bound, and never mints a union nobody
-//! wrote. [`sig_subtype`] and [`meet_schemas`] are the order and the meet over two signature schemas —
-//! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates under one bucket key,
-//! class by class through a shape's priority classes: [`admit_by_class`] is what a keyworded call
-//! admits by, and [`select_by_class`] the elimination a candidate list runs.
+//! [`Collector::solve`] bounds each variable by a pair of ends and binds its least instance.
+//! [`sig_subtype`] and [`meet_schemas`] are the order and the meet over two signature schemas —
+//! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates
+//! under one bucket key, class by class through a shape's priority classes: [`admit_by_class`] is
+//! what a keyworded call admits by, and [`select_by_class`] the elimination a candidate list runs.
 //!
 //! # Storage
 //!

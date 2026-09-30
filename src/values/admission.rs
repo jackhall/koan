@@ -60,7 +60,7 @@ pub enum ConstructionRefused {
         payload: KType,
     },
     /// The payload's type cannot be solved against the family's representation: a structural
-    /// mismatch, or contributions to one parameter with no maximum.
+    /// mismatch, or contributions to one parameter joining outside its bound.
     Unsolved { family: KType, payload: KType },
 }
 

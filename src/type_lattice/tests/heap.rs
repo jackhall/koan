@@ -26,7 +26,7 @@ use crate::type_lattice::sig_relations::{
 use crate::type_lattice::substitute::{
     canonicalize_binder, erase_quantified, substitute_quantified,
 };
-use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
+use crate::type_lattice::unify::{Collector, admits_with};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
@@ -59,6 +59,19 @@ fn interning_and_relations_touch_no_heap() {
         warm(bump);
     }
     let types = TypeRegistry::in_region(region);
+    // What the two pair solves read: an unbounded variable, the union its lower contributions
+    // join to, and a function position it reaches from above with two unrelated arguments.
+    let open = types.quantified(0, KType::ANY);
+    let mixed = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
+    let above = types
+        .function_type(scratch, &[], &[(x, open)], KType::NULL)
+        .handle;
+    let takes = |t: KType| {
+        types
+            .function_type(scratch, &[], &[(x, t)], KType::NULL)
+            .handle
+    };
+    let (takes_number, takes_str) = (takes(KType::NUMBER), takes(KType::STR));
 
     let before = allocation_count();
 
@@ -230,22 +243,24 @@ fn interning_and_relations_touch_no_heap() {
     assert!(least.solve(&types).is_ok());
     let mut split = Collector::new(scratch, &[KType::ANY]);
     for argument in [KType::NUMBER, KType::STR] {
+        assert!(admits_with(&types, scratch, open, argument, Variance::Co, &mut split).is_ok());
+    }
+    assert!(split.solve(&types).is_ok_and(|s| s.as_slice() == [mixed]));
+    let mut from_above = Collector::new(scratch, &[KType::ANY]);
+    for argument in [takes_number, takes_str] {
         assert!(
             admits_with(
                 &types,
                 scratch,
-                variable,
+                above,
                 argument,
                 Variance::Co,
-                &mut split
+                &mut from_above
             )
             .is_ok()
         );
     }
-    assert!(matches!(
-        split.solve(&types),
-        Err(UnifyFailure::NoMaximum { index: 0, .. })
-    ));
+    assert!(from_above.solve(&types).is_ok());
 
     let read = |kt: KType| match types.node(kt) {
         TypeNode::Signature { schema, .. } => schema,
