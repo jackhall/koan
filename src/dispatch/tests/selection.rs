@@ -40,13 +40,20 @@ fn a_class_that_orders_neither_candidate_passes_both_to_the_next() {
 fn a_keyworded_call_solves_a_group_class_by_class_and_a_call_by_name_jointly() {
     let pair = "EXPR FOR ALL #[Elt] #(PAIR x :(LIST OF Elt) WITH y :(LIST OF Elt)) -> Str = \
                 #(\"paired\")\n";
+    let mixed = "EXPR #(MIXED) -> Any = #([1, \"x\"])\n";
     assert_eq!(
         run(&format!(
-            "{pair}PRINT (PAIR [1, \"x\"] WITH [1])\nPRINT (PAIR [1] WITH [1, \"x\"])"
+            "{pair}{mixed}PRINT (PAIR [1, \"x\"] WITH [1])\nPRINT (PAIR [1] WITH (MIXED))"
         )),
         "paired\nerror: no overload of PAIR _ WITH _ admits \
          (:(LIST OF Number), :(LIST OF :(Number | Str)))",
         "the first class fixes `Elt`, and the second must lie under it"
+    );
+    assert_eq!(
+        run(&format!("{pair}PRINT (PAIR [1] WITH [1, \"x\"])")),
+        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits \
+         (:(LIST OF Number), :(LIST OF :(Number | Str)))",
+        "an exact second argument above `Elt`'s solution refuses the load"
     );
     assert_eq!(
         run(&format!(

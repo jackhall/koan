@@ -771,12 +771,13 @@ proptest! {
     }
 }
 
-/// What one case draws: per slot, where its static type comes from and whether it is exact; the
+/// What one case draws: per slot, where its static type comes from and its mode (within it,
+/// exactly it, or bounded below); the
 /// argument pool and the types a carried argument is met with; and per lexical level, the type the
 /// run binds it to.
 #[derive(Clone, Debug)]
 struct Draw {
-    picks: Vec<(u8, bool)>,
+    picks: Vec<(u8, u8)>,
     pool: Vec<KType>,
     drawn: Vec<KType>,
     instances: Vec<u8>,
@@ -787,7 +788,7 @@ struct Draw {
 fn draw() -> impl Strategy<Value = Draw> {
     let source = prop_oneof![3 => Just(0u8), 1 => Just(1u8), 1 => Just(2u8)];
     (
-        prop::collection::vec((source, any::<bool>()), 4),
+        prop::collection::vec((source, 0u8..3), 4),
         arb_arguments(world(), 4),
         arb_arguments(world(), 4),
         prop::collection::vec(0u8..3, 2),
@@ -817,9 +818,11 @@ fn instance(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType, dra
 
 /// Static arguments for `a`, one per slot, beside carried arguments within them. Slot `k`'s static
 /// type is drawn by `draw.picks[k]` from `a`'s own slot with its group erased, from one of `b`'s so
-/// erased, or from the argument pool, and is exact where the pick says; its carried type is the
-/// static type as the run carries it where exact, else that met with a drawn type. `None` where
-/// some argument is `Never`.
+/// erased, or from the argument pool. Its mode is the pick's second element: `1` is exactly the
+/// static type, carried as the run carries it; `2`, where the static type holds no rigid variable
+/// and meets a drawn type above `Never`, is bounded below by that meet, which it carries; anything
+/// else is within the static type, carrying it met with a drawn type. `None` where some argument is
+/// `Never`.
 fn static_and_carried(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -831,20 +834,27 @@ fn static_and_carried(
     let other: Vec<KType> = shape_slots(erase_quantified(types, scratch, b), types).collect();
     let mut arguments = Vec::with_capacity(own.len());
     let mut carried = Vec::with_capacity(own.len());
-    for (k, (source, exact)) in draw.picks.iter().take(own.len()).enumerate() {
+    for (k, (source, mode)) in draw.picks.iter().take(own.len()).enumerate() {
         let static_type = match source {
             0 => own[k],
             1 if !other.is_empty() => other[k % other.len()],
             _ => draw.pool[k],
         };
         let run = instance(types, scratch, static_type, draw);
-        let (argument, one) = if *exact {
-            (Interval::point(static_type), run)
-        } else {
-            (
+        let below = meet(types, scratch, static_type, draw.drawn[k]);
+        let (argument, one) = match mode {
+            1 => (Interval::point(static_type), run),
+            2 if !types.contains_rigid(static_type) && below != KType::NEVER => (
+                Interval {
+                    lower: below,
+                    upper: static_type,
+                },
+                below,
+            ),
+            _ => (
                 Interval::within(static_type),
                 meet(types, scratch, run, draw.drawn[k]),
-            )
+            ),
         };
         if argument.upper == KType::NEVER || one == KType::NEVER {
             return None;

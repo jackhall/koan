@@ -214,7 +214,8 @@ pub fn admit_by_class<'s>(
 /// What the load knows of a candidate against arguments of known static types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// Some slot meets its argument's upper end at `Never`: no call admits.
+    /// Some slot, read at its greatest instance, meets its argument's upper end at `Never` or does
+    /// not lie above its lower end: no call admits.
     Never,
     /// Every call admits, whatever it carries within the static types.
     Always,
@@ -234,7 +235,8 @@ pub struct Judged<'s> {
 /// classes. No argument's upper end is `Never`.
 ///
 /// A class is *never* where some slot, read at its greatest instance, meets its argument's upper
-/// end at `Never`. It admits every call when each slot does: a slot naming its own class's
+/// end at `Never` or does not lie above its lower end, read below its rigid variables: the carried
+/// type lies above that lower end, so the slot admits no call. It admits every call when each slot does: a slot naming its own class's
 /// variables where the class is exact — those arguments exact and free of rigid variables, the
 /// earlier variables they name pinned — so the static solve is the call's; a slot whose least
 /// instance, earlier variables read at theirs, lies above its argument's upper end; or a bare
@@ -285,7 +287,16 @@ pub fn judge_by_class<'s>(
                 },
             );
             let upper = bound_above(types, scratch, arguments[slot].upper);
-            if meet(types, scratch, greatest, upper) == KType::NEVER {
+            let lower = read_through(
+                types,
+                scratch,
+                arguments[slot].lower,
+                Side::Below,
+                &mut |node| node.rigid_bound().map(Interval::within),
+            );
+            if meet(types, scratch, greatest, upper) == KType::NEVER
+                || !is_subtype_of(types, scratch, lower, greatest)
+            {
                 return Judged {
                     verdict: Verdict::Never,
                     intervals: None,

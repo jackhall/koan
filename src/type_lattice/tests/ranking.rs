@@ -491,3 +491,55 @@ fn a_lexical_slot_admits_what_lies_under_it() {
         Verdict::Maybe
     );
 }
+
+/// A slot, read at its greatest instance, that does not lie above its argument's lower end admits
+/// no call: the carried type lies above that end. The lower end is read below its rigid variables.
+#[test]
+fn a_slot_above_no_type_an_argument_can_carry_is_never() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let field = |text: &str| BinderSymbol::declared(text, &world.symbols).expect("a bindable token");
+    let record = |fields: &[(BinderSymbol, KType)]| world.types.record(world.region, fields);
+    let (numbers, anys) = (world.types.list(KType::NUMBER), world.types.list(KType::ANY));
+
+    let which = world.head(&[], &[Kw("WHICH"), Slot(numbers)], &[]);
+    let verdict = |argument: Interval| world.judge(which, &[argument]).0;
+    assert_eq!(verdict(Interval::point(anys)), Verdict::Never);
+    assert_eq!(verdict(Interval::within(anys)), Verdict::Maybe);
+    assert_eq!(verdict(Interval::point(numbers)), Verdict::Always);
+
+    let elements = world.types.list(world.var(0));
+    let pair = world.head(
+        &["Elt"],
+        &[Kw("PAIR"), Slot(elements), Kw("WITH"), Slot(elements)],
+        &[],
+    );
+    for first in [Interval::point(numbers), Interval::within(numbers)] {
+        assert_eq!(
+            world.judge(pair, &[first, Interval::point(anys)]).0,
+            Verdict::Never,
+            "`y` is read at `Elt`'s greatest instance, `LIST OF Number`"
+        );
+    }
+
+    let (a, b) = (field("a"), field("b"));
+    let elt = world.types.lexical(0, world.name("Elt"), KType::NUMBER);
+    let strs = world.head(&[], &[Kw("STRS"), Slot(world.types.list(KType::STR))], &[]);
+    let needs_b = world.head(&[], &[Kw("GET"), Slot(record(&[(b, KType::NUMBER)]))], &[]);
+    let has_a = world.head(&[], &[Kw("GET"), Slot(record(&[(a, KType::NUMBER)]))], &[]);
+    assert_eq!(
+        world.judge(strs, &[Interval::point(world.types.list(elt))]).0,
+        Verdict::Maybe,
+        "the lower end read below `Elt` is `LIST OF Never`"
+    );
+    assert_eq!(
+        world.judge(needs_b, &[Interval::point(record(&[(a, elt)]))]).0,
+        Verdict::Never
+    );
+    let bounded_below = Interval {
+        lower: record(&[(a, KType::NEVER)]),
+        upper: record(&[(a, KType::ANY)]),
+    };
+    assert_eq!(world.judge(needs_b, &[bounded_below]).0, Verdict::Never);
+    assert_eq!(world.judge(has_a, &[bounded_below]).0, Verdict::Maybe);
+}

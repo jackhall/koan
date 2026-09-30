@@ -119,7 +119,7 @@ fn a_backslash_group_takes_its_key_from_the_eval_that_runs_it() {
     );
     assert_eq!(
         run(&format!("{run_it}PRINT (RUN #(\\(WAVE \"bob\")))")),
-        "error: no overload of RUN _ admits (:(Expression NEEDING #[(WAVE _)]))",
+        "load: <test>:5:7: no overload of `RUN _` admits (:(Expression NEEDING #[(WAVE _)]))",
         "a parameter admits a quote whose needed keys its list covers"
     );
 }
