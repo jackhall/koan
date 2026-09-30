@@ -8,10 +8,10 @@
 //! literal's, a container's, a construction's and a selected candidate's own type flow up. A
 //! parameter or an ascription is exactly its type where the retype makes it so — a list, dict or
 //! record type or a nominal one — since the run retypes the value to it, and at most its type
-//! otherwise. What the load cannot bound is
-//! `[Never, Any]`. A static type may hold the lexical variables of its **chain** — the shapes from
-//! the program or a quote's code down, numbered as the type channel numbers them — and a crossing
-//! into code, or an `EVAL` leaving it, is read through [`bound_above`], so no variable leaks across.
+//! otherwise. What the load cannot bound is `[Never, Any]`. A static type may hold the lexical
+//! variables of its **chain** — the shapes from the program or a quote's code down, numbered as the
+//! type channel numbers them — and a crossing into code, or an `EVAL` leaving it, is read through
+//! [`bound_above`], so no variable leaks across.
 //!
 //! Each keyworded use **judges** each candidate class by class ([`judge_by_class`]): *never*
 //! drops it, *always* means it admits whatever the run carries, and a *maybe* one the call admits.
@@ -21,8 +21,9 @@
 //! the certain ambiguity. A quantified candidate's return is read through its group's intervals.
 //! A call whose callee and solve the load knows exactly — a selected candidate, or a call by name
 //! of an exact callee — is exactly the return its frame retypes to; a call in tail position never
-//! finishes, and is typed as any other. An `EVAL` of code the load traces to a written quote returns that code's last statement's
-//! type. A callable body whose static type meets its declared return at `Never` refuses the load
+//! finishes, and is typed as any other. An `EVAL` of code the load traces to a written quote is at
+//! most that code's last statement's type, and `FROM` at most the projection of its record. A
+//! callable body whose static type meets its declared return at `Never` refuses the load
 //! too, as does an ascription whose operand's static type meets its type at `Never`; one whose
 //! operand's static upper end lies under its type is **settled**, and the run checks nothing. What
 //! the pass fixes rests in each shape's write-once [`Statics`] cell, which
@@ -448,9 +449,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         })
     }
 
-    /// `<value> :! <Type>`: its type, exactly where that is a list, dict or record type. Where the
-    /// operand's static upper end lies under the type the ascription is settled, and the run checks
-    /// nothing; where the two meet at `Never` the load is refused.
+    /// `<value> :! <Type>`: its type, exactly where the retype makes it so ([`retyped_to`]). Where
+    /// the operand's static upper end lies under the type the ascription is settled, and the run
+    /// checks nothing; where the two meet at `Never` the load is refused.
     fn ascribe(
         &mut self,
         level: usize,
@@ -959,9 +960,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let native = self
             .builtin(judgement.candidate)
             .map(|builtin| Native::of(builtin.id()));
-        if native == Some(Native::Project)
-            && let Some(record) = arguments.get(1)
-        {
+        if native == Some(Native::Project) {
+            let record = arguments.get(1).expect("`FROM` takes a record second");
             return (self.projected(operand, record.upper), false);
         }
         let evaluates = native == Some(Native::Eval);

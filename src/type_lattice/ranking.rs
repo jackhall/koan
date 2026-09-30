@@ -236,12 +236,12 @@ pub struct Judged<'s> {
 ///
 /// A class is *never* where some slot, read at its greatest instance, meets its argument's upper
 /// end at `Never` or does not lie above its lower end, read below its rigid variables: the carried
-/// type lies above that lower end, so the slot admits no call. It admits every call when each slot does: a slot naming its own class's
-/// variables where the class is exact — those arguments exact and free of rigid variables, the
-/// earlier variables they name pinned — so the static solve is the call's; a slot whose least
-/// instance, earlier variables read at theirs, lies above its argument's upper end; or a bare
-/// variable of the class that no other slot of the class names, whose one contribution lies under
-/// its bound.
+/// type lies above that lower end, so the slot admits no call. It admits every call when each slot
+/// does: a slot naming its own class's variables where the class is exact — those arguments exact
+/// and free of rigid variables, the earlier variables they name pinned — so the static solve is
+/// the call's; a slot whose least instance, earlier variables read at theirs, lies above its
+/// argument's upper end; or a bare variable of the class that no other slot of the class names,
+/// whose one contribution lies under its bound.
 pub fn judge_by_class<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,

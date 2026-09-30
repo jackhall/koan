@@ -94,6 +94,14 @@ overload ranks its slots in written order.
   to the fields it names. `EVAL` runs code (below), and `USING` fills a code's
   holes through the [`USING` door](../knot/README.md#a-quote).
 
+**A native is never retyped.** No builtin declares a return the
+[retype](../values/README.md#the-type-memo-and-satisfies) makes exact — a list,
+dict or record type or a nominal one — so a selected builtin's call is exact
+at its return only where that return is exact already, and the run pays no
+retype for it. `FROM`, which declares `:{}`, is the exception: the load
+computes its return, at most the [projection](#static-types) of its record. A
+test over the table pins the rule and its one exception.
+
 **A shadowable builtin is derived, not listed.** A builtin whose operands are
 all `Any` — `==` and `PRINT` — admits every argument, so any user overload
 narrower than `Any` beats it at the first class, and is selected in its place for
@@ -172,24 +180,36 @@ fixed:
   value they denote; a list, dict or record literal has the ends its parts' ends
   build, and a construction the ends its payload's build;
 - a name has its binder's static type: a parameter is exactly its declared type
-  where that is a list, dict or record type, since its frame
+  where the retype makes it so — a list, dict or record type, a family or its
+  application, a newtype or a union's variant — since its frame
   [retypes](../program/README.md#the-body-runner) the argument to it, and at
-  most its declared type otherwise; a local has its right-hand side's, a
+  most its declared type otherwise, a union keeping each variant's own type; a
+  local has its right-hand side's, a
   registration is exactly its function type, and a type name its type value's; a block's `it`, an arm's `it`, a name a
   `USING` surfaces and a quote's hole are at most `Any`;
 - a block has its last statement's type, and a bucket declaration is `Null`;
-- an ascription `e :! T` is, like a parameter, exactly `T` where `T` is a list,
-  dict or record type and at most `T` otherwise; a nominal `T` stays at most
-  itself though the run retypes to it. An operand whose static type is `Never`
+- an ascription `e :! T` is, like a parameter, exactly `T` where the retype
+  makes it so and at most `T` otherwise. An operand whose static type is `Never`
   never arrives, and the ascription is `Never`; a type the load leaves unknown
   makes it at most `Any`;
-- a keyworded call is at most its selected candidate's return, or the join of
-  every kept candidate's — `Any` where one of them is a candidate the load
-  cannot read: a spread, a hole, a registration of unknown shape;
+- a keyworded call is its selected candidate's return — exactly that return
+  where the retype makes it so and the group is unquantified or solved to
+  points, since the frame retypes its value to it, and at most it otherwise —
+  or at most the join of every kept candidate's return: `Any` where one of them
+  is a candidate the load cannot read, a spread, a hole or a registration of
+  unknown shape;
 - an application is the identity its construction builds when its head is a
-  type the load knows, and at most its callee's return when the head is a
-  function; a union variant construction and `ATTR` over a record are at most
-  `Any`;
+  type the load knows, and its callee's return when the head is a function —
+  exact by the same rule where the callee's static type is exact, and at most
+  that return otherwise, since a parameter of function type may bind a function
+  declaring a smaller return, and no function is retyped; a union variant
+  construction and `ATTR` over a record are at most `Any`;
+- a call in tail position is typed as any other call: its node never finishes,
+  since the frame it tails into returns at the enclosing contract, so no
+  carried type is read against it;
+- `FROM` over a written field list and an argument at most a record type holding
+  each field is at most the record of those fields at their types there, and
+  at most `:{}` otherwise;
 - an `EVAL` of code the load traces to a written quote — its operand, or a name
   `LET` binds to one — is at most the code's last statement's upper end as the
   code runs there, read through
@@ -237,7 +257,10 @@ own, so a static type crossing into it, a `$` name's, or leaving it, an
 **Verdicts.** Each keyworded use gives each candidate one of three, as
 [`judge_by_class`](../type_lattice/README.md#priority-classes) judges it:
 
-- *never* — some slot meets its argument's upper end at `Never`;
+- *never* — some slot meets its argument's upper end at `Never`, or does not
+  lie above its argument's lower end, since the carried type lies above that
+  end: beside `EXPR #(WHICH x :(LIST OF Number))`, `WHICH x` over a parameter
+  `x :(LIST OF Any)` is *never*;
 - *always* — every class admits whatever the call carries within its
   arguments' static types: a slot that is a variable of its own class alone
   admits under the variable's bound, and a class whose arguments naming its own
@@ -440,8 +463,11 @@ unmarked uses, `USING` fills, both marks and `NEEDING` keys;
 value, a cyclic value, a miss and a module operand at run, a declared parameter
 retyping by keyword and by name with the solution substituted, a tail chain
 returning at the outermost contract, and at load an ascription's and a
-container parameter's exact type, a settled ascription, a refused one, and a
-generic use over an exact parameter selected; and
+container or nominal parameter's exact type, a union's kept at most, a settled
+ascription, a refused one, a generic use over an exact parameter selected, a
+candidate *never* over an argument's lower end, a call exact at its callee's
+return — by keyword, by name, in tail position — and one the load cannot solve
+exactly, `FROM`'s projection, and the builtin table's returns; and
 [tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
 which is on the [Miri slate](../../observe/miri_slate.md). Every runnable
 tutorial snippet is checked against its shown output by
@@ -459,9 +485,9 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
-- [Exact types from the retype](../../roadmap/gradual-typing/exact-retyped-types.md)
-  — a call exact at its return, a candidate *never* over an exact argument it
-  does not admit, and an ascription exact at a nominal type.
+- [An exact projection](../../roadmap/gradual-typing/exact-projection.md) —
+  `FROM` retyping its result, so the load types it exactly and the builtin
+  table's test exempts nothing.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

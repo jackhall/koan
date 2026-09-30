@@ -59,7 +59,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
-- [Exact types from the retype](gradual-typing/exact-retyped-types.md)
+- [An exact projection](gradual-typing/exact-projection.md)
 - [Solving to the least instance](gradual-typing/least-instance-solving.md)
 - [Solving dropped type parameters](gradual-typing/solving-dropped-type-parameters.md)
 - [Calls solved from their static types](gradual-typing/static-solutions.md)

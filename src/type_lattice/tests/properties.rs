@@ -772,9 +772,8 @@ proptest! {
 }
 
 /// What one case draws: per slot, where its static type comes from and its mode (within it,
-/// exactly it, or bounded below); the
-/// argument pool and the types a carried argument is met with; and per lexical level, the type the
-/// run binds it to.
+/// exactly it, or bounded below); the argument pool and the types a carried argument is met with;
+/// and per lexical level, the type the run binds it to.
 #[derive(Clone, Debug)]
 struct Draw {
     picks: Vec<(u8, u8)>,

@@ -289,7 +289,9 @@ candidate shape a verdict against arguments of known static types, each an
 interval, class by class, beside each variable's interval:
 
 - *never* — some slot, each variable an earlier class solved read at its
-  greatest instance, meets its argument's upper end at `Never`;
+  greatest instance, meets its argument's upper end at `Never`, or does not lie
+  above its argument's lower end read below its rigid variables: every type a
+  call carries lies above that end, so the slot admits none;
 - *always* — every class admits whatever a call carries within the arguments'
   intervals: a slot naming no variable of its own class admits its argument's
   upper end with each earlier variable at its least instance; a slot that is a
