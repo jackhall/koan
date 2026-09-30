@@ -32,10 +32,12 @@ use crate::type_lattice::substitute::{
 };
 use crate::type_lattice::unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 use crate::type_lattice::walk::Variance;
-use crate::type_lattice::walk::unary::{LEAF, Visit, visit};
+use crate::type_lattice::walk::unary::{Descent, LEAF, Step, Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
-use super::generators::{World, arb_arguments, arb_function_type, arb_shape_type, arb_type};
+use super::generators::{
+    World, arb_arguments, arb_function_type, arb_instance_chain, arb_shape_type, arb_type,
+};
 
 thread_local! {
     /// One live registry and one alphabet per test thread — proptest runs each `#[test]` on its
@@ -73,6 +75,29 @@ fn function() -> BoxedStrategy<KType> {
     arb_function_type(world(), 3)
 }
 
+/// Whether `kt` holds a quantified binder anywhere, a signature's members included. The laws stated
+/// by handle skip such a draw: two binders can admit each other without being one handle
+/// (README § Concrete types and binders).
+fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> bool {
+    let descent = Descent {
+        signature: Step::Through,
+        set_member: Step::Leaf,
+    };
+    visit(types, scratch, kt, descent, &mut |_, node, _| {
+        if node.binds_quantifiers() {
+            Visit::Stop
+        } else {
+            Visit::Descend
+        }
+    })
+}
+
+/// Whether `a` and `b` lie below each other — one handle over concrete types, and possibly two
+/// over binders.
+fn equivalent(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> bool {
+    is_subtype_of(types, scratch, a, b) && is_subtype_of(types, scratch, b, a)
+}
+
 /// The binary laws take the whole of whatever depth the tier asks for: the space two generated
 /// types range over is the widest any law here draws from, and a thin sweep of it proves little.
 fn binary() -> ProptestConfig {
@@ -96,15 +121,33 @@ fn ternary() -> ProptestConfig {
 proptest! {
     #![proptest_config(binary())]
 
+    /// By handle over binder-free types; [`join_and_meet_commute_up_to_equivalence`] covers the
+    /// rest.
     #[test]
     fn join_and_meet_are_commutative_and_idempotent(a in one(), b in one()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
+        if holds_binder(&types, scratch, a) || holds_binder(&types, scratch, b) {
+            return Ok(());
+        }
         prop_assert_eq!(join(&types, scratch, a, b), join(&types, scratch, b, a));
         prop_assert_eq!(meet(&types, scratch, a, b), meet(&types, scratch, b, a));
         prop_assert_eq!(join(&types, scratch, a, a), a);
         prop_assert_eq!(meet(&types, scratch, a, a), a);
+    }
+
+    #[test]
+    fn join_and_meet_commute_up_to_equivalence(a in one(), b in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let (ab, ba) = (join(&types, scratch, a, b), join(&types, scratch, b, a));
+        prop_assert!(equivalent(&types, scratch, ab, ba), "the joins differ");
+        let (ab, ba) = (meet(&types, scratch, a, b), meet(&types, scratch, b, a));
+        prop_assert!(equivalent(&types, scratch, ab, ba), "the meets differ");
+        prop_assert!(equivalent(&types, scratch, join(&types, scratch, a, a), a));
+        prop_assert!(equivalent(&types, scratch, meet(&types, scratch, a, a), a));
     }
 
     #[test]
@@ -129,11 +172,16 @@ proptest! {
 proptest! {
     #![proptest_config(ternary())]
 
+    /// By handle over binder-free types; [`join_and_meet_associate_up_to_equivalence`] covers the
+    /// rest.
     #[test]
     fn join_and_meet_are_associative(a in small(), b in small(), c in small()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
+        if [a, b, c].into_iter().any(|kt| holds_binder(&types, scratch, kt)) {
+            return Ok(());
+        }
         prop_assert_eq!(
             join(&types, scratch, join(&types, scratch, a, b), c),
             join(&types, scratch, a, join(&types, scratch, b, c))
@@ -142,6 +190,19 @@ proptest! {
             meet(&types, scratch, meet(&types, scratch, a, b), c),
             meet(&types, scratch, a, meet(&types, scratch, b, c))
         );
+    }
+
+    #[test]
+    fn join_and_meet_associate_up_to_equivalence(a in small(), b in small(), c in small()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let left = join(&types, scratch, join(&types, scratch, a, b), c);
+        let right = join(&types, scratch, a, join(&types, scratch, b, c));
+        prop_assert!(equivalent(&types, scratch, left, right), "the joins differ");
+        let left = meet(&types, scratch, meet(&types, scratch, a, b), c);
+        let right = meet(&types, scratch, a, meet(&types, scratch, b, c));
+        prop_assert!(equivalent(&types, scratch, left, right), "the meets differ");
     }
 }
 
@@ -161,11 +222,15 @@ proptest! {
         prop_assert!(!is_more_specific_than(&types, scratch, a, a));
     }
 
+    /// By handle over binder-free types: two binders can admit each other and stay two handles.
     #[test]
     fn the_order_is_antisymmetric(a in one(), b in one()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
+        if holds_binder(&types, scratch, a) || holds_binder(&types, scratch, b) {
+            return Ok(());
+        }
         if is_subtype_of(&types, scratch, a, b) && is_subtype_of(&types, scratch, b, a) {
             prop_assert_eq!(a, b);
         }
@@ -223,6 +288,22 @@ proptest! {
         if is_subtype_of(&types, scratch, a, b) && is_subtype_of(&types, scratch, b, c) {
             prop_assert!(is_subtype_of(&types, scratch, a, c));
         }
+    }
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// The chains [`the_order_is_transitive`] almost never draws: a binder, its instance at a
+    /// least instance, and a type whose two positions take that instance apart.
+    #[test]
+    fn the_order_is_transitive_through_an_instance((a, b, c) in arb_instance_chain(world())) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        prop_assert!(is_subtype_of(&types, scratch, a, b), "the binder lies below its instance");
+        prop_assert!(is_subtype_of(&types, scratch, b, c), "the instance lies below the split");
+        prop_assert!(is_subtype_of(&types, scratch, a, c), "the binder lies below the split");
     }
 }
 

@@ -21,6 +21,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, Va
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
+use crate::type_lattice::lattice::{join, meet};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
 use crate::type_lattice::registry::TypeRegistry;
@@ -304,13 +305,14 @@ fn arb_fields(
 /// occurrence by its bound or by `Never`, so a group whose variables were only sprinkled at random
 /// would almost never survive interning, and the laws about quantified shapes would run over
 /// nothing. Each slot is ranked `_` or by a small integer, so written order and rankings with ties
-/// both occur.
+/// both occur. Both occurrences take one [`planted`] form, so a union argument can pour its
+/// members into one variable through a list or a function's parameter.
 fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy<KType> {
     let grounds = world.grounds();
     (
         1..4usize,
         prop::collection::vec(0..grounds.len(), 0..2),
-        prop::collection::vec((0..4usize, 0..4usize), 0..2),
+        prop::collection::vec((0..4usize, 0..4usize, 0..3u8), 0..2),
     )
         .prop_flat_map(move |(positions, bounds, plantings)| {
             let world = world.clone();
@@ -348,13 +350,15 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
                         slots.push(slot);
                     }
                     for (index, variable) in vars.iter().enumerate() {
-                        let (first, second) = plantings.get(index).copied().unwrap_or((0, 1));
+                        let (first, second, form) =
+                            plantings.get(index).copied().unwrap_or((0, 1, 0));
                         let (first, second) = (first % slots.len(), second % slots.len());
                         if first == second {
                             continue;
                         }
-                        slots[first] = *variable;
-                        slots[second] = *variable;
+                        let planted = planted(&world, *variable, form);
+                        slots[first] = planted;
+                        slots[second] = planted;
                     }
                     let mut run: Vec<DispatchTokenElement> = Vec::new();
                     for (keyword, slot) in keywords.into_iter().zip(slots) {
@@ -383,13 +387,14 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
 /// for the reason [`arb_shape`] plants one at two slots: canonical form replaces a single
 /// occurrence by its bound or by `Never`, so a sprinkled group would almost never survive
-/// interning and the laws about quantified functions would run over nothing.
+/// interning and the laws about quantified functions would run over nothing. Both occurrences
+/// take one [`planted`] form.
 fn arb_function(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy<KType> {
     let grounds = world.grounds();
     (
         1..4usize,
         prop::collection::vec(0..grounds.len(), 0..2),
-        prop::collection::vec((0..4usize, 0..4usize), 0..2),
+        prop::collection::vec((0..4usize, 0..4usize, 0..3u8), 0..2),
     )
         .prop_flat_map(move |(arity, bounds, plantings)| {
             let world = world.clone();
@@ -420,13 +425,14 @@ fn arb_function(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrat
                 let mut positions = drawn;
                 positions.push(ret);
                 for (index, variable) in vars.iter().enumerate() {
-                    let (first, second) = plantings.get(index).copied().unwrap_or((0, 1));
+                    let (first, second, form) = plantings.get(index).copied().unwrap_or((0, 1, 0));
                     let (first, second) = (first % positions.len(), second % positions.len());
                     if first == second {
                         continue;
                     }
-                    positions[first] = *variable;
-                    positions[second] = *variable;
+                    let planted = planted(&world, *variable, form);
+                    positions[first] = planted;
+                    positions[second] = planted;
                 }
                 let ret = positions.pop().expect("the return is the last position");
                 let params: Vec<(BinderSymbol, KType)> =
@@ -440,6 +446,26 @@ fn arb_function(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrat
             })
         })
         .boxed()
+}
+
+/// A planted variable in one of three forms: itself (`form` 0), a list's element (1), or a
+/// function's parameter (2), which reaches the variable from above.
+fn planted(world: &World, variable: KType, form: u8) -> KType {
+    match form {
+        0 => variable,
+        1 => world.types.list(variable),
+        _ => function_of(world, variable),
+    }
+}
+
+/// `FN :{x :parameter} -> Null`.
+fn function_of(world: &World, parameter: KType) -> KType {
+    with_scratch(|scratch| {
+        world
+            .types
+            .function_type(scratch, &[], &[(world.binders[0], parameter)], KType::NULL)
+            .handle
+    })
 }
 
 /// An interface with a handful of members of each kind.
@@ -619,8 +645,103 @@ pub fn arb_arguments(world: World, arity: usize) -> impl Strategy<Value = Vec<KT
         pool.push(with_scratch(|scratch| {
             world.types.union_of(scratch, &[KType::NUMBER, KType::STR])
         }));
+        // Unions whose members pour into one planted variable, through a list or a parameter.
+        let lists = [
+            world.types.list(KType::NUMBER),
+            world.types.list(KType::STR),
+        ];
+        pool.push(with_scratch(|scratch| {
+            world.types.union_of(scratch, &lists)
+        }));
+        let functions = [
+            function_of(&world, KType::NUMBER),
+            function_of(&world, KType::STR),
+        ];
+        pool.push(with_scratch(|scratch| {
+            world.types.union_of(scratch, &functions)
+        }));
         pool
     };
     prop::collection::vec(0..pool.len(), arity)
         .prop_map(move |picks| picks.into_iter().map(|index| pool[index]).collect())
+}
+
+/// A chain `a ≤ b ≤ c` through an instance, which [`arb_type`]'s draws almost never line up: `a` is
+/// a binder over one variable at two positions, `b` its instance at the least instance `c`'s two
+/// positions give that variable, and `c` puts two ground types at those positions.
+///
+/// The binder is a function, or a shape with both slots in one class. A position is the variable
+/// itself — two ground types join into it — or `FN :{x :_} -> Null` over it, where they meet. An
+/// optional filler position holds one generated type in all three.
+pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> {
+    let pool = {
+        let mut pool = world.grounds();
+        pool.push(KType::BOOL);
+        pool.push(world.types.list(KType::NUMBER));
+        pool.push(world.types.list(KType::STR));
+        pool
+    };
+    let filler = prop::option::of(arb_type(world.clone(), 1));
+    (
+        any::<bool>(),
+        0..pool.len(),
+        0..pool.len(),
+        any::<bool>(),
+        filler,
+    )
+        .prop_map(move |(shape, g1, g2, wrapped, filler)| {
+            let (g1, g2) = (pool[g1], pool[g2]);
+            let position = |kt| if wrapped { function_of(&world, kt) } else { kt };
+            let variable = world.types.quantified(0, KType::ANY);
+            let instance = with_scratch(|scratch| {
+                if wrapped {
+                    meet(&world.types, scratch, g1, g2)
+                } else {
+                    join(&world.types, scratch, g1, g2)
+                }
+            });
+            let build = |quantifiers: &[TypeSymbol], first: KType, second: KType| {
+                with_scratch(|scratch| {
+                    if shape {
+                        let (pure, wrap) = (world.keywords[0], world.keywords[1]);
+                        let mut run = vec![
+                            DispatchTokenElement::Keyword(pure),
+                            DispatchTokenElement::Slot(first),
+                            DispatchTokenElement::Keyword(wrap),
+                            DispatchTokenElement::Slot(second),
+                        ];
+                        if let Some(filler) = filler {
+                            run.push(DispatchTokenElement::Keyword(pure));
+                            run.push(DispatchTokenElement::Slot(filler));
+                        }
+                        let slots = run.len() / 2;
+                        let ranks = vec![RawRank::Numbered(1); slots];
+                        let classes = dense_classes(scratch, &ranks);
+                        world
+                            .types
+                            .shape_type(scratch, quantifiers, &run, classes, KType::NULL)
+                            .handle
+                    } else {
+                        let mut params =
+                            vec![(world.binders[1], first), (world.binders[2], second)];
+                        if let Some(filler) = filler {
+                            params.push((world.binders[0], filler));
+                        }
+                        world
+                            .types
+                            .function_type(scratch, quantifiers, &params, KType::NULL)
+                            .handle
+                    }
+                })
+            };
+            let a = build(
+                &world.type_names[..1],
+                position(variable),
+                position(variable),
+            );
+            let b = build(&[], position(instance), position(instance));
+            let c = build(&[], position(g1), position(g2));
+            (a, b, c)
+        })
+        .boxed()
 }
