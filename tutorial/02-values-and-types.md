@@ -80,9 +80,9 @@ the type no value ever has. That is what makes `[]` fit *any* list: `LET xs = []
 binds, a standalone `[]` is fine, and `[]` can be passed to a function whose
 parameter is typed `:(LIST OF Number)`, because a list of nothing is a list of
 numbers as far as the type is concerned. Once you've met
-[functions](04-functions.md) and [type ascription](#naming-types) below, you can
-still pin an empty collection to a specific type through the position it appears
-in. (Braces are different: a bare `{}` is the empty *record*, not an empty
+[functions](04-functions.md) and [type ascription](#ascribing-a-type-with-) below,
+you can still pin an empty collection to a specific type:
+`[] :! (LIST OF Number)` is an empty list of numbers. (Braces are different: a bare `{}` is the empty *record*, not an empty
 dictionary.)
 
 ## Comparing values with `==` and `!=`
@@ -210,5 +210,46 @@ print it, or compare it. But only a type name stands where a type goes, so
 
 This is the foundation the [module system](11-modules.md) builds on, where
 signatures describe types abstractly and modules supply them.
+
+## Ascribing a type with `:!`
+
+A value's type comes from its contents: `[1, 2]` is a `:(LIST OF Number)`.
+`<value> :! <Type>` checks a value against a type and gives back the same value
+viewed at that type, so whatever uses it next sees the type you wrote rather
+than the contents' extra precision. [Overloading](04-functions.md#overloading-by-specificity)
+shows the difference:
+
+```koan
+EXPR #(DESCRIBE xs :(LIST OF Number)) -> Str = #("numbers")
+EXPR #(DESCRIBE xs :(LIST OF Any)) -> Str = #("anything")
+PRINT (DESCRIBE [1, 2])
+PRINT (DESCRIBE ([1, 2] :! (LIST OF Any)))
+```
+
+```text
+numbers
+anything
+```
+
+The type on the right is written as in any type position: a type name, a
+parenthesized type like `(LIST OF Any)`, or the `:(…)` form. Ascribing a union
+views the value at the member that fits it: after
+`LET Maybe = :((LIST OF Any) | Null)`, `[1, 2] :! Maybe` is a
+`:(LIST OF Any)`. A type with no list member — `Any` itself — leaves a list's
+type as it was.
+
+A value that does not satisfy the type is an error. Where koan can tell before
+running that it never could, it refuses the program when it loads:
+
+```koan
+PRINT ("s" :! Number)
+```
+
+```text
+error: <input>:1:7: this value is Str, which can never satisfy its ascription Number
+```
+
+`:!` over a [module](11-modules.md#ascription) checks the module against a
+signature instead.
 
 Next: [Names, binding, and dispatch](03-names-and-dispatch.md).

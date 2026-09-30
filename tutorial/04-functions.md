@@ -162,6 +162,30 @@ something else
 `:(LIST OF Number)` is more specific than `:Any`, so the list routes to the
 first definition and everything else falls through to the second.
 
+### Inside a body, a parameter has its declared type
+
+A parameter's declared type is a contract, like a return type: inside the body
+the argument is viewed at the type the parameter declares, as a
+[`:!` ascription](02-values-and-types.md#ascribing-a-type-with-) views it, so the
+body dispatches on what it declared rather than on what the caller happened to
+pass:
+
+```koan
+EXPR #(DESCRIBE xs :(LIST OF Number)) -> Str = #("numbers")
+EXPR #(DESCRIBE xs :(LIST OF Any)) -> Str = #("anything")
+EXPR #(SHOW xs :(LIST OF Any)) -> Str = #(DESCRIBE xs)
+PRINT (DESCRIBE [1, 2])
+PRINT (SHOW [1, 2])
+```
+
+```text
+numbers
+anything
+```
+
+A returned value is viewed at the declared return type the same way. A
+parameter or return declared `Any` keeps the value's own type.
+
 ## Two kinds of function
 
 Koan has two callables, and they are spelled apart because they are reached in

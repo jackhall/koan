@@ -17,11 +17,13 @@ candidates by the arguments' carried types, and runs the one that wins.
 ## What dispatch runs
 
 Literals, names, containers, record access, construction, functions, keyword
-dispatch, the builtin library, quotes, `EVAL` and `USING` over code, and
-uncaught faults. [Matching](../../roadmap/conditionals/matching.md) owns `MATCH`,
+dispatch, the builtin library, quotes, `EVAL` and `USING` over code, `:!` over
+any value but a module, and uncaught faults.
+[Matching](../../roadmap/conditionals/matching.md) owns `MATCH`,
 [catching errors](#catching) `TRY`, `CATCH` and `Result`, and
 [module programs](../../roadmap/rewrite/modules.md) own the module expression
-shapes; a node dispatch has no reading for is a fault.
+shapes, `:|`, and `:!` over a module; a node dispatch has no reading for is a
+fault.
 
 ## What a node is
 
@@ -43,6 +45,14 @@ never the parse — as one of:
 - a `FN`, born through the [lambda door](../knot/README.md#a-lambda), so a
   callable no binder names is born where it is evaluated, with the captures it
   reads there;
+- an **ascription** `<value> :! <Type>`: the operand, evaluated, checked against
+  the type its type part denotes — read as a type expression leaf's is — unless
+  the load [settled](#static-types) it, and
+  [retyped](../values/README.md#the-type-memo-and-satisfies) to it, so what
+  follows dispatches on the ascribed type: after
+  `LET Loose = :((LIST OF Any) | Null)`, `[1] :! Loose` carries `LIST OF Any`.
+  A value that does not satisfy the type is a fault; a module operand is a fault
+  until [module programs](../../roadmap/rewrite/modules.md) run its view door;
 - a **bucket declaration**, whose value is `null`;
 - a **keyworded call**: a node the shape holds a candidate list for;
 - an **application** `(head argument)`: a construction when the head is a type —
@@ -161,11 +171,18 @@ fixed:
   their own type, their code type, their function type, and the type of the type
   value they denote; a list, dict or record literal has the ends its parts' ends
   build, and a construction the ends its payload's build;
-- a name has its binder's static type: a parameter is at most its declared type,
-  a local has its right-hand side's, a registration is exactly its function
-  type, and a type name its type value's; a block's `it`, an arm's `it`, a name a
+- a name has its binder's static type: a parameter is exactly its declared type
+  where that is a list, dict or record type, since its frame
+  [retypes](../program/README.md#the-body-runner) the argument to it, and at
+  most its declared type otherwise; a local has its right-hand side's, a
+  registration is exactly its function type, and a type name its type value's; a block's `it`, an arm's `it`, a name a
   `USING` surfaces and a quote's hole are at most `Any`;
 - a block has its last statement's type, and a bucket declaration is `Null`;
+- an ascription `e :! T` is, like a parameter, exactly `T` where `T` is a list,
+  dict or record type and at most `T` otherwise; a nominal `T` stays at most
+  itself though the run retypes to it. An operand whose static type is `Never`
+  never arrives, and the ascription is `Never`; a type the load leaves unknown
+  makes it at most `Any`;
 - a keyworded call is at most its selected candidate's return, or the join of
   every kept candidate's — `Any` where one of them is a candidate the load
   cannot read: a spread, a hole, a registration of unknown shape;
@@ -197,7 +214,12 @@ variable's upper end at a covariant position, its lower end at a contravariant
 one. So under `EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)`, `ONLY 1` is
 `Number`. Where every argument whose slot names a variable is exact and holds
 no lexical variable, the solve over the static types is the call's own, and
-each variable is solved to a point. An exact argument over a lexical variable
+each variable is solved to a point. A parameter exact at a container type is
+such an argument: under
+`EXPR FOR ALL #[Elt] #(FLAT rows :(LIST OF (LIST OF Elt))) -> :(LIST OF Elt)`,
+`FLAT rows` over a parameter `rows :(LIST OF (LIST OF (Number | Str)))` is
+selected at load, and solves `Elt` to `Number | Str` whatever the argument's
+contents. An exact argument over a lexical variable
 is no such solve: the load solves through the variable's bound, where the call
 solves through the type the run binds it to. A call binds each variable to one type, so it still solves its group from
 the carried types.
@@ -264,6 +286,20 @@ itself be `Never`-typed — every other body meets `Never` at `Never`, and refus
 the load. The check is a meet of upper ends, not an order: a body whose static
 type is at most `Any` loads, and the run holds what it returns to the contract.
 
+**The ascription check.** An ascription is checked the same way: one whose
+operand's upper end meets its type at `Never` refuses the load
+(`ShapeError::AscriptionNeverSatisfied`), located at the ascription node, both
+read through `bound_above`:
+
+```text
+this value is Str, which can never satisfy its ascription Number
+```
+
+One whose operand's upper end lies under its type is **settled**: every value
+the run carries there satisfies it, so the run retypes without checking. The
+order is rigid-aware, so an operand typed by a lexical variable settles an
+ascription to that variable. The cell records each settled ascription by site.
+
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
 Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running
@@ -279,9 +315,11 @@ owes the frame's [`Contract`](../program/record.rs). When it selects a
 registration whose declared return, substituted by the call's solution,
 satisfies the contract — or calls an unquantified function by name whose return
 does — it hands its cell to the callee's frame by a tail rather than spawning
-it, so a keyworded self-call in tail position holds a constant number of cells
-however deep it recurses. Any other value it finishes with is held to the
-contract: retyped to the declared return, or a fault naming the callee.
+it, handing the frame the contract it owes, so a keyworded self-call in tail
+position holds a constant number of cells however deep it recurses, and a chain
+of tail hops returns at the outermost declared return. Any other value it
+finishes with is held to the contract: checked against the callee's own return,
+a miss naming it, and retyped to the contract's outermost return.
 
 ## Running code
 
@@ -311,6 +349,8 @@ dispatch decides:
 | a missing union member | `:(Some \| None) has no member Many` |
 | an incomparable `==` | `<T> and <U> cannot be compared` |
 | `ATTR` over a module | `reading a module's member arrives with modules` |
+| `:!` over a value that misses its type | `:(LIST OF :(Number \| Str)) does not satisfy its ascription :(LIST OF Number)` |
+| `:!` over a module | `ascribing a module arrives with modules` |
 | a `USING` ranking | `MOVE _ TO _ is ranked two ways` |
 | a dict key that is no scalar | `:(LIST OF Number) cannot be a dict key` |
 | a node with no reading | `nothing evaluates <node>` |
@@ -322,8 +362,8 @@ arguments, an argument a call by name does not fit
 group, a callee that is no function, a type expression that does not
 elaborate, and an `EVAL`'s refusal.
 
-A no-overload miss, an ambiguity or a return miss the load can already see is no
-fault: it refuses the load, located at `path:line:col`
+A no-overload miss, an ambiguity, a return miss or an ascription miss the load
+can already see is no fault: it refuses the load, located at `path:line:col`
 ([static types](#static-types)).
 The run meets only those whose static types are too wide to tell — an argument
 read out of a record field, say, whose static type is `Any`.
@@ -395,7 +435,13 @@ record access, construction, error values, and a program nested to the
 [syntax depth limit](../parse/README.md#the-syntax-depth-limit) in each nesting
 shape run on a [`STACK_BYTES`](../program/README.md#the-stack) thread, one
 level more refused at load; [quotes](tests/quotes.rs) —
-unmarked uses, `USING` fills, both marks and `NEEDING` keys; and
+unmarked uses, `USING` fills, both marks and `NEEDING` keys;
+[ascription](tests/ascription.rs) — `:!` retyping member by member, a tagged
+value, a cyclic value, a miss and a module operand at run, a declared parameter
+retyping by keyword and by name with the solution substituted, a tail chain
+returning at the outermost contract, and at load an ascription's and a
+container parameter's exact type, a settled ascription, a refused one, and a
+generic use over an exact parameter selected; and
 [tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
 which is on the [Miri slate](../../observe/miri_slate.md). Every runnable
 tutorial snippet is checked against its shown output by
@@ -413,6 +459,9 @@ tutorial snippet is checked against its shown output by
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
 - [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
   — a type parameter canonical form drops, which a call binds to its bound.
+- [Exact types from the retype](../../roadmap/gradual-typing/exact-retyped-types.md)
+  — a call exact at its return, a candidate *never* over an exact argument it
+  does not admit, and an ascription exact at a nominal type.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

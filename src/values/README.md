@@ -192,12 +192,21 @@ quantifier admits by unification against the handle under a fresh collector,
 which checks shape alone: a variable's bound, and two slots of one call agreeing
 on a variable, are the caller's collector to solve. Nothing descends into a
 value to type it, so a value's precision is whatever its type says, and **an
-ascription changes it**: `Value::retyped` stamps a container checked against a
-declared node of its own kind with the declared handle over the same shared
-runs, and a tagged value checked against a union with the member that names its
-constructor. A knot member is never restamped, since a knot never grows a
-node. Downstream dispatch then sees the contract rather than the
-contents' incidental precision.
+ascription changes it** — a `:!`, a parameter binding its argument, a frame
+returning under its contract. `Value::retyped` reads the declared type member
+by member (a union's members, or the type alone): the value takes the meet of
+the members of its own kind that it lies under — a list, dict or record node
+for a container, a node naming its constructor for a tagged value — and keeps
+its own type where there is none, so a list ascribed `Any` stays as precise as
+it was. The target depends on the value and the type alone, never on member
+order. A plain value takes the target as its handle over the same shared runs.
+A knot's data node, whose memo its knot cannot restamp, is laid down as a plain
+value of its kind over its cells, each edge resolved to the sibling it names
+and a dict's keys or a record's names shared: O(width) per retype, and the
+retyped value renders its cycle one level down. The retype is shallow: the top
+node's type changes, and its cells keep their own, so a `LIST OF (LIST OF Any)`
+retype leaves each inner list as precise as it was. Downstream dispatch then
+sees the contract rather than the contents' incidental precision.
 
 The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
@@ -227,8 +236,9 @@ knot member weighs what its own rebuild writes, which its layer memoizes — the
 whole knot it sits in, since a member copies by re-tying its knot, and a data
 node's resident weighs only its own struct and links. Program storage a member
 holds weighs nothing past the pointer. A crossing reads the weight off the
-value rather than walking it; a retype shares the runs, so it shares the
-weight.
+value rather than walking it; a plain retype shares the runs, so it shares the
+weight, and a laid-down data node is weighed as the plain door of its kind
+weighs the same cells.
 
 ## Crossing
 
@@ -492,5 +502,3 @@ otherwise pair with are `cellgraph`'s own slate.
 - [Module programs](../../roadmap/rewrite/modules.md) — a builtin native
   reading a sealed builtin value its overload admitted through the seal, once
   a view's members reach a program.
-- [Value ascription](../../roadmap/gradual-typing/value-ascription.md) — `:!` over any
-  value, and a retype that reads a union member by member.

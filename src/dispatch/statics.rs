@@ -21,7 +21,8 @@
 //! and an `EVAL` of code the load traces to a written quote returns that code's last statement's
 //! type. A callable body whose static type meets its declared return at `Never` refuses the load
 //! too, as does an ascription whose operand's static type meets its type at `Never`; one whose
-//! operand's static upper end lies under its type is **settled**, and the run checks nothing. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
+//! operand's static upper end lies under its type is **settled**, and the run checks nothing. What
+//! the pass fixes rests in each shape's write-once [`Statics`] cell, which
 //! [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
@@ -85,8 +86,8 @@ fn under(upper: KType) -> Interval {
 }
 
 /// The static type of a value retyped to `declared` — an ascription's, a parameter's: exactly
-/// `declared` where it is a list, dict or record type, which every value of that kind is retyped to,
-/// and at most `declared` otherwise.
+/// `declared` where it is a list, dict or record type, which every value of that kind is retyped
+/// to, and at most `declared` otherwise.
 fn exact_at_container(types: &TypeRegistry<'_>, declared: KType) -> Interval {
     match types.node(declared) {
         TypeNode::List { .. } | TypeNode::Dict { .. } | TypeNode::Record { .. } => {

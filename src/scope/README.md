@@ -439,7 +439,7 @@ elaborated — and the pass fills it, once, where the program loads:
 - each **type expression** the shape records (`BodyShape::type_expressions`, by
   site): a `:(…)` or `:{…}` in value position, a type part of an expression
   shape that births no callable — a `MATCH`'s result and union clause, a
-  `TRY`'s result, an ascription's signature — and each `MATCH … WITH` guard,
+  `TRY`'s result, an ascription's type — and each `MATCH … WITH` guard,
   with its arm set and written index. A callable's signature, a declaration's definition and a type
   `LET`'s right-hand side are not recorded: they are typed with their callable or
   binder, and a type nested in a recorded one is part of it;
@@ -464,11 +464,13 @@ One more cell per shape holds the **value channel**: the `Statics` dispatch's
 a static type, an interval, for each part the evaluator reads as a value (by
 site), each statement (by index) and each slot (by index), and one `Narrowing` per keyworded
 use, parallel to its candidate list: the one candidate selected, or each
-candidate kept beside its verdict, *always* or *maybe*. It lives here for the
+candidate kept beside its verdict, *always* or *maybe*; and the site of each
+**settled** `:!`, whose operand's static type lies under its type, so the run
+checks nothing there. It lives here for the
 same reason the type channel's cells do, and the shape reads it by site
-(`value_type`, `narrowing`), statement index or slot; a shape the pass has not
-fixed — a quote's code it refused — has no static types, and every candidate of
-every use in it is *maybe*.
+(`value_type`, `narrowing`, `settled`), statement index or slot; a shape the
+pass has not fixed — a quote's code it refused — has no static types, every
+candidate of every use in it is *maybe*, and no ascription in it is settled.
 
 ## Names that arrive at run time
 

@@ -186,7 +186,8 @@ receipt slot per statement per call, for statements that mostly never park.
 Born as `KBirth::Program` it lays the top level's activation down; born as
 `KBirth::Call` it lays the callee's activation down in the frame's own cell and
 binds each value parameter from the argument record, which must name them
-exactly; born as `KBirth::Eval` it lays the code's activation down in the
+exactly, **retyped** to the parameter's declared type with the call's
+type-parameter solution substituted; born as `KBirth::Eval` it lays the code's activation down in the
 frame's own cell over a closure run it assembles in the code shape's capture
 order — each `$` name from the bindings the code carries, each hole from those
 a `USING` supplied, each `\` name from the offered record — every edge resolved
@@ -203,8 +204,12 @@ the group from that collector itself; a type parameter the caller writes into
 the record names no parameter, and misnames the call. A **`:Type` parameter** —
 a type-channel parameter that is no `FOR ALL` name — is an argument like any
 other: the frame binds it to the type value the call passed, by keyword or by
-name. Either way each `FOR ALL` slot is then bound to a type value holding its
-solution, looked
+name. Either way a value parameter is an ascription: its argument is
+[retyped](../values/README.md#the-type-memo-and-satisfies) to the declared
+type, the solution substituted, so the body dispatches on what the parameter
+declares rather than on the contents' further precision, and `SHOW [1]` under
+`SHOW x :(LIST OF Any)` sees a `LIST OF Any`. Each `FOR ALL` slot is then bound
+to a type value holding its solution, looked
 up **by its own name** through the callee's
 [quantifier map](../knot/README.md) — the slots arrive symbol-sorted, not in the
 order the `FOR ALL` group was written. A name the map says canonical form dropped
@@ -265,9 +270,9 @@ it — go on a local bump for that step, never a `Vec`.
 A called frame owes its caller a value satisfying its callee's declared return,
 with the frame's own type-parameter solution substituted: a
 [`Contract`](record.rs), which names the callee so a miss can say whose return
-it was. The frame's value is **retyped** to the declared return — a container to
-the declared type, a tagged value to the union member naming its constructor —
-and a value that does not satisfy it is a fault
+it was. The frame's value is **retyped** to the declared return, member by
+member as [any retype](../values/README.md#the-type-memo-and-satisfies) is, and
+a value that does not satisfy it is a fault
 (`:(FN :{} -> Number) returned Str, which does not satisfy Number`).
 
 When a frame's last unit is a statement that binds nothing, the runner does not
@@ -276,7 +281,12 @@ own place, handing it the contract, and the evaluation owes the frame's caller
 the value. An evaluation whose selected call's declared return satisfies the
 contract tails again, into the callee's frame, so a tail recursion N deep holds
 a constant number of cells; any other value is held to the contract where the
-evaluation finishes. An `EVAL`'s frame owes no contract, and a block never
+evaluation finishes. The hop hands the frame it reaches the contract it owes,
+and the caller asked for the outermost callee's return: that frame's value is
+checked against its own callee's return, which a miss names, and retyped to the
+outermost return of the chain — the contract's `retype`. So beside
+`INNER -> :(LIST OF Number)`, an `OUTER -> :(LIST OF Any)` tailing into it
+returns a `LIST OF Any`. An `EVAL`'s frame owes no contract, and a block never
 tails.
 
 ### Faults and output
@@ -374,7 +384,8 @@ binder, a binder before an `EVAL` statement run after it, a malformed quote
 refused only when run, a required keyworded hole unbound, an argument a call by name does not fit
 refused, a refused tie ending
 the program uncaught, a frame's value retyped to its declared return and a
-return that misses it, a self-call in tail position holding its cells constant,
+return that misses it, an argument retyped to its parameter's declared type, a
+tail chain returning at the outermost contract, a self-call in tail position holding its cells constant,
 and one whole program with all of them.
 [`tests/substrate.rs`](tests/substrate.rs) loads two programs through a helper,
 moves them into a `Vec`, runs each, and reads a binding back in a separate call
@@ -394,8 +405,6 @@ before the program ran, and a stalled substrate. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [Value ascription](../../roadmap/gradual-typing/value-ascription.md) — an argument
-  retyped to its parameter's declared type where the frame binds it.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
   receipt run laid down anew per park, and the bytes a `Shares` tail hop leaves
   in its host.

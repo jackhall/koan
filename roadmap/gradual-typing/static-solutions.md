@@ -38,7 +38,7 @@ again.
   argument and an `EVAL`'s complement each other in one solve. An argument at
   most `Any` is one the load knows nothing of, a parameter declared `Any` among
   them, since `Any` constrains nothing; a programmer moves an argument to the
-  load's side with [`:!`](value-ascription.md).
+  load's side with [`:!`](../../src/dispatch/README.md#what-a-node-is).
 - *A contribution holding a lexical variable — open.* An argument typed by an
   enclosing body's `Elt` contributes `Elt`, which the run replaces through a
   coordinate the use's body reads, and a body that never names `Elt` captures
@@ -52,8 +52,6 @@ again.
 
 ## Dependencies
 
-**Requires:**
-
-- [Value ascription](value-ascription.md) — an ascribed argument's static type.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

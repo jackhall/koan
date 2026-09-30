@@ -98,6 +98,7 @@ the link in each section to the relevant chapter.
 | `FOR ALL #{<Name>: <Type>, ...}` | Bounded type parameters, each name to its bound; a name in a `#[…]` group is bounded by `Any`. See [12](12-functors.md#bounding-a-type-parameter). |
 | `TYPE (<Name> UNDER <Type>)`  | A bounded type member, inside a `SIG`.             |
 | `:(<Type> & <Type>)`          | Meet — a value of both types; mixes with `\|` only through parentheses. |
+| `<value> :! <Type>`           | Ascription: check a value against a type and view it at that type. |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 | `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
 | `UNION (Elem AS Option) = #{<Tag>: <Type>, ...}` | A union over type parameters; each variant is a constructor over all of them. See [12](12-functors.md#unions-over-type-parameters-union-elem-as-option). |
