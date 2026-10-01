@@ -216,7 +216,13 @@ fixed:
   points, since the frame retypes its value to it, and at most it otherwise —
   or at most the join of every kept candidate's return: `Any` where one of them
   is a candidate the load cannot read, a spread, a hole or a registration of
-  unknown shape;
+  unknown shape. A `USING … SCOPE` block's
+  [surfaced head](../scope/README.md#names-that-arrive-at-run-time) is a
+  registration whose return is at most the head's whatever the solve, since the
+  module's own definition answers the call: under
+  `SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]`, in
+  `USING (m :! Boxes) SCOPE (…)`, `BOX 1` is at most `LIST OF Number` and
+  `BOX "s"` at most `LIST OF Str`, each use solving the head's `Elt` afresh;
 - an application is the identity its construction builds when its head is a
   type the load knows, and its callee's return when the head is a function —
   exact by the same rule where the callee's static type is exact, and at most
@@ -297,15 +303,18 @@ own, so a static type crossing into it, a `$` name's, or leaving it, an
 **Verdicts.** Each keyworded use gives each candidate one of three, as
 [`judge_by_class`](../type_lattice/README.md#priority-classes) judges it:
 
-- *never* — some slot meets its argument's upper end at `Never`, or does not
-  lie above its argument's lower end, since the carried type lies above that
+- *never* — some slot meets its argument's upper end at `Never`, or its
+  argument's lower end does not fit it, since the carried type lies above that
   end: beside `EXPR #(WHICH x :(LIST OF Number))`, `WHICH x` over a parameter
   `x :(LIST OF Any)` is *never*;
 - *always* — every class admits whatever the call carries within its
   arguments' static types: a slot that is a variable of its own class alone
   admits under the variable's bound, and a class whose arguments naming its own
   variables are exact and hold no lexical variable admits when its static
-  solve does;
+  solve does. Each admission reads
+  [*fits*](../type_lattice/README.md#the-relations), so a module argument at
+  most a signature declaring all of `Boxes`'s members and more is *always* at a
+  slot `:Boxes`;
 - *maybe* — any other, and every candidate the load cannot read.
 
 A slot naming a variable an earlier
@@ -380,9 +389,9 @@ read through `bound_above`:
 this value is Str, which can never satisfy its ascription Number
 ```
 
-One whose operand's upper end lies under its type is **settled**: every value
-the run carries there satisfies it, so the run retypes without checking. The
-order is rigid-aware, so an operand typed by a lexical variable settles an
+One whose operand's upper end [fits](../type_lattice/README.md#the-relations)
+its type is **settled**: every value the run carries there satisfies it, so the
+run retypes without checking. *Fits* is rigid-aware, so an operand typed by a lexical variable settles an
 ascription to that variable. The cell records each settled ascription by site.
 
 What the pass fixes rests in each shape's write-once
@@ -489,8 +498,10 @@ closed, unquantified one at a key with builtin overloads — whatever declared
 types its signature names, so an alias of `Number` is checked as `Number` is —
 overlaps a builtin overload whose operands are not all `Any` when every slot pair
 meets above `Never`, which refuses the shape (`ShapeError::Overlaps`). A
-registration whose shape is rigid or unknown is never checked, and one a builtin beats
-at some operand type is simply never selected there — nothing reports it, since
+registration whose shape is rigid or unknown is never checked, nor is a
+`USING … SCOPE` block's surfaced head, which births no callable: the definition
+answering it is the module's own, checked where the module is built. A
+registration a builtin beats at some operand type is simply never selected there — nothing reports it, since
 koan has no warning channel ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
 
 ## The import rule
@@ -512,7 +523,10 @@ and a quantified candidate that may admit whose carried solve fails;
 a capture along a chain, a generic call by keyword, verdicts leaving one,
 several and no candidate, the load refusals in a program, an uncalled body and
 a quote's code, an `EVAL` whose traced code can never meet its declared return,
-and an argument that never arrives;
+an argument that never arrives, each call of a quantified function typed by its
+own arguments, a `USING … SCOPE` block's surfaced heads typed through the
+ascription's pins, and a wider signature *always* at a narrower one's slot and
+outranking it;
 [generic](tests/generic.rs) — generic code at load: a nested callable
 substituted by level and agreeing with its load-time type where it is born, a
 quote's code typed twice interning nothing, a nested group's parameters and
@@ -523,7 +537,9 @@ call, and returns read through a group's intervals, by keyword and by name;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
-builtin library, combined definitions, lambdas, type parameters, contracts,
+builtin library, combined definitions, lambdas, type parameters, a quantified
+function run only through a call, modules fitting a signature's quantified head
+and each application their overloads answer, contracts,
 record access, construction, error values, and a program nested to the
 [syntax depth limit](../parse/README.md#the-syntax-depth-limit) in each nesting
 shape run on a [`STACK_BYTES`](../program/README.md#the-stack) thread, one
@@ -561,10 +577,8 @@ tutorial snippet is checked against its shown output by
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
   and `Result`.
 - [Module programs](../../roadmap/rewrite/modules.md) — the module expression
-  shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
-- [Quantifiers on declarations](../../roadmap/rewrite/quantifiers-on-declarations.md)
-  — a quantified function read only at the head of a call, and verdicts and
-  ranking over signature-typed slots.
+  shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations bound
+  where the body runs.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

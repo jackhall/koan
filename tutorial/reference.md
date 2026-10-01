@@ -19,7 +19,7 @@ the link in each section to the relevant chapter.
 | `EXPR FOR ALL #[<names>] #(<head>) -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry. |
 | `LET <name> = FN EXPR #(<head>) -> <Type> = #(<body>)` | Both channels from one statement: the value name and the shape's bucket. |
 | `FN :{<fields>} -> <Type> = #(<body>)`     | A lambda: keyword-less, reached by name, called with a record of named arguments. |
-| `FN FOR ALL #[<names>] :{<fields>} -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. |
+| `FN FOR ALL #[<names>] :{<fields>} -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. Written only bound to a name or called on the spot, and its name is read only at the head of a call; wrap it in an unquantified `FN` to pass it. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
 | `CLOSE OVER (<captures>) (<block>)`        | Run a block over a region of its own, copying the named values in; only the block's last expression escapes, and it holds copies rather than the enclosing call. |
@@ -71,13 +71,15 @@ the link in each section to the relevant chapter.
 | `MODULE <name> = (<bindings>)`                   | Group bindings under a name (snake_case — a module is a value). |
 | `<module>.<member>`                              | Read a module member.              |
 | `SIG <Name> = #[(VAL <name> :<Type>) ...]`       | Declare a signature (a module's type; Type-token name). |
-| `VAL <name> :<Type>`                             | A required value member, inside a `SIG`. |
-| `EXPR #(<head>) -> <Type>`                       | A required keyworded member, inside a `SIG` (bodyless; `FOR ALL` twin included). |
+| `SIG <Name> FOR ALL #[<names>] = #[...]`         | A signature over head parameters, each one type per module, which its members name. |
+| `VAL <name> :<Type>`                             | A required value member, inside a `SIG`; its type may be a quantified function type. |
+| `EXPR #(<head>) -> <Type>`                       | A required keyworded member, inside a `SIG` (bodyless; `FOR ALL` twin included, for a type each use works out afresh). |
 | `<module> :! <Sig>`                              | Transparent ascription.            |
 | `<module> :\| <Sig>`                             | Opaque ascription.                 |
 | `USING <module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
 | `EXPR #(<KW> <p> :<Sig>) -> Module = #(<body>)`    | A functor: a function returning a module (a module parameterized by a module). |
-| `<Sig> WITH {<Slot> = <Type>}`                   | Specialize a signature by pinning a type slot. |
+| `<Sig> WITH {<Param> = <Type>}`                  | An application: pin some of a signature's head parameters. |
+| `:(<Sig> & <Sig>)`                               | The meet of two signatures: a module fits it when it fits both. |
 | `TYPE OF <value>`                                | The type a value reports for itself; a module's is its signature. |
 
 ## Type expressions — see [2](02-values-and-types.md)
@@ -92,14 +94,12 @@ the link in each section to the relevant chapter.
 | `:(LIST OF <Type>)`           | List type.                                         |
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
 | `:(FN :{<params>} -> <Result>)`| Lambda type — the parameter list is a record type (`:{}` when nullary). |
-| `:(FN FOR ALL #[<names>] :{<params>} -> <Result>)` | The quantified lambda type. |
+| `:(FN FOR ALL #[<names>] :{<params>} -> <Result>)` | The quantified lambda type, written only as a `VAL` member's type inside a `SIG`. |
 | `:(EXPR #(<head>) -> <Result>)` | Expression-shape type — the keyword/slot run a keyworded definition registers for dispatch; write `_` at each slot. |
-| `:(EXPR FOR ALL #[<names>] #(<head>) -> <Result>)` | The quantified shape type. |
-| `FOR ALL #{<Name>: <Type>, ...}` | Bounded type parameters, each name to its bound; a name in a `#[…]` group is bounded by `Any`. See [12](12-functors.md#bounding-a-type-parameter). |
-| `TYPE (<Name> UNDER <Type>)`  | A bounded type member, inside a `SIG`.             |
+| `:(EXPR FOR ALL #[<names>] #(<head>) -> <Result>)` | The quantified shape type, written only inside a `SIG`. |
+| `FOR ALL #{<Name>: <Type>, ...}` | Bounded type parameters, each name to its bound, on a definition or a `SIG`'s head; a name in a `#[…]` group is bounded by `Any`. See [12](12-functors.md#bounding-a-type-parameter). |
 | `:(<Type> & <Type>)`          | Meet — a value of both types; mixes with `\|` only through parentheses. |
 | `<value> :! <Type>`           | Ascription: check a value against a type and view it at that type. |
-| `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 | `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
 | `UNION (Elem AS Option) = #{<Tag>: <Type>, ...}` | A union over type parameters; each variant is a constructor over all of them. See [12](12-functors.md#unions-over-type-parameters-union-elem-as-option). |
 | `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |

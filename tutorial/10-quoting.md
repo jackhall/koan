@@ -254,7 +254,7 @@ kind standing in for the one above it:
 Code
 └─ Block               two or more statements
    └─ Expression       one statement
-      ├─ Declaration   #(VAL x :Str), #(TYPE Carrier), a bodyless head
+      ├─ Declaration   #(VAL x :Str), a bodyless head
       │  └─ Binder     #(LET x = 1): a declaration that also binds where it is written
       ├─ Literal       #(42), #("y"), #(#(x))
       ├─ Symbol        one token

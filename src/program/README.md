@@ -213,8 +213,8 @@ declares rather than on the contents' further precision, and `SHOW [1]` under
 to a type value holding its solution, looked
 up **by its own name** through the callee's
 [quantifier map](../knot/README.md) — the slots arrive symbol-sorted, not in the
-order the `FOR ALL` group was written. A name the map says canonical form dropped
-binds that variable's bound. A callee that is no function, an argument record
+order the `FOR ALL` group was written. The group keeps every name, so each is
+bound to its solution, a name no argument reaches to its bound. A callee that is no function, an argument record
 that misnames a parameter, an argument that does not fit its parameter, and a
 group the arguments cannot solve are each a
 [fault](#faults-and-output). Born as `KBirth::Block` it lays a block's

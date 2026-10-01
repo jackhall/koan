@@ -60,8 +60,9 @@ Three things follow, and each is load-bearing:
   no shared registry.
 - **Generativity is one explicit mechanism**, applied in two places: a minted
   `ScopeId` nonce folded into the content ahead of everything else, carried by a
-  recursive-group window and by an abstract member. Two opaque ascriptions of one
-  signature never unify, and nothing else in the vocabulary is generative.
+  recursive-group window and by the carrier an opaque view mints for a head
+  parameter. Two opaque ascriptions of one signature never unify, and nothing
+  else in the vocabulary is generative.
 
 The hasher lives in `digest.rs` and only there. Every payload begins with a
 distinct domain tag byte so no two variants can share a digest, every text run is
@@ -115,8 +116,9 @@ subtree.
 - **Three rigid variables**, and the split is deliberate. `Quantified` is
   positional and bound by the enclosing binder, so two binders alpha-equivalent
   under a renaming intern to one node, and a free one in a declared slot is what
-  a call solves. `AbstractType` is *named*, because signature members are
-  reached by name and schemas are edited by name. A **lexical variable**
+  a call solves. `Parameter` is *named*: a signature's head parameter, which its
+  members read and `WITH` pins by name, or — carrying a nonce — the carrier an
+  opaque view mints for one. A **lexical variable**
   (`Lexical`) is a name only a run binds, read where the program loads
   ([the type channel at load](../elaborate/README.md#the-type-channel-at-load)):
   it is positional by its level along the lexical chain that declares it, and
@@ -129,14 +131,19 @@ subtree.
   `Number | Str` lies under `Number | Str | Bool`, though under neither member.
   A lexical variable has a **lower end** too, a closed type under its bound:
   below it lie itself and whatever lies under that end, where below
-  `Quantified` and `AbstractType` lie only themselves and `Never`. A name a
+  `Quantified` and `Parameter` lie only themselves and `Never`. A name a
   `FOR ALL` declares has the lower end `Never`; a later priority class reads an
   earlier one's variable as a lexical variable between two ends
   ([priority classes](#priority-classes)).
-- **`Signature`** — owned interface content. A `SIG`-declared interface, a
-  module's self-sig, and the empty signature that `:Module` lowers to are all
-  this one node, distinguished only by the schema. It carries no binder and no
-  label: two textually identical declarations are one type.
+- **Signature types** — three nodes, each read as a set of
+  [applications](#signature-types). A `Signature` is owned interface content: a
+  `SIG`-declared interface, a module's self-sig, a view's signature and the
+  empty signature that `:Module` lowers to are all this one node, distinguished
+  only by the schema. It carries no binder and no label: two textually identical
+  declarations are one type. A `SignatureApply` is a declared signature with
+  some of its head parameters pinned, `Stack WITH {Elt = Number}`, and a
+  `SignatureMeet` is two or more applications, none lying above another, sorted
+  by handle so the set's identity is order-blind.
 - **`Sibling` and `SetMember`** — the pre-seal and post-seal forms of a
   co-declared nominal group. See *Recursive groups*, below. A member's schema
   is a newtype's representation, or a type-constructor family's: the type a
@@ -190,19 +197,32 @@ heap nowhere — a bracket the suite asserts directly ([tests/heap.rs](tests/hea
 
 ## The relations
 
-[`is_subtype_of`](order.rs) is **one order**, reflexive and transitive, and
-antisymmetric over [concrete types](#concrete-types-and-binders), memoized through
-the registry's verdict edges. There are no tie-break tiers: nothing ranks a token
-leaf against `Str`, a nominal slot against a kind slot, or a constrained slot
-against an unconstrained one. Those are not subtype facts, and a dispatch that
-must choose between two unrelated slot types has an ambiguity, not a verdict.
+Two relations, and the split is the point. [`is_subtype_of`](order.rs) is **the
+order**: reflexive, transitive and antisymmetric, memoized through the
+registry's verdict edges, and it **never solves** — a quantified binder lies
+under only itself, and two signature types compare by their applications' pins.
+It is what every construction reads: interning, a canonical union, `join`,
+`meet`, an overload set's subsumption, a cache key. [`fits`](order.rs) is what
+every **question** reads: admission, a static verdict, ranking, a settled
+ascription, the return check, the view door. It solves: a quantified binder
+fits another when some instantiation of its group puts the instance under the
+other, and a module's signature fits a declared one when its members do. *Fits*
+contains the order and is reflexive and transitive, but two handles may fit each
+other, so nothing is built from it. `satisfied_by` is *fits* read from a slot's
+side. Each relation records its verdict under its own `Relation`, by handle pair,
+so a caller compares no slot types of its own.
 
-**The guard set lives in `order.rs` and only there.** Every relation that reads
-the order — the three slot compositions, the unifier's leaf, the specificity
-verdict, the signature relation's value-slot rule — reaches it through
-`is_subtype_of`, so there is no second descent to keep in step with this one.
-`is_more_specific_than` is its strict version and `satisfied_by` the same
-question read from a slot's side.
+There are no tie-break tiers: nothing ranks a token leaf against `Str`, a
+nominal slot against a kind slot, or a constrained slot against an
+unconstrained one. Those are not subtype facts, and a dispatch that must choose
+between two unrelated slot types has an ambiguity, not a verdict.
+
+**The guard set lives in `order.rs` and only there.** The two relations are one
+descent, the `Order` lockstep, which differs between them at its leaf alone, and
+a nested pair goes back through the entry point of the relation it was asked
+under. Every reader of either — the unifier's leaf, the specificity verdict,
+*fits*' value-slot rule — reaches it through `is_subtype_of` or `fits`, so there
+is no second descent to keep in step with this one.
 
 **An application lies under its family.** Two applications of one family are
 ordered argument by argument, covariantly, and an application lies strictly
@@ -220,24 +240,75 @@ A union meets member by member, each member against the other side *whole*, so
 a variable whose bound spans several members survives: with `Elt` bounded by
 `Number | Str`, `(Elt | Bool) & (Number | Str)` is `Elt`. The four
 laws — commutativity, associativity, idempotence and absorption — hold over every
-node kind, by handle over concrete types and up to equivalence over a type
-holding a binder, and that is what fixes both operations.
+node kind by handle, and that is what fixes both operations.
 
-[`sig_subtype`](sig_relations.rs) is the relation over two signature schemas:
-`sub <: sup` iff `sub` supplies every member `sup` names, with each manifest
-member equal, each abstract member present at the matching kind and under the
-declared bound, each value slot covariantly compatible after abstract-member
-substitution, each keyworded member satisfied by an overload the same selection
-dispatch would make, and each operator record covered at an equal mode.
-`meet_schemas` is what two signatures meet at; **the module lattice has no join
-of its own**, since two unordered signatures join to their union.
-`shape_specificity` ranks two candidates under one bucket key — and it reads
-shapes alone, since a function type ranks in no bucket. A keyworded member
-whose sub-side bucket ranks its slots otherwise fails as `RankingMismatch`, and
-two signatures whose keyworded members at one key rank otherwise do not meet.
+Because the order never solves, its laws hold **by handle over every type**,
+binders and signature types included: two handles that lie under each other are
+one handle. Two binders that admit each other do so in *fits* alone —
+`∀Elt :{x :Elt, y :Elt} -> Elt` fits `∀A B :{x :A, y :B} -> A | B` at its
+instance over `A | B`, and the two are unordered. A union and an overload set
+keep the first of two members that lie under each other, and
+[`unsubsumed`](order.rs) is where they do.
 
-A quantified binder relates to another of its kind by **instantiation**, not
-structurally: some instantiation of the subject's variables, each under its
+### Signature types
+
+A signature type reads as a **set of applications**
+([signatures.rs](signatures.rs)), an application being a declared signature
+with some of its head parameters pinned: a `Signature` is the one application
+pinning nothing — the empty signature, `Module`, is the empty set — a
+`SignatureApply` is itself, and a `SignatureMeet` is its members. In the order,
+one application lies under another of the same signature when its pins include
+the other's, each at an equal type, so `Stack WITH {Elt = Number}` lies under
+`Stack`, and two different pins of one parameter are unordered, even `Number`
+and `Number | Str`. A set lies under another when each application of the upper
+lies above some application of the lower, so the empty set is the top. The meet
+of two sets is their union less each application lying above another, which
+makes it exact: `(Stack WITH {Elt = Number}) & (Stack WITH {Elt = Str})` holds
+both applications and lies under each. **The module lattice has no join of its
+own**, since two unordered signature types join to their union. Whether one
+declared signature's members include another's is a question for *fits*, never
+the order.
+
+[`sig_fits`](sig_relations.rs) is *fits* over two signature types. The offered
+side fits each asked application on its own, its members pooled across the
+offered applications: each manifest member equal, each value slot under the
+declared type, each keyworded member satisfied by some offered overload at its
+key, and each operator record covered at an equal mode. An asked application's
+unpinned head parameters are solved first, as a call solves its group — one
+collector, to which each asked member contributes what the offer gives it, and
+the [least instance](#the-unifier-collects-it-does-not-bind) taken — and then
+every member is checked under that solution. A variable is read by its side:
+
+| | offered side | asked side |
+|---|---|---|
+| a member's own `FOR ALL` variable | solved afresh for each member, as a call solves it | rigid |
+| an unpinned head parameter | one rigid unknown per application | one variable, solved and discarded |
+| a pinned head parameter | the pin | the pin |
+
+For each asked keyworded member, one offered overload at its key contributes,
+each tried in turn: pooling a key's overloads would make *fits* not transitive.
+A module with a `PUSH` at `Number` and one at `Str` fits the meet of `Stack`'s
+two pinned applications, which lies under `Stack`, so it must fit `Stack` too,
+and it does, at the first overload's `Elt`. An offered overload with a group of
+its own contributes nothing and is checked after the solve. *Fits* asks only
+that some overload satisfy each keyworded member, so a tie is an ambiguity where
+a call meets it; refusing one would break transitivity the same way. A module's
+self-signature stands on the offered side like any signature, and on the asked
+side compares by handle. A member's variable may solve to any type, a signature
+holding a quantified member included: containment by instantiation is
+undecidable in general, so *fits* is what the collector answers, and a relation
+it misses is refused at load and at run alike.
+[`fits_application`](sig_relations.rs) hands back what one application solves
+each parameter to — the pins, then the solution — which
+[the view door](../knot/module/README.md#the-view-door) reads. A keyworded
+member whose offered bucket ranks its slots otherwise fails as
+`RankingMismatch`. `shape_specificity` ranks two candidates under one bucket key
+— and it reads shapes alone, since a function type ranks in no bucket.
+
+### Quantified binders
+
+A quantified binder relates to another of its kind only in *fits*, and there by
+**instantiation**, not structurally: some instantiation of the subject's variables, each under its
 bound, must put the instance below the other with the other's variables rigid.
 [`admits_shape`](sig_relations.rs) is that clause for two shapes, position by
 position; [`admits_function`](sig_relations.rs) is its twin for two function
@@ -246,34 +317,22 @@ lie under the declared one and the return pair the reverse, then one `solve`.
 The solve asks only that each variable's pair of ends denote some type
 ([the unifier](#the-unifier-collects-it-does-not-bind)); it picks no instance.
 Width is the order's own either way: a function subtype asks for no name its
-supertype does not.
+supertype does not. In the order a quantified binder lies under only itself.
 
-**A binder is interned in canonical form.** Both interning
-doors — [`shape_type`](registry.rs) and [`function_type`](registry.rs) — run
-one canonicalizer over the positions the binder binds: a variable with no
-occurrence is dropped, one that occurs exactly once is replaced by its bound at
-a contravariant position and by `Never` at a covariant one, and the survivors
-are renumbered by first occurrence. A shape walks its slots in element order,
-a function its parameters in **symbol-sorted key order** — a record's identity
-is order-blind, so the renumbering must be too — and then the return. The
-surviving names are render-only and the digest feeds the group's arity, so two
-alpha-variants are one handle; the door hands its caller back the
-declaration-index → canonical-index map alongside the handle, which is what a
-call needs to bind each type parameter to its solution.
-
-### Concrete types and binders
-
-A type is **concrete** when it holds no quantified binder and no free variable.
-A binder is abstract while it is solved: it stands for its instances, and
-becomes concrete only once a solve picks one, at load where each variable's
-pair meets at a point and at run otherwise. Over concrete types the order is
-antisymmetric, one handle per type, and the laws hold by handle. Over a type
-holding a binder they hold up to equivalence, since two handles may lie under
-each other: `∀Elt :{x :Elt, y :Elt} -> Elt` and `∀A B :{x :A, y :B} -> A | B`
-do, the first at its instance over `A | B`. Canonical form gives many such pairs
-one handle, but no rule here depends on it doing so. A union and an overload set
-keep the first of two members that lie under each other, and
-[`unsubsumed`](order.rs) is where they do.
+**A binder keeps every variable it declares.** Both interning doors —
+[`shape_type`](registry.rs) and [`function_type`](registry.rs) — number a group
+over the positions it binds: first the variables some position names, by first
+occurrence, a shape walking its slots in element order and a function its
+parameters in **symbol-sorted key order** — a record's identity is order-blind,
+so the numbering must be too — and then the return; then every variable no
+position names, in declared order. No variable is dropped, so a call solves each
+one: under `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`, `KIND 1` binds
+`Elt` to `Number`. The names are render-only, and the digest feeds the group's
+arity and each variable's bound, so two alpha-variants are one handle. The door
+hands its caller back the declaration-index → group-index map alongside the
+handle, which is what a call needs to bind each type parameter to its solution.
+A variable no argument reaches binds its bound, the least instance of
+`[Never, bound]`.
 
 ### Priority classes
 
@@ -303,10 +362,10 @@ covariant position names the variable, `[U, bound]` where only a contravariant
 one does — and each later class admits against a lexical variable between
 those ends. An interval whose ends meet, or a solution holding a rigid
 variable of the candidate's, is read as that point. So a signature's view never promises a call its overload refuses:
-in written order, `FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt)` does not lie
-under `#(PAIR x :(Number | Str) WITH y :(Number | Str))`, which admits
+in written order, `FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt)` does not fit
+`#(PAIR x :(Number | Str) WITH y :(Number | Str))`, which admits
 `PAIR 1 WITH "s"`, while `FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Null) TO y :Elt)`
-lies under `#(APPLY f :(FN :{x :Number} -> Null) TO y :Number)`, since a call
+fits `#(APPLY f :(FN :{x :Number} -> Null) TO y :Number)`, since a call
 binds `Elt` at or above `Number`.
 
 The classes order **ranking**. [`class_at_least`](ranking.rs) is the verdict
@@ -349,7 +408,7 @@ shape, per the table in [`family_top`](order.rs):
 
 | Family top | Node variants |
 |---|---|
-| `Value` | `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `Record`, `KFunction`, `ExpressionShape`, `ConstructorApply`, `Signature` (a module is a value), `SetMember`, `Sibling` |
+| `Value` | `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `Record`, `KFunction`, `ExpressionShape`, `ConstructorApply`, the three signature types (a module is a value), `SetMember`, `Sibling` |
 | `Code` | every code kind: `Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`, `Identifier`, `TypeNameToken`, `SigiledTypeExpr`, `RecordType` |
 | `Type` | every `OfKind` |
 
@@ -357,8 +416,8 @@ The other nodes take their family from elsewhere. A union lies under a top when
 every member does, and a rigid variable when its bound does. A variable bounded
 by `Value` lies under `Value`, and one bounded by `Value | Type` under that
 union. A variable bounded by `Any` — the default bound of a `FOR ALL` name and
-of a signature's `TYPE` member — lies under no family top: a value sealed behind
-an unbounded member satisfies that member and `Any`, but not `Value`. A deferred return lies under
+of a signature's head parameter — lies under no family top: a value sealed behind
+an unbounded parameter satisfies that parameter and `Any`, but not `Value`. A deferred return lies under
 none, since its return is not known. So no type but `Never` lies under two tops.
 
 A pair of tops is their union: `Value | Type` is the top of values and types
@@ -377,7 +436,7 @@ wherever it can stand in its place:
 Code
 └─ Block                  statements; written, two or more
    └─ Expression          one statement
-      ├─ Declaration      declares a name or a shape: VAL, a TYPE declarator, a bodyless head
+      ├─ Declaration      declares a name or a shape: VAL, a bodyless head
       │  └─ Binder        also installs where it is written: LET, an EXPR definition, …
       ├─ Literal          a lone scalar literal or nested quote
       ├─ Symbol           a lone token
@@ -419,13 +478,15 @@ elements are.
 
 ### Substitute, then ask
 
-[substitute.rs](substitute.rs) holds substitution and the relations that are *a
-substitution composed with an ordinary one* — slot equality, slot satisfaction,
-slot specificity, quantifier instantiation and erasure. No second structural
-descent exists for any of them. Interning is insert-if-absent on a
-content-addressed table, a substitution that binds nothing returns its input
-handle, and every subtype verdict is memoized, so the composition costs one
-intern per changed composite.
+[substitute.rs](substitute.rs) holds substitution — of a binder's own
+variables (instantiation and erasure), of lexical levels, and of a signature's
+head parameters by name ([`substitute_parameters`](substitute.rs)) — and the
+reads that replace a variable by one of its ends. No second structural descent
+exists for any of them. Interning is insert-if-absent on a content-addressed
+table and a substitution that binds nothing returns its input handle, so a
+substitution costs one intern per changed composite. A signature is closed
+content, so no substitution enters one; a head parameter a pin names is reached
+through the application's pins.
 
 A load-time type is read where it runs by replacing each lexical variable with
 the binding at its level ([`substitute_levels`](substitute.rs)). No binder
@@ -437,7 +498,7 @@ above, a variable takes its upper end at a covariant position and its lower end
 at a contravariant one, which gives the type above every instance; read from
 below, the reverse, which gives the type below every instance. A signature is
 left opaque. `bound_above` is the read from above with every free variable — a
-`Quantified` under none of the type's own binders, every `AbstractType` and
+`Quantified` under none of the type's own binders, every `Parameter` and
 every lexical variable — at `[Never, bound]`, a lexical variable at its own
 two ends, which is what a load-time type is
 compared through where a run may bind its variables to anything under their
@@ -459,7 +520,7 @@ one with a minimum meets to that minimum; admission cannot depend on the order
 the slots are read.
 
 While it is solved, a variable can slide between its ends, so the solve picks
-no point, and the order's instantiation clause asks only that each pair denote
+no point, and *fits*' instantiation clause asks only that each pair denote
 some type. A point is taken where something needs one: a call binds each
 variable to its pair's **least instance**, the lower end where a lower
 contribution reached the variable and the upper end otherwise. So
@@ -524,9 +585,13 @@ record sizes a linear symbol compare beats hashing. Two invariants define it —
 and **names are unique** within a record.
 
 A [`SigSchema`](schema.rs) is the normalized carrier of a signature's shape.
-Members are split by *representation* rather than by surface syntax: an abstract
-member is a rigid variable with no concrete witness, a manifest member fixes a
-concrete type. Every channel is a slice in the run region stored in one canonical
+Its **origin** says whether a `SIG` declared it or a module carries it — a
+module's self-signature, a view's, the empty one — and is part of its identity,
+since *fits* reads the two differently on its asking side. A declared
+signature's **head parameters** are a table of its own, each name to the
+`Parameter` its members read; a manifest member fixes a concrete type. A schema
+with no parameter and no member is always the empty signature, so `SIG E = #[]`
+and `Module` are one handle. Every channel is a slice in the run region stored in one canonical
 order — named tables symbol-sorted with each name once, the keyworded channel and
 the operator channel each in their own canonical order — so **a reader walks a
 table in that order and never sorts one**, and a lookup by name is a binary
@@ -585,8 +650,8 @@ canonical after it.
 
 Every structural recursion here goes through one of the two drivers in
 [walk](walk.rs), with rendering the single hand-written exhaustive match. Adding
-a compound node variant is a compile error at the drivers' arm tables, at the
-descent-knob sites, and in the renderer — **and nowhere else**. That is the
+a compound node variant is a compile error at the drivers' arm tables and in the
+renderer — **and nowhere else**. That is the
 property the drivers exist for. Adding any variant, leaf or compound, is also a
 compile error at [`family_top`](order.rs), which has no wildcard arm, so no
 type goes without a family.
@@ -595,31 +660,33 @@ Ask first whether the walk is unary or binary, then whether it rebuilds.
 
 - **Unary rebuild** ([walk/unary.rs](walk/unary.rs)) — supply a leaf rule
   `FnMut(KType, &TypeNode, &Context) -> Option<KType>`: `Some(k)` replaces the
-  node and stops, `None` lets the driver descend. Then pick the descent knobs:
-  whether a nested `Signature` is descended or treated as a leaf, and which union
-  door reassembles a union. Substitution, binder canonicalization and sibling
-  rewriting are all this.
+  node and stops, `None` lets the driver descend, and the one knob picks which
+  union door reassembles a union. A signature and a sealed member are leaves to
+  both unary drivers: one is closed content, the other content-addressed by its
+  component. Substitution and sibling rewriting are this.
 - **Unary visit** — supply a pre-order rule returning descend / skip / stop.
   Occurrence censuses and reference folds are this.
 - **Binary** ([walk/binary.rs](walk/binary.rs)) — implement `Lockstep`: an entry
   guard, a leaf verdict, a set-wise rule for unions, and a structural combine that
-  reads the arm's width verdict generically. The order, the meet and the unifier's
-  collector are the three instances. Two signatures, and two callables of which
-  one is quantified, reach the leaf verdict rather than a child pairing, because
-  their relations are schema-level and instantiation-level doors.
+  reads the arm's width verdict generically. The order — serving *fits* too —
+  the meet and the unifier's collector are the three instances. Two signature
+  types, and two callables of which one is quantified, reach the leaf verdict
+  rather than a child pairing, because their relations are application-level and
+  instantiation-level doors.
 
-The context a unary rule is handed answers the three questions the arm table
-alone cannot: whether an enclosing descended signature declares a given abstract
-member, how many binders lie between the root and here — `binder_depth`, which
-counts shapes and quantified function types alike — and the variance of the
-current position.
+The context a unary rule is handed answers the two questions the arm table
+alone cannot: how many binders lie between the root and here — `binder_depth`,
+which counts shapes and quantified function types alike — and the variance of
+the current position.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
 *between* children and inherits the quantifier binder from above, which neither
 driver expresses. It spells a type as a program writes it: a quantifier group
 as `FOR ALL #[Elt Key]`, or as a dict of each name to its bound,
-`FOR ALL #{Elt: Number, Key: Any}`, once any bound is not `Any`; and an
-expression shape's head quoted, `#(PURE _ :Elt)`. Every entry point takes the registry and the symbol interner,
+`FOR ALL #{Elt: Number, Key: Any}`, once any bound is not `Any`; a signature's
+head parameters as a bounded group, `SIG FOR ALL #{Elt: Any} (top: Elt)`, and an
+application in a meet parenthesized, `(… WITH {Elt = Number}) & (… WITH {Elt = Str})`;
+and an expression shape's head quoted, `#(PURE _ :Elt)`. Every entry point takes the registry and the symbol interner,
 never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Laws, not shapes
@@ -627,13 +694,15 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 The lattice is tested by its **laws**, as properties over generated type trees
 interned into a live registry ([tests/properties.rs](tests/properties.rs)). The
 order's reflexivity, antisymmetry and transitivity; join and meet's four laws;
-substitution's fixpoints; the digest's agreement with structural equality. A law
-two binders can break by handle — antisymmetry, and join and meet's
-commutativity, idempotence and associativity — draws types holding no binder
-([concrete types and binders](#concrete-types-and-binders)), and join and
-meet's laws among them have twins stated up to equivalence that draw binders
-too; the generators put carried unions
-under quantified positions, where a solve joins and meets.
+substitution's fixpoints; the digest's agreement with structural equality. Each
+holds **by handle** over every generated type, quantified binders and signature
+types included, and no law has a twin stated up to equivalence: the order never
+solves, so two handles that lie under each other are one. *Fits* has laws of its
+own — it is reflexive and transitive, contains the order, and fits the meet of
+two signature types to each — and a quantified binder lies under only itself in
+the order. The generators draw signatures over head parameters, applications
+pinning some of them and meets of two applications, and put carried unions under
+quantified positions, where a solve joins and meets.
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in
 [tests/families.rs](tests/families.rs), an interval's in
@@ -650,12 +719,9 @@ vocabulary so an identity move is visible in a diff
 
 ## Open work
 
-- [Quantifiers on declarations](../../roadmap/rewrite/quantifiers-on-declarations.md)
-  — an order that never solves, a signature type as a set of applications, and
-  the solving relation that admission, verdicts and ranking read.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
-  signature meet that bounds an abstract member by `Never`, which the
-  closed-bound rule forbids.
+  singleton static type for a type value, and anonymous structural recursion
+  in types.

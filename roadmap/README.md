@@ -63,7 +63,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Calls solved from their static types](gradual-typing/static-solutions.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [Dict defaults](rewrite/dict-defaults.md)
-- [Quantifiers on declarations](rewrite/quantifiers-on-declarations.md)
+- [Modules](rewrite/modules.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)

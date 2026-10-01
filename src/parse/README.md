@@ -125,8 +125,8 @@ statements are a `Block`; a statement of a member-declaring builtin shape a
 `Declaration`, and one that installs a `Binder`; a lone scalar literal or nested
 quote a `Literal`; a lone name, keyword, `:(…)` or `:{…}` its own kind; and every
 other statement an `Expression`. The declaration test is a table fact,
-`BuiltinShapeId::declares_member`, asked before the binder plan, since a `TYPE`
-declarator carries a plan yet installs nothing. A written paren is a part of its
+`BuiltinShapeId::declares_member`, asked before the binder plan, since a `VAL`
+carries a plan yet installs nothing. A written paren is a part of its
 own, so `#((LET x = 1))` is an `Expression`. `ExpressionPart::code_kind` answers
 the same for a bare part: a bare group is code of its own kind, as a quote is.
 

@@ -186,6 +186,22 @@ read of a capture that is an edge resolves through it to the sibling the edge
 names — a function or a data node — a bound value like any other. A capture read at birth through
 such a coordinate is therefore the sibling's value word.
 
+**A quantified function is read only at the head of a call.** A name bound to
+a quantified `FN` — by a `LET` of one, a `LET … = FN EXPR FOR ALL …`, a module
+body's binder of either, or a quantified `VAL` member a `USING … SCOPE` surfaces
+— resolves only as the head of a call by name, `(pick {x = 1})`; anywhere else
+it is refused `QuantifiedRead`, so its quantified type enters no other type. A
+`$pick` in a quote's code reads where the quote is written, so the same rule
+holds there, and a bare `$pick` refuses the program rather than the code; an
+`EVAL` refuses to offer `pick` to the code it runs, since an offer passes the
+name's value in. A
+quantified `FN` itself is written only as a binder's right-hand side or the head
+of a call, and is refused `QuantifiedLambda` elsewhere. Both rules read the
+syntax a name's declaration has, so no type is needed. To pass one, wrap it in
+an unquantified `FN` that calls it. A keyworded hole filled from a module and
+the candidates an `EVAL` offers are lists, not names, so either may hold a
+quantified registration.
+
 A search by symbol happens only where a shape is built.
 How the shape's runs are searched — linear below some length, binary above —
 is an implementation detail measured, not a commitment of the design.
@@ -286,7 +302,7 @@ body by site names it by — `BodyShape::form`, the builtin
 shape node a callable body sits in, where its signature is read,
 `BodyShape::rhs`, each `LET` binder's right-hand side part, where a data member
 is read, and `BodyShape::declarations`, each type binder's whole declaration
-node — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or a `LET` of a type name — where the
+node — a `NEWTYPE`, `UNION`, `SIG` or a `LET` of a type name — where the
 declaration door reads which declaration it is and where its declared part sits,
 off the node's own builtin shape. A caller ties a component of value binders
 when it is cyclic or every member births a callable or a module; a non-cyclic
@@ -302,11 +318,10 @@ A declaration's definition part is walked under the constructor state, so every
 type name it reads is a deferred mention — but a definition's own statements are
 declarators with builtin shapes of their own, and a type expression written
 inside one is a node with a shape of its own too: each is walked by *their*
-roles rather than by structure. A `SIG` body's `TYPE (Key Val AS Pair)`
-therefore declares `Pair`, and `Key` and `Val` sit in its `Name` part, which no
-walk reads; `TYPE (Carrier UNDER Number)` declares `Carrier`, and its bound is a
-deferred mention like the rest of the definition; a `FOR ALL` group inside one of
-its heads declares its quantifiers, bounded or not;
+roles rather than by structure. A `SIG`'s own `FOR ALL` group declares its head
+parameters for every member, and is read where the declaration is, as a
+callable's group is, so a bound in it is an eager mention; a `FOR ALL` group
+inside one of its heads declares its quantifiers, bounded or not;
 a manifest `LET` member declares its name, so a later `VAL` naming it is no
 mention either; a union's tags name its variants and are no mentions, while
 each payload quote is read as a type expression; and a parameterized
@@ -454,7 +469,7 @@ A cell holds `Unknown`, a closed value, or a rigid value beside the
 `Variable`s — a variable's level and the coordinate its value is
 read at — that the run substitutes. The vocabulary lives here, beside the shape
 that holds it: `Static`, `Variable`, and the callable-typing records the
-elaborator fills, `Callable`, `Canonical`, `Registered`, `ParameterBinding`, and
+elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
 `Elaboration`, so a shape error can carry an elaboration's refusal. A reader
 holding the shape reads its cell by site or slot: the evaluator, the body runner,
 a callable's birth and the overlap check.
@@ -491,11 +506,21 @@ Two forms introduce names no shape can see.
   the same way, and candidates for a keyworded use in the body. Only the binding is left to run time, which is
   [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s.
 
+  An operand ascribed to a signature surfaces each bodyless `EXPR` and `OP`
+  head the signature declares as such a registration — one per bucket key the
+  head's definition would register at, two for a `UNARY OP` — laid out among
+  the parameters at an index no statement takes and ranked by the head's own
+  written ranks, or an operator's chaining, so a ranking that disagrees with
+  another at its key is refused as a definition's is. Each records where its
+  head, its `SIG` and the ascription naming it are written
+  (`Registration::surfaced`), which is how
+  [the load](../elaborate/README.md#the-type-channel-at-load) types it.
+
   That works only if the names are readable where the shape is built, so the
   builder walks the operand's spine back to a declaration that states its
   members: a `MODULE` or `GROUP` binder's body, the `SIG` an ascription at the
-  site names, a `LET` rooted at either, a value or type alias, and a `WITH` pin,
-  which changes no name. The same walk reads the
+  site names — its head parameters and its members — a `LET` rooted at either,
+  a value or type alias, and a `WITH` pin, which changes no name. The same walk reads the
   [operator groups](#operator-groups) the operand surfaces — a `GROUP` binder's
   group, or a `SIG`'s bodyless `GROUP` heads — which the body then holds, so an
   operator run of their members may be written in it. The walk is fuel-bounded,
@@ -823,8 +848,7 @@ Over operands `o0 … on` and operators `k1 … kn`, each operand already rewrit
   and only `A | B` is read as an infix pair. Koan has no precedence, so
   `A | B & C` is `MixedGroups`. An operator run inside a quote the builder
   reads — a head, a type guard, a union's payload, a `FOR ALL` bound, a
-  signature's member — or inside a `TYPE` declarator's `<Name> UNDER <bound>` is
-  rewritten too, and the quote rebuilt around it;
+  signature's member — is rewritten too, and the quote rebuilt around it;
 - **pairwise** — the adjacent pairs `o(i-1) ki oi`, folded through the group's
   combiner written infix, in the group's direction.
 
@@ -884,7 +908,12 @@ program only for a `$` name nothing binds where the quote is written:
 - an **unsurfaced** `USING` — an operand that does not say, where the shape is
   built, which names it surfaces;
 - an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
-  rewrite home yet, and the reserved forms that exist only to diagnose a miss;
+  rewrite home yet, and the reserved forms that exist only to diagnose a miss,
+  `TYPE` among them, since a signature hides a type through a head parameter;
+- a **quantified lambda** — a quantified `FN` written anywhere but a binder's
+  right-hand side or the head of a call;
+- a **quantified read** — a name bound to a quantified function read anywhere
+  but the head of a call ([resolution](#resolution));
 - an **unquoted** part — one its role reads as a quote or a container of
   quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
   body. The message says how the part is written;

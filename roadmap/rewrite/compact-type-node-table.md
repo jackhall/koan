@@ -1,18 +1,18 @@
 # A compact type node table
 
-**Problem.** A [`TypeNode`](../../src/type_lattice/node.rs) is 128 B, sized by
-its largest variants: `AbstractType` and `Signature` at 120 B (a `SigSchema` is
-104 B), `SetMember` at 113 B and `ExpressionShape` at 96 B. The variants a
+**Problem.** A [`TypeNode`](../../src/type_lattice/node.rs) is 112 B, sized by
+its largest variants: `Signature` (a `SigSchema` is 88 B), `SetMember` and
+`ExpressionShape`. The variants a
 program mints most often (`List`, `Dict`, `Record`, `KFunction`, `Union`) need
 48 B or less. The [registry](../../src/type_lattice/registry.rs)'s node table
 stores an `Entry` beside each key: the node plus its `quantified` and `rigid`
-flags, which pad it to 144 B, so each bucket is 160 B. The table is a hashbrown map
+flags, which pad it to 128 B, so each bucket is 144 B. The table is a hashbrown map
 in [program storage](../../src/program/README.md) that doubles when full. The
 bump can't take the old table back, so after each doubling the previous bucket
-array sits dead until the program ends. A registry of 16k mixed types measures
-11.8 MB: about 5.3 MB of live node table, 5.3 MB of dead tables, 1.2 MB of
-interned content and 49 KB of verdict table. Nothing sizes the table ahead of the
-program it serves.
+array sits dead until the program ends. A registry of 16k mixed types, measured
+over a 128 B node, held 11.8 MB: about 5.3 MB of live node table, 5.3 MB of dead
+tables, 1.2 MB of interned content and 49 KB of verdict table. Nothing sizes the
+table ahead of the program it serves.
 
 **Acceptance criteria.**
 
@@ -52,7 +52,7 @@ program it serves.
   Each has room for a `u16` at offset 2, a `u32` at offset 4, one thin
   reference at offset 8 and two 16 B fields:
   - `Signature { flags, schema: &'run SigSchema, schema_digest }`.
-    `sig_satisfies` reads the schema's tables together and its verdict is
+    `sig_fits` reads the schema's tables together and its verdict is
     cached, so the hop is paid once per pair.
   - `SetMember { flags, kind, index: u32, data, scc_digest, name }`, where
     `data` holds `scc_size` and the `NodeSchema`. `kind_of` and sibling

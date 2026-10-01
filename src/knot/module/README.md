@@ -35,8 +35,8 @@ and a view both go through, so the two have one representation and one copy.
 Every door here rests on one rule, and [`layout.rs`](layout.rs) is the only
 place it is spelled:
 
-> **Value members, sorted by name; then type members, sorted by name**, abstract
-> and manifest merged into one run.
+> **Value members, sorted by name; then type members, sorted by name**, a
+> signature's head parameters and manifest members merged into one run.
 
 Three readers agree on it, and none consults the others:
 
@@ -73,15 +73,20 @@ through — holding only the members its signature names, at the types that
 signature declares. So a view and a body-born module have one representation and
 one copy, and nothing downstream asks which it holds.
 
-The door reads the source's self-signature, checks it satisfies the ascribed one
-(`sig_subtype`), and then fixes two substitutions over the signature's abstract
-members:
+The ascribed type must be one application of a declared signature,
+`Counter` or `Counter WITH {Carrier = Number}`; a meet of several is refused,
+since a view lays out one signature's members. The door checks that the source's
+self-signature [*fits*](../../type_lattice/README.md#signature-types) the
+application, which solves each head parameter the application leaves unpinned
+from what the source's members offer, and then fixes two substitutions over the
+signature's head parameters:
 
-- `from` — what the *source* binds each abstract member to, which is the
-  substitution the member it holds was built under;
-- `to` — under `:!`, `from` itself; under `:|`, a **fresh mint per abstract
-  member**: a rigid variable carrying this application's nonce, over the
-  declaration's own parameter names and bound.
+- `from` — what *fits* solved each one to, or its pin: under
+  `SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]`, a source binding
+  `zero` to `0` gives `Carrier` the type `Number`;
+- `to` — under `:!`, `from` itself; under `:|`, a **fresh mint per unpinned
+  parameter**: a `Parameter` carrying this application's nonce, under the
+  declaration's own bound. A pinned parameter keeps its pin either way.
 
 Everything after that is one body, [`build`](view.rs), so the two operators are
 not two paths that agree: `:!` is the case of `:|` where `to` is `from`, and
@@ -89,12 +94,13 @@ every coercion below stops at its first comparison. Two `:|` ascriptions of one
 signature over one module therefore produce views whose carriers do not unify,
 while `:!` is a relabelling.
 
-The view carries a signature of its own — every type member fixed manifest at
-what `to` gives it, every value slot at its declared type read under `to` — so a
-module's own signature never has abstract members, and a view's is a module's.
+The view carries a signature of its own — each head parameter a manifest member
+at what `to` gives it, every manifest member and value slot at its declared type
+read under `to` — so a view's signature is a module's, with no parameters, and
+it lays out no keyworded member.
 
 An `Unascribable` names which door refused: the operand is no module, the
-ascribed handle names no signature, the module does not satisfy the signature
+ascribed handle names no one application of a signature, the module does not fit it
 (carrying the lattice's own failure), or a member could not take the view's type
 for it. A refusal binds nothing and writes nothing but what a partial coercion
 walk had already laid down, which no name reaches.
@@ -103,8 +109,8 @@ walk had already laid down, which no name reaches.
 
 A view's members take the view's types where the view is built, so every read
 surface agrees by construction and nothing downstream re-checks. Under `:|` a
-member declared at an abstract member no longer has the type it had in the
-source, so it is not carried but rebuilt — [`coerce`](coerce.rs).
+member declared at an unpinned head parameter no longer has the type it had in
+the source, so it is not carried but rebuilt — [`coerce`](coerce.rs).
 
 **The walk recurses on the declared type**, never on the two substituted types
 in lockstep. A union interns its members in a canonical order, so the source's
@@ -112,16 +118,16 @@ substitution and the view's do not correspond position for position; only the
 declaration lines them up. At each step the declared type read under `from` and
 under `to` says what the member is coming from and going to, and **where the two
 agree there is nothing to do** — which is the whole of `:!`, and every slot of
-`:|` that names no abstract member.
+`:|` that names no unpinned parameter.
 
 Where they differ, the arm is the declared type's:
 
-- a reference to an abstract member, first-order or applied — the value takes
-  the mint as its one tagged layer, through
-  [`sealing`](../../values/README.md#what-a-value-is), the second checked
-  constructor beside `construction`: an abstract type records no representation
-  to check a construction against, so what is checked is that the identity is a
-  per-application mint and that the payload satisfies the source's own binding;
+- a reference to a head parameter — the value takes the mint as its one tagged
+  layer, through [`sealing`](../../values/README.md#what-a-value-is), the second
+  checked constructor beside `construction`: a parameter records no
+  representation to check a construction against, so what is checked is that
+  the identity is a per-application mint and that the payload satisfies the
+  source's own binding;
 - a list, dict or record — rebuilt part by part from what its type shows, a
   record from the fields its slot declares and no other, through its own public
   door and re-stamped with the declared handle where the derived memo is not that one,
@@ -136,11 +142,13 @@ Where they differ, the arm is the declared type's:
   function it stands before, the type a caller sees, the declared slot type and
   the two substitutions as signature handles. Teaching a call to go through it
   is [module programs](../../../roadmap/rewrite/modules.md)';
-- a signature — the member is **re-viewed** through the same `build`. Nothing is
-  minted at a nested boundary: the nested signature's slot types name the
-  *enclosing* signature's members, so the enclosing substitutions read them and
-  the nested view's abstract identities are the outer mints, arriving through
-  the declared type rather than being made again.
+- an application whose pins name the enclosing signature's parameters — the
+  member is **re-viewed** through the same `build`. Nothing is minted at a
+  nested boundary: the enclosing substitutions read the pins, so the nested
+  view's identities are the outer mints, arriving through the declared type
+  rather than being made again, and the nested signature's own unpinned
+  parameters keep what *fits* solves them to. A signature-typed slot whose type
+  names no enclosing parameter reads alike either side, and is carried.
 
 Anything else, and any value whose shape does not match the arm its declaration
 took, is a `CoercionRefused` naming what it was.
@@ -157,8 +165,9 @@ What is left at run time is the binding, and layout order is what makes it an
 index: [`surface`](surface.rs) walks the block's slots, picks the parameters out
 by declared position — a block declares locals of its own, and a local sorts in
 among the parameters rather than after them — and binds the `k`-th parameter of
-a channel to member `k` of that channel. The walk is staged first, so a refusal
-binds nothing.
+a channel to member `k` of that channel. A surfaced head is a registration
+parameter, which the load types and nothing binds here. The walk is staged
+first, so a refusal binds nothing.
 
 Its three refusals are unreachable from koan source: the block's parameters
 *are* the module's declared names, so a block and the module it surfaces cannot
@@ -188,9 +197,9 @@ ties the binder with the finished activation.
 - [`tests/coerced.rs`](tests/coerced.rs) — what a barrier holds, and `values`
   seeing it as the function it stands for.
 - [`tests/view.rs`](tests/view.rs) — a transparent view carries what the
-  signature names and drops the rest, an opaque one mints a fresh carrier per
-  application and sources it at its own nonce, each refusal, and a view copying
-  across a cell like any module.
+  signature names at what *fits* solves, an opaque one mints a fresh carrier per
+  application under the parameter's name and bound and keeps a pin, each
+  refusal, and a view copying across a cell like any module.
 - [`tests/coerce.rs`](tests/coerce.rs) — one program per arm: every slot that
   names the carrier born at the mint, a function member behind a barrier, a
   nested module re-viewed at the outer mint, a signature-typed slot naming no
@@ -209,8 +218,6 @@ suite, since they are facts about the shape.
 - [Module programs](../../../roadmap/rewrite/modules.md) — evaluating `:|`, `:!`
   and a member read as expressions, and calling a function member through its
   barrier.
-- [Quantifiers on declarations](../../../roadmap/rewrite/quantifiers-on-declarations.md)
-  — the view door reading the solving relation, and a quantified member.
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
-  data member coerced through a barrier, `WITH` over a signature in a type
-  expression, and a dict's keys crossing a barrier unsealed.
+  data member coerced through a barrier, a union slot coercing by interning
+  order, and a dict's keys crossing a barrier unsealed.

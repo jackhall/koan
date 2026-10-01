@@ -116,11 +116,11 @@ nothing to keep in agreement.
 
 **A seal is the second checked door.** [`sealing`](admission.rs) is what an
 opaque view's barrier goes through
-([members are born coerced](../knot/module/README.md#members-are-born-coerced)): an
-abstract type records no representation for `construction` to check a payload
+([members are born coerced](../knot/module/README.md#members-are-born-coerced)): a
+head parameter records no representation for `construction` to check a payload
 against, so what is checked instead is that the identity is a *per-application
-mint* — a nonced abstract type, or an application of one — and that the payload
-satisfies what the source binds that member to. It answers the mint as the
+mint* — a `Parameter` carrying a nonce — and that the payload satisfies what the
+source binds that parameter to. It answers the mint as the
 identity, or a `SealRefused`: `NotAMint` for an identity that is no mint,
 `Misfit` for a payload the source's binding does not admit. `Tagged::seal` is
 the checked door over it, and it `peel`s, so a sealed member takes the mint as
@@ -146,7 +146,7 @@ one layer, so there is one layer to read through.
 
 A value borrows at one lifetime, `Value<'cell>`: what a writer laid down in a
 cell's region, following
-[cellgraph's contract](../../cellgraph/README.md#the-contract-two-embedder-types).
+[cellgraph's contract](../../cellgraph/README.md#the-contract-three-embedder-types).
 No arm holds program storage. A quote's body lives there, but a quote is a knot
 member, and what a member holds of program storage — a function's body shape, a
 quote's body and code shape — sits inside the member, at the lifetime the layer

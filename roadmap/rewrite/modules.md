@@ -10,9 +10,13 @@ expression shape, and a name a `USING` surfaces resolves to a coordinate a runni
 has to redeem, and [dispatch](../../src/dispatch/README.md) answers each with an
 error value, since nothing evaluates it. No module program runs on the rewritten
 stack, and the old runtime's [`Module`](../../src/machine/model/values/module.rs)
-is the module surface `machine` still owns. The layer's signatures hide a type
-through an abstract `TYPE` member, and each evaluation of `:|` mints a fresh
-nonce for it, so two opaque views of one module never share a carrier.
+is the module surface `machine` still owns. A signature hides a type through a
+head parameter, `SIG Counter FOR ALL #[Carrier] = #[…]`, and each evaluation of
+`:|` mints a fresh nonce for each parameter the application leaves unpinned, so
+two opaque views of one module never share a carrier. A `USING … SCOPE` body
+types each keyworded use of its operand signature's member heads at load
+([static types](../../src/dispatch/README.md#static-types)), but nothing binds
+those registrations where the body runs.
 
 **Acceptance criteria.**
 
@@ -78,10 +82,9 @@ nonce for it, so two opaque views of one module never share a carrier.
   no door of its own.
 - *Parameterized signatures — decided.* A signature quantifies at its head,
   `SIG Ordered FOR ALL #{Carrier: Bound} = #[…]`, and
-  `Ordered WITH {Carrier = Number}` is an application, per
-  [quantifiers on declarations](quantifiers-on-declarations.md), which declares
-  them, moves the view door onto them and leaves the `:|` mint carrying a nonce
-  that this item removes. Ascription solves the head quantifier against the
+  `Ordered WITH {Carrier = Number}` is an application. The
+  [view door](../../src/knot/module/README.md#the-view-door) already reads them,
+  and its `:|` mint carries a nonce that this item removes. Ascription solves the head quantifier against the
   module's member types with the unifier a call solves a `FOR ALL` with, and
   `ints :! (Ordered WITH {Carrier = …})` stays writable. It takes the
   [least instance](../../src/type_lattice/README.md#the-unifier-collects-it-does-not-bind)
@@ -136,9 +139,9 @@ nonce for it, so two opaque views of one module never share a carrier.
   only where it is ascribed or passed to a `:Sig` slot.
 - *An unpinned signature parameter — decided.* An application may leave a head
   parameter unpinned, and it then stands for one type per module, as the
-  annotation's check reads it, per
-  [quantifiers on declarations](quantifiers-on-declarations.md). A variable a
-  member needs per use is written on the member.
+  annotation's check reads it, as
+  [*fits*](../../src/type_lattice/README.md#the-relations) reads an unpinned
+  parameter. A variable a member needs per use is written on the member.
 - *Leaving a constructor's parameter unpinned — open.* Whether a type
   constructor's application may pin some parameters and leave the rest
   quantified, `Pair WITH {First = Number}` leaving `Second` open, which relaxes
@@ -158,14 +161,11 @@ nonce for it, so two opaque views of one module never share a carrier.
 
 ## Dependencies
 
-**Requires:**
-
-- [Quantifiers on declarations](quantifiers-on-declarations.md) — the signature
-  types and the relation the doors read.
+**Requires:** none.
 
 **Unblocks:**
 
-- [A compact type node table](compact-type-node-table.md) — `AbstractType` is
-  gone before the node is sized.
+- [A compact type node table](compact-type-node-table.md) — the nonce a
+  `Parameter` carries is gone before the node is sized.
 - [Retire the old runtime](retire-the-old-runtime.md) — the module surface
   `machine` still owns.

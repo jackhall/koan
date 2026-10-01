@@ -128,11 +128,12 @@ button
 
 `:!` is **transparent** ascription and `:|` is **opaque**. Both check the
 module against the signature and expose its value members. The difference is in
-how they treat *abstract type members* a signature can declare: transparent
-ascription leaves those types visible as their underlying definition, while
-opaque ascription hides them behind the signature, so callers can only use them
-through the operations the signature provides. For a module with only value
-members, the two behave the same.
+how they treat the types a signature leaves for each module to choose — its
+[head parameters](12-functors.md#signatures-over-a-type-sig--for-all-and-with):
+transparent ascription leaves each one visible as the type the module chose,
+while opaque ascription hides it behind the signature, so callers can only use
+it through the operations the signature provides. For a signature with no head
+parameters, the two behave the same.
 
 If the module is missing a required member, ascription fails:
 
@@ -198,9 +199,10 @@ a color
 ```
 
 This works for a module sealed behind a signature too, and it is where opening
-one pays off: the block names the signature's abstract type members, and they
-stay abstract there — `Elem` is the sealed module's own type, never the concrete
-type it was built from.
+one pays off: the block names the signature's head parameters, and they stay
+hidden there — `Elem` is the sealed module's own type, never the concrete type
+it was built from. Each use of a shape the signature declares is checked where
+the block is written, against the signature's head for it.
 
 Names you declare inside the block belong to the block. They are visible to the
 block's later statements, they shadow a module member of the same name from the

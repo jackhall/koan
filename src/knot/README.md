@@ -52,9 +52,9 @@ activation. This module closes it:
   [elaborator builds](../elaborate/README.md#a-callables-type) from the
   function's type over its head. The **quantifier map**, where the function's
   type binds a `FOR ALL` group, pairs each
-  `FOR ALL` name the declaration wrote with that name's index in the canonical
-  group, or with its bound where canonical form dropped it
-  ([the elaborator hands it back](../elaborate/README.md#a-callables-type)),
+  `FOR ALL` name the declaration wrote with that name's index in the group —
+  a permutation, since the group keeps every name
+  ([the elaborator hands it back](../elaborate/README.md#a-callables-type)) —
   and a call reads it to bind each type parameter to what the group solved to.
   It is keyed by the **name** because a frame walks its callee's slots in the
   type channel's symbol order, so nothing positional survives the trip. The
