@@ -23,8 +23,10 @@ nonce for it, so two opaque views of one module never share a carrier.
   where the reader runs, and a member that is itself a knot member crosses to
   the reader priced as its knot.
 - A registration a `USING … SCOPE` operand surfaces is a candidate for a
-  keyworded use in its body, and one as specific as a registration visible
-  from outside the body makes the call an ambiguity error.
+  keyworded use in its body — a `MODULE` binder's own registration, or the
+  module's registration a signature's member head selects, bound where the body
+  runs — and one as specific as a registration visible from outside the body
+  makes the call an ambiguity error.
 - A `USING … SCOPE` body's static type, read where the body is written, holds
   none of the body's own lexical variables. Sibling blocks number their names
   alike, so one block's `Tt` never reaches a sibling that declares its own `Tt`
@@ -33,13 +35,9 @@ nonce for it, so two opaque views of one module never share a carrier.
   [barrier](../../src/knot/module/README.md#members-are-born-coerced) an opaque view
   holds rewrites each argument from the view's
   types to its root implementation's, runs the underlying function, and rewrites
-  the result to the view's types where the call returns.
-- A signature quantifies at its head: `SIG Counter FOR ALL #{Carrier: Any} = #[…]`
-  elaborates, `Counter WITH {Carrier = Number}` is its application, and a `TYPE`
-  member in a signature is refused where its shape is built.
-- `ints :! Counter` solves `Carrier` against `ints`'s member types, as a call
-  solves a `FOR ALL` against its arguments, and the view shows the solution;
-  under `ints :| Counter` the view's `Carrier` is an unbounded carrier that no
+  the result to the view's types where the call returns. A barrier before a
+  quantified member solves the member's group at each call first.
+- Under `ints :| Counter` the view's `Carrier` is an unbounded carrier that no
   code outside the view constructs or matches.
 - Two evaluations of `ints :| Counter`, and `(ints :| Counter) :| Counter`,
   yield views whose carriers are one type, so a value read from one passes to
@@ -64,6 +62,12 @@ nonce for it, so two opaque views of one module never share a carrier.
   equality: a sealed `Number` a view's member hands to `+`, or to any native
   whose slot admits it, computes as the number, and no member of a view over a
   builtin type reaches a native's invariant check.
+- A functor whose slot is `m :(Monad WITH {Wrap = Context})` runs over a module
+  defining `RETURN` and `BIND` at every `Item`, its body using `BIND` at two
+  instances through that one slot.
+- A quantified member read `m.f` outside the head of a call refuses the load
+  where `m`'s static type names the member, and is a fault where the read runs
+  when its module arrived through `Any`.
 - The old runtime's tutorial programs that use modules run on the rewritten
   stack and print the same output.
 
@@ -74,9 +78,10 @@ nonce for it, so two opaque views of one module never share a carrier.
   no door of its own.
 - *Parameterized signatures — decided.* A signature quantifies at its head,
   `SIG Ordered FOR ALL #{Carrier: Bound} = #[…]`, and
-  `Ordered WITH {Carrier = Number}` is an application. A signature declares no
-  `TYPE` member, so the abstract member, its nonce and the signature meet over
-  abstract members go. Ascription solves the head quantifier against the
+  `Ordered WITH {Carrier = Number}` is an application, per
+  [quantifiers on declarations](quantifiers-on-declarations.md), which declares
+  them, moves the view door onto them and leaves the `:|` mint carrying a nonce
+  that this item removes. Ascription solves the head quantifier against the
   module's member types with the unifier a call solves a `FOR ALL` with, and
   `ints :! (Ordered WITH {Carrier = …})` stays writable. It takes the
   [least instance](../../src/type_lattice/README.md#the-unifier-collects-it-does-not-bind)
@@ -129,10 +134,18 @@ nonce for it, so two opaque views of one module never share a carrier.
   ([keyworded uses](../../src/scope/README.md#keyworded-uses)), so a module meeting a signature whose members are
   ranked does not repeat the ranking. A module without an annotation is checked
   only where it is ascribed or passed to a `:Sig` slot.
-- *Leaving a parameter unpinned — open.* Whether an application may pin some
-  parameters and leave the rest quantified, `Pair WITH {First = Number}`
-  leaving `Second` open, which relaxes the refusal of an application missing a
-  key, for type constructors as for signatures.
+- *An unpinned signature parameter — decided.* An application may leave a head
+  parameter unpinned, and it then stands for one type per module, as the
+  annotation's check reads it, per
+  [quantifiers on declarations](quantifiers-on-declarations.md). A variable a
+  member needs per use is written on the member.
+- *Leaving a constructor's parameter unpinned — open.* Whether a type
+  constructor's application may pin some parameters and leave the rest
+  quantified, `Pair WITH {First = Number}` leaving `Second` open, which relaxes
+  the refusal of an application missing a key.
+- *Ascribing a meet — open.* The view door refuses `m :! (A & B)`, since a view
+  lays out one signature's members. A view of several applications could lay
+  out each member once, or meet the types two applications give one name.
 - *Higher-kinded parameters — open.* A parameter ranging over type-constructor
   families, as a `Monad` signature over `(Type AS Wrap)` needs, lacks a spelling
   in the quantifier dict, and that spelling should be one with
@@ -147,6 +160,8 @@ nonce for it, so two opaque views of one module never share a carrier.
 
 **Requires:**
 
+- [Quantifiers on declarations](quantifiers-on-declarations.md) — the signature
+  types and the relation the doors read.
 
 **Unblocks:**
 

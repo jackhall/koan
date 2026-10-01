@@ -650,8 +650,9 @@ vocabulary so an identity move is visible in a diff
 
 ## Open work
 
-- [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
-  — a group interned with every declared variable kept, for solving only.
+- [Quantifiers on declarations](../../roadmap/rewrite/quantifiers-on-declarations.md)
+  — an order that never solves, a signature type as a set of applications, and
+  the solving relation that admission, verdicts and ranking read.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.

@@ -44,9 +44,10 @@ program it serves.
 
 **Directions.**
 
-- *`AbstractType` — decided.* [Modules](modules.md) removes it, its nonce and
-  the mint in [`knot/module/view.rs`](../../src/knot/module/view.rs), so this
-  item lays out no `AbstractType` and mints nothing.
+- *`Parameter` — decided.* [Modules](modules.md) removes the nonce a `:|` mint
+  carries and the mint in [`knot/module/view.rs`](../../src/knot/module/view.rs),
+  so this item lays out `Parameter { name, bound }`, with no nonce, and mints
+  nothing.
 - *The layouts of `Signature` and `SetMember` — decided.*
   Each has room for a `u16` at offset 2, a `u32` at offset 4, one thin
   reference at offset 8 and two 16 B fields:
@@ -65,9 +66,8 @@ program it serves.
   offset 1, and the size assert turns any layout drift into a build error.
   A hand-packed header over a `union` payload reaches the same 48 B and adds
   `unsafe`.
-- *How `ExpressionShape` fits 48 B — open.* Only `elements`, `ret` and the
-  quantifier arity carry identity: `quantifiers` is render-only, and `bounds`
-  is read off the `Quantified` occurrences. Options: move the whole payload
+- *How `ExpressionShape` fits 48 B — open.* Only `elements`, `ret`, the
+  quantifier arity and `bounds` carry identity: `quantifiers` is render-only. Options: move the whole payload
   out of line, which puts a hop on every dispatch read of `elements` and
   `ret`; or keep `elements` and `ret` inline and move `quantifiers` and
   `bounds` behind one `Option<&'run ShapeBinders>`, which is `None` for a
@@ -94,7 +94,7 @@ needs dispatch.
 
 **Requires:**
 
-- [Modules](modules.md) — removes `AbstractType`, a 120 B variant this item
-  gives no layout.
+- [Modules](modules.md) — removes the nonce `Parameter` carries, so the
+  variant this item lays out is small.
 
 **Unblocks:** none — a leaf.

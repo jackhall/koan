@@ -209,6 +209,8 @@ suite, since they are facts about the shape.
 - [Module programs](../../../roadmap/rewrite/modules.md) — evaluating `:|`, `:!`
   and a member read as expressions, and calling a function member through its
   barrier.
+- [Quantifiers on declarations](../../../roadmap/rewrite/quantifiers-on-declarations.md)
+  — the view door reading the solving relation, and a quantified member.
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
   data member coerced through a barrier, `WITH` over a signature in a type
   expression, and a dict's keys crossing a barrier unsealed.

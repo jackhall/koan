@@ -519,9 +519,9 @@ refusal refusing the load, or kept on its quote's code shape.
 
 ## Open work
 
-- [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
-  — a type parameter canonical form drops, which a call binds to its bound
-  rather than to what the arguments solve it to.
+- [Quantifiers on declarations](../../roadmap/rewrite/quantifiers-on-declarations.md)
+  — `SIG … FOR ALL` and `WITH` over a signature, and a quantified function type
+  spelled only as a `VAL` member's.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates;
   a family's variance, which no declaration states; and a parameterized union

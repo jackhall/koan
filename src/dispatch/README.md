@@ -562,8 +562,9 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Module programs](../../roadmap/rewrite/modules.md) — the module expression
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
-- [Solving dropped type parameters](../../roadmap/gradual-typing/solving-dropped-type-parameters.md)
-  — a type parameter canonical form drops, which a call binds to its bound.
+- [Quantifiers on declarations](../../roadmap/rewrite/quantifiers-on-declarations.md)
+  — a quantified function read only at the head of a call, and verdicts and
+  ranking over signature-typed slots.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.
