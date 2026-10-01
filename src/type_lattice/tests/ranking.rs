@@ -65,9 +65,11 @@ impl<'r> World<'r> {
         self.head_to(group, parts, classes, KType::ANY)
     }
 
-    /// The shape `FOR ALL #[<group>] #(<parts>) -> <ret>` under `classes`.
+    /// The shape `FOR ALL #[<group>] #(<parts>) -> <ret>` under `classes`, each variable bounded by
+    /// `Any`.
     fn head_to(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8], ret: KType) -> KType {
         let names: Vec<TypeSymbol> = group.iter().map(|text| self.name(text)).collect();
+        let bounds = vec![KType::ANY; names.len()];
         let elements: Vec<DispatchTokenElement> = parts
             .iter()
             .map(|part| match part {
@@ -78,7 +80,7 @@ impl<'r> World<'r> {
             })
             .collect();
         self.types
-            .shape_type(self.region, &names, &elements, classes, ret)
+            .shape_type(self.region, &names, &bounds, &elements, classes, ret)
             .handle
     }
 
@@ -86,7 +88,7 @@ impl<'r> World<'r> {
     fn handler(&self, param: KType) -> KType {
         let v = BinderSymbol::declared("v", &self.symbols).expect("a bindable token");
         self.types
-            .function_type(self.region, &[], &[(v, param)], KType::NULL)
+            .function_type(self.region, &[], &[], &[(v, param)], KType::NULL)
             .handle
     }
 
@@ -234,9 +236,9 @@ fn move_is_decided_by_its_second_class() {
     );
 }
 
-/// `PAIR 1 WITH 2`: one variable beats two. Canonical form reads the two-variable head as
-/// `#(PAIR _ :Any WITH _ :Any)`; the one-variable head's `Elt`, solved from `x`, reads at `y` as a
-/// stand-in over whatever a call binds it to, which `Any` does not lie under.
+/// `PAIR 1 WITH 2`: one variable beats two. The one-variable head's `Elt`, solved from `x`, reads at
+/// `y` as a stand-in over whatever a call binds it to, which the two-variable head's independent
+/// `Second` does not lie under.
 #[test]
 fn pair_prefers_one_variable_to_two() {
     let bump = Bump::new();
@@ -261,12 +263,6 @@ fn pair_prefers_one_variable_to_two() {
         ],
         &[],
     );
-    let any = world.head(
-        &[],
-        &[Kw("PAIR"), Slot(KType::ANY), Kw("WITH"), Slot(KType::ANY)],
-        &[],
-    );
-    assert_eq!(two, any);
     assert_eq!(world.select(&[one, two]), [0]);
     assert_eq!(world.select(&[two, one]), [1]);
     assert_eq!(

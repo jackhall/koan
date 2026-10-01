@@ -270,10 +270,10 @@ fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
 #[test]
 fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
     // A callee's type-parameter slots reach its frame **symbol-sorted**, which is BLAKE3 order and
-    // so unrelated to what was written. These two callees are the same type — canonical form drops
-    // the unused name from both — and differ only in the order their groups were written, so a
-    // frame that read the map positionally would hand one of them the other's answer. Both must
-    // read `Unused` as `Any` whichever way the two symbols happen to sort.
+    // so unrelated to what was written. These two callees are the same type — each group puts the
+    // unused name last — and differ only in the order their groups were written, so a frame that
+    // read the map positionally would hand one of them the other's answer. No argument reaches
+    // `Unused`, so both must read it as its bound `Any` whichever way the two symbols sort.
     let mut substrate = loaded(
         "LET ab = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET ba = (FN FOR ALL #[Unused Held] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
@@ -281,7 +281,7 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
         2,
     );
     let read = run_and_read(&mut substrate, &["one", "two"]);
-    assert_eq!(read[0], "Any", "`Unused` is dropped by canonical form");
+    assert_eq!(read[0], "Any", "`Unused` binds its bound");
     assert_eq!(
         read[1], read[0],
         "the written order does not change the answer"
@@ -403,7 +403,7 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
 }
 
 #[test]
-fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
+fn a_type_parameter_no_argument_reaches_binds_its_bound() {
     let mut substrate = loaded(
         "LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET t = (which [1 2])",

@@ -12,7 +12,7 @@ use crate::values::Value;
 
 use super::super::{callable_type, type_expression};
 use super::{Held, Program, nulls, scalars, with_program};
-use crate::scope::{Canonical, Elaboration, ParameterBinding};
+use crate::scope::{Elaboration, ParameterBinding};
 
 /// The right-hand side of `LET <name> = <rhs>` on `line`.
 fn rhs<'graph>(line: &KExpression<'graph>) -> &'graph ExpressionPart<'graph> {
@@ -75,7 +75,7 @@ LET Bare = Alias";
             assert_eq!(
                 elaborated(&program, 5),
                 Ok(types
-                    .function_type(scratch, &[], &[(x, KType::NUMBER)], KType::BOOL)
+                    .function_type(scratch, &[], &[], &[(x, KType::NUMBER)], KType::BOOL)
                     .handle)
             );
             let twice = [
@@ -85,7 +85,7 @@ LET Bare = Alias";
             assert_eq!(
                 elaborated(&program, 6),
                 Ok(types
-                    .shape_type(scratch, &[], &twice, &[], KType::NUMBER)
+                    .shape_type(scratch, &[], &[], &twice, &[], KType::NUMBER)
                     .handle)
             );
             assert_eq!(elaborated(&program, 7), Ok(KType::STR));
@@ -124,7 +124,7 @@ LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
             DispatchTokenElement::Slot(KType::STR),
         ];
         let ranked = types
-            .shape_type(scratch, &[], &elements, &[1, 0], KType::NUMBER)
+            .shape_type(scratch, &[], &[], &elements, &[1, 0], KType::NUMBER)
             .handle;
         assert_eq!(elaborated(&program, 0), Ok(ranked));
         assert_eq!(elaborated(&program, 1), Ok(ranked));
@@ -160,7 +160,7 @@ fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
         let quantified = types.quantified(0, KType::ANY);
         let x = BinderSymbol::classify("x").unwrap();
         let inner = types
-            .function_type(scratch, &[], &[(x, quantified)], quantified)
+            .function_type(scratch, &[], &[], &[(x, quantified)], quantified)
             .handle;
         let elt = program.type_name("Elt");
         assert_eq!(
@@ -169,6 +169,7 @@ fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
                 .shape_type(
                     scratch,
                     &[elt],
+                    &[KType::ANY],
                     &[
                         keyword("APPLY", program.symbols),
                         DispatchTokenElement::Slot(inner),
@@ -297,13 +298,16 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                 .function_type(
                     scratch,
                     &[],
+                    &[],
                     &[(x, KType::NUMBER), (ys, types.list(KType::STR))],
                     KType::BOOL
                 )
                 .handle)
         );
         let shape = |elements: &[DispatchTokenElement], ret| {
-            types.shape_type(scratch, &[], elements, &[], ret).handle
+            types
+                .shape_type(scratch, &[], &[], elements, &[], ret)
+                .handle
         };
         let number = DispatchTokenElement::Slot(KType::NUMBER);
         // Every definition is typed by its function type, over its head's **slot names**: a call
@@ -312,13 +316,19 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
         assert_eq!(
             typed("twice"),
             Ok(types
-                .function_type(scratch, &[], &[(x, KType::NUMBER)], KType::NUMBER)
+                .function_type(scratch, &[], &[], &[(x, KType::NUMBER)], KType::NUMBER)
                 .handle)
         );
         let elt = program.type_name("Elt");
         let quantified = types.quantified(0, KType::ANY);
         let identity = types
-            .function_type(scratch, &[elt], &[(x, quantified)], quantified)
+            .function_type(
+                scratch,
+                &[elt],
+                &[KType::ANY],
+                &[(x, quantified)],
+                quantified,
+            )
             .handle;
         assert_eq!(
             typed("id"),
@@ -332,13 +342,14 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
         );
         assert_eq!(
             mapped("lambda_id"),
-            vec![(elt, Canonical::At(0))],
-            "the one declared name survives canonical form at index 0, keyed by the name written"
+            vec![(elt, 0)],
+            "the one declared name is at index 0, keyed by the name written"
         );
         let binary = |ret| {
             types
                 .function_type(
                     scratch,
+                    &[],
                     &[],
                     &[(left, KType::NUMBER), (right, KType::NUMBER)],
                     ret,
@@ -356,6 +367,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
             Ok(types
                 .function_type(
                     scratch,
+                    &[],
                     &[],
                     &[(operands, types.list(KType::NUMBER))],
                     KType::NUMBER
@@ -378,16 +390,14 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
             registered("twice").parameters,
             ParameterBinding::Named(&[x])
         );
-        assert_eq!(
-            registered("id").quantifier_map,
-            &[(elt, Canonical::At(0))][..]
-        );
+        assert_eq!(registered("id").quantifier_map, &[(elt, 0)][..]);
         assert_eq!(
             registered("id").shape,
             types
                 .shape_type(
                     scratch,
                     &[elt],
+                    &[KType::ANY],
                     &[
                         keyword("ID", symbols),
                         DispatchTokenElement::Slot(quantified)
@@ -488,6 +498,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                 .function_type(
                     scratch,
                     &[elt],
+                    &[KType::ANY],
                     &[(x, quantified), (ys, types.list(quantified))],
                     quantified
                 )
@@ -498,6 +509,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
             types
                 .function_type(
                     scratch,
+                    &[],
                     &[],
                     &[(left, KType::NUMBER), (right, KType::NUMBER)],
                     KType::NUMBER
@@ -595,7 +607,7 @@ LET Nested = :(FN FOR ALL #[Outer] :{f :(FN FOR ALL #{Elt: Outer} :{x :Elt y :El
 }
 
 #[test]
-fn a_callable_carries_its_bounds_and_maps_a_dropped_name_to_its_bound() {
+fn a_callable_carries_its_bounds_and_maps_each_name_to_its_index() {
     let source = "\
 LET lambda = (FN FOR ALL #{Elt: Number} :{x :Elt y :Elt} -> Elt = #(x))
 LET id = FN EXPR FOR ALL #{Elt: Number} #(ID x :Elt) -> Elt = #(x)
@@ -621,14 +633,14 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
         assert_eq!(
             which.quantifier_map.to_vec(),
             vec![
-                (
-                    program.type_name("Unused"),
-                    Canonical::Dropped {
-                        bound: KType::ANY_VALUE
-                    }
-                ),
-                (program.type_name("Held"), Canonical::At(0)),
-            ]
+                (program.type_name("Unused"), 1),
+                (program.type_name("Held"), 0),
+            ],
+            "`Held` is named first; `Unused`, named by no position, comes after"
+        );
+        assert_eq!(
+            crate::type_lattice::quantifier_bounds(types, which.ktype),
+            &[KType::ANY, KType::ANY_VALUE]
         );
     });
 }
@@ -696,6 +708,7 @@ fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
             types
                 .shape_type(
                     scratch,
+                    &[],
                     &[],
                     &[number, keyword("~", symbols), number],
                     &[],

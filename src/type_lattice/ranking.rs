@@ -222,7 +222,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
 }
 
 /// Solve `declared`'s group against one argument type per slot, class by class — what a keyworded
-/// call admits by. The solution in the shape's canonical group order, a variable no slot mentions
+/// call admits by. The solution in the shape's group order, a variable no slot mentions
 /// reading as its bound; `None` when some class does not admit, when `declared` is not a shape,
 /// or when the arguments are not one per slot.
 pub fn admit_by_class<'s>(

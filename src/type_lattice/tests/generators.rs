@@ -301,10 +301,9 @@ fn arb_fields(
 /// An expression shape, sometimes over a quantifier group of its own. Every variable is minted
 /// under a variable-free bound.
 ///
-/// A variable is planted at **two** argument positions on purpose: canonical form replaces a single
-/// occurrence by its bound or by `Never`, so a group whose variables were only sprinkled at random
-/// would almost never survive interning, and the laws about quantified shapes would run over
-/// nothing. Each slot is ranked `_` or by a small integer, so written order and rankings with ties
+/// A variable is planted at **two** argument positions on purpose, so the laws about quantified
+/// shapes run over variables that relate two positions, which a group sprinkled at random would
+/// rarely give. Each slot is ranked `_` or by a small integer, so written order and rankings with ties
 /// both occur. Both occurrences take one [`planted`] form, so a union argument can pour its
 /// members into one variable through a list or a function's parameter.
 fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy<KType> {
@@ -324,6 +323,7 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
                     .collect(),
             );
             let names: Vec<TypeSymbol> = world.type_names[..bounds.len()].to_vec();
+            let bounds: Vec<KType> = bounds.iter().map(|bound| world.grounds()[*bound]).collect();
             let positions = positions.max(bounds.len() * 2).min(4);
             let slot = arb_type_in(
                 world.clone(),
@@ -373,7 +373,7 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_type(scratch, &names, &run, classes, ret)
+                            .shape_type(scratch, &names, &bounds, &run, classes, ret)
                             .handle
                     })
                 })
@@ -385,10 +385,8 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
 /// variable-free bound.
 ///
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
-/// for the reason [`arb_shape`] plants one at two slots: canonical form replaces a single
-/// occurrence by its bound or by `Never`, so a sprinkled group would almost never survive
-/// interning and the laws about quantified functions would run over nothing. Both occurrences
-/// take one [`planted`] form.
+/// for the reason [`arb_shape`] plants one at two slots. Both occurrences take one [`planted`]
+/// form.
 fn arb_function(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy<KType> {
     let grounds = world.grounds();
     (
@@ -406,6 +404,7 @@ fn arb_function(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrat
                     .collect(),
             );
             let names: Vec<TypeSymbol> = world.type_names[..bounds.len()].to_vec();
+            let bounds: Vec<KType> = bounds.iter().map(|bound| world.grounds()[*bound]).collect();
             let arity = arity.min(world.binders.len());
             let value = arb_type_in(
                 world.clone(),
@@ -440,7 +439,7 @@ fn arb_function(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrat
                 with_scratch(|scratch| {
                     world
                         .types
-                        .function_type(scratch, &names, &params, ret)
+                        .function_type(scratch, &names, &bounds, &params, ret)
                         .handle
                 })
             })
@@ -463,7 +462,13 @@ fn function_of(world: &World, parameter: KType) -> KType {
     with_scratch(|scratch| {
         world
             .types
-            .function_type(scratch, &[], &[(world.binders[0], parameter)], KType::NULL)
+            .function_type(
+                scratch,
+                &[],
+                &[],
+                &[(world.binders[0], parameter)],
+                KType::NULL,
+            )
             .handle
     })
 }
@@ -719,7 +724,14 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_type(scratch, quantifiers, &run, classes, KType::NULL)
+                            .shape_type(
+                                scratch,
+                                quantifiers,
+                                &[KType::ANY][..quantifiers.len()],
+                                &run,
+                                classes,
+                                KType::NULL,
+                            )
                             .handle
                     } else {
                         let mut params =
@@ -729,7 +741,13 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
                         }
                         world
                             .types
-                            .function_type(scratch, quantifiers, &params, KType::NULL)
+                            .function_type(
+                                scratch,
+                                quantifiers,
+                                &[KType::ANY][..quantifiers.len()],
+                                &params,
+                                KType::NULL,
+                            )
                             .handle
                     }
                 })

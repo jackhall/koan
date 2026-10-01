@@ -127,14 +127,15 @@ pub enum TypeNode<'run> {
     /// function-typed slot records the names a caller must use to invoke what it receives.
     ///
     /// A non-empty `quantifiers` makes it a **binder** of its own, exactly as an
-    /// [`Self::ExpressionShape`] is: the group is canonical, its names are render-only, and the
-    /// digest feeds the arity. An empty one binds nothing and is transparent — an unquantified
+    /// [`Self::ExpressionShape`] is: the group keeps every variable it declares, its names are
+    /// render-only, and the digest feeds the arity and the bounds. An empty one binds nothing and is
+    /// transparent — an unquantified
     /// function type written inside a quantified head keeps reading that head's variables.
     KFunction {
         /// The type parameters this function binds, in `Quantified` index order. Render-only, as
         /// a shape's are.
         quantifiers: &'run [TypeSymbol],
-        /// Each quantifier's bound, in the same order. Digest-excluded: the occurrences carry it.
+        /// Each quantifier's bound, in the same order.
         bounds: &'run [KType],
         params: Record<'run>,
         ret: KType,
@@ -149,16 +150,14 @@ pub enum TypeNode<'run> {
     /// erases. So no shape is ever equal to, satisfies, or is satisfied by a lambda type.
     ///
     /// Argument **names** are binder-side only and are absent here. Quantifier names are
-    /// render-only too: the digest feeds the arity, so alpha-variants intern once and
-    /// `quantifiers` holds whichever spelling was interned first. Each surviving variable's
-    /// *bound* rides on its own [`Self::Quantified`] occurrences, which the canonical form
-    /// guarantees exist; `bounds` is the same list read off them once, at intern.
+    /// render-only too: the digest feeds the arity and the bounds, so alpha-variants intern once and
+    /// `quantifiers` holds whichever spelling was interned first. A variable no position names
+    /// carries its bound in `bounds` alone.
     ExpressionShape {
         /// The type parameters this shape binds, in `Quantified` index order. Render-only:
         /// the arity is identity, the names are not.
         quantifiers: &'run [TypeSymbol],
-        /// Each quantifier's bound, in the same order. Digest-excluded: the occurrences already
-        /// carry it.
+        /// Each quantifier's bound, in the same order.
         bounds: &'run [KType],
         /// The call shape: fixed keywords interleaved with the argument positions' declared types.
         elements: &'run [DispatchTokenElement],

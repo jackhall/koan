@@ -20,7 +20,7 @@ use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpVec, Writer};
 use crate::program::Contract;
 use crate::scope::{Candidate, Coordinate, IMPLICIT};
-use crate::scope::{Canonical, ParameterBinding, Registered};
+use crate::scope::{ParameterBinding, Registered};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     KType, TypeRegistry, Verdict, admit_by_class, quantifier_bounds, satisfied_by, select_by_class,
@@ -34,7 +34,7 @@ use super::{Evaluation, Operand};
 pub(super) enum Selection<'x, 'graph, 'here> {
     Builtin(&'graph BuiltinFunction),
     /// A function a registration binds, beside the solution its shape's group took in the shape's
-    /// canonical order — empty for an unquantified one.
+    /// group order — empty for an unquantified one.
     Function {
         callee: KValue<'graph, 'here>,
         registered: Registered<'here>,
@@ -231,11 +231,9 @@ pub(super) fn arguments<'graph, 'here>(
             ));
         }
     }
-    for (name, canonical) in registered.quantifier_map {
-        if let Canonical::At(index) = canonical {
-            let solved = TypeValue::new(writer, solution[*index], types);
-            fields.push((BinderSymbol::Type(*name), Value::Type(solved)));
-        }
+    for (name, index) in registered.quantifier_map {
+        let solved = TypeValue::new(writer, solution[*index], types);
+        fields.push((BinderSymbol::Type(*name), Value::Type(solved)));
     }
     Value::Record(Record::new(writer, &fields, types, scratch))
 }

@@ -210,18 +210,18 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(scratch, fields.as_slice()),
         TypeNode::KFunction {
-            quantifiers,
+            bounds,
             params,
             ret,
             ..
-        } => function_digest(scratch, quantifiers.len(), params.as_slice(), ret.digest()),
+        } => function_digest(scratch, bounds, params.as_slice(), ret.digest()),
         TypeNode::ExpressionShape {
-            quantifiers,
+            bounds,
             elements,
             classes,
             ret,
             ..
-        } => shape_digest(quantifiers.len(), elements, classes, ret.digest()),
+        } => shape_digest(bounds, elements, classes, ret.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
         TypeNode::Lexical {
             level,
@@ -338,34 +338,41 @@ pub(super) fn record_digest(
 }
 
 /// A function type `(params) -> ret`, its quantifier **arity** first — never the names, since
-/// alpha-variants are one type, and unconditionally, as a shape's is. Each surviving variable's
-/// bound rides in its own `Quantified` occurrences, which canonical form guarantees.
+/// alpha-variants are one type, and unconditionally, as a shape's is — then each variable's bound
+/// in group order. A variable no position names carries its bound nowhere else.
 pub(super) fn function_digest(
     scratch: BumpAllocator<'_>,
-    arity: usize,
+    bounds: &[KType],
     params: &[(BinderSymbol, KType)],
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_KFUNCTION);
-    h.count(arity);
+    h.count(bounds.len());
+    for bound in bounds {
+        h.digest(bound.digest());
+    }
     feed_record(&mut h, scratch, params);
     h.digest(ret).finish()
 }
 
-/// An expression shape: its quantifier **arity** (never the names — alpha-variants are one type),
-/// then its element run in order, each element a keyword's symbol bits behind a `1` byte or a slot
-/// type's digest behind a `0`, then the return. Order is identity here where a `KFunction`'s
-/// parameter record is order-blind: a shape's argument positions are what dispatch reads. Each
-/// variable's bound rides in its own `Quantified` occurrences, which canonical form guarantees.
+/// An expression shape: its quantifier **arity** (never the names — alpha-variants are one type)
+/// and each variable's bound in group order, then its element run in order, each element a
+/// keyword's symbol bits behind a `1` byte or a slot type's digest behind a `0`, then the return. Order is identity here where a `KFunction`'s
+/// parameter record is order-blind: a shape's argument positions are what dispatch reads. A
+/// variable no position names carries its bound nowhere but here.
 ///
 pub(super) fn shape_digest(
-    arity: usize,
+    bounds: &[KType],
     elements: &[DispatchTokenElement],
     classes: &[u8],
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
-    h.count(arity).count(elements.len());
+    h.count(bounds.len());
+    for bound in bounds {
+        h.digest(bound.digest());
+    }
+    h.count(elements.len());
     for element in elements {
         match element {
             DispatchTokenElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),

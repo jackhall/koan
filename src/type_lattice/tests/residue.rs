@@ -80,6 +80,7 @@ fn a_twice_used_variable_takes_the_join() {
         .shape_type(
             region,
             &[name],
+            &[KType::ANY],
             &[
                 DispatchTokenElement::Keyword(keyword),
                 DispatchTokenElement::Slot(element),
@@ -136,7 +137,7 @@ fn a_variable_reached_from_above_takes_the_meet() {
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let takes = |t: KType| {
         types
-            .function_type(region, &[], &[(x, t)], KType::NULL)
+            .function_type(region, &[], &[], &[(x, t)], KType::NULL)
             .handle
     };
     let position = takes(types.quantified(0, KType::ANY));
@@ -175,7 +176,7 @@ fn a_solve_fails_only_where_its_pair_denotes_nothing() {
     );
     let takes = |t: KType| {
         types
-            .function_type(region, &[], &[(x, t)], KType::NULL)
+            .function_type(region, &[], &[], &[(x, t)], KType::NULL)
             .handle
     };
     assert_eq!(
@@ -204,7 +205,13 @@ fn the_order_closes_through_a_joined_instance() {
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let takes = |group: &[TypeSymbol], first: KType, second: KType| {
         types
-            .function_type(region, group, &[(x, first), (y, second)], KType::NULL)
+            .function_type(
+                region,
+                group,
+                &[KType::ANY][..group.len()],
+                &[(x, first), (y, second)],
+                KType::NULL,
+            )
             .handle
     };
     let variable = types.quantified(0, KType::ANY);
@@ -251,20 +258,23 @@ fn solve_over(
         })
 }
 
+/// No law: a worked spelling. A variable one position names stays a variable, and one no position
+/// names stays in the group behind the rest, its bound part of the type's identity.
 #[test]
-fn a_single_occurrence_takes_its_bound_or_never() {
+fn a_binder_keeps_every_variable_it_declares() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
-    let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
-    let variable = types.quantified(0, KType::NUMBER);
-    let head = |slot: KType, ret: KType| {
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
+    let head = |names: &[TypeSymbol], bounds: &[KType], slot: KType, ret: KType| {
         types
             .shape_type(
                 region,
-                &[name],
+                names,
+                bounds,
                 &[
                     DispatchTokenElement::Keyword(keyword),
                     DispatchTokenElement::Slot(slot),
@@ -274,12 +284,57 @@ fn a_single_occurrence_takes_its_bound_or_never() {
             )
             .handle
     };
-    // Contravariant and alone: the caller picks it, so the slot accepts anything under the bound.
-    let in_slot = head(variable, KType::NULL);
-    assert_eq!(in_slot, head(KType::NUMBER, KType::NULL));
-    // Covariant and alone: it must hold at every instantiation, which only the bottom does.
-    let in_return = head(KType::STR, variable);
-    assert_eq!(in_return, head(KType::STR, KType::NEVER));
+    let in_slot = head(
+        &[elt],
+        &[KType::NUMBER],
+        types.quantified(0, KType::NUMBER),
+        KType::NULL,
+    );
+    assert_ne!(in_slot, head(&[], &[], KType::NUMBER, KType::NULL));
+    let renamed = head(
+        &[other],
+        &[KType::NUMBER],
+        types.quantified(0, KType::NUMBER),
+        KType::NULL,
+    );
+    assert_eq!(in_slot, renamed, "the names are render-only");
+    let TypeNode::ExpressionShape { bounds, .. } = types.node(in_slot) else {
+        panic!("the shape door interned something else");
+    };
+    assert_eq!(bounds, &[KType::NUMBER]);
+    let in_return = head(
+        &[elt],
+        &[KType::NUMBER],
+        KType::STR,
+        types.quantified(0, KType::NUMBER),
+    );
+    assert_ne!(in_return, head(&[], &[], KType::STR, KType::NEVER));
+
+    // `Other` is named nowhere. Declared first or second, it is numbered after `Elt`.
+    let first = head(
+        &[elt, other],
+        &[KType::NUMBER, KType::STR],
+        types.quantified(0, KType::NUMBER),
+        KType::NULL,
+    );
+    let second = head(
+        &[other, elt],
+        &[KType::STR, KType::NUMBER],
+        types.quantified(1, KType::NUMBER),
+        KType::NULL,
+    );
+    assert_eq!(first, second);
+    assert_ne!(first, in_slot);
+    let other_bound = head(
+        &[elt, other],
+        &[KType::NUMBER, KType::BOOL],
+        types.quantified(0, KType::NUMBER),
+        KType::NULL,
+    );
+    assert_ne!(
+        first, other_bound,
+        "an unnamed variable's bound is identity"
+    );
 }
 
 /// No law: `Record`'s order-blind equality and the digest agreeing with it are properties of the
@@ -328,11 +383,12 @@ fn width_runs_the_way_each_arm_declares() {
     assert_eq!(join(&types, region, wide, narrow), narrow);
 
     let few = types
-        .function_type(region, &[], &[(x, KType::NUMBER)], KType::NULL)
+        .function_type(region, &[], &[], &[(x, KType::NUMBER)], KType::NULL)
         .handle;
     let many = types
         .function_type(
             region,
+            &[],
             &[],
             &[(x, KType::NUMBER), (y, KType::STR)],
             KType::NULL,
@@ -345,9 +401,9 @@ fn width_runs_the_way_each_arm_declares() {
     assert!(!is_subtype_of(&types, region, many, few));
 }
 
-/// No law: the canonical form of a quantified function is a claim about worked spellings — which
-/// renamings and which written orders collapse to one handle, and what a lone occurrence becomes —
-/// and a generated pair almost never spells two of them.
+/// No law: a quantified function's identity is a claim about worked spellings — which renamings
+/// and which written orders collapse to one handle — and a generated pair almost never spells two
+/// of them.
 #[test]
 fn a_quantified_function_interns_by_shape_whatever_its_names() {
     let symbols = SymbolInterner::new();
@@ -364,49 +420,36 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
     // written order, is one handle: the names are render-only and the record is order-blind.
     let identity = |group, param| {
         types
-            .function_type(region, group, &[(x, param)], param)
+            .function_type(region, group, &[KType::ANY], &[(x, param)], param)
             .handle
     };
     let (as_elt, as_other) = ([elt], [other]);
     assert_eq!(identity(&as_elt, variable), identity(&as_other, variable));
     let forward = types
-        .function_type(region, &[elt], &[(x, variable), (y, KType::STR)], variable)
-        .handle;
-    let reversed = types
-        .function_type(region, &[elt], &[(y, KType::STR), (x, variable)], variable)
-        .handle;
-    assert_eq!(forward, reversed);
-
-    // A lone covariant occurrence is `Never`; a lone contravariant one is its bound.
-    let lone_return = types
-        .function_type(region, &[elt], &[(x, KType::NUMBER)], variable)
-        .handle;
-    assert_eq!(
-        lone_return,
-        types
-            .function_type(region, &[], &[(x, KType::NUMBER)], KType::NEVER)
-            .handle,
-    );
-    let lone_param = types
         .function_type(
             region,
             &[elt],
-            &[(x, types.quantified(0, KType::NUMBER))],
-            KType::STR,
+            &[KType::ANY],
+            &[(x, variable), (y, KType::STR)],
+            variable,
         )
         .handle;
-    assert_eq!(
-        lone_param,
-        types
-            .function_type(region, &[], &[(x, KType::NUMBER)], KType::STR)
-            .handle,
-    );
+    let reversed = types
+        .function_type(
+            region,
+            &[elt],
+            &[KType::ANY],
+            &[(y, KType::STR), (x, variable)],
+            variable,
+        )
+        .handle;
+    assert_eq!(forward, reversed);
 
     // The order instantiates: the quantified identity is below every monomorphic identity, and
     // below a quantified function that promises less about its return.
     let quantified_identity = identity(&as_elt, variable);
     let on_numbers = types
-        .function_type(region, &[], &[(x, KType::NUMBER)], KType::NUMBER)
+        .function_type(region, &[], &[], &[(x, KType::NUMBER)], KType::NUMBER)
         .handle;
     assert!(is_subtype_of(
         &types,
@@ -421,7 +464,7 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         quantified_identity
     ));
     let to_any = types
-        .function_type(region, &[elt], &[(x, variable)], KType::ANY)
+        .function_type(region, &[elt], &[KType::ANY], &[(x, variable)], KType::ANY)
         .handle;
     assert!(is_subtype_of(&types, region, quantified_identity, to_any));
 }
@@ -457,7 +500,7 @@ fn each_node_kind_lies_under_its_family_top() {
         KType::DICT_ANY_ANY,
         types.record(region, &[(x, KType::ANY)]),
         types
-            .function_type(region, &[], &[(x, KType::ANY)], KType::ANY)
+            .function_type(region, &[], &[], &[(x, KType::ANY)], KType::ANY)
             .handle,
         types.intern(
             region,
@@ -768,6 +811,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
         .function_type(
             region,
             &[x_name],
+            &[KType::ANY],
             &[(y, declared), (z, declared)],
             KType::NULL,
         )
@@ -776,13 +820,20 @@ fn a_carried_variable_fills_what_its_bound_fills() {
         .function_type(
             region,
             &[],
+            &[],
             &[(y, list_of_number), (z, list_of_number)],
             KType::NULL,
         )
         .handle;
     let bounded = types.quantified(0, list_of_number);
     let each_bounded = types
-        .function_type(region, &[name], &[(y, bounded), (z, bounded)], KType::NULL)
+        .function_type(
+            region,
+            &[name],
+            &[list_of_number],
+            &[(y, bounded), (z, bounded)],
+            KType::NULL,
+        )
         .handle;
     // A bound spanning two declared members is admitted member by member: `Held` bounded by
     // `LIST OF Number | Str` fills `LIST OF X | Str`, though neither member alone takes it.
@@ -857,24 +908,37 @@ fn a_bounded_quantifier_renders_under_its_bound() {
         .function_type(
             region,
             &[elt, key],
+            &[KType::ANY_VALUE, KType::ANY],
             &[(a, value_bounded), (b, free)],
             types.dict(value_bounded, free),
         )
         .handle;
-    // Canonical form orders the group by first occurrence, which puts `Key` first here.
+    // The group is ordered by first occurrence, which puts `Key` first here.
     assert_eq!(
         crate::type_lattice::display_name(pair, &types, &symbols).to_string(),
         ":(FN FOR ALL #{Key: Any, Elt: Value} :{a :Elt b :Key} -> :(MAP Elt -> Key))"
     );
     let alone = types
-        .function_type(region, &[elt], &[(a, value_bounded)], value_bounded)
+        .function_type(
+            region,
+            &[elt],
+            &[KType::ANY_VALUE],
+            &[(a, value_bounded)],
+            value_bounded,
+        )
         .handle;
     let rendered = crate::type_lattice::display_name(alone, &types, &symbols).to_string();
     assert!(rendered.contains("FOR ALL #{Elt: Value} "), "{rendered}");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let union_bounded = types.quantified(0, number_or_str);
     let spanning = types
-        .function_type(region, &[elt], &[(a, union_bounded)], union_bounded)
+        .function_type(
+            region,
+            &[elt],
+            &[number_or_str],
+            &[(a, union_bounded)],
+            union_bounded,
+        )
         .handle;
     let rendered = crate::type_lattice::display_name(spanning, &types, &symbols).to_string();
     assert!(
@@ -898,15 +962,19 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
     let elt = types.quantified(0, KType::ANY);
 
     assert_eq!(above(types.list(elt)), types.list(KType::ANY));
-    let taking = types.function_type(region, &[], &[(y, elt)], elt).handle;
+    let taking = types
+        .function_type(region, &[], &[], &[(y, elt)], elt)
+        .handle;
     let widest = types
-        .function_type(region, &[], &[(y, KType::NEVER)], KType::ANY)
+        .function_type(region, &[], &[], &[(y, KType::NEVER)], KType::ANY)
         .handle;
     assert_eq!(above(taking), widest);
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     assert_eq!(above(types.quantified(0, number_or_str)), number_or_str);
 
-    let closed = types.function_type(region, &[tee], &[(y, elt)], elt).handle;
+    let closed = types
+        .function_type(region, &[tee], &[KType::ANY], &[(y, elt)], elt)
+        .handle;
     assert_eq!(above(closed), closed);
     let list_of_number = types.list(KType::NUMBER);
     assert_eq!(above(list_of_number), list_of_number);

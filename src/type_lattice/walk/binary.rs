@@ -419,7 +419,13 @@ impl Rebuilder<'_, '_> {
             Assembly::Function(keys) => {
                 let (values, ret) = paired.split_at(keys.len());
                 types
-                    .function_type(scratch, &[], &named(scratch, keys, values, extra), ret[0])
+                    .function_type(
+                        scratch,
+                        &[],
+                        &[],
+                        &named(scratch, keys, values, extra),
+                        ret[0],
+                    )
                     .handle
             }
             Assembly::Shape(elements, classes) => {
@@ -433,7 +439,7 @@ impl Rebuilder<'_, '_> {
                 }));
                 let ret = *slots.next().expect("the return follows the slots");
                 types
-                    .shape_type(scratch, &[], &rebuilt, classes, ret)
+                    .shape_type(scratch, &[], &[], &rebuilt, classes, ret)
                     .handle
             }
             Assembly::Apply(keys) => types.constructor_apply(

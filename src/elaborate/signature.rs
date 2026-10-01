@@ -12,8 +12,8 @@ use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Callable, Canonical, Elaboration, IMPLICIT, ParameterBinding, Registered, Registration, Site,
-    Which, is_equal, is_unequal,
+    Callable, Elaboration, IMPLICIT, ParameterBinding, Registered, Registration, Site, Which,
+    is_equal, is_unequal,
 };
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, GroupIntern, KType, TypeNode, TypeRegistry};
@@ -105,15 +105,8 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 group
                     .names
                     .iter()
-                    .zip(&group.bounds)
                     .zip(interned.quantifier_map)
-                    .map(|((name, bound), canonical)| {
-                        let canonical = match canonical {
-                            Some(index) => Canonical::At(*index),
-                            None => Canonical::Dropped { bound: *bound },
-                        };
-                        (*name, canonical)
-                    }),
+                    .map(|(name, index)| (*name, *index)),
             );
             let map = map.leak();
             let registered = registration.map(|registration| {
@@ -223,11 +216,11 @@ fn operator_function<'graph, R: Reads<'graph> + ?Sized>(
     let (types, scratch) = (elaborator.types, elaborator.scratch);
     let function = if unary {
         let operands = BinderSymbol::Value(IMPLICIT.operands.symbol());
-        types.function_type(scratch, &[], &[(operands, types.list(operand))], ret)
+        types.function_type(scratch, &[], &[], &[(operands, types.list(operand))], ret)
     } else {
         let left = BinderSymbol::Value(IMPLICIT.left.symbol());
         let right = BinderSymbol::Value(IMPLICIT.right.symbol());
-        types.function_type(scratch, &[], &[(left, operand), (right, operand)], ret)
+        types.function_type(scratch, &[], &[], &[(left, operand), (right, operand)], ret)
     };
     Ok((symbol, function.handle, operand))
 }
@@ -258,30 +251,22 @@ impl Head<'_, '_> {
 
 /// What a registration's bucket holds of `function`, the definition's function type, whose
 /// declaration-order quantifier map is `map`: the shape [`registered_shape`] builds over `head`
-/// ranked by `classes`, `map` read through into that shape's canonical group, and the parameter
-/// binding.
+/// ranked by `classes`, `map` read through into that shape's group, and the parameter binding.
 fn registered<'x>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
     function: KType,
-    map: &[(TypeSymbol, Canonical)],
+    map: &[(TypeSymbol, usize)],
     head: Head<'_, '_>,
     classes: &[u8],
 ) -> Registered<'x> {
     let (shape, parameters) = registered_shape(types, scratch, function, head, classes);
-    // The shape's slots are the function's parameters, so its canonical group keeps exactly the
-    // variables the function's keeps, renumbered.
+    // The shape's group is the function's, renumbered.
     let mut read_through = BumpVec::with_capacity_in(map.len(), scratch);
-    read_through.extend(map.iter().map(|(name, canonical)| {
-        let canonical = match canonical {
-            Canonical::At(index) => Canonical::At(
-                shape.quantifier_map[*index]
-                    .expect("a shape keeps every variable its function keeps"),
-            ),
-            dropped => *dropped,
-        };
-        (*name, canonical)
-    }));
+    read_through.extend(
+        map.iter()
+            .map(|(name, index)| (*name, shape.quantifier_map[*index])),
+    );
     Registered {
         shape: shape.handle,
         quantifier_map: read_through.leak(),
@@ -292,7 +277,7 @@ fn registered<'x>(
 /// The expression shape a registration puts in its bucket, built from `function`, the definition's
 /// function type, over `head`: each keyword where the head writes it, and each slot at the type
 /// `function` gives the parameter it names, ranked by `classes`, over `function`'s return and
-/// quantified over its canonical group — beside how a call binds the slots to the parameters.
+/// quantified over its group — beside how a call binds the slots to the parameters.
 ///
 /// The shape door renumbers that group by first occurrence in element order, so the shape is the
 /// one `:(EXPR …)` spells for the same head, although `function` numbered it in its parameters'
@@ -306,9 +291,9 @@ fn registered_shape<'x>(
 ) -> (GroupIntern<'x>, ParameterBinding<'x>) {
     let TypeNode::KFunction {
         quantifiers,
+        bounds,
         params,
         ret,
-        ..
     } = types.node(function)
     else {
         unreachable!("a definition is typed by its function type")
@@ -369,6 +354,6 @@ fn registered_shape<'x>(
             ParameterBinding::Operands
         }
     };
-    let shape = types.shape_type(scratch, quantifiers, &elements, classes, ret);
+    let shape = types.shape_type(scratch, quantifiers, bounds, &elements, classes, ret);
     (shape, parameters)
 }

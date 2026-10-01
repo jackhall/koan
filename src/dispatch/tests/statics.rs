@@ -265,8 +265,8 @@ fn a_use_no_candidate_can_admit_refuses_the_load() {
     );
     assert_eq!(
         run("EXPR FOR ALL #{Elt: Str} #(PLUS x :Elt) -> Any = #(x + 1)"),
-        "load: <test>:1:51: no overload of `_ + _` admits (Str, Number)",
-        "a variable is read through its bound"
+        "load: <test>:1:51: no overload of `_ + _` admits (Elt, Number)",
+        "a rigid variable is judged through its bound"
     );
     assert_eq!(
         run("EXPR FOR ALL #[Elt] #(PLUS x :Elt) -> Any = #(x + 1)\nPRINT (PLUS 1)"),

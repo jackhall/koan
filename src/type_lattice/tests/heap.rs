@@ -64,11 +64,11 @@ fn interning_and_relations_touch_no_heap() {
     let open = types.quantified(0, KType::ANY);
     let mixed = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
     let above = types
-        .function_type(scratch, &[], &[(x, open)], KType::NULL)
+        .function_type(scratch, &[], &[], &[(x, open)], KType::NULL)
         .handle;
     let takes = |t: KType| {
         types
-            .function_type(scratch, &[], &[(x, t)], KType::NULL)
+            .function_type(scratch, &[], &[], &[(x, t)], KType::NULL)
             .handle
     };
     let (takes_number, takes_str) = (takes(KType::NUMBER), takes(KType::STR));
@@ -79,17 +79,24 @@ fn interning_and_relations_touch_no_heap() {
     let record = types.record(scratch, &[(x, KType::NUMBER), (y, KType::STR)]);
     let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
     let function = types
-        .function_type(scratch, &[], &[(x, KType::NUMBER)], record)
+        .function_type(scratch, &[], &[], &[(x, KType::NUMBER)], record)
         .handle;
     let union = types.union_of(scratch, &[KType::NUMBER, KType::STR, record]);
     let variable = types.quantified(0, KType::NUMBER);
     let quantified_function = types
-        .function_type(scratch, &[elt], &[(x, variable)], variable)
+        .function_type(
+            scratch,
+            &[elt],
+            &[KType::NUMBER],
+            &[(x, variable)],
+            variable,
+        )
         .handle;
     let shape = types
         .shape_type(
             scratch,
             &[elt],
+            &[KType::NUMBER],
             &[Keyword(pure), Slot(variable), Slot(variable)],
             &[],
             variable,
@@ -98,6 +105,7 @@ fn interning_and_relations_touch_no_heap() {
     let plain = types
         .shape_type(
             scratch,
+            &[],
             &[],
             &[Keyword(pure), Slot(KType::NUMBER), Slot(KType::NUMBER)],
             &[],
@@ -111,6 +119,7 @@ fn interning_and_relations_touch_no_heap() {
     let operator = types
         .shape_type(
             scratch,
+            &[],
             &[],
             &[Slot(member), Keyword(plus), Slot(member)],
             &[],
@@ -135,6 +144,7 @@ fn interning_and_relations_touch_no_heap() {
         .shape_type(
             scratch,
             &[],
+            &[],
             &[Keyword(pure), Slot(KType::NUMBER)],
             &[],
             KType::NUMBER,
@@ -143,6 +153,7 @@ fn interning_and_relations_touch_no_heap() {
     let offers = types
         .shape_type(
             scratch,
+            &[],
             &[],
             &[Keyword(pure), Slot(KType::STR)],
             &[],
@@ -207,7 +218,7 @@ fn interning_and_relations_touch_no_heap() {
     let _ = meet(&types, scratch, record, narrow);
     assert!(is_subtype_of(&types, scratch, applied, group_family));
     let sink = types
-        .function_type(scratch, &[], &[(x, variable)], KType::NUMBER)
+        .function_type(scratch, &[], &[], &[(x, variable)], KType::NUMBER)
         .handle;
     assert!(types.quantifies_contravariantly(scratch, sink, 1));
     let _ = meet(&types, scratch, union, record);

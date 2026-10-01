@@ -11,7 +11,7 @@
 use crate::elaborate::callable_type;
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
-use crate::scope::{Callable, Canonical, ParameterBinding, Registered};
+use crate::scope::{Callable, ParameterBinding, Registered};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry, substitute_levels};
 use crate::values::{Link, Weight};
@@ -65,9 +65,9 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.ktype
     }
 
-    /// Where each `FOR ALL` name the declaration wrote landed in the canonical group, empty for
-    /// an unquantified function.
-    pub fn quantifier_map(&self) -> &'cell [(TypeSymbol, Canonical)] {
+    /// Each `FOR ALL` name the declaration wrote, with its index in the type's group; empty for an
+    /// unquantified function.
+    pub fn quantifier_map(&self) -> &'cell [(TypeSymbol, usize)] {
         self.typing.map_or(&[], |typing| typing.quantifier_map)
     }
 
@@ -82,16 +82,16 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.registered().map(|registered| registered.shape)
     }
 
-    /// Where the type parameter named `name` landed in the canonical group — its index, or its
-    /// bound where canonical form dropped it — and `None` where the function binds no such name.
+    /// The index in the type's group of the type parameter named `name`, and `None` where the
+    /// function binds no such name.
     ///
     /// Keyed by name because a frame walks its callee's slots **symbol-sorted**, not in the order
     /// the `FOR ALL` group was written.
-    pub fn canonical_quantifier(&self, name: TypeSymbol) -> Option<Canonical> {
+    pub fn quantifier_index(&self, name: TypeSymbol) -> Option<usize> {
         self.quantifier_map()
             .iter()
             .find(|(declared, _)| *declared == name)
-            .map(|(_, canonical)| *canonical)
+            .map(|(_, index)| *index)
     }
 
     /// The body shape a call activates.
@@ -127,8 +127,8 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 }
 
 /// What a call and a selection read beside a function's type: its quantifier map, each `FOR ALL`
-/// name the declaration wrote paired with its index in the canonical group or with its bound where
-/// canonical form dropped it, and what its registration puts in its bucket.
+/// name the declaration wrote paired with its index in the type's group, and what its registration
+/// puts in its bucket.
 ///
 /// A call binds each type-parameter slot by the **name** its map pairs with a solution: a frame
 /// walks its callee's slots symbol-sorted, so a positional read would hand one variable another's
@@ -136,7 +136,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 /// handle inline would widen every node in the program from 64 to 80 bytes.
 #[derive(Clone, Copy)]
 pub struct Typing<'cell> {
-    quantifier_map: &'cell [(TypeSymbol, Canonical)],
+    quantifier_map: &'cell [(TypeSymbol, usize)],
     registered: Option<Registered<'cell>>,
 }
 
@@ -145,7 +145,7 @@ impl<'cell> Typing<'cell> {
     /// has neither.
     pub(super) fn laid_down(
         writer: Writer<'cell>,
-        map: &[(TypeSymbol, Canonical)],
+        map: &[(TypeSymbol, usize)],
         registered: Option<Registered<'_>>,
     ) -> Option<&'cell Typing<'cell>> {
         (!map.is_empty() || registered.is_some()).then(|| {
@@ -184,8 +184,8 @@ impl<'cell> Typing<'cell> {
             };
             (registered.quantifier_map.len(), names)
         });
-        Weight::run::<(TypeSymbol, Canonical)>(len)
-            .plus(Weight::run::<(TypeSymbol, Canonical)>(map))
+        Weight::run::<(TypeSymbol, usize)>(len)
+            .plus(Weight::run::<(TypeSymbol, usize)>(map))
             .plus(Weight::run::<BinderSymbol>(names))
             .plus(Weight::flat::<Typing<'_>>())
     }
@@ -197,7 +197,7 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     pub ktype: KType,
     /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
     /// it into the region.
-    pub quantifier_map: &'x [(TypeSymbol, Canonical)],
+    pub quantifier_map: &'x [(TypeSymbol, usize)],
     /// What the elaborator built for the registration the function is born for.
     pub registered: Option<Registered<'x>>,
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,

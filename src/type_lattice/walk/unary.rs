@@ -383,6 +383,7 @@ fn reassemble(
         TypeNode::Record { fields } => types.record(scratch, &rekey(scratch, fields, new)),
         TypeNode::KFunction {
             quantifiers,
+            bounds,
             params,
             ..
         } => {
@@ -391,6 +392,7 @@ fn reassemble(
                 .function_type(
                     scratch,
                     quantifiers,
+                    bounds,
                     &rekey(scratch, params, values),
                     ret[0],
                 )
@@ -398,6 +400,7 @@ fn reassemble(
         }
         TypeNode::ExpressionShape {
             quantifiers,
+            bounds,
             elements,
             classes,
             ..
@@ -412,7 +415,7 @@ fn reassemble(
             }));
             let ret = *slots.next().expect("the return follows the slots");
             types
-                .shape_type(scratch, quantifiers, &rebuilt, classes, ret)
+                .shape_type(scratch, quantifiers, bounds, &rebuilt, classes, ret)
                 .handle
         }
         TypeNode::Union { .. } => match cfg.union {

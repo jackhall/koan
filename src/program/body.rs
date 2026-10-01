@@ -38,8 +38,8 @@ use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
+use crate::scope::Static;
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
-use crate::scope::{Canonical, Static};
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
@@ -517,7 +517,7 @@ fn frame<'graph, 'here>(
             .and_then(|seen| seen.value().as_type())
             .map(|value| value.handle())
     };
-    // The group's solution in canonical order. A keyworded call's selection carried it by name; a
+    // The group's solution in group order. A keyworded call's selection carried it by name; a
     // call by name's is solved here, every value parameter's declared type against its argument's
     // carried type under one collector — which, for an unquantified callee, is the arguments'
     // admission alone.
@@ -526,10 +526,8 @@ fn frame<'graph, 'here>(
         CallKind::Keyworded if !quantifiers.is_empty() => {
             let mut solved = BumpVec::with_capacity_in(quantifiers.len(), scratch);
             solved.resize(quantifiers.len(), KType::NEVER);
-            for (name, canonical) in function.quantifier_map() {
-                if let Canonical::At(canonical) = canonical {
-                    solved[*canonical] = carried(*name).ok_or_else(misnamed)?;
-                }
+            for (name, index) in function.quantifier_map() {
+                solved[*index] = carried(*name).ok_or_else(misnamed)?;
             }
             solution = Some(solved);
         }
@@ -593,27 +591,25 @@ fn frame<'graph, 'here>(
             }
             // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
             // argument like any other, passed by keyword or by name.
-            BinderSymbol::Type(name) if function.canonical_quantifier(name).is_none() => {
+            BinderSymbol::Type(name) if function.quantifier_index(name).is_none() => {
                 parameters += 1;
                 argument(name.symbol())?.value()
             }
             // A `FOR ALL` name is bound by **name**: the shape's type channel reaches here
             // symbol-sorted, not in the order the group was written, so a positional read would
-            // hand one variable another's solution. A name the map dropped takes its bound, since
-            // there is nothing to solve for. Only a keyworded call's arguments carry one, so a
-            // call by name's that names one does not name its parameters.
+            // hand one variable another's solution. Only a keyworded call's arguments carry one, so
+            // a call by name's that names one does not name its parameters.
             BinderSymbol::Type(name) => {
                 if kind == CallKind::Keyworded && carried(name).is_some() {
                     parameters += 1;
                 }
-                let solved = match function.canonical_quantifier(name) {
-                    Some(Canonical::At(canonical)) => solution
-                        .as_ref()
-                        .and_then(|solution| solution.get(canonical).copied())
-                        .expect("a quantified callee's group is solved"),
-                    Some(Canonical::Dropped { bound }) => bound,
-                    None => unreachable!("a name no group declares is a `:Type` parameter"),
-                };
+                let index = function
+                    .quantifier_index(name)
+                    .expect("a name no group declares is a `:Type` parameter");
+                let solved = solution
+                    .as_ref()
+                    .and_then(|solution| solution.get(index).copied())
+                    .expect("a quantified callee's group is solved");
                 Value::Type(TypeValue::new(writer, solved, types))
             }
             BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {

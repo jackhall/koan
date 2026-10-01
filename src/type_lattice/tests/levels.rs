@@ -42,11 +42,18 @@ impl<'r> World<'r> {
         self.types.lexical(level, self.name(text), bound)
     }
 
-    /// `FOR ALL #[<group>] FN :{<name> :<param>} -> <ret>`.
+    /// `FOR ALL #[<group>] FN :{<name> :<param>} -> <ret>`, each variable bounded by `Any`.
     fn function(&self, group: &[&str], name: &str, param: KType, ret: KType) -> KType {
         let names: Vec<TypeSymbol> = group.iter().map(|text| self.name(text)).collect();
+        let bounds = vec![KType::ANY; names.len()];
         self.types
-            .function_type(self.region, &names, &[(self.field(name), param)], ret)
+            .function_type(
+                self.region,
+                &names,
+                &bounds,
+                &[(self.field(name), param)],
+                ret,
+            )
             .handle
     }
 

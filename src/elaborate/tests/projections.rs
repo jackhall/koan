@@ -88,7 +88,7 @@ fn a_slot_typed_by_a_field_reads_its_declared_type() {
             assert_eq!(
                 callable.ktype,
                 types
-                    .function_type(scratch, &[], &[(v, KType::STR)], KType::STR)
+                    .function_type(scratch, &[], &[], &[(v, KType::STR)], KType::STR)
                     .handle
             );
         },

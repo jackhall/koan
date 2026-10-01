@@ -70,7 +70,7 @@ fn shape() -> BoxedStrategy<KType> {
 }
 
 /// A generated function type, for the same reason [`shape`] exists: the laws about a binder's
-/// canonical form have nothing to say about a draw that is not one.
+/// group have nothing to say about a draw that is not one.
 fn function() -> BoxedStrategy<KType> {
     arb_function_type(world(), 3)
 }
@@ -509,26 +509,27 @@ proptest! {
 proptest! {
     #![proptest_config(binary())]
 
+    /// Re-interning a shape through its door with the group it already carries returns the very
+    /// handle: the group order is idempotent.
     #[test]
-    fn canonical_shape_form_is_a_fixed_point(a in shape()) {
+    fn interning_a_shapes_own_content_is_a_fixed_point(a in shape()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
         if let TypeNode::ExpressionShape {
             quantifiers,
+            bounds,
             elements,
             classes,
             ret,
-            ..
         } = types.node(a)
         {
-            let again = types.shape_type(scratch, quantifiers, elements, classes, ret);
+            let again = types.shape_type(scratch, quantifiers, bounds, elements, classes, ret);
             prop_assert_eq!(again.handle, a);
         }
     }
 
-    /// The bounds a shape node stores beside its quantifier group are the ones its own occurrences
-    /// carry — the canonical form guarantees every surviving variable occurs, so each is reachable.
+    /// Every occurrence of a shape's own variable carries the bound the shape stores for it.
     #[test]
     fn a_shape_stores_the_bounds_its_occurrences_carry(a in shape()) {
         let types = registry();
@@ -548,26 +549,24 @@ proptest! {
             _ => Visit::Descend,
         });
         for (index, bound) in stored.iter().enumerate() {
-            prop_assert_eq!(carried[index], Some(*bound));
+            prop_assert!(carried[index].is_none_or(|carried| carried == *bound));
         }
     }
 
-    /// Re-interning a function type through the canonicalizing door with the group it already
-    /// carries returns the very handle: canonical form is idempotent, which is what makes the
-    /// order over quantified functions antisymmetric.
+    /// The function twin of [`interning_a_shapes_own_content_is_a_fixed_point`].
     #[test]
-    fn canonical_function_form_is_a_fixed_point(a in function()) {
+    fn interning_a_functions_own_content_is_a_fixed_point(a in function()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
         if let TypeNode::KFunction {
             quantifiers,
+            bounds,
             params,
             ret,
-            ..
         } = types.node(a)
         {
-            let again = types.function_type(scratch, quantifiers, params.as_slice(), ret);
+            let again = types.function_type(scratch, quantifiers, bounds, params.as_slice(), ret);
             prop_assert_eq!(again.handle, a);
         }
     }
@@ -592,7 +591,7 @@ proptest! {
             _ => Visit::Descend,
         });
         for (index, bound) in stored.iter().enumerate() {
-            prop_assert_eq!(carried[index], Some(*bound));
+            prop_assert!(carried[index].is_none_or(|carried| carried == *bound));
         }
     }
 

@@ -113,7 +113,7 @@ fn a_contravariant_occurrence_is_found() {
     let types = TypeRegistry::in_region(region);
     let variable = types.quantified(0, KType::ANY);
     let function = |params: &[(BinderSymbol, KType)], ret| {
-        types.function_type(region, &[], params, ret).handle
+        types.function_type(region, &[], &[], params, ret).handle
     };
     let sink = function(&[(x, variable)], KType::NULL);
     assert!(types.quantifies_contravariantly(region, sink, 1));

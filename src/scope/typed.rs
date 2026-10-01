@@ -3,7 +3,7 @@
 //!
 //! `scope` sits below `elaborate`, so the records the elaborator hands back for a callable — its
 //! [`Callable`] type, the [`Registered`] shape its bucket holds, where each `FOR ALL` name landed
-//! ([`Canonical`]) — and its refusal ([`Elaboration`]) live here, beside the shape whose write-once
+//! in its group — and its refusal ([`Elaboration`]) live here, beside the shape whose write-once
 //! cells hold them. A cell holds a [`Static`]: unknown, closed, or rigid over [`Variable`]s — the
 //! lexical variables the run supplies, by level — which [`solutions`] reads through an activation
 //! for one substitution.
@@ -23,28 +23,19 @@ use crate::values::{KnottedFamily, Value};
 use super::activation::ActivationView;
 use super::shape::{Candidate, Coordinate, Site};
 
-/// Where a `FOR ALL` name the declaration wrote landed in a canonical group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Canonical {
-    /// The group's variable at this index: a call binds the name to what the group solves it to.
-    At(usize),
-    /// Dropped by canonical form: a call binds the name to its bound.
-    Dropped { bound: KType },
-}
-
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
-/// canonical group — what a call needs to bind each type parameter to its solution.
+/// group — what a call needs to bind each type parameter to its solution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Callable<'x> {
     pub ktype: KType,
-    /// Each `FOR ALL` name the declaration wrote, in written order, with where it landed in
-    /// `ktype`'s canonical group. Empty for an unquantified callable.
+    /// Each `FOR ALL` name the declaration wrote, in written order, with its index in `ktype`'s
+    /// group. Empty for an unquantified callable.
     ///
     /// The **name** is the key, not the position: a callee's type-parameter slots reach its frame
     /// symbol-sorted, not in written order, and `ktype`'s own `quantifiers` cannot stand in for
     /// this because alpha-variants intern to one node and it holds whichever spelling interned
     /// first.
-    pub quantifier_map: &'x [(TypeSymbol, Canonical)],
+    pub quantifier_map: &'x [(TypeSymbol, usize)],
     /// What the registration the callable is born for puts in its bucket; `None` for a callable no
     /// registration binds — a `FN`, or a combined statement's name.
     pub registered: Option<Registered<'x>>,
@@ -57,10 +48,10 @@ pub struct Registered<'x> {
     /// The expression shape: the function type's parameters laid over the registration's key,
     /// ranked by the registration's classes.
     pub shape: KType,
-    /// Each `FOR ALL` name the declaration wrote, in written order, with where it landed in
-    /// `shape`'s canonical group — which numbers the variables by first occurrence in element
-    /// order, not as `ktype`'s does.
-    pub quantifier_map: &'x [(TypeSymbol, Canonical)],
+    /// Each `FOR ALL` name the declaration wrote, in written order, with its index in `shape`'s
+    /// group — which numbers the variables by first occurrence in element order, not as `ktype`'s
+    /// does.
+    pub quantifier_map: &'x [(TypeSymbol, usize)],
     pub parameters: ParameterBinding<'x>,
 }
 

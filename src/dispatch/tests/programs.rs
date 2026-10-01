@@ -458,3 +458,12 @@ fn a_nominal_over_a_run_bound_type_is_declared_per_call() {
                   PRINT (mk {x = \"a\", y = \"b\"})";
     assert_eq!(run(source), "Boxed({v = 1})\nBoxed({v = a})");
 }
+
+/// A variable one argument reaches is solved from it by each call, by keyword and by name.
+#[test]
+fn a_variable_used_once_is_solved_by_each_call() {
+    let source = "EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)\n\
+                  LET kind = (FN FOR ALL #[Elt] :{x :Elt} -> Type = #(Elt))\n\
+                  PRINT (KIND 1)\nPRINT (kind {x = \"s\"})";
+    assert_eq!(run(source), "Number\nStr");
+}

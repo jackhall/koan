@@ -31,7 +31,7 @@ impl<'r> World<'r> {
     fn function(&self, name: &str, param: KType, ret: KType) -> KType {
         let name = BinderSymbol::declared(name, &self.symbols).expect("a bindable token");
         self.types
-            .function_type(self.region, &[], &[(name, param)], ret)
+            .function_type(self.region, &[], &[], &[(name, param)], ret)
             .handle
     }
 

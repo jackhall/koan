@@ -706,7 +706,7 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// A callable body's own `FOR ALL` group as its body reads it: the lexical variable each
-    /// canonical variable is, in canonical order. Empty for every other shape, and where the load
+    /// variable of the group is, in group order. Empty for every other shape, and where the load
     /// did not type the callable.
     pub fn group_levels(&self) -> &'graph [KType] {
         self.group_levels.get()

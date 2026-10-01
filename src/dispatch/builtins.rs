@@ -212,7 +212,7 @@ pub(super) fn table<'graph>(
             Element::Slot(Takes::ListOf(item)) => DispatchTokenElement::Slot(types.list(*item)),
         }));
         let shape = types
-            .shape_type(scratch, &[], &elements, &[], overload.returns)
+            .shape_type(scratch, &[], &[], &elements, &[], overload.returns)
             .handle;
         let function = builtin(writer, shape, overload.native as u32);
         overloads.push((key, Value::Knotted(function)));

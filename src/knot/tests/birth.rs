@@ -63,7 +63,7 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                 f.ktype(),
                 fixture
                     .types
-                    .function_type(scratch, &[], &[(x, KType::NUMBER)], KType::NUMBER)
+                    .function_type(scratch, &[], &[], &[(x, KType::NUMBER)], KType::NUMBER)
                     .handle
             );
             assert!(std::ptr::eq(
@@ -104,7 +104,7 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             let shape = |elements: &[DispatchTokenElement]| {
                 Some(
                     types
-                        .shape_type(scratch, &[], elements, &[], KType::NUMBER)
+                        .shape_type(scratch, &[], &[], elements, &[], KType::NUMBER)
                         .handle,
                 )
             };
@@ -130,6 +130,7 @@ fn a_function_born_for_a_registration_carries_its_shape() {
                 types
                     .function_type(
                         scratch,
+                        &[],
                         &[],
                         &[
                             (fixture.name("left"), KType::NUMBER),
@@ -177,6 +178,7 @@ fn a_bare_definition_binds_its_function_to_its_registration_slot() {
                 types
                     .shape_type(
                         scratch,
+                        &[],
                         &[],
                         &[
                             DispatchTokenElement::Keyword(keyword),

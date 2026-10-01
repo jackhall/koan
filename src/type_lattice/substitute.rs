@@ -14,6 +14,7 @@ use super::node::TypeNode;
 use super::order::is_subtype_of;
 use super::registry::TypeRegistry;
 use super::schema::{Members, member};
+use super::shape::DispatchTokenElement;
 use super::unify::Interval;
 use super::walk::Variance;
 use super::walk::unary::{LEAF, Rebuild, Step, UnionDoor, Visit, rebuild, visit};
@@ -87,13 +88,13 @@ pub fn substitute_levels(
 }
 
 /// `kt` at a solved call. A **binder** — a shape, or a function type carrying a group — owns the
-/// variables, so instantiating one substitutes through its positions and return and the canonical
-/// form drops the emptied group: the result is the callable this call has, as against the one the
-/// declaration wrote. Every other type carries no binder of its own and substitutes in place.
+/// variables, so instantiating one opens it: each position and the return, read on its own, has
+/// the binder's variables free, and substitutes through `bindings`; the result is interned with no
+/// group, the callable this call has as against the one the declaration wrote. Every other type
+/// carries no binder of its own and substitutes in place.
 ///
-/// `bindings` are in the binder's **canonical** quantifier order — a caller holding
-/// declaration-order bindings translates them through the map
-/// [`shape_type`](TypeRegistry::shape_type) or
+/// `bindings` are in the binder's **group** order — a caller holding declaration-order bindings
+/// translates them through the map [`shape_type`](TypeRegistry::shape_type) or
 /// [`function_type`](TypeRegistry::function_type) handed back.
 pub fn instantiate_quantified(
     types: &TypeRegistry<'_>,
@@ -101,21 +102,35 @@ pub fn instantiate_quantified(
     kt: KType,
     bindings: &[KType],
 ) -> KType {
-    if !types.node(kt).binds_quantifiers() || own_group(types, kt).is_empty() {
+    if own_group(types, kt).is_empty() {
         return substitute_quantified(types, scratch, kt, bindings);
     }
-    rebuild(
-        types,
-        scratch,
-        kt,
-        OVER_QUANTIFIERS,
-        &mut |kt, node, context| match *node {
-            TypeNode::Quantified { index, .. } if context.binder_depth() == 1 => {
-                Some(bindings.get(index).copied().unwrap_or(kt))
-            }
-            _ => None,
-        },
-    )
+    let open = |position| substitute_quantified(types, scratch, position, bindings);
+    match types.node(kt) {
+        TypeNode::KFunction { params, ret, .. } => {
+            let mut opened = BumpVec::with_capacity_in(params.len(), scratch);
+            opened.extend(params.iter().map(|(name, position)| (name, open(position))));
+            types
+                .function_type(scratch, &[], &[], &opened, open(ret))
+                .handle
+        }
+        TypeNode::ExpressionShape {
+            elements,
+            classes,
+            ret,
+            ..
+        } => {
+            let mut opened = BumpVec::with_capacity_in(elements.len(), scratch);
+            opened.extend(elements.iter().map(|element| match element {
+                DispatchTokenElement::Slot(position) => DispatchTokenElement::Slot(open(*position)),
+                keyword => *keyword,
+            }));
+            types
+                .shape_type(scratch, &[], &[], &opened, classes, open(ret))
+                .handle
+        }
+        _ => unreachable!("only a binder carries a group"),
+    }
 }
 
 /// `kt` with every variable of its own group replaced by that variable's bound — what a quantified
@@ -209,7 +224,7 @@ pub fn read_through<'run>(
     )
 }
 
-/// The bound of each variable of `kt`'s own quantifier group, in canonical index order,
+/// The bound of each variable of `kt`'s own quantifier group, in group order,
 /// as the binder node stores it. Empty for anything that binds no group.
 pub fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: KType) -> &'run [KType] {
     own_group(types, kt)

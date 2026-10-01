@@ -4,8 +4,8 @@
 
 use crate::memory::BumpAllocator;
 use crate::scope::{
-    BodyShape, Canonical, CaptureSlot, Coordinate, Elaboration, ShapeError, ShapeKind, Slot,
-    Static, Target, TypeExpression, Variable,
+    BodyShape, CaptureSlot, Coordinate, Elaboration, ShapeError, ShapeKind, Slot, Static, Target,
+    TypeExpression, Variable,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
@@ -166,9 +166,6 @@ fn a_value_position_type_is_closed() {
     });
 }
 
-// Each `FOR ALL` name below occurs at least twice in its signature: canonical form drops one that
-// occurs once, which a call binds to its bound, so the load reads it as that closed bound.
-
 #[test]
 fn a_for_all_name_is_its_lexical_variable() {
     let source = "LET f = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Held = \
@@ -180,19 +177,17 @@ fn a_for_all_name_is_its_lexical_variable() {
         let (value, levels) = rigid(only(body));
         assert_eq!(value, types.list(held));
         assert_eq!(levels, [0]);
-        assert_eq!(body.group_levels(), [held]);
+        assert_eq!(
+            body.group_levels(),
+            [held, lexical(program, 1, "Unused")],
+            "a name no position reads is still a variable of the group"
+        );
         let Static::Closed(callable) = body.callable_type() else {
             panic!("the callable's type is closed")
         };
         let held = program.type_name("Held");
         let unused = program.type_name("Unused");
-        assert_eq!(
-            callable.quantifier_map,
-            [
-                (held, Canonical::At(0)),
-                (unused, Canonical::Dropped { bound: KType::ANY })
-            ]
-        );
+        assert_eq!(callable.quantifier_map, [(held, 0), (unused, 1)]);
         let [Static::Rigid { variables, .. }] = [only(body)] else {
             unreachable!()
         };
@@ -205,6 +200,24 @@ fn a_for_all_name_is_its_lexical_variable() {
             }]
         );
     });
+}
+
+#[test]
+fn a_for_all_name_one_slot_reads_is_rigid_in_the_body() {
+    typed(
+        "EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(:(LIST OF Elt))",
+        |program| {
+            let shape = program.activation.shape();
+            let body = shape
+                .births(shape.registrations()[0].slot)
+                .expect("the registration births its body");
+            let elt = lexical(program, 0, "Elt");
+            assert_eq!(body.group_levels(), [elt]);
+            let (value, levels) = rigid(only(body));
+            assert_eq!(value, program.types.list(elt));
+            assert_eq!(levels, [0]);
+        },
+    );
 }
 
 #[test]
@@ -360,6 +373,7 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
         let expected = types.function_type(
             program.scratch,
             &[program.type_name("Tee")],
+            &[KType::ANY],
             &[(field("y"), tee), (field("z"), lexical(program, 0, "Elt"))],
             tee,
         );
@@ -421,7 +435,7 @@ fn a_callable_and_its_registration_are_typed_at_load() {
         assert_eq!(
             value.ktype,
             types
-                .function_type(program.scratch, &[], &[(name, elt)], elt)
+                .function_type(program.scratch, &[], &[], &[(name, elt)], elt)
                 .handle
         );
         assert_eq!(variables.len(), 1);

@@ -534,7 +534,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         let ret = self.part(ret, groups)?;
         Ok(self
             .types
-            .function_type(self.scratch, &group.names, &params, ret))
+            .function_type(self.scratch, &group.names, &group.bounds, &params, ret))
     }
 
     /// The **function** type an `EXPR` definition's head declares, bare or combined: the head's
@@ -574,7 +574,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         let ret = self.part(ret, groups)?;
         Ok(self
             .types
-            .function_type(self.scratch, &group.names, &params, ret))
+            .function_type(self.scratch, &group.names, &group.bounds, &params, ret))
     }
 
     /// `EXPR [FOR ALL <names>] <head> -> <return>`: the head's keywords and typed slots, under a
@@ -614,7 +614,14 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         let ret = self.part(ret, &own)?;
         Ok(self
             .types
-            .shape_type(self.scratch, &group.names, &elements, classes, ret)
+            .shape_type(
+                self.scratch,
+                &group.names,
+                &group.bounds,
+                &elements,
+                classes,
+                ret,
+            )
             .handle)
     }
 

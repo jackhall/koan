@@ -11,7 +11,7 @@
 //!
 //! Lexical variables are numbered by **level** along a **chain**: the shapes from a chain root —
 //! the program, or a quote's code — down to the one read. A shape's own names take the levels after
-//! its parent's, a callable's own `FOR ALL` group first in canonical order, so a name keeps its
+//! its parent's, a callable's own `FOR ALL` group first in group order, so a name keeps its
 //! level wherever a nested shape of the chain reads it, and sibling shapes reuse levels. A `$` name
 //! crossing into code is a name of the code's own, bounded as the name it reads.
 //!
@@ -24,7 +24,7 @@ use crate::parse::KExpression;
 use crate::parse::builtin_shapes::binder::quoted_body;
 use crate::parse::builtin_shapes::role::Role;
 use crate::scope::{
-    BodyShape, Builtins, Callable, Canonical, CaptureSlot, CaptureSource, Coordinate, Elaboration,
+    BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
     ParameterBinding, Registered, ShapeError, ShapeKind, Site, Slot, Static, Target, UnitWork,
     Variable, source_of,
 };
@@ -74,11 +74,11 @@ enum Key {
     Capture(usize, CaptureSlot),
 }
 
-/// A quantified callable's own `FOR ALL` names, read off its load-time type: where each landed in
-/// its canonical group, and the lexical variable each canonical variable is in its body.
+/// A quantified callable's own `FOR ALL` names, read off its load-time type: each one's index in
+/// its group, and the lexical variable each variable of the group is in its body.
 #[derive(Clone, Copy)]
 struct Own<'graph> {
-    map: &'graph [(TypeSymbol, Canonical)],
+    map: &'graph [(TypeSymbol, usize)],
     levels: &'graph [KType],
 }
 
@@ -254,12 +254,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             return Class::NotAType;
         };
         if let Some(own) = self.chain[level].own
-            && let Some((_, canonical)) = own.map.iter().find(|(held, _)| *held == name)
+            && let Some((_, index)) = own.map.iter().find(|(held, _)| *held == name)
         {
-            return match *canonical {
-                Canonical::Dropped { bound } => Class::Type(bound),
-                Canonical::At(index) => Class::Variable(own.levels[index]),
-            };
+            return Class::Variable(own.levels[*index]);
         }
         Class::RunBound {
             key,
@@ -515,7 +512,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         at.names = names;
     }
 
-    /// A quantified callable's own group, read off its load-time type `callable`: canonical
+    /// A quantified callable's own group, read off its load-time type `callable`: the group's
     /// variable `i` is the lexical variable at level `base + i`, named as the declaration wrote
     /// it, laid down in program storage.
     fn own(&self, callable: Callable<'graph>, base: usize) -> Own<'graph> {
@@ -527,8 +524,8 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
             let (name, _) = callable
                 .quantifier_map
                 .iter()
-                .find(|(_, canonical)| *canonical == Canonical::At(index))
-                .expect("each canonical variable is a name the declaration wrote");
+                .find(|(_, at)| *at == index)
+                .expect("each variable of the group is a name the declaration wrote");
             self.types.lexical(base + index, *name, *bound)
         }));
         Own {
