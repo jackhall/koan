@@ -9,8 +9,8 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
-    DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
-    constructor_param_names, dense_classes, meet,
+    DispatchTokenElement, GroupIntern, KType, NodeSchema, SigOrigin, TypeNode, TypeRegistry,
+    constructor_param_names, dense_classes, meet, member,
 };
 
 /// The connector keywords of the formless composites.
@@ -129,7 +129,7 @@ pub(super) struct Elaborator<'e, 'run, 'x, R: ?Sized> {
     /// siblings. Empty for an ordinary type expression.
     pub(super) fellows: &'e [Fellow<'e>],
     /// Names declared inside the definition being elaborated and holding no slot of the enclosing
-    /// shape — a `SIG` body's abstract and manifest members, and a higher-kinded declarator's
+    /// shape — a `SIG`'s head parameters and manifest members, and a higher-kinded declarator's
     /// parameters. Empty outside a definition.
     pub(super) locals: &'e [(TypeSymbol, KType)],
 }
@@ -316,6 +316,14 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 }
                 Ok(self.types.code_needing(self.scratch, kind, &names))
             }
+            // `Sig WITH {Param = Type, …}` — a declared signature with some head parameters pinned.
+            3 if keyword(1, &KEYWORDS.with)
+                && let ExpressionPart::RecordLiteral(pins) = &parts[2].value =>
+            {
+                let signature =
+                    self.closed_operands(site, || self.part(&parts[0].value, groups))?;
+                self.pin(site, signature, pins, groups)
+            }
             4 if keyword(0, &CONNECTORS.map) && keyword(2, &KEYWORDS.arrow) => {
                 let key = self.part(&parts[1].value, groups)?;
                 let value = self.part(&parts[3].value, groups)?;
@@ -472,6 +480,35 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         Ok(self
             .types
             .constructor_apply(self.scratch, constructor, arguments))
+    }
+
+    /// `signature` with `pins` fixing head parameters by name: `signature` a declared signature,
+    /// and each key one of its parameters. The parser has refused a repeated key.
+    fn pin(
+        &self,
+        site: Site,
+        signature: KType,
+        pins: &[(BinderSymbol, ExpressionPart<'graph>)],
+        groups: &Groups<'_>,
+    ) -> Result<KType, Elaboration> {
+        let unsupported = Elaboration::Unsupported { site };
+        let TypeNode::Signature { schema, .. } = self.types.node(signature) else {
+            return Err(unsupported);
+        };
+        if schema.origin != SigOrigin::Declared {
+            return Err(unsupported);
+        }
+        let mut pinned = BumpVec::with_capacity_in(pins.len(), self.scratch);
+        for (name, pin) in pins {
+            let BinderSymbol::Type(parameter) = name else {
+                return Err(unsupported);
+            };
+            if member(schema.parameters, *parameter).is_none() {
+                return Err(unsupported);
+            }
+            pinned.push((*name, self.part(pin, groups)?));
+        }
+        Ok(self.types.signature_apply(self.scratch, signature, &pinned))
     }
 
     /// `FN [FOR ALL <names>] <schema> -> <return>`.

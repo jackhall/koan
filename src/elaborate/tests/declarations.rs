@@ -641,6 +641,69 @@ fn a_meet_of_signatures_holds_both() {
 }
 
 #[test]
+fn with_pins_a_signatures_head_parameters() {
+    brought(
+        "SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt)]\n\
+         SIG Pair FOR ALL #[Left Right] = #[(VAL left :Left) (VAL right :Right)]\n\
+         LET Numbers = :(Stack WITH {Elt = Number})\n\
+         LET Halves = :(Pair WITH {Left = Str})",
+        |program| {
+            let types = program.types;
+            let pin = |name: &str| BinderSymbol::Type(program.type_name(name));
+            assert_eq!(
+                program.bound("Numbers"),
+                types.signature_apply(
+                    program.scratch,
+                    program.bound("Stack"),
+                    &[(pin("Elt"), KType::NUMBER)]
+                )
+            );
+            let TypeNode::SignatureApply { signature, pins } = types.node(program.bound("Halves"))
+            else {
+                panic!("a pin of one of two parameters is an application");
+            };
+            assert_eq!(signature, program.bound("Pair"));
+            assert_eq!(pins.get(pin("Left").symbol()), Some(KType::STR));
+            assert_eq!(pins.get(pin("Right").symbol()), None);
+        },
+    );
+}
+
+#[test]
+fn a_pin_naming_no_parameter_is_refused() {
+    for pinned in ["Stack WITH {Key = Number}", "Number WITH {Elt = Number}"] {
+        declared(
+            &format!("SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt)]\nLET Bad = :({pinned})"),
+            |_, brought| {
+                assert!(
+                    matches!(brought, Err(Elaboration::Unsupported { .. })),
+                    "{pinned}: {brought:?}"
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn two_applications_meet_at_the_set_of_both() {
+    brought(
+        "SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt)]\n\
+         LET Numbers = :(Stack WITH {Elt = Number})\n\
+         LET Strings = :(Stack WITH {Elt = Str})\n\
+         LET Both = :(Numbers & Strings)",
+        |program| {
+            let TypeNode::SignatureMeet { members } = program.types.node(program.bound("Both"))
+            else {
+                panic!("two pins of one parameter are unordered");
+            };
+            let mut expected = [program.bound("Numbers"), program.bound("Strings")];
+            expected.sort_unstable();
+            assert_eq!(members, expected);
+        },
+    );
+}
+
+#[test]
 fn a_signatures_members_read_its_head_parameters() {
     brought(
         "SIG Stack FOR ALL #{Elt: Any} = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]",

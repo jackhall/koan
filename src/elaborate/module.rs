@@ -4,8 +4,8 @@
 //!
 //! Nothing here walks a value: a slot's type is the memo its value already carries, which the tie
 //! derived, and a registration's shape is the one its function was born with, which only the
-//! function layer reads — so the caller hands those in. A module's signature declares no abstract
-//! member: a body binds every name it declares.
+//! function layer reads — so the caller hands those in. A module's signature declares no head
+//! parameter: a body binds every name it declares.
 
 use crate::memory::BumpAllocator;
 use crate::scope::{ActivationView, ShapeKind};

@@ -682,6 +682,28 @@ fn a_signature_body_reads_the_types_it_does_not_declare() {
     );
 }
 
+#[test]
+fn a_pin_reads_its_type_and_labels_its_parameter() {
+    shaped(
+        "NEWTYPE Distance = Number\n\
+         SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt)]\n\
+         LET Far = :(Stack WITH {Elt = Distance})",
+        |fixture, _, shape| {
+            let shape = shape.expect("the program shapes");
+            let name = |text| BinderSymbol::Type(type_name(text, fixture.symbols));
+            mention_of(shape, name("Stack"));
+            mention_of(shape, name("Distance"));
+            assert!(
+                !shape
+                    .mentions()
+                    .iter()
+                    .any(|mention| mention.name == name("Elt")),
+                "a pin's key names a parameter, not a type in scope"
+            );
+        },
+    );
+}
+
 /// The one block shape in `shape`'s tree — each program below holds a single `USING` body.
 fn only_block<'graph>(shape: &BodyShape<'graph>) -> &'graph BodyShape<'graph> {
     fn collect<'graph>(shape: &BodyShape<'graph>, found: &mut Vec<&'graph BodyShape<'graph>>) {
