@@ -106,8 +106,8 @@ pub(crate) fn identifier_part_binder_name(expr: &KExpression<'_>) -> Option<Bind
     }
 }
 
-/// Placeholder extractor for a name slot that takes a bare name or a declarator — `TYPE`, a
-/// `NEWTYPE` family and `UNION`: the bare form's name is the `Type` part at `parts[1]`; the
+/// Placeholder extractor for a name slot that takes a bare name or a declarator — a `NEWTYPE`
+/// family and `UNION`: the bare form's name is the `Type` part at `parts[1]`; the
 /// declarator's is the *last* inner part of the parenthesized `(Param AS Name)` expression. A
 /// bounded declarator, `(<declarator> UNDER <bound>)`, names what its declarator names.
 pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymbol> {
@@ -571,9 +571,8 @@ pub struct BinderFacts {
     /// The declaration surface this key belongs to (see [`BinderSurface`]).
     pub surface: BinderSurface,
     /// The parts-run position of the declared name, for the forms whose name is a direct part of
-    /// the statement spine (`VAL` declares at this position even though it installs nothing;
-    /// `TYPE`'s higher-kinded form nests its name inside the slot, so the position holds no bare
-    /// name there and reads as vacuous). `None` for the bucket-only forms (`FN`, `OP`), whose
+    /// the statement spine (`VAL` declares at this position even though it installs nothing).
+    /// `None` for the bucket-only forms (`FN`, `OP`), whose
     /// spine carries no declared name. Dispatch resolution reads this off the node's cached shape
     /// ([`KExpression::binder_name_slot`]) to exempt a declaration slot from parking on a
     /// still-finalizing same-named outer binder. Pinned against `names` by the

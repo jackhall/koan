@@ -194,17 +194,16 @@ pub fn solves_identity(types: &TypeRegistry<'_>, head: KType) -> bool {
 /// What sealing a payload under an opaque mint refuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SealRefused {
-    /// The identity is no per-application mint: not a nonced abstract type, nor an application of
-    /// one.
+    /// The identity is no per-application mint: no nonced `Parameter`.
     NotAMint(KType),
     /// The payload's type does not satisfy what the source binds the member to.
     Misfit { mint: KType, witness: KType },
 }
 
 /// The identity a payload of type `payload` takes when sealed under `mint`, the per-application
-/// abstract type an opaque ascription minted for a member the source binds to `witness`.
+/// carrier an opaque ascription minted for a parameter the source binds to `witness`.
 ///
-/// The barrier's rule, beside [`construction`]: an abstract type records no representation for a
+/// The barrier's rule, beside [`construction`]: a mint records no representation for a
 /// construction to check against, so what is checked is the source's own binding. Sealing happens
 /// where a view is built, never where a koan program writes a construction.
 pub fn sealing(
@@ -224,16 +223,12 @@ pub fn sealing(
     }
 }
 
-/// Whether `ktype` is a per-application mint: a nonced abstract type, or an application of one.
+/// Whether `ktype` is a per-application mint: a nonced head parameter.
 fn is_mint(types: &TypeRegistry<'_>, ktype: KType) -> bool {
-    match types.node(ktype) {
-        TypeNode::AbstractType { nonce, .. } => nonce.is_some(),
-        TypeNode::ConstructorApply { constructor, .. } => matches!(
-            types.node(constructor),
-            TypeNode::AbstractType { nonce: Some(_), .. }
-        ),
-        _ => false,
-    }
+    matches!(
+        types.node(ktype),
+        TypeNode::Parameter { nonce: Some(_), .. }
+    )
 }
 
 /// `value` read through its seal where the seal's bound licenses it. An opaque view's seal is
@@ -442,8 +437,10 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
             .any(|member| admits_part(*member, part, types)),
         TypeNode::KFunction { .. }
         | TypeNode::SetMember { .. }
-        | TypeNode::AbstractType { .. }
+        | TypeNode::Parameter { .. }
         | TypeNode::Signature { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. }
         | TypeNode::ExpressionShape { .. }
         | TypeNode::ConstructorApply { .. }
         | TypeNode::DeferredReturn(_)

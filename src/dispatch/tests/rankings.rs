@@ -8,7 +8,7 @@ use crate::memory::Bump;
 use crate::program::{CellSubstrate, KBirth, KBundle, KState};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::{Coordinate, Target};
-use crate::type_lattice::{SigSubtypeFailure, TypeNode, sig_subtype};
+use crate::type_lattice::{FitsFailure, sig_fits};
 
 use super::super::Koan;
 use super::{output, run};
@@ -113,15 +113,11 @@ fn ascribing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
         })
     };
     let types = program.types();
-    let schema = |handle| match types.node(handle) {
-        TypeNode::Signature { schema, .. } => schema,
-        _ => panic!("a signature"),
-    };
-    let module = schema(read("m").ktype());
-    let mover = schema(read("Mover").as_type().expect("a type").handle());
-    let verdict = match sig_subtype(types, &Bump::new(), module, mover) {
+    let module = read("m").ktype();
+    let mover = read("Mover").as_type().expect("a type").handle();
+    let verdict = match sig_fits(types, &Bump::new(), module, mover) {
         Ok(()) => String::from("satisfies"),
-        Err(SigSubtypeFailure::RankingMismatch { .. }) => String::from("ranked otherwise"),
+        Err(FitsFailure::RankingMismatch { .. }) => String::from("ranked otherwise"),
         Err(_) => String::from("fails otherwise"),
     };
     ASCRIBED.with(|ascribed| *ascribed.borrow_mut() = verdict);

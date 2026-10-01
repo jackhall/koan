@@ -10,7 +10,7 @@ use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
-    constructor_param_names, dense_classes, meet, shape_keys_equal,
+    constructor_param_names, dense_classes, meet,
 };
 
 /// The connector keywords of the formless composites.
@@ -350,7 +350,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                         self.part(&parts[2].value, groups)?,
                     ))
                 })?;
-                self.meet(site, left, right)
+                Ok(meet(self.types, self.scratch, left, right))
             }
             2 if keyword(0, &CONNECTORS.meet) => {
                 let ExpressionPart::ListLiteral(operands) = parts[1].value else {
@@ -359,37 +359,13 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 self.closed_operands(site, || {
                     let mut met = KType::ANY;
                     for operand in operands.iter() {
-                        met = self.meet(site, met, self.part(operand, groups)?)?;
+                        met = meet(self.types, self.scratch, met, self.part(operand, groups)?);
                     }
                     Ok(met)
                 })
             }
             _ => Err(unsupported),
         }
-    }
-
-    /// The meet of `left` and `right`, written at `site`. Two signatures that rank one keyword
-    /// pattern two ways have none, and are refused rather than met at `Never`: every declaration
-    /// and definition at a key carries one ranking.
-    fn meet(&self, site: Site, left: KType, right: KType) -> Result<KType, Elaboration> {
-        let keyworded = |handle| match self.types.node(handle) {
-            TypeNode::Signature { schema, .. } => Some(schema.keyworded),
-            _ => None,
-        };
-        let classes = |shape| match self.types.node(shape) {
-            TypeNode::ExpressionShape { classes, .. } => classes,
-            _ => unreachable!("a keyworded member is an expression shape"),
-        };
-        if let (Some(ours), Some(theirs)) = (keyworded(left), keyworded(right))
-            && ours.iter().any(|mine| {
-                theirs.iter().any(|other| {
-                    shape_keys_equal(*mine, *other, self.types) && classes(*mine) != classes(*other)
-                })
-            })
-        {
-            return Err(Elaboration::RankingDisagrees { site });
-        }
-        Ok(meet(self.types, self.scratch, left, right))
     }
 
     /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
@@ -425,7 +401,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
     }
 
     /// A bound: a closed, inhabited type. One naming a run-bound name is left for the run; one
-    /// naming any other type variable — a `FOR ALL` name or a signature's abstract member — or
+    /// naming any other type variable — a `FOR ALL` name or a signature's head parameter — or
     /// that is `Never` is refused at its site.
     pub(super) fn bound(
         &self,
@@ -442,7 +418,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
     }
 
     /// The parameter names a constructor head takes: a fellow family's while its group is open, a
-    /// declared family's or a higher-kinded abstract member's, or — for a union every member of
+    /// declared family's, or — for a union every member of
     /// which takes one parameter set — that set, since applying the union applies each member.
     fn param_names(&self, constructor: KType) -> Option<&[TypeSymbol]> {
         if let Some(fellow) = self

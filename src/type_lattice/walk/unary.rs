@@ -7,17 +7,16 @@
 //! descent-knob sites.
 //!
 //! Both entry points take the scratch allocator the walk's transient buffers — each node's child
-//! list, the rebuilt children, the context's shadow stack — are built in.
+//! list and the rebuilt children — are built in.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::symbols::{BinderSymbol, TypeSymbol};
+use crate::symbols::BinderSymbol;
 
 use super::Variance;
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::{SigSchema, canonical_overloads};
 use crate::type_lattice::shape::DispatchTokenElement;
 
 /// Whether a knobbed arm is descended or treated as a leaf.
@@ -63,34 +62,25 @@ pub enum UnionDoor {
     Flat,
 }
 
-/// [`rebuild`]'s knobs. A sealed member cannot be rebuilt, so there is no `set_member` knob.
+/// [`rebuild`]'s knobs. A signature is opaque content and a sealed member cannot be rebuilt, so
+/// neither has a knob.
 #[derive(Clone, Copy)]
 pub struct Rebuild {
-    pub signature: Step,
     pub union: UnionDoor,
 }
 
 /// What the driver knows about the position a rule is looking at.
-pub struct Context<'s> {
-    /// Abstract member names declared by the descended signatures on the path here, innermost
-    /// last. A name in the stack is bound by a nearer binder than any the rule is substituting for.
-    shadow: BumpVec<'s, TypeSymbol>,
+pub struct Context {
     binder_depth: usize,
     variance: Variance,
 }
 
-impl<'s> Context<'s> {
-    fn root(scratch: BumpAllocator<'s>, variance: Variance) -> Self {
+impl Context {
+    fn root(variance: Variance) -> Self {
         Context {
-            shadow: BumpVec::new_in(scratch),
             binder_depth: 0,
             variance,
         }
-    }
-
-    /// Whether an enclosing descended `Signature` declares an abstract member of this name.
-    pub fn shadows(&self, name: TypeSymbol) -> bool {
-        self.shadow.contains(&name)
     }
 
     /// Binders — expression shapes, and function types carrying a group — on the path from the
@@ -114,7 +104,7 @@ pub fn visit<'run>(
     scratch: BumpAllocator<'_>,
     root: KType,
     descent: Descent,
-    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context<'_>) -> Visit,
+    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
     visit_in(types, scratch, root, descent, Variance::Co, at)
 }
@@ -128,9 +118,9 @@ pub fn visit_in<'run>(
     root: KType,
     descent: Descent,
     variance: Variance,
-    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context<'_>) -> Visit,
+    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
-    let mut context = Context::root(scratch, variance);
+    let mut context = Context::root(variance);
     visit_at(types, scratch, root, descent, &mut context, at)
 }
 
@@ -139,8 +129,8 @@ fn visit_at<'run>(
     scratch: BumpAllocator<'_>,
     kt: KType,
     descent: Descent,
-    context: &mut Context<'_>,
-    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context<'_>) -> Visit,
+    context: &mut Context,
+    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
     let node = types.node(kt);
     match at(kt, &node, context) {
@@ -152,7 +142,6 @@ fn visit_at<'run>(
     if kids.is_empty() {
         return false;
     }
-    let depth = shadow_depth(&node, descent.signature, context);
     let binder = node.binds_quantifiers();
     if binder {
         context.binder_depth += 1;
@@ -170,7 +159,6 @@ fn visit_at<'run>(
     if binder {
         context.binder_depth -= 1;
     }
-    context.shadow.truncate(depth);
     stopped
 }
 
@@ -184,9 +172,9 @@ pub fn rebuild<'run>(
     scratch: BumpAllocator<'_>,
     root: KType,
     cfg: Rebuild,
-    rule: &mut impl FnMut(KType, &TypeNode<'run>, &Context<'_>) -> Option<KType>,
+    rule: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Option<KType>,
 ) -> KType {
-    let mut context = Context::root(scratch, Variance::Co);
+    let mut context = Context::root(Variance::Co);
     rebuild_at(types, scratch, root, cfg, &mut context, rule)
 }
 
@@ -195,20 +183,19 @@ fn rebuild_at<'run>(
     scratch: BumpAllocator<'_>,
     kt: KType,
     cfg: Rebuild,
-    context: &mut Context<'_>,
-    rule: &mut impl FnMut(KType, &TypeNode<'run>, &Context<'_>) -> Option<KType>,
+    context: &mut Context,
+    rule: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Option<KType>,
 ) -> KType {
     let node = types.node(kt);
     if let Some(replacement) = rule(kt, &node, context) {
         return replacement;
     }
-    // A sealed member is content-addressed by its component, so it has no rebuild: the `Leaf`
-    // knob here is the whole reason `Rebuild` carries no `set_member` field.
-    let kids = child_list(scratch, &node, cfg.signature, Step::Leaf);
+    // A signature is opaque and a sealed member is content-addressed by its component, so neither
+    // has a rebuild: the two `Leaf` knobs here are why `Rebuild` carries no field for them.
+    let kids = child_list(scratch, &node, Step::Leaf, Step::Leaf);
     if kids.is_empty() {
         return kt;
     }
-    let depth = shadow_depth(&node, cfg.signature, context);
     let binder = node.binds_quantifiers();
     if binder {
         context.binder_depth += 1;
@@ -226,25 +213,10 @@ fn rebuild_at<'run>(
     if binder {
         context.binder_depth -= 1;
     }
-    context.shadow.truncate(depth);
     if !changed {
         return kt;
     }
     reassemble(types, scratch, &node, &rebuilt, cfg).unwrap_or(kt)
-}
-
-/// Push the abstract member names a descended signature declares, and hand back the stack depth to
-/// truncate to on the way out.
-fn shadow_depth(node: &TypeNode<'_>, signature: Step, context: &mut Context<'_>) -> usize {
-    let depth = context.shadow.len();
-    if signature == Step::Through
-        && let TypeNode::Signature { schema, .. } = node
-    {
-        context
-            .shadow
-            .extend(schema.abstract_members.iter().map(|(name, _)| *name));
-    }
-    depth
 }
 
 /// A node's children under the knobs, in [`children`]'s order, in a buffer sized to their count.
@@ -332,17 +304,13 @@ pub fn children(
             out(lower, false);
             out(bound, false);
         }
-        TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => {
+        TypeNode::Quantified { bound, .. } | TypeNode::Parameter { bound, .. } => {
             out(bound, false)
         }
-        // Abstract members, then manifest members, then value slots, then the keyworded shapes.
+        // Parameters, then manifest members, then value slots, then the keyworded shapes.
         TypeNode::Signature { schema, .. } => {
             if signature == Step::Through {
-                for (_, kt) in schema
-                    .abstract_members
-                    .iter()
-                    .chain(schema.manifest_members)
-                {
+                for (_, kt) in schema.parameters.iter().chain(schema.manifest_members) {
                     out(*kt, false);
                 }
                 for (_, kt) in schema.value_slots {
@@ -353,6 +321,9 @@ pub fn children(
                 }
             }
         }
+        // An application's pins; its signature is closed.
+        TypeNode::SignatureApply { pins, .. } => pins.values().for_each(|kt| out(kt, false)),
+        TypeNode::SignatureMeet { members } => members.iter().for_each(|m| out(*m, false)),
         TypeNode::SetMember { schema, .. } => {
             if set_member == Step::Through {
                 match schema {
@@ -429,14 +400,11 @@ fn reassemble(
         TypeNode::Lexical { level, name, .. } => {
             types.lexical_between(scratch, level, name, new[0], new[1])
         }
-        TypeNode::AbstractType {
-            source,
-            name,
-            param_names,
-            nonce,
-            ..
-        } => types.abstract_type(scratch, source, name, param_names, nonce, new[0]),
-        TypeNode::Signature { schema, .. } => rebuilt_schema(types, scratch, schema, new),
+        TypeNode::Parameter { name, nonce, .. } => types.parameter(name, new[0], nonce),
+        TypeNode::SignatureApply { signature, pins } => {
+            types.signature_apply(scratch, signature, &rekey(scratch, pins, new))
+        }
+        TypeNode::SignatureMeet { .. } => types.signature_meet(scratch, new),
         // A sealed member is keyed by its component's digest, which was computed over exactly the
         // schema it carries: rebuilding one would name content its handle contradicts.
         TypeNode::SetMember { .. } => return None,
@@ -453,31 +421,4 @@ fn rekey<'s>(
     let mut fields = BumpVec::with_capacity_in(record.len(), scratch);
     fields.extend(record.keys().zip(values.iter().copied()));
     fields
-}
-
-/// `schema` with every member handle replaced by its rebuild, read back in [`children`]'s order and
-/// interned. Each named table is mapped type by type, which keeps its order; the keyworded channel
-/// re-canonicalizes, since two overloads may have become one.
-fn rebuilt_schema(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    schema: SigSchema<'_>,
-    new: &[KType],
-) -> KType {
-    let mut next = new.iter().copied();
-    let mut replaced = || next.next().expect("one replacement per member");
-    let abstract_members = schema.abstract_members.map_types(scratch, |_| replaced());
-    let manifest_members = schema.manifest_members.map_types(scratch, |_| replaced());
-    let value_slots = schema.value_slots.map_types(scratch, |_| replaced());
-    let mut keyworded = BumpVec::with_capacity_in(schema.keyworded.len(), scratch);
-    keyworded.extend(schema.keyworded.iter().map(|_| replaced()));
-    canonical_overloads(types, scratch, &mut keyworded);
-    types.intern_schema(SigSchema {
-        sig_id: schema.sig_id,
-        abstract_members,
-        manifest_members,
-        value_slots,
-        keyworded: &keyworded,
-        operators: schema.operators,
-    })
 }

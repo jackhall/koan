@@ -8,7 +8,7 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
-use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
@@ -18,17 +18,14 @@ use crate::type_lattice::order::{is_more_specific_than, is_subtype_of, satisfied
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{
-    Members, SigSchema, canonical_overloads, is_shape, shape_classes, shape_keys_equal,
-    shape_quantifiers, shape_return, shape_slots, specialize_schema,
+    Members, canonical_overloads, is_shape, shape_classes, shape_keys_equal, shape_quantifiers,
+    shape_return, shape_slots,
 };
 use crate::type_lattice::shape::Specificity;
-use crate::type_lattice::sig_relations::{
-    admits_shape, meet_schemas, shape_specificity, sig_subtype,
-};
+use crate::type_lattice::sig_relations::{admits_shape, shape_specificity, sig_fits};
 use crate::type_lattice::substitute::{
-    Side, bound_above, canonicalize_binder, erase_quantified, instantiate_quantified,
-    quantifier_bounds, read_through, slot_more_specific_or_equal, slot_satisfied_by,
-    slot_types_equal, substitute_quantified, substitute_sig_members,
+    Side, bound_above, erase_quantified, instantiate_quantified, quantifier_bounds, read_through,
+    substitute_parameters, substitute_quantified,
 };
 use crate::type_lattice::unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 use crate::type_lattice::walk::Variance;
@@ -410,7 +407,7 @@ proptest! {
         let rigid = visit(&types, scratch, a, LEAF, &mut |_, node, _| match node {
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
-            | TypeNode::AbstractType { .. } => Visit::Stop,
+            | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
         prop_assert_eq!(types.contains_quantified(a), quantified);
@@ -432,10 +429,7 @@ proptest! {
         if !types.contains_quantified(a) {
             prop_assert_eq!(substitute_quantified(&types, scratch, a, &[b, b, b]), a);
         }
-        prop_assert_eq!(
-            substitute_sig_members(&types, scratch, a, ScopeId::SENTINEL, Members::EMPTY),
-            a
-        );
+        prop_assert_eq!(substitute_parameters(&types, scratch, a, Members::EMPTY), a);
     }
 
     #[test]
@@ -466,41 +460,6 @@ proptest! {
         let lowest = [KType::NEVER; 8];
         let instance = substitute_quantified(&types, scratch, a, &lowest);
         prop_assert!(is_subtype_of(&types, scratch, instance, above));
-    }
-
-    #[test]
-    fn canonicalizing_a_binder_is_idempotent(a in one()) {
-        let types = registry();
-        let bump = Bump::new();
-        let scratch = &bump;
-        let once = canonicalize_binder(&types, scratch, a, ScopeId::SENTINEL);
-        prop_assert_eq!(
-            canonicalize_binder(&types, scratch, once, ScopeId::SENTINEL),
-            once
-        );
-    }
-
-    #[test]
-    fn the_slot_relations_are_their_definitions(a in one(), b in one(), c in one()) {
-        let types = registry();
-        let bump = Bump::new();
-        let scratch = &bump;
-        let world = world();
-        let members = Members::from_pairs(scratch, [(world.type_names[0], c)]);
-        let id = ScopeId::SENTINEL;
-        let substituted = substitute_sig_members(&types, scratch, a, id, members);
-        prop_assert_eq!(
-            slot_satisfied_by(&types, scratch, a, b, id, members),
-            satisfied_by(&types, scratch, substituted, b)
-        );
-        prop_assert_eq!(
-            slot_more_specific_or_equal(&types, scratch, a, b, id, members),
-            is_subtype_of(&types, scratch, substituted, b)
-        );
-        prop_assert_eq!(
-            slot_types_equal(&types, scratch, a, b, id, members),
-            substituted == b
-        );
     }
 }
 
@@ -1155,39 +1114,33 @@ fn seal(
 proptest! {
     #![proptest_config(binary())]
 
+    /// *Fits* holds of a signature type and itself and of anything and `Module`, and the meet of
+    /// two signature types fits both.
     #[test]
-    fn schema_relations_bound_their_operands(a in one(), b in one()) {
+    fn fits_bounds_the_signature_meet(a in one(), b in one()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let read = |kt: KType| match types.node(kt) {
-            TypeNode::Signature { schema, .. } => Some(schema),
-            _ => None,
-        };
-        let (Some(left), Some(right)) = (read(a), read(b)) else {
+        let signature = |kt: KType| matches!(types.node(kt), TypeNode::Signature { .. });
+        if !signature(a) || !signature(b) {
             return Ok(());
-        };
-        prop_assert!(sig_subtype(&types, scratch, left, left).is_ok());
-        prop_assert!(sig_subtype(&types, scratch, left, SigSchema::EMPTY).is_ok());
-        if let Some(met) = meet_schemas(&types, scratch, left, right) {
-            let met = read(met).expect("a meet of two schemas interns as a signature");
-            prop_assert!(sig_subtype(&types, scratch, met, left).is_ok());
-            prop_assert!(sig_subtype(&types, scratch, met, right).is_ok());
         }
+        prop_assert!(sig_fits(&types, scratch, a, a).is_ok());
+        prop_assert!(sig_fits(&types, scratch, a, KType::EMPTY_SIGNATURE).is_ok());
+        let met = meet(&types, scratch, a, b);
+        prop_assert!(sig_fits(&types, scratch, met, a).is_ok());
+        prop_assert!(sig_fits(&types, scratch, met, b).is_ok());
     }
 
     /// Every interned schema is stored in its canonical order — the invariant that lets every
-    /// reader walk a table straight through and look a name up by binary search — and
-    /// specializing one by nothing names it again.
+    /// reader walk a table straight through and look a name up by binary search.
     #[test]
     fn a_schema_is_stored_in_canonical_order(a in one()) {
         let types = registry();
-        let bump = Bump::new();
-        let scratch = &bump;
         let TypeNode::Signature { schema, .. } = types.node(a) else {
             return Ok(());
         };
-        prop_assert!(schema.abstract_members.windows(2).all(|w| w[0].0 < w[1].0));
+        prop_assert!(schema.parameters.windows(2).all(|w| w[0].0 < w[1].0));
         prop_assert!(schema.manifest_members.windows(2).all(|w| w[0].0 < w[1].0));
         prop_assert!(schema.value_slots.windows(2).all(|w| w[0].0 < w[1].0));
         prop_assert!(
@@ -1196,7 +1149,6 @@ proptest! {
                 .iter()
                 .all(|group| group.members.windows(2).all(|w| w[0] < w[1]))
         );
-        prop_assert_eq!(specialize_schema(&types, scratch, schema, &[]), a);
     }
 }
 

@@ -16,7 +16,8 @@ use crate::symbols::BinderSymbol;
 use super::handle::KType;
 use super::node::TypeNode;
 use super::registry::{Relation, TypeRegistry};
-use super::sig_relations::{admits_function, admits_shape, sig_subtype};
+use super::sig_relations::{admits_function, admits_shape, sig_fits};
+use super::signatures::is_signature_type;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 
@@ -34,8 +35,8 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   keywords, contravariant in its slots and covariant in its return.
 /// - A union is below `b` when every member is; a non-union is below a union when it is below some
 ///   member.
-/// - A signature is below another when [`sig_subtype`] accepts the pair.
-/// - A **rigid variable** — `Quantified`, `Lexical` or `AbstractType` — is a nominal identity
+/// - A signature type is below another when [`sig_fits`] accepts the pair.
+/// - A **rigid variable** — `Quantified`, `Lexical` or `Parameter` — is a nominal identity
 ///   between its lower end (`Never` but for a lexical variable's) and its bound: below it lie
 ///   itself and whatever lies under its lower end, above it itself and everything above its bound,
 ///   a union included. The clauses agree because both ends are variable-free types.
@@ -150,16 +151,16 @@ impl Lockstep for Order {
         if let Some(lower) = nb.rigid_lower() {
             return is_subtype_of(types, scratch, a, lower);
         }
+        if is_signature_type(types, a) && is_signature_type(types, b) {
+            if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::SigSatisfies) {
+                return known;
+            }
+            let verdict = sig_fits(types, scratch, a, b).is_ok();
+            types.record_verdict(a.digest(), b.digest(), Relation::SigSatisfies, verdict);
+            return verdict;
+        }
         match (na, nb) {
             (TypeNode::OfKind(x), TypeNode::OfKind(y)) => y.admits(x),
-            (TypeNode::Signature { schema: sub, .. }, TypeNode::Signature { schema: sup, .. }) => {
-                if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::SigSatisfies) {
-                    return known;
-                }
-                let verdict = sig_subtype(types, scratch, sub, sup).is_ok();
-                types.record_verdict(a.digest(), b.digest(), Relation::SigSatisfies, verdict);
-                verdict
-            }
             // A quantified shape is below another when some instantiation of its group puts every
             // slot and the return under the other's, with the other's rigid.
             (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
@@ -251,6 +252,8 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::ExpressionShape { .. }
         | TypeNode::ConstructorApply { .. }
         | TypeNode::Signature { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Sibling(_)
         | TypeNode::AnyValue => Some(KType::ANY_VALUE),
@@ -274,7 +277,7 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::Union { .. }
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
-        | TypeNode::AbstractType { .. }
+        | TypeNode::Parameter { .. }
         | TypeNode::DeferredReturn(_) => None,
     }
 }
@@ -316,14 +319,4 @@ pub(super) fn unsubsumed<'s>(
         })
     }));
     keep
-}
-
-/// The index of the one element of `0..count` that `dominates` every other, if there is one — the
-/// tournament a most-specific overload, a keyworded selection and a contribution set's extremum
-/// all run.
-pub(super) fn dominant(
-    count: usize,
-    mut dominates: impl FnMut(usize, usize) -> bool,
-) -> Option<usize> {
-    (0..count).find(|&i| (0..count).all(|j| i == j || dominates(i, j)))
 }

@@ -1,7 +1,7 @@
 //! A module's self-signature, over a module body activated in a cell with its slots bound by hand.
 
 use crate::symbols::KeywordSymbol;
-use crate::type_lattice::{KType, ReductionMode, SchemaDraft, TypeNode, satisfied_by};
+use crate::type_lattice::{KType, ReductionMode, SchemaDraft, SigOrigin, TypeNode, satisfied_by};
 use crate::values::{TypeValue, Value};
 
 use super::{Program, nulls, with_program};
@@ -55,8 +55,8 @@ fn a_module_reports_a_value_slot_per_value_binder_and_a_manifest_member_per_type
                 panic!("a self-signature is a Signature node");
             };
             assert!(
-                schema.abstract_members.is_empty(),
-                "a module's signature declares no abstract member",
+                schema.parameters.is_empty() && schema.origin == SigOrigin::Module,
+                "a module's signature declares no parameter",
             );
             assert!(schema.keyworded.is_empty() && schema.operators.is_empty());
         },

@@ -41,9 +41,11 @@ use super::node::{NodeSchema, TypeNode};
 use super::order::{Dropped, is_subtype_of, unsubsumed};
 use super::record::Record;
 use super::schema::{
-    DeclaredGroup, Members, SchemaDraft, SigSchema, canonical_groups, canonical_overloads,
+    DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, canonical_groups,
+    canonical_overloads, member,
 };
 use super::shape::{DeferredReturnSurface, DispatchTokenElement, written_order};
+use super::signatures::canonical_applications;
 use super::substitute::substitute_quantified;
 use super::walk::Variance;
 use super::walk::unary::{LEAF, Step, Visit, children, visit, visit_in};
@@ -54,7 +56,7 @@ struct Entry<'run> {
     node: TypeNode<'run>,
     /// Whether a `Quantified` position is reachable without crossing a shape's own binder.
     quantified: bool,
-    /// Whether any rigid variable — `Quantified`, `Lexical` or `AbstractType` — is reachable.
+    /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable.
     rigid: bool,
 }
 
@@ -86,7 +88,7 @@ impl<'run> Entry<'run> {
                 quantified: true,
                 rigid: true,
             },
-            TypeNode::AbstractType { .. } | TypeNode::Lexical { .. } => Entry {
+            TypeNode::Parameter { .. } | TypeNode::Lexical { .. } => Entry {
                 node,
                 quantified,
                 rigid: true,
@@ -110,7 +112,7 @@ type NodeTable<'run> = BumpBackedMap<'run, TypeDigest, Entry<'run>, IdentityBuil
 pub(super) enum Relation {
     /// [`is_subtype_of`](super::order::is_subtype_of), the one order.
     Subtype,
-    /// [`sig_subtype`](super::sig_relations::sig_subtype) over the two schemas.
+    /// [`sig_fits`](super::sig_relations::sig_fits) over two signature types.
     SigSatisfies,
     /// [`class_at_least`](super::ranking::class_at_least) at the class it names.
     ClassAtLeast(u8),
@@ -520,36 +522,18 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
-    /// A named rigid variable — a signature's abstract member, or an opaque ascription's
-    /// per-application mint when `nonce` is set. `bound` is what bounds it, [`KType::ANY`]
-    /// where the declaration constrains nothing. `param_names` may arrive in any order: identity is
-    /// their set, so they are stored symbol-sorted.
+    /// A named rigid variable — a signature's head parameter, or the carrier an opaque view mints
+    /// for one when `nonce` is set. `bound` is what bounds it, [`KType::ANY`] where the
+    /// declaration constrains nothing.
     ///
     /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).
-    pub fn abstract_type(
-        &self,
-        scratch: BumpAllocator<'_>,
-        source: ScopeId,
-        name: TypeSymbol,
-        param_names: &[TypeSymbol],
-        nonce: Option<ScopeId>,
-        bound: KType,
-    ) -> KType {
+    pub fn parameter(&self, name: TypeSymbol, bound: KType, nonce: Option<ScopeId>) -> KType {
         debug_assert!(
             !self.contains_rigid(bound),
             "a rigid variable's bound holds no rigid variable of its own",
         );
-        let mut sorted = BumpVec::with_capacity_in(param_names.len(), scratch);
-        sorted.extend_from_slice(param_names);
-        sorted.sort_unstable();
-        sorted.dedup();
-        let digest = digest::abstract_type_digest(source, name, &sorted, nonce, bound);
-        self.intern_digested(digest, || TypeNode::AbstractType {
-            source,
-            name,
-            param_names: self.rehome(&sorted),
-            nonce,
-            bound,
+        self.intern_digested(digest::parameter_digest(name, bound, nonce), || {
+            TypeNode::Parameter { name, bound, nonce }
         })
     }
 
@@ -678,11 +662,12 @@ impl<'run> TypeRegistry<'run> {
     /// A module-signature type over `draft`, in canonical form — the one door a schema enters the
     /// lattice through. It makes each named table a [`Members`], canonicalizes the keyworded and
     /// operator channels, digests the result, and copies it into the region on a miss, so no
-    /// interned schema is ever uncanonical.
+    /// interned schema is ever uncanonical. A schema with no parameter and no member is the empty
+    /// signature whatever its origin, so `SIG E = #[]` and `Module` are one handle.
     pub fn signature(&self, scratch: BumpAllocator<'_>, draft: SchemaDraft<'_>) -> KType {
         let SchemaDraft {
-            sig_id,
-            abstract_members,
+            origin,
+            parameters,
             manifest_members,
             value_slots,
             mut keyworded,
@@ -691,26 +676,30 @@ impl<'run> TypeRegistry<'run> {
         } = draft;
         canonical_overloads(self, scratch, &mut keyworded);
         canonical_groups(&mut operators);
-        self.intern_schema(SigSchema {
-            sig_id,
-            abstract_members: Members::from_table(abstract_members),
+        let schema = SigSchema {
+            origin,
+            parameters: Members::from_table(parameters),
             manifest_members: Members::from_table(manifest_members),
             value_slots: Members::from_table(value_slots),
             keyworded: &keyworded,
             operators: &operators,
-        })
+        };
+        if schema.is_empty() {
+            return KType::EMPTY_SIGNATURE;
+        }
+        self.intern_schema(schema)
     }
 
     /// Intern a schema that is already canonical, wherever its slices live: the seed's door for
-    /// [`SigSchema::EMPTY`], and a walk's for a schema it rebuilt member for member. Computes the
-    /// schema's content digest once, here, so the node carries it and identity is one compare.
+    /// [`SigSchema::EMPTY`]. Computes the schema's content digest once, here, so the node carries
+    /// it and identity is one compare.
     pub(super) fn intern_schema(&self, schema: SigSchema<'_>) -> KType {
-        let schema_digest = schema_content_digest(schema, self);
+        let schema_digest = schema_content_digest(schema);
         self.intern_digested(digest::signature_digest(schema_digest), || {
             TypeNode::Signature {
                 schema: SigSchema {
-                    sig_id: schema.sig_id,
-                    abstract_members: schema.abstract_members.copied_into(self.bump),
+                    origin: schema.origin,
+                    parameters: schema.parameters.copied_into(self.bump),
                     manifest_members: schema.manifest_members.copied_into(self.bump),
                     value_slots: schema.value_slots.copied_into(self.bump),
                     keyworded: self.rehome(schema.keyworded),
@@ -719,6 +708,53 @@ impl<'run> TypeRegistry<'run> {
                 schema_digest,
             }
         })
+    }
+
+    /// `signature` with `pins` fixed — the application `Stack WITH {Elt = Number}` spells —
+    /// or `signature` itself for no pins. `signature` is a declared signature, and each pin is
+    /// keyed by one of its parameters.
+    pub fn signature_apply(
+        &self,
+        scratch: BumpAllocator<'_>,
+        signature: KType,
+        pins: &[(BinderSymbol, KType)],
+    ) -> KType {
+        if pins.is_empty() {
+            return signature;
+        }
+        debug_assert!(
+            matches!(
+                self.node(signature),
+                TypeNode::Signature { schema, .. }
+                    if schema.origin == SigOrigin::Declared
+                        && pins.iter().all(|(name, _)| matches!(
+                            name,
+                            BinderSymbol::Type(name) if member(schema.parameters, *name).is_some()
+                        ))
+            ),
+            "an application pins a declared signature's own parameters",
+        );
+        let digest = digest::signature_apply_digest(scratch, signature.digest(), pins);
+        self.intern_digested(digest, || TypeNode::SignatureApply {
+            signature,
+            pins: Record::over(self.rehome(pins)),
+        })
+    }
+
+    /// The meet of the signature types `members` — the set of every application they hold, less
+    /// each application lying above another ([`signatures`](super::signatures)). The empty set is
+    /// `Module`, and a set of one is that application's own handle.
+    pub fn signature_meet(&self, scratch: BumpAllocator<'_>, members: &[KType]) -> KType {
+        let set = canonical_applications(self, scratch, members);
+        match set[..] {
+            [] => KType::EMPTY_SIGNATURE,
+            [only] => only,
+            _ => self.intern_digested(digest::signature_meet_digest(&set), || {
+                TypeNode::SignatureMeet {
+                    members: self.rehome(&set),
+                }
+            }),
+        }
     }
 
     /// An operator channel copied into the region, each record's member run with it.
@@ -1053,7 +1089,7 @@ impl<'run> TypeRegistry<'run> {
         self.entry(kt).quantified
     }
 
-    /// Whether any rigid variable — `Quantified`, `Lexical` or `AbstractType` — is reachable from
+    /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable from
     /// `kt`. Read off the flag interning stored beside the node.
     ///
     /// The invariant a **bound** carries: a bound is a variable-free type. That is what keeps the

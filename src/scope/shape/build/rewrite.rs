@@ -37,9 +37,8 @@
 //! See [README.md § Operator groups](../../README.md#operator-groups).
 
 use crate::memory::{BumpVec, collect};
-use crate::parse::builtin_shapes::binder::bounded_run;
+use crate::parse::builtin_shapes::KEYWORDS;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
-use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, ProgramNode, Spanned};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
@@ -186,9 +185,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         }
                         Role::Definition(DefinitionKind::Members) => {
                             self.rewrite_quotes(&part.value, Quotes::Items)?
-                        }
-                        Role::Name if form.id == BuiltinShapeId::TypeDeclaration => {
-                            self.rewrite_bounds(&part.value)?
                         }
                         Role::Keyword
                         | Role::Name
@@ -349,30 +345,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             index += if typed { 2 } else { 1 };
         }
         Ok(changed.then(|| self.brand.nested_node(&parts, run.source)))
-    }
-
-    /// A `TYPE` declarator with its bound's operator runs chained: the third part of a
-    /// `<Name> UNDER <bound>` run.
-    fn rewrite_bounds(
-        &mut self,
-        part: &ExpressionPart<'graph>,
-    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError<'graph>> {
-        let ExpressionPart::Expression(node) = part else {
-            return Ok(None);
-        };
-        let run = node.reference();
-        if bounded_run(run).is_none() {
-            return Ok(None);
-        }
-        let Some(rewritten) = self.rewrite_part(&run.parts[2].value)? else {
-            return Ok(None);
-        };
-        let mut parts: Run<'x, 'graph> = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
-        parts.extend_from_slice(run.parts);
-        parts[2].value = rewritten;
-        Ok(Some(ExpressionPart::Expression(
-            self.brand.nested_node(&parts, run.source),
-        )))
     }
 
     /// The quotes of a container the shape builder reads where it is written — a list's items, or

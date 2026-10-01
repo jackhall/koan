@@ -573,15 +573,16 @@ fn a_type_binder_records_its_declaration_node() {
 
 #[test]
 fn a_signature_body_declares_its_own_members() {
-    // A `SIG` body's `TYPE` members, its higher-kinded parameters, its `FOR ALL` names and its
-    // manifest `LET` members are the definition's own: none is a mention of the enclosing shape.
+    // A `SIG`'s head parameters, its members' `FOR ALL` names and its manifest `LET` members are
+    // the definition's own: none is a mention of the enclosing shape.
     for (source, own) in [
         (
-            "SIG Pairish = #[(TYPE (Key Val AS Pair))]",
-            &["Key", "Val", "Pair"][..],
+            "SIG Headed FOR ALL #{Key: Any, Val: Any} = #[(VAL k :Key) (VAL v :Val)]",
+            &["Key", "Val"][..],
         ),
         (
-            "SIG Boxy = #[(TYPE Elem) (VAL unbox :(EXPR FOR ALL #[Held] #(TAKE it :Held) -> Elem))]",
+            "SIG Boxy FOR ALL #[Elem] = \
+             #[(VAL unbox :(EXPR FOR ALL #[Held] #(TAKE it :Held) -> Elem))]",
             &["Elem", "Held"],
         ),
         (
@@ -606,6 +607,23 @@ fn a_signature_body_declares_its_own_members() {
             }
         });
     }
+}
+
+#[test]
+fn a_type_member_is_refused_where_it_is_written() {
+    // A signature hides a type through a head parameter, so `TYPE` is a reserved shape.
+    shaped(
+        "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]",
+        |_, _, shape| {
+            assert!(matches!(
+                shape.err(),
+                Some(ShapeError::Unsupported {
+                    form: BuiltinShapeId::TypeDeclaration,
+                    ..
+                })
+            ));
+        },
+    );
 }
 
 #[test]
@@ -723,7 +741,7 @@ fn a_module_naming_itself_from_a_body_of_its_own_is_refused() {
 #[test]
 fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
     let module = "MODULE m = ((LET x = 1) (NEWTYPE Dist = Number))";
-    let shown = "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]";
+    let shown = "SIG Shown FOR ALL #[Carrier] = #[(VAL zero :Carrier)]";
     let cases: &[(String, &[&str])] = &[
         // A `MODULE` binder read directly, and the same read from a body that precedes it.
         (format!("{module}\nUSING m SCOPE (x)"), &["x", "Dist"]),
@@ -823,7 +841,7 @@ fn a_callable_in_a_using_body_captures_a_surfaced_name_by_reading_it() {
 #[test]
 fn an_operand_whose_names_cannot_be_read_is_refused() {
     let module = "MODULE m = (LET x = 1)";
-    let shown = "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]";
+    let shown = "SIG Shown FOR ALL #[Carrier] = #[(VAL zero :Carrier)]";
     let cases = [
         // A parameter typed by a signature may hold a wider module, so it is never readable.
         format!("{shown}\nLET f = (FN :{{m :Shown}} -> Number = #(USING m SCOPE (zero)))"),
@@ -852,13 +870,14 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
                 if name == type_name("Missing", fixture.symbols)
         ));
     };
-    // A bound naming nothing in scope is unbound, in a `FOR ALL` group and a `TYPE` declarator.
+    // A bound naming nothing in scope is unbound, in a callable's `FOR ALL` group and a
+    // signature's.
     shaped(
         "LET f = (FN FOR ALL #{Elt: Missing} :{x :Elt y :Elt} -> Elt = #(x))",
         |fixture, _, shape| missing(fixture, shape),
     );
     shaped(
-        "SIG Shown = #[(TYPE (Carrier UNDER Missing)) (VAL zero :Carrier)]",
+        "SIG Shown FOR ALL #{Carrier: Missing} = #[(VAL zero :Carrier)]",
         |fixture, _, shape| missing(fixture, shape),
     );
     // A bound naming a declared type is that type's mention; the bounded name is the body's.
@@ -879,9 +898,9 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
             assert!(body.slot(dist).is_none());
         },
     );
-    // A bounded `TYPE` member is the signature's own, and its bound a mention.
+    // A bounded head parameter is the signature's own, and its bound a mention.
     shaped(
-        "SIG Shown = #[(TYPE (Carrier UNDER Number)) (VAL zero :Carrier)]",
+        "SIG Shown FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
             let carrier = BinderSymbol::Type(type_name("Carrier", fixture.symbols));
@@ -891,8 +910,9 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
                     .iter()
                     .any(|mention| mention.name == carrier)
             );
+            // The head group is read where the declaration is, as a callable's group is.
             let number = BinderSymbol::Type(type_name("Number", fixture.symbols));
-            assert_eq!(mention_of(shape, number).class, MentionClass::Deferred);
+            assert_eq!(mention_of(shape, number).class, MentionClass::Eager);
         },
     );
 }

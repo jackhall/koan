@@ -1,26 +1,31 @@
 //! The view door: what `m :! Sig` and `m :| Sig` build.
 //!
 //! A view is a module of its own — the same node, through the same constructor — holding only the
-//! members its signature names, at the types that signature declares. Both operators narrow; they
-//! differ in what the signature's abstract members mean afterwards.
+//! members its signature names, at the types that signature declares. The ascribed type is one
+//! application of a declared signature; a meet of several is refused. The source must *fit* it
+//! ([`fits_application`]), which solves each head parameter the application leaves unpinned from
+//! what the source's members offer. Both operators narrow; they differ in what the parameters mean
+//! afterwards.
 //!
-//! Under `:!` they mean what the source binds them to, so the view's members are the source's own
-//! words and the view is a relabelling. Under `:|` each one is **minted afresh, once per
-//! application**: a rigid variable carrying a nonce nothing else can name, so two ascriptions of
-//! one signature over one module produce views whose carriers do not unify. Every member is then
-//! born [coerced](super::coerce) to the mints.
+//! Under `:!` they mean what *fits* solved them to, or what the application pins them to, so the
+//! view's members are the source's own words and the view is a relabelling. Under `:|` each
+//! unpinned one is **minted afresh, once per application**: a [`Parameter`](TypeNode::Parameter)
+//! carrying a nonce nothing else can name, so two ascriptions of one signature over one module
+//! produce views whose carriers do not unify. Every member is then born [coerced](super::coerce)
+//! to the mints. A pinned parameter keeps its pin either way.
 //!
-//! Nothing is minted at a *nested* boundary. A slot declared at a nested signature is re-viewed
-//! against that signature read under the outer view's bindings, so the nested view's abstract
-//! identities are the outer mints, arriving through the declared type rather than being made
-//! again. [`build`] is the one body both the outer ascription and the nested case go through.
+//! Nothing is minted at a *nested* boundary. A slot declared at an application whose pins name the
+//! outer signature's parameters is re-viewed against it read under the outer view's bindings, so
+//! the nested view's identities are the outer mints, arriving through the declared type rather
+//! than being made again. [`build`] is the one body both the outer ascription and the nested case
+//! go through.
 
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    KType, Members, SchemaDraft, SigSchema, SigSubtypeFailure, TypeNode, TypeRegistry,
-    constructor_param_names, member as bound_member, sig_subtype, substitute_sig_members,
+    FitsFailure, KType, Members, SchemaDraft, SigSchema, TypeNode, TypeRegistry, fits_application,
+    member as bound_member, substitute_parameters,
 };
 use crate::values::{TypeValue, Value};
 
@@ -30,9 +35,10 @@ use super::{Module, layout};
 /// Which operator is ascribing: `:!` keeps the source's types, `:|` mints its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ascription {
-    /// `:|` — each abstract member becomes a fresh mint, and every member is born coerced to it.
+    /// `:|` — each unpinned head parameter becomes a fresh mint, and every member is born coerced
+    /// to it.
     Opaque,
-    /// `:!` — the abstract members keep the source's bindings, so every member is carried verbatim.
+    /// `:!` — the parameters keep what *fits* solved them to, so every member is carried verbatim.
     Transparent,
 }
 
@@ -41,10 +47,10 @@ pub enum Ascription {
 pub enum Unascribable<'run, 'x> {
     /// The operand is no module.
     NotAModule,
-    /// The ascribed handle names no signature.
+    /// The ascribed handle names no one application of a signature.
     NotASignature(KType),
-    /// The module does not satisfy the signature.
-    Unsatisfied(SigSubtypeFailure<'run, 'x>),
+    /// The module does not fit the signature.
+    Unsatisfied(FitsFailure<'run, 'x>),
     /// A member the signature names could not take the view's type for it.
     Coercion {
         name: ValueSymbol,
@@ -62,22 +68,31 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
-    let sig = layout::schema_of(signature, types).ok_or(Unascribable::NotASignature(signature))?;
-    let held = source_schema(source, types).ok_or(Unascribable::NotAModule)?;
-    sig_subtype(types, scratch, held, sig).map_err(Unascribable::Unsatisfied)?;
-    let from = source_bindings(&sig, &held, scratch);
+    let (declared, pins) = match types.node(signature) {
+        TypeNode::Signature { .. } => (signature, &[][..]),
+        TypeNode::SignatureApply { signature, pins } => (signature, pins.as_slice()),
+        _ => return Err(Unascribable::NotASignature(signature)),
+    };
+    let sig = layout::schema_of(declared, types).ok_or(Unascribable::NotASignature(signature))?;
+    let held = source.module().ok_or(Unascribable::NotAModule)?.ktype();
+    // The empty signature asks nothing, and every module fits it.
+    let from = if sig.is_empty() {
+        Members::EMPTY
+    } else {
+        fits_application(types, scratch, held, declared, pins).map_err(Unascribable::Unsatisfied)?
+    };
     let to = match mode {
-        // Transparent: the abstract members keep the source's bindings, so every slot type reads
-        // the same either side and the coercion walk stops at its first comparison.
+        // Transparent: the parameters keep the source's bindings, so every slot type reads the
+        // same either side and the coercion walk stops at its first comparison.
         Ascription::Transparent => from,
-        Ascription::Opaque => mint(&sig, types, scratch),
+        Ascription::Opaque => mint(&sig, from, pins, types, scratch),
     };
     let view = view_signature(&sig, to, types, scratch);
     build(writer, source, sig, view, from, to, types, scratch)
 }
 
 /// Build the view's member run in layout order and lay the node down. `from` and `to` are what the
-/// source and the view bind the signature's abstract members to.
+/// source and the view bind the signature's head parameters to.
 ///
 /// Two callers: an ascription, and a nested signature slot inside one
 /// ([`coerce`](super::coerce::coerce)), which passes the enclosing substitutions unchanged —
@@ -120,66 +135,49 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     Ok(Knotted::of(Module::tie(writer, view, &members), 0))
 }
 
-/// A fresh mint per abstract member of `sig`: a rigid variable carrying this application's nonce,
-/// over the same parameter names and the same bound the declaration gives it.
+/// The view's bindings under `:|`: a fresh mint per head parameter of `sig` that `pins` leaves
+/// unpinned — a [`Parameter`](TypeNode::Parameter) carrying this application's nonce, under the
+/// bound the declaration gives it — and each pinned one at what `from` holds for it, its pin.
 fn mint<'x>(
     sig: &SigSchema<'_>,
+    from: Members<'_, TypeSymbol>,
+    pins: &[(BinderSymbol, KType)],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Members<'x, TypeSymbol> {
     let nonce = ScopeId::next();
     Members::from_pairs(
         scratch,
-        sig.abstract_members.iter().map(|(name, declared)| {
-            let params = constructor_param_names(*declared, types).unwrap_or(&[]);
-            let bound = match types.node(*declared) {
-                TypeNode::AbstractType { bound, .. } => bound,
-                _ => KType::ANY,
+        sig.parameters.iter().map(|(name, declared)| {
+            let pinned = pins
+                .iter()
+                .any(|(pin, _)| *pin == BinderSymbol::Type(*name));
+            let to = if pinned {
+                bound_member(from, *name).expect("fits binds every parameter")
+            } else {
+                let bound = types.node(*declared).rigid_bound().unwrap_or(KType::ANY);
+                types.parameter(*name, bound, Some(nonce))
             };
-            (
-                *name,
-                types.abstract_type(scratch, nonce, *name, params, Some(nonce), bound),
-            )
+            (*name, to)
         }),
     )
 }
 
-/// What `source` binds each of `sig`'s abstract members to — the substitution the member it holds
-/// was built under.
-fn source_bindings<'x>(
-    sig: &SigSchema<'_>,
-    source: &SigSchema<'_>,
-    scratch: BumpAllocator<'x>,
-) -> Members<'x, TypeSymbol> {
-    Members::from_pairs(
-        scratch,
-        sig.abstract_members.iter().map(|(name, _)| {
-            (
-                *name,
-                source
-                    .type_member(*name)
-                    .expect("satisfaction admitted every abstract member"),
-            )
-        }),
-    )
-}
-
-/// The signature the view itself carries: every one of `sig`'s type members fixed manifest at what
-/// `to` gives it, and every value slot at its declared type read under `to`. A module's own
-/// signature never has abstract members, and a view's is a module's.
-fn view_signature(
+/// The signature the view itself carries: each of `sig`'s parameters a manifest member at what `to`
+/// gives it, each manifest member and value slot at its declared type read under `to`. A view's
+/// signature is a module's, so it has no parameters, and a view lays out no keyworded member.
+pub(super) fn view_signature(
     sig: &SigSchema<'_>,
     to: Members<'_, TypeSymbol>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
-    let read =
-        |declared: KType| substitute_sig_members(types, scratch, declared, ScopeId::SENTINEL, to);
+    let read = |declared: KType| substitute_parameters(types, scratch, declared, to);
     let mut draft = SchemaDraft::new(scratch);
-    for (name, _) in sig.abstract_members.iter().copied() {
+    for (name, _) in sig.parameters.iter().copied() {
         draft.insert_manifest(
             name,
-            bound_member(to, name).expect("every abstract member is bound"),
+            bound_member(to, name).expect("every parameter is bound"),
         );
     }
     for (name, fixed) in sig.manifest_members.iter().copied() {
@@ -189,12 +187,4 @@ fn view_signature(
         draft.insert_value_slot(name, read(declared));
     }
     types.signature(scratch, draft)
-}
-
-/// The self-signature `source` carries, if it is a module.
-fn source_schema<'run>(
-    source: Knotted<'_, '_>,
-    types: &TypeRegistry<'run>,
-) -> Option<SigSchema<'run>> {
-    layout::schema_of(source.module()?.ktype(), types)
 }

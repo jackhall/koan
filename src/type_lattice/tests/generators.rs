@@ -25,7 +25,7 @@ use crate::type_lattice::lattice::{join, meet};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::SchemaDraft;
+use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::{
     DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes,
 };
@@ -112,7 +112,7 @@ pub fn arb_type(world: World, depth: u32) -> BoxedStrategy<KType> {
 
 /// [`arb_type`] with the rigid variables in scope: `bound` are an enclosing shape's quantifiers,
 /// which do not cross into a nested shape's own binder, and `members` are an enclosing signature's
-/// abstract members, which do.
+/// head parameters, which do.
 fn arb_type_in(
     world: World,
     depth: u32,
@@ -205,23 +205,13 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
             .prop_map(move |index| types.deferred_return(DeferredReturnSurface::Type(names[index])))
             .boxed()
     };
-    let opaque = (
-        0..abstract_world.type_names.len(),
-        0..3usize,
-        0..grounds.len(),
-    )
-        .prop_map(move |(name, arity, bound)| {
-            let params = &abstract_world.type_names[..arity.min(2)];
-            with_scratch(|scratch| {
-                abstract_world.types.abstract_type(
-                    scratch,
-                    OPAQUE_MINT,
-                    abstract_world.type_names[name],
-                    params,
-                    Some(OPAQUE_MINT),
-                    abstract_world.grounds()[bound],
-                )
-            })
+    let opaque =
+        (0..abstract_world.type_names.len(), 0..grounds.len()).prop_map(move |(name, bound)| {
+            abstract_world.types.parameter(
+                abstract_world.type_names[name],
+                abstract_world.grounds()[bound],
+                Some(OPAQUE_MINT),
+            )
         });
     // A lexical variable: one of two levels, named from the type alphabet, over a ground bound —
     // and over the `Number | Str` ground, sometimes above a lower end of one of its members.
@@ -473,36 +463,35 @@ fn function_of(world: &World, parameter: KType) -> KType {
     })
 }
 
-/// An interface with a handful of members of each kind.
+/// An interface with a handful of members of each kind: a declared signature over head parameters
+/// with ground bounds, or a module's schema, which has none.
 ///
-/// The abstract members are chosen first and their handles handed down to every member type, so a
-/// slot that names `Elt` names the very handle the schema binds it to — which is what projection
+/// The parameters are chosen first and their handles handed down to every member type, so a slot
+/// that names `Elt` names the very handle the schema binds it to — which is what the elaborator
 /// produces and what the relations assume.
 fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
     let grounds = world.grounds();
     let outer = world.clone();
-    prop::collection::vec((0..world.type_names.len(), 0..grounds.len()), 0..2)
-        .prop_flat_map(move |declared| {
+    (
+        prop::collection::vec((0..world.type_names.len(), 0..grounds.len()), 0..2),
+        any::<bool>(),
+    )
+        .prop_flat_map(move |(declared, module)| {
             let world = outer.clone();
-            let mut abstract_members: Vec<(TypeSymbol, KType)> = Vec::new();
+            let mut parameters: Vec<(TypeSymbol, KType)> = Vec::new();
             for (name, bound) in declared {
                 let name = world.type_names[name];
-                if abstract_members.iter().all(|(held, _)| *held != name) {
-                    let member = with_scratch(|scratch| {
-                        world.types.abstract_type(
-                            scratch,
-                            ScopeId::SENTINEL,
-                            name,
-                            &[],
-                            None,
-                            world.grounds()[bound],
-                        )
-                    });
-                    abstract_members.push((name, member));
+                if parameters.iter().all(|(held, _)| *held != name) {
+                    let parameter = world.types.parameter(name, world.grounds()[bound], None);
+                    parameters.push((name, parameter));
                 }
             }
-            let members: Rc<Vec<KType>> =
-                Rc::new(abstract_members.iter().map(|(_, kt)| *kt).collect());
+            let origin = if module && parameters.is_empty() {
+                SigOrigin::Module
+            } else {
+                SigOrigin::Declared
+            };
+            let members: Rc<Vec<KType>> = Rc::new(parameters.iter().map(|(_, kt)| *kt).collect());
             let none = Rc::new(Vec::new());
             let manifest = arb_type_in(world.clone(), depth - 1, none.clone(), members.clone());
             let slot = arb_type_in(world.clone(), depth - 1, none.clone(), members.clone());
@@ -518,16 +507,16 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
                         let mut draft = SchemaDraft::new(scratch);
                         for (name, kt) in manifests {
                             let name = world.type_names[name];
-                            if abstract_members.iter().all(|(held, _)| *held != name) {
+                            if parameters.iter().all(|(held, _)| *held != name) {
                                 draft.insert_manifest(name, kt);
                             }
                         }
                         for (name, kt) in slots {
                             draft.insert_value_slot(world.values[name], kt);
                         }
-                        draft.sig_id = (!abstract_members.is_empty()).then_some(ScopeId::SENTINEL);
-                        for (name, member) in &abstract_members {
-                            draft.insert_abstract(*name, *member);
+                        draft.origin = origin;
+                        for (name, parameter) in &parameters {
+                            draft.insert_parameter(*name, *parameter);
                         }
                         for shape in keyworded {
                             draft.push_keyworded(shape);

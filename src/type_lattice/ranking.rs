@@ -499,7 +499,7 @@ pub fn class_at_least(
 }
 
 /// The level of a class walk's stand-in, which no lexical variable the elaborator mints shares.
-const STAND_IN_LEVEL: usize = usize::MAX;
+pub(super) const STAND_IN_LEVEL: usize = usize::MAX;
 
 /// What a variable an earlier class solved to `solution` reads as in a later one, over static
 /// types: `solution` itself where the reach interval converged or `solution` names a rigid variable

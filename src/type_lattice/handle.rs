@@ -120,7 +120,7 @@ impl KType {
     pub const DICT_ANY_ANY: KType = KType(TypeDigest(0xf9b9d64d_aa69edda_e7a59f82_4e0f5015));
     /// The empty signature — top of the module lattice, the type `:Module` lowers to. It
     /// constrains nothing, so every module value satisfies it.
-    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0xb80aaa8d_7e3507bd_e06a1496_5250ca90));
+    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0x9d9c6ff8_d07721a9_90cd6da6_77262d30));
 
     /// `TypeNameToken | SigiledTypeExpr | RecordType` — the code a type is written as: a union's
     /// variant payload or a quantifier's bound. Not spellable.
@@ -260,7 +260,7 @@ impl KType {
             TypeNode::AnyCode => fixed(&CODE_NAME),
             TypeNode::Never => fixed(&NEVER_NAME),
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(symbols)),
-            TypeNode::AbstractType { name, .. } => Some(*name),
+            TypeNode::Parameter { name, .. } => Some(*name),
             TypeNode::SetMember { name, .. } => Some(*name),
             TypeNode::Signature { schema_digest, .. } => (*schema_digest
                 == super::digest::empty_schema_digest())
@@ -276,22 +276,22 @@ impl KType {
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
             | TypeNode::CodeNeeding { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. }
             | TypeNode::Sibling(_) => None,
         })
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
-    /// `OfKind`. A signature is `Signature`, a user-declared nominal is its family read off its
-    /// member node, an abstract member with declared parameters is a constructor, and every other
-    /// type is `ProperType`. Never returns [`KKind::AnyType`], which is a slot-only expectation.
+    /// `OfKind`. A signature type is `Signature`, a user-declared nominal is its family read off its
+    /// member node, and every other type is `ProperType`. Never returns [`KKind::AnyType`], which is a slot-only expectation.
     pub fn kind_of(self, types: &TypeRegistry<'_>) -> KKind {
         types.with_node(self, |node| match node {
-            TypeNode::Signature { .. } => KKind::Signature,
+            TypeNode::Signature { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. } => KKind::Signature,
             TypeNode::SetMember { kind, .. } => *kind,
             TypeNode::ConstructorApply { constructor, .. } => constructor.kind_of(types),
-            TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
-                KKind::TypeConstructor
-            }
             _ => KKind::ProperType,
         })
     }

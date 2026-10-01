@@ -27,7 +27,7 @@ use super::record::Record;
 use super::registry::TypeRegistry;
 use super::schema::{DeclaredGroup, SigSchema, shape_elements, shape_return, shape_slots};
 use super::shape::DispatchTokenElement;
-use super::sig_relations::SigSubtypeFailure;
+use super::sig_relations::FitsFailure;
 
 /// A symbol's text, resolved through the run's interner. Rendering stays total: a miss prints a
 /// placeholder rather than panicking, because error formatting must never be the thing that fails.
@@ -187,7 +187,7 @@ fn write_name_in(
             }
             f.write_str("})")
         }
-        TypeNode::AbstractType { name, .. } | TypeNode::Lexical { name, .. } => {
+        TypeNode::Parameter { name, .. } | TypeNode::Lexical { name, .. } => {
             write!(f, "{}", display_symbol(name.symbol(), symbols))
         }
         // A sealed nominal member renders by its own member name — a bare newtype (`:Wrapper`) or a
@@ -208,6 +208,29 @@ fn write_name_in(
             } else {
                 write_sig_schema(f, *schema, types, symbols)
             }
+        }
+        // `<signature> WITH {Elt = Number}`, the pins in their written order.
+        TypeNode::SignatureApply { signature, pins } => {
+            write_name_in(*signature, f, types, symbols, binder)?;
+            f.write_str(" WITH {")?;
+            for (index, (name, pinned)) in pins.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                write!(f, "{} = ", display_symbol(name.symbol(), symbols))?;
+                write_name_in(pinned, f, types, symbols, binder)?;
+            }
+            f.write_str("}")
+        }
+        // Each application as it renders alone, joined by `&`.
+        TypeNode::SignatureMeet { members } => {
+            for (index, member) in members.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(" & ")?;
+                }
+                write_name_in(*member, f, types, symbols, binder)?;
+            }
+            Ok(())
         }
         // Diagnostic only: a sibling reference is meaningful against its window and never survives
         // a seal.
@@ -388,7 +411,7 @@ fn write_shape_head(
 }
 
 /// The structural rendering of a non-empty interface: `SIG (member: Type, …)` over every member the
-/// schema names — abstract members, then manifest members, then value slots, each table in its
+/// schema names — parameters, then manifest members, then value slots, each table in its
 /// stored symbol order, which is deterministic across runs because a symbol is a digest of its text.
 fn write_sig_schema(
     f: &mut std::fmt::Formatter<'_>,
@@ -397,7 +420,7 @@ fn write_sig_schema(
     symbols: &SymbolInterner,
 ) -> std::fmt::Result {
     let members = schema
-        .abstract_members
+        .parameters
         .iter()
         .chain(schema.manifest_members)
         .map(|(name, kt)| (name.symbol(), *kt))
@@ -624,13 +647,13 @@ fn render_mode(mode: ReductionMode, symbols: &SymbolInterner) -> String {
     }
 }
 
-/// Render a signature-subtyping failure as the message fragment an ascription error embeds after
+/// Render a *fits* failure as the message fragment an ascription error embeds after
 /// `` module does not satisfy signature `{path}`: ``.
 ///
 /// `operators` is the declaring side's chaining channel, so a keyworded head renders as the `OP`
 /// surface that declared it rather than as a bare `EXPR` head.
-pub fn render_sig_failure(
-    failure: &SigSubtypeFailure<'_, '_>,
+pub fn render_fits_failure(
+    failure: &FitsFailure<'_, '_>,
     operators: &[DeclaredGroup<'_>],
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
@@ -638,13 +661,13 @@ pub fn render_sig_failure(
     let head = |shape: KType| render_keyworded_head(shape, operators, types, symbols);
     let show = |kt: KType| display_name(kt, types, symbols);
     match failure {
-        SigSubtypeFailure::MissingTypeMember { name } => {
+        FitsFailure::MissingTypeMember { name } => {
             format!(
                 "missing type member `{}`",
                 render_symbol(name.symbol(), symbols)
             )
         }
-        SigSubtypeFailure::ManifestMismatch {
+        FitsFailure::ManifestMismatch {
             name,
             got,
             expected,
@@ -654,46 +677,10 @@ pub fn render_sig_failure(
             show(*got),
             show(*expected)
         ),
-        SigSubtypeFailure::KindMismatch {
-            name,
-            expected_params: Some(params),
-            got,
-        } => {
-            let mut sorted: Vec<String> = params
-                .iter()
-                .map(|p| render_symbol(p.symbol(), symbols))
-                .collect();
-            sorted.sort_unstable();
-            format!(
-                "type member `{}` must be a type constructor with parameters {{{}}}, got `{}`",
-                render_symbol(name.symbol(), symbols),
-                sorted.join(", "),
-                show(*got)
-            )
-        }
-        SigSubtypeFailure::KindMismatch {
-            name,
-            expected_params: None,
-            got,
-        } => format!(
-            "type member `{}` must be a proper type, got the type constructor `{}`",
-            render_symbol(name.symbol(), symbols),
-            show(*got)
-        ),
-        SigSubtypeFailure::BoundMismatch {
-            name,
-            got,
-            expected,
-        } => format!(
-            "type member `{}` is `{}` but the signature bounds it by `{}`",
-            render_symbol(name.symbol(), symbols),
-            show(*got),
-            show(*expected)
-        ),
-        SigSubtypeFailure::MissingValueSlot { name } => {
+        FitsFailure::MissingValueSlot { name } => {
             format!("missing member `{}`", render_symbol(name.symbol(), symbols))
         }
-        SigSubtypeFailure::ValueSlotMismatch {
+        FitsFailure::ValueSlotMismatch {
             name,
             got,
             expected,
@@ -703,15 +690,15 @@ pub fn render_sig_failure(
             show(*got),
             show(*expected)
         ),
-        SigSubtypeFailure::MissingKeyworded { head: shape } => {
+        FitsFailure::MissingKeyworded { head: shape } => {
             format!("missing keyworded member `{}`", head(*shape))
         }
-        SigSubtypeFailure::RankingMismatch { head: shape, got } => format!(
+        FitsFailure::RankingMismatch { head: shape, got } => format!(
             "keyworded member `{}` is ranked two ways (found `{}`)",
             head(*shape),
             head(*got)
         ),
-        SigSubtypeFailure::KeywordedMismatch { head: shape, got } => format!(
+        FitsFailure::KeywordedMismatch { head: shape, got } => format!(
             "no overload satisfies keyworded member `{}` (found {})",
             head(*shape),
             got.iter()
@@ -719,7 +706,7 @@ pub fn render_sig_failure(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        SigSubtypeFailure::QuantifiedMismatch {
+        FitsFailure::QuantifiedMismatch {
             head: shape,
             parameter,
             got,
@@ -730,24 +717,12 @@ pub fn render_sig_failure(
             show(*got),
             parameter_name = render_symbol(parameter.symbol(), symbols)
         ),
-        SigSubtypeFailure::AmbiguousKeyworded {
-            head: shape,
-            candidates,
-        } => format!(
-            "keyworded member `{}` is satisfied by {} with no most specific one",
-            head(*shape),
-            candidates
-                .iter()
-                .map(|one| format!("`{}`", head(*one)))
-                .collect::<Vec<_>>()
-                .join(" and ")
-        ),
-        SigSubtypeFailure::MissingOperatorGroup { members } => format!(
+        FitsFailure::MissingOperatorGroup { members } => format!(
             "no chaining mode covers `{}` (the module defines the buckets but declares no group \
              over them)",
             render_members(members, symbols)
         ),
-        SigSubtypeFailure::OperatorModeMismatch {
+        FitsFailure::OperatorModeMismatch {
             members,
             expected,
             got,
@@ -756,6 +731,14 @@ pub fn render_sig_failure(
             render_members(members, symbols),
             render_mode(*expected, symbols),
             render_mode(*got, symbols)
+        ),
+        FitsFailure::Unsolved { parameter } => format!(
+            "what the module offers solves parameter `{}` to no type",
+            render_symbol(parameter.symbol(), symbols)
+        ),
+        FitsFailure::SelfSignature { expected } => format!(
+            "only the module whose own signature is `{}` fits it",
+            show(*expected)
         ),
     }
 }

@@ -4,7 +4,7 @@
 //! computes, and that no two node kinds share a domain tag. The first catches a recipe change that
 //! would silently re-identify a builtin leaf; the second catches a new variant added without one.
 
-use crate::memory::{Bump, ScopeId};
+use crate::memory::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::digest::node_digest;
@@ -14,7 +14,7 @@ use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_name;
-use crate::type_lattice::schema::{SchemaDraft, SigSchema};
+use crate::type_lattice::schema::SigSchema;
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 
 #[test]
@@ -150,11 +150,12 @@ fn constants_match_freshly_interned_nodes() {
         );
     }
     // The empty signature carries a schema digest computed at intern time, so it is checked through
-    // the door that mints one rather than against a hand-built node.
+    // the intern that mints one rather than against a hand-built node; the signature door answers
+    // the constant for an empty draft without interning.
     assert_eq!(
-        types.signature(region, SchemaDraft::new(region)),
+        types.intern_schema(SigSchema::EMPTY),
         KType::EMPTY_SIGNATURE,
-        "the pinned `KType::EMPTY_SIGNATURE` is not what the signature door interns for an empty \
+        "the pinned `KType::EMPTY_SIGNATURE` is not what its intern mints for an empty \
          schema",
     );
 }
@@ -199,12 +200,10 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::AnyCode,
         TypeNode::Never,
         TypeNode::OfKind(KKind::ProperType),
-        TypeNode::AbstractType {
-            source: ScopeId::SENTINEL,
+        TypeNode::Parameter {
             name,
-            param_names: &[],
-            nonce: None,
             bound: KType::ANY,
+            nonce: None,
         },
         TypeNode::List {
             element: KType::NUMBER,
@@ -248,6 +247,11 @@ fn every_node_kind_has_its_own_tag() {
             schema: SigSchema::EMPTY,
             schema_digest: node_digest(region, &TypeNode::Number),
         },
+        TypeNode::SignatureApply {
+            signature: KType::NUMBER,
+            pins: Record::over(&arguments),
+        },
+        TypeNode::SignatureMeet { members: &members },
         TypeNode::DeferredReturn(DeferredReturnSurface::Type(name)),
         TypeNode::Sibling(0),
         TypeNode::CodeNeeding {
@@ -288,7 +292,7 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::AnyCode => "AnyCode",
             TypeNode::Never => "Never",
             TypeNode::OfKind(_) => "OfKind",
-            TypeNode::AbstractType { .. } => "AbstractType",
+            TypeNode::Parameter { .. } => "Parameter",
             TypeNode::List { .. } => "List",
             TypeNode::Dict { .. } => "Dict",
             TypeNode::Record { .. } => "Record",
@@ -299,6 +303,8 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::Union { .. } => "Union",
             TypeNode::ConstructorApply { .. } => "ConstructorApply",
             TypeNode::Signature { .. } => "Signature",
+            TypeNode::SignatureApply { .. } => "SignatureApply",
+            TypeNode::SignatureMeet { .. } => "SignatureMeet",
             TypeNode::DeferredReturn(_) => "DeferredReturn",
             TypeNode::Sibling(_) => "Sibling",
             TypeNode::SetMember { .. } => "SetMember",

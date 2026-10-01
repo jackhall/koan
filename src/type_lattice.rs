@@ -19,8 +19,9 @@
 //! their canonical union otherwise — and [`meet`] the greatest lower bound. [`admits_with`] walks a
 //! declared type against a carried one and collects what would solve the quantified positions;
 //! [`Collector::solve`] bounds each variable by a pair of ends and binds its least instance.
-//! [`sig_subtype`] and [`meet_schemas`] are the order and the meet over two signature schemas —
-//! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates
+//! [`sig_fits`] is *fits* over two signature types: each a set of applications of declared
+//! signatures, which meet at the union of their sets — two unordered signature types join to their
+//! union — and [`shape_specificity`] ranks two candidates
 //! under one bucket key, class by class through a shape's priority classes: [`admit_by_class`] is
 //! what a keyworded call admits by, and [`select_by_class`] the elimination a candidate list runs.
 //!
@@ -62,6 +63,7 @@ mod render;
 mod schema;
 mod shape;
 mod sig_relations;
+mod signatures;
 mod substitute;
 mod unify;
 mod walk;
@@ -83,23 +85,18 @@ pub use ranking::{
 pub use record::Record;
 pub use registry::{GroupIntern, TypeRegistry};
 pub use render::{
-    TypeNameDisplay, display_name, display_symbol, render_keyworded_head, render_sig_failure,
+    TypeNameDisplay, display_name, display_symbol, render_fits_failure, render_keyworded_head,
     render_symbol,
 };
 pub use schema::{
-    DeclaredGroup, Members, SchemaDraft, SigSchema, constructor_param_names,
-    is_abstract_sig_member, is_shape, member, shape_keys_equal, shape_return, shape_slots,
-    specialize_schema,
+    DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, constructor_param_names, is_shape,
+    member, shape_keys_equal, shape_return, shape_slots,
 };
 pub use shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, dense_classes};
-pub use sig_relations::{
-    SigSubtypeFailure, most_specific_ktype, select_keyworded_satisfier, shape_specificity,
-    sig_subtype,
-};
+pub use sig_relations::{FitsFailure, fits_application, shape_specificity, sig_fits};
 pub use substitute::{
-    Side, bound_above, canonicalize_binder, erase_quantified, erase_rigid, instantiate_quantified,
-    quantifier_bounds, read_through, slot_more_specific_or_equal, slot_satisfied_by,
-    slot_types_equal, substitute_levels, substitute_quantified, substitute_sig_members,
+    Side, bound_above, erase_quantified, erase_rigid, instantiate_quantified, quantifier_bounds,
+    read_through, substitute_levels, substitute_parameters, substitute_quantified,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;

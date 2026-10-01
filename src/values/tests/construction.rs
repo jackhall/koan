@@ -588,8 +588,8 @@ fn a_member_seals_under_a_mint_its_source_binding_admits() {
         let distance = fixture.newtype("Distance", KType::NUMBER);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
         let nonce = ScopeId::next();
-        let declared = types.abstract_type(scratch, nonce, carrier, &[], None, KType::ANY);
-        let mint = types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), KType::ANY);
+        let declared = types.parameter(carrier, KType::ANY, None);
+        let mint = types.parameter(carrier, KType::ANY, Some(nonce));
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let sealed = Tagged::seal(
@@ -672,7 +672,7 @@ fn a_payload_is_read_at_its_identitys_representation() {
         assert_eq!(representation(types, scratch, silent), None);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
         let nonce = ScopeId::next();
-        let mint = types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), KType::ANY);
+        let mint = types.parameter(carrier, KType::ANY, Some(nonce));
         assert_eq!(representation(types, scratch, mint), None);
     });
 }

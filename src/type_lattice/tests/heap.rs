@@ -7,25 +7,20 @@
 //! region, too — so any allocation inside the bracket is the lattice's own, and the test names it by
 //! failing.
 
-use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::tests::allocation_count;
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::lattice::{join, meet};
-use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::ReductionMode;
 use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::{SchemaDraft, specialize_schema};
+use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::DispatchTokenElement::{Keyword, Slot};
-use crate::type_lattice::sig_relations::{
-    SigSubtypeFailure, select_keyworded_satisfier, shape_specificity, sig_subtype,
-};
-use crate::type_lattice::substitute::{
-    canonicalize_binder, erase_quantified, substitute_quantified,
-};
+use crate::type_lattice::sig_relations::{FitsFailure, shape_specificity, sig_fits};
+use crate::type_lattice::substitute::{erase_quantified, substitute_quantified};
 use crate::type_lattice::unify::{Collector, admits_with};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
@@ -113,9 +108,8 @@ fn interning_and_relations_touch_no_heap() {
         )
         .handle;
 
-    // A signature with a member of every kind and a chaining record.
-    let member = types.abstract_type(scratch, ScopeId::SENTINEL, elt, &[], None, KType::ANY);
-    let family = types.abstract_type(scratch, ScopeId::SENTINEL, wrap, &[item], None, KType::ANY);
+    // A signature with a head parameter, a member of every kind and a chaining record.
+    let member = types.parameter(elt, KType::ANY, None);
     let operator = types
         .shape_type(
             scratch,
@@ -127,15 +121,14 @@ fn interning_and_relations_touch_no_heap() {
         )
         .handle;
     let mut draft = SchemaDraft::new(scratch);
-    draft.sig_id = Some(ScopeId::SENTINEL);
-    draft.insert_abstract(elt, member);
-    draft.insert_abstract(wrap, family);
+    draft.origin = SigOrigin::Declared;
+    draft.insert_parameter(elt, member);
     draft.insert_manifest(item, KType::NUMBER);
     draft.insert_value_slot(a, member);
     draft.push_keyworded(operator);
     draft.push_operator_group(&[plus], ReductionMode::FoldLeft);
     let interface = types.signature(scratch, draft);
-    // A module missing the constructor member the interface declares.
+    // A module missing the members the interface declares.
     let mut draft = SchemaDraft::new(scratch);
     draft.insert_manifest(elt, KType::NUMBER);
     let module = types.signature(scratch, draft);
@@ -161,12 +154,13 @@ fn interning_and_relations_touch_no_heap() {
         )
         .handle;
     let mut draft = SchemaDraft::new(scratch);
+    draft.origin = SigOrigin::Declared;
     draft.push_keyworded(wants);
     let keyworded = types.signature(scratch, draft);
     let mut draft = SchemaDraft::new(scratch);
     draft.push_keyworded(offers);
     let mismatched = types.signature(scratch, draft);
-    // A module fixing the member `module` fixes to a different type: the two have no meet.
+    // A module fixing the member `module` fixes to a different type.
     let mut draft = SchemaDraft::new(scratch);
     draft.insert_manifest(elt, KType::STR);
     let clashing = types.signature(scratch, draft);
@@ -203,15 +197,13 @@ fn interning_and_relations_touch_no_heap() {
         &[(BinderSymbol::Type(item), KType::NUMBER)],
     );
 
-    let TypeNode::Signature { schema, .. } = types.node(interface) else {
-        unreachable!("the signature door interns a signature");
-    };
-    let specialized = specialize_schema(&types, scratch, schema, &[(elt, KType::STR)]);
+    let pinned =
+        types.signature_apply(scratch, interface, &[(BinderSymbol::Type(elt), KType::STR)]);
 
     // --- Relations ---
     assert!(is_subtype_of(&types, scratch, record, narrow));
     assert!(!is_subtype_of(&types, scratch, narrow, record));
-    let _ = is_subtype_of(&types, scratch, specialized, interface);
+    assert!(is_subtype_of(&types, scratch, pinned, interface));
     let _ = join(&types, scratch, record, function);
     let _ = is_subtype_of(&types, scratch, quantified_function, function);
     let _ = join(&types, scratch, group_member, KType::NUMBER);
@@ -222,9 +214,9 @@ fn interning_and_relations_touch_no_heap() {
         .handle;
     assert!(types.quantifies_contravariantly(scratch, sink, 1));
     let _ = meet(&types, scratch, union, record);
-    // Two signatures meet member for member; two manifest bindings for one name have no meet.
+    // Two signature types meet at the set of both, which is never `Never`.
     assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);
-    assert_eq!(meet(&types, scratch, module, clashing), KType::NEVER);
+    assert_ne!(meet(&types, scratch, module, clashing), KType::NEVER);
 
     let mut collector = Collector::new(scratch, &[KType::ANY]);
     assert!(
@@ -273,25 +265,19 @@ fn interning_and_relations_touch_no_heap() {
     }
     assert!(from_above.solve(&types).is_ok());
 
-    let read = |kt: KType| match types.node(kt) {
-        TypeNode::Signature { schema, .. } => schema,
-        _ => unreachable!("the signature door interns a signature"),
-    };
-    assert!(sig_subtype(&types, scratch, schema, schema).is_ok());
-    assert!(sig_subtype(&types, scratch, read(module), schema).is_err());
+    assert!(sig_fits(&types, scratch, interface, interface).is_ok());
+    assert!(sig_fits(&types, scratch, module, interface).is_err());
     assert!(matches!(
-        sig_subtype(&types, scratch, read(mismatched), read(keyworded)),
-        Err(SigSubtypeFailure::KeywordedMismatch { .. })
+        sig_fits(&types, scratch, mismatched, keyworded),
+        Err(FitsFailure::KeywordedMismatch { .. })
     ));
     // Two unordered signatures: the union door's subsumption pass takes both negative verdicts.
     let _ = types.union_of(scratch, &[interface, module]);
     let _ = shape_specificity(&types, scratch, shape, plain);
-    assert!(select_keyworded_satisfier(&types, scratch, wants, &[wants, offers], None).is_ok());
     let _ = substitute_quantified(&types, scratch, types.list(variable), &[KType::STR]);
     let _ = erase_quantified(&types, scratch, shape);
-    let _ = canonicalize_binder(&types, scratch, interface, ScopeId::SENTINEL);
     assert!(types.contains_quantified(types.list(variable)));
-    assert!(types.contains_rigid(family));
+    assert!(types.contains_rigid(member));
 
     let allocated = allocation_count() - before;
     assert_eq!(

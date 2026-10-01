@@ -38,8 +38,8 @@ use crate::memory::{
     strongly_connected_components,
 };
 use crate::parse::builtin_shapes::binder::{
-    BinderSurface, DeclaredElement, SlotLabel, bounded, declared_element, head_run, needed_key,
-    needed_name, needing, slot_label,
+    BinderSurface, DeclaredElement, SlotLabel, declared_element, head_run, needed_key, needed_name,
+    needing, slot_label,
 };
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
@@ -131,7 +131,7 @@ pub(super) fn program<'graph, X: Knotted>(
 /// says, and admits one of its slot's types by [`admits_part`], the one admission rule — a type
 /// expression's and an in-place operand's type is
 /// the value it denotes, so only their spelling is checked. A binder name is a bare name, or a bare
-/// declarator group for `TYPE`, `UNION` and `NEWTYPE`. Code written where a quote or a container of
+/// declarator group for `UNION` and `NEWTYPE`. Code written where a quote or a container of
 /// quotes is wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part
 /// whose syntax fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
 fn written_as_read<'e>(
@@ -141,9 +141,7 @@ fn written_as_read<'e>(
 ) -> Result<(), ShapeError<'e>> {
     let declarator = matches!(
         form.id,
-        BuiltinShapeId::TypeDeclaration
-            | BuiltinShapeId::Union
-            | BuiltinShapeId::NewTypeDeclaration
+        BuiltinShapeId::Union | BuiltinShapeId::NewTypeDeclaration
     );
     let quoted = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::QuotedExpression(_));
     for (index, (element, part)) in form.elements.iter().zip(node.parts).enumerate() {
@@ -1486,9 +1484,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Ok(())
             }
             (DefinitionKind::Members, ExpressionPart::ListLiteral(members)) => {
-                // A signature declares its own names — its abstract `TYPE` members and its manifest
-                // `LET` members alike — so a later member naming one is no mention of the enclosing
-                // shape. The door resolves them against the definition it is elaborating.
+                // A signature declares its own names — its manifest `LET` members, beside the head
+                // parameters its group declares — so a later member naming one is no mention of the
+                // enclosing shape. The door resolves them against the definition it is elaborating.
                 let mut own = BumpVec::new_in(self.scratch);
                 own.extend(members.iter().filter_map(quoted_body).filter_map(|member| {
                     match member.statement_binder_plan()?.name? {
@@ -1571,14 +1569,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         self.walk_definition_part(level, statement, bound, state)?;
                     }
                 }
-                // A `TYPE` member's bound is read where the `SIG` runs; its name is the body's.
-                Role::Name => {
-                    if form.id == BuiltinShapeId::TypeDeclaration
-                        && let Some((_, bound)) = bounded(part)
-                    {
-                        self.walk_definition_part(level, statement, bound, state)?;
-                    }
-                }
+                Role::Name => {}
                 Role::Definition(inner) => {
                     self.walk_definition(level, statement, part, inner, state)?
                 }

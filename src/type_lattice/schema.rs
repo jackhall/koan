@@ -2,13 +2,12 @@
 //! are stored in, and [`SchemaDraft`], the transient a schema is assembled in before the signature
 //! door canonicalizes and interns it.
 //!
-//! Members are split by *representation*, not by surface syntax: an abstract member is a rigid
-//! variable with no concrete witness (an [`TypeNode::AbstractType`] node, of either order), a
-//! manifest member fixes a concrete type. A module self-sig never has abstract members — `TYPE` is
-//! a SIG-body-only construct.
+//! A declared signature's head parameters (`SIG Stack FOR ALL #[Elt] = …`) are its
+//! [`parameters`](SigSchema::parameters), each a [`TypeNode::Parameter`] its members read by name;
+//! a manifest member fixes a concrete type. A module's self-signature has no parameters.
 //!
-//! Every channel is a slice in the run region, stored in one canonical order: the three named
-//! tables are [`Members`], symbol-sorted by name with each name once — an order the type holds
+//! Every channel is a slice in the run region, stored in one canonical order: the named tables
+//! are [`Members`], symbol-sorted by name with each name once — an order the type holds
 //! itself, since a table is only ever built sorted — the keyworded channel in
 //! [`canonical_overloads`] order, the operator channel in [`canonical_groups`] order. A reader walks
 //! a table in that order and never sorts one; a lookup by name is a binary search ([`member`]). The
@@ -22,10 +21,9 @@
 //!
 //! The relations over two schemas live in [`sig_relations`](super::sig_relations).
 
-use std::cmp::Ordering;
 use std::ops::Deref;
 
-use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
 use super::handle::KType;
@@ -35,7 +33,6 @@ use super::operators::{FoldDirection, ReductionMode};
 use super::order::{Dropped, unsubsumed};
 use super::registry::TypeRegistry;
 use super::shape::DispatchTokenElement;
-use super::substitute::substitute_sig_members;
 
 /// A named member table: `(name, type)` pairs, symbol-sorted by name with each name once. The shape
 /// every name-keyed channel of a schema is stored in, and the shape a substitution's bindings
@@ -43,9 +40,9 @@ use super::substitute::substitute_sig_members;
 ///
 /// The order is the type's own invariant, not a caller's promise: a table is built only by
 /// [`Members::from_table`], which sorts and dedups, or derived from one by a step that keeps its
-/// names in place ([`copied_into`](Self::copied_into), [`map_types`](Self::map_types)). So every
-/// reader may binary-search a table ([`member`]) or walk two in lockstep ([`merge_join`]) without
-/// checking it. Reading a table is reading its slice, through `Deref`.
+/// names in place ([`copied_into`](Self::copied_into)). So every
+/// reader may binary-search a table ([`member`]) without checking it. Reading a table is reading
+/// its slice, through `Deref`.
 pub struct Members<'a, N>(&'a [(N, KType)]);
 
 impl<N> Clone for Members<'_, N> {
@@ -85,16 +82,6 @@ impl<'a, N: Copy> Members<'a, N> {
         } else {
             Members(bump.alloc_slice_copy(self.0))
         }
-    }
-
-    /// This table with each bound type replaced by `read` of it, in `scratch`. The names stay
-    /// where they are, so the result is a table in the same order.
-    pub(super) fn map_types<'b>(
-        self,
-        scratch: BumpAllocator<'b>,
-        mut read: impl FnMut(KType) -> KType,
-    ) -> Members<'b, N> {
-        Members(scratch.alloc_slice_fill_iter(self.0.iter().map(|(name, kt)| (*name, read(*kt)))))
     }
 }
 
@@ -137,19 +124,12 @@ pub fn member<N: Ord + Copy>(members: Members<'_, N>, name: N) -> Option<KType> 
 /// Normalized signature schema — the carrier the signature relations are defined over.
 #[derive(Clone, Copy)]
 pub struct SigSchema<'run> {
-    /// The binder this schema's own abstract members are sourced at: `Some(ScopeId::SENTINEL)`
-    /// for a SIG declaration, `None` for a module self-sig (whose slot types name no
-    /// SIG-declared refs).
-    ///
-    /// The binder is *canonical*, not the declaring scope's id: projection rewrites every
-    /// SIG-own member's `source` to [`ScopeId::SENTINEL`], so two textually identical `SIG`
-    /// declarations project to one schema and intern to one type. `SENTINEL` is never a minted
-    /// scope id, so a canonical binder cannot alias a real one.
-    pub sig_id: Option<ScopeId>,
-    /// Abstract type members: name → the rigid variable standing for it. Its `param_names` carry
-    /// the member's order (empty = first-order, non-empty = a constructor over those parameters)
-    /// and its `bound` what bounds it.
-    pub abstract_members: Members<'run, TypeSymbol>,
+    /// Whether a `SIG` declared this schema or a module carries it: a module's self-signature, a
+    /// view's signature, the empty signature. *Fits* reads the two differently on its asking side.
+    pub origin: SigOrigin,
+    /// Head parameters: name → the [`TypeNode::Parameter`] its members read, bound inside. Empty
+    /// for a module's schema.
+    pub parameters: Members<'run, TypeSymbol>,
     /// Manifest type members: name → the fixed type.
     pub manifest_members: Members<'run, TypeSymbol>,
     /// Value slots: name → declared (SIG) or derived (self-sig) type.
@@ -166,6 +146,15 @@ pub struct SigSchema<'run> {
     pub operators: &'run [DeclaredGroup<'run>],
 }
 
+/// Where a schema comes from — part of its identity.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SigOrigin {
+    /// A `SIG` declaration.
+    Declared,
+    /// A module: its self-signature, a view's signature, or the empty signature.
+    Module,
+}
+
 /// One declared chaining record: which operators chain together, and how a run of them reduces.
 /// `members` is sorted by symbol bits and deduped, so two records over the same set compare and
 /// digest alike whatever order they were written in.
@@ -177,124 +166,41 @@ pub struct DeclaredGroup<'run> {
 
 impl SigSchema<'_> {
     /// The member-free schema — the module-lattice top the `:Module` name lowers to, and the
-    /// content any zero-member `SIG E = ()` declaration projects to. `sig_id` is `None`: an empty
-    /// interface names no abstract member for a slot type to substitute against.
+    /// content any declaration with no parameter and no member normalizes to.
     pub const EMPTY: SigSchema<'static> = SigSchema {
-        sig_id: None,
-        abstract_members: Members::EMPTY,
+        origin: SigOrigin::Module,
+        parameters: Members::EMPTY,
         manifest_members: Members::EMPTY,
         value_slots: Members::EMPTY,
         keyworded: &[],
         operators: &[],
     };
 
-    /// Whether this schema names no member at all — the lattice top, and the identity a
-    /// [`meet_schemas`](super::sig_relations::meet_schemas) that keeps nothing lands on.
+    /// Whether this schema declares no parameter and names no member — the lattice top, whatever
+    /// its origin.
     pub fn is_empty(&self) -> bool {
-        self.abstract_members.is_empty()
+        self.parameters.is_empty()
             && self.manifest_members.is_empty()
             && self.value_slots.is_empty()
             && self.keyworded.is_empty()
             && self.operators.is_empty()
     }
 
-    /// This schema's binding for the type member `name`, manifest first — the reading every
-    /// relation over two schemas takes, since a manifest binding satisfies an abstract
-    /// requirement but not the reverse.
+    /// This schema's manifest binding for the type member `name`.
     pub fn type_member(&self, name: TypeSymbol) -> Option<KType> {
-        member(self.manifest_members, name).or_else(|| member(self.abstract_members, name))
-    }
-
-    /// Every type member's name paired with its binding, manifest first — the substitution a
-    /// relation carries into the other side's slot types, as one table.
-    pub fn member_bindings<'s>(&self, scratch: BumpAllocator<'s>) -> Members<'s, TypeSymbol> {
-        merged_bindings(scratch, self.abstract_members, self.manifest_members)
+        member(self.manifest_members, name)
     }
 }
 
-/// Abstract and manifest members as one table, manifest winning on a shared name — one merge of
-/// two sorted runs, which yields each name once and in order, so the merge is itself a table.
-pub(super) fn merged_bindings<'s>(
-    scratch: BumpAllocator<'s>,
-    abstract_members: Members<'_, TypeSymbol>,
-    manifest_members: Members<'_, TypeSymbol>,
-) -> Members<'s, TypeSymbol> {
-    let mut bindings =
-        BumpVec::with_capacity_in(abstract_members.len() + manifest_members.len(), scratch);
-    bindings.extend(merge_join(abstract_members, manifest_members).map(
-        |(name, abstract_binding, manifest)| {
-            (
-                name,
-                manifest
-                    .or(abstract_binding)
-                    .expect("a joined name is held by one side"),
-            )
-        },
-    ));
-    Members(bindings.leak())
-}
-
-/// Walk two symbol-sorted tables together in one pass, in name order: one item per name either
-/// side holds, with that side's binding. How two schemas' named channels are read against each
-/// other without a sort.
-pub(super) fn merge_join<'a, N: Ord + Copy>(
-    left: Members<'a, N>,
-    right: Members<'a, N>,
-) -> MergeJoin<'a, N> {
-    MergeJoin {
-        left: left.0,
-        right: right.0,
-    }
-}
-
-/// The iterator [`merge_join`] hands back.
-pub(super) struct MergeJoin<'a, N> {
-    left: &'a [(N, KType)],
-    right: &'a [(N, KType)],
-}
-
-impl<N: Ord + Copy> Iterator for MergeJoin<'_, N> {
-    type Item = (N, Option<KType>, Option<KType>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let order = match (self.left.first(), self.right.first()) {
-            (None, None) => return None,
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (Some(left), Some(right)) => left.0.cmp(&right.0),
-        };
-        let take = |table: &mut &[(N, KType)]| {
-            let ((name, kt), rest) = table.split_first().expect("the compared side is non-empty");
-            *table = rest;
-            (*name, *kt)
-        };
-        Some(match order {
-            Ordering::Less => {
-                let (name, kt) = take(&mut self.left);
-                (name, Some(kt), None)
-            }
-            Ordering::Greater => {
-                let (name, kt) = take(&mut self.right);
-                (name, None, Some(kt))
-            }
-            Ordering::Equal => {
-                let (name, left) = take(&mut self.left);
-                let (_, right) = take(&mut self.right);
-                (name, Some(left), Some(right))
-            }
-        })
-    }
-}
-
-/// A signature schema under construction, staged in scratch. Built by a projection, a
-/// specialization or a meet, and consumed by [`TypeRegistry::signature`], which fixes every
-/// channel's canonical order and interns the result — so a draft may be filled in any order.
+/// A signature schema under construction, staged in scratch. Built by a declaration, a module or
+/// a view, and consumed by [`TypeRegistry::signature`], which fixes every channel's canonical order
+/// and interns the result — so a draft may be filled in any order.
 ///
 /// A named insert replaces an earlier binding for the same name, so each name lands once.
 pub struct SchemaDraft<'s> {
-    /// See [`SigSchema::sig_id`].
-    pub sig_id: Option<ScopeId>,
-    pub(super) abstract_members: BumpVec<'s, (TypeSymbol, KType)>,
+    /// See [`SigSchema::origin`].
+    pub origin: SigOrigin,
+    pub(super) parameters: BumpVec<'s, (TypeSymbol, KType)>,
     pub(super) manifest_members: BumpVec<'s, (TypeSymbol, KType)>,
     pub(super) value_slots: BumpVec<'s, (ValueSymbol, KType)>,
     pub(super) keyworded: BumpVec<'s, KType>,
@@ -303,11 +209,11 @@ pub struct SchemaDraft<'s> {
 }
 
 impl<'s> SchemaDraft<'s> {
-    /// An empty draft — the member-free schema until something is inserted.
+    /// An empty draft of a module's schema — the member-free schema until something is inserted.
     pub fn new(scratch: BumpAllocator<'s>) -> Self {
         SchemaDraft {
-            sig_id: None,
-            abstract_members: BumpVec::new_in(scratch),
+            origin: SigOrigin::Module,
+            parameters: BumpVec::new_in(scratch),
             manifest_members: BumpVec::new_in(scratch),
             value_slots: BumpVec::new_in(scratch),
             keyworded: BumpVec::new_in(scratch),
@@ -316,38 +222,9 @@ impl<'s> SchemaDraft<'s> {
         }
     }
 
-    /// A draft holding everything `schema` does, to be edited and re-interned.
-    pub fn from_schema(scratch: BumpAllocator<'s>, schema: SigSchema<'_>) -> Self {
-        let copied = |table: Members<'_, _>| {
-            let mut staged = BumpVec::with_capacity_in(table.len(), scratch);
-            staged.extend_from_slice(&table);
-            staged
-        };
-        let mut keyworded = BumpVec::with_capacity_in(schema.keyworded.len(), scratch);
-        keyworded.extend_from_slice(schema.keyworded);
-        let mut operators = BumpVec::with_capacity_in(schema.operators.len(), scratch);
-        operators.extend(schema.operators.iter().map(|group| DeclaredGroup {
-            members: scratch.alloc_slice_copy(group.members),
-            mode: group.mode,
-        }));
-        SchemaDraft {
-            sig_id: schema.sig_id,
-            abstract_members: copied(schema.abstract_members),
-            manifest_members: copied(schema.manifest_members),
-            value_slots: {
-                let mut staged = BumpVec::with_capacity_in(schema.value_slots.len(), scratch);
-                staged.extend_from_slice(&schema.value_slots);
-                staged
-            },
-            keyworded,
-            operators,
-            scratch,
-        }
-    }
-
-    /// Bind the abstract member `name` to the rigid variable standing for it.
-    pub fn insert_abstract(&mut self, name: TypeSymbol, member: KType) {
-        upsert(&mut self.abstract_members, name, member);
+    /// Declare the head parameter `name`, read by the members as `parameter`.
+    pub fn insert_parameter(&mut self, name: TypeSymbol, parameter: KType) {
+        upsert(&mut self.parameters, name, parameter);
     }
 
     /// Fix the manifest member `name` to `kt`.
@@ -358,15 +235,6 @@ impl<'s> SchemaDraft<'s> {
     /// Declare the value slot `name` at `kt`.
     pub fn insert_value_slot(&mut self, name: ValueSymbol, kt: KType) {
         upsert(&mut self.value_slots, name, kt);
-    }
-
-    /// Drop the abstract member `name`, handing back its binding if there was one.
-    pub fn remove_abstract(&mut self, name: TypeSymbol) -> Option<KType> {
-        let index = self
-            .abstract_members
-            .iter()
-            .position(|(held, _)| *held == name)?;
-        Some(self.abstract_members.remove(index).1)
     }
 
     /// Declare a keyworded member.
@@ -393,47 +261,6 @@ fn upsert<N: PartialEq + Copy>(table: &mut BumpVec<'_, (N, KType)>, name: N, kt:
         Some(slot) => slot.1 = kt,
         None => table.push((name, kt)),
     }
-}
-
-/// `schema` with `pins` fixed manifest and substituted through every remaining member and slot
-/// type — what `WITH` specialization produces, interned.
-///
-/// The specialized schema is fully concrete in the pinned members, so `Ordered WITH {Carrier =
-/// Number}` interns the same content a SIG declaring `Carrier = Number` outright carries and
-/// specialization introduces no second spelling of a concrete interface. With no pins it is
-/// `schema`'s own handle.
-pub fn specialize_schema(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    schema: SigSchema<'_>,
-    pins: &[(TypeSymbol, KType)],
-) -> KType {
-    let mut draft = SchemaDraft::from_schema(scratch, schema);
-    if pins.is_empty() {
-        return types.signature(scratch, draft);
-    }
-    for (name, kt) in pins {
-        draft.remove_abstract(*name);
-        draft.insert_manifest(*name, *kt);
-    }
-    if let Some(sig_id) = draft.sig_id {
-        // The substitution is read by binary search, so the pins become a table.
-        let substitutions = Members::from_pairs(scratch, pins.iter().copied());
-        let substitute =
-            |kt: KType| substitute_sig_members(types, scratch, kt, sig_id, substitutions);
-        for (_, kt) in draft.manifest_members.iter_mut() {
-            *kt = substitute(*kt);
-        }
-        for (_, kt) in draft.value_slots.iter_mut() {
-            *kt = substitute(*kt);
-        }
-        // Two declared overloads that became identical under a pin are one overload once the door
-        // canonicalizes the channel.
-        for shape in draft.keyworded.iter_mut() {
-            *shape = substitute(*shape);
-        }
-    }
-    types.signature(scratch, draft)
 }
 
 /// Put a schema's operator channel in canonical order — sorted by member run, then by mode, exact
@@ -585,16 +412,14 @@ pub(super) fn shape_quantifiers<'run>(kt: KType, types: &TypeRegistry<'run>) -> 
     }
 }
 
-/// `Some(parameter names)` iff `kt` is a type constructor — a declared family (a
-/// `TypeConstructor`-kind member, whose names ride its sealed schema) or a SIG's abstract
-/// higher-kinded member (an `AbstractType` node carrying them directly). `None` for a first-order
-/// type. Arity is the returned list's length; the list is symbol-sorted.
+/// `Some(parameter names)` iff `kt` is a type constructor — a declared family, a
+/// `TypeConstructor`-kind member whose names ride its sealed schema. `None` for a first-order type.
+/// Arity is the returned list's length; the list is symbol-sorted.
 pub fn constructor_param_names<'run>(
     kt: KType,
     types: &TypeRegistry<'run>,
 ) -> Option<&'run [TypeSymbol]> {
     match types.node(kt) {
-        TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => Some(param_names),
         TypeNode::SetMember {
             kind: KKind::TypeConstructor,
             schema: NodeSchema::TypeConstructor { param_names, .. },
@@ -602,18 +427,4 @@ pub fn constructor_param_names<'run>(
         } => Some(param_names),
         _ => None,
     }
-}
-
-/// Whether two constructor parameter lists name the same set: identity is the name set, and both
-/// lists are stored symbol-sorted, so set equality is slice equality.
-pub(super) fn name_sets_equal(left: &[TypeSymbol], right: &[TypeSymbol]) -> bool {
-    left == right
-}
-
-/// Classify a SIG type-table entry by its *representation*: an abstract member is a rigid variable
-/// with no concrete witness, which is exactly an `AbstractType` node — the first-order `TYPE Elt`
-/// slot and the higher-kinded `TYPE (Elem AS Wrap)` slot alike. Everything else — a manifest
-/// binding of a concrete type, a minted constructor family — is manifest.
-pub fn is_abstract_sig_member(kt: KType, types: &TypeRegistry<'_>) -> bool {
-    matches!(types.node(kt), TypeNode::AbstractType { .. })
 }

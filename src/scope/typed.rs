@@ -80,11 +80,9 @@ pub enum Elaboration {
         name: Symbol,
         site: Site,
     },
-    /// A bound at `site` that names a type variable — a `FOR ALL` name or a signature's abstract
-    /// member — or is `Never`.
+    /// A bound at `site` that names a type variable — a `FOR ALL` name or a signature's head
+    /// parameter — or is `Never`.
     Bound { site: Site },
-    /// A meet at `site` of two signatures that rank one keyword pattern two ways.
-    RankingDisagrees { site: Site },
     /// The load-time reader cannot know the type at `site` before the program runs: the load
     /// pass's cue to leave it for the run, never reported.
     Unknown { site: Site },
@@ -98,7 +96,6 @@ impl Elaboration {
             | Elaboration::Unsupported { site }
             | Elaboration::NoSuchMember { site, .. }
             | Elaboration::Bound { site }
-            | Elaboration::RankingDisagrees { site }
             | Elaboration::Unknown { site } => *site,
         }
     }
@@ -139,9 +136,6 @@ impl fmt::Display for ElaborationDisplay<'_, '_> {
                 self.symbols.display(*name)
             ),
             Elaboration::Bound { .. } => f.write_str("a bound names a type variable or Never"),
-            Elaboration::RankingDisagrees { .. } => {
-                f.write_str("a meet of two signatures ranks one key two ways")
-            }
             Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
         }
     }

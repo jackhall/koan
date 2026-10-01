@@ -273,7 +273,7 @@ fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
         // Each opaque ascription mints its own nonce, so two mints of one bound are two identities.
         let mint = |bound| {
             let nonce = ScopeId::next();
-            types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), bound)
+            types.parameter(carrier, bound, Some(nonce))
         };
         let number_or_str = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
         let (by_number, by_number_again) = (mint(KType::NUMBER), mint(KType::NUMBER));
@@ -326,7 +326,7 @@ fn a_seal_bounded_by_a_code_kind_reveals_every_quote() {
         let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
         let mint = |bound| {
             let nonce = ScopeId::next();
-            types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), bound)
+            types.parameter(carrier, bound, Some(nonce))
         };
         let name = quote(fixture, "#(y)");
         let call = quote(fixture, "#(f x)");

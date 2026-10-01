@@ -51,8 +51,8 @@ pub enum TypeNode<'run> {
     /// Statements of code — the kind every body slot takes; written, it is two or more statements.
     /// The one code kind directly under [`Self::AnyCode`].
     Block,
-    /// One statement that declares a name or a shape: a `VAL`, a `TYPE` declarator, a bodyless
-    /// head, or a [`Self::Binder`].
+    /// One statement that declares a name or a shape: a `VAL`, a bodyless head, or a
+    /// [`Self::Binder`].
     Declaration,
     /// One statement that declares and installs where it is written, as `LET x = 1` does.
     Binder,
@@ -84,29 +84,20 @@ pub enum TypeNode<'run> {
     /// Type-accepting argument slot, carrying the shallow [`KKind`] it admits — and the type a
     /// non-signature type value reports (`OfKind(ProperType)`).
     OfKind(KKind),
-    /// A **rigid variable named by a signature member**: an abstract type member declared by a
-    /// SIG slot or minted by opaque ascription.
+    /// A **named rigid variable**: a signature's head parameter (no `nonce`), or the carrier an
+    /// opaque `:|` view mints for one (a `nonce` nothing else can name, so two opaque ascriptions
+    /// of one signature never unify). `bound` is what bounds it, [`KType::ANY`] unless declared.
     ///
-    /// Named and editable where [`Self::Quantified`] is positional and alpha-equivalent, because
-    /// members are reached by name and schemas are edited by name. The three rigid variables —
-    /// these two and [`Self::Lexical`] — share the rigid rule in the order and the role of the
-    /// rigid side in a specificity check.
+    /// Named where [`Self::Quantified`] is positional: a parameter is substituted by name within
+    /// its own signature, and `WITH` pins it by name. The three rigid variables — this,
+    /// [`Self::Quantified`] and [`Self::Lexical`] — share the rigid rule in the order and the role
+    /// of the rigid side in a specificity check.
     ///
-    /// `source` is the binder the member is named against. `nonce` is the generativity
-    /// mechanism: `None` for a SIG-body declaration, `Some(<per-application module scope id>)`
-    /// for the mint `:|` produces, so two opaque ascriptions of one SIG never unify.
-    /// `param_names` carries the member's order — empty is a first-order proper type
-    /// (`TYPE Elt`), non-empty a constructor over those named parameters (`TYPE (Elem AS Wrap)`).
-    /// They are stored symbol-sorted: a constructor's identity is its parameter-name *set*.
-    /// `bound` is what the variable is bounded by, [`KType::ANY`] unless declared.
-    ///
-    /// Every field is identity; nothing here is digest-excluded.
-    AbstractType {
-        source: ScopeId,
+    /// Every field is identity.
+    Parameter {
         name: TypeSymbol,
-        param_names: &'run [TypeSymbol],
-        nonce: Option<ScopeId>,
         bound: KType,
+        nonce: Option<ScopeId>,
     },
     /// `List<element>`. Bare `List` lowers to `List<Any>`.
     List {
@@ -205,9 +196,9 @@ pub enum TypeNode<'run> {
         constructor: KType,
         arguments: Record<'run>,
     },
-    /// A module signature — owned interface content. A `SIG`-declared interface, a module's
-    /// self-sig, and the empty signature (the lattice top `:Module` lowers to) are all this one
-    /// node, distinguished only by `schema`.
+    /// A module signature — owned interface content: a `SIG`-declared interface, a module's
+    /// self-signature, a view's signature, or the empty signature (the lattice top `:Module` lowers
+    /// to), told apart by `schema`.
     ///
     /// The node carries no binder and no label: two textually identical SIG declarations are one
     /// type. `schema_digest` is
@@ -216,6 +207,23 @@ pub enum TypeNode<'run> {
     Signature {
         schema: SigSchema<'run>,
         schema_digest: TypeDigest,
+    },
+    /// An **application** of a declared signature: `signature` with some of its head parameters
+    /// pinned, spelled `Stack WITH {Elt = Number}`. `signature` is a [`Self::Signature`] of origin
+    /// `Declared`; `pins` is non-empty and keyed by the parameters' names. Build through
+    /// [`TypeRegistry::signature_apply`](super::registry::TypeRegistry::signature_apply), which
+    /// answers `signature` itself for no pins.
+    SignatureApply {
+        signature: KType,
+        pins: Record<'run>,
+    },
+    /// A **set of applications**, two or more, none lying above another, sorted by handle so the
+    /// set's identity is order-blind: what the meet of two signature types is. Each member is a
+    /// [`Self::Signature`] or a [`Self::SignatureApply`], never the empty signature and never a
+    /// meet. Build through
+    /// [`TypeRegistry::signature_meet`](super::registry::TypeRegistry::signature_meet).
+    SignatureMeet {
+        members: &'run [KType],
     },
     /// Confined carrier for a synthesized FN `ret` slot whose source return is deferred. Holds
     /// only the hashable surface shadow, and admits nothing on its own.
@@ -255,13 +263,13 @@ impl TypeNode<'_> {
         }
     }
 
-    /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or an
-    /// [`Self::AbstractType`]'s — or `None` for any other node.
+    /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or a
+    /// [`Self::Parameter`]'s — or `None` for any other node.
     pub fn rigid_bound(&self) -> Option<KType> {
         match self {
             TypeNode::Quantified { bound, .. }
             | TypeNode::Lexical { bound, .. }
-            | TypeNode::AbstractType { bound, .. } => Some(*bound),
+            | TypeNode::Parameter { bound, .. } => Some(*bound),
             _ => None,
         }
     }
@@ -271,7 +279,7 @@ impl TypeNode<'_> {
     pub fn rigid_lower(&self) -> Option<KType> {
         match self {
             TypeNode::Lexical { lower, .. } => Some(*lower),
-            TypeNode::Quantified { .. } | TypeNode::AbstractType { .. } => Some(KType::NEVER),
+            TypeNode::Quantified { .. } | TypeNode::Parameter { .. } => Some(KType::NEVER),
             _ => None,
         }
     }

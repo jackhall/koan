@@ -181,7 +181,7 @@ pub struct Collector<'s> {
 
 /// A point in a [`Collector`]'s history, for [`Collector::rollback`].
 #[derive(Clone, Copy)]
-struct Mark {
+pub(super) struct Mark {
     cells: usize,
     trail: usize,
 }
@@ -221,7 +221,7 @@ impl<'s> Collector<'s> {
     }
 
     /// Where the history stands now.
-    fn mark(&self) -> Mark {
+    pub(super) fn mark(&self) -> Mark {
         Mark {
             cells: self.bounds.len(),
             trail: self.trail.len(),
@@ -230,7 +230,7 @@ impl<'s> Collector<'s> {
 
     /// Forget every contribution since `mark`. Contributions only ever append, so the trail names
     /// exactly what to pop, and a cell the walk grew since then goes with it.
-    fn rollback(&mut self, mark: Mark) {
+    pub(super) fn rollback(&mut self, mark: Mark) {
         while self.trail.len() > mark.trail {
             let (index, variance, previous) = self.trail.pop().expect("the trail reaches the mark");
             match variance {

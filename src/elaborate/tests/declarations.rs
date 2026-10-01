@@ -4,8 +4,8 @@
 use crate::memory::BumpAllocator;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, ValueSymbol};
 use crate::type_lattice::{
-    FoldDirection, KKind, KType, NodeSchema, ReductionMode, TypeNode, TypeRegistry, display_name,
-    member,
+    FoldDirection, KKind, KType, NodeSchema, ReductionMode, SigOrigin, TypeNode, TypeRegistry,
+    display_name, member, shape_return, shape_slots,
 };
 
 use super::{Held, Program, brought, declared, with_program};
@@ -136,26 +136,28 @@ fn a_union_and_a_newtype_seal_in_one_group() {
 }
 
 #[test]
-fn a_signature_declares_its_abstract_and_manifest_members() {
+fn a_signature_declares_its_parameters_and_manifest_members() {
     brought(
-        "SIG Fixed = #[(TYPE Carrier) (LET Elem = Number) (VAL x :Elem) (VAL c :Carrier)]",
+        "SIG Fixed FOR ALL #[Carrier] = #[(LET Elem = Number) (VAL x :Elem) (VAL c :Carrier)]",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Fixed"))
             else {
                 panic!("a SIG binds a signature");
             };
+            assert_eq!(schema.origin, SigOrigin::Declared);
             let carrier = program.type_name("Carrier");
             let rigid =
-                member(schema.abstract_members, carrier).expect("the signature declares `Carrier`");
+                member(schema.parameters, carrier).expect("the signature declares `Carrier`");
             assert!(
                 matches!(
                     program.types.node(rigid),
-                    TypeNode::AbstractType {
+                    TypeNode::Parameter {
                         bound: KType::ANY,
+                        nonce: None,
                         ..
                     }
                 ),
-                "an unbounded `TYPE` member is bounded by `Any`"
+                "an unbounded head parameter is bounded by `Any`"
             );
             assert_eq!(
                 member(schema.manifest_members, program.type_name("Elem")),
@@ -177,7 +179,8 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
 #[test]
 fn a_signatures_bodyless_heads_are_keyworded_members() {
     brought(
-        "SIG Ring = #[(TYPE Carrier) (OP #(+) OVER Carrier) (UNARY OP #(~) OVER Carrier -> Carrier)]",
+        "SIG Ring FOR ALL #[Carrier] = \
+         #[(OP #(+) OVER Carrier) (UNARY OP #(~) OVER Carrier -> Carrier)]",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Ring"))
             else {
@@ -275,41 +278,6 @@ fn a_declared_family_is_applied_by_member_name() {
 }
 
 #[test]
-fn a_signatures_higher_kinded_member_has_a_use_site() {
-    brought(
-        "SIG Boxy = #[(TYPE (Held AS Boxed)) (VAL unbox :(FN :{x :(Number AS Boxed)} -> Number))]",
-        |program| {
-            let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Boxy"))
-            else {
-                panic!("a SIG binds a signature");
-            };
-            let boxed = member(schema.abstract_members, program.type_name("Boxed"))
-                .expect("the signature declares `Boxed`");
-            let TypeNode::AbstractType { param_names, .. } = program.types.node(boxed) else {
-                panic!("a higher-kinded member is an abstract type");
-            };
-            assert_eq!(param_names, &[program.type_name("Held")]);
-            let unbox = member(
-                schema.value_slots,
-                ValueSymbol::declared("unbox", program.symbols).unwrap(),
-            )
-            .expect("the signature declares `unbox`");
-            let TypeNode::KFunction { params, .. } = program.types.node(unbox) else {
-                panic!("the slot is a function type");
-            };
-            let x = BinderSymbol::classify("x").unwrap();
-            let TypeNode::ConstructorApply { constructor, .. } = program
-                .types
-                .node(params.get(x.symbol()).expect("the parameter `x`"))
-            else {
-                panic!("the parameter applies the abstract member");
-            };
-            assert_eq!(constructor, boxed);
-        },
-    );
-}
-
-#[test]
 fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
     // Each case names the binder whose slot the refusal must leave empty.
     for (source, left) in [
@@ -320,11 +288,9 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
             "SIG Holder = #[(VAL n :Nat)]\nNEWTYPE Nat = :{s :Holder}",
             "Nat",
         ),
-        // A bare `TYPE` names an abstract member only a signature can bind.
-        ("TYPE Loose", "Loose"),
         // `{+}` alone is not the builtin additive group, so it would chain `+` a second way.
         (
-            "SIG Chained = #[(TYPE Carrier) (GROUP FOLD LEFT = #[(OP #(+) OVER Carrier)])]",
+            "SIG Chained FOR ALL #[Carrier] = #[(GROUP FOLD LEFT = #[(OP #(+) OVER Carrier)])]",
             "Chained",
         ),
         // A repeated parameter name gives a family two slots under one label.
@@ -451,7 +417,7 @@ fn operator(text: &str, program: &Program<'_, '_, '_>) -> KeywordSymbol {
 #[test]
 fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
     brought(
-        "SIG Ring = #[(TYPE Carrier) \
+        "SIG Ring FOR ALL #[Carrier] = #[\
          (GROUP FOLD RIGHT = #[(OP #(@) OVER Carrier) (OP #(%) OVER Carrier)])]",
         |program| {
             let mut members = vec![operator("@", &program), operator("%", &program)];
@@ -473,7 +439,7 @@ fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
     );
     // A pairwise group takes its combiner from the quote, and its members may state a result.
     brought(
-        "SIG Cmp = #[(TYPE Carrier) \
+        "SIG Cmp FOR ALL #[Carrier] = #[\
          (GROUP PAIRWISE FOLD #(AND) LEFT = #[(OP #(~) OVER Carrier -> Bool)])]",
         |program| {
             assert_eq!(
@@ -554,25 +520,26 @@ fn a_group_head_the_door_cannot_read_refuses() {
     );
 }
 
-/// The bound of the abstract member `name` of the signature bound to `sig`.
+/// The bound of the head parameter `name` of the signature bound to `sig`.
 fn member_bound(program: &Program<'_, '_, '_>, sig: &str, name: &str) -> KType {
     let TypeNode::Signature { schema, .. } = program.types.node(program.bound(sig)) else {
         panic!("a SIG binds a signature");
     };
-    let rigid = member(schema.abstract_members, program.type_name(name))
-        .expect("the signature declares the member");
-    let TypeNode::AbstractType { bound, .. } = program.types.node(rigid) else {
-        panic!("an abstract member is a rigid variable");
+    let rigid = member(schema.parameters, program.type_name(name))
+        .expect("the signature declares the parameter");
+    let TypeNode::Parameter { bound, .. } = program.types.node(rigid) else {
+        panic!("a head parameter is a rigid variable");
     };
     bound
 }
 
 #[test]
-fn a_bounded_type_member_carries_its_bound() {
+fn a_bounded_head_parameter_carries_its_bound() {
     let source = "\
-SIG Plain = #[(TYPE (Carrier UNDER Number)) (VAL c :Carrier)]
-SIG Either = #[(TYPE (Carrier UNDER :(Number | Str))) (VAL c :Carrier)]
-SIG Based = #[(LET Base = Number) (TYPE (Carrier UNDER Base)) (VAL c :Carrier)]";
+SIG Plain FOR ALL #{Carrier: Number} = #[(VAL c :Carrier)]
+SIG Either FOR ALL #{Carrier: :(Number | Str)} = #[(VAL c :Carrier)]
+LET Base = Number
+SIG Based FOR ALL #{Carrier: Base} = #[(VAL c :Carrier)]";
     brought(source, |program| {
         let (types, scratch) = (program.types, program.scratch);
         assert_eq!(member_bound(&program, "Plain", "Carrier"), KType::NUMBER);
@@ -583,20 +550,16 @@ SIG Based = #[(LET Base = Number) (TYPE (Carrier UNDER Base)) (VAL c :Carrier)]"
         assert_eq!(
             member_bound(&program, "Based", "Carrier"),
             KType::NUMBER,
-            "a manifest member reads as its type"
+            "an alias reads as its type"
         );
     });
 }
 
 #[test]
-fn a_bound_on_an_abstract_or_higher_kinded_member_or_a_family_is_refused() {
+fn a_bound_naming_a_parameter_or_on_a_family_is_refused() {
     declared(
-        "SIG Chained = #[(TYPE Key) (TYPE (Elt UNDER Key))]",
+        "SIG Chained FOR ALL #{Key: Any, Elt: Key} = #[(VAL e :Elt)]",
         |_, brought| assert!(matches!(brought, Err(Elaboration::Bound { .. }))),
-    );
-    declared(
-        "SIG Kinded = #[(TYPE ((Elem AS Wrap) UNDER Number))]",
-        |_, brought| assert!(matches!(brought, Err(Elaboration::Unsupported { .. }))),
     );
     declared("NEWTYPE (Elt UNDER Number)", |_, brought| {
         assert!(matches!(brought, Err(Elaboration::Unsupported { .. })))
@@ -609,7 +572,6 @@ fn a_bound_on_an_abstract_or_higher_kinded_member_or_a_family_is_refused() {
 fn every_member_declaring_shape_is_a_signature_member() {
     use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId};
     let members = [
-        (BuiltinShapeId::TypeDeclaration, "TYPE Carrier"),
         (BuiltinShapeId::Val, "VAL x :Str"),
         (
             BuiltinShapeId::ExpressionHead,
@@ -661,13 +623,75 @@ fn every_member_declaring_shape_is_a_signature_member() {
 }
 
 #[test]
-fn a_meet_of_signatures_ranking_one_key_two_ways_is_refused() {
-    declared(
+fn a_meet_of_signatures_holds_both() {
+    brought(
         "SIG Ranked = #[(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)]\n\
          SIG Written = #[(EXPR #(MOVE _ :Number TO _ :Str) -> Number)]\n\
          LET Both = :(Ranked & Written)",
+        |program| {
+            let TypeNode::SignatureMeet { members } = program.types.node(program.bound("Both"))
+            else {
+                panic!("two unordered signatures meet at the set of both");
+            };
+            let mut expected = [program.bound("Ranked"), program.bound("Written")];
+            expected.sort_unstable();
+            assert_eq!(members, expected);
+        },
+    );
+}
+
+#[test]
+fn a_signatures_members_read_its_head_parameters() {
+    brought(
+        "SIG Stack FOR ALL #{Elt: Any} = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]",
+        |program| {
+            let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Stack"))
+            else {
+                panic!("a SIG binds a signature");
+            };
+            let elt = member(schema.parameters, program.type_name("Elt")).expect("`Elt`");
+            let [push] = schema.keyworded else {
+                panic!("one keyworded member");
+            };
+            let slots: Vec<KType> = shape_slots(*push, program.types).collect();
+            assert_eq!(slots, [elt]);
+            assert_eq!(
+                shape_return(*push, program.types),
+                Some(program.types.list(elt))
+            );
+        },
+    );
+}
+
+#[test]
+fn a_member_may_quantify_its_own_variables() {
+    // A keyworded member's own group, a `VAL` typed by a quantified function type, and a member
+    // reading a head parameter under its own group.
+    brought(
+        "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n\
+         SIG Ident = #[(VAL identity :(FN FOR ALL #[Item] :{x :Item} -> Item))]\n\
+         SIG Mappable FOR ALL #[Elt] = #[(EXPR FOR ALL #[Next] \
+           #(MAP _ :(LIST OF Elt) WITH _ :(FN :{x :Elt} -> Next)) -> :(LIST OF Next))]",
+        |program| {
+            for name in ["Boxes", "Ident", "Mappable"] {
+                assert!(
+                    matches!(
+                        program.types.node(program.bound(name)),
+                        TypeNode::Signature { .. }
+                    ),
+                    "`{name}` elaborates"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn a_repeated_head_parameter_is_refused() {
+    declared(
+        "SIG Twice FOR ALL #[Elt Elt] = #[(VAL e :Elt)]",
         |_, brought| {
-            assert!(matches!(brought, Err(Elaboration::RankingDisagrees { .. })));
+            assert!(brought.is_err(), "{brought:?}");
         },
     );
 }

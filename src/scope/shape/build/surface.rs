@@ -20,7 +20,8 @@
 
 use crate::memory::{BumpAllocator, BumpVec, collect, resident};
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::role::{BodyKind, Role};
+use crate::parse::builtin_shapes::binder::quantifier_entries;
+use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::DeclaredGroup;
@@ -162,15 +163,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let name = BinderSymbol::Type(*name);
                 let (level, at, statement) = self.declaring(level, name, at).ok_or(())?;
                 match statement.cache().builtin_shape().map(|shape| shape.id) {
-                    Some(BuiltinShapeId::Sig) => {
-                        let definition = role_part(
-                            statement,
-                            Role::Definition(
-                                crate::parse::builtin_shapes::role::DefinitionKind::Members,
-                            ),
-                        )
-                        .ok_or(())?;
-                        self.sig_members(definition, out)
+                    Some(BuiltinShapeId::Sig | BuiltinShapeId::QuantifiedSig) => {
+                        self.sig_members(statement, out)
                     }
                     Some(BuiltinShapeId::LetValue) => {
                         let rhs = role_part(statement, Role::Rhs).ok_or(())?;
@@ -239,24 +233,31 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         Ok(())
     }
 
-    /// The members a `SIG` body declares, and the groups its bodyless `GROUP` heads do. A bodyless
-    /// `EXPR` or `OP` head declares no member until dispatch gives it a slot; anything else in a
-    /// signature body is read by nobody here.
+    /// The names a `SIG` declares — its head parameters and its body's members — and the groups
+    /// its bodyless `GROUP` heads do. A bodyless `EXPR` or `OP` head declares no member until
+    /// dispatch gives it a slot; anything else in a signature body is read by nobody here.
     ///
     /// A signature's group lives in its operator channel, so no claim holds a record for it and one
     /// is built here, in program storage, from the same member scan a `GROUP` statement takes.
     fn sig_members(
         &self,
-        definition: &ExpressionPart<'graph>,
+        statement: &KExpression<'graph>,
         out: &mut Surfaced<'x, 'graph>,
     ) -> Result<(), ()> {
+        if let Some(group) = role_part(statement, Role::Quantifiers) {
+            for entry in quantifier_entries(group) {
+                out.names.push(BinderSymbol::Type(entry.name.ok_or(())?));
+            }
+        }
+        let definition =
+            role_part(statement, Role::Definition(DefinitionKind::Members)).ok_or(())?;
         let ExpressionPart::ListLiteral(members) = definition else {
             return Err(());
         };
         for member in members.iter() {
             let line = quoted_body(member).ok_or(())?.statement_spine();
             match line.cache().builtin_shape().map(|shape| shape.id) {
-                Some(BuiltinShapeId::TypeDeclaration | BuiltinShapeId::LetValue) => {
+                Some(BuiltinShapeId::LetValue) => {
                     out.names.push(
                         line.statement_binder_plan()
                             .and_then(|plan| plan.name)

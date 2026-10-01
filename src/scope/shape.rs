@@ -620,8 +620,8 @@ impl<'graph> BodyShape<'graph> {
         Some(self.rhs[index].1)
     }
 
-    /// The declaration node of the type binder at `slot` — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or
-    /// a `LET` of a type name, whole, so the door reads which declaration it is and where its
+    /// The declaration node of the type binder at `slot` — a `NEWTYPE`, `UNION`, `SIG` or a `LET`
+    /// of a type name, whole, so the door reads which declaration it is and where its
     /// declared part sits off the node's builtin shape, as [`form`](Self::form) is where a
     /// callable's signature is read. `None` for a value binder and for a parameter.
     pub fn declarations(&self, slot: Slot) -> Option<&'graph KExpression<'graph>> {

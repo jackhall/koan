@@ -21,13 +21,12 @@
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,
 //! `EXPR #(head) -> Ret` with and without `FOR ALL` and ranked where a signature member writes an
-//! integer in a slot's place, a union `A | B` and a meet `A & B` of members — refused where two
-//! signatures rank one keyword pattern two ways — a record type `:{…}`, a union member `Union.Tag`,
+//! integer in a slot's place, a union `A | B` and a meet `A & B` of members, a record type `:{…}`, a union member `Union.Tag`,
 //! the declared type of a record's field `Record.field`, and a constructor application `Pair {Key =
 //! Number}` with its arity-one sugar `Number AS Wrap`. A name a `FOR ALL` group declares is that
 //! group's quantifier, bounded by what `(Name UNDER <bound>)` writes or else by `Any`, and is never
-//! a mention; a `SIG`'s `TYPE (Name UNDER <bound>)` bounds its abstract member the same way. Every
-//! other spelling is [`Unsupported`].
+//! a mention; a `SIG`'s head group (`SIG <Name> FOR ALL <group> = …`) bounds each head parameter
+//! the same way. Every other spelling is [`Unsupported`].
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::parse`, `crate::scope`, `crate::source`, `crate::symbols`, `crate::type_lattice` and

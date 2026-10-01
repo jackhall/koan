@@ -9,17 +9,16 @@
 //! The digest is a pure function of type content, so two independently built types with the same
 //! content digest equal with no shared interner. Generativity is one explicit mechanism applied in
 //! two places: a minted [`ScopeId`] nonce folded into the content ahead of everything else,
-//! carried by a recursive-group window and by an abstract member.
+//! carried by a recursive-group window and by the carrier an opaque view mints.
 //!
 //! **There is one recipe.** A node's digest is its tag byte, its own scalar payload, and its
 //! children's digests — which are already known, because children are handles. Nothing here walks
 //! a type: [`node_digest`] is one layer deep, and [`schema_content_digest`] reads a schema's
 //! members by their handles, each table straight through in the canonical order it is stored in.
 //! The only buffer a recipe needs is the symbol sort an order-blind record or union digests under,
-//! which stages in the caller's scratch. Projection re-sources every reference to a signature's own abstract
-//! members to [`ScopeId::SENTINEL`] before a schema reaches here, so a textually identical
-//! declaration already presents identical handles and there is nothing left for a deep
-//! canonicalizing walk to do.
+//! which stages in the caller's scratch. A signature's members read its head parameters by name,
+//! so a textually identical declaration already presents identical handles and there is nothing
+//! left for a deep canonicalizing walk to do.
 //!
 //! **The hasher lives here and only here.** Every payload begins with a distinct domain tag byte
 //! so no two variants can share a digest, every text run is length-prefixed so concatenation is
@@ -32,8 +31,7 @@ use super::handle::KType;
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
 use super::operators::{FoldDirection, ReductionMode};
-use super::registry::TypeRegistry;
-use super::schema::SigSchema;
+use super::schema::{SigOrigin, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
@@ -73,7 +71,7 @@ const TAG_SET_LOCAL: u8 = 0x11;
 const TAG_SET_REF: u8 = 0x14;
 const TAG_UNION: u8 = 0x16;
 const TAG_SIGNATURE: u8 = 0x17;
-const TAG_ABSTRACT_TYPE: u8 = 0x19;
+// 0x19 is retired: it tagged the abstract type member a head parameter replaced.
 const TAG_CONSTRUCTOR_APPLY: u8 = 0x1A;
 const TAG_RECURSIVE_SET: u8 = 0x1B;
 const TAG_SIG_CONTENT: u8 = 0x1C;
@@ -94,6 +92,9 @@ const TAG_KEYWORD: u8 = 0x29;
 const TAG_DECLARATION: u8 = 0x2A;
 const TAG_CODE_NEEDING: u8 = 0x2B;
 const TAG_LEXICAL: u8 = 0x2C;
+const TAG_PARAMETER: u8 = 0x2D;
+const TAG_SIGNATURE_APPLY: u8 = 0x2E;
+const TAG_SIGNATURE_MEET: u8 = 0x2F;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -199,13 +200,7 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::CodeNeeding { kind, names } => code_needing_digest(*kind, names),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
-        TypeNode::AbstractType {
-            source,
-            name,
-            param_names,
-            nonce,
-            bound,
-        } => abstract_type_digest(*source, *name, param_names, *nonce, *bound),
+        TypeNode::Parameter { name, bound, nonce } => parameter_digest(*name, *bound, *nonce),
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(scratch, fields.as_slice()),
@@ -235,6 +230,10 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
             arguments,
         } => constructor_apply_digest(scratch, constructor.digest(), arguments.as_slice()),
         TypeNode::Signature { schema_digest, .. } => signature_digest(*schema_digest),
+        TypeNode::SignatureApply { signature, pins } => {
+            signature_apply_digest(scratch, signature.digest(), pins.as_slice())
+        }
+        TypeNode::SignatureMeet { members } => signature_meet_digest(members),
         TypeNode::Sibling(index) => sibling_digest(*index),
         TypeNode::SetMember {
             scc_digest, index, ..
@@ -271,18 +270,14 @@ pub(super) fn sibling_digest(index: usize) -> TypeDigest {
     DigestHasher::new(TAG_SET_LOCAL).count(index).finish()
 }
 
-/// A named rigid variable's identity fields: the generativity `nonce` first, then the binder
-/// `source`, the name, the parameter names, and the variable's bound. The parameter
-/// names arrive symbol-sorted — the order the node stores them in, a canonical order over the set
-/// that is their identity — and feed as fixed-width symbol bits.
-pub(super) fn abstract_type_digest(
-    source: ScopeId,
+/// A named rigid variable's identity fields: the generativity `nonce` first, then the name and the
+/// variable's bound.
+pub(super) fn parameter_digest(
     name: TypeSymbol,
-    param_names: &[TypeSymbol],
-    nonce: Option<ScopeId>,
     bound: KType,
+    nonce: Option<ScopeId>,
 ) -> TypeDigest {
-    let mut h = DigestHasher::new(TAG_ABSTRACT_TYPE);
+    let mut h = DigestHasher::new(TAG_PARAMETER);
     match nonce {
         Some(id) => {
             h.byte(1).scope_id(id);
@@ -291,13 +286,31 @@ pub(super) fn abstract_type_digest(
             h.byte(0);
         }
     }
-    h.scope_id(source)
-        .symbol(name.symbol())
-        .count(param_names.len());
-    for param in param_names {
-        h.symbol(param.symbol());
+    h.symbol(name.symbol()).digest(bound.digest()).finish()
+}
+
+/// An application of a declared signature: the signature's digest, then its pins as an order-blind
+/// record.
+pub(super) fn signature_apply_digest(
+    scratch: BumpAllocator<'_>,
+    signature: TypeDigest,
+    pins: &[(BinderSymbol, KType)],
+) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_SIGNATURE_APPLY);
+    h.digest(signature);
+    feed_record(&mut h, scratch, pins);
+    h.finish()
+}
+
+/// A set of applications: its members' digests in the stored order, which is sorted by handle, so
+/// the set digests order-blind.
+pub(super) fn signature_meet_digest(members: &[KType]) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_SIGNATURE_MEET);
+    h.count(members.len());
+    for member in members {
+        h.digest(member.digest());
     }
-    h.digest(bound.digest()).finish()
+    h.finish()
 }
 
 /// A code kind needing names: the kind, then the names in the symbol-sorted order the node stores
@@ -440,8 +453,7 @@ pub(super) fn constructor_apply_digest(
 }
 
 /// A module-signature type's digest: its schema's content digest — identity by interface, not by
-/// mint. `WITH` pins fold into the schema before interning, so the schema content is the whole
-/// identity.
+/// mint.
 pub(super) fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE);
     h.digest(content_digest);
@@ -451,36 +463,18 @@ pub(super) fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
 /// The content digest of a normalized signature schema — a pure function of its members, read one
 /// layer deep.
 ///
-/// Abstract members feed `(name, order, parameter names, bound digest)`; manifest members, value
-/// slots and keyworded shapes feed their handles' own digests; operator records feed their member
-/// runs and modes last. Every channel is stored in its canonical order — the named tables
+/// The origin feeds first, then the parameters, manifest members and value slots as their names
+/// and their handles' own digests, then the keyworded shapes' digests, then the operator records'
+/// member runs and modes. Every channel is stored in its canonical order — the named tables
 /// symbol-sorted, the keyworded group and the operator records in the schema's own canonical order
 /// — so each is fed straight through and the declaration order never reaches the digest.
-///
-/// No walk descends a member. Projection has already re-sourced every reference to one of the
-/// signature's own abstract members to [`ScopeId::SENTINEL`], so a textually identical declaration
-/// projects to identical handles and a schema digests by its member handles alone.
-pub(super) fn schema_content_digest(schema: SigSchema<'_>, types: &TypeRegistry<'_>) -> TypeDigest {
+pub(super) fn schema_content_digest(schema: SigSchema<'_>) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIG_CONTENT);
-
-    // Each abstract member feeds its name, then its order — `0x00` for a first-order proper type,
-    // `0x01` plus the parameter names for a constructor — then its bound. The
-    // parameter names are stored sorted, so the encoding is order-blind.
-    h.count(schema.abstract_members.len());
-    for (name, member) in schema.abstract_members {
-        let (param_names, bound) = read_abstract(*member, types);
-        h.symbol(name.symbol());
-        if param_names.is_empty() {
-            h.byte(0);
-        } else {
-            h.byte(1).count(param_names.len());
-            for param in param_names {
-                h.symbol(param.symbol());
-            }
-        }
-        h.digest(bound.digest());
-    }
-
+    h.byte(origin_byte(schema.origin));
+    feed_named_types(
+        &mut h,
+        schema.parameters.iter().map(|(n, kt)| (n.symbol(), *kt)),
+    );
     feed_named_types(
         &mut h,
         schema
@@ -526,28 +520,24 @@ pub(super) fn schema_content_digest(schema: SigSchema<'_>, types: &TypeRegistry<
 }
 
 /// The digest of the member-free schema — the module-lattice top (`:Module`), the type a
-/// module-accepting slot lowers to. Byte-for-byte what [`schema_content_digest`] produces for an
-/// empty [`SigSchema`], and computable without one because an empty schema names no member.
+/// module-accepting slot lowers to. Byte-for-byte what [`schema_content_digest`] produces for
+/// [`SigSchema::EMPTY`], and computable without one because an empty schema names no member.
 pub(super) fn empty_schema_digest() -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIG_CONTENT);
-    h.count(0); // abstract_members
-    h.count(0); // manifest_members (feed_named_types header)
-    h.count(0); // value_slots (feed_named_types header)
+    h.byte(origin_byte(SigOrigin::Module));
+    h.count(0); // parameters
+    h.count(0); // manifest_members
+    h.count(0); // value_slots
     h.count(0); // keyworded members
     h.count(0); // operator records
     h.finish()
 }
 
-/// An abstract member's order and bound, read off its own node. The one read
-/// [`schema_content_digest`] takes: a member handle names an `AbstractType`, whose parameter names
-/// carry its order and whose `bound` is what bounds it. Anything else in the table is a
-/// first-order member bounded by `Any`.
-fn read_abstract<'run>(member: KType, types: &TypeRegistry<'run>) -> (&'run [TypeSymbol], KType) {
-    match types.node(member) {
-        TypeNode::AbstractType {
-            param_names, bound, ..
-        } => (param_names, bound),
-        _ => (&[], KType::ANY),
+/// A schema's origin as the byte its digest feeds.
+fn origin_byte(origin: SigOrigin) -> u8 {
+    match origin {
+        SigOrigin::Declared => 0,
+        SigOrigin::Module => 1,
     }
 }
 

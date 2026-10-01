@@ -16,11 +16,9 @@ use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, select_by_class};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_name;
-use crate::type_lattice::schema::SchemaDraft;
+use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::{DispatchTokenElement, RawRank, Specificity, dense_classes};
-use crate::type_lattice::sig_relations::{
-    SigSubtypeFailure, meet_schemas, shape_specificity, sig_subtype,
-};
+use crate::type_lattice::sig_relations::{FitsFailure, shape_specificity, sig_fits};
 use crate::type_lattice::unify::Interval;
 
 /// One position of a test head: a keyword by its text, or a slot's type.
@@ -381,10 +379,9 @@ fn class_verdicts_are_recorded_and_reused() {
     assert_eq!(world.types.verdict_tally().0, recorded);
 }
 
-/// A signature member ranked `2 … 1` is not satisfied by a module whose bucket is written-order,
-/// and two signatures ranking one key two ways have no meet.
+/// A signature member ranked `2 … 1` is not satisfied by a module whose bucket is written-order.
 #[test]
-fn a_ranking_disagreement_refuses_in_the_signature_relations() {
+fn a_ranking_disagreement_refuses_in_fits() {
     let bump = Bump::new();
     let world = World::new(&bump);
     let parts = [Kw("MOVE"), Slot(KType::ANY), Kw("TO"), Slot(KType::ANY)];
@@ -392,39 +389,27 @@ fn a_ranking_disagreement_refuses_in_the_signature_relations() {
     let written = world.head(&[], &parts, &[]);
     let signature = |member| {
         let mut draft = SchemaDraft::new(world.region);
+        draft.origin = SigOrigin::Declared;
         draft.keyworded.push(member);
-        let kt = world.types.signature(world.region, draft);
-        match world.types.node(kt) {
-            TypeNode::Signature { schema, .. } => schema,
-            _ => unreachable!("the signature door interns a signature"),
-        }
+        world.types.signature(world.region, draft)
     };
     assert!(matches!(
-        sig_subtype(
+        sig_fits(
             &world.types,
             world.region,
             signature(written),
             signature(ranked)
         ),
-        Err(SigSubtypeFailure::RankingMismatch { .. })
+        Err(FitsFailure::RankingMismatch { .. })
     ));
     assert!(
-        sig_subtype(
+        sig_fits(
             &world.types,
             world.region,
             signature(ranked),
             signature(ranked)
         )
         .is_ok()
-    );
-    assert!(
-        meet_schemas(
-            &world.types,
-            world.region,
-            signature(written),
-            signature(ranked)
-        )
-        .is_none()
     );
 }
 

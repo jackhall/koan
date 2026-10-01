@@ -1,7 +1,7 @@
 //! Members born coerced: what an opaque view does to each thing it carries across its barrier.
 //!
-//! Under `:|` a view's abstract members are fresh mints, so a member declared at one of them no
-//! longer has the type it had in the source. The member is therefore not carried but rebuilt at
+//! Under `:|` a view's unpinned head parameters are fresh mints, so a member declared at one of
+//! them no longer has the type it had in the source. The member is therefore not carried but rebuilt at
 //! the view's types: data is re-tagged through the admission barrier, a container is rebuilt part
 //! by part from what its type shows — a record from the fields its slot declares, and no other —
 //! and re-stamped, a nested module is re-viewed, and a function is wrapped in a
@@ -17,10 +17,11 @@
 //! [modules](../../../roadmap/rewrite/modules.md)'.
 
 use crate::knot::{KValue, Knotted};
-use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
-use crate::symbols::TypeSymbol;
+use crate::memory::{BumpAllocator, BumpVec, Writer};
+use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    KType, Members, SchemaDraft, TypeNode, TypeRegistry, satisfied_by, substitute_sig_members,
+    KType, Members, SchemaDraft, TypeNode, TypeRegistry, fits_application, satisfied_by,
+    substitute_parameters,
 };
 use crate::values::{Dict, List, Record, SealRefused, Tagged, Value};
 
@@ -52,7 +53,7 @@ pub struct Coercion<'a, 'cell, 'run, 'x> {
     pub writer: Writer<'cell>,
     pub types: &'a TypeRegistry<'run>,
     pub scratch: BumpAllocator<'x>,
-    /// What the source module binds the signature's abstract members to.
+    /// What the source module binds the signature's head parameters to.
     pub from: Members<'x, TypeSymbol>,
     /// What the view binds them to: the mints under `:|`, the source's own under `:!`.
     pub to: Members<'x, TypeSymbol>,
@@ -61,24 +62,12 @@ pub struct Coercion<'a, 'cell, 'run, 'x> {
 impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
     /// `declared` read under the source module's bindings.
     fn source_side(&self, declared: KType) -> KType {
-        substitute_sig_members(
-            self.types,
-            self.scratch,
-            declared,
-            ScopeId::SENTINEL,
-            self.from,
-        )
+        substitute_parameters(self.types, self.scratch, declared, self.from)
     }
 
     /// `declared` read under the view's bindings.
     fn view_side(&self, declared: KType) -> KType {
-        substitute_sig_members(
-            self.types,
-            self.scratch,
-            declared,
-            ScopeId::SENTINEL,
-            self.to,
-        )
+        substitute_parameters(self.types, self.scratch, declared, self.to)
     }
 
     /// A `Signature` handle whose manifest members are `table` — what a barrier node holds, since
@@ -101,14 +90,14 @@ pub fn coerce<'graph, 'cell>(
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
     let (src, dst) = (cx.source_side(declared), cx.view_side(declared));
     // The two sides agree, so the member already has the type the view declares: the whole of
-    // `:!`, and every slot of `:|` that names no abstract member.
+    // `:!`, and every slot of `:|` that names no unpinned parameter.
     if src == dst {
         return Ok(value);
     }
     match cx.types.node(declared) {
-        // A reference to an abstract member, first-order or applied: the value takes the mint as
-        // its one tagged layer, the barrier checking the mint is one and the payload fits.
-        TypeNode::AbstractType { nonce: None, .. } | TypeNode::ConstructorApply { .. } => {
+        // A reference to a head parameter: the value takes the mint as its one tagged layer, the
+        // barrier checking the mint is one and the payload fits.
+        TypeNode::Parameter { nonce: None, .. } => {
             Tagged::seal(cx.writer, value, dst, src, cx.types, cx.scratch)
                 .map(Value::Tagged)
                 .map_err(CoercionRefused::Seal)
@@ -130,7 +119,7 @@ pub fn coerce<'graph, 'cell>(
                 built.with_type(cx.writer, dst)
             }))
         }
-        // Keys are untouched: a dict's key type names no member a signature can declare abstract.
+        // Keys are untouched: a dict's key type names no parameter a view mints.
         TypeNode::Dict {
             value: cell_type, ..
         } => {
@@ -197,20 +186,48 @@ pub fn coerce<'graph, 'cell>(
             );
             Ok(Value::Knotted(Knotted::of(knot, 0)))
         }
-        // A nested module is re-viewed, and nothing is minted at the boundary: the nested
-        // signature's own members were substituted when its slot was declared, so its slot types
-        // name the *enclosing* signature's members and the enclosing substitutions read them. A
-        // signature that names none of them never reaches here — its two sides agree and the
-        // comparison above carried the module already.
-        TypeNode::Signature { schema, .. } => {
+        // A nested module is re-viewed, and nothing is minted at the boundary: the application's
+        // pins name the enclosing signature's parameters, which the enclosing substitutions read.
+        // The nested signature's own unpinned parameters keep what *fits* solves them to either
+        // side. An application naming none of the enclosing parameters never reaches here — its
+        // two sides agree and the comparison above carried the module already.
+        TypeNode::SignatureApply { signature, .. } => {
             let Value::Knotted(member) = value else {
                 return Err(CoercionRefused::NotAModule);
             };
-            if member.module().is_none() {
+            let Some(module) = member.module() else {
                 return Err(CoercionRefused::NotAModule);
-            }
+            };
+            let (
+                TypeNode::SignatureApply {
+                    pins: from_pins, ..
+                },
+                TypeNode::SignatureApply { pins: to_pins, .. },
+            ) = (cx.types.node(src), cx.types.node(dst))
+            else {
+                return Err(CoercionRefused::Unsupported(declared));
+            };
+            let Some(schema) = super::layout::schema_of(signature, cx.types) else {
+                return Err(CoercionRefused::Unsupported(declared));
+            };
+            let from = fits_application(
+                cx.types,
+                cx.scratch,
+                module.ktype(),
+                signature,
+                from_pins.as_slice(),
+            )
+            .map_err(|_| CoercionRefused::Nested)?;
+            let to = Members::from_pairs(
+                cx.scratch,
+                from.iter().map(|(name, solved)| {
+                    let pinned = to_pins.get(BinderSymbol::Type(*name).symbol());
+                    (*name, pinned.unwrap_or(*solved))
+                }),
+            );
+            let view = view::view_signature(&schema, to, cx.types, cx.scratch);
             view::build(
-                cx.writer, member, schema, dst, cx.from, cx.to, cx.types, cx.scratch,
+                cx.writer, member, schema, view, from, to, cx.types, cx.scratch,
             )
             .map(Value::Knotted)
             .map_err(|_| CoercionRefused::Nested)

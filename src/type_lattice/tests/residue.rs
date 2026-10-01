@@ -5,7 +5,7 @@
 //! that pins the *edge* of a law rather than the law itself. Each builds its own registry over a
 //! region of its own, which doubles as its scratch.
 
-use crate::memory::{Bump, ScopeId};
+use crate::memory::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::digest::{TypeDigest, empty_schema_digest, node_digest};
@@ -17,8 +17,9 @@ use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_name;
-use crate::type_lattice::schema::{SchemaDraft, shape_slots};
+use crate::type_lattice::schema::{SchemaDraft, SigOrigin, shape_slots};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
+use crate::type_lattice::sig_relations::sig_fits;
 use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
 use crate::type_lattice::walk::Variance;
 
@@ -566,7 +567,7 @@ fn each_node_kind_lies_under_its_family_top() {
         under(types.quantified(0, KType::ANY_VALUE)),
         [KType::ANY_VALUE]
     );
-    let sealed = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, KType::ANY);
+    let sealed = types.parameter(name, KType::ANY, None);
     assert!(under(sealed).is_empty());
     // A union answers by its members, and a deferred return, whose return is unknown, by none.
     let mixed = types.union_of(region, &[KType::NUMBER, KType::PROPER_TYPE]);
@@ -783,7 +784,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Held", &symbols).expect("a Type token");
     let list_of_number = types.list(KType::NUMBER);
-    let carried = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, list_of_number);
+    let carried = types.parameter(name, list_of_number, None);
     let declared = types.list(types.quantified(0, KType::ANY));
     let mut collector = Collector::new(region, &[KType::ANY]);
     assert_eq!(
@@ -838,7 +839,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     // A bound spanning two declared members is admitted member by member: `Held` bounded by
     // `LIST OF Number | Str` fills `LIST OF X | Str`, though neither member alone takes it.
     let spanning_bound = types.union_of(region, &[list_of_number, KType::STR]);
-    let spanning = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, spanning_bound);
+    let spanning = types.parameter(name, spanning_bound, None);
     let either = types.union_of(region, &[declared, KType::STR]);
     let mut collector = Collector::new(region, &[KType::ANY]);
     assert_eq!(
@@ -978,4 +979,115 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
     assert_eq!(above(closed), closed);
     let list_of_number = types.list(KType::NUMBER);
     assert_eq!(above(list_of_number), list_of_number);
+}
+
+/// `#(<keyword> _ :<slot>) -> <ret>`, unranked and unquantified.
+fn head(
+    types: &TypeRegistry<'_>,
+    region: &Bump,
+    keyword: KeywordSymbol,
+    slot: KType,
+    ret: KType,
+) -> KType {
+    types
+        .shape_type(
+            region,
+            &[],
+            &[],
+            &[
+                DispatchTokenElement::Keyword(keyword),
+                DispatchTokenElement::Slot(slot),
+            ],
+            &[],
+            ret,
+        )
+        .handle
+}
+
+/// A signature over `shapes`, declared over `parameters` or a module's when `module`.
+fn keyworded(
+    types: &TypeRegistry<'_>,
+    region: &Bump,
+    module: bool,
+    parameters: &[(TypeSymbol, KType)],
+    shapes: &[KType],
+) -> KType {
+    let mut draft = SchemaDraft::new(region);
+    if !module {
+        draft.origin = SigOrigin::Declared;
+    }
+    for (name, parameter) in parameters {
+        draft.insert_parameter(*name, *parameter);
+    }
+    for shape in shapes {
+        draft.push_keyworded(*shape);
+    }
+    types.signature(region, draft)
+}
+
+/// No law: *fits* is transitive, and these are the worked spellings that would break it were a
+/// key's overloads pooled into one solve. A module with `PUSH` at `Number` and at `Str` fits each
+/// pinned application of `Stack` and their meet, which lies under `Stack`, so it fits `Stack` too —
+/// at the first overload's `Elt`. One with only the `Number` overload fits `Stack` and its
+/// `Number` application, and not its `Str` one.
+#[test]
+fn a_key_s_overloads_are_tried_one_at_a_time() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let push = KeywordSymbol::declared("PUSH", &symbols).expect("a keyword token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let parameter = types.parameter(elt, KType::ANY, None);
+    let stack = keyworded(
+        &types,
+        region,
+        false,
+        &[(elt, parameter)],
+        &[head(&types, region, push, parameter, types.list(parameter))],
+    );
+    let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
+    let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));
+    let both = meet(&types, region, numbers, strs);
+    let at = |kt| head(&types, region, push, kt, types.list(kt));
+    let two = keyworded(
+        &types,
+        region,
+        true,
+        &[],
+        &[at(KType::NUMBER), at(KType::STR)],
+    );
+    let one = keyworded(&types, region, true, &[], &[at(KType::NUMBER)]);
+    for asked in [stack, numbers, strs, both] {
+        assert!(sig_fits(&types, region, two, asked).is_ok());
+    }
+    assert!(is_subtype_of(&types, region, both, stack));
+    assert!(sig_fits(&types, region, one, stack).is_ok());
+    assert!(sig_fits(&types, region, one, numbers).is_ok());
+    assert!(sig_fits(&types, region, one, strs).is_err());
+}
+
+/// No law: *fits* asks only that some overload satisfy each keyworded member, so a tie is no
+/// refusal. `M`'s two `FIT`s both satisfy `Narrow`'s, and `M` fits `Wide`, which fits `Narrow`.
+#[test]
+fn a_tie_under_an_asked_member_still_fits() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let f = KeywordSymbol::declared("FIT", &symbols).expect("a keyword token");
+    let either = |other| types.union_of(region, &[KType::NUMBER, other]);
+    let at = |slot| head(&types, region, f, slot, KType::NUMBER);
+    let m = keyworded(
+        &types,
+        region,
+        true,
+        &[],
+        &[at(either(KType::STR)), at(either(KType::BOOL))],
+    );
+    let wide = keyworded(&types, region, false, &[], &[at(either(KType::STR))]);
+    let narrow = keyworded(&types, region, false, &[], &[at(KType::NUMBER)]);
+    assert!(sig_fits(&types, region, m, wide).is_ok());
+    assert!(sig_fits(&types, region, wide, narrow).is_ok());
+    assert!(sig_fits(&types, region, m, narrow).is_ok());
 }

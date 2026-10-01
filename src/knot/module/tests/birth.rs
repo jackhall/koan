@@ -83,7 +83,7 @@ LET outside = 1";
             let TypeNode::Signature { schema, .. } = fixture.types.node(m.ktype()) else {
                 panic!("a module's type is a Signature node");
             };
-            assert!(schema.abstract_members.is_empty());
+            assert!(schema.parameters.is_empty());
             assert_eq!(schema.value_slots.len(), 2);
             assert_eq!(schema.manifest_members.len(), 1);
             assert_eq!(schema.manifest_members[0].1, dist.handle());

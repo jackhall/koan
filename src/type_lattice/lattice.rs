@@ -15,7 +15,7 @@ use super::handle::KType;
 use super::node::TypeNode;
 use super::order::{code_needs, is_subtype_of};
 use super::registry::TypeRegistry;
-use super::sig_relations::meet_schemas;
+use super::signatures::is_signature_type;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, Width, lockstep};
 
@@ -47,8 +47,8 @@ pub fn join_iter<I: IntoIterator<Item = KType>>(
 ///
 /// Pointwise through lists, dicts and constructor arguments; the union of both field sets with
 /// shared fields met for records; the intersection of parameter names with shared parameters joined
-/// and returns met for functions; distribution through a union; [`meet_schemas`] for two
-/// signatures; the kinds' meet needing the names both need for two code kinds; `Never` where no
+/// and returns met for functions; distribution through a union; the set of both operands'
+/// applications for two signature types; the kinds' meet needing the names both need for two code kinds; `Never` where no
 /// common shape exists.
 pub fn meet(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> KType {
     lockstep(types, scratch, a, b, Variance::Co, &mut Meet)
@@ -110,29 +110,25 @@ impl Lockstep for Meet {
         b: KType,
         _v: Variance,
     ) -> KType {
-        // Two interfaces meet at their strongest common refinement; a conflict — two manifest
-        // bindings for one name, two modes for one operator run — is the absence of a meet.
-        match (types.node(a), types.node(b)) {
-            (TypeNode::Signature { schema: x, .. }, TypeNode::Signature { schema: y, .. }) => {
-                meet_schemas(types, scratch, x, y).unwrap_or(KType::NEVER)
-            }
-            // Two code kinds, one needing names, meet at the kinds' meet needing the names both
-            // need. Two bare kinds unordered in the code tree have no meet.
-            (na, nb) => match (code_needs(types, a), code_needs(types, b)) {
-                (Some((x, xs)), Some((y, ys)))
-                    if matches!(na, TypeNode::CodeNeeding { .. })
-                        || matches!(nb, TypeNode::CodeNeeding { .. }) =>
-                {
-                    let kind = meet(types, scratch, x, y);
-                    if kind == KType::NEVER {
-                        return KType::NEVER;
-                    }
-                    let mut both = BumpVec::new_in(scratch);
-                    both.extend(xs.iter().filter(|name| ys.contains(name)).copied());
-                    types.code_needing(scratch, kind, &both)
+        // Two signature types meet at the set of both operands' applications, which is exact and
+        // never `Never`.
+        if is_signature_type(types, a) && is_signature_type(types, b) {
+            return types.signature_meet(scratch, &[a, b]);
+        }
+        // Two code kinds, one needing names, meet at the kinds' meet needing the names both need.
+        // Two bare kinds unordered in the code tree have no meet.
+        let needing = |kt| matches!(types.node(kt), TypeNode::CodeNeeding { .. });
+        match (code_needs(types, a), code_needs(types, b)) {
+            (Some((x, xs)), Some((y, ys))) if needing(a) || needing(b) => {
+                let kind = meet(types, scratch, x, y);
+                if kind == KType::NEVER {
+                    return KType::NEVER;
                 }
-                _ => KType::NEVER,
-            },
+                let mut both = BumpVec::new_in(scratch);
+                both.extend(xs.iter().filter(|name| ys.contains(name)).copied());
+                types.code_needing(scratch, kind, &both)
+            }
+            _ => KType::NEVER,
         }
     }
 
