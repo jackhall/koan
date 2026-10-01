@@ -261,11 +261,6 @@ fn a_family_declaration_is_refused() {
             &format!("{RESULT}\nLET Bad = :(Result {{Ok = Number, Error = Str, Other = Null}})"),
             "Bad",
         ),
-        // A nested group shadows the union's parameters.
-        (
-            "UNION (Elem AS Poly) = #{Map: :(FN FOR ALL #[Held] :{x :Held} -> Elem)}",
-            "Poly",
-        ),
     ] {
         declared(source, |program, brought| {
             assert!(

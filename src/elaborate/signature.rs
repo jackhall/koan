@@ -6,6 +6,8 @@
 //! the function's parameters. A call is by name through the function type; only a bucket reads the
 //! shape. See [dispatch](../dispatch/README.md).
 
+use std::cell::Cell;
+
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
@@ -45,6 +47,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
         scratch,
         fellows: &[],
         locals: &[],
+        binder: Cell::new(false),
     };
     let top = Groups {
         names: &[],

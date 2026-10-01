@@ -94,19 +94,6 @@ LET Bare = Alias";
 }
 
 #[test]
-fn a_quantified_head_interns_by_shape_whatever_its_names() {
-    let source = "\
-LET Named = :(EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt)
-LET Renamed = :(EXPR FOR ALL #[Other] #(ID x :Other) -> Other)
-LET Fixed = :(EXPR #(ID x :Number) -> Number)";
-    with_program(source, scalars, nulls, |program| {
-        let named = elaborated(&program, 0).unwrap();
-        assert_eq!(elaborated(&program, 1), Ok(named));
-        assert_ne!(elaborated(&program, 2), Ok(named));
-    });
-}
-
-#[test]
 fn a_ranked_head_interns_by_its_dense_ranking() {
     // A signature member ranks a head by the integers in its slots' places: `2 … 1` and `20 … 10`
     // are one ranking, written order another, and a named slot sits in the unnumbered class.
@@ -134,66 +121,6 @@ LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
             display_name(ranked, types, program.symbols).to_string(),
             ":(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)"
         );
-    });
-}
-
-#[test]
-fn a_quantified_lambda_type_interns_by_shape_whatever_its_names() {
-    let source = "\
-LET Named = :(FN FOR ALL #[Elt] :{x :Elt} -> Elt)
-LET Renamed = :(FN FOR ALL #[Other] :{x :Other} -> Other)
-LET Fixed = :(FN :{x :Number} -> Number)";
-    with_program(source, scalars, nulls, |program| {
-        let named = elaborated(&program, 0).unwrap();
-        assert_eq!(elaborated(&program, 1), Ok(named));
-        assert_ne!(elaborated(&program, 2), Ok(named));
-    });
-}
-
-#[test]
-fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
-    // A bare `FN` type opens no group, so its field and return keep reading the head's `Elt`.
-    let source =
-        "LET Applied = :(EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO v :Elt) -> Elt)";
-    with_program(source, scalars, nulls, |program| {
-        let (types, scratch) = (program.types, program.scratch);
-        let quantified = types.quantified(0, KType::ANY);
-        let x = BinderSymbol::classify("x").unwrap();
-        let inner = types
-            .function_type(scratch, &[], &[], &[(x, quantified)], quantified)
-            .handle;
-        let elt = program.type_name("Elt");
-        assert_eq!(
-            elaborated(&program, 0),
-            Ok(types
-                .shape_type(
-                    scratch,
-                    &[elt],
-                    &[KType::ANY],
-                    &[
-                        keyword("APPLY", program.symbols),
-                        DispatchTokenElement::Slot(inner),
-                        keyword("TO", program.symbols),
-                        DispatchTokenElement::Slot(quantified),
-                    ],
-                    &[],
-                    quantified
-                )
-                .handle)
-        );
-    });
-}
-
-#[test]
-fn an_outer_quantifier_read_under_a_nested_function_group_is_refused() {
-    // The nested `FN FOR ALL` opens a group of its own, which shadows the head's `Elt`.
-    let source = "LET Shadowed = :(EXPR FOR ALL #[Elt] \
-                    #(APPLY f :(FN FOR ALL #[Other] :{x :Elt} -> Other) TO v :Elt) -> Elt)";
-    with_program(source, scalars, nulls, |program| {
-        assert!(matches!(
-            elaborated(&program, 0),
-            Err(Elaboration::Unsupported { .. })
-        ));
     });
 }
 
@@ -537,33 +464,6 @@ fn sorted_bounds(types: &TypeRegistry<'_>, handle: KType) -> Vec<KType> {
 }
 
 #[test]
-fn a_bounded_quantifier_carries_its_bound() {
-    let source = "\
-LET Pair = :(FN FOR ALL #{Elt: Value, Key: Any} :{a :Elt b :Key c :Elt d :Key} -> Elt)
-LET Shape = :(EXPR FOR ALL #{Elt: Value, Key: Any} #(PAIR a :Elt b :Key c :Elt d :Key) -> Elt)
-LET Lone = :(FN FOR ALL #{Elt: Value} :{x :Elt y :Elt} -> Elt)
-LET Free = :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Elt)
-LET Spanning = :(FN FOR ALL #{Elt: :(Number | Str | Bool)} :{x :Elt y :Elt} -> Elt)";
-    with_program(source, with_value, nulls, |program| {
-        let (types, scratch) = (program.types, program.scratch);
-        let mut expected = vec![KType::ANY_VALUE, KType::ANY];
-        expected.sort();
-        for line in [0, 1] {
-            let handle = elaborated(&program, line).expect("the type elaborates");
-            assert_eq!(sorted_bounds(types, handle), expected, "line {line}");
-        }
-        let lone = elaborated(&program, 2).expect("the type elaborates");
-        assert_eq!(sorted_bounds(types, lone), vec![KType::ANY_VALUE]);
-        assert_ne!(elaborated(&program, 3), Ok(lone), "a bound is identity");
-        let spanning = elaborated(&program, 4).expect("the type elaborates");
-        assert_eq!(
-            sorted_bounds(types, spanning),
-            vec![types.union_of(scratch, &[KType::NUMBER, KType::STR, KType::BOOL])]
-        );
-    });
-}
-
-#[test]
 fn a_meet_is_the_greatest_lower_bound_of_its_operands() {
     let source = "\
 LET Met = :((Number | Str) & (Str | Bool))
@@ -581,28 +481,6 @@ LET Disjoint = :(Number & Str)";
             Ok(types.record(scratch, &[(x, KType::NUMBER), (y, KType::STR)]))
         );
         assert_eq!(elaborated(&program, 3), Ok(KType::NEVER));
-    });
-}
-
-#[test]
-fn a_bound_naming_a_variable_or_never_is_refused() {
-    let source = "\
-LET Own = :(FN FOR ALL #{Elt: Key, Key: Any} :{x :Elt y :Key} -> Elt)
-LET Empty = :(FN FOR ALL #{Elt: :(Number & Str)} :{x :Elt y :Elt} -> Elt)
-LET Nested = :(FN FOR ALL #[Outer] :{f :(FN FOR ALL #{Elt: Outer} :{x :Elt y :Elt} -> Elt) g :Outer} -> Outer)";
-    with_program(source, with_value, nulls, |program| {
-        assert!(matches!(
-            elaborated(&program, 0),
-            Err(Elaboration::Bound { .. })
-        ));
-        assert!(matches!(
-            elaborated(&program, 1),
-            Err(Elaboration::Bound { .. })
-        ));
-        assert!(matches!(
-            elaborated(&program, 2),
-            Err(Elaboration::Unsupported { .. })
-        ));
     });
 }
 

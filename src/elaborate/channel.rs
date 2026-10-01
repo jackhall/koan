@@ -360,6 +360,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                         scratch,
                         fellows: &[],
                         locals: &[],
+                        binder: Cell::new(false),
                     };
                     elaborator.node(expression.site, body, &top)
                 }

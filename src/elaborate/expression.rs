@@ -1,6 +1,8 @@
 //! One type expression, part by part: a name read through the activation, a composite built from
 //! the handles its parts elaborate to.
 
+use std::cell::Cell;
+
 use super::reads::{Reads, TypeAt};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
@@ -54,6 +56,7 @@ pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
         scratch,
         fellows: &[],
         locals: &[],
+        binder: Cell::new(false),
     }
     .part(part, &groups)
 }
@@ -132,6 +135,10 @@ pub(super) struct Elaborator<'e, 'run, 'x, R: ?Sized> {
     /// shape — a `SIG`'s head parameters and manifest members, and a higher-kinded declarator's
     /// parameters. Empty outside a definition.
     pub(super) locals: &'e [(TypeSymbol, KType)],
+    /// Whether the next composite node may be a quantified function type or expression shape: set
+    /// for one signature member's type, and cleared by the first composite the elaborator reaches,
+    /// so a quantified type nested inside one is refused.
+    pub(super) binder: Cell<bool>,
 }
 
 impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
@@ -150,6 +157,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 self.node(site, node.reference(), groups)
             }
             ExpressionPart::RecordType(node) => {
+                self.binder.set(false);
                 let mut fields = BumpVec::new_in(self.scratch);
                 self.pairs(site, node.reference(), groups, |name, ktype| {
                     fields.push((name, ktype));
@@ -241,6 +249,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         if let [only] = parts {
             return self.part(&only.value, groups);
         }
+        let binder = self.binder.take();
+        let quantified = Elaboration::Quantified { site };
         // `Ctor {Param = Type, …}` — a declared type constructor applied to its arguments by
         // member name. It resolves no builtin shape: the head is a type name and the payload a
         // record literal, so the arm is keyed structurally, ahead of the table lookup.
@@ -261,6 +271,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                     let group = QuantifierGroup::empty(self.scratch);
                     Ok(self.function(&group, part(1), part(3), groups)?.handle)
                 }
+                BuiltinShapeId::QuantifiedLambdaType if !binder => Err(quantified),
+                BuiltinShapeId::QuantifiedExpressionHead if !binder => Err(quantified),
                 BuiltinShapeId::QuantifiedLambdaType => {
                     let group = self.group(part(3), groups)?;
                     Ok(self.function(&group, part(4), part(6), groups)?.handle)

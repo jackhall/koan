@@ -83,6 +83,9 @@ pub enum Elaboration {
     /// A bound at `site` that names a type variable — a `FOR ALL` name or a signature's head
     /// parameter — or is `Never`.
     Bound { site: Site },
+    /// A quantified function type or expression shape at `site`, written anywhere but as the whole
+    /// type of a signature's `VAL` member or a signature's keyworded head.
+    Quantified { site: Site },
     /// The load-time reader cannot know the type at `site` before the program runs: the load
     /// pass's cue to leave it for the run, never reported.
     Unknown { site: Site },
@@ -96,6 +99,7 @@ impl Elaboration {
             | Elaboration::Unsupported { site }
             | Elaboration::NoSuchMember { site, .. }
             | Elaboration::Bound { site }
+            | Elaboration::Quantified { site }
             | Elaboration::Unknown { site } => *site,
         }
     }
@@ -136,6 +140,9 @@ impl fmt::Display for ElaborationDisplay<'_, '_> {
                 self.symbols.display(*name)
             ),
             Elaboration::Bound { .. } => f.write_str("a bound names a type variable or Never"),
+            Elaboration::Quantified { .. } => {
+                f.write_str("a quantified type is written only as a signature's `VAL` member type")
+            }
             Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
         }
     }

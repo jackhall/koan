@@ -9,6 +9,8 @@
 //!
 //! See [README.md § Declarations](README.md#declarations).
 
+use std::cell::Cell;
+
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::{
@@ -127,6 +129,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
             scratch,
             fellows: &fellows,
             locals: &[],
+            binder: Cell::new(false),
         };
         match member.kind {
             Declared::NewType { repr } => {
@@ -335,6 +338,7 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
             scratch,
             fellows: &[],
             locals: &[],
+            binder: Cell::new(false),
         };
         match self.kind {
             Declared::Alias(rhs) => elaborator.part(rhs, &TOP),
@@ -446,6 +450,7 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
             scratch,
             fellows: elaborator.fellows,
             locals: &locals,
+            binder: Cell::new(false),
         };
         let site = Site::of(&node.parts[0].value);
         let unsupported = Elaboration::Unsupported { site };
@@ -482,10 +487,12 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
                 let ExpressionPart::Identifier(name) = name_part.ok_or(unsupported)? else {
                     return Err(unsupported);
                 };
+                member.binder.set(true);
                 let handle = member.part(type_parts[0].ok_or(unsupported)?, &TOP)?;
                 draft.insert_value_slot(*name, handle);
             }
             BuiltinShapeId::ExpressionHead | BuiltinShapeId::QuantifiedExpressionHead => {
+                member.binder.set(true);
                 draft.push_keyworded(member.node(site, node, &TOP)?);
             }
             BuiltinShapeId::OperatorHead

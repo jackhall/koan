@@ -347,7 +347,7 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
     let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\
                   (:(Elt & Number)) \
                   (:(Elt.x)) \
-                  (:(FN FOR ALL #[Tee] :{y :Tee, z :Elt} -> Tee)) \
+                  (:(FN :{y :Number, z :Elt} -> Number)) \
                   (:(Number AS Elt)) \
                   (:(Elt NEEDING #[y])) \
                   (:(Number & Str))))";
@@ -364,7 +364,6 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
             panic!("one expression in statement 2")
         };
         let (value, levels) = rigid(function.typed());
-        let tee = types.quantified(0, KType::ANY);
         let field = |name| {
             BinderSymbol::Value(
                 crate::symbols::ValueSymbol::declared(name, program.symbols).expect("a name"),
@@ -372,10 +371,13 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
         };
         let expected = types.function_type(
             program.scratch,
-            &[program.type_name("Tee")],
-            &[KType::ANY],
-            &[(field("y"), tee), (field("z"), lexical(program, 0, "Elt"))],
-            tee,
+            &[],
+            &[],
+            &[
+                (field("y"), KType::NUMBER),
+                (field("z"), lexical(program, 0, "Elt")),
+            ],
+            KType::NUMBER,
         );
         assert_eq!(value, expected.handle);
         assert_eq!(levels, [0]);
