@@ -14,7 +14,7 @@
 
 use crate::memory::{BumpAllocator, Writer};
 use crate::symbols::Symbol;
-use crate::type_lattice::{KType, TypeNode, TypeRegistry, is_subtype_of, meet};
+use crate::type_lattice::{KType, TypeNode, TypeRegistry, fits, meet};
 
 use super::admission::type_satisfies;
 use super::circular::{Circular, Resolved};
@@ -93,11 +93,11 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         let target = members
             .iter()
             .copied()
-            .filter(|member| of_kind(*member) && is_subtype_of(types, scratch, own, *member))
+            .filter(|member| of_kind(*member) && fits(types, scratch, own, *member))
             .reduce(|lower, member| {
-                if is_subtype_of(types, scratch, lower, member) {
+                if fits(types, scratch, lower, member) {
                     lower
-                } else if is_subtype_of(types, scratch, member, lower) {
+                } else if fits(types, scratch, member, lower) {
                     member
                 } else {
                     meet(types, scratch, lower, member)

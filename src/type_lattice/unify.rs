@@ -24,11 +24,11 @@ use crate::memory::{BumpAllocator, BumpVec};
 use super::handle::KType;
 use super::lattice::{join_iter, meet};
 use super::node::TypeNode;
-use super::order::is_subtype_of;
+use super::order::fits;
 use super::registry::TypeRegistry;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
-use super::walk::unary::{LEAF, Visit, visit_in};
+use super::walk::unary::{Visit, visit_in};
 
 /// Why a carried type does not fill a declared position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,34 +130,27 @@ impl Names {
         variance: Variance,
         under_union: bool,
     ) {
-        visit_in(
-            types,
-            scratch,
-            kt,
-            LEAF,
-            variance,
-            &mut |_, node, context| {
-                if node.binds_quantifiers() {
-                    return Visit::Skip;
-                }
-                match *node {
-                    TypeNode::Quantified { index: found, .. } => {
-                        if found == index && context.variance() == Variance::Co {
-                            self.named = true;
-                            self.reached |= !under_union;
-                        }
-                        Visit::Skip
+        visit_in(types, scratch, kt, variance, &mut |_, node, context| {
+            if node.binds_quantifiers() {
+                return Visit::Skip;
+            }
+            match *node {
+                TypeNode::Quantified { index: found, .. } => {
+                    if found == index && context.variance() == Variance::Co {
+                        self.named = true;
+                        self.reached |= !under_union;
                     }
-                    TypeNode::Union { members } => {
-                        for member in members {
-                            self.over(types, scratch, *member, index, context.variance(), true);
-                        }
-                        Visit::Skip
-                    }
-                    _ => Visit::Descend,
+                    Visit::Skip
                 }
-            },
-        );
+                TypeNode::Union { members } => {
+                    for member in members {
+                        self.over(types, scratch, *member, index, context.variance(), true);
+                    }
+                    Visit::Skip
+                }
+                _ => Visit::Descend,
+            }
+        });
     }
 }
 
@@ -310,7 +303,7 @@ impl<'s> Collector<'s> {
                 let joined = join_iter(types, scratch, lower.iter().copied());
                 // Each ceiling on its own: a meet may land below the greatest lower bound.
                 for ceiling in upper.iter().copied().chain([bound]) {
-                    if !is_subtype_of(types, scratch, joined, ceiling) {
+                    if !fits(types, scratch, joined, ceiling) {
                         return Err(UnifyFailure::Disagree {
                             index,
                             lower: joined,
@@ -423,8 +416,8 @@ impl Lockstep for Admits<'_, '_> {
     ) -> Option<Admission> {
         if !types.contains_quantified(declared) {
             let admits = match v {
-                Variance::Co => is_subtype_of(types, scratch, carried, declared),
-                Variance::Contra => is_subtype_of(types, scratch, declared, carried),
+                Variance::Co => fits(types, scratch, carried, declared),
+                Variance::Contra => fits(types, scratch, declared, carried),
             };
             return Some(admits.then_some(()).ok_or(UnifyFailure::Mismatch));
         }

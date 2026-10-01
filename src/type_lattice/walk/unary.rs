@@ -3,8 +3,10 @@
 //! [`children`] lists a compound node's child handles in a fixed order, each with the variance its
 //! position carries; [`reassemble`] puts a node back together from replacement children in that
 //! same order. Every structural recursion over one type is [`visit`] or [`rebuild`] over that
-//! pair, so a new compound variant is a compile error in exactly two matches here plus the
-//! descent-knob sites.
+//! pair, so a new compound variant is a compile error in exactly two matches here.
+//!
+//! A signature's members and a sealed member's schema are closed content: neither walk reaches
+//! inside one.
 //!
 //! Both entry points take the scratch allocator the walk's transient buffers — each node's child
 //! list and the rebuilt children — are built in.
@@ -14,17 +16,10 @@ use crate::symbols::BinderSymbol;
 
 use super::Variance;
 use crate::type_lattice::handle::KType;
-use crate::type_lattice::node::{NodeSchema, TypeNode};
+use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::shape::DispatchTokenElement;
-
-/// Whether a knobbed arm is descended or treated as a leaf.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Step {
-    Through,
-    Leaf,
-}
 
 /// What a [`visit`] rule does at the node it was handed.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -37,20 +32,6 @@ pub enum Visit {
     Stop,
 }
 
-/// [`visit`]'s descent knobs.
-#[derive(Clone, Copy)]
-pub struct Descent {
-    pub signature: Step,
-    pub set_member: Step,
-}
-
-/// The knobs a probe over quantifier structure takes: a nested signature and a sealed member are
-/// both opaque, so the walk reaches only what the type spells inline.
-pub const LEAF: Descent = Descent {
-    signature: Step::Leaf,
-    set_member: Step::Leaf,
-};
-
 /// Which union door reassembles a rebuilt union.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UnionDoor {
@@ -62,8 +43,7 @@ pub enum UnionDoor {
     Flat,
 }
 
-/// [`rebuild`]'s knobs. A signature is opaque content and a sealed member cannot be rebuilt, so
-/// neither has a knob.
+/// [`rebuild`]'s knobs.
 #[derive(Clone, Copy)]
 pub struct Rebuild {
     pub union: UnionDoor,
@@ -103,10 +83,9 @@ pub fn visit<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
     root: KType,
-    descent: Descent,
     at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
-    visit_in(types, scratch, root, descent, Variance::Co, at)
+    visit_in(types, scratch, root, Variance::Co, at)
 }
 
 /// [`visit`] with the root's own polarity supplied — what a walk over a position already known to
@@ -116,19 +95,17 @@ pub fn visit_in<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
     root: KType,
-    descent: Descent,
     variance: Variance,
     at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
     let mut context = Context::root(variance);
-    visit_at(types, scratch, root, descent, &mut context, at)
+    visit_at(types, scratch, root, &mut context, at)
 }
 
 fn visit_at<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
     kt: KType,
-    descent: Descent,
     context: &mut Context,
     at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
@@ -138,7 +115,7 @@ fn visit_at<'run>(
         Visit::Skip => return false,
         Visit::Descend => {}
     }
-    let kids = child_list(scratch, &node, descent.signature, descent.set_member);
+    let kids = child_list(scratch, &node);
     if kids.is_empty() {
         return false;
     }
@@ -150,7 +127,7 @@ fn visit_at<'run>(
     let mut stopped = false;
     for (child, flips) in kids.iter().copied() {
         context.variance = if flips { outer.flipped() } else { outer };
-        if visit_at(types, scratch, child, descent, context, at) {
+        if visit_at(types, scratch, child, context, at) {
             stopped = true;
             break;
         }
@@ -190,9 +167,7 @@ fn rebuild_at<'run>(
     if let Some(replacement) = rule(kt, &node, context) {
         return replacement;
     }
-    // A signature is opaque and a sealed member is content-addressed by its component, so neither
-    // has a rebuild: the two `Leaf` knobs here are why `Rebuild` carries no field for them.
-    let kids = child_list(scratch, &node, Step::Leaf, Step::Leaf);
+    let kids = child_list(scratch, &node);
     if kids.is_empty() {
         return kt;
     }
@@ -219,34 +194,21 @@ fn rebuild_at<'run>(
     reassemble(types, scratch, &node, &rebuilt, cfg).unwrap_or(kt)
 }
 
-/// A node's children under the knobs, in [`children`]'s order, in a buffer sized to their count.
-fn child_list<'s>(
-    scratch: BumpAllocator<'s>,
-    node: &TypeNode<'_>,
-    signature: Step,
-    set_member: Step,
-) -> BumpVec<'s, (KType, bool)> {
+/// A node's children, in [`children`]'s order, in a buffer sized to their count.
+fn child_list<'s>(scratch: BumpAllocator<'s>, node: &TypeNode<'_>) -> BumpVec<'s, (KType, bool)> {
     let mut count = 0;
-    children(node, signature, set_member, &mut |_, _| count += 1);
+    children(node, &mut |_, _| count += 1);
     let mut kids = BumpVec::with_capacity_in(count, scratch);
-    children(node, signature, set_member, &mut |kt, flips| {
-        kids.push((kt, flips))
-    });
+    children(node, &mut |kt, flips| kids.push((kt, flips)));
     kids
 }
 
 /// **The arm table.** Every compound node's child handles, in the order [`reassemble`] reads them
 /// back, each handed to `out` with whether its position flips variance.
 ///
-/// A signature's members and a sealed member's schema arrive under their knobs; everything else is
-/// unconditional. A signature's tables are read in their stored order — the one order the two
-/// functions here agree on position for position.
-pub fn children(
-    node: &TypeNode<'_>,
-    signature: Step,
-    set_member: Step,
-    out: &mut impl FnMut(KType, bool),
-) {
+/// A signature and a sealed member are leaves: one is closed content, the other content-addressed
+/// by its component.
+pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(KType, bool)) {
     match *node {
         TypeNode::Number
         | TypeNode::Str
@@ -272,7 +234,9 @@ pub fn children(
         | TypeNode::Never
         | TypeNode::OfKind(_)
         | TypeNode::DeferredReturn(_)
-        | TypeNode::Sibling(_) => {}
+        | TypeNode::Sibling(_)
+        | TypeNode::Signature { .. }
+        | TypeNode::SetMember { .. } => {}
         TypeNode::List { element } => out(element, false),
         TypeNode::Dict { key, value } => {
             out(key, false);
@@ -307,35 +271,9 @@ pub fn children(
         TypeNode::Quantified { bound, .. } | TypeNode::Parameter { bound, .. } => {
             out(bound, false)
         }
-        // Parameters, then manifest members, then value slots, then the keyworded shapes.
-        TypeNode::Signature { schema, .. } => {
-            if signature == Step::Through {
-                for (_, kt) in schema.parameters.iter().chain(schema.manifest_members) {
-                    out(*kt, false);
-                }
-                for (_, kt) in schema.value_slots {
-                    out(*kt, false);
-                }
-                for kt in schema.keyworded {
-                    out(*kt, false);
-                }
-            }
-        }
         // An application's pins; its signature is closed.
         TypeNode::SignatureApply { pins, .. } => pins.values().for_each(|kt| out(kt, false)),
         TypeNode::SignatureMeet { members } => members.iter().for_each(|m| out(*m, false)),
-        TypeNode::SetMember { schema, .. } => {
-            if set_member == Step::Through {
-                match schema {
-                    NodeSchema::NewType(repr) => out(repr, false),
-                    NodeSchema::TypeConstructor { representation, .. } => {
-                        if let Some(representation) = representation {
-                            out(representation, false)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -405,9 +343,6 @@ fn reassemble(
             types.signature_apply(scratch, signature, &rekey(scratch, pins, new))
         }
         TypeNode::SignatureMeet { .. } => types.signature_meet(scratch, new),
-        // A sealed member is keyed by its component's digest, which was computed over exactly the
-        // schema it carries: rebuilding one would name content its handle contradicts.
-        TypeNode::SetMember { .. } => return None,
         _ => return None,
     })
 }

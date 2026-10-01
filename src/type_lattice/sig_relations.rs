@@ -1,5 +1,5 @@
-//! *Fits* over two signature types, the two binder relations the order's instantiation clauses
-//! read, and the specificity verdict a dispatch ranks candidates by.
+//! *Fits* over two signature types, the two binder relations *fits*' instantiation clauses read,
+//! and the specificity verdict a dispatch ranks candidates by.
 //!
 //! [`sig_fits`] is *fits* for signatures: `offered` fits `asked` when, for each application `asked`
 //! holds ([`signatures`](super::signatures)), the offered members — pooled across the offered
@@ -18,7 +18,7 @@ use super::handle::KType;
 use super::lattice::meet;
 use super::node::TypeNode;
 use super::operators::ReductionMode;
-use super::order::{is_subtype_of, satisfied_by};
+use super::order::{fits, satisfied_by};
 use super::ranking::{Ranked, STAND_IN_LEVEL, admits_by_class, class_at_least};
 use super::registry::TypeRegistry;
 use super::schema::{
@@ -34,7 +34,7 @@ use super::walk::Variance;
 // --- Specificity ---
 
 /// Whether `declared` admits `candidate` class by class — `declared`'s variables solved,
-/// `candidate`'s rigid — then `declared`'s return under `candidate`'s: the order's instantiation
+/// `candidate`'s rigid — then `declared`'s return under `candidate`'s: *fits*' instantiation
 /// clause for two shapes.
 ///
 /// Prenex instantiation through the collector: each slot pair asks the candidate's slot to lie
@@ -67,7 +67,7 @@ pub(super) fn admits_shape(
 
 /// Whether `declared` admits `candidate` name by name — `declared`'s variables solved,
 /// `candidate`'s rigid — with `declared`'s return under `candidate`'s. The function twin of
-/// [`admits_shape`], reached from the order alone.
+/// [`admits_shape`], reached from *fits* alone.
 ///
 /// Width is the order's own: every name `declared` asks for, `candidate` must have, and a name
 /// only `candidate` has is one `declared` never needs. A parameter pair asks the candidate's
@@ -755,7 +755,7 @@ fn quantified_position_failure(
     for declared_slot in shape_slots(declared, types) {
         let candidate_slot = candidate_slots.next()?;
         // Contravariance: a candidate position fills a declared one by being equal or more general.
-        if is_subtype_of(types, scratch, declared_slot, candidate_slot) {
+        if fits(types, scratch, declared_slot, candidate_slot) {
             continue;
         }
         let named = (0..quantifiers.len())

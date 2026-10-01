@@ -11,16 +11,15 @@
 //! Rendering is the one recursion written by hand: it spells syntax *between* children and
 //! inherits the quantifier binder from above, which neither driver expresses. Adding a compound
 //! variant is a compile error at [`unary`]'s `children` / `reassemble` pair, at [`binary`]'s
-//! pairing table, at the descent-knob sites, and in the rendering match — nowhere else.
+//! pairing table, and in the rendering match — nowhere else.
 //!
 //! # Writing a new walk
 //!
 //! Ask first whether the walk is unary or binary, then whether it rebuilds.
 //!
 //! - A **unary rebuild** supplies a leaf rule `FnMut(KType, &TypeNode, &Context) -> Option<KType>`:
-//!   `Some(k)` replaces the node and stops there, `None` lets the driver descend. Pick the descent
-//!   knobs — whether a nested `Signature` is descended or treated as a leaf, and which union door
-//!   reassembles a union. Substitution, binder canonicalization and sibling rewriting are all this.
+//!   `Some(k)` replaces the node and stops there, `None` lets the driver descend. Pick the union
+//!   door that reassembles a union. Substitution and sibling rewriting are both this.
 //! - A **unary visit** supplies `FnMut(KType, &TypeNode, &Context) -> Visit` and reads the
 //!   context. Occurrence censuses and reference folds are this.
 //! - A **binary walk** implements [`binary::Lockstep`]. The order, the meet and the unifier's

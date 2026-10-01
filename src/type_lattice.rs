@@ -13,9 +13,10 @@
 //!
 //! # The relations
 //!
-//! [`is_subtype_of`] is one reflexive partial order, memoized through the registry's verdict edges;
-//! [`is_more_specific_than`] is its strict version and [`satisfied_by`] the same question read from
-//! a slot's side. [`join`] is the least upper bound — the larger operand when the two are ordered,
+//! [`is_subtype_of`] is one reflexive partial order, memoized through the registry's verdict edges,
+//! which never solves; every construction reads it. [`fits`] contains it and solves — a quantified
+//! binder fits another through an instance, a module's signature fits a declared one through its
+//! members — and every question reads it, [`satisfied_by`] from a slot's side. [`join`] is the least upper bound — the larger operand when the two are ordered,
 //! their canonical union otherwise — and [`meet`] the greatest lower bound. [`admits_with`] walks a
 //! declared type against a carried one and collects what would solve the quantified positions;
 //! [`Collector::solve`] bounds each variable by a pair of ends and binds its least instance.
@@ -78,7 +79,7 @@ pub use kind::KKind;
 pub use lattice::{join, join_iter, meet};
 pub use node::{NodeSchema, TypeNode};
 pub use operators::{FoldDirection, ReductionMode};
-pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
+pub use order::{fits, is_subtype_of, satisfied_by};
 pub use ranking::{
     Judged, Verdict, admit_by_class, class_at_least, judge_by_class, select_by_class,
 };

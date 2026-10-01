@@ -14,8 +14,8 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with,
-    is_subtype_of, join, satisfied_by, substitute_quantified,
+    Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with, fits, join,
+    satisfied_by, substitute_quantified,
 };
 
 use super::{Knotted, Resolved, Value, WorkingPart};
@@ -247,7 +247,7 @@ pub fn unsealed<'cell, X: Knotted>(
     let payload = *tagged.payload();
     let revealed = is_mint(types, tagged.ktype())
         && kind_of(&payload, types, scratch)
-            .is_some_and(|kind| is_subtype_of(types, scratch, tagged.ktype(), kind));
+            .is_some_and(|kind| fits(types, scratch, tagged.ktype(), kind));
     if revealed { payload } else { value }
 }
 

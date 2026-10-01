@@ -48,7 +48,7 @@ use super::shape::{DeferredReturnSurface, DispatchTokenElement, written_order};
 use super::signatures::canonical_applications;
 use super::substitute::substitute_quantified;
 use super::walk::Variance;
-use super::walk::unary::{LEAF, Step, Visit, children, visit, visit_in};
+use super::walk::unary::{Visit, children, visit, visit_in};
 
 /// One interned node, and the two probe answers computed off its children when it was interned.
 #[derive(Clone, Copy)]
@@ -67,7 +67,7 @@ impl<'run> Entry<'run> {
     /// name before its own node is interned, and a sealed member is a leaf for both probes.
     fn over(node: TypeNode<'run>, nodes: &NodeTable<'run>) -> Self {
         let (mut quantified, mut rigid) = (false, false);
-        children(&node, Step::Leaf, Step::Leaf, &mut |child, _| {
+        children(&node, &mut |child, _| {
             if let Some(entry) = nodes.get(&child.digest()) {
                 quantified |= entry.quantified;
                 rigid |= entry.rigid;
@@ -112,8 +112,8 @@ type NodeTable<'run> = BumpBackedMap<'run, TypeDigest, Entry<'run>, IdentityBuil
 pub(super) enum Relation {
     /// [`is_subtype_of`](super::order::is_subtype_of), the one order.
     Subtype,
-    /// [`sig_fits`](super::sig_relations::sig_fits) over two signature types.
-    SigSatisfies,
+    /// [`fits`](super::order::fits), the relation a question reads.
+    Fits,
     /// [`class_at_least`](super::ranking::class_at_least) at the class it names.
     ClassAtLeast(u8),
 }
@@ -123,7 +123,7 @@ impl Relation {
     fn bits(self) -> u64 {
         match self {
             Relation::Subtype => 0,
-            Relation::SigSatisfies => 1,
+            Relation::Fits => 1,
             Relation::ClassAtLeast(class) => 2 + u64::from(class),
         }
     }
@@ -929,33 +929,26 @@ impl<'run> TypeRegistry<'run> {
         census.resize(arity, Occurrences::default());
         let mut seen = 0usize;
         for (kt, position) in positions {
-            visit_in(
-                self,
-                scratch,
-                kt,
-                LEAF,
-                position,
-                &mut |_, node, context| {
-                    if node.binds_quantifiers() {
-                        return Visit::Skip;
-                    }
-                    match *node {
-                        TypeNode::Quantified { index, .. } => {
-                            if let Some(record) = census.get_mut(index) {
-                                if record.first == usize::MAX {
-                                    record.first = seen;
-                                }
-                                if context.variance() == Variance::Contra {
-                                    record.contravariant += 1;
-                                }
-                                seen += 1;
+            visit_in(self, scratch, kt, position, &mut |_, node, context| {
+                if node.binds_quantifiers() {
+                    return Visit::Skip;
+                }
+                match *node {
+                    TypeNode::Quantified { index, .. } => {
+                        if let Some(record) = census.get_mut(index) {
+                            if record.first == usize::MAX {
+                                record.first = seen;
                             }
-                            Visit::Skip
+                            if context.variance() == Variance::Contra {
+                                record.contravariant += 1;
+                            }
+                            seen += 1;
                         }
-                        _ => Visit::Descend,
+                        Visit::Skip
                     }
-                },
-            );
+                    _ => Visit::Descend,
+                }
+            });
         }
         census
     }
@@ -1110,7 +1103,7 @@ impl<'run> TypeRegistry<'run> {
         index: usize,
     ) -> bool {
         self.contains_quantified(kt)
-            && visit(self, scratch, kt, LEAF, &mut |_, node, _| {
+            && visit(self, scratch, kt, &mut |_, node, _| {
                 if node.binds_quantifiers() {
                     return Visit::Skip;
                 }
@@ -1145,7 +1138,7 @@ impl<'run> TypeRegistry<'run> {
         kt: KType,
         arity: usize,
     ) -> bool {
-        !visit(self, scratch, kt, LEAF, &mut |_, node, _| {
+        !visit(self, scratch, kt, &mut |_, node, _| {
             if node.binds_quantifiers() {
                 return Visit::Skip;
             }

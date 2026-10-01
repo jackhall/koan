@@ -152,7 +152,7 @@ fn arb_type_in(
             }
         ),
         3 => arb_shape(shape_world, depth, shape_members),
-        2 => arb_signature(sig_world, depth),
+        2 => arb_signature_type(sig_world, depth),
         1 => arb_sealed_member(group_world, depth),
         1 => arb_family(family_world.clone(), depth),
         1 => (arb_family(family_world, depth), inner()).prop_map(move |(family, argument)| {
@@ -461,6 +461,43 @@ fn function_of(world: &World, parameter: KType) -> KType {
             )
             .handle
     })
+}
+
+/// A signature type: a signature, an application of one pinning some of its head parameters at
+/// ground types, or the meet of two applications.
+fn arb_signature_type(world: World, depth: u32) -> BoxedStrategy<KType> {
+    let meet_world = world.clone();
+    prop_oneof![
+        2 => arb_signature(world.clone(), depth),
+        2 => arb_application(world.clone(), depth),
+        1 => (arb_application(world.clone(), depth), arb_application(world, depth)).prop_map(
+            move |(a, b)| with_scratch(|scratch| meet_world.types.signature_meet(scratch, &[a, b]))
+        ),
+    ]
+    .boxed()
+}
+
+/// A drawn signature with each of its head parameters pinned at a ground type or left open — the
+/// signature itself where it pins none.
+fn arb_application(world: World, depth: u32) -> BoxedStrategy<KType> {
+    let grounds = world.grounds();
+    let picks = prop::collection::vec(prop::option::of(0..grounds.len()), 2);
+    (arb_signature(world.clone(), depth), picks)
+        .prop_map(move |(signature, picks)| {
+            let TypeNode::Signature { schema, .. } = world.types.node(signature) else {
+                unreachable!("a drawn signature is one");
+            };
+            let pins: Vec<(BinderSymbol, KType)> = schema
+                .parameters
+                .iter()
+                .zip(picks)
+                .filter_map(|((name, _), pick)| {
+                    pick.map(|pick| (BinderSymbol::Type(*name), grounds[pick]))
+                })
+                .collect();
+            with_scratch(|scratch| world.types.signature_apply(scratch, signature, &pins))
+        })
+        .boxed()
 }
 
 /// An interface with a handful of members of each kind: a declared signature over head parameters

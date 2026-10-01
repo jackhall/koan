@@ -12,7 +12,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::node::TypeNode;
-use crate::type_lattice::order::is_subtype_of;
+use crate::type_lattice::order::fits;
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, select_by_class};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_name;
@@ -269,7 +269,7 @@ fn pair_prefers_one_variable_to_two() {
     );
 }
 
-/// The order's clause over static types: a later class reads an earlier variable at its reach
+/// *Fits* over static types: a later class reads an earlier variable at its reach
 /// interval, so `PAIR` in written order refuses a candidate whose second slot a call may fill with
 /// a type the first did not carry, and `APPLY` admits one whose second slot lies above the first's
 /// contravariant contribution.
@@ -277,7 +277,7 @@ fn pair_prefers_one_variable_to_two() {
 fn a_later_class_reads_an_earlier_variable_at_its_interval() {
     let bump = Bump::new();
     let world = World::new(&bump);
-    let below = |a, b| is_subtype_of(&world.types, world.region, a, b);
+    let below = |a, b| fits(&world.types, world.region, a, b);
     let number_or_str = world.union(&[KType::NUMBER, KType::STR]);
     let pair = |group: &[&str], x, y, classes: &[u8]| {
         world.head_to(

@@ -23,13 +23,10 @@ fn a_recorded_verdict_reads_back() {
     let types = TypeRegistry::in_region(&bump);
     assert_eq!(types.verdict(key(1), key(2), Relation::Subtype), None);
     types.record_verdict(key(1), key(2), Relation::Subtype, true);
-    types.record_verdict(key(1), key(2), Relation::SigSatisfies, false);
+    types.record_verdict(key(1), key(2), Relation::Fits, false);
     types.record_verdict(key(2), key(1), Relation::Subtype, false);
     assert_eq!(types.verdict(key(1), key(2), Relation::Subtype), Some(true));
-    assert_eq!(
-        types.verdict(key(1), key(2), Relation::SigSatisfies),
-        Some(false)
-    );
+    assert_eq!(types.verdict(key(1), key(2), Relation::Fits), Some(false));
     assert_eq!(
         types.verdict(key(2), key(1), Relation::Subtype),
         Some(false)
@@ -49,7 +46,7 @@ fn a_colliding_key_never_answers_for_another() {
         let read = types.verdict(key(subject), key(candidate), Relation::Subtype);
         assert!(read.is_none() || read == Some(verdict));
     }
-    assert_eq!(types.verdict(key(1), key(2), Relation::SigSatisfies), None);
+    assert_eq!(types.verdict(key(1), key(2), Relation::Fits), None);
 }
 
 #[test]

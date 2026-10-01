@@ -1,7 +1,7 @@
 //! Substitution: of a binder's own variables, of lexical levels, of a signature's head parameters,
 //! and of the reads that replace a variable by one of its ends.
 //!
-//! Every walk here is a [`unary`](super::walk::unary) instance: a leaf rule plus descent knobs.
+//! Every walk here is a [`unary`](super::walk::unary) instance: a leaf rule plus the union door.
 //! Interning is insert-if-absent on a content-addressed table and a substitution that binds nothing
 //! returns its input handle, so a walk costs one intern per changed composite.
 
@@ -15,7 +15,7 @@ use super::schema::{Members, member};
 use super::shape::DispatchTokenElement;
 use super::unify::Interval;
 use super::walk::Variance;
-use super::walk::unary::{LEAF, Rebuild, UnionDoor, Visit, rebuild, visit};
+use super::walk::unary::{Rebuild, UnionDoor, Visit, rebuild, visit};
 
 /// The knobs every walk here but the seal's takes: rebuilt unions canonicalize.
 const CANONICAL: Rebuild = Rebuild {
@@ -285,7 +285,7 @@ pub(super) fn collect_siblings(
     kt: KType,
     out: &mut BumpVec<'_, usize>,
 ) {
-    visit(types, scratch, kt, LEAF, &mut |_, node, _| match *node {
+    visit(types, scratch, kt, &mut |_, node, _| match *node {
         TypeNode::Sibling(index) => {
             out.push(index);
             Visit::Skip

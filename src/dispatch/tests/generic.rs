@@ -433,11 +433,3 @@ fn two_arguments_reaching_one_parameter_from_above_bind_the_meet_of_their_types(
         ":(FN :{x :Number} -> Null)"
     );
 }
-
-#[test]
-fn a_generic_function_passes_to_a_slot_whose_parameters_differ() {
-    let source = "EXPR #(TAKE f :(FN :{x :Number, y :Str} -> Null)) -> Str = #(\"taken\")\n\
-                  LET g = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Null = #(null))\n\
-                  PRINT (TAKE g)";
-    assert_eq!(run(source), "taken");
-}

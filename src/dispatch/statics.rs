@@ -51,9 +51,8 @@ use crate::scope::{
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, Interval, KType, Record, Side, TypeNode, TypeRegistry, Variance, Verdict,
-    admits_with, bound_above, class_at_least, instantiate_quantified, intervals, is_subtype_of,
-    join_iter, judge_by_class, meet, quantifier_bounds, read_through, select_by_class,
-    shape_return,
+    admits_with, bound_above, class_at_least, fits, instantiate_quantified, intervals, join_iter,
+    judge_by_class, meet, quantifier_bounds, read_through, select_by_class, shape_return,
 };
 use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
 
@@ -489,7 +488,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 at: node.source,
             });
         }
-        if is_subtype_of(types, scratch, typed.upper, ascribed) {
+        if fits(types, scratch, typed.upper, ascribed) {
             self.chain[level].settled.push(Site::of_node(node));
         }
         Ok(retyped_to(types, ascribed))

@@ -20,8 +20,8 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Interval, KType, Side, TypeNode, TypeRegistry, bound_above, is_subtype_of, join_iter,
-    read_through, shape_return, shape_slots,
+    Interval, KType, Side, TypeNode, TypeRegistry, bound_above, fits, join_iter, read_through,
+    shape_return, shape_slots,
 };
 use crate::values::record_type;
 
@@ -118,7 +118,7 @@ fn outside(
     let lower = read_through(types, scratch, argument.lower, Side::Below, &mut |node| {
         node.rigid_interval()
     });
-    !is_subtype_of(types, scratch, lower, bound_above(types, scratch, needed))
+    !fits(types, scratch, lower, bound_above(types, scratch, needed))
 }
 
 /// The type each slot of `native`'s call needs: its declared slot, narrowed by a rule of its own

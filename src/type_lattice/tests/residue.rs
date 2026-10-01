@@ -13,9 +13,9 @@ use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::lattice::{join, meet};
 use crate::type_lattice::node::{NodeSchema, TypeNode};
-use crate::type_lattice::order::is_subtype_of;
+use crate::type_lattice::order::{fits, is_subtype_of};
 use crate::type_lattice::record::Record;
-use crate::type_lattice::registry::TypeRegistry;
+use crate::type_lattice::registry::{Relation, TypeRegistry};
 use crate::type_lattice::render::display_name;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin, shape_slots};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
@@ -192,11 +192,11 @@ fn a_solve_fails_only_where_its_pair_denotes_nothing() {
     );
 }
 
-/// The item's chain through a joined instance: a function generic over both its parameters lies
-/// under its instance at `Number | Str`, which lies under a function taking a number and a string —
-/// and the order reaches the last from the first in one step.
+/// The item's chain through a joined instance: a function generic over both its parameters fits
+/// its instance at `Number | Str`, which lies under a function taking a number and a string — and
+/// *fits* reaches the last from the first in one step. The order relates only the last two.
 #[test]
-fn the_order_closes_through_a_joined_instance() {
+fn fits_closes_through_a_joined_instance() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
@@ -220,9 +220,10 @@ fn the_order_closes_through_a_joined_instance() {
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let joined = takes(&[], number_or_str, number_or_str);
     let split = takes(&[], KType::NUMBER, KType::STR);
-    assert!(is_subtype_of(&types, region, generic, joined));
+    assert!(fits(&types, region, generic, joined));
     assert!(is_subtype_of(&types, region, joined, split));
-    assert!(is_subtype_of(&types, region, generic, split));
+    assert!(fits(&types, region, generic, split));
+    assert!(!is_subtype_of(&types, region, generic, joined));
 }
 
 /// Admit each of `arguments` into its slot of `slots` through one collector bounded by `bounds`,
@@ -446,13 +447,14 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         .handle;
     assert_eq!(forward, reversed);
 
-    // The order instantiates: the quantified identity is below every monomorphic identity, and
-    // below a quantified function that promises less about its return.
+    // *Fits* instantiates: the quantified identity fits every monomorphic identity, and a quantified
+    // function that promises less about its return. The order relates neither pair.
     let quantified_identity = identity(&as_elt, variable);
     let on_numbers = types
         .function_type(region, &[], &[], &[(x, KType::NUMBER)], KType::NUMBER)
         .handle;
-    assert!(is_subtype_of(
+    assert!(fits(&types, region, quantified_identity, on_numbers));
+    assert!(!is_subtype_of(
         &types,
         region,
         quantified_identity,
@@ -467,7 +469,8 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
     let to_any = types
         .function_type(region, &[elt], &[KType::ANY], &[(x, variable)], KType::ANY)
         .handle;
-    assert!(is_subtype_of(&types, region, quantified_identity, to_any));
+    assert!(fits(&types, region, quantified_identity, to_any));
+    assert!(!is_subtype_of(&types, region, quantified_identity, to_any));
 }
 
 /// No law: which family top a node kind lies under is a definition, not a property — the family
@@ -775,7 +778,7 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
 
 /// No law: the unifier's carried-variable rule is covered by a property, but the solution it
 /// reaches is a worked example. `Y` bounded by `LIST OF Number` fills `LIST OF X`, solving `X` to
-/// `Number` — and that closes the order's transitivity through a monomorphic instance.
+/// `Number` — and that closes *fits*' transitivity through a monomorphic instance.
 #[test]
 fn a_carried_variable_fills_what_its_bound_fills() {
     let symbols = SymbolInterner::new();
@@ -803,8 +806,9 @@ fn a_carried_variable_fills_what_its_bound_fills() {
         Ok(vec![KType::NUMBER])
     );
 
-    // `FOR ALL (X) FN :{y :(LIST OF X) z :(LIST OF X)} -> Null` ≤ the `Number` instance ≤
-    // `FOR ALL (Y UNDER :(LIST OF Number)) FN :{y :Y z :Y} -> Null`, and the first ≤ the third.
+    // `FN FOR ALL #[Elt] :{y :(LIST OF Elt) z :(LIST OF Elt)} -> Null` fits the `Number` instance,
+    // which fits `FN FOR ALL #{Held: :(LIST OF Number)} :{y :Held z :Held} -> Null`, and the first
+    // fits the third.
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let z = BinderSymbol::declared("z", &symbols).expect("a bindable token");
     let x_name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
@@ -858,9 +862,9 @@ fn a_carried_variable_fills_what_its_bound_fills() {
         Ok(vec![KType::NUMBER])
     );
 
-    assert!(is_subtype_of(&types, region, each_list, on_numbers));
-    assert!(is_subtype_of(&types, region, on_numbers, each_bounded));
-    assert!(is_subtype_of(&types, region, each_list, each_bounded));
+    assert!(fits(&types, region, each_list, on_numbers));
+    assert!(fits(&types, region, on_numbers, each_bounded));
+    assert!(fits(&types, region, each_list, each_bounded));
 }
 
 /// No law: the regression the solution law's sampler found. A carried deferred return lies under
@@ -1090,4 +1094,77 @@ fn a_tie_under_an_asked_member_still_fits() {
     assert!(sig_fits(&types, region, m, wide).is_ok());
     assert!(sig_fits(&types, region, wide, narrow).is_ok());
     assert!(sig_fits(&types, region, m, narrow).is_ok());
+}
+
+/// No law: the item's worked spellings of the two relations. The order compares applications by
+/// their pins and two quantified function types by handle; *fits* solves where the order will not,
+/// and records its verdict under its own relation.
+#[test]
+fn the_order_never_solves_and_fits_does() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let below = |a, b| is_subtype_of(&types, region, a, b);
+
+    // `Stack WITH {Elt = Number}` lies under `Stack`; its `Str` application is unordered with it,
+    // and the meet of the two lies under each.
+    let push = KeywordSymbol::declared("PUSH", &symbols).expect("a keyword token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let parameter = types.parameter(elt, KType::ANY, None);
+    let stack = keyworded(
+        &types,
+        region,
+        false,
+        &[(elt, parameter)],
+        &[head(&types, region, push, parameter, types.list(parameter))],
+    );
+    let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
+    let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));
+    assert!(below(numbers, stack));
+    assert!(!below(stack, numbers));
+    assert!(!below(numbers, strs) && !below(strs, numbers));
+    let both = meet(&types, region, numbers, strs);
+    assert!(below(both, numbers) && below(both, strs));
+
+    // `∀Elt :{x :Elt, y :Elt} -> Elt` and `∀A B :{x :A, y :B} -> A | B` are unordered, and the
+    // first fits the second at its instance over `A | B`.
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
+    let left = TypeSymbol::declared("Left", &symbols).expect("a Type token");
+    let right = TypeSymbol::declared("Right", &symbols).expect("a Type token");
+    let (first, second) = (
+        types.quantified(0, KType::ANY),
+        types.quantified(1, KType::ANY),
+    );
+    let same = types
+        .function_type(
+            region,
+            &[elt],
+            &[KType::ANY],
+            &[(x, first), (y, first)],
+            first,
+        )
+        .handle;
+    let either = types
+        .function_type(
+            region,
+            &[left, right],
+            &[KType::ANY, KType::ANY],
+            &[(x, first), (y, second)],
+            types.union_of(region, &[first, second]),
+        )
+        .handle;
+    assert!(!below(same, either) && !below(either, same));
+    assert!(fits(&types, region, same, either));
+
+    // One `fits` leaves its verdict under its own relation, apart from the order's.
+    assert_eq!(
+        types.verdict(same.digest(), either.digest(), Relation::Fits),
+        Some(true)
+    );
+    assert_eq!(
+        types.verdict(same.digest(), either.digest(), Relation::Subtype),
+        Some(false)
+    );
 }

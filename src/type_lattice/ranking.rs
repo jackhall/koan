@@ -11,7 +11,7 @@
 //! as the arguments.
 //!
 //! [`class_at_least`] is the per-class specificity verdict dispatch ranks by, recorded in the
-//! registry's verdict table under [`Relation::ClassAtLeast`]. It and the order's clause differ from
+//! registry's verdict table under [`Relation::ClassAtLeast`]. It and *fits*' shape clause differ from
 //! admission at a call in how an earlier class's outcome reads later: over static types, each
 //! stands for every type a call carries under it, so a class that admitted fixes each variable it
 //! solved to an **interval** of bindings, read later as a lexical variable between its ends
@@ -31,7 +31,7 @@ use crate::symbols::TypeSymbol;
 use super::handle::KType;
 use super::lattice::meet;
 use super::node::TypeNode;
-use super::order::is_subtype_of;
+use super::order::fits;
 use super::registry::{Relation, TypeRegistry};
 use super::shape::{DispatchTokenElement, class_of};
 use super::substitute::{Side, bound_above, read_through};
@@ -326,7 +326,7 @@ pub fn judge_by_class<'s>(
                 &mut |node| node.rigid_interval(),
             );
             if meet(types, scratch, greatest, upper) == KType::NEVER
-                || !is_subtype_of(types, scratch, lower, greatest)
+                || !fits(types, scratch, lower, greatest)
             {
                 return Judged {
                     verdict: Verdict::Never,
@@ -364,13 +364,13 @@ pub fn judge_by_class<'s>(
                     },
                 );
             always = if !types.contains_quantified(least) {
-                is_subtype_of(types, scratch, arguments[slot].upper, least)
+                fits(types, scratch, arguments[slot].upper, least)
             } else if let TypeNode::Quantified { index, bound } = types.node(least)
                 && own(index)
                 && !(0..walk.slots.len())
                     .any(|other| other != slot && in_class(other) && names(other, index))
             {
-                is_subtype_of(types, scratch, arguments[slot].upper, bound)
+                fits(types, scratch, arguments[slot].upper, bound)
             } else {
                 false
             };

@@ -1,14 +1,18 @@
-//! `is_subtype_of` — the one order, and the two readings written over it.
+//! `is_subtype_of` — the one order — and *fits*, the relation a question reads.
 //!
-//! One reflexive partial order, memoized through the registry's verdict edges. There are no
-//! tie-break tiers: nothing ranks a token leaf against `Str`, a nominal slot against a kind slot,
-//! or a constrained slot against an unconstrained one. Those are not subtype facts, and a dispatch
-//! that needs to choose between two unrelated slot types has an ambiguity, not a verdict.
+//! Both are reflexive, memoized through the registry's verdict edges under their own
+//! [`Relation`], and share one descent, [`Order`], which differs between them at its leaf alone.
+//! The **order** never solves: a quantified binder lies under only itself, and two signature types
+//! compare by their applications' pins (R-5). It is what every construction reads — a join, a meet,
+//! a union's or an overload set's subsumption. ***Fits*** solves: a quantified binder fits another
+//! when some instantiation of its group puts the instance under the other, and a module's
+//! signature fits a declared one when its members do. It contains the order, and it is what every
+//! question reads — whether a value fills a slot, a return lies within its contract, a bound holds.
 //!
-//! **The guard set is here and only here.** Every relation that reads the order — the three
-//! `slot_*` compositions, the unifier's leaf, the specificity verdict, the signature relation's
-//! value-slot rule — reaches it through [`is_subtype_of`], so there is no second descent to keep in
-//! step with this one.
+//! There are no tie-break tiers: nothing ranks a token leaf against `Str`, a nominal slot against
+//! a kind slot, or a constrained slot against an unconstrained one. Those are not subtype facts,
+//! and a dispatch that needs to choose between two unrelated slot types has an ambiguity, not a
+//! verdict.
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
@@ -17,7 +21,7 @@ use super::handle::KType;
 use super::node::TypeNode;
 use super::registry::{Relation, TypeRegistry};
 use super::sig_relations::{admits_function, admits_shape, sig_fits};
-use super::signatures::is_signature_type;
+use super::signatures::{applications, applications_under, is_signature_type};
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 
@@ -35,14 +39,13 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   keywords, contravariant in its slots and covariant in its return.
 /// - A union is below `b` when every member is; a non-union is below a union when it is below some
 ///   member.
-/// - A signature type is below another when [`sig_fits`] accepts the pair.
+/// - A signature type is below another when each application of the other lies above one of its
+///   own: the same signature, pinning at least the other's pins, each at an equal type.
 /// - A **rigid variable** — `Quantified`, `Lexical` or `Parameter` — is a nominal identity
 ///   between its lower end (`Never` but for a lexical variable's) and its bound: below it lie
 ///   itself and whatever lies under its lower end, above it itself and everything above its bound,
 ///   a union included. The clauses agree because both ends are variable-free types.
-/// - A quantified shape is below another shape, and a quantified function below another function,
-///   when some instantiation of its variables, each under its bound, puts the instance below the
-///   other with the other's variables rigid.
+/// - A quantified shape or function type lies under only itself.
 /// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other.
 /// - Every other pair is unrelated.
 pub fn is_subtype_of(
@@ -51,13 +54,44 @@ pub fn is_subtype_of(
     a: KType,
     b: KType,
 ) -> bool {
+    related(types, scratch, a, b, Relation::Subtype)
+}
+
+/// Whether `a` fits `b`: the order, but for two clauses that solve. A quantified shape fits another
+/// shape, and a quantified function another function, when some instantiation of its variables,
+/// each under its bound, puts the instance under the other with the other's variables rigid. A
+/// signature type fits another when [`sig_fits`] accepts the pair. Everything the order relates
+/// fits.
+pub fn fits(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> bool {
+    related(types, scratch, a, b, Relation::Fits)
+}
+
+/// Whether the type a position carries fills the slot declared there — *fits*, read from the
+/// slot's side.
+pub fn satisfied_by(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    slot: KType,
+    carried: KType,
+) -> bool {
+    fits(types, scratch, carried, slot)
+}
+
+/// `relation` — the order or *fits* — over `a` and `b`, through the verdict cache.
+fn related(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: KType,
+    b: KType,
+    relation: Relation,
+) -> bool {
     if a == b || b == KType::ANY || a == KType::NEVER {
         return true;
     }
     if a == KType::ANY || b == KType::NEVER {
         return false;
     }
-    if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::Subtype) {
+    if let Some(known) = types.verdict(a.digest(), b.digest(), relation) {
         return known;
     }
     let verdict = lockstep(
@@ -66,37 +100,21 @@ pub fn is_subtype_of(
         a,
         b,
         Variance::Co,
-        &mut Order { root: true },
+        &mut Order {
+            root: true,
+            relation,
+        },
     );
-    types.record_verdict(a.digest(), b.digest(), Relation::Subtype, verdict);
+    types.record_verdict(a.digest(), b.digest(), relation, verdict);
     verdict
 }
 
-/// The strict order: unequal handles and a subtype.
-pub fn is_more_specific_than(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    a: KType,
-    b: KType,
-) -> bool {
-    a != b && is_subtype_of(types, scratch, a, b)
-}
-
-/// Whether the type a position carries fills the slot declared there — the order, read from the
-/// slot's side.
-pub fn satisfied_by(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    slot: KType,
-    carried: KType,
-) -> bool {
-    is_subtype_of(types, scratch, carried, slot)
-}
-
-/// The order as a [`Lockstep`] instance. `root` is what routes every nested pair back through
-/// [`is_subtype_of`], so each one is memoized rather than only the pair the caller asked about.
+/// The order or *fits* as a [`Lockstep`] instance. `root` is what routes every nested pair back
+/// through [`related`] under the same `relation`, so each one is memoized rather than only the
+/// pair the caller asked about.
 struct Order {
     root: bool,
+    relation: Relation,
 }
 
 impl Lockstep for Order {
@@ -114,8 +132,8 @@ impl Lockstep for Order {
             // A contravariant position asks the reverse question, which is the same relation with
             // the operands swapped.
             return Some(match v {
-                Variance::Co => is_subtype_of(types, scratch, a, b),
-                Variance::Contra => is_subtype_of(types, scratch, b, a),
+                Variance::Co => related(types, scratch, a, b, self.relation),
+                Variance::Contra => related(types, scratch, b, a, self.relation),
             });
         }
         self.root = false;
@@ -125,14 +143,16 @@ impl Lockstep for Order {
         if let Some(bound) = na.rigid_bound() {
             return Some(
                 matches!(types.node(b), TypeNode::Union { members } if members.contains(&a))
-                    || is_subtype_of(types, scratch, bound, b),
+                    || related(types, scratch, bound, b, self.relation),
             );
         }
         // A union is below `b` when every member is below `b` whole, for the same reason.
         match na {
-            TypeNode::Union { members } => {
-                Some(members.iter().all(|x| is_subtype_of(types, scratch, *x, b)))
-            }
+            TypeNode::Union { members } => Some(
+                members
+                    .iter()
+                    .all(|x| related(types, scratch, *x, b, self.relation)),
+            ),
             _ => None,
         }
     }
@@ -149,27 +169,30 @@ impl Lockstep for Order {
         // A rigid variable's down-set is checked first: below one lie only itself — which the
         // caller's equality guard already answered — and whatever lies under its lower end.
         if let Some(lower) = nb.rigid_lower() {
-            return is_subtype_of(types, scratch, a, lower);
+            return related(types, scratch, a, lower, self.relation);
         }
+        let solves = self.relation == Relation::Fits;
         if is_signature_type(types, a) && is_signature_type(types, b) {
-            if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::SigSatisfies) {
-                return known;
-            }
-            let verdict = sig_fits(types, scratch, a, b).is_ok();
-            types.record_verdict(a.digest(), b.digest(), Relation::SigSatisfies, verdict);
-            return verdict;
+            return if solves {
+                sig_fits(types, scratch, a, b).is_ok()
+            } else {
+                let lower = applications(types, scratch, a).expect("a signature type");
+                let upper = applications(types, scratch, b).expect("a signature type");
+                applications_under(&lower, &upper)
+            };
         }
         match (na, nb) {
             (TypeNode::OfKind(x), TypeNode::OfKind(y)) => y.admits(x),
-            // A quantified shape is below another when some instantiation of its group puts every
-            // slot and the return under the other's, with the other's rigid.
+            // A quantified shape fits another when some instantiation of its group puts every
+            // slot and the return under the other's, with the other's rigid. In the order it lies
+            // under only itself, which the caller's equality guard already answered.
             (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
-                admits_shape(types, scratch, a, b)
+                solves && admits_shape(types, scratch, a, b)
             }
             // The same clause for a pair of function types, related name by name. Only a pair
             // where one quantifies reaches here — two monomorphic ones pair structurally.
             (TypeNode::KFunction { .. }, TypeNode::KFunction { .. }) => {
-                admits_function(types, scratch, a, b)
+                solves && admits_function(types, scratch, a, b)
             }
             // An application lies under the family it applies: a bare family stands for every
             // application of it. A pre-seal sibling has the profile of the member it becomes.

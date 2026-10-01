@@ -14,7 +14,7 @@ use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::lattice::{join, join_iter, meet};
 use crate::type_lattice::node::TypeNode;
-use crate::type_lattice::order::{is_more_specific_than, is_subtype_of, satisfied_by};
+use crate::type_lattice::order::{fits, is_subtype_of, satisfied_by};
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{
@@ -23,13 +23,14 @@ use crate::type_lattice::schema::{
 };
 use crate::type_lattice::shape::Specificity;
 use crate::type_lattice::sig_relations::{admits_shape, shape_specificity, sig_fits};
+use crate::type_lattice::signatures::{applications, applications_under, is_signature_type};
 use crate::type_lattice::substitute::{
     Side, bound_above, erase_quantified, instantiate_quantified, quantifier_bounds, read_through,
     substitute_parameters, substitute_quantified,
 };
 use crate::type_lattice::unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 use crate::type_lattice::walk::Variance;
-use crate::type_lattice::walk::unary::{Descent, LEAF, Step, Visit, visit};
+use crate::type_lattice::walk::unary::{Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
 use super::generators::{
@@ -72,29 +73,6 @@ fn function() -> BoxedStrategy<KType> {
     arb_function_type(world(), 3)
 }
 
-/// Whether `kt` holds a quantified binder anywhere, a signature's members included. The laws stated
-/// by handle skip such a draw: two binders can admit each other without being one handle
-/// (README § Concrete types and binders).
-fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> bool {
-    let descent = Descent {
-        signature: Step::Through,
-        set_member: Step::Leaf,
-    };
-    visit(types, scratch, kt, descent, &mut |_, node, _| {
-        if node.binds_quantifiers() {
-            Visit::Stop
-        } else {
-            Visit::Descend
-        }
-    })
-}
-
-/// Whether `a` and `b` lie below each other — one handle over concrete types, and possibly two
-/// over binders.
-fn equivalent(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> bool {
-    is_subtype_of(types, scratch, a, b) && is_subtype_of(types, scratch, b, a)
-}
-
 /// The binary laws take the whole of whatever depth the tier asks for: the space two generated
 /// types range over is the widest any law here draws from, and a thin sweep of it proves little.
 fn binary() -> ProptestConfig {
@@ -118,33 +96,15 @@ fn ternary() -> ProptestConfig {
 proptest! {
     #![proptest_config(binary())]
 
-    /// By handle over binder-free types; [`join_and_meet_commute_up_to_equivalence`] covers the
-    /// rest.
     #[test]
     fn join_and_meet_are_commutative_and_idempotent(a in one(), b in one()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if holds_binder(&types, scratch, a) || holds_binder(&types, scratch, b) {
-            return Ok(());
-        }
         prop_assert_eq!(join(&types, scratch, a, b), join(&types, scratch, b, a));
         prop_assert_eq!(meet(&types, scratch, a, b), meet(&types, scratch, b, a));
         prop_assert_eq!(join(&types, scratch, a, a), a);
         prop_assert_eq!(meet(&types, scratch, a, a), a);
-    }
-
-    #[test]
-    fn join_and_meet_commute_up_to_equivalence(a in one(), b in one()) {
-        let types = registry();
-        let bump = Bump::new();
-        let scratch = &bump;
-        let (ab, ba) = (join(&types, scratch, a, b), join(&types, scratch, b, a));
-        prop_assert!(equivalent(&types, scratch, ab, ba), "the joins differ");
-        let (ab, ba) = (meet(&types, scratch, a, b), meet(&types, scratch, b, a));
-        prop_assert!(equivalent(&types, scratch, ab, ba), "the meets differ");
-        prop_assert!(equivalent(&types, scratch, join(&types, scratch, a, a), a));
-        prop_assert!(equivalent(&types, scratch, meet(&types, scratch, a, a), a));
     }
 
     #[test]
@@ -169,16 +129,11 @@ proptest! {
 proptest! {
     #![proptest_config(ternary())]
 
-    /// By handle over binder-free types; [`join_and_meet_associate_up_to_equivalence`] covers the
-    /// rest.
     #[test]
     fn join_and_meet_are_associative(a in small(), b in small(), c in small()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if [a, b, c].into_iter().any(|kt| holds_binder(&types, scratch, kt)) {
-            return Ok(());
-        }
         prop_assert_eq!(
             join(&types, scratch, join(&types, scratch, a, b), c),
             join(&types, scratch, a, join(&types, scratch, b, c))
@@ -189,18 +144,6 @@ proptest! {
         );
     }
 
-    #[test]
-    fn join_and_meet_associate_up_to_equivalence(a in small(), b in small(), c in small()) {
-        let types = registry();
-        let bump = Bump::new();
-        let scratch = &bump;
-        let left = join(&types, scratch, join(&types, scratch, a, b), c);
-        let right = join(&types, scratch, a, join(&types, scratch, b, c));
-        prop_assert!(equivalent(&types, scratch, left, right), "the joins differ");
-        let left = meet(&types, scratch, meet(&types, scratch, a, b), c);
-        let right = meet(&types, scratch, a, meet(&types, scratch, b, c));
-        prop_assert!(equivalent(&types, scratch, left, right), "the meets differ");
-    }
 }
 
 // --- 2. The order ---
@@ -216,18 +159,13 @@ proptest! {
         prop_assert!(is_subtype_of(&types, scratch, a, a));
         prop_assert!(is_subtype_of(&types, scratch, KType::NEVER, a));
         prop_assert!(is_subtype_of(&types, scratch, a, KType::ANY));
-        prop_assert!(!is_more_specific_than(&types, scratch, a, a));
     }
 
-    /// By handle over binder-free types: two binders can admit each other and stay two handles.
     #[test]
     fn the_order_is_antisymmetric(a in one(), b in one()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if holds_binder(&types, scratch, a) || holds_binder(&types, scratch, b) {
-            return Ok(());
-        }
         if is_subtype_of(&types, scratch, a, b) && is_subtype_of(&types, scratch, b, a) {
             prop_assert_eq!(a, b);
         }
@@ -241,8 +179,6 @@ proptest! {
         let below = is_subtype_of(&types, scratch, a, b);
         prop_assert_eq!(below, join(&types, scratch, a, b) == b);
         prop_assert_eq!(below, meet(&types, scratch, a, b) == a);
-        prop_assert_eq!(below, satisfied_by(&types, scratch, b, a));
-        prop_assert_eq!(is_more_specific_than(&types, scratch, a, b), a != b && below);
     }
 
     #[test]
@@ -258,6 +194,40 @@ proptest! {
                 is_subtype_of(&types, scratch, a, b),
                 a == b || is_subtype_of(&types, scratch, a, lower)
             );
+        }
+    }
+
+    #[test]
+    fn fits_is_reflexive(a in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        prop_assert!(fits(&types, scratch, a, a));
+    }
+
+    #[test]
+    fn fits_contains_the_order(a in one(), b in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        if is_subtype_of(&types, scratch, a, b) {
+            prop_assert!(fits(&types, scratch, a, b));
+            prop_assert!(satisfied_by(&types, scratch, b, a));
+        }
+    }
+
+    /// Two distinct function types, or two distinct shapes, one of which quantifies, are unordered:
+    /// the order never solves.
+    #[test]
+    fn a_quantified_binder_lies_under_only_itself(
+        (a, b) in prop_oneof![(function(), function()), (shape(), shape())],
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let binds = |kt: KType| types.node(kt).binds_quantifiers();
+        if a != b && (binds(a) || binds(b)) {
+            prop_assert!(!is_subtype_of(&types, scratch, a, b));
         }
     }
 
@@ -286,21 +256,31 @@ proptest! {
             prop_assert!(is_subtype_of(&types, scratch, a, c));
         }
     }
+
+    #[test]
+    fn fits_is_transitive(a in small(), b in small(), c in small()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        if fits(&types, scratch, a, b) && fits(&types, scratch, b, c) {
+            prop_assert!(fits(&types, scratch, a, c));
+        }
+    }
 }
 
 proptest! {
     #![proptest_config(binary())]
 
-    /// The chains [`the_order_is_transitive`] almost never draws: a binder, its instance at a
-    /// least instance, and a type whose two positions take that instance apart.
+    /// The chains [`fits_is_transitive`] almost never draws: a binder, its instance at a least
+    /// instance, and a type whose two positions take that instance apart.
     #[test]
-    fn the_order_is_transitive_through_an_instance((a, b, c) in arb_instance_chain(world())) {
+    fn fits_is_transitive_through_an_instance((a, b, c) in arb_instance_chain(world())) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        prop_assert!(is_subtype_of(&types, scratch, a, b), "the binder lies below its instance");
-        prop_assert!(is_subtype_of(&types, scratch, b, c), "the instance lies below the split");
-        prop_assert!(is_subtype_of(&types, scratch, a, c), "the binder lies below the split");
+        prop_assert!(fits(&types, scratch, a, b), "the binder fits its instance");
+        prop_assert!(fits(&types, scratch, b, c), "the instance fits the split");
+        prop_assert!(fits(&types, scratch, a, c), "the binder fits the split");
     }
 }
 
@@ -398,13 +378,13 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let quantified = visit(&types, scratch, a, LEAF, &mut |_, node, _| match node {
+        let quantified = visit(&types, scratch, a, &mut |_, node, _| match node {
             // Either binder's group is its own, so nothing under one is free here.
             _ if node.binds_quantifiers() => Visit::Skip,
             TypeNode::Quantified { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
-        let rigid = visit(&types, scratch, a, LEAF, &mut |_, node, _| match node {
+        let rigid = visit(&types, scratch, a, &mut |_, node, _| match node {
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
             | TypeNode::Parameter { .. } => Visit::Stop,
@@ -451,7 +431,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        prop_assume!(!visit(&types, scratch, a, LEAF, &mut |_, node, _| {
+        prop_assume!(!visit(&types, scratch, a, &mut |_, node, _| {
             if node.binds_quantifiers() { Visit::Stop } else { Visit::Descend }
         }));
         let above = bound_above(&types, scratch, a);
@@ -496,7 +476,7 @@ proptest! {
         let scratch = &bump;
         let stored = quantifier_bounds(&types, a);
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
-        visit(&types, scratch, a, LEAF, &mut |_, node, context| match *node {
+        visit(&types, scratch, a, &mut |_, node, context| match *node {
             TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
                 if let Some(slot) = carried.get_mut(index) {
                     *slot = Some(bound);
@@ -538,7 +518,7 @@ proptest! {
         let scratch = &bump;
         let stored = quantifier_bounds(&types, a);
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
-        visit(&types, scratch, a, LEAF, &mut |_, node, context| match *node {
+        visit(&types, scratch, a, &mut |_, node, context| match *node {
             TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
                 if let Some(slot) = carried.get_mut(index) {
                     *slot = Some(bound);
@@ -649,7 +629,7 @@ proptest! {
             && shape_quantifiers(a, &types).is_empty()
             && shape_quantifiers(b, &types).is_empty()
             && shape_keys_equal(a, b, &types);
-        if !comparable || !is_subtype_of(&types, scratch, a, b) {
+        if !comparable || !fits(&types, scratch, a, b) {
             return Ok(());
         }
         // `a ≤ b` on monomorphic shapes means every position `b` accepts, `a` accepts too.
@@ -762,7 +742,7 @@ proptest! {
             Ok(solution) => solution,
             // A solve fails only where the set its pair denotes is empty.
             Err(UnifyFailure::Disagree { lower, upper, .. }) => {
-                prop_assert!(!is_subtype_of(&types, scratch, lower, upper));
+                prop_assert!(!fits(&types, scratch, lower, upper));
                 return Ok(());
             }
             Err(UnifyFailure::Mismatch) => return Ok(()),
@@ -785,22 +765,19 @@ proptest! {
         for (index, solved) in solution.iter().enumerate() {
             let (lower, upper) = collector.contributions(index);
             let bound = collector.bound(index);
-            let equivalent = |x: KType, y: KType| {
-                is_subtype_of(&types, scratch, x, y) && is_subtype_of(&types, scratch, y, x)
-            };
             // The least instance of the pair: its lower end where a lower contribution reached the
             // variable, and its upper end otherwise. An end is the extremum of its contributions
-            // where they have one — up to equivalence, since two binders may be equivalent handles.
+            // where they have one.
             if !lower.is_empty() {
                 prop_assert_eq!(*solved, join_iter(&types, scratch, lower.iter().copied()));
                 for ceiling in upper.iter().chain([&bound]) {
-                    prop_assert!(is_subtype_of(&types, scratch, *solved, *ceiling));
+                    prop_assert!(fits(&types, scratch, *solved, *ceiling));
                 }
                 let maximum = lower.iter().find(|candidate| {
                     lower.iter().all(|other| is_subtype_of(&types, scratch, *other, **candidate))
                 });
                 if let Some(maximum) = maximum {
-                    prop_assert!(equivalent(*solved, *maximum));
+                    prop_assert_eq!(*solved, *maximum);
                 }
             } else {
                 let met = upper
@@ -813,11 +790,11 @@ proptest! {
                     })
                 });
                 if let Some(minimum) = minimum {
-                    prop_assert!(equivalent(*solved, *minimum));
+                    prop_assert_eq!(*solved, *minimum);
                 }
             }
-            // Every solution lies under its variable's declared bound.
-            prop_assert!(is_subtype_of(&types, scratch, *solved, bound));
+            // Every solution fits its variable's declared bound.
+            prop_assert!(fits(&types, scratch, *solved, bound));
         }
     }
 }
@@ -1121,8 +1098,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let signature = |kt: KType| matches!(types.node(kt), TypeNode::Signature { .. });
-        if !signature(a) || !signature(b) {
+        if !is_signature_type(&types, a) || !is_signature_type(&types, b) {
             return Ok(());
         }
         prop_assert!(sig_fits(&types, scratch, a, a).is_ok());
@@ -1130,6 +1106,23 @@ proptest! {
         let met = meet(&types, scratch, a, b);
         prop_assert!(sig_fits(&types, scratch, met, a).is_ok());
         prop_assert!(sig_fits(&types, scratch, met, b).is_ok());
+    }
+
+    /// For two signature types the order is R-5 over their applications, and nothing solves.
+    #[test]
+    fn the_signature_order_is_its_rule(a in one(), b in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let (Some(lower), Some(upper)) =
+            (applications(&types, scratch, a), applications(&types, scratch, b))
+        else {
+            return Ok(());
+        };
+        prop_assert_eq!(
+            is_subtype_of(&types, scratch, a, b),
+            applications_under(&lower, &upper)
+        );
     }
 
     /// Every interned schema is stored in its canonical order — the invariant that lets every
