@@ -152,6 +152,8 @@ enum Known {
 struct Judgement<'x> {
     candidate: Candidate,
     known: Known,
+    /// Whether the candidate is a `USING … SCOPE` block's surfaced head, whose return is at most.
+    surfaced: bool,
     verdict: Verdict,
     intervals: Option<&'x [Interval]>,
     ruled: Option<Interval>,
@@ -900,6 +902,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 judged.push(Judgement {
                     candidate: *candidate,
                     known,
+                    surfaced: self.surfaced(level, *candidate),
                     verdict,
                     intervals,
                     ruled,
@@ -1016,7 +1019,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// What a judged candidate returns: a builtin's return as its [rule](super::rules) gives it; a
     /// registration's shape's return read through its group's intervals — exactly that return where
     /// the retype makes it so and the solve is the call's, the group empty or every interval a
-    /// point, since its frame retypes its value to it, and at most it otherwise.
+    /// point, since its frame retypes its value to it, and at most it otherwise. A surfaced head's
+    /// return is at most whatever the solve: the module's own definition answers the call, and the
+    /// signature states only a bound on what it returns.
     fn candidate_return(&self, judgement: Judgement<'_>) -> Interval {
         if let Some(ruled) = judgement.ruled {
             return ruled;
@@ -1026,8 +1031,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             Known::Unknown => return under(KType::ANY),
         };
         let returned = self.returned(registered, judgement.intervals);
-        let solved =
-            (judgement.intervals).is_some_and(|all| all.iter().all(|each| each.is_exact()));
+        let solved = !judgement.surfaced
+            && (judgement.intervals).is_some_and(|all| all.iter().all(|each| each.is_exact()));
         if solved {
             retyped_to(self.types, returned)
         } else {
@@ -1112,6 +1117,20 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 .and_then(|member| member.builtin()),
             _ => None,
         }
+    }
+
+    /// Whether `candidate`, read from the shape at `level`, is a `USING … SCOPE` block's surfaced
+    /// head.
+    fn surfaced(&self, level: usize, candidate: Candidate) -> bool {
+        let Candidate::One(coordinate) = candidate else {
+            return false;
+        };
+        self.slot_of(level, coordinate).is_some_and(|(at, slot)| {
+            self.chain[at]
+                .shape
+                .registration(slot)
+                .is_some_and(|registration| registration.surfaced.is_some())
+        })
     }
 
     /// What the load knows of `candidate`'s registered shape, read from the shape at `level`.

@@ -213,7 +213,8 @@ pub enum Which {
 }
 
 /// One registration a body declares: a keyworded definition's function, bound at `slot`, under one
-/// of its bucket keys.
+/// of its bucket keys — or, in a `USING … SCOPE` block, a bodyless head its operand's signature
+/// declares.
 #[derive(Clone, Copy, Debug)]
 pub struct Registration<'graph> {
     pub slot: Slot,
@@ -221,9 +222,26 @@ pub struct Registration<'graph> {
     /// The key as its keywords and slots.
     pub elements: &'graph [KeyElement],
     /// Each slot's dense priority class, in element order: the ranking of the declaration visible
-    /// where the definition is written, an operator's chaining, or written order.
+    /// where the definition is written, an operator's chaining, a surfaced head's own ranking, or
+    /// written order.
     pub classes: &'graph [u8],
     pub which: Which,
+    /// Where a surfaced head is written; `None` for a definition's registration.
+    pub surfaced: Option<&'graph SurfacedHead<'graph>>,
+}
+
+/// A bodyless keyworded head a `USING … SCOPE` operand's signature declares, which the block holds
+/// as a registration of its own: a parameter of the registration channel, typed where the program
+/// loads and bound by nothing at run. Each place is named by how many shapes out from the block it
+/// lies, so the load pass reads it off the chain of shapes it keeps.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfacedHead<'graph> {
+    /// The head's statement in the signature's body.
+    pub head: &'graph KExpression<'graph>,
+    /// The `SIG` declaration's type binder: its shape's hops out, and its slot there.
+    pub signature: (u32, Slot),
+    /// The ascription naming the signature: its shape's hops out, and its type part's site there.
+    pub ascription: (u32, Site),
 }
 
 /// A bucket declaration a body holds, `EXPR #(MOVE 2 TO 1)`: the ranking it gives its key, from

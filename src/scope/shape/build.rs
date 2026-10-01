@@ -2,8 +2,9 @@
 //!
 //! A body is built in four passes over a draft kept in scratch. The binders pass lays out the
 //! declared names and refuses a repeated name or a builtin's, then lays out each definition's
-//! registrations and reads each bucket declaration's ranking, ranking each registration by its
-//! chaining or by the declaration it sees and refusing two rankings of one key that meet. The
+//! registrations — and a `USING … SCOPE` block's surfaced heads, as registration parameters — and
+//! reads each bucket declaration's ranking, ranking each registration by its chaining, its head or
+//! the declaration it sees and refusing two rankings of one key that meet. The
 //! mention pass walks each statement from its root, carrying the class a mention met there would
 //! take, resolving each mention and each keyworded use's candidates as it is met and building each
 //! nested body or arm as a draft of its own on top of the chain of enclosing drafts; a binder or
@@ -39,7 +40,7 @@ use crate::memory::{
 };
 use crate::parse::builtin_shapes::binder::{
     BinderSurface, DeclaredElement, SlotLabel, declared_element, head_run, needed_key, needed_name,
-    needing, slot_label,
+    needing, next_is_type_slot, slot_label,
 };
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
@@ -63,8 +64,8 @@ use super::super::typed::Static;
 use super::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
-    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, TypeExpression,
-    Unit, UnitWork, Which, resolve_here,
+    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead, Target,
+    TypeExpression, Unit, UnitWork, Which, resolve_here,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
 use std::cell::Cell;
@@ -76,7 +77,7 @@ mod surface;
 pub(in crate::scope) use locate::source_within;
 
 use rewrite::{Built, BuiltKind, chained};
-use surface::Surfaced;
+use surface::{Surfaced, SurfacedKey};
 
 /// The names a body binds that no signature writes. The shape builder binds them, and the
 /// elaborator reads an operator's function type over them, so the two cannot disagree.
@@ -448,6 +449,7 @@ struct Registered<'graph> {
     elements: &'graph [KeyElement],
     classes: &'graph [u8],
     which: Which,
+    surfaced: Option<&'graph SurfacedHead<'graph>>,
 }
 
 /// A ranking some statement gives a key, as a statement or a use at the same key sees it.
@@ -668,6 +670,8 @@ struct Builder<'graph, 'x, 'e> {
     /// The quantified parameters of the `USING … SCOPE` body about to be drafted, taken by that
     /// draft.
     quantified: BumpVec<'x, BinderSymbol>,
+    /// The surfaced heads of the `USING … SCOPE` body about to be drafted, taken by that draft.
+    heads: BumpVec<'x, SurfacedKey<'graph>>,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -700,6 +704,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             in_type: 0,
             admits: Admits::Nothing,
             quantified: BumpVec::new_in(scratch),
+            heads: BumpVec::new_in(scratch),
         }
     }
 
@@ -757,7 +762,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .chain
             .last()
             .map_or(u32::MAX, |parent| parent.current.0);
-        let mut draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
+        let heads = std::mem::replace(&mut self.heads, BumpVec::new_in(self.scratch));
+        let mut draft = self.binders(
+            kind,
+            entered_at,
+            parent_statement,
+            (parameters, &heads),
+            &nodes,
+        )?;
         draft.signature = self.signature.take();
         draft.quantified = std::mem::replace(&mut self.quantified, BumpVec::new_in(self.scratch));
         draft.frame = self.frame;
@@ -781,16 +793,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// The binders pass: every parameter at `0` and every statement's name at its position, a
-    /// repeated name and a builtin's name refused in that order; then each statement's registrations
-    /// and bucket declarations, each ranked and checked against every ranking of its key it sees.
-    /// Each parameter comes paired with where the node declaring it is written, which an error
-    /// about it points at.
+    /// repeated name and a builtin's name refused in that order; then each surfaced head's
+    /// registration and each statement's registrations and bucket declarations, each ranked and
+    /// checked against every ranking of its key it sees. Each parameter comes paired with where the
+    /// node declaring it is written, which an error about it points at.
     fn binders(
         &self,
         kind: ShapeKind,
         entered_at: Position,
         parent_statement: u32,
-        parameters: &[(BinderSymbol, SourceRef)],
+        (parameters, heads): (&[(BinderSymbol, SourceRef)], &[SurfacedKey<'graph>]),
         nodes: &[&KExpression<'graph>],
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
         let scratch = self.scratch;
@@ -826,7 +838,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         values.sort_unstable_by_key(|(name, _)| *name);
         types.sort_unstable_by_key(|(name, _)| *name);
-        let (registered, rankings) = self.keyed(kind, nodes)?;
+        let (registered, rankings) = self.keyed(kind, heads, nodes)?;
         let mut registrations = BumpVec::with_capacity_in(registered.len(), scratch);
         registrations.extend(registered.iter().map(|entry| (entry.symbol, entry.at)));
         registrations.sort_unstable_by_key(|(symbol, _)| *symbol);
@@ -884,14 +896,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         })
     }
 
-    /// The keyed half of the binders pass, statement by statement: each definition's registration
-    /// under each of its keys, ranked by its chaining when it is an operator and otherwise by the
-    /// declaration it sees, and each bucket declaration's ranking. Each is refused when it sees
-    /// another ranking of its key, or a builtin overload there, that differs from its own.
+    /// The keyed half of the binders pass: each surfaced head's registration, a parameter ranked as
+    /// its head writes, then statement by statement each definition's registration under each of
+    /// its keys, ranked by its chaining when it is an operator and otherwise by the declaration it
+    /// sees, and each bucket declaration's ranking. Each is refused when it sees another ranking of
+    /// its key, or a builtin overload there, that differs from its own.
     #[allow(clippy::type_complexity)]
     fn keyed(
         &self,
         kind: ShapeKind,
+        heads: &[SurfacedKey<'graph>],
         nodes: &[&KExpression<'graph>],
     ) -> Result<
         (
@@ -903,6 +917,27 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let depth = self.chain.len() as u32;
         let mut registered: BumpVec<'x, Registered<'graph>> = BumpVec::new_in(self.scratch);
         let mut rankings: BumpVec<'x, Ranking<'graph>> = BumpVec::new_in(self.scratch);
+        // A surfaced head writes where a parameter does, under an index no statement takes.
+        for (index, entry) in heads.iter().enumerate() {
+            let (at, source) = (Position::PARAMETER, entry.head.head.source);
+            self.open_key(entry.elements, source)?;
+            let key = KeyElement::key(entry.elements.iter().copied());
+            let classes = match head_run(entry.head.head) {
+                Some(run) => self.head_classes(run),
+                None => self.operator_classes(entry.elements),
+            };
+            let own = (kind, &registered[..], &rankings[..], at);
+            self.agrees(own, key, entry.elements, classes, source)?;
+            registered.push(Registered {
+                symbol: RegistrationSymbol::of(key, depth, (nodes.len() + index) as u32, 0),
+                at,
+                key,
+                elements: entry.elements,
+                classes,
+                which: entry.which,
+                surfaced: Some(entry.head),
+            });
+        }
         for (index, node) in nodes.iter().enumerate() {
             let spine = node.statement_spine();
             let at = Position::statement(index);
@@ -946,6 +981,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         (true, 0) => Which::Unary,
                         (true, _) => Which::Binary,
                     },
+                    surfaced: None,
                 });
             }
         }
@@ -1019,6 +1055,28 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             _ => &[0],
         };
         collect(self.brand.writer(), classes.iter().copied())
+    }
+
+    /// The ranking a signature member's head `run` writes: an integer per slot, or written order
+    /// where it writes none.
+    fn head_classes(&self, run: &KExpression<'graph>) -> &'graph [u8] {
+        let parts = run.parts;
+        let mut raw = BumpVec::with_capacity_in(parts.len() / 2, self.scratch);
+        let mut index = 0;
+        while index < parts.len() {
+            if let Some(label) = slot_label(&parts[index].value)
+                && next_is_type_slot(parts, index + 1)
+            {
+                raw.push(label.rank());
+                index += 2;
+                continue;
+            }
+            index += 1;
+        }
+        collect(
+            self.brand.writer(),
+            dense_classes(self.scratch, &raw).iter().copied(),
+        )
     }
 
     /// A definition's ranking: the classes of the nearest bucket declaration of `key` it sees, or
@@ -1839,6 +1897,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         if kind == BodyKind::Surfaced {
             self.quantified = surfaced.quantified;
+            self.heads = surfaced.heads;
         }
         self.enter_child(
             level,
@@ -2000,7 +2059,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
         let mut marks = BumpVec::new_in(self.scratch);
         code_marks(code, &mut marks);
-        let draft = self.binders(ShapeKind::Code, entered_at, statement, &[], &[])?;
+        let draft = self.binders(ShapeKind::Code, entered_at, statement, (&[], &[]), &[])?;
         self.chain.push(draft);
         let inner = self.chain.len() - 1;
         let reader = Reader {
@@ -2845,6 +2904,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 elements: entry.elements,
                 classes: entry.classes,
                 which: entry.which,
+                surfaced: entry.surfaced,
             }
         }));
         registrations.sort_unstable_by_key(|registration| registration.slot);

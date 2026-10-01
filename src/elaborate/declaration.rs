@@ -18,7 +18,7 @@ use crate::parse::builtin_shapes::binder::{
 };
 use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BuiltinGroup, Component, Elaboration, Site, is_equality};
+use crate::scope::{BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, FoldDirection, KKind, KType, RecursiveGroupWindow, ReductionMode,
@@ -343,11 +343,43 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
         match self.kind {
             Declared::Alias(rhs) => elaborator.part(rhs, &TOP),
             Declared::Signature { group, body } => {
-                signature_type(&elaborator, group, body, self.site)
+                let mut heads = BumpVec::new_in(scratch);
+                signature_type(&elaborator, group, body, self.site, &mut heads)
             }
             _ => unreachable!("a nominal member seals in a window"),
         }
     }
+}
+
+/// A bodyless keyworded head's shape under one of its keys, by the head's site.
+pub(super) type HeadShape = (Site, Which, KType);
+
+/// The shape of each bodyless keyworded head of the signature the `SIG` `node` declares, by the
+/// head's site and which of its keys the shape is under — the shapes the signature holds, over its
+/// head parameters — its names read through `reader`, which reads where the `SIG` is written.
+pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
+    node: &'graph KExpression<'graph>,
+    reader: &R,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'x>,
+) -> Result<(KType, BumpVec<'x, HeadShape>), Elaboration> {
+    let declaration = Declaration::of(node, scratch)?;
+    let Declared::Signature { group, body } = declaration.kind else {
+        return Err(Elaboration::Unsupported {
+            site: declaration.site,
+        });
+    };
+    let elaborator = Elaborator {
+        reader,
+        types,
+        scratch,
+        fellows: &[],
+        locals: &[],
+        binder: Cell::new(false),
+    };
+    let mut heads = BumpVec::new_in(scratch);
+    let signature = signature_type(&elaborator, group, body, declaration.site, &mut heads)?;
+    Ok((signature, heads))
 }
 
 /// A `UNION`'s `#{<Tag>: <payload>, …}` dict as tag/payload pairs, in written order: each key quotes
@@ -409,13 +441,14 @@ fn last_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
 /// its written bound — a closed one, so a bound naming another parameter is refused. The parameters
 /// and the manifest members are the signature's own names, resolved through the elaborator's local
 /// table rather than through a mention, since the shape declared them in the definition. A bodyless `EXPR`,
-/// `OP` or `UNARY OP` head is a keyworded member; a bodyless `GROUP` is the operator channel's and
-/// is refused here.
-fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
+/// `OP` or `UNARY OP` head is a keyworded member, pushed onto `heads` by its site under each of
+/// its keys; a bodyless `GROUP` is the operator channel's.
+fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
     elaborator: &Elaborator<'_, '_, '_, R>,
     group: Option<&'graph ExpressionPart<'graph>>,
     body: &'graph ExpressionPart<'graph>,
     site: Site,
+    heads: &mut BumpVec<'h, HeadShape>,
 ) -> Result<KType, Elaboration> {
     let unsupported = Elaboration::Unsupported { site };
     let ExpressionPart::ListLiteral(body) = body else {
@@ -493,13 +526,15 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
             }
             BuiltinShapeId::ExpressionHead | BuiltinShapeId::QuantifiedExpressionHead => {
                 member.binder.set(true);
-                draft.push_keyworded(member.node(site, node, &TOP)?);
+                let shape = member.node(site, node, &TOP)?;
+                heads.push((site, Which::Only, shape));
+                draft.push_keyworded(shape);
             }
             BuiltinShapeId::OperatorHead
             | BuiltinShapeId::OperatorHeadReturning
             | BuiltinShapeId::UnaryOperatorHeadReturning => {
                 let data = data.ok_or(unsupported)?;
-                let shape = operator_shape(
+                let (shape, bridge) = operator_shape(
                     &member,
                     form.id == BuiltinShapeId::UnaryOperatorHeadReturning,
                     data,
@@ -509,6 +544,12 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
                 )?;
                 if form.id == BuiltinShapeId::OperatorHeadReturning {
                     returning.push((quoted_operator(data).ok_or(unsupported)?, site));
+                }
+                match bridge {
+                    Some(bridge) => {
+                        heads.extend([(site, Which::Unary, shape), (site, Which::Binary, bridge)])
+                    }
+                    None => heads.push((site, Which::Only, shape)),
                 }
                 draft.push_keyworded(shape);
             }
@@ -632,7 +673,7 @@ fn group_members<'graph, 'x, R: Reads<'graph> + ?Sized>(
             }
         }
         let data = data.ok_or(unsupported)?;
-        let shape = operator_shape(
+        let (shape, _) = operator_shape(
             elaborator,
             false,
             data,

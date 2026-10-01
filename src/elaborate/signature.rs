@@ -154,7 +154,8 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
 }
 
 /// The expression shape an operator head declares: the one [`registered_shape`] builds from
-/// [`operator_function`]'s type over `operand <symbol> operand` or `<symbol> operands`.
+/// [`operator_function`]'s type over `operand <symbol> operand` or `<symbol> operands` — beside, for
+/// a `UNARY OP`, the shape its binary key holds, `operand <symbol> operand` packed into `operands`.
 ///
 /// One builder, two callers: a definition registers the shape built from its function type, and a
 /// `SIG` body's bodyless head is built by this same door, so a head and the definition satisfying
@@ -168,16 +169,18 @@ pub(super) fn operator_shape<'graph, R: Reads<'graph> + ?Sized>(
     operand: &ExpressionPart<'graph>,
     ret: Option<&ExpressionPart<'graph>>,
     groups: &Groups<'_>,
-) -> Result<KType, Elaboration> {
-    let (symbol, function, _) = operator_function(elaborator, unary, symbol, operand, ret, groups)?;
-    let (shape, _) = registered_shape(
-        elaborator.types,
-        elaborator.scratch,
-        function,
-        Head::operator(unary, symbol),
-        &[],
-    );
-    Ok(shape.handle)
+) -> Result<(KType, Option<KType>), Elaboration> {
+    let (symbol, function, operand) =
+        operator_function(elaborator, unary, symbol, operand, ret, groups)?;
+    let (types, scratch) = (elaborator.types, elaborator.scratch);
+    let (shape, _) = registered_shape(types, scratch, function, Head::operator(unary, symbol), &[]);
+    let bridge = unary.then(|| {
+        let head = Head::Bridge(symbol, operand);
+        registered_shape(types, scratch, function, head, &[])
+            .0
+            .handle
+    });
+    Ok((shape.handle, bridge))
 }
 
 /// The function type an operator head declares, beside its symbol and its operand type: `FN

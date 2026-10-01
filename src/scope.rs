@@ -48,8 +48,8 @@ pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
-    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, TypeExpression,
-    Unit, UnitWork, Which, source_of, spelled,
+    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead, Target,
+    TypeExpression, Unit, UnitWork, Which, source_of, spelled,
 };
 pub use typed::{
     Callable, Elaboration, ElaborationDisplay, Narrowing, ParameterBinding, Registered, Static,

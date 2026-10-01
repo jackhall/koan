@@ -3,7 +3,7 @@
 
 use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Program};
-use crate::scope::{BodyShape, Narrowing, Site, Slot};
+use crate::scope::{BodyShape, Narrowing, ShapeKind, Site, Slot};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{Interval, KType, Verdict, display_name};
 
@@ -379,5 +379,105 @@ fn each_call_of_a_quantified_function_is_typed_by_its_arguments() {
     assert_eq!(
         top(&format!("{pick}LET s = (pick {{x = \"s\"}})"), "s"),
         "Str"
+    );
+}
+
+/// The block a `USING … SCOPE` in the body of `source`'s one top-level callable builds.
+fn using_block<R>(source: &str, inspect: impl FnOnce(&Program<'_>, &BodyShape<'_>) -> R) -> R {
+    loaded(source, |program| {
+        let (_, callable) = program
+            .shape()
+            .nested_shapes()
+            .iter()
+            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            .expect("the callable is nested in the top level");
+        let (_, block) = callable
+            .nested_shapes()
+            .iter()
+            .find(|(_, nested)| nested.kind() == ShapeKind::Block)
+            .expect("the callable's body holds the block");
+        inspect(program, block)
+    })
+}
+
+#[test]
+fn a_surfaced_head_is_typed_at_load_and_returns_at_most() {
+    let boxes = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n";
+    let source = format!(
+        "{boxes}EXPR #(OPEN m :Boxes) -> Any = #(USING (m :! Boxes) SCOPE (\
+         (LET a = (BOX 1)) (LET b = (BOX \"s\"))))"
+    );
+    using_block(&source, |program, block| {
+        let at_most = |name| {
+            let typed = block
+                .binder_type(slot(program, block, name))
+                .expect("the load typed the block");
+            assert_eq!(typed.lower, KType::NEVER, "`{name}` is at most its return");
+            display_name(typed.upper, program.types(), program.symbols()).to_string()
+        };
+        assert_eq!(at_most("a"), ":(LIST OF Number)");
+        assert_eq!(at_most("b"), ":(LIST OF Str)");
+    });
+}
+
+#[test]
+fn a_surfaced_head_reads_the_ascription_s_pins() {
+    let stack = "SIG Stack FOR ALL #{Elt: Any} = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]\n";
+    let using = |ascribed: &str, body: &str| {
+        format!("{stack}EXPR #(OPEN s :Stack) -> Any = #(USING (s :! {ascribed}) SCOPE ({body}))")
+    };
+    let pinned = using("(Stack WITH {Elt = Number})", "LET a = (PUSH 1)");
+    using_block(&pinned, |program, block| {
+        let typed = block
+            .binder_type(slot(program, block, "a"))
+            .expect("the load typed the block");
+        assert_eq!(typed.lower, KType::NEVER);
+        assert_eq!(
+            display_name(typed.upper, program.types(), program.symbols()).to_string(),
+            ":(LIST OF Number)"
+        );
+    });
+    assert_eq!(
+        run(&using("(Stack WITH {Elt = Number})", "PUSH \"s\"")),
+        "load: <test>:2:81: no overload of `PUSH _` admits (Str)"
+    );
+    let open = using("Stack", "LET a = (PUSH 1)");
+    using_block(&open, |program, block| {
+        let typed = block
+            .binder_type(slot(program, block, "a"))
+            .expect("the load typed the block");
+        assert_eq!(
+            display_name(typed.upper, program.types(), program.symbols()).to_string(),
+            ":(LIST OF Elt)",
+            "an unpinned parameter reads as the block's own type name"
+        );
+    });
+}
+
+#[test]
+fn a_surfaced_operator_head_is_typed_at_load() {
+    let using = |body: &str| {
+        format!(
+            "SIG Mix = #[(OP #(<>) OVER Number)]\n\
+             EXPR #(OPEN m :Mix) -> Any = #(USING (m :! Mix) SCOPE ({body}))"
+        )
+    };
+    using_block(&using("LET a = (1 <> 2)"), |program, block| {
+        assert_eq!(upper(program, block, "a"), KType::NUMBER);
+    });
+    assert_eq!(
+        run(&using("\"s\" <> 2")),
+        "load: <test>:2:55: no overload of `_ <> _` admits (Str, Number)"
+    );
+}
+
+#[test]
+fn a_surfaced_head_s_ranking_must_agree_with_its_key_s_others() {
+    let source = "SIG Moves = #[(EXPR #(MOVE 2 :Number TO 1 :Number) -> Number)]\n\
+                  EXPR #(OPEN m :Moves) -> Any = #(USING (m :! Moves) SCOPE (\
+                  (EXPR #(MOVE a :Str TO b :Str) -> Number = #(1))))";
+    assert_eq!(
+        run(source),
+        "load: <test>:2:59: `MOVE _ TO _` is ranked two ways here"
     );
 }

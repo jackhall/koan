@@ -5,6 +5,8 @@
 //! every body nested in it, and over a quote's code where an `EVAL` runs it — and reads each
 //! registration's expression shape off the cell [the load pass](crate::elaborate::type_channel)
 //! filled: every closed, unquantified one is checked, whatever declared types its signature names.
+//! A `USING … SCOPE` block's surfaced head births no callable and is not checked here: the
+//! definition answering it is the module's own, checked where the module is built.
 //! A builtin overload whose operands are all `Any` is shadowable and overlaps nothing; any other
 //! overlaps a registration when every slot pair meets above `Never`.
 

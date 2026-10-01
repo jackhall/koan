@@ -15,6 +15,10 @@
 //! level wherever a nested shape of the chain reads it, and sibling shapes reuse levels. A `$` name
 //! crossing into code is a name of the code's own, bounded as the name it reads.
 //!
+//! A `USING … SCOPE` block's surfaced head is typed from its signature: the head's shape as the
+//! `SIG` declares it, each head parameter read at the ascription's pin or, unpinned, at the block's
+//! own type parameter of that name.
+//!
 //! See [README.md § The type channel at load](README.md#the-type-channel-at-load).
 
 use std::cell::Cell;
@@ -25,15 +29,15 @@ use crate::parse::builtin_shapes::binder::quoted_body;
 use crate::parse::builtin_shapes::role::Role;
 use crate::scope::{
     BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
-    ParameterBinding, Registered, ShapeError, ShapeKind, Site, Slot, Static, Target, UnitWork,
-    Variable, source_of,
+    ParameterBinding, Registered, Registration, ShapeError, ShapeKind, Site, Slot, Static,
+    SurfacedHead, Target, UnitWork, Variable, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{KType, TypeNode, TypeRegistry};
+use crate::type_lattice::{KType, Members, TypeNode, TypeRegistry, substitute_parameters};
 use crate::values::{Knotted, Value};
 
-use super::declaration::type_declarations;
+use super::declaration::{signature_heads, type_declarations};
 use super::expression::{Elaborator, Groups, type_expression};
 use super::reads::{Reads, TypeAt};
 use super::signature::callable_type;
@@ -306,6 +310,77 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         Static::Rigid { value, variables }
     }
 
+    /// The bucket entry of `registration`, the surfaced head `head` of the block at chain level
+    /// `level`: the shape the head's `SIG` declares under the registration's key and ranking, each
+    /// head parameter read at the ascription's pin or, unpinned, at the block's own type parameter
+    /// of that name. `None` where the ascription is no closed signature or application of one, or
+    /// the signature does not type where it is declared. Nothing calls a surfaced head at run, so
+    /// its entry carries no quantifier map and binds no parameter.
+    fn surfaced(
+        &self,
+        level: usize,
+        registration: &Registration<'graph>,
+        head: &SurfacedHead<'graph>,
+    ) -> Option<Static<'graph, Registered<'graph>>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let (hops, site) = head.ascription;
+        let ascribing = self.chain[level - hops as usize].shape;
+        let Static::Closed(ascribed) = ascribing.typed_expression(site) else {
+            return None;
+        };
+        let (signature, pins) = match types.node(ascribed) {
+            TypeNode::Signature { .. } => (ascribed, &[][..]),
+            TypeNode::SignatureApply { signature, pins } => (signature, pins.as_slice()),
+            _ => return None,
+        };
+        let (hops, slot) = head.signature;
+        let declaring = level - hops as usize;
+        let node = self.chain[declaring].shape.declarations(slot)?;
+        let reader = self.reader(declaring, Mode::Declaring);
+        let (declared, heads) = signature_heads(node, &reader, types, scratch).ok()?;
+        debug_assert_eq!(
+            declared, signature,
+            "an ascription names the signature its SIG declares"
+        );
+        let written = Site::of(&head.head.parts[0].value);
+        let (_, _, shape) = heads
+            .iter()
+            .find(|(site, which, _)| *site == written && *which == registration.which)?;
+        let TypeNode::Signature { schema, .. } = types.node(signature) else {
+            unreachable!("an application applies a signature");
+        };
+        let reader = self.reader(level, Mode::Typing);
+        let block = self.chain[level].shape;
+        let mut bindings = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
+        for (name, _) in schema.parameters.iter() {
+            let pinned = pins
+                .iter()
+                .find(|(pin, _)| *pin == BinderSymbol::Type(*name));
+            let bound = match pinned {
+                Some((_, pin)) => *pin,
+                None => {
+                    let (slot, _) = block.slot(BinderSymbol::Type(*name))?;
+                    let local = Coordinate::Activation {
+                        hops: 0,
+                        target: Target::Local(slot),
+                    };
+                    match reader.type_at(local) {
+                        TypeAt::Type(handle) | TypeAt::Rigid(handle) => handle,
+                        TypeAt::NotAType | TypeAt::Unknown => return None,
+                    }
+                }
+            };
+            bindings.push((*name, bound));
+        }
+        let read = substitute_parameters(types, scratch, *shape, Members::from_table(bindings));
+        let registered = Registered {
+            shape: ranked(types, scratch, read, registration.classes),
+            quantifier_map: &[],
+            parameters: ParameterBinding::Named(&[]),
+        };
+        Some(self.fixed(&reader, registered))
+    }
+
     /// Type the shape at chain level `level`, then every shape nested in it.
     fn visit(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
@@ -384,6 +459,12 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         repeated_guards(shape)?;
 
         for registration in shape.registrations() {
+            if let Some(head) = registration.surfaced {
+                if let Some(typed) = self.surfaced(level, registration, head) {
+                    shape.fix_registered(registration.slot, typed);
+                }
+                continue;
+            }
             let Some(form) = shape.births(registration.slot).and_then(BodyShape::form) else {
                 continue;
             };
@@ -469,6 +550,28 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         }
         Ok(())
     }
+}
+
+/// The expression shape `shape` ranked by `classes`.
+fn ranked(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    shape: KType,
+    classes: &[u8],
+) -> KType {
+    let TypeNode::ExpressionShape {
+        quantifiers,
+        bounds,
+        elements,
+        ret,
+        ..
+    } = types.node(shape)
+    else {
+        unreachable!("a head declares an expression shape");
+    };
+    types
+        .shape_type(scratch, quantifiers, bounds, elements, classes, ret)
+        .handle
 }
 
 /// What [`Pass::fixed`]'s callers assert of every type they fix.
