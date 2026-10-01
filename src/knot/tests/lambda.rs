@@ -128,11 +128,10 @@ fn a_lambda_weighs_what_the_tie_gives_the_same_function() {
 #[test]
 fn a_quantified_lambda_carries_its_quantifier_map() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))");
+        let lines = fixture.parse("LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))");
         fixture.in_cell(pin, |context| {
-            let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
-            let member = born(fixture, writer, activation, 0);
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let member = callable(fixture, activation, "pick");
             let function = member.function().expect("a function");
             assert_eq!(function.quantifier_map().len(), 1);
             let elt = TypeSymbol::declared("Elt", fixture.symbols).expect("a Type token");

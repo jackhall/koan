@@ -63,7 +63,7 @@ fn captured_sibling<'graph, 'cell>(
 const KNOT: &str = "\
 LET greeting = \"hi\"
 LET words = [\"alpha\" \"beta\"]
-LET f = FN EXPR #(GREET n :Number) -> Str = #(greeting words g)
+LET f = FN EXPR #(GREET n :Number) -> Str = #(greeting words (g {x = n}))
 LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(words f x))";
 
 #[test]

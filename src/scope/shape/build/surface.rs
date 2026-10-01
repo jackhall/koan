@@ -39,6 +39,8 @@ use crate::source::SourceRef;
 pub(super) struct Surfaced<'x, 'graph> {
     pub names: BumpVec<'x, BinderSymbol>,
     pub groups: BumpVec<'x, &'graph DeclaredGroup<'graph>>,
+    /// The names among `names` bound to quantified functions, read only at the head of a call.
+    pub quantified: BumpVec<'x, BinderSymbol>,
 }
 
 impl<'x, 'graph> Surfaced<'x, 'graph> {
@@ -46,6 +48,7 @@ impl<'x, 'graph> Surfaced<'x, 'graph> {
         Surfaced {
             names: BumpVec::new_in(scratch),
             groups: BumpVec::new_in(scratch),
+            quantified: BumpVec::new_in(scratch),
         }
     }
 }
@@ -121,7 +124,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         | BuiltinShapeId::GroupPairwiseFoldRight,
                     ) => {
                         self.surfaced_group(statement, out)?;
-                        body_binders(statement, &mut out.names)
+                        body_binders(statement, out)
                     }
                     Some(BuiltinShapeId::LetValue) => {
                         let rhs = role_part(statement, Role::Rhs).ok_or(())?;
@@ -270,6 +273,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         return Err(());
                     };
                     out.names.push(BinderSymbol::Value(name));
+                    if role_part(line, Role::TypeExpression).is_some_and(quantified_type) {
+                        out.quantified.push(BinderSymbol::Value(name));
+                    }
                 }
                 Some(
                     BuiltinShapeId::GroupHeadFoldLeft
@@ -303,6 +309,36 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         Ok(())
     }
 
+    /// Whether the value `name`, read in the draft at `level` at `at`, is bound to a quantified
+    /// function: by a statement [`quantified_statement`] reads as one, or as a quantified member a
+    /// `USING … SCOPE` body surfaces. [`Builder::resolve`]'s walk, with nothing recorded.
+    pub(super) fn quantified(&self, level: usize, name: BinderSymbol, at: Position) -> bool {
+        if !matches!(name, BinderSymbol::Value(_)) {
+            return false;
+        }
+        let (mut level, mut at) = (level, at);
+        loop {
+            let draft = &self.chain[level];
+            let names = draft.channels();
+            if let Some(index) = names.find(name)
+                && at.sees(names.get(index))
+            {
+                return match names.get(index).0.checked_sub(1) {
+                    Some(statement) => quantified_statement(&draft.nodes[statement as usize]),
+                    None => draft.quantified.contains(&name),
+                };
+            }
+            if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
+                return false;
+            }
+            let Some(parent) = level.checked_sub(1) else {
+                return false;
+            };
+            level = parent;
+            at = self.chain[level].boundary();
+        }
+    }
+
     /// The draft level, the position a read there takes, and the statement declaring `name` —
     /// [`Builder::resolve`]'s walk with nothing recorded. `None` for a builtin, a parameter (which
     /// declares no statement), a hole of a quote's code, and a name with no binding at all.
@@ -333,18 +369,51 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
 }
 
 /// The names the body of a `MODULE` or `GROUP` binder binds, read through the very call the binders
-/// pass makes, so the two cannot drift.
+/// pass makes, so the two cannot drift, and which of them are bound to quantified functions.
 fn body_binders<'graph>(
     statement: &KExpression<'graph>,
-    out: &mut BumpVec<'_, BinderSymbol>,
+    out: &mut Surfaced<'_, 'graph>,
 ) -> Result<(), ()> {
     let body = body_of(role_part(statement, Role::Body(BodyKind::Module)).ok_or(())?).ok_or(())?;
     for (line, _) in body.body_statements() {
         if let Some(name) = line.statement_binder_plan().and_then(|plan| plan.name) {
-            out.push(name);
+            out.names.push(name);
+            if quantified_statement(line) {
+                out.quantified.push(name);
+            }
         }
     }
     Ok(())
+}
+
+/// Whether `statement` binds a quantified function: a `LET` of a quantified `FN`, or a
+/// `LET … = FN EXPR FOR ALL …`.
+fn quantified_statement(statement: &KExpression<'_>) -> bool {
+    match statement.cache().builtin_shape().map(|shape| shape.id) {
+        Some(BuiltinShapeId::CombinedQuantifiedExpression) => true,
+        Some(BuiltinShapeId::LetValue) => role_part(statement, Role::Rhs)
+            .is_some_and(|rhs| written_as(rhs, BuiltinShapeId::QuantifiedLambda)),
+        _ => false,
+    }
+}
+
+/// Whether a signature member's type part is a quantified function type or expression shape.
+fn quantified_type(part: &ExpressionPart<'_>) -> bool {
+    written_as(part, BuiltinShapeId::QuantifiedLambdaType)
+        || written_as(part, BuiltinShapeId::QuantifiedExpressionHead)
+}
+
+/// Whether `part`, through one-part wrappers and a sigil, is a node of the form `id`.
+fn written_as(part: &ExpressionPart<'_>, id: BuiltinShapeId) -> bool {
+    let (ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node)) = part else {
+        return false;
+    };
+    let node = node.reference();
+    match (node.cache().builtin_shape(), node.parts) {
+        (Some(form), _) => form.id == id,
+        (None, [only]) => written_as(&only.value, id),
+        _ => false,
+    }
 }
 
 /// The one part of `node` its form gives `role`.

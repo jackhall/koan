@@ -467,3 +467,46 @@ fn a_variable_used_once_is_solved_by_each_call() {
                   PRINT (KIND 1)\nPRINT (kind {x = \"s\"})";
     assert_eq!(run(source), "Number\nStr");
 }
+
+/// A quantified function runs only through a call: by name, written at a call's head, or wrapped in
+/// an unquantified `FN` that calls it.
+#[test]
+fn a_quantified_function_runs_through_a_call() {
+    let pick = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n";
+    assert_eq!(run(&format!("{pick}PRINT (pick {{x = 1}})")), "1");
+    assert_eq!(
+        run(&format!(
+            "{pick}LET wrap = (FN :{{x :Number}} -> Number = #(pick {{x = x}}))\n\
+             LET keep = [wrap]\n\
+             PRINT (wrap {{x = 2}})"
+        )),
+        "2"
+    );
+    assert_eq!(
+        run("PRINT ((FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)) {x = 3})"),
+        "3"
+    );
+    assert_eq!(
+        run("LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))\nPRINT \"loaded\""),
+        "loaded"
+    );
+}
+
+/// A quantified function type is spelled only as a signature's member: a parameter's type, a
+/// return type and an ascription refuse the load.
+#[test]
+fn a_spelled_quantified_type_refuses_the_load() {
+    let quantified = ":(FN FOR ALL #[Elt] :{x :Elt} -> Elt)";
+    for source in [
+        "LET f = (FN :{g :(FN FOR ALL #[Elt] :{x :Elt} -> Elt)} -> Null = #(null))".to_string(),
+        format!("LET f = (FN :{{}} -> {quantified} = #(null))"),
+        format!("LET v = (1 :! {quantified})"),
+    ] {
+        let printed = run(&source);
+        assert!(
+            printed
+                .contains("a quantified type is written only as a signature's `VAL` member type"),
+            "`{source}`: {printed}"
+        );
+    }
+}

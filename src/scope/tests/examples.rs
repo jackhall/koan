@@ -954,3 +954,86 @@ fn a_lambdas_body_is_found_by_its_forms_body_site() {
         assert_eq!(Site::of_body(&shape.body()[0]), None);
     });
 }
+
+const PICK: &str = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
+
+#[test]
+fn a_quantified_function_is_read_only_at_the_head_of_a_call() {
+    let module = "MODULE m = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
+    let identity = "SIG Ident = #[(VAL identity :(FN FOR ALL #[Item] :{x :Item} -> Item))]";
+    for (source, name) in [
+        (format!("{PICK}\nLET keep = [pick]"), "pick"),
+        (format!("{PICK}\nPRINT pick"), "pick"),
+        (format!("{PICK}\nLET alias = pick"), "pick"),
+        (
+            "LET pick = FN EXPR FOR ALL #[Elt] #(PICK x :Elt) -> Elt = #(x)\nLET keep = [pick]"
+                .to_string(),
+            "pick",
+        ),
+        (format!("{module}\nUSING m SCOPE (pick)"), "pick"),
+        (
+            format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity)"),
+            "identity",
+        ),
+    ] {
+        shaped(&source, |_, _, shape| {
+            let name = BinderSymbol::classify(name).unwrap();
+            assert!(
+                matches!(
+                    shape.err(),
+                    Some(ShapeError::QuantifiedRead { name: read, .. }) if read == name
+                ),
+                "`{source}` refuses the read"
+            );
+        });
+    }
+    for source in [
+        format!("{PICK}\nLET keep = [(FN :{{x :Number}} -> Number = #(pick {{x = x}}))]"),
+        format!("{PICK}\nPRINT (pick {{x = 1}})"),
+        format!("{PICK}\nPRINT ((pick) {{x = 1}})"),
+        format!("{module}\nUSING m SCOPE (pick {{x = 1}})"),
+        format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity {{x = 1}})"),
+        // A quantified function calling itself by name.
+        "LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))".to_string(),
+    ] {
+        shaped(&source, |fixture, _, shape| {
+            if let Err(error) = shape {
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn a_quantified_fn_is_written_only_where_a_binder_or_a_call_takes_it() {
+    let lambda = "(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
+    for source in [
+        format!("LET keep = [{lambda}]"),
+        format!("PRINT {lambda}"),
+        lambda.to_string(),
+        format!("LET f = (FN :{{}} -> Any = #({lambda}))"),
+    ] {
+        shaped(&source, |_, _, shape| {
+            assert!(
+                matches!(shape.err(), Some(ShapeError::QuantifiedLambda { .. })),
+                "`{source}` refuses the lambda"
+            );
+        });
+    }
+    for source in [
+        format!("LET f = {lambda}"),
+        format!("PRINT ({lambda} {{x = 1}})"),
+    ] {
+        shaped(&source, |fixture, _, shape| {
+            if let Err(error) = shape {
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                );
+            }
+        });
+    }
+}

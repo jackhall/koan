@@ -367,3 +367,17 @@ fn a_quantified_candidate_is_selected_when_it_always_admits() {
                   LET b = (BOTH (EITHER) AND \"s\")";
     assert_eq!(narrowing(source, "b"), "full", "its `y` may miss the solve");
 }
+
+/// Each call of a quantified function solves its group from that call's arguments, at load.
+#[test]
+fn each_call_of_a_quantified_function_is_typed_by_its_arguments() {
+    let pick = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n";
+    assert_eq!(
+        top(&format!("{pick}LET n = (pick {{x = 1}})"), "n"),
+        "Number"
+    );
+    assert_eq!(
+        top(&format!("{pick}LET s = (pick {{x = \"s\"}})"), "s"),
+        "Str"
+    );
+}

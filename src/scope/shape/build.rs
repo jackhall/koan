@@ -300,6 +300,20 @@ fn part_marks<'graph>(
     }
 }
 
+/// What the next part the walk reaches may be beyond what any part may: set right before a
+/// binder's right-hand side or a call's head is walked, and taken by the first part there that is
+/// not a one-part wrapper. A quantified `FN` is written only where this admits it, and a name bound
+/// to one is read only at a call's head.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Admits {
+    #[default]
+    Nothing,
+    /// A binder's right-hand side: a quantified `FN` written there.
+    Lambda,
+    /// A call's head: a quantified `FN` written there, or a name bound to one.
+    Head,
+}
+
 /// The class a mention met in this context takes, before the context's own role applies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -549,6 +563,9 @@ struct Draft<'graph, 'x> {
     /// Whether this is a `USING … SCOPE` body, whose operand's registrations the builder does not
     /// read: a use under one may select one, so none is refused for want of a candidate.
     surfaced: bool,
+    /// The parameters of a `USING … SCOPE` body bound to quantified functions, each read only at
+    /// the head of a call.
+    quantified: BumpVec<'x, BinderSymbol>,
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
     /// The statement being walked when a nested draft was entered, and the class that path takes
@@ -646,6 +663,11 @@ struct Builder<'graph, 'x, 'e> {
     /// How many type expressions the walk is inside: a keyworded node there is a type the
     /// elaborator reads, not a use dispatch selects for.
     in_type: u32,
+    /// What the next part may be; see [`Admits`].
+    admits: Admits,
+    /// The quantified parameters of the `USING … SCOPE` body about to be drafted, taken by that
+    /// draft.
+    quantified: BumpVec<'x, BinderSymbol>,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -676,6 +698,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             skip_floor: 0,
             signature: None,
             in_type: 0,
+            admits: Admits::Nothing,
+            quantified: BumpVec::new_in(scratch),
         }
     }
 
@@ -735,6 +759,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .map_or(u32::MAX, |parent| parent.current.0);
         let mut draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
         draft.signature = self.signature.take();
+        draft.quantified = std::mem::replace(&mut self.quantified, BumpVec::new_in(self.scratch));
         draft.frame = self.frame;
         draft.held = held;
         draft.tail = entry.tail;
@@ -853,6 +878,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             refusal: None,
             tail: false,
             surfaced: false,
+            quantified: BumpVec::new_in(scratch),
             arm: None,
             current: (0, MentionClass::Eager),
         })
@@ -1118,6 +1144,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
+        let wrapper = node.cache().builtin_shape().is_none()
+            && matches!(node.parts, [only] if !matches!(only.value, ExpressionPart::Keyword(_)));
+        let admits = if wrapper {
+            self.admits
+        } else {
+            std::mem::take(&mut self.admits)
+        };
         let declares = node.cache().binder_plan().is_some()
             || node
                 .cache()
@@ -1158,7 +1191,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .is_some_and(|built| built.kind == BuiltKind::Negation);
                 self.candidates(level, statement, node, negation)?;
             }
-            for part in node.parts {
+            // `(f {…})`: a call by name, whose head may be a quantified `FN` or a name bound to one.
+            let call = node.parts.len() == 2
+                && !node
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part.value, ExpressionPart::Keyword(_)));
+            for (index, part) in node.parts.iter().enumerate() {
+                if call && index == 0 {
+                    self.admits = Admits::Head;
+                }
                 self.walk_part(level, statement, &part.value, State::Eager)?;
             }
             return Ok(());
@@ -1168,6 +1210,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 form: form.id,
                 at: node.source,
             });
+        }
+        if form.id == BuiltinShapeId::QuantifiedLambda && admits == Admits::Nothing {
+            return Err(ShapeError::QuantifiedLambda { at: node.source });
         }
         debug_assert_eq!(
             form.elements.len(),
@@ -1277,12 +1322,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 Role::Rhs => {
                     let draft = &mut self.chain[level];
+                    let mut binds = false;
                     let mut declares_type = false;
                     if state == State::Root
                         && let Some(binder) = draft.statement_binders[statement as usize].first()
                     {
                         draft.rhs.push((binder, Site::of(part)));
                         self.parts.insert(Site::of(part), part);
+                        binds = true;
                         declares_type = draft.is_type_slot(binder);
                     }
                     // A type `LET`'s right-hand side is its declaration's definition, typed with
@@ -1290,6 +1337,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     if declares_type {
                         self.typed(|builder| builder.walk_part(level, statement, part, state))?
                     } else {
+                        if binds {
+                            self.admits = Admits::Lambda;
+                        }
                         self.walk_part(level, statement, part, state)?
                     }
                 }
@@ -1327,10 +1377,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         part: &'graph ExpressionPart<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
+        // A node passes the allowance on to its own visit; every other part takes it here.
+        let admits = if matches!(part, ExpressionPart::Expression(_)) {
+            self.admits
+        } else {
+            std::mem::take(&mut self.admits)
+        };
         match part {
-            ExpressionPart::Identifier(name) => {
-                self.mention(level, statement, part, BinderSymbol::Value(*name), state)
-            }
+            ExpressionPart::Identifier(name) => self.mention_through(
+                level,
+                statement,
+                part,
+                BinderSymbol::Value(*name),
+                None,
+                state,
+                admits == Admits::Head,
+            ),
             ExpressionPart::Type(name) if !self.skips(name) => {
                 self.mention(level, statement, part, BinderSymbol::Type(*name), state)
             }
@@ -1341,6 +1403,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .built_as(node.reference())
                     .is_some_and(|built| built.kind == BuiltKind::Block)
                 {
+                    self.admits = Admits::Nothing;
                     return self.enter_child(
                         level,
                         statement,
@@ -1402,7 +1465,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 self.enter_code(level, statement, part, node.reference(), state)
             }
             ExpressionPart::MarkedName(mark, name) => {
-                self.mention_through(level, statement, part, *name, Some(*mark), state)
+                self.mention_through(level, statement, part, *name, Some(*mark), state, false)
             }
             ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
                 Err(ShapeError::MarkOutsideQuote {
@@ -1610,7 +1673,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
             // A marked name never binds to a name the definition declares, so it skips nothing.
             ExpressionPart::MarkedName(mark, name) => {
-                return self.mention_through(level, statement, part, *name, Some(*mark), state);
+                return self.mention_through(
+                    level,
+                    statement,
+                    part,
+                    *name,
+                    Some(*mark),
+                    state,
+                    false,
+                );
             }
             ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
                 return Err(ShapeError::MarkOutsideQuote {
@@ -1766,6 +1837,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BodyKind::Module => &[],
             BodyKind::Surfaced => &surfaced.names,
         };
+        if kind == BodyKind::Surfaced {
+            self.quantified = surfaced.quantified;
+        }
         self.enter_child(
             level,
             statement,
@@ -2354,11 +2428,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         name: BinderSymbol,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
-        self.mention_through(level, statement, part, name, None, state)
+        self.mention_through(level, statement, part, name, None, state, false)
     }
 
     /// [`mention`](Self::mention) of a name read through `mark`, which only a quote value's code
-    /// may hold.
+    /// may hold. A name bound to a quantified function is refused unless the read is a call's
+    /// `head`.
+    #[allow(clippy::too_many_arguments)]
     fn mention_through(
         &mut self,
         level: usize,
@@ -2367,6 +2443,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         name: BinderSymbol,
         mark: Option<Mark>,
         state: State,
+        head: bool,
     ) -> Result<(), ShapeError<'graph>> {
         if mark.is_some() && !self.in_quote(level) {
             return Err(ShapeError::MarkOutsideQuote {
@@ -2384,6 +2461,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             class,
         };
         let site = Site::of(part);
+        if !head && self.quantified(level, name, at) {
+            return Err(ShapeError::QuantifiedRead {
+                name,
+                site,
+                at: self.part_source(level, statement, site),
+            });
+        }
         let coordinate = match self.builtins.lookup(name) {
             Some(index) => Coordinate::Builtin(index),
             None => {

@@ -85,11 +85,11 @@ fn a_nested_callable_substitutes_its_enclosing_names_by_level() {
 
 #[test]
 fn typing_a_quote_s_code_a_second_time_interns_no_type() {
-    let quote = "#(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+    let quote = "#(LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
                  LET g = (FN :{} -> Elt = #(x))\n  \
                  PRINT y\n  \
                  x\n\
-                 ))";
+                 )))";
     let count = |source: &str| loaded(source, |program| program.types().node_count());
     assert_eq!(
         count(&format!("LET q = {quote}")),

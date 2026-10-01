@@ -890,6 +890,15 @@ pub enum ShapeError<'graph> {
         site: Site,
         at: SourceRef,
     },
+    /// A quantified `FN` written at `at`, anywhere but a binder's right-hand side or the head of a
+    /// call.
+    QuantifiedLambda { at: SourceRef },
+    /// A name bound to a quantified function, read at `at` anywhere but the head of a call.
+    QuantifiedRead {
+        name: BinderSymbol,
+        site: Site,
+        at: SourceRef,
+    },
     /// A component containing an eager mention of one of its own members, found at the statement
     /// of the member declared first: its named members, and the key of each registration in it.
     EagerCycle {
@@ -1085,6 +1094,8 @@ impl ShapeError<'_> {
             ShapeError::Rebind { second, .. } => *second,
             ShapeError::ShadowsBuiltin { at, .. }
             | ShapeError::Unbound { at, .. }
+            | ShapeError::QuantifiedLambda { at }
+            | ShapeError::QuantifiedRead { at, .. }
             | ShapeError::EagerCycle { at, .. }
             | ShapeError::MarkOutsideQuote { at }
             | ShapeError::Unsupported { at, .. }
@@ -1158,6 +1169,16 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             ShapeError::Unbound { name: read, .. } => {
                 write!(f, "`{}` names no binding visible here", name(read))
             }
+            ShapeError::QuantifiedLambda { .. } => f.write_str(
+                "a quantified `FN` is written only as a binder's right-hand side or the head of a \
+                 call",
+            ),
+            ShapeError::QuantifiedRead { name: read, .. } => write!(
+                f,
+                "`{}` is quantified, so it is read only at the head of a call; wrap it in an \
+                 unquantified `FN` to pass it",
+                name(read)
+            ),
             ShapeError::EagerCycle {
                 members,
                 definitions,
