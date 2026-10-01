@@ -30,7 +30,8 @@
 //! A group mark covers the use it wraps and, when that use tops an operator run, every use the
 //! rewrite built for that operator run — never one in an operand. A code draft that cannot be built is not an
 //! error of the program; its error is kept for the `EVAL` that runs it, and only a `$` mark nothing
-//! binds where the quote is written refuses the program.
+//! binds where the quote is written, or one reading a quantified function anywhere but a call's
+//! head, refuses the program.
 //!
 //! See [README.md § Visibility](../README.md#visibility).
 
@@ -1522,9 +1523,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::QuotedExpression(node) => {
                 self.enter_code(level, statement, part, node.reference(), state)
             }
-            ExpressionPart::MarkedName(mark, name) => {
-                self.mention_through(level, statement, part, *name, Some(*mark), state, false)
-            }
+            ExpressionPart::MarkedName(mark, name) => self.mention_through(
+                level,
+                statement,
+                part,
+                *name,
+                Some(*mark),
+                state,
+                admits == Admits::Head,
+            ),
             ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
                 Err(ShapeError::MarkOutsideQuote {
                     at: self.part_source(level, statement, Site::of(part)),
@@ -2059,6 +2066,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
         let mut marks = BumpVec::new_in(self.scratch);
         code_marks(code, &mut marks);
+        // A `$` name reads where the quote is written, so a quantified function read through one
+        // anywhere but a call's head is the program's error.
+        if let ShapeError::QuantifiedRead { site, .. } = refusal
+            && marks.iter().any(|(mark, marked, at)| {
+                *mark == Mark::Written && matches!(marked, Marked::Name(_)) && *at == site
+            })
+        {
+            return Err(refusal);
+        }
         let draft = self.binders(ShapeKind::Code, entered_at, statement, (&[], &[]), &[])?;
         self.chain.push(draft);
         let inner = self.chain.len() - 1;
@@ -2136,7 +2152,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// An `EVAL` of a callable's parameter whose type needs names offers each of them to the code
     /// it runs: a name resolves here as an eager read at the `EVAL`'s statement would, recorded as
-    /// one for the units pass, and is `Unbound` when nothing binds it here; a key is listed as a use
+    /// one for the units pass, and is `Unbound` when nothing binds it here and `QuantifiedRead`
+    /// when it is bound to a quantified function; a key is listed as a use
     /// at the key written at the `EVAL` would be, and is `NoCandidate` when that lists nothing.
     fn offer(
         &mut self,
@@ -2161,6 +2178,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut offered = BumpVec::with_capacity_in(needed.len(), self.scratch);
         for entry in needed.iter() {
             if let Some(name) = needed_name(entry) {
+                // An offer passes the name's value into the code, which a quantified function's
+                // name never is.
+                if self.quantified(level, name, at, None) {
+                    return Err(ShapeError::QuantifiedRead {
+                        name,
+                        site: Site::of(operand),
+                        at: node.source,
+                    });
+                }
                 let coordinate = match self.builtins.lookup(name) {
                     Some(index) => Coordinate::Builtin(index),
                     None => {
@@ -2520,7 +2546,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             class,
         };
         let site = Site::of(part);
-        if !head && self.quantified(level, name, at) {
+        if !head && self.quantified(level, name, at, mark) {
             return Err(ShapeError::QuantifiedRead {
                 name,
                 site,

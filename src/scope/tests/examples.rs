@@ -975,6 +975,20 @@ fn a_quantified_function_is_read_only_at_the_head_of_a_call() {
             format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity)"),
             "identity",
         ),
+        // A `$` name reads where the quote is written.
+        (format!("{PICK}\nLET q = #($pick)"), "pick"),
+        (
+            format!("{PICK}\nLET q = #(LET f = (FN :{{}} -> Any = #([$pick])))"),
+            "pick",
+        ),
+        // An `EVAL` offering the name passes its value into the code.
+        (
+            format!(
+                "{PICK}\nLET run = (FN :{{body :(Expression NEEDING #[pick])}} -> Any = \
+                 #(EVAL body -> Any))"
+            ),
+            "pick",
+        ),
     ] {
         shaped(&source, |_, _, shape| {
             let name = BinderSymbol::classify(name).unwrap();
@@ -995,6 +1009,7 @@ fn a_quantified_function_is_read_only_at_the_head_of_a_call() {
         format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity {{x = 1}})"),
         // A quantified function calling itself by name.
         "LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))".to_string(),
+        format!("{PICK}\nLET q = #($pick {{x = 1}})"),
     ] {
         shaped(&source, |fixture, _, shape| {
             if let Err(error) = shape {

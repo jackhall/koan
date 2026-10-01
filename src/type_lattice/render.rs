@@ -222,13 +222,21 @@ fn write_name_in(
             }
             f.write_str("}")
         }
-        // Each application as it renders alone, joined by `&`.
+        // Each application as it renders alone, joined by `&`; one with pins is parenthesized, as
+        // a meet of applications is written.
         TypeNode::SignatureMeet { members } => {
             for (index, member) in members.iter().enumerate() {
                 if index > 0 {
                     f.write_str(" & ")?;
                 }
+                let pinned = matches!(types.node(*member), TypeNode::SignatureApply { .. });
+                if pinned {
+                    f.write_str("(")?;
+                }
                 write_name_in(*member, f, types, symbols, binder)?;
+                if pinned {
+                    f.write_str(")")?;
+                }
             }
             Ok(())
         }
@@ -410,9 +418,10 @@ fn write_shape_head(
     f.write_str(")")
 }
 
-/// The structural rendering of a non-empty interface: `SIG (member: Type, …)` over every member the
-/// schema names — parameters, then manifest members, then value slots, each table in its
-/// stored symbol order, which is deterministic across runs because a symbol is a digest of its text.
+/// The structural rendering of a non-empty interface: `SIG FOR ALL #{Elt: Bound} (member: Type, …)`,
+/// its head parameters in the group as a `SIG` declares them and every other member the schema
+/// names in the parentheses — manifest members, then value slots, each table in its stored symbol
+/// order, which is deterministic across runs because a symbol is a digest of its text.
 fn write_sig_schema(
     f: &mut std::fmt::Formatter<'_>,
     schema: SigSchema<'_>,
@@ -420,9 +429,8 @@ fn write_sig_schema(
     symbols: &SymbolInterner,
 ) -> std::fmt::Result {
     let members = schema
-        .parameters
+        .manifest_members
         .iter()
-        .chain(schema.manifest_members)
         .map(|(name, kt)| (name.symbol(), *kt))
         .chain(
             schema
@@ -430,7 +438,24 @@ fn write_sig_schema(
                 .iter()
                 .map(|(name, kt)| (name.symbol(), *kt)),
         );
-    f.write_str("SIG (")?;
+    f.write_str("SIG ")?;
+    if !schema.parameters.is_empty() {
+        f.write_str("FOR ALL #{")?;
+        for (index, (name, parameter)) in schema.parameters.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            let bound = types.node(*parameter).rigid_bound().unwrap_or(KType::ANY);
+            write!(
+                f,
+                "{}: {}",
+                display_symbol(name.symbol(), symbols),
+                display_name(bound, types, symbols)
+            )?;
+        }
+        f.write_str("} ")?;
+    }
+    f.write_str("(")?;
     let mut written = 0;
     for (name, kt) in members {
         if written > 0 {

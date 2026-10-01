@@ -37,7 +37,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KType, Members, TypeNode, TypeRegistry, substitute_parameters};
 use crate::values::{Knotted, Value};
 
-use super::declaration::{signature_heads, type_declarations};
+use super::declaration::{HeadShape, signature_heads, type_declarations};
 use super::expression::{Elaborator, Groups, type_expression};
 use super::reads::{Reads, TypeAt};
 use super::signature::callable_type;
@@ -321,6 +321,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         level: usize,
         registration: &Registration<'graph>,
         head: &SurfacedHead<'graph>,
+        signatures: &mut Signatures<'p>,
     ) -> Option<Static<'graph, Registered<'graph>>> {
         let (types, scratch) = (self.types, self.scratch);
         let (hops, site) = head.ascription;
@@ -334,12 +335,20 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             _ => return None,
         };
         let (hops, slot) = head.signature;
-        let declaring = level - hops as usize;
-        let node = self.chain[declaring].shape.declarations(slot)?;
-        let reader = self.reader(declaring, Mode::Declaring);
-        let (declared, heads) = signature_heads(node, &reader, types, scratch).ok()?;
+        let declaring = (level - hops as usize, slot);
+        let index = match signatures.iter().position(|(held, _)| *held == declaring) {
+            Some(index) => index,
+            None => {
+                let node = self.chain[declaring.0].shape.declarations(slot)?;
+                let reader = self.reader(declaring.0, Mode::Declaring);
+                let heads = signature_heads(node, &reader, types, scratch).ok();
+                signatures.push((declaring, heads));
+                signatures.len() - 1
+            }
+        };
+        let (declared, heads) = signatures[index].1.as_ref()?;
         debug_assert_eq!(
-            declared, signature,
+            *declared, signature,
             "an ascription names the signature its SIG declares"
         );
         let written = Site::of(&head.head.parts[0].value);
@@ -458,9 +467,10 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         }
         repeated_guards(shape)?;
 
+        let mut signatures: Signatures<'p> = BumpVec::new_in(scratch);
         for registration in shape.registrations() {
             if let Some(head) = registration.surfaced {
-                if let Some(typed) = self.surfaced(level, registration, head) {
+                if let Some(typed) = self.surfaced(level, registration, head, &mut signatures) {
                     shape.fix_registered(registration.slot, typed);
                 }
                 continue;
@@ -573,6 +583,10 @@ fn ranked(
         .shape_type(scratch, quantifiers, bounds, elements, classes, ret)
         .handle
 }
+
+/// Each `SIG` a block's surfaced heads name, by its declaring level and slot, beside its handle
+/// and its heads' shapes — `None` where it does not type — so the block elaborates each once.
+type Signatures<'p> = BumpVec<'p, ((usize, Slot), Option<(KType, BumpVec<'p, HeadShape>)>)>;
 
 /// What [`Pass::fixed`]'s callers assert of every type they fix.
 const FREE: &str = "no load-time type holds a free `Quantified`";

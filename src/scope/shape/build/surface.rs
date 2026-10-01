@@ -27,7 +27,7 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::quantifier_entries;
 use crate::parse::builtin_shapes::binder::{fn_def_binder_bucket, op_def_binder_bucket};
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Role};
-use crate::parse::{ExpressionPart, KExpression, KeyElement};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::DeclaredGroup;
 
@@ -369,18 +369,27 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         Ok(())
     }
 
-    /// Whether the value `name`, read in the draft at `level` at `at`, is bound to a quantified
-    /// function: by a statement [`quantified_statement`] reads as one, or as a quantified member a
-    /// `USING … SCOPE` body surfaces. [`Builder::resolve`]'s walk, with nothing recorded.
-    pub(super) fn quantified(&self, level: usize, name: BinderSymbol, at: Position) -> bool {
+    /// Whether the value `name`, read through `mark` in the draft at `level` at `at`, is bound to a
+    /// quantified function: by a statement [`quantified_statement`] reads as one, or as a quantified
+    /// member a `USING … SCOPE` body surfaces. [`Builder::resolve`]'s walk, with nothing recorded:
+    /// a `$` name skips each local up to its code and reads outward from there, unmarked, and any
+    /// other name stops at its code, since a `\` name is what an `EVAL` offers, checked there.
+    pub(super) fn quantified(
+        &self,
+        level: usize,
+        name: BinderSymbol,
+        at: Position,
+        mark: Option<Mark>,
+    ) -> bool {
         if !matches!(name, BinderSymbol::Value(_)) {
             return false;
         }
-        let (mut level, mut at) = (level, at);
+        let (mut level, mut at, mut mark) = (level, at, mark);
         loop {
             let draft = &self.chain[level];
             let names = draft.channels();
-            if let Some(index) = names.find(name)
+            if mark != Some(Mark::Written)
+                && let Some(index) = names.find(name)
                 && at.sees(names.get(index))
             {
                 return match names.get(index).0.checked_sub(1) {
@@ -388,8 +397,10 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     None => draft.quantified.contains(&name),
                 };
             }
-            if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
-                return false;
+            match (draft.kind, mark) {
+                (ShapeKind::Code, Some(Mark::Written)) => mark = None,
+                (ShapeKind::Program | ShapeKind::Code, _) => return false,
+                _ => {}
             }
             let Some(parent) = level.checked_sub(1) else {
                 return false;

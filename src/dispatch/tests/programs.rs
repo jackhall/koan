@@ -490,6 +490,19 @@ fn a_quantified_function_runs_through_a_call() {
         run("LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))\nPRINT \"loaded\""),
         "loaded"
     );
+    assert_eq!(
+        run(&format!(
+            "{pick}LET q = #($pick)\nLET keep = [(EVAL q -> Any)]"
+        )),
+        "load: <test>:2:11: `pick` is quantified, so it is read only at the head of a call; wrap it in \
+         an unquantified `FN` to pass it"
+    );
+    assert_eq!(
+        run(&format!(
+            "{pick}LET q = #($pick {{x = 4}})\nPRINT (EVAL q -> Any)"
+        )),
+        "4"
+    );
 }
 
 /// A quantified function type is spelled only as a signature's member: a parameter's type, a
@@ -555,5 +568,19 @@ fn a_module_fits_each_application_its_overloads_answer() {
     assert_eq!(
         fits("BOTH one"),
         "error: no overload of BOTH _ admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+    );
+}
+
+#[test]
+fn a_signature_prints_its_head_parameters_and_a_meet_its_applications() {
+    let source = "SIG Stack FOR ALL #{Elt: Any} = #[(VAL top :Elt)]\n\
+                  SIG Short FOR ALL #{Size: Number} = #[(VAL size :Size)]\n\
+                  PRINT Short\n\
+                  PRINT :((Stack WITH {Elt = Number}) & (Stack WITH {Elt = Str}))";
+    assert_eq!(
+        run(source),
+        "SIG FOR ALL #{Size: Number} (size: Size)\n\
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Number}) & \
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Str})"
     );
 }
