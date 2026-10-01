@@ -1,7 +1,7 @@
 //! Members born coerced: what an opaque view does to each thing it carries across its barrier.
 //!
 //! Under `:|` a view's unpinned head parameters are fresh mints, so a member declared at one of
-//! them no longer has the type it had in the source. The member is therefore not carried but rebuilt at
+//! them has a type other than the one it has in the source. The member is therefore not carried but rebuilt at
 //! the view's types: data is re-tagged through the admission barrier, a container is rebuilt part
 //! by part from what its type shows — a record from the fields its slot declares, and no other —
 //! and re-stamped, a nested module is re-viewed, and a function is wrapped in a

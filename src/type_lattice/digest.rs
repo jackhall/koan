@@ -71,7 +71,7 @@ const TAG_SET_LOCAL: u8 = 0x11;
 const TAG_SET_REF: u8 = 0x14;
 const TAG_UNION: u8 = 0x16;
 const TAG_SIGNATURE: u8 = 0x17;
-// 0x19 is retired: it tagged the abstract type member a head parameter replaced.
+// 0x19 is retired — never reuse it.
 const TAG_CONSTRUCTOR_APPLY: u8 = 0x1A;
 const TAG_RECURSIVE_SET: u8 = 0x1B;
 const TAG_SIG_CONTENT: u8 = 0x1C;

@@ -510,3 +510,50 @@ fn a_spelled_quantified_type_refuses_the_load() {
         );
     }
 }
+
+/// `SIG Boxes`, a `MODULE` its `BOX` fits and one it does not, and a function taking a `Boxes`.
+const BOXES: &str = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n\
+                     MODULE poly = (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x]))\n\
+                     MODULE mono = (EXPR #(BOX x :Number) -> :(LIST OF Number) = #([x]))\n\
+                     EXPR #(TAKE m :Boxes) -> Str = #(\"fits\")\n";
+
+#[test]
+fn a_module_whose_member_is_as_general_fits_a_quantified_head() {
+    assert_eq!(run(&format!("{BOXES}PRINT (TAKE poly)")), "fits");
+    // A `MODULE` binder is `[Never, Any]` at load, so the miss is the call's, at run.
+    assert_eq!(
+        run(&format!("{BOXES}PRINT (TAKE mono)")),
+        "error: no overload of TAKE _ admits (SIG (#(BOX _ :Number) -> :(LIST OF Number)))"
+    );
+}
+
+#[test]
+fn a_module_fits_each_application_its_overloads_answer() {
+    let source = "SIG Stack FOR ALL #{Elt: Any} = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]\n\
+                  LET Numbers = :(Stack WITH {Elt = Number})\n\
+                  LET Strings = :(Stack WITH {Elt = Str})\n\
+                  MODULE one = (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x]))\n\
+                  MODULE two = (\
+                  (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x])) \
+                  (EXPR #(PUSH x :Str) -> :(LIST OF Str) = #([x])))\n\
+                  EXPR #(ANY m :Stack) -> Str = #(\"stack\")\n\
+                  EXPR #(NUMBERS m :Numbers) -> Str = #(\"numbers\")\n\
+                  EXPR #(STRINGS m :Strings) -> Str = #(\"strings\")\n\
+                  EXPR #(BOTH m :(Numbers & Strings)) -> Str = #(\"both\")\n";
+    // A `MODULE` binder is `[Never, Any]` at load, so each miss is the call's, at run.
+    let fits = |call: &str| run(&format!("{source}PRINT ({call})"));
+    assert_eq!(fits("ANY one"), "stack");
+    assert_eq!(fits("NUMBERS one"), "numbers");
+    assert_eq!(
+        fits("STRINGS one"),
+        "error: no overload of STRINGS _ admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+    );
+    assert_eq!(fits("ANY two"), "stack");
+    assert_eq!(fits("NUMBERS two"), "numbers");
+    assert_eq!(fits("STRINGS two"), "strings");
+    assert_eq!(fits("BOTH two"), "both");
+    assert_eq!(
+        fits("BOTH one"),
+        "error: no overload of BOTH _ admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+    );
+}

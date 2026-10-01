@@ -1,11 +1,12 @@
 //! Static types and static selection: what the load pass types each value expression and binder
 //! as, how it narrows a keyworded use's candidates, and what it refuses.
 
+use crate::memory::Bump;
 use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Program};
-use crate::scope::{BodyShape, Narrowing, ShapeKind, Site, Slot};
+use crate::scope::{BodyShape, Narrowing, ShapeKind, Site, Slot, Static};
 use crate::symbols::TypeSymbol;
-use crate::type_lattice::{Interval, KType, Verdict, display_name};
+use crate::type_lattice::{Interval, KType, Verdict, class_at_least, display_name};
 
 use super::{Koan, output, run};
 
@@ -479,5 +480,55 @@ fn a_surfaced_head_s_ranking_must_agree_with_its_key_s_others() {
     assert_eq!(
         run(source),
         "load: <test>:2:59: `MOVE _ TO _` is ranked two ways here"
+    );
+}
+
+/// `SIG Crates` declares `Boxes`'s `BOX` and a `size`; `TAKE` takes a `Boxes`, and `PICK` takes
+/// either.
+const CRATES: &str = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n\
+                      SIG Crates = #[\
+                      (EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt)) (VAL size :Number)]\n\
+                      EXPR #(TAKE m :Boxes) -> Str = #(\"boxes\")\n\
+                      EXPR #(PICK m :Boxes) -> Str = #(\"boxes\")\n\
+                      EXPR #(PICK m :Crates) -> Str = #(\"crates\")\n\
+                      LET use = (FN :{c :Crates} -> Str = #(\
+                      (LET taken = (TAKE c)) (LET picked = (PICK c)) (picked)))\n";
+
+#[test]
+fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
+    loaded(CRATES, |program| {
+        let used = body(program, program.shape(), "use");
+        assert_eq!(let_narrowing(program, used, "taken"), "selected");
+        assert_eq!(let_narrowing(program, used, "picked"), "selected");
+        // `PICK`'s two shapes, by whether the slot's signature declares `size`.
+        let pick = |sized: bool| {
+            let shape = program.shape();
+            shape
+                .registrations()
+                .iter()
+                .find_map(
+                    |registration| match shape.registered_type(registration.slot) {
+                        Static::Closed(registered) => {
+                            let rendered =
+                                display_name(registered.shape, program.types(), program.symbols())
+                                    .to_string();
+                            (rendered.contains("PICK") && rendered.contains("size") == sized)
+                                .then_some(registered.shape)
+                        }
+                        _ => None,
+                    },
+                )
+                .expect("both overloads are typed at load")
+        };
+        let (crates, boxes) = (pick(true), pick(false));
+        let scratch = Bump::new();
+        assert!(class_at_least(program.types(), &scratch, crates, boxes, 0));
+        assert!(!class_at_least(program.types(), &scratch, boxes, crates, 0));
+    });
+    let module = "MODULE crate = (\
+                  (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x])) (LET size = 1))\n";
+    assert_eq!(
+        run(&format!("{CRATES}{module}PRINT (use {{c = crate}})")),
+        "crates"
     );
 }
