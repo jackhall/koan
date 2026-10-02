@@ -1,5 +1,6 @@
-//! A list: one run of cells in the region, typed by the join of its elements. Its cells are value
-//! words, or [`Link`]s when the list is a knot's data node.
+//! A list: one run of cells in the region, typed by the join of its elements — or `List<Any>` for a
+//! key's candidates, which dispatch alone reads. Its cells are value words, or [`Link`]s when the
+//! list is a knot's data node.
 
 use std::marker::PhantomData;
 
@@ -35,6 +36,23 @@ impl<'cell, X: Knotted> List<'cell, X> {
         });
         let ktype = list_type(types, scratch, cells.iter().map(Value::ktype));
         Self::weighed(writer, cells, ktype)
+    }
+
+    /// Lay down a key's candidates — the functions a `USING` hole or an `EVAL` offer gathers at
+    /// one key — typed `List<Any>` without reading any function's type. Dispatch alone reads such
+    /// a list, each function by its own type; a quantified registration's type is a scheme, which
+    /// no list type joins.
+    pub fn of_candidates(
+        writer: Writer<'cell>,
+        functions: impl ExactSizeIterator<Item = Value<'cell, X>>,
+    ) -> &'cell List<'cell, X> {
+        let mut functions = functions;
+        let cells = writer.fill(functions.len(), |_| {
+            functions
+                .next()
+                .expect("an exact-size iterator yields its reported length")
+        });
+        Self::weighed(writer, cells, KType::LIST_OF_ANY)
     }
 
     /// A list over value cells already resident in `writer`'s region under `ktype`, weighed as

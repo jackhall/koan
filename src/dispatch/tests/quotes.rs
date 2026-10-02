@@ -101,6 +101,30 @@ fn using_fills_a_keyworded_hole_with_a_module_s_registrations_at_its_key() {
     );
 }
 
+/// A key's candidates are laid down typed `List<Any>`, so a quantified registration stands at a
+/// hole a `USING` fills, and at a key an `EVAL` offers, beside any other.
+#[test]
+fn a_quantified_registration_fills_a_hole_and_is_offered_at_its_key() {
+    let boxed = "EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x])";
+    assert_eq!(
+        run(&format!(
+            "MODULE m = ({boxed})
+PRINT (EVAL (#(BOX 1) USING m) -> Any)"
+        )),
+        "[1]"
+    );
+    assert_eq!(
+        run(&format!(
+            "EXPR #(RUN body :(Expression NEEDING #[(BOX _)])) -> Any = #(\n  \
+             {boxed}\n  \
+             EVAL body -> Any\n\
+             )\n\
+             PRINT (RUN #(\\(BOX \"a\")))"
+        )),
+        "[a]"
+    );
+}
+
 #[test]
 fn a_dollar_group_resolves_its_use_where_the_quote_is_written() {
     assert_eq!(

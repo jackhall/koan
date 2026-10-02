@@ -403,7 +403,7 @@ fn offered<'graph, 'here>(
                         }
                     }
                 }
-                Value::List(List::new(writer, functions.iter().copied(), types, scratch))
+                Value::List(List::of_candidates(writer, functions.iter().copied()))
             }
         };
         fields.push((*name, offered));

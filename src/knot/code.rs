@@ -304,7 +304,7 @@ pub fn using<'graph, 'cell>(
                 keyed.clear();
                 self::keyed(shape, key, source, types, scratch, &mut keyed)?;
                 (!keyed.is_empty())
-                    .then(|| Value::List(List::new(writer, keyed.iter().copied(), types, scratch)))
+                    .then(|| Value::List(List::of_candidates(writer, keyed.iter().copied())))
             }
             name => super::field(writer, source, name, types, scratch),
         };
