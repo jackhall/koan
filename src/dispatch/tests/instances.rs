@@ -342,3 +342,15 @@ fn an_imprecise_other_argument_fixes_nothing() {
     let column = line.rfind("pick").expect("the argument is written") + 1;
     assert_eq!(run(&source), format!("load: <test>:2:{column}: {UNFIXED}"));
 }
+
+#[test]
+fn a_union_wanted_type_fixes_nothing_and_renders_as_written() {
+    let source = module("(LET f :((FN :{x :Number} -> Number) | Null) = pick)");
+    let column = source.rfind("pick").expect("the read is written") + 1;
+    assert_eq!(
+        run(&source),
+        format!(
+            "load: <test>:1:{column}: :((FN :{{x :Number}} -> Number) | Null) does not fix `Elt`"
+        )
+    );
+}

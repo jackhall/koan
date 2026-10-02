@@ -41,6 +41,37 @@ pub fn display_symbol(symbol: Symbol, symbols: &SymbolInterner) -> SymbolDisplay
     symbols.display(symbol)
 }
 
+/// One type's surface under the quantifier binder `binder`, as a `Display` view.
+struct NameIn<'x, 'run> {
+    kt: Handle,
+    types: &'x TypeRegistry<'run>,
+    symbols: &'x SymbolInterner,
+    binder: &'x [TypeSymbol],
+}
+
+impl std::fmt::Display for NameIn<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_name_in(self.kt, f, self.types, self.symbols, self.binder)
+    }
+}
+
+/// A writer into `f` that drops the type sigil a surface opens a parenthesis with, `:(`, and keeps
+/// every other surface — a record's `:{`, a leaf name — as it is.
+struct Unsigiled<'a, 'b> {
+    f: &'a mut std::fmt::Formatter<'b>,
+    first: bool,
+}
+
+impl std::fmt::Write for Unsigiled<'_, '_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let first = std::mem::replace(&mut self.first, false);
+        match text.strip_prefix(':') {
+            Some(rest) if first && rest.starts_with('(') => self.f.write_str(rest),
+            _ => self.f.write_str(text),
+        }
+    }
+}
+
 /// Surface-syntax rendering, straight into `f`. The one place the surface arms are written.
 ///
 /// `binder` is the quantifier binder in force — the enclosing shape's parameter names, which its
@@ -160,14 +191,20 @@ fn write_name_in(
         },
         TypeNode::DeferredReturn(surface) => surface.write_surface(f, symbols),
         // `:(A | B)` — members separated by ` | ` and wrapped in the type sigil. A compound member
-        // already opens its own sigil, which nests fine.
+        // is written in bare parentheses inside it, as a union is spelled: `:((LIST OF Any) | Null)`.
         TypeNode::Union { members } => {
             f.write_str(":(")?;
             for (index, member) in members.iter().enumerate() {
                 if index > 0 {
                     f.write_str(" | ")?;
                 }
-                write_name_in(*member, f, types, symbols, binder)?;
+                let member = NameIn {
+                    kt: *member,
+                    types,
+                    symbols,
+                    binder,
+                };
+                write!(Unsigiled { f, first: true }, "{member}")?;
             }
             f.write_str(")")
         }

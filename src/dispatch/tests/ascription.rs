@@ -198,7 +198,7 @@ fn an_ascription_has_its_type_at_load() {
         assert_eq!(ends(program, top, "exact"), (point.clone(), point));
         assert_eq!(
             ends(program, top, "loose"),
-            ("Never".to_string(), ":(:(LIST OF Any) | Null)".to_string())
+            ("Never".to_string(), ":((LIST OF Any) | Null)".to_string())
         );
         assert_eq!(
             ends(program, top, "any"),
