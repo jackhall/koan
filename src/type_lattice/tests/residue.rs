@@ -828,6 +828,30 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     assert_eq!(meet(&types, region, number_or_str, elt_or_bool), elt);
 }
 
+/// No law: the generators rarely draw a carrier beside every member its bound spans. An opaque
+/// carrier is concrete, so the order reduces it like any concrete member, under the union of the
+/// rest as well as under one member.
+#[test]
+fn a_carrier_under_the_rest_of_a_union_is_dropped() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
+    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    let carrier = types.parameter(
+        name,
+        number_or_str,
+        Some(crate::memory::ScopeId::from_raw(1, 1)),
+    );
+    assert!(types.is_concrete(carrier));
+    assert_eq!(
+        types.union_of(region, &[carrier, KType::NUMBER, KType::STR]),
+        number_or_str
+    );
+    assert_eq!(join(&types, region, carrier, number_or_str), number_or_str);
+}
+
 /// No law: the unifier's carried-variable rule is covered by a property, but the solution it
 /// reaches is a worked example. `Y` bounded by `LIST OF Number` fills `LIST OF X`, solving `X` to
 /// `Number` — and that closes *fits*' transitivity through a monomorphic instance.

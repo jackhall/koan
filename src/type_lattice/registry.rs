@@ -1016,6 +1016,7 @@ impl<'run> TypeRegistry<'run> {
             let keep = unsubsumed(self, scratch, &flat, Dropped::Below);
             let mut keep = keep.iter();
             flat.retain(|_| *keep.next().unwrap_or(&true));
+            self.drop_carriers_under_the_rest(scratch, &mut flat);
         }
         // The three family tops together hold every type, so their union is `Any` — and must be, or
         // a type variable bounded by `Any` would lie under `Any` but not under the union that equals it.
@@ -1030,6 +1031,40 @@ impl<'run> TypeRegistry<'run> {
             1 => flat[0],
             _ => self.intern_union_members(scratch, &flat),
         }
+    }
+
+    /// Drop from `flat` every opaque carrier whose bound lies under the union of the other
+    /// concrete members that are no rigid variable — a bound spanning several members, which the
+    /// pairwise pass cannot see. A carrier is concrete, so the order reduces it; a bound holds no
+    /// rigid variable, so no rigid member holds one up.
+    fn drop_carriers_under_the_rest(
+        &self,
+        scratch: BumpAllocator<'_>,
+        flat: &mut BumpVec<'_, KType>,
+    ) {
+        let carrier_bound = |member: KType| match self.node(member) {
+            TypeNode::Parameter {
+                bound,
+                nonce: Some(_),
+                ..
+            } if bound != KType::ANY => Some(bound),
+            _ => None,
+        };
+        if !flat.iter().any(|member| carrier_bound(*member).is_some()) {
+            return;
+        }
+        let mut rest = BumpVec::with_capacity_in(flat.len(), scratch);
+        rest.extend(flat.iter().copied().filter(|member| {
+            self.is_concrete(*member) && self.node(*member).rigid_bound().is_none()
+        }));
+        // With one such member the pairwise pass already decided.
+        if rest.len() < 2 {
+            return;
+        }
+        let rest = self.intern_union_members(scratch, &rest);
+        flat.retain(|member| {
+            carrier_bound(*member).is_none_or(|bound| !is_subtype_of(self, scratch, bound, rest))
+        });
     }
 
     /// Intern a union from members that are already flat and already an antichain — dedup by handle
