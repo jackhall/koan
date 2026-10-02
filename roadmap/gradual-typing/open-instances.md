@@ -32,8 +32,9 @@ made.
 
 ## Dependencies
 
-**Requires:**
+Builds on the [type captures](../../src/scope/README.md#resolution) a call's
+contribution reads a lexical variable through.
 
-- [Calls solved from their static types](static-solutions.md) — the type captures a body that never names the variable reads it through.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

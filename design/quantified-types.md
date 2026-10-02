@@ -206,9 +206,11 @@ Each rule above is a known one, and the source says what it buys and costs.
 | `:\|` and its carrier, minted per ascription; `:!` | opaque (generative) and transparent ascription; sealing as an existential | Rossberg, Russo and Dreyer, *F-ing modules* (2014) |
 | An unpinned head parameter: one rigid unknown offered, one solved variable asked | an existential type, packed on one side and opened on the other | the same |
 
-Two departures matter when reading those sources. Koan solves a group from
-the types the arguments *carry*, at the call, so a solve always has concrete
-types to read and never infers a scheme. And its `Any` is the top of a
+Two departures matter when reading those sources. Koan solves a group at the
+call, from the upper end of each argument's static type and from the type it
+*carries* where the load knows nothing of it, each read at the types the run
+binds, so a solve always has concrete types to read and never infers a
+scheme. And its `Any` is the top of a
 lattice, not an unknown type, so nothing here is checked by consistency.
 
 ## Open work
@@ -217,6 +219,6 @@ lattice, not an unknown type, so nothing here is checked by consistency.
   carrier as a bound, higher-kinded head parameters, `m.f` outside the head of
   a call, calling through an opaque view's quantified member, and whether a
   keyworded form's name counts as a module member's binding.
-- [Calls solved from their static types](../roadmap/gradual-typing/static-solutions.md)
-  — capturing a lexical variable a solution names, which would let such an
-  instance load.
+- [Instances over a lexical variable](../roadmap/gradual-typing/open-instances.md)
+  — an instance whose solution names a type a run binds, read through the type
+  captures a call's contribution already uses.

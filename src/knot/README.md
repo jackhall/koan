@@ -329,7 +329,8 @@ back unchanged, since which names are its holes is unknown.
 A function's captured environment is the scope layer's
 [closure bindings](../scope/README.md#three-tiers): one run, in capture-slot
 order, of [links](../values/README.md#what-a-value-is) — value words and knot
-edges, the same cell type a data node holds. A value word is the enclosing
+edges, the same cell type a data node holds — the builder's captures first,
+then the type captures the static pass added. A value word is the enclosing
 binding's word, shallow, so capturing a string shares its bytes. An edge names
 a fellow node by index.
 
@@ -383,7 +384,13 @@ are equal when they hold the same shape handle — one per written `FN`, `EXPR` 
 instance, and their closure bindings compare equal as a bisimulation,
 under the pair set circular data uses. Bindings are immutable and no shape
 retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
-shape and captures fix what it does. The same text written at another site is
+shape and captures fix what it does. A closure holds a
+[type capture](../scope/README.md#resolution) — an enclosing call's binding of
+a type name — only where a call in its body reads it for a solve: at a slot
+that solves in one of the call's candidates, including one the load judged
+*never* and dropped, since the call runs what selection over the full list
+would. So a function born under two bindings of a type name compares equal
+wherever no call in it reads that name. The same text written at another site is
 unequal, and a builtin compares by its table identity. `values` compares by an
 identity rather than a shape, since it names none: `Knotted::resolve` hands it
 the shape's address. A quote's code compares as its syntax and the values its

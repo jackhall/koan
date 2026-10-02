@@ -396,7 +396,10 @@ it is declared, along the lexical chain of bodies: the names of every enclosing
 body first, then the body's own — a callable's own `FOR ALL` group first, in its
 group order, then its other names in slot order. So a name has one level in
 every body that reads it — the body that declares it, a body nested in that one,
-under a group a nested signature opens — and no binder captures it.
+under a group a nested signature opens — and no binder captures it. The body
+that declares a name records its level beside the slot or capture its
+activation holds the bound type at ([declared variables](../scope/README.md#load-time-types)),
+so a use nested deeper can find where a run reads the variable.
 
 A level is no identity beyond its chain. Two bodies neither of which encloses
 the other number their names alike, and equal content is one node, so typing a

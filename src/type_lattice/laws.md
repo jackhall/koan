@@ -229,8 +229,9 @@ variable for the next, it says so with a
 [priority class](solving.md#priority-classes).
 
 **What enforces it.** `a_solution_is_the_least_instance_of_its_contributions`,
-`admission_without_quantifiers_is_the_order` and
-`a_carried_variable_is_admitted_where_its_bound_is`.
+`admission_without_quantifiers_is_the_order`,
+`a_carried_variable_is_admitted_where_its_bound_is` and
+`a_solution_reads_only_its_solving_slots`.
 
 ## A load-time verdict holds at every run
 
@@ -248,13 +249,13 @@ ascription retypes without checking. Each is sound only if the verdict was.
 
 **What breaks.**
 
-- *Reading only the upper end.* Under
-  `EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`, the call
-  `PAIR a WITH b` over parameters `a :(Number | Str)` and `b :(Number | Str)`
-  is *maybe*: `a` may carry `Number` where `b` carries `Str`, and the second
-  class then refuses `b`. Treat each argument as exactly its upper end and the
-  verdict is *always*, the load selects the candidate, and that call runs a
-  body it was never admitted to.
+- *Reading only the upper end.* Under `EXPR #(WHICH x :Number) -> Str`, the
+  call `WHICH a` over a parameter `a :(Number | Str)` is *maybe*: `a` may
+  carry `Number`. Treat the argument as exactly its upper end and the verdict
+  is *never*, and the load drops a candidate that runs. Only where the call
+  itself solves from that upper end — an argument's
+  [contribution](../dispatch/README.md#static-types) at a slot that solves —
+  may the judge read it as a point.
 - *Reading a variable as its bound at a contravariant position.* A parameter
   `f :(FN :{x :Elt} -> Null)`, with `Elt` a lexical variable bounded by `Any`,
   read as `FN :{x :Any} -> Null`, is *always* at a slot of that type. Where a

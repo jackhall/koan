@@ -127,6 +127,10 @@ that pair. So
 `FOR ALL #[Elt] #(PAIR x :(LIST OF Elt) WITH y :(LIST OF Elt))` fixes `Elt`
 from `x` and refuses a `y` that does not lie under it, while one class over both
 slots — or a call by name, whose record has no order — solves them jointly.
+[`solving_slots`](ranking.rs) names the slots a solve reads: each one naming a
+variable whose first class is its own. In written order `PAIR`'s `x` solves and
+its `y` only admits, so dispatch hands the solve an argument's static type at
+`x` alone.
 
 `admits_shape` runs the same loop with a candidate shape's slot types as the
 arguments. A slot type stands for every type a call carries under it, so an
@@ -159,15 +163,17 @@ interval, class by class, beside each variable's interval:
 - *never* — some slot, each variable an earlier class solved read at its
   greatest instance, meets its argument's upper end at `Never`, or does not lie
   above its argument's lower end read below its rigid variables: every type a
-  call carries lies above that end, so the slot admits none;
+  call carries lies above that end, so the slot admits none; or an **exact
+  class** — one every slot of which that names a variable of its own has an
+  exact argument holding no rigid variable, and names only earlier variables
+  solved to a point — whose static solve over those slots fails, since that
+  solve is the call's own;
 - *always* — every class admits whatever a call carries within the arguments'
   intervals: a slot naming no variable of its own class admits its argument's
   upper end with each earlier variable at its least instance; a slot that is a
   variable of its class alone, named by no other slot of the class, admits the
-  argument's upper end under the variable's bound; and a class every slot of
-  which that names a variable of its own has an exact argument holding no rigid
-  variable, and names only earlier variables solved to a point, admits when its
-  static solve does;
+  argument's upper end under the variable's bound; and an exact class admits
+  when its static solve does;
 - *maybe* — any other.
 
 Every rule reads a relation that holds of a lexical variable for every type a

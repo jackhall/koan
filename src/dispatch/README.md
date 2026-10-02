@@ -12,7 +12,7 @@ What a keyworded use may select is fixed where its shape is built
 is a relation of the type lattice
 ([priority classes](../type_lattice/solving.md#priority-classes)). Dispatch is
 what runs between the two: it evaluates a call's slots, admits and ranks the
-candidates by the arguments' carried types, and runs the one that wins.
+candidates by the arguments' types, and runs the one that wins.
 
 ## What dispatch runs
 
@@ -136,7 +136,9 @@ label's the code kind of its name. [`select`](select.rs) then:
 
 1. **admits** each candidate whose registered shape — a builtin's own type, or
    the shape a registration's function carries — admits the carried types
-   class by class, solving a quantified candidate's group as it goes; a spread
+   class by class, solving a quantified candidate's group as it goes, each
+   slot that solves reading its argument's [contribution](#static-types)
+   where the load recorded one; a spread
    candidate, a list a `USING` or an `EVAL` supplied, contributes each function
    in it;
 2. **ranks** the admitting candidates by the lattice's per-class verdicts, which
@@ -160,7 +162,7 @@ closed, is dropped too: whenever it admits, elimination drops it at that class.
 A use left with no *maybe* candidate is ranked there when it holds one
 candidate or every one is closed. Its winner is selected, and the call runs it
 without admitting or ranking ([`chosen`](select.rs)), a quantified candidate
-still solving its group from the carried types; a use none of whose candidates
+still solving its group, as step 1 solves it; a use none of whose candidates
 ranks first refuses the load as an ambiguity. Any other call admits its *maybe*
 candidates, takes each *always* one as admitted, ranks as above, and chooses
 what selection over the full list would. Several rigid candidates are ranked at
@@ -174,11 +176,11 @@ slot to the parameter the registration names for it — or packs every slot into
 `operands` for a unary operator — and carries each type parameter the call
 solved, by name, as a type value, which the frame binds rather than solving
 again. A builtin's native runs in the evaluation's own step. A call by name
-hands its record over as written, and the
-[frame](../program/README.md#the-body-runner) admits each argument against its
-parameter's declared type and solves the callee's group against them jointly,
-so naming the callee may admit what a keyworded call of the same function
-refuses. The call says which it is (`CallKind`), so only a keyworded call's
+hands its record over as written, beside each contribution the load recorded
+for it, and the [frame](../program/README.md#the-body-runner) admits each
+argument — at its contribution where it has one — against its parameter's
+declared type and solves the callee's group against them jointly, so naming the
+callee may admit what a keyworded call of the same function refuses. The call says which it is (`CallKind`), so only a keyworded call's
 record is trusted to carry type parameters.
 
 ## Static types
@@ -340,9 +342,9 @@ variable, which holds every solution a call can reach, and its return is
 [read through the intervals](../type_lattice/solving.md#substitute-then-ask): a
 variable's upper end at a covariant position, its lower end at a contravariant
 one. So under `EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)`, `ONLY 1` is
-`Number`. Where every argument whose slot names a variable is exact and holds
-no lexical variable, the solve over the static types is the call's own, and
-each variable is solved to a point. A parameter exact at a container type is
+`Number`. Where every argument at a slot that solves is exact or contributes
+its static type (below), and holds no lexical variable, the solve over the
+static types is the call's own, and each variable is solved to a point. A parameter exact at a container type is
 such an argument: under
 `EXPR FOR ALL #[Elt] #(FLAT rows :(LIST OF (LIST OF Elt))) -> :(LIST OF Elt)`,
 `FLAT rows` over a parameter `rows :(LIST OF (LIST OF (Number | Str)))` is
@@ -352,8 +354,43 @@ is no such solve: the load solves through the variable's bound, where the call
 solves through the type the run binds it to. A call binds each variable to one
 type, the
 [least instance](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
-of the pair its carried types solve it to, so it still solves its group from
-the carried types.
+of the pair its arguments solve it to.
+
+**Contributions.** A call solves a quantified candidate's group from what the
+load knows of each argument, and from what the run carries only where the load
+knows nothing. At a slot that
+[solves](../type_lattice/solving.md#priority-classes) — one naming a variable
+its own class is the first to name — an argument **contributes** the upper end
+of its static type, or its carried type where that upper end is `Any`, since
+`Any` constrains nothing; every other slot admits its argument's carried type,
+as an unquantified slot does. So under
+`EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`, `PAIR a WITH b` over
+parameters `a :(Number | Str)` and `b :(Number | Str)` binds `Elt` to
+`Number | Str` whatever they hold, while `PAIR e WITH a`, `e` an `EVAL`
+declared `-> Any`, solves `Elt` from what `e` carries and admits `a` against
+it. A programmer moves an argument to the load's side with `:!`. A static type
+that cannot fit its slot contributes all the same, so the solve fails at every
+run and the load refuses the use: under
+`EXPR FOR ALL #[Elt] #(FIRST xs :(LIST OF Elt)) -> Elt`, `FIRST m` over a
+parameter `m :((LIST OF Number) | Null)` refuses the load, where an
+unquantified slot of that type would be *maybe*. An instance argument and an
+`ATTR` label written bare contribute their carried types. A static solve may
+bind what the carried one would not, and the call runs what it binds; a
+no-overload fault still names the carried types.
+
+A contribution holding a lexical variable is read where the call runs, at the
+type the run binds the variable to. The use records where it reads each
+variable — a hop per block, and a
+[type capture](../scope/README.md#load-time-types) in each callable or module
+between the use and the body declaring the variable — so a callable nested in a
+generic body solves as that body itself would, and a closure holds a type
+capture only where one of its calls reads it. The pass computes a
+contribution only at a position some candidate's slot solves, whether or not
+the load keeps that candidate, since a call runs what selection over the full
+list would and a candidate the load judged *never* from a contribution must stay
+*never* there. The cell
+records each use's contributions, which the call resolves and hands selection
+beside the carried types.
 
 **Lexical variables.** A static type may hold the
 [lexical variables](../elaborate/README.md#the-type-channel-at-load) of the
@@ -376,7 +413,9 @@ own, so a static type crossing into it, a `$` name's, or leaving it, an
   arguments' static types: a slot that is a variable of its own class alone
   admits under the variable's bound, and a class whose arguments naming its own
   variables are exact and hold no lexical variable admits when its static
-  solve does. Each admission reads
+  solve does — where that solve fails, the candidate is *never*. A contributing
+  argument is read as exactly its upper end, since the call solves from that
+  type. Each admission reads
   [*fits*](../type_lattice/relations.md#the-relations), so a module argument at
   most a signature declaring all of `Boxes`'s members and more is *always* at a
   slot `:Boxes`;
@@ -386,9 +425,10 @@ A slot naming a variable an earlier
 [class](../type_lattice/solving.md#priority-classes) solved is read through that
 variable's interval: at its least instance for *always*, at its greatest for
 *never*. So under `EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`,
-`PAIR 1 WITH 2` is *always*, while `PAIR a WITH b` over parameters
-`a :(Number | Str)` and `b :(Number | Str)` is *maybe*: `a` may carry `Number`
-where `b` carries `Str`. An argument whose static type is `Never` never arrives,
+`PAIR 1 WITH 2` is *always*, and so is `PAIR a WITH b` over parameters
+`a :(Number | Str)` and `b :(Number | Str)`, since `a` contributes
+`Number | Str` and `b` lies under it, while `PAIR a WITH e`, `e` an `EVAL`
+declared `-> Any`, is *maybe*: `e` may carry a type `Elt` does not admit. An argument whose static type is `Never` never arrives,
 so its use drops and ranks nothing and its own static type is `Never`. A use
 left with no candidate refuses the load (`ShapeError::NoAdmittingCandidate`):
 
@@ -477,15 +517,28 @@ the argument exact, names a field no parameter declares:
 ```
 
 A callee the load knows only at most, such as a parameter of function type, is
-the call's to admit.
+the call's to admit. A call by name whose callee the load reads as a quantified
+function solves its group from its argument record's static type, each field
+contributing as a keyworded argument does, so `pair {x = a, y = b}` under
+`FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(LIST OF Elt)` is exactly
+`LIST OF (Number | Str)` over the parameters above. Wherever the argument's
+record names every parameter, the cell records the contributions by the
+argument's site for the frame, whatever the static solve finds: a field whose
+static type the load cannot admit still contributes, and the frame solves from
+it as a keyworded call would. The call refuses the load
+where a closed contribution does not fit its parameter, or where every solving
+parameter's contribution is closed and the group has no solution: under
+`FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt`, `only {x = a}` over
+`a :(Number | Str)` refuses the load.
 
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
 Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running
 it reports it, as it reports the type channel's. Debug builds check both halves
 on every run: a finished value's carried type lies within its node's static
-type, and a call that dropped, selected or took a candidate as admitted runs
-what selection over the full list would.
+type, a call that dropped, selected or took a candidate as admitted runs
+what selection over the full list would, and each argument a call binds
+carries a type under its slot or parameter at the solution.
 
 ## Tails under a contract
 
@@ -616,7 +669,8 @@ outranking it;
 substituted by level and agreeing with its load-time type where it is born, a
 quote's code typed twice interning nothing, a nested group's parameters and
 return check, exact static types, crossings into and out of code, an `EVAL`'s
-declared type, a quantified candidate selected only over exact arguments, a
+declared type, a quantified candidate selected where its static solve is the
+call's, a
 *maybe* an *always* outranks dropped, a use ranked at load and one ranked at the
 call, and returns read through a group's intervals, by keyword and by name;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
@@ -653,6 +707,15 @@ arguments first, candidates disagreeing, a call by name's record, a closed
 solution, an instance's body reading its solution and calling its siblings, its
 equality, and one made in a frame and called where it lands, which is on the
 [Miri slate](../../observe/miri_slate.md);
+[contributions](tests/contributions.rs) — a call solved from its arguments'
+contributions: a declared argument's static type, an `EVAL`'s carried one at a
+slot that solves and at one that does not, a static type that cannot fit its
+slot refused at load, a contribution over a lexical variable read in its body,
+through nested callables and through a block, a closure capturing a type only
+where a call in it contributes it, which is on the
+[Miri slate](../../observe/miri_slate.md), and a call by name solved from its
+record's static type, exact at its return, refused at load, reading a rigid
+contribution, and solving from a rigid field the load cannot admit;
 [rules](tests/rules.rs) — the law every native's type rule obeys over drawn
 argument intervals and names, and what `FROM`'s and `ATTR`'s rules make
 the load type and refuse and the run carry;

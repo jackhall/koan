@@ -165,6 +165,18 @@ member's place in the component, which the birth turns into a knot edge the
 caller mints. That covers a callable a binder births and a `FN` a data binder's
 constructor slot holds alike.
 
+A callable or module also holds a **type capture** past the builder's captures
+for each lexical variable of an enclosing body that a call in it solves from:
+the static pass adds one where a
+[contribution](../dispatch/README.md#static-types) names such a variable, with
+the coordinate of the enclosing activation its birth reads
+(`BodyShape::type_captures`), and a callable between the two passes it on
+through a type capture of its own. So a body reads a type name it never writes,
+and a closure holds one only where a call in it reads it. Births read the
+builder's captures, then the type captures, so the closure is `capture_count()`
+slots long. A type capture is never merged with a builder capture of the same
+name.
+
 A code shape is where a [mark](#holes-and-marks) is spent, so its captures are
 keyed by name **and** mark: a hole `x`, a `$x` and a `\x` read in one body are
 three captures. A `$x` skips every binder in the code, the parameters of a
@@ -479,6 +491,10 @@ elaborated — and the pass fills it, once, where the program loads:
   its own `FOR ALL` group is in the body (`BodyShape::group_levels`), and the
   solution a `FN FOR ALL` the load instantiated is born at
   (`BodyShape::born_instance`), written by dispatch's static pass;
+- each lexical variable a body declares, by level, beside the slot or capture
+  its activation holds the bound type at (`BodyShape::declared_variables`),
+  which the static pass reads to find where a use reads a variable, and the
+  type captures that pass adds (`BodyShape::type_captures`);
 - a quote's code shape's **typing refusal**, which `BodyShape::refusal` reports
   as it reports the code's own error.
 
@@ -498,10 +514,14 @@ site), each statement (by index) and each slot (by index), and one `Narrowing` p
 use, parallel to its candidate list: the one candidate selected, or each
 candidate kept beside its verdict, *always* or *maybe*; the site of each
 **settled** `:!` or annotation, whose value's static type lies under its type,
-so the run checks nothing there; and the solution each name read at an
-[instance site](../dispatch/README.md#static-types) is instantiated at. It
-lives here for the same reason the type channel's cells do, and the shape reads
-it by site (`value_type`, `narrowing`, `settled`, `instance_at`), statement
+so the run checks nothing there; the solution each name read at an
+[instance site](../dispatch/README.md#static-types) is instantiated at; each
+keyworded use's **contributions**, parallel to its candidate list, a static type
+per argument the call solves from, `Unknown` where it reads the carried type;
+and each call by name's contributions, by its argument's site, a static type
+per parameter by name. It lives here for the same reason the type channel's
+cells do, and the shape reads it by site (`value_type`, `narrowing`, `settled`,
+`instance_at`, `contributions`, `named_contributions`), statement
 index or slot; a shape the
 pass has not fixed — a quote's code it refused — has no static types, every
 candidate of every use in it is *maybe*, and no ascription in it is settled.

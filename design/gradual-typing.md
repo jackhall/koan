@@ -111,8 +111,10 @@ Every value carries a concrete type, memoized where the value is laid down
 reads its arguments' carried types and does whatever the load left:
 
 1. it **admits** each remaining candidate, solving a quantified candidate's
-   group from the carried types
-   ([the unifier](../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind));
+   group ([the unifier](../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind))
+   from what the load knows of each argument — the upper end of its static
+   type, at a slot that solves — and from the carried type only where the load
+   knows nothing ([contributions](../src/dispatch/README.md#static-types));
 2. it **ranks** the admitting candidates
    ([selection](../src/dispatch/README.md#selection));
 3. it **binds** each variable to its least instance, a concrete type, and
@@ -137,14 +139,17 @@ and never guesses.
 - Where a relation holds at some bindings and not others, the answer is
   *maybe* or *unknown*, and the call decides.
 
-Under `EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`, `PAIR 1 WITH 2`
-is *always*, while `PAIR a WITH b` over parameters `a :(Number | Str)` and
-`b :(Number | Str)` is *maybe*: `a` may carry a `Number` where `b` carries a
-`Str`.
+Under `EXPR #(WHICH x :Number) -> Str`, `WHICH a` over a parameter
+`a :(Number | Str)` is *maybe*: `a` may carry a `Number`. The load reads an
+argument as exactly its upper end only where the call itself solves from it:
+under `EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`, `PAIR a WITH b`
+over parameters `a :(Number | Str)` and `b :(Number | Str)` binds `Elt` to
+`Number | Str` at every run, so it is *always*.
 
 Debug builds check the rule on every run: a finished value's carried type lies
-within its node's static type, and a call the load decided runs what selection
-over the full candidate list would.
+within its node's static type, a call the load decided runs what selection
+over the full candidate list would, and each argument a call binds carries a
+type under its slot at the solution.
 
 ## In the literature
 
@@ -187,7 +192,7 @@ changes what a reader sees and which overload runs.
 
 - [Gradual typing](../roadmap/gradual-typing/README.md) — the project's open
   items.
-- [Calls solved from their static types](../roadmap/gradual-typing/static-solutions.md)
-  — a call's group solved from what the load knows of its arguments.
+- [Instances over a lexical variable](../roadmap/gradual-typing/open-instances.md)
+  — a quantified function instantiated at a type each run binds.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)

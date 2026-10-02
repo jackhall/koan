@@ -111,7 +111,7 @@ seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
   [barrier](../../src/knot/module/README.md#members-are-born-coerced) stays: a
   scalar carries no type of its own, so hiding a `0` wraps it, while a
   container is retyped with no wrapper. Existential use is a universal call,
-  since a `FOR ALL` is solved against carried types when the call runs, and a
+  since a `FOR ALL` is solved when the call runs, and a
   functor quantifies itself,
   `EXPR FOR ALL #[Elt] #(MAKESET elem :(Ordered WITH {Carrier = Elt}))`, so
   [dispatch](../../src/dispatch/README.md#selection) solves `Elt` through the module's member types as it
