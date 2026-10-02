@@ -5,7 +5,9 @@
 //! bucket key, then each registration visible to it, then — in a quote's code — the functions a
 //! `USING` or an `EVAL` supplies for its key ([`CandidateList`](crate::scope::CandidateList)). A
 //! call evaluates its slots, keeps the candidates whose expression shape admits the arguments'
-//! carried types class by class, and ranks the survivors by the type lattice's per-class verdicts;
+//! types class by class — a quantified one's group solved from what the load knows of each
+//! argument, and from its carried type where the load knows nothing — and ranks the survivors by
+//! the type lattice's per-class verdicts;
 //! a lone survivor runs, a builtin wins a tie, and anything else is an error value. A builtin
 //! overload is a function value like any other, whose body is a native. Where the program loads,
 //! each use's candidates are narrowed by its arguments' static types, and chosen where one is left

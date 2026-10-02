@@ -1121,19 +1121,24 @@ proptest! {
         }
     }
 
-    /// A solve reads only its solving slots: with any argument another slot admits in place of the
-    /// carried one, the solution is the same.
+    /// A solve reads only its solving slots: with another call's arguments at every other slot,
+    /// wherever that call admits, the solution is the same. A slot the door misses would carry the
+    /// other call's argument into the solve.
     #[test]
     fn a_solution_reads_only_its_solving_slots(
         a in shape(),
         b in shape(),
         draw in draw(),
+        other in draw(),
     ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some((_, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
+        let (Some((_, carried)), Some((_, elsewhere))) = (
+            static_and_carried(&types, scratch, a, b, &draw),
+            static_and_carried(&types, scratch, a, b, &other),
+        ) else {
             return Ok(());
         };
         let run_shape = instance(&types, scratch, a, &draw);
@@ -1141,24 +1146,15 @@ proptest! {
             return Ok(());
         };
         let solving = solving_slots(&types, scratch, run_shape);
-        // A slot that solves nothing names only variables an earlier class solved, so the slot read
-        // at the solution is an argument it admits.
-        let read: Vec<Handle> = shape_slots(run_shape, &types)
-            .zip(&carried)
+        let mixed: Vec<Handle> = carried
+            .iter()
+            .zip(&elsewhere)
             .zip(solving)
-            .map(|((slot, argument), solves)| {
-                if *solves {
-                    *argument
-                } else {
-                    substitute_quantified(&types, scratch, slot, solution)
-                }
-            })
+            .map(|((own, theirs), solves)| if *solves { *own } else { *theirs })
             .collect();
-        prop_assert_eq!(
-            admit_by_class(&types, scratch, run_shape, &read),
-            Some(solution),
-            "a solve read a slot that solves nothing",
-        );
+        if let Some(mixed) = admit_by_class(&types, scratch, run_shape, &mixed) {
+            prop_assert_eq!(mixed, solution, "a solve read a slot that solves nothing");
+        }
     }
 }
 

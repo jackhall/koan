@@ -3,13 +3,12 @@
 //! Each candidate's registered expression shape admits the operands' carried types class by class
 //! ([`admit_by_class`]), solving a quantified candidate's group as it goes. At a slot the group's
 //! solve reads ([`solving_slots`]), an operand the load recorded a **contribution** for is read as
-//! that type instead — its static type's upper end, where the run carries it — so a call solves
-//! from what the load knows of each argument and from the carried type only where it knows
-//! nothing. The admitting
-//! candidates are ranked by the lattice's per-class verdicts ([`select_by_class`]), which the
-//! registry records the first time a pair meets, so dispatch compares no slot types of its own. A
-//! lone survivor runs; where several survive, a builtin among them wins, and otherwise the call is
-//! ambiguous, whichever scopes the survivors were declared in.
+//! that type instead — its static type's upper end, resolved where the call runs — so a call
+//! solves from what the load knows of each argument and from the carried type only where it knows
+//! nothing. The admitting candidates are ranked by the lattice's per-class verdicts
+//! ([`select_by_class`]), which the registry records the first time a pair meets, so dispatch
+//! compares no slot types of its own. A lone survivor runs; where several survive, a builtin among
+//! them wins, and otherwise the call is ambiguous, whichever scopes the survivors were declared in.
 //!
 //! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it
 //! kept: it admits each *maybe* one, takes each *always* one as admitted — solving only a

@@ -41,8 +41,8 @@
 //! parameters. A call by name of a quantified function solves its group from its argument record's
 //! fields, each contributing as a keyworded argument does, and records the contributions by its
 //! argument's site for the frame; it refuses the load where a closed contribution misses its
-//! parameter or closed ones leave the group unsolved. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
-//! [`evaluate`](super::evaluate) reads.
+//! parameter or closed ones leave the group unsolved. What the pass fixes rests in each shape's
+//! write-once [`Statics`] cell, which [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
 //! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its cell,
@@ -394,9 +394,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
 
     /// Where the lexical variable at `variable`'s level is read from the shape at chain level
     /// `level`: its home in the shape that declares it, stepped in through every shape between — a
-    /// hop per block, a type capture per callable or module. `None` where no shape of this chain
-    /// declares it.
-    fn coordinate_of(&mut self, level: usize, variable: usize) -> Option<Coordinate> {
+    /// hop per block, a type capture per callable or module. The type channel numbers each lexical
+    /// variable of a chain in the shape that declares it, so a static type names none without a
+    /// home on its own chain.
+    fn coordinate_of(&mut self, level: usize, variable: usize) -> Coordinate {
+        const HOMED: &str = "a lexical variable a static type names has its home on its chain";
         let mut home = level;
         let target = loop {
             let at = &self.chain[home];
@@ -404,9 +406,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if let Some((_, target)) = declared.into_iter().find(|(at, _)| *at == variable) {
                 break *target;
             }
-            if at.roots_chain || home == 0 {
-                return None;
-            }
+            assert!(!at.roots_chain && home > 0, "{HOMED}");
             home -= 1;
         };
         let mut coordinate = Coordinate::Activation { hops: 0, target };
@@ -417,10 +417,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     hops: 0,
                     target: Target::Capture(self.type_capture(inner, variable, coordinate)),
                 },
-                ShapeKind::Program | ShapeKind::Code => return None,
+                ShapeKind::Program | ShapeKind::Code => unreachable!("{HOMED}"),
             };
         }
-        Some(coordinate)
+        coordinate
     }
 
     /// The closure slot of the shape at `level` that holds the lexical variable `variable`, read at
@@ -461,9 +461,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
         let mut located = BumpVec::with_capacity_in(levels.len(), scratch);
         for variable in levels.iter().copied() {
-            let Some(at) = self.coordinate_of(level, variable) else {
-                return Static::Unknown;
-            };
+            let at = self.coordinate_of(level, variable);
             located.push(Located {
                 level: variable,
                 at,
@@ -1577,7 +1575,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// whether that solve is the call's — the group empty, or every interval a point.
     ///
     /// Where the callee is the quantified function typed by `scheme`, each parameter naming its
-    /// group solves from its field's contribution, which the call records by `argument`'s site; the
+    /// group solves from its field's contribution, which the call records by `argument`'s site
+    /// whenever its record names every parameter, as a keyworded use records its arguments'; the
     /// load refuses the call where a closed contribution does not fit its parameter, or where every
     /// solving parameter's contribution is closed and the group has no solution.
     fn called(
@@ -1610,20 +1609,47 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             arguments: bound_above(types, scratch, payload.upper),
             at: node.source,
         };
-        let mut collector = Collector::<Parametric>::new(scratch, bounds);
-        let mut declared = BumpVec::with_capacity_in(params.len(), scratch);
-        let mut contributed = BumpVec::new_in(scratch);
-        let (mut exact, mut closed) = (true, true);
+        if params
+            .iter()
+            .any(|(name, _)| upper.get(name.symbol()).is_none())
+        {
+            return Ok((self.through(ret, None), false));
+        }
+        // Each solving parameter's contribution, recorded whatever the static solve finds: the
+        // frame solves from it at every call the load does not refuse.
+        let mut contributions = BumpVec::with_capacity_in(params.len(), scratch);
         for (name, param) in params.iter() {
-            let Some(field) = upper.get(name.symbol()) else {
-                return Ok((self.through(ret, None), false));
-            };
+            let field = upper
+                .get(name.symbol())
+                .expect("every parameter has its field");
             let solving = (0..bounds.len())
                 .any(|variable| types.references_quantifier(scratch, param, variable));
-            let contribution = match scheme {
+            contributions.push(match scheme {
                 Some(_) if solving => self.contribution(level, field),
                 _ => Static::Unknown,
-            };
+            });
+        }
+        let mut known = BumpVec::with_capacity_in(params.len(), scratch);
+        known.extend(
+            params
+                .iter()
+                .zip(contributions.iter())
+                .filter(|(_, contribution)| !matches!(contribution, Static::Unknown))
+                .map(|((name, _), contribution)| (name.symbol(), *contribution)),
+        );
+        if !self.unfilled && !known.is_empty() {
+            let recorded = collect(self.writer, known.iter().copied());
+            self.chain[level].named.push((Site::of(argument), recorded));
+        }
+        let mut collector = Collector::<Parametric>::new(scratch, bounds);
+        let mut declared = BumpVec::with_capacity_in(params.len(), scratch);
+        let (mut exact, mut closed) = (true, true);
+        for ((name, param), contribution) in params.iter().zip(contributions.iter()) {
+            let field = upper
+                .get(name.symbol())
+                .expect("every parameter has its field");
+            let solving = (0..bounds.len())
+                .any(|variable| types.references_quantifier(scratch, param, variable));
             if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
                 if let Static::Closed(_) = contribution {
                     return Err(never());
@@ -1639,19 +1665,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     || lower.and_then(|lower| lower.get(name.symbol())) == Some(field)
                         && types.concrete(field).is_some();
             }
-            if !matches!(contribution, Static::Unknown) {
-                contributed.push((name.symbol(), contribution));
-            }
             declared.push(param);
         }
         match collector.solve(types) {
             Ok(solution) => {
-                if !self.unfilled && !contributed.is_empty() {
-                    let contributed = collect(self.writer, contributed.iter().copied());
-                    self.chain[level]
-                        .named
-                        .push((Site::of(argument), contributed));
-                }
                 let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
                 Ok((self.through(ret, Some(&solved)), exact))
             }

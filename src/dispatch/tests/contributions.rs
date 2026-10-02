@@ -195,3 +195,14 @@ fn a_call_by_name_reads_a_rigid_contribution_where_it_runs() {
                   PRINT (WIDE 1 AND 2)";
     assert_eq!(run(source), ":(Number | Str)");
 }
+
+/// `b`'s static type is `Outer`, which the load cannot admit at `LIST OF Elt`; the call still
+/// solves from what `Outer` is bound to, as a keyworded call would, not from `b`'s carried list.
+#[test]
+fn a_call_by_name_solves_from_a_rigid_field_the_load_cannot_admit() {
+    let source = "LET first = FN EXPR FOR ALL #[Elt] #(FIRST y :(LIST OF Elt)) -> Type = #(Elt)\n\
+                  EXPR FOR ALL #[Outer] #(ONE b :Outer) -> Type = #(first {y = b})\n\
+                  EXPR #(WIDE q :((LIST OF Number) | (LIST OF Str))) -> Type = #(ONE q)\n\
+                  PRINT (WIDE [1])";
+    assert_eq!(run(source), ":(Number | Str)");
+}
