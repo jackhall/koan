@@ -68,21 +68,38 @@ pub(super) fn admits_shape(
 /// Whether `declared` admits `candidate` name by name — `declared`'s variables solved,
 /// `candidate`'s rigid — with `declared`'s return under `candidate`'s. The function twin of
 /// [`admits_shape`], reached from *fits* alone.
-///
-/// Width is the order's own: every name `declared` asks for, `candidate` must have, and a name
-/// only `candidate` has is one `declared` never needs. A parameter pair asks the candidate's
-/// parameter to lie under the declared one (covariant for the collector, since a parameter's own
-/// polarity is contravariant) and the return pair asks the declared return to lie under the
-/// candidate's.
 pub(super) fn admits_function(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     declared: Handle,
     candidate: Handle,
 ) -> bool {
+    let TypeNode::KFunction { bounds, .. } = types.node(declared) else {
+        return false;
+    };
+    let mut collector = Collector::<Handle>::new(scratch, bounds);
+    collect_function(types, scratch, declared, candidate, &mut collector)
+        && collector.solve(types).is_ok()
+}
+
+/// Collect what `candidate` contributes to `declared`'s group into `collector`, opened over that
+/// group's bounds: whether every pair admits, before any solve. The walk [`admits_function`] and
+/// [`instance_under`] share.
+///
+/// Width is the order's own: every name `declared` asks for, `candidate` must have, and a name
+/// only `candidate` has is one `declared` never needs. A parameter pair asks the candidate's
+/// parameter to lie under the declared one (covariant for the collector, since a parameter's own
+/// polarity is contravariant) and the return pair asks the declared return to lie under the
+/// candidate's.
+fn collect_function<T: TypeHandle>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    declared: Handle,
+    candidate: Handle,
+    collector: &mut Collector<'_, T>,
+) -> bool {
     let (
         TypeNode::KFunction {
-            bounds,
             params: declared_params,
             ret: declared_ret,
             ..
@@ -96,28 +113,66 @@ pub(super) fn admits_function(
     else {
         return false;
     };
-    let mut collector = Collector::<Handle>::new(scratch, bounds);
     for (name, slot) in declared_params.iter() {
         let Some(argument) = candidate_params.get(name.symbol()) else {
             return false;
         };
-        if admits(types, scratch, slot, argument, Variance::Co, &mut collector).is_err() {
+        if admits(types, scratch, slot, argument, Variance::Co, collector).is_err() {
             return false;
         }
     }
-    if admits(
+    admits(
         types,
         scratch,
         declared_ret,
         candidate_ret,
         Variance::Contra,
-        &mut collector,
+        collector,
     )
-    .is_err()
-    {
-        return false;
+    .is_ok()
+}
+
+/// Why a scheme has no least instance under a wanted function type.
+pub enum InstanceFailure<'s> {
+    /// The scheme does not fit the wanted type: no instance lies under it.
+    NoInstance,
+    /// The scheme fits, but no contribution from the wanted type reaches these variables of its
+    /// group, by group index, so nothing fixes them.
+    Unfixed(BumpVec<'s, usize>),
+}
+
+/// The least instance of `scheme` under `wanted`, a function type: *fits*' instantiation clause
+/// for a function scheme, answering the solution in group order rather than whether one exists.
+/// Each variable some contribution reaches takes its least instance; one none reaches is named,
+/// never read as its bound.
+pub(super) fn instance_under<'s, T: TypeHandle>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    scheme: Handle,
+    wanted: Handle,
+) -> Result<BumpVec<'s, T>, InstanceFailure<'s>> {
+    let TypeNode::KFunction { bounds, .. } = types.node(scheme) else {
+        unreachable!("an instance is taken of a function scheme")
+    };
+    debug_assert!(!bounds.is_empty(), "a scheme binds a group");
+    debug_assert!(
+        matches!(types.node(wanted), TypeNode::KFunction { .. }),
+        "an instance is wanted at a function type"
+    );
+    let mut collector = Collector::<T>::new(scratch, bounds);
+    if !collect_function(types, scratch, scheme, wanted, &mut collector) {
+        return Err(InstanceFailure::NoInstance);
     }
-    collector.solve(types).is_ok()
+    let solution = collector
+        .solve(types)
+        .map_err(|_| InstanceFailure::NoInstance)?;
+    let mut unfixed = BumpVec::new_in(scratch);
+    unfixed.extend((0..bounds.len()).filter(|index| !collector.reached(*index)));
+    if unfixed.is_empty() {
+        Ok(solution)
+    } else {
+        Err(InstanceFailure::Unfixed(unfixed))
+    }
 }
 
 /// Rank two candidates under one bucket key and ranking, lexicographically by class.

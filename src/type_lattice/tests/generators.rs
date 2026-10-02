@@ -23,7 +23,9 @@ use proptest::prelude::*;
 use crate::memory::{Bump, BumpAllocator, ScopeId};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
-use crate::type_lattice::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
+use crate::type_lattice::handle::{
+    DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap,
+};
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
@@ -32,7 +34,7 @@ use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::{
     DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes,
 };
-use crate::type_lattice::typed::{join, meet};
+use crate::type_lattice::typed::{instantiate_quantified, join, meet, quantifier_bounds};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
 /// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
@@ -775,6 +777,45 @@ pub fn arb_shape_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Pa
 pub fn arb_function_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Parametric>> {
     arb_function(world.clone(), depth, Rc::new(Vec::new()), false)
         .prop_map(move |raw| world.declared(raw))
+        .boxed()
+}
+
+/// A function scheme and a function type it may be wanted at: an unrelated function type, or the
+/// scheme's own instance at drawn ground bindings, under which an instance always lies. An
+/// unrelated draw alone almost never meets its scheme.
+pub fn arb_wanted_instance(world: World, depth: u32) -> BoxedStrategy<(Scheme, Parametric)> {
+    let grounds = world.grounds();
+    let scheme = arb_function(world.clone(), depth, Rc::new(Vec::new()), false).prop_filter_map(
+        "a scheme",
+        {
+            let world = world.clone();
+            move |raw| world.declared(raw).as_scheme()
+        },
+    );
+    let unrelated = arb_function(world.clone(), depth, Rc::new(Vec::new()), false).prop_filter_map(
+        "an unquantified function type",
+        {
+            let world = world.clone();
+            move |raw| world.declared(raw).as_type()
+        },
+    );
+    (
+        scheme,
+        unrelated,
+        prop::collection::vec(0..grounds.len(), 3),
+        any::<bool>(),
+    )
+        .prop_map(move |(scheme, unrelated, picks, own)| {
+            if !own {
+                return (scheme, unrelated);
+            }
+            let bindings: Vec<KType> = picks.iter().map(|pick| grounds[*pick]).collect();
+            let instance = with_scratch(|scratch| {
+                let bindings = &bindings[..quantifier_bounds(&world.types, scheme).len()];
+                instantiate_quantified(&world.types, scratch, scheme, bindings)
+            });
+            (scheme, instance)
+        })
         .boxed()
 }
 

@@ -24,13 +24,16 @@ use crate::type_lattice::schema::{
     shape_return, shape_slots,
 };
 use crate::type_lattice::shape::Specificity;
+use crate::type_lattice::sig_relations::InstanceFailure;
 use crate::type_lattice::sig_relations::{admits_shape, shape_specificity, sig_fits};
 use crate::type_lattice::signatures::{applications, applications_under, is_signature_type};
 use crate::type_lattice::substitute::{
     Side, Variable, bound_above, quantifier_bounds, read_through, substitute_parameters,
     substitute_quantified,
 };
-use crate::type_lattice::typed::{fits, is_subtype_of, join, meet, satisfied_by};
+use crate::type_lattice::typed::{
+    fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
+};
 use crate::type_lattice::unify::{Collector, Interval, UnifyFailure, admits, intervals};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::walk::unary::{Visit, visit};
@@ -39,7 +42,7 @@ use crate::type_lattice::{lattice, order};
 
 use super::generators::{
     World, arb_any, arb_arguments, arb_concrete, arb_function_type, arb_instance_chain,
-    arb_shape_type,
+    arb_shape_type, arb_wanted_instance,
 };
 
 thread_local! {
@@ -282,6 +285,46 @@ proptest! {
         prop_assert!(fits(&types, scratch, a, b), "the binder fits its instance");
         prop_assert!(fits(&types, scratch, b, c), "the instance fits the split");
         prop_assert!(fits(&types, scratch, a, c), "the binder fits the split");
+    }
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// An instance is taken of a scheme exactly where the scheme fits the type it is wanted at:
+    /// the door answers *fits*' instantiation clause, and only adds which instance.
+    #[test]
+    fn an_instance_exists_where_its_scheme_fits((scheme, wanted) in arb_wanted_instance(world(), 3)) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let result = instance_under(&types, scratch, scheme, wanted);
+        prop_assert_eq!(
+            matches!(result, Err(InstanceFailure::NoInstance)),
+            !fits(&types, scratch, scheme, wanted)
+        );
+    }
+
+    /// A least instance under a concrete type is concrete, and the instance it makes lies under
+    /// the type it was wanted at.
+    #[test]
+    fn an_instance_lies_under_the_type_it_is_wanted_at(
+        (scheme, wanted) in arb_wanted_instance(world(), 3)
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some(wanted) = types.concrete(wanted) else {
+            return Ok(());
+        };
+        let Ok(solution) = instance_under(&types, scratch, scheme, wanted) else {
+            return Ok(());
+        };
+        let instance = types.concrete(instantiate_quantified(&types, scratch, scheme, &solution));
+        // A variable free in the scheme outside its own group stays free in the instance.
+        prop_assume!(instance.is_some());
+        let instance = instance.expect("assumed");
+        prop_assert!(is_subtype_of(&types, scratch, instance, wanted));
     }
 }
 

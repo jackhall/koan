@@ -326,6 +326,13 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
         self.trail.push((index, variance, previous));
     }
 
+    /// Whether any contribution, lower or upper, reached the `index`-th variable.
+    pub(super) fn reached(&self, index: usize) -> bool {
+        let reached =
+            |cells: &[BumpVec<'_, Handle>]| cells.get(index).is_some_and(|cell| !cell.is_empty());
+        reached(&self.lower) || reached(&self.upper)
+    }
+
     /// The lower and upper contributions to the `index`-th variable, in arrival order — what
     /// reached it at a covariant position and what reached it at a contravariant one. Empty slices
     /// for an index no argument reached.

@@ -18,7 +18,7 @@ use super::ranking::{self, Judged};
 use super::registry::TypeRegistry;
 use super::schema::Members;
 use super::shape::Specificity;
-use super::sig_relations::{self, FitsFailure};
+use super::sig_relations::{self, FitsFailure, InstanceFailure};
 use super::substitute::{self, Side, Variable};
 use super::unify::Interval;
 
@@ -209,6 +209,19 @@ pub fn instantiate_quantified<B: TypeHandle>(
         scheme.raw(),
         bindings,
     ))
+}
+
+/// *Fits*' instantiation clause for a function scheme, answering the least instance under
+/// `wanted`, a function type, in group order: [`InstanceFailure::NoInstance`] where the scheme does
+/// not fit `wanted`, and [`InstanceFailure::Unfixed`] where it does but no contribution reaches
+/// some variable. Each entry is a contribution's join or meet, so a solution under a `T` is a `T`.
+pub fn instance_under<'s, T: TypeHandle>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    scheme: Scheme,
+    wanted: T,
+) -> Result<BumpVec<'s, T>, InstanceFailure<'s>> {
+    sig_relations::instance_under(types, scratch, scheme.raw(), wanted.raw())
 }
 
 /// `kt` with every variable replaced by its bound. A parametric type holds no binder, so every
