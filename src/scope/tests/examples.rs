@@ -1052,3 +1052,36 @@ fn a_quantified_fn_is_written_only_where_a_binder_or_a_call_takes_it() {
         });
     }
 }
+
+/// A body whose value is read takes its last statement's, so one binding a quantified function there
+/// would hand on a value nothing solves; anywhere else the binding's value goes unread.
+#[test]
+fn a_body_s_value_binds_no_quantified_function() {
+    let expression = "EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)";
+    for source in [
+        format!("LET f = (FN :{{}} -> Any = #({PICK}))"),
+        format!("LET f = (FN :{{}} -> Any = #({expression}))"),
+        format!("LET f = (FN :{{}} -> Any = #(\n  LET y = 1\n  {PICK}\n))"),
+    ] {
+        shaped(&source, |_, _, shape| {
+            assert!(
+                matches!(shape.err(), Some(ShapeError::QuantifiedValue { .. })),
+                "`{source}` refuses the body's value"
+            );
+        });
+    }
+    for source in [
+        PICK.to_string(),
+        format!("LET f = (FN :{{}} -> Number = #(\n  {PICK}\n  pick {{x = 1}}\n))"),
+        format!("MODULE m = ({PICK})"),
+    ] {
+        shaped(&source, |fixture, _, shape| {
+            if let Err(error) = shape {
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                );
+            }
+        });
+    }
+}

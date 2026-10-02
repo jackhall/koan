@@ -78,7 +78,7 @@ mod surface;
 pub(in crate::scope) use locate::source_within;
 
 use rewrite::{Built, BuiltKind, chained};
-use surface::{Surfaced, SurfacedKey};
+use surface::{Surfaced, SurfacedKey, quantified_value};
 
 /// The names a body binds that no signature writes. The shape builder binds them, and the
 /// elaborator reads an operator's function type over them, so the two cannot disagree.
@@ -758,6 +758,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             if let Some(rewritten) = self.rewrite_statement(nodes[index])? {
                 nodes[index] = resident(writer, rewritten);
             }
+        }
+        // A body whose value is read takes its last statement's: one binding a quantified function
+        // would hand on a value no type solves.
+        if matches!(
+            kind,
+            ShapeKind::Callable | ShapeKind::Block | ShapeKind::Code
+        ) && let Some(last) = nodes.last()
+            && quantified_value(last)
+        {
+            return Err(ShapeError::QuantifiedValue { at: last.source });
         }
         let parent_statement = self
             .chain

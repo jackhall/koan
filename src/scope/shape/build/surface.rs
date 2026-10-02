@@ -458,6 +458,14 @@ fn body_binders<'graph>(
     Ok(())
 }
 
+/// Whether `statement`'s value is a quantified function it binds: [`quantified_statement`], or a
+/// bare `EXPR FOR ALL …` definition.
+pub(super) fn quantified_value(statement: &KExpression<'_>) -> bool {
+    quantified_statement(statement)
+        || statement.cache().builtin_shape().map(|shape| shape.id)
+            == Some(BuiltinShapeId::QuantifiedExpressionDefinition)
+}
+
 /// Whether `statement` binds a quantified function: a `LET` of a quantified `FN`, or a
 /// `LET … = FN EXPR FOR ALL …`.
 fn quantified_statement(statement: &KExpression<'_>) -> bool {

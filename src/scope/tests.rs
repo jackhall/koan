@@ -228,6 +228,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::ShadowsBuiltin { name, .. } => E::ShadowsBuiltin { name, at },
         E::Unbound { name, site, .. } => E::Unbound { name, site, at },
         E::QuantifiedLambda { .. } => E::QuantifiedLambda { at },
+        E::QuantifiedValue { .. } => E::QuantifiedValue { at },
         E::QuantifiedRead { name, site, .. } => E::QuantifiedRead { name, site, at },
         E::EagerCycle {
             members,

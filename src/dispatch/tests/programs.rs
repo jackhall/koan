@@ -474,6 +474,22 @@ fn a_variable_used_once_is_solved_by_each_call() {
 fn a_quantified_function_runs_through_a_call() {
     let pick = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n";
     assert_eq!(run(&format!("{pick}PRINT (pick {{x = 1}})")), "1");
+    // A body returning one is refused where it is written, not when its value is read.
+    assert_eq!(
+        run(
+            "LET f = (FN :{} -> Any = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))))\n\
+             PRINT (f {})"
+        ),
+        "load: <test>:1:27: this binds a quantified function as the body's value, and nothing \
+         solves its group to a concrete type; end the body with another statement"
+    );
+    assert_eq!(
+        run(
+            "LET q = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\nPRINT (EVAL q -> Any)"
+        ),
+        "error: <test>:1:10: this binds a quantified function as the body's value, and nothing \
+         solves its group to a concrete type; end the body with another statement"
+    );
     assert_eq!(
         run(&format!(
             "{pick}LET wrap = (FN :{{x :Number}} -> Number = #(pick {{x = x}}))\n\

@@ -915,6 +915,10 @@ pub enum ShapeError<'graph> {
     /// A quantified `FN` written at `at`, anywhere but a binder's right-hand side or the head of a
     /// call.
     QuantifiedLambda { at: SourceRef },
+    /// The last statement of a body whose value is read — a callable's, an arm's, a quote's —
+    /// binding a quantified function at `at`: the statement's value is the body's, and nothing
+    /// solves the function's group to give it a concrete type.
+    QuantifiedValue { at: SourceRef },
     /// A name bound to a quantified function, read at `at` anywhere but the head of a call.
     QuantifiedRead {
         name: BinderSymbol,
@@ -1117,6 +1121,7 @@ impl ShapeError<'_> {
             ShapeError::ShadowsBuiltin { at, .. }
             | ShapeError::Unbound { at, .. }
             | ShapeError::QuantifiedLambda { at }
+            | ShapeError::QuantifiedValue { at }
             | ShapeError::QuantifiedRead { at, .. }
             | ShapeError::EagerCycle { at, .. }
             | ShapeError::MarkOutsideQuote { at }
@@ -1194,6 +1199,10 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             ShapeError::QuantifiedLambda { .. } => f.write_str(
                 "a quantified `FN` is written only as a binder's right-hand side or the head of a \
                  call",
+            ),
+            ShapeError::QuantifiedValue { .. } => f.write_str(
+                "this binds a quantified function as the body's value, and nothing solves its \
+                 group to a concrete type; end the body with another statement",
             ),
             ShapeError::QuantifiedRead { name: read, .. } => write!(
                 f,

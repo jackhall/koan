@@ -243,7 +243,7 @@ fn a_type_parameter_is_a_rigid_variable() {
 #[test]
 fn an_outer_for_all_name_keeps_its_level_in_an_inner_body() {
     let source = "LET f = (FN FOR ALL #[Ay] :{x :Ay} -> Ay = \
-                  #(LET g = (FN FOR ALL #[Be] :{y :Be} -> Be = #(:(MAP Ay -> Be)))))";
+                  #(\n  LET g = (FN FOR ALL #[Be] :{y :Be} -> Be = #(:(MAP Ay -> Be)))\n  x\n))";
     typed(source, |program| {
         let inner = nested(program.birth("f"), ShapeKind::Callable);
         let types = program.types;
@@ -278,7 +278,7 @@ fn sibling_quantified_bodies_number_their_own_names_alike() {
 #[test]
 fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
     let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
-                  #(LET g = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t))))";
+                  #(\n  LET g = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t))\n  x\n))";
     typed(source, |program| {
         let inner = nested(program.birth("f"), ShapeKind::Callable);
         let (value, levels) = match inner.callable_type() {
@@ -308,7 +308,7 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
 #[test]
 fn a_bound_naming_a_run_bound_name_is_left_for_the_run() {
     let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
-                  #(LET g = (FN FOR ALL #{Tee: Elt} :{t :Tee} -> Tee = #(t))))";
+                  #(\n  LET g = (FN FOR ALL #{Tee: Elt} :{t :Tee} -> Tee = #(t))\n  x\n))";
     typed(source, |program| {
         let inner = nested(program.birth("f"), ShapeKind::Callable);
         assert!(matches!(inner.callable_type(), Static::Unknown));
