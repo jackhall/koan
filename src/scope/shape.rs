@@ -1042,8 +1042,6 @@ pub enum ShapeError<'graph> {
         wanted: KType,
         at: SourceRef,
     },
-    /// An instance solving `variable` to a type each run binds: a solution must be closed.
-    OpenInstance { variable: TypeSymbol, at: SourceRef },
     /// A keyworded use whose kept candidates want a quantified function argument at different
     /// instances.
     AmbiguousInstance {
@@ -1276,7 +1274,6 @@ impl ShapeError<'_> {
             | ShapeError::QuantifiedValue { at }
             | ShapeError::Unfixed { at, .. }
             | ShapeError::NoInstance { at, .. }
-            | ShapeError::OpenInstance { at, .. }
             | ShapeError::AmbiguousInstance { at, .. }
             | ShapeError::NoInstanceAtCandidates { at, .. }
             | ShapeError::QuantifiedRead { at, .. }
@@ -1394,11 +1391,6 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "{} has no instance under {}",
                 display_name(*scheme, self.types, self.symbols),
                 display_name(*wanted, self.types, self.symbols)
-            ),
-            ShapeError::OpenInstance { variable, .. } => write!(
-                f,
-                "this solves `{}` to a type each run binds; ascribe a type no `FOR ALL` names",
-                self.symbols.display(variable.symbol())
             ),
             ShapeError::QuantifiedRead { name: read, .. } => write!(
                 f,

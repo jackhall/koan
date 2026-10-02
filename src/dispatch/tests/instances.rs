@@ -2,8 +2,11 @@
 //! group — an annotation, an ascription, a body's declared return, a container's element type —
 //! and refused where nothing does.
 
+use crate::scope::ShapeKind;
+
+use super::generic::expressed;
 use super::run;
-use super::statics::{binder, loaded, module_body, top};
+use super::statics::{binder, body, interval, loaded, module_body, top};
 
 const PICK: &str = "(LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
 
@@ -132,12 +135,165 @@ fn a_quantified_literal_is_born_as_its_instance() {
 }
 
 #[test]
-fn an_instance_solving_a_run_bound_type_is_refused() {
+fn an_instance_solving_a_run_bound_type_is_made_at_each_call() {
     assert_eq!(
         run("EXPR FOR ALL #[Outer] #(WRAP y :Outer) -> Any = #(\n  \
-             LET f :(FN :{x :Outer} -> Outer) = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n)"),
-        "load: <test>:1:50: this solves `Elt` to a type each run binds; ascribe a type no `FOR ALL` \
-         names"
+             LET f :(FN :{x :Outer} -> Outer) = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n)\n\
+             PRINT (WRAP 1)\n\
+             PRINT ((WRAP \"s\") {x = \"t\"})"),
+        ":(FN :{x :Number} -> Number)\nt"
+    );
+}
+
+/// `WRAP`, binding `Outer` at each call, returning `ret` from `body`.
+fn wrap(ret: &str, body: &str) -> String {
+    format!("(EXPR FOR ALL #[Outer] #(WRAP a :Outer) -> {ret} = #({body}))")
+}
+
+#[test]
+fn a_name_is_instantiated_at_a_type_each_run_binds() {
+    assert_eq!(
+        run(&module(&format!(
+            "{} (PRINT (WRAP 1)) (PRINT (WRAP \"s\")) (PRINT ((WRAP 1) {{x = 5}}))",
+            wrap(":(FN :{x :Outer} -> Outer)", "pick")
+        ))),
+        ":(FN :{x :Number} -> Number)\n:(FN :{x :Str} -> Str)\n5"
+    );
+}
+
+#[test]
+fn an_instance_over_a_run_bound_type_is_exactly_that_instance() {
+    let source = module(&format!(
+        "{} (PRINT (WRAP true))",
+        wrap("Any", "(LET f = (pick :! :(FN :{x :Outer} -> Outer))) (f)")
+    ));
+    loaded(&source, |program| {
+        let wrap = expressed(program, module_body(program, "lib"), "WRAP");
+        let typed = interval(program, wrap, "f");
+        assert_eq!(typed.lower, typed.upper, "the instance is exact");
+        assert_eq!(binder(program, wrap, "f"), ":(FN :{x :Outer} -> Outer)");
+    });
+    assert_eq!(run(&source), ":(FN :{x :Bool} -> Bool)");
+}
+
+#[test]
+fn a_literal_written_in_place_is_born_at_a_type_each_run_binds() {
+    assert_eq!(
+        run(&format!(
+            "{}\nPRINT (WRAP true)",
+            wrap(
+                "Any",
+                "(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)) :! :(FN :{x :Outer} -> Outer)"
+            )
+        )),
+        ":(FN :{x :Bool} -> Bool)"
+    );
+}
+
+#[test]
+fn a_keyworded_argument_is_instantiated_at_a_type_each_run_binds() {
+    let using = |argument: &str, call: &str| {
+        run(&module(&format!(
+            "{} (PRINT {call})",
+            wrap(
+                "Outer",
+                &format!(
+                    "(EXPR #(USE f :(FN :{{x :Outer}} -> Outer)) -> Outer = #(f {{x = a}})) \
+                     (USE {argument})"
+                )
+            )
+        )))
+    };
+    assert_eq!(using("pick", "(WRAP 5)"), "5");
+    assert_eq!(
+        using(
+            "(FN FOR ALL #[Item] :{x :Item} -> Item = #(x))",
+            "(WRAP \"s\")"
+        ),
+        "s"
+    );
+}
+
+#[test]
+fn a_call_by_name_and_a_container_instantiate_at_a_type_each_run_binds() {
+    assert_eq!(
+        run(&module(&format!(
+            "{} (PRINT (WRAP 7))",
+            wrap(
+                "Outer",
+                "(LET use = (FN :{f :(FN :{x :Outer} -> Outer)} -> Outer = #(f {x = a}))) \
+                 (use {f = pick})"
+            )
+        ))),
+        "7"
+    );
+    assert_eq!(
+        run(&module(&format!(
+            "{} (PRINT (WRAP 1))",
+            wrap(
+                "Any",
+                "(LET fs :(LIST OF (FN :{x :Outer} -> Outer)) = [pick]) (fs)"
+            )
+        ))),
+        "[:(FN :{x :Number} -> Number)]"
+    );
+}
+
+#[test]
+fn a_nested_callable_reads_an_instance_s_variable_through_a_type_capture() {
+    let returns = ":(FN :{x :Outer} -> Outer)";
+    let go = format!("(LET go = (FN :{{}} -> {returns} = #(pick))) (go {{}})");
+    let source = module(&format!("{} (PRINT (WRAP 1))", wrap(returns, &go)));
+    loaded(&source, |program| {
+        let wrap = expressed(program, module_body(program, "lib"), "WRAP");
+        assert_eq!(body(program, wrap, "go").type_captures().len(), 1);
+    });
+    assert_eq!(run(&source), ":(FN :{x :Number} -> Number)");
+    let inner = format!("(LET inner = (FN :{{}} -> {returns} = #(pick))) (inner {{}})");
+    let go = format!("(LET go = (FN :{{}} -> {returns} = #({inner}))) (go {{}})");
+    assert_eq!(
+        run(&module(&format!("{} (PRINT (WRAP 1))", wrap(returns, &go)))),
+        ":(FN :{x :Number} -> Number)",
+        "a callable between the site and the variable's home passes the capture on"
+    );
+}
+
+#[test]
+fn a_block_between_an_instance_site_and_the_variables_home_is_a_hop() {
+    let source = module(
+        "(EXPR FOR ALL #{Outer: Number} #(MID x :Outer) -> Bool = \
+         #(0 < ((pick :! :(FN :{x :Outer} -> Outer)) {x = x}) < 3)) \
+         (PRINT (MID 1))",
+    );
+    loaded(&source, |program| {
+        let mid = expressed(program, module_body(program, "lib"), "MID");
+        assert!(
+            mid.nested_shapes()
+                .iter()
+                .any(|(_, nested)| nested.kind() == ShapeKind::Block),
+            "the run's shared operand is hoisted into a block"
+        );
+    });
+    assert_eq!(run(&source), "true");
+}
+
+#[test]
+fn instances_made_under_one_binding_are_equal() {
+    assert_eq!(
+        run(&module(&format!(
+            "{} (PRINT ((WRAP 1) == (WRAP 2))) (PRINT ((WRAP 1) == (WRAP \"s\")))",
+            wrap(":(FN :{x :Outer} -> Outer)", "pick")
+        ))),
+        "true\nfalse"
+    );
+    let returns = ":(FN :{x :Outer} -> Outer)";
+    assert_eq!(
+        run(&module(&format!(
+            "(EXPR FOR ALL #[Outer] #(MAKE a :Outer) -> :(FN :{{}} -> {returns}) = \
+             #(FN :{{}} -> {returns} = #(pick))) \
+             (PRINT ((MAKE 1) == (MAKE 2))) (PRINT ((MAKE 1) == (MAKE \"s\")))"
+        ))),
+        "true\nfalse"
     );
 }
 

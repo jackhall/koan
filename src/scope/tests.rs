@@ -236,7 +236,6 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             at,
         },
         E::NoInstance { scheme, wanted, .. } => E::NoInstance { scheme, wanted, at },
-        E::OpenInstance { variable, .. } => E::OpenInstance { variable, at },
         E::AmbiguousInstance { key, .. } => E::AmbiguousInstance { key, at },
         E::NoInstanceAtCandidates { key, .. } => E::NoInstanceAtCandidates { key, at },
         E::QuantifiedValue { .. } => E::QuantifiedValue { at },
