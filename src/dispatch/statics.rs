@@ -58,8 +58,9 @@
 //! container's element type where that is the container's own type, a call by name's parameter
 //! record, and a keyworded argument's slot at each candidate — and the site is instantiated at the
 //! least instance under it ([`instance_under`]). A quantified callee's other arguments solve its
-//! group first, and the slot is read through that solve; the candidates a use keeps must agree on
-//! each instance. A name's solution is recorded by its site and a literal's in its body's
+//! group first, and the slot is read through that solve: a variable a class before the slot's
+//! solves is taken from that class's solving slots at their contributions, as the call solves it.
+//! The candidates a use keeps must agree on each instance. A name's solution is recorded by its site and a literal's in its body's
 //! born-instance cell; a site the wanted type fixes nothing at refuses the load. A solution naming
 //! a lexical variable records where the site reads it, as a contribution does, and the run reads
 //! the type it binds there. So a part's and a statement's static type is never a scheme.
