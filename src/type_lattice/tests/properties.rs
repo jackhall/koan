@@ -1121,24 +1121,21 @@ proptest! {
         }
     }
 
-    /// A solve reads only its solving slots: with another call's arguments at every other slot,
-    /// wherever that call admits, the solution is the same. A slot the door misses would carry the
-    /// other call's argument into the solve.
+    /// A solve reads only its solving slots: with other calls' arguments at the slots that solve
+    /// nothing, wherever the shape admits them, the solution is the same. A slot the door misses
+    /// would carry another call's argument into the solve.
     #[test]
     fn a_solution_reads_only_its_solving_slots(
         a in shape(),
         b in shape(),
         draw in draw(),
-        other in draw(),
+        others in prop::collection::vec(draw(), 4),
     ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let (Some((_, carried)), Some((_, elsewhere))) = (
-            static_and_carried(&types, scratch, a, b, &draw),
-            static_and_carried(&types, scratch, a, b, &other),
-        ) else {
+        let Some((_, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
             return Ok(());
         };
         let run_shape = instance(&types, scratch, a, &draw);
@@ -1146,14 +1143,28 @@ proptest! {
             return Ok(());
         };
         let solving = solving_slots(&types, scratch, run_shape);
-        let mixed: Vec<Handle> = carried
-            .iter()
-            .zip(&elsewhere)
-            .zip(solving)
-            .map(|((own, theirs), solves)| if *solves { *own } else { *theirs })
-            .collect();
-        if let Some(mixed) = admit_by_class(&types, scratch, run_shape, &mixed) {
-            prop_assert_eq!(mixed, solution, "a solve read a slot that solves nothing");
+        for other in &others {
+            let Some((_, elsewhere)) = static_and_carried(&types, scratch, a, b, other) else {
+                continue;
+            };
+            // The other call's arguments at every slot that solves nothing at once, then at each
+            // alone: one argument that misses its slot leaves the others to be checked.
+            let swapped = |at: &dyn Fn(usize) -> bool| -> Vec<Handle> {
+                (0..carried.len())
+                    .map(|slot| if at(slot) { elsewhere[slot] } else { carried[slot] })
+                    .collect()
+            };
+            let mut mixes = vec![swapped(&|slot| !solving[slot])];
+            mixes.extend(
+                (0..carried.len())
+                    .filter(|slot| !solving[*slot])
+                    .map(|only| swapped(&|slot| slot == only)),
+            );
+            for mixed in mixes {
+                if let Some(mixed) = admit_by_class(&types, scratch, run_shape, &mixed) {
+                    prop_assert_eq!(mixed, solution, "a solve read a slot that solves nothing");
+                }
+            }
         }
     }
 }

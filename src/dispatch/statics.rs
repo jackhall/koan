@@ -1609,47 +1609,42 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             arguments: bound_above(types, scratch, payload.upper),
             at: node.source,
         };
-        if params
-            .iter()
-            .any(|(name, _)| upper.get(name.symbol()).is_none())
-        {
-            return Ok((self.through(ret, None), false));
+        // Each parameter beside its field and whether it names the group: one read of each.
+        let mut read = BumpVec::with_capacity_in(params.len(), scratch);
+        for (name, param) in params.iter() {
+            let Some(field) = upper.get(name.symbol()) else {
+                return Ok((self.through(ret, None), false));
+            };
+            let solving = (0..bounds.len())
+                .any(|variable| types.references_quantifier(scratch, param, variable));
+            read.push((name.symbol(), param, field, solving));
         }
         // Each solving parameter's contribution, recorded whatever the static solve finds: the
         // frame solves from it at every call the load does not refuse.
-        let mut contributions = BumpVec::with_capacity_in(params.len(), scratch);
-        for (name, param) in params.iter() {
-            let field = upper
-                .get(name.symbol())
-                .expect("every parameter has its field");
-            let solving = (0..bounds.len())
-                .any(|variable| types.references_quantifier(scratch, param, variable));
+        let mut contributions = BumpVec::with_capacity_in(read.len(), scratch);
+        for (_, _, field, solving) in read.iter().copied() {
             contributions.push(match scheme {
                 Some(_) if solving => self.contribution(level, field),
                 _ => Static::Unknown,
             });
         }
-        let mut known = BumpVec::with_capacity_in(params.len(), scratch);
+        let mut known = BumpVec::with_capacity_in(read.len(), scratch);
         known.extend(
-            params
-                .iter()
+            read.iter()
                 .zip(contributions.iter())
                 .filter(|(_, contribution)| !matches!(contribution, Static::Unknown))
-                .map(|((name, _), contribution)| (name.symbol(), *contribution)),
+                .map(|((name, ..), contribution)| (*name, *contribution)),
         );
         if !self.unfilled && !known.is_empty() {
             let recorded = collect(self.writer, known.iter().copied());
             self.chain[level].named.push((Site::of(argument), recorded));
         }
         let mut collector = Collector::<Parametric>::new(scratch, bounds);
-        let mut declared = BumpVec::with_capacity_in(params.len(), scratch);
+        let mut declared = BumpVec::with_capacity_in(read.len(), scratch);
         let (mut exact, mut closed) = (true, true);
-        for ((name, param), contribution) in params.iter().zip(contributions.iter()) {
-            let field = upper
-                .get(name.symbol())
-                .expect("every parameter has its field");
-            let solving = (0..bounds.len())
-                .any(|variable| types.references_quantifier(scratch, param, variable));
+        for ((name, param, field, solving), contribution) in
+            read.iter().copied().zip(contributions.iter())
+        {
             if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
                 if let Static::Closed(_) = contribution {
                     return Err(never());
@@ -1662,7 +1657,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 let contributes = matches!(contribution, Static::Closed(_));
                 closed &= contributes;
                 exact &= contributes
-                    || lower.and_then(|lower| lower.get(name.symbol())) == Some(field)
+                    || lower.and_then(|lower| lower.get(name)) == Some(field)
                         && types.concrete(field).is_some();
             }
             declared.push(param);
