@@ -41,9 +41,13 @@ use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, bloc
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site};
+use crate::scope::{
+    BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site, Static, StaticType,
+};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, TypeNode, Verdict, bound_above, satisfied_by};
+use crate::type_lattice::{
+    DeclaredType, KType, TypeNode, Verdict, bound_above, satisfied_by, substitute_levels,
+};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
@@ -483,15 +487,21 @@ fn call<'graph, 'here>(
     let writer = step.writer();
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
-    let narrowing = at.view.shape().narrowing(Site::of_node(node));
+    let shape = at.view.shape();
+    let contributed = contributed(at, shape.contributions(Site::of_node(node)), &scratch);
+    let narrowing = shape.narrowing(Site::of_node(node));
     let full = || {
         let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
-        select::selected(at, maybe, &arguments, &scratch)
+        select::selected(at, maybe, &arguments, &contributed, &scratch)
     };
     let selection = match narrowing {
         Narrowing::Full => full(),
-        Narrowing::Kept(kept) => select::selected(at, kept.iter().copied(), &arguments, &scratch),
-        Narrowing::Selected(coordinate) => select::chosen(at, coordinate, &arguments, &scratch),
+        Narrowing::Kept(kept) => {
+            select::selected(at, kept.iter().copied(), &arguments, &contributed, &scratch)
+        }
+        Narrowing::Selected(coordinate) => {
+            select::chosen(at, coordinate, &arguments, &contributed, &scratch)
+        }
     };
     #[cfg(debug_assertions)]
     if !matches!(narrowing, Narrowing::Full) {
@@ -511,6 +521,10 @@ fn call<'graph, 'here>(
             registered,
             solution,
         } => {
+            debug_assert!(
+                select::carried_fit(types, &scratch, registered.shape, solution, &arguments),
+                "each argument carries a type under its slot at the solution"
+            );
             let arguments =
                 select::arguments(types, writer, registered, &operands, solution, &scratch);
             let call = |owed| {
@@ -544,6 +558,30 @@ fn call<'graph, 'here>(
     };
     let error = raised.raise(program, writer);
     finish(step, at, error)
+}
+
+/// What each recorded contribution is where the call runs: a closed type as it is, a rigid one at
+/// the types the run binds its variables to, and `None` where the call reads the carried type.
+fn contributed<'x, 'graph>(
+    at: &Evaluation<'graph, '_>,
+    recorded: &[StaticType<'graph>],
+    scratch: &'x Bump,
+) -> BumpVec<'x, Option<KType>> {
+    let types = at.program.types();
+    let mut contributed = BumpVec::with_capacity_in(recorded.len(), scratch);
+    contributed.extend(recorded.iter().map(|each| {
+        match each {
+            Static::Unknown => None,
+            known => Some(
+                known
+                    .solved(&at.view, scratch, |value, bindings| {
+                        types.concrete(substitute_levels(types, scratch, value, bindings))
+                    })
+                    .expect("a contribution's variables are bound where its call runs"),
+            ),
+        }
+    }));
+    contributed
 }
 
 /// The parts of a keyworded node its call needs: every slot evaluated, save an `ATTR` label

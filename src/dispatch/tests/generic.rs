@@ -11,7 +11,7 @@ use super::statics::{
 };
 
 /// The body the registration of `shape` whose key leads with the keyword `lead` births.
-fn expressed<'graph>(
+pub(super) fn expressed<'graph>(
     program: &Program<'graph>,
     shape: &'graph BodyShape<'graph>,
     lead: &str,
@@ -39,7 +39,7 @@ fn statement(shape: &BodyShape<'_>, index: usize) -> String {
 
 /// The narrowing of the keyworded use written as the last statement of the body the `index`th
 /// registration of `source`'s top level leading with `lead` births.
-fn last_in(source: &str, lead: &str) -> String {
+pub(super) fn last_in(source: &str, lead: &str) -> String {
     loaded(source, |program| {
         let body = expressed(program, program.shape(), lead);
         statement(body, body.body().len() - 1)
@@ -247,7 +247,7 @@ fn eval_is_its_declared_type() {
 }
 
 #[test]
-fn a_quantified_candidate_is_selected_only_where_its_arguments_are_exact() {
+fn a_quantified_candidate_is_selected_where_its_static_solve_is_the_calls() {
     let pair = "EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str = #(\"pair\")\n";
     loaded(&format!("{pair}LET p = (PAIR 1 WITH 2)"), |program| {
         assert_eq!(let_narrowing(program, program.shape(), "p"), "selected");
@@ -255,7 +255,13 @@ fn a_quantified_candidate_is_selected_only_where_its_arguments_are_exact() {
     let over = format!(
         "{pair}EXPR #(USE a :(Number | Str) AND b :(Number | Str)) -> Str = #(PAIR a WITH b)"
     );
-    assert_eq!(last_in(&over, "USE"), "full");
+    assert_eq!(last_in(&over, "USE"), "selected");
+    let unknown = format!("{pair}EXPR #(USE a :Any AND b :Any) -> Str = #(PAIR a WITH b)");
+    assert_eq!(
+        last_in(&unknown, "USE"),
+        "full",
+        "an argument at most `Any` contributes its carried type"
+    );
 }
 
 #[test]
@@ -292,14 +298,12 @@ fn a_call_admits_only_its_maybe_candidates() {
     let pairs = "EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str = #(\"joint\")\n\
                  EXPR FOR ALL #[First Second] #(PAIR x :First WITH y :Second) -> Str = \
                  #(\"apart\")\n";
-    let used = format!(
-        "{pairs}EXPR #(USE a :(Number | Str) AND b :(Number | Str)) -> Str = #(PAIR a WITH b)"
-    );
+    let used = format!("{pairs}EXPR #(USE a :(Number | Str) AND e :Any) -> Str = #(PAIR a WITH e)");
     // In list order: `apart`'s two variables are each alone in their class, `joint`'s second slot
-    // names the variable its first solved.
+    // names the variable its first solved, to `Number | Str`.
     assert_eq!(last_in(&used, "USE"), "kept always maybe");
-    assert_eq!(run(&format!("{used}\nPRINT (USE 1 AND 2)")), "joint");
-    assert_eq!(run(&format!("{used}\nPRINT (USE 1 AND \"a\")")), "apart");
+    assert_eq!(run(&format!("{used}\nPRINT (USE 1 AND \"a\")")), "joint");
+    assert_eq!(run(&format!("{used}\nPRINT (USE 1 AND true)")), "apart");
     let exact = format!("{pairs}LET p = (PAIR 1 WITH 2)");
     loaded(&exact, |program| {
         assert_eq!(let_narrowing(program, program.shape(), "p"), "selected");

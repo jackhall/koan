@@ -263,6 +263,13 @@ pub struct Statics<'graph> {
     /// Each name read at an instance site, by site, sorted by site, beside the solution the load
     /// instantiated its quantified function at.
     pub instances: &'graph [(Site, &'graph [KType])],
+    /// Each keyworded use's contributions, parallel to the shape's candidate lists: per argument,
+    /// the static type its solving slot is solved from — `Unknown` where the call reads the carried
+    /// type. Empty for a use every argument of which does.
+    pub contributions: &'graph [&'graph [StaticType<'graph>]],
+    /// Each call by name's contributions, by its argument part's site, sorted by site: each
+    /// parameter the load recorded a static type for, by name.
+    pub named: &'graph [(Site, &'graph [(Symbol, StaticType<'graph>)])],
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

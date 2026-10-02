@@ -4,6 +4,7 @@
 mod annotation;
 mod ascription;
 mod boundary;
+mod contributions;
 mod generic;
 mod instances;
 mod programs;

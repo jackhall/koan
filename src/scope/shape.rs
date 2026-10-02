@@ -52,7 +52,7 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
 };
@@ -873,10 +873,36 @@ impl<'graph> BodyShape<'graph> {
         Some(instances[index].1)
     }
 
+    /// What each argument of the keyworded use at `site` contributes to its candidates' solves:
+    /// empty where every argument contributes its carried type, or the load fixed nothing.
+    pub fn contributions(&self, site: Site) -> &'graph [StaticType<'graph>] {
+        let Some(statics) = self.statics.get() else {
+            return &[];
+        };
+        self.candidates
+            .binary_search_by_key(&site, |(use_site, _)| *use_site)
+            .ok()
+            .and_then(|index| statics.contributions.get(index).copied())
+            .unwrap_or(&[])
+    }
+
+    /// What each parameter of the call by name whose argument part sits at `site` is solved from,
+    /// by name: empty where every parameter reads its carried type.
+    pub fn named_contributions(&self, site: Site) -> &'graph [(Symbol, StaticType<'graph>)] {
+        let Some(statics) = self.statics.get() else {
+            return &[];
+        };
+        statics
+            .named
+            .binary_search_by_key(&site, |(at, _)| *at)
+            .map_or(&[], |index| statics.named[index].1)
+    }
+
     /// Written once, by the language's load pass.
     pub fn fix_statics(&self, statics: Statics<'graph>) {
         debug_assert!(self.statics.get().is_none());
         debug_assert_eq!(statics.narrowings.len(), self.candidates.len());
+        debug_assert_eq!(statics.contributions.len(), self.candidates.len());
         self.statics.set(Some(statics));
     }
 

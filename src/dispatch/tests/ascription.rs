@@ -317,7 +317,7 @@ fn a_call_is_exact_at_its_callee_s_return() {
 #[test]
 fn a_call_the_load_cannot_solve_exactly_is_at_most_its_return() {
     let source = "EXPR FOR ALL #[Elt] #(SINGLE x :Elt) -> :(LIST OF Elt) = #([x])\n\
-                  LET use = FN EXPR #(USE u :(Number | Str) WITH f :(FN :{} -> :(LIST OF Any))) \
+                  LET use = FN EXPR #(USE u :Any WITH f :(FN :{} -> :(LIST OF Any))) \
                   -> Any = #(\n  \
                   LET single = (SINGLE u)\n  \
                   LET called = (f {})\n  \
@@ -328,7 +328,7 @@ fn a_call_the_load_cannot_solve_exactly_is_at_most_its_return() {
         let never = "Never".to_string();
         assert_eq!(
             ends(program, used, "single"),
-            (never.clone(), ":(LIST OF :(Number | Str))".to_string()),
+            (never.clone(), ":(LIST OF Any)".to_string()),
             "`Elt` solves to an interval that is no point"
         );
         assert_eq!(let_narrowing(program, used, "single"), "selected");

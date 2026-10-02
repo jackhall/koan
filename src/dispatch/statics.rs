@@ -15,6 +15,11 @@
 //!
 //! Each keyworded use **judges** each candidate class by class ([`judge_by_class`]): *never*
 //! drops it, *always* means it admits whatever the run carries, and a *maybe* one the call admits.
+//! An argument at a slot whose class solves a variable ([`solving_slots`]) **contributes** its
+//! static upper end to the solve, unless that is `Any`: the judge reads it as exactly that type, and
+//! the use records it for the call. A contribution naming a lexical variable records where the use
+//! reads it — a hop per block, and a **type capture** per callable or module between the use and the
+//! variable's home, which the shape lays down past its builder's captures.
 //! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
 //! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
 //! first, is **selected** and runs without admitting; where they rank none first, the load refuses
@@ -63,17 +68,18 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, CaptureSource, Coordinate, Narrowing, Position,
-    ShapeError, ShapeKind, Site, Slot, Static, Statics, Target, UnitWork, source_of,
+    BodyShape, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate, Narrowing,
+    Position, ShapeError, ShapeKind, Site, Slot, Static, StaticType, Statics, Target, UnitWork,
+    Variable as Located, source_of,
 };
 use crate::source::SourceRef;
-use crate::symbols::BinderSymbol;
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{
     Collector, DeclaredType, InstanceFailure, Interval, KType, Parametric, Record, Scheme, Side,
     TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above, class_at_least,
     fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
     quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
-    select_by_class, shape_return, shape_slots,
+    select_by_class, shape_return, shape_slots, solving_slots,
 };
 use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
 
@@ -159,6 +165,13 @@ struct Level<'p, 'graph> {
     settled: BumpVec<'p, Site>,
     /// Each name read at an instance site, beside the solution its function is instantiated at.
     instances: BumpVec<'p, (Site, &'graph [KType])>,
+    /// Each keyworded use's contributions, parallel to the candidate lists.
+    contributions: BumpVec<'p, &'graph [StaticType<'graph>]>,
+    /// Each call by name's contributions, by its argument part's site.
+    named: BumpVec<'p, (Site, &'graph [(Symbol, StaticType<'graph>)])>,
+    /// Each type capture a contribution read in a shape nested here added, by the variable's level,
+    /// beside the coordinate it reads in the enclosing activation.
+    type_captures: BumpVec<'p, (usize, Coordinate)>,
 }
 
 /// The walk's state: the chain of enclosing shapes.
@@ -251,6 +264,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         binders.resize(shape.slots(), DeclaredType::Type(unknown()));
         let mut narrowings = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
         narrowings.resize(shape.candidate_lists().len(), Narrowing::Full);
+        let mut contributions = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
+        contributions.resize(shape.candidate_lists().len(), &[][..]);
         self.chain.push(Level {
             shape,
             roots_chain,
@@ -260,6 +275,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             narrowings,
             settled: BumpVec::new_in(scratch),
             instances: BumpVec::new_in(scratch),
+            contributions,
+            named: BumpVec::new_in(scratch),
+            type_captures: BumpVec::new_in(scratch),
         });
     }
 
@@ -293,6 +311,15 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if !done(nested) {
                 self.nest(level, nested)?;
             }
+        }
+        // A nested shape adds a type capture to each shape between it and the variable's home, so
+        // the captures are laid down once every nested shape is typed.
+        let at = &self.chain[level];
+        if !self.unfilled && !at.type_captures.is_empty() {
+            at.shape.fix_type_captures(collect(
+                self.writer,
+                at.type_captures.iter().map(|(_, source)| *source),
+            ));
         }
         Ok(())
     }
@@ -349,6 +376,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         at.parts.sort_unstable_by_key(|(site, _)| *site);
         at.settled.sort_unstable();
         at.instances.sort_unstable_by_key(|(site, _)| *site);
+        at.named.sort_unstable_by_key(|(site, _)| *site);
         at.shape.fix_statics(Statics {
             parts: collect(writer, at.parts.iter().copied()),
             statements: collect(writer, at.statements.iter().copied()),
@@ -356,7 +384,92 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             narrowings: collect(writer, at.narrowings.iter().copied()),
             settled: collect(writer, at.settled.iter().copied()),
             instances: collect(writer, at.instances.iter().copied()),
+            contributions: collect(writer, at.contributions.iter().copied()),
+            named: collect(writer, at.named.iter().copied()),
         });
+    }
+
+    /// Where the lexical variable at `variable`'s level is read from the shape at chain level
+    /// `level`: its home in the shape that declares it, stepped in through every shape between — a
+    /// hop per block, a type capture per callable or module. `None` where no shape of this chain
+    /// declares it.
+    fn coordinate_of(&mut self, level: usize, variable: usize) -> Option<Coordinate> {
+        let mut home = level;
+        let target = loop {
+            let at = &self.chain[home];
+            let declared = at.shape.declared_variables().iter();
+            if let Some((_, target)) = declared.into_iter().find(|(at, _)| *at == variable) {
+                break *target;
+            }
+            if at.roots_chain || home == 0 {
+                return None;
+            }
+            home -= 1;
+        };
+        let mut coordinate = Coordinate::Activation { hops: 0, target };
+        for inner in home + 1..=level {
+            coordinate = match self.chain[inner].shape.kind() {
+                ShapeKind::Block => coordinate.through_block(),
+                ShapeKind::Callable | ShapeKind::Module => Coordinate::Activation {
+                    hops: 0,
+                    target: Target::Capture(self.type_capture(inner, variable, coordinate)),
+                },
+                ShapeKind::Program | ShapeKind::Code => return None,
+            };
+        }
+        Some(coordinate)
+    }
+
+    /// The closure slot of the shape at `level` that holds the lexical variable `variable`, read at
+    /// `source` in the enclosing activation: the type capture already recorded for it, or a new one.
+    fn type_capture(&mut self, level: usize, variable: usize, source: Coordinate) -> CaptureSlot {
+        let at = &mut self.chain[level];
+        let index = match at.type_captures.iter().position(|(v, _)| *v == variable) {
+            Some(index) => index,
+            None => {
+                at.type_captures.push((variable, source));
+                at.type_captures.len() - 1
+            }
+        };
+        CaptureSlot((at.shape.captures().len() + index) as u32)
+    }
+
+    /// What an argument whose static upper end is `upper`, in the shape at `level`, contributes to
+    /// a solve where its call runs: `Unknown` — the carried type — where `upper` is `Any`; `upper`
+    /// where it is closed; and `upper` beside where each lexical variable it names is read.
+    fn contribution(&mut self, level: usize, upper: Parametric) -> StaticType<'graph> {
+        let (types, scratch) = (self.types, self.scratch);
+        if upper == KType::ANY.into() {
+            return Static::Unknown;
+        }
+        let mut levels: BumpVec<'_, usize> = BumpVec::new_in(scratch);
+        read_through(types, scratch, upper, Side::Above, &mut |variable| {
+            if let Variable::Lexical { level, .. } = variable
+                && !levels.contains(&level)
+            {
+                levels.push(level);
+            }
+            None
+        });
+        if levels.is_empty() {
+            return types
+                .concrete(upper)
+                .map_or(Static::Unknown, Static::Closed);
+        }
+        let mut located = BumpVec::with_capacity_in(levels.len(), scratch);
+        for variable in levels.iter().copied() {
+            let Some(at) = self.coordinate_of(level, variable) else {
+                return Static::Unknown;
+            };
+            located.push(Located {
+                level: variable,
+                at,
+            });
+        }
+        Static::Rigid {
+            value: upper,
+            variables: collect(self.writer, located.iter().copied()),
+        }
     }
 
     /// A slot's static type before any unit runs: a registration's function type, a type name's
@@ -1624,6 +1737,33 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         {
             return Ok(Interval::point(KType::NEVER.into()));
         }
+        // What each argument contributes where some candidate's slot solves from it: an instance
+        // argument and a label their carried types. No other argument is read, so a type capture
+        // is added only where a solve reads it.
+        let mut solved = BumpVec::with_capacity_in(wanted.len(), scratch);
+        solved.resize(wanted.len(), false);
+        for candidate in list.candidates {
+            if let Some(registered) = self.candidate(level, *candidate).shape() {
+                let solving = solving_slots(types, scratch, registered);
+                for (each, solves) in solved.iter_mut().zip(solving) {
+                    *each |= *solves;
+                }
+            }
+        }
+        let mut contributions = BumpVec::with_capacity_in(wanted.len(), scratch);
+        for (position, wanted) in wanted.iter().enumerate() {
+            let instance = sites.iter().any(|site| site.position == position);
+            contributions.push(match wanted {
+                Wanted::Evaluated(_) if solved[position] && !instance => {
+                    self.contribution(level, arguments[position].upper)
+                }
+                _ => Static::Unknown,
+            });
+        }
+        let contributes = contributions
+            .iter()
+            .any(|contribution| !matches!(contribution, Static::Unknown));
+
         let uppers = || collect(self.writer, arguments.iter().map(|argument| argument.upper));
 
         let mut judged = BumpVec::with_capacity_in(list.candidates.len(), scratch);
@@ -1660,6 +1800,21 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             }
             let (mut verdict, intervals) = match known.shape() {
                 Some(registered) => {
+                    // A solving slot whose argument contributes its static type is solved from
+                    // exactly that type's upper end.
+                    if contributes {
+                        let solving = solving_slots(types, scratch, registered);
+                        let mut read = BumpVec::with_capacity_in(here.len(), scratch);
+                        read.extend(here.iter().enumerate().map(|(position, argument)| {
+                            let contributed = solving.get(position) == Some(&true)
+                                && !matches!(contributions[position], Static::Unknown);
+                            match contributed {
+                                true => Interval::point(argument.upper),
+                                false => *argument,
+                            }
+                        }));
+                        here = read.leak();
+                    }
                     let judged = judge_by_class(types, scratch, registered, here);
                     (judged.verdict, judged.intervals)
                 }
@@ -1687,6 +1842,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     instances,
                 });
             }
+        }
+        if contributes && !self.unfilled {
+            self.chain[level].contributions[index] =
+                collect(self.writer, contributions.iter().copied());
         }
         if judged.is_empty() {
             // One candidate's own instance refusal, or every candidate's at once.

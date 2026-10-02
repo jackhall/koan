@@ -229,7 +229,7 @@ fn code_an_eval_runs_is_checked_for_overlaps_where_it_runs() {
 
 #[test]
 fn a_candidate_that_may_admit_still_solves_its_group_from_the_carried_types() {
-    let source = "EXPR #(EITHER) -> (Number | Str) = #(1)\n\
+    let source = "EXPR #(EITHER) -> Any = #(1)\n\
                   EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(\"both\")\n\
                   PRINT (BOTH (EITHER) AND \"s\")";
     assert_eq!(

@@ -1,7 +1,11 @@
 //! Admission and selection: which of a keyworded call's candidates runs.
 //!
 //! Each candidate's registered expression shape admits the operands' carried types class by class
-//! ([`admit_by_class`]), solving a quantified candidate's group as it goes. The admitting
+//! ([`admit_by_class`]), solving a quantified candidate's group as it goes. At a slot the group's
+//! solve reads ([`solving_slots`]), an operand the load recorded a **contribution** for is read as
+//! that type instead — its static type's upper end, where the run carries it — so a call solves
+//! from what the load knows of each argument and from the carried type only where it knows
+//! nothing. The admitting
 //! candidates are ranked by the lattice's per-class verdicts ([`select_by_class`]), which the
 //! registry records the first time a pair meets, so dispatch compares no slot types of its own. A
 //! lone survivor runs; where several survive, a builtin among them wins, and otherwise the call is
@@ -10,7 +14,7 @@
 //! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it
 //! kept: it admits each *maybe* one, takes each *always* one as admitted — solving only a
 //! quantified one's group — and ranks. Where it selected one, the call reads that candidate
-//! ([`chosen`]) and admits nothing, save to solve a quantified one's group from the carried types.
+//! ([`chosen`]) and admits nothing, save to solve a quantified one's group.
 //!
 //! A selected function is called by keyword: its argument record binds each slot to the parameter
 //! its registration names for it — or packs every slot into `operands` — and carries each of its
@@ -24,8 +28,10 @@ use crate::scope::{ParameterBinding, Registered};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, satisfied_by,
-    scheme_return, select_by_class, shape_return, substitute_quantified,
+    scheme_return, select_by_class, shape_return, solving_slots, substitute_quantified,
 };
+#[cfg(debug_assertions)]
+use crate::type_lattice::{scheme_slots, shape_slots};
 use crate::values::{List, Record, TypeValue, Value};
 
 use super::{Evaluation, Operand};
@@ -52,12 +58,14 @@ struct Admitted<'x, 'graph, 'here> {
     solution: &'x [KType],
 }
 
-/// Select among `candidates`, read through `at`'s view, for operands of the types `arguments`: each
+/// Select among `candidates`, read through `at`'s view, for operands of the types `arguments`, each
+/// solving slot reading its operand's entry of `contributed` where it holds one: each candidate
 /// beside the load's verdict, where an *always* one is taken as admitted.
 pub(super) fn selected<'x, 'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
     candidates: impl IntoIterator<Item = (Candidate, Verdict)>,
     arguments: &[KType],
+    contributed: &[Option<KType>],
     scratch: &'x Bump,
 ) -> Selection<'x, 'graph, 'here> {
     let types = at.program.types();
@@ -69,7 +77,8 @@ pub(super) fn selected<'x, 'graph, 'here>(
         let solution = if verdict == Verdict::Always && matches!(shape, DeclaredType::Type(_)) {
             Some(&[][..])
         } else {
-            admit_by_class(types, scratch, shape, arguments)
+            let solved = solved_from(types, scratch, shape, arguments, contributed);
+            admit_by_class(types, scratch, shape, solved)
         };
         match solution {
             Some(solution) => admitted.push(Admitted {
@@ -139,11 +148,12 @@ pub(super) fn selected<'x, 'graph, 'here>(
 
 /// The candidate the load selected, read at `coordinate` through `at`'s view, for operands of the
 /// types `arguments`: run without admitting, save that a quantified one solves its group from them
-/// — and where that solve fails, no overload, as full selection finds.
+/// and `contributed` — and where that solve fails, no overload, as full selection finds.
 pub(super) fn chosen<'x, 'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
     coordinate: Coordinate,
     arguments: &[KType],
+    contributed: &[Option<KType>],
     scratch: &'x Bump,
 ) -> Selection<'x, 'graph, 'here> {
     let types = at.program.types();
@@ -161,7 +171,8 @@ pub(super) fn chosen<'x, 'graph, 'here>(
     let solution = if matches!(registered.shape, DeclaredType::Type(_)) {
         &[][..]
     } else {
-        match admit_by_class(types, scratch, registered.shape, arguments) {
+        let solved = solved_from(types, scratch, registered.shape, arguments, contributed);
+        match admit_by_class(types, scratch, registered.shape, solved) {
             Some(solution) => solution,
             None => return Selection::NoOverload,
         }
@@ -171,6 +182,62 @@ pub(super) fn chosen<'x, 'graph, 'here>(
         registered,
         solution,
     }
+}
+
+/// The types `shape`'s group is solved from: at each slot the solve reads, the argument's
+/// contribution where the load recorded one, and its carried type everywhere else.
+fn solved_from<'x>(
+    types: &TypeRegistry<'_>,
+    scratch: &'x Bump,
+    shape: DeclaredType<KType>,
+    carried: &'x [KType],
+    contributed: &[Option<KType>],
+) -> &'x [KType] {
+    if contributed.is_empty() || matches!(shape, DeclaredType::Type(_)) {
+        return carried;
+    }
+    let solving = solving_slots(types, scratch, shape.into());
+    if solving.len() != carried.len() {
+        return carried;
+    }
+    scratch.alloc_slice_fill_iter((0..carried.len()).map(|slot| {
+        match (solving[slot], contributed.get(slot).copied().flatten()) {
+            (true, Some(contribution)) => contribution,
+            _ => carried[slot],
+        }
+    }))
+}
+
+/// Whether each of `carried` lies under its slot of `shape` at `solution`.
+#[cfg(debug_assertions)]
+pub(super) fn carried_fit(
+    types: &TypeRegistry<'_>,
+    scratch: &Bump,
+    shape: DeclaredType<KType>,
+    solution: &[KType],
+    carried: &[KType],
+) -> bool {
+    let slots: BumpVec<'_, KType> = match shape {
+        DeclaredType::Type(shape) => {
+            let mut slots = BumpVec::new_in(scratch);
+            slots.extend(shape_slots(shape, types));
+            slots
+        }
+        DeclaredType::Scheme(scheme) => {
+            let mut slots = BumpVec::new_in(scratch);
+            slots.extend(scheme_slots(scheme, types).map(|slot| {
+                types
+                    .concrete(substitute_quantified(types, scratch, slot, solution))
+                    .expect("a run-time solution is concrete")
+            }));
+            slots
+        }
+    };
+    slots.len() == carried.len()
+        && slots
+            .iter()
+            .zip(carried)
+            .all(|(slot, argument)| satisfied_by(types, scratch, *slot, *argument))
 }
 
 /// Whether two selections run the same thing: one builtin, one function with one solution, or the

@@ -390,7 +390,7 @@ fn an_eval_whose_code_can_never_meet_its_return_refuses_the_load() {
 fn a_quantified_candidate_is_selected_when_it_always_admits() {
     let only = "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\nLET o = (ONLY 1)";
     assert_eq!(narrowing(only, "o"), "selected");
-    let source = "EXPR #(EITHER) -> (Number | Str) = #(1)\n\
+    let source = "EXPR #(EITHER) -> Any = #(1)\n\
                   EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(\"both\")\n\
                   LET b = (BOTH (EITHER) AND \"s\")";
     assert_eq!(narrowing(source, "b"), "full", "its `y` may miss the solve");
