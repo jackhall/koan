@@ -4,11 +4,11 @@
 
 use crate::memory::BumpAllocator;
 use crate::scope::{
-    BodyShape, CaptureSlot, Coordinate, Elaboration, ShapeError, ShapeKind, Slot, Static, Target,
-    TypeExpression, Variable,
+    BodyShape, CaptureSlot, Coordinate, Elaboration, FunctionGroupMap, ShapeError, ShapeKind, Slot,
+    Static, StaticType, Target, TypeExpression, Variable,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeNode, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, TypeRegistry};
 
 use super::super::type_channel;
 use super::{Held, Program, with_program};
@@ -76,7 +76,7 @@ fn written_in<'graph>(
 }
 
 /// The one type expression `shape` records.
-fn only<'graph>(shape: &'graph BodyShape<'graph>) -> Static<'graph, KType> {
+fn only<'graph>(shape: &'graph BodyShape<'graph>) -> StaticType<'graph> {
     let [expression] = shape.type_expressions() else {
         panic!(
             "one type expression, not {}",
@@ -98,7 +98,7 @@ fn nested<'graph>(shape: &'graph BodyShape<'graph>, kind: ShapeKind) -> &'graph 
 }
 
 /// The rigid value `typed` holds, beside its variables' levels.
-fn rigid(typed: Static<'_, KType>) -> (KType, Vec<usize>) {
+fn rigid(typed: StaticType<'_>) -> (Parametric, Vec<usize>) {
     match typed {
         Static::Rigid { value, variables } => (
             value,
@@ -108,19 +108,19 @@ fn rigid(typed: Static<'_, KType>) -> (KType, Vec<usize>) {
     }
 }
 
-fn closed(typed: Static<'_, KType>) -> KType {
+fn closed(typed: StaticType<'_>) -> KType {
     match typed {
         Static::Closed(value) => value,
         _ => panic!("a closed type, not {typed:?}"),
     }
 }
 
-fn unknown(typed: Static<'_, KType>) -> bool {
+fn unknown(typed: StaticType<'_>) -> bool {
     matches!(typed, Static::Unknown)
 }
 
 /// The lexical variable `name` at `level`, bounded by `Any`.
-fn lexical(program: &Program<'_, '_, '_>, level: usize, name: &str) -> KType {
+fn lexical(program: &Program<'_, '_, '_>, level: usize, name: &str) -> Parametric {
     program
         .types
         .lexical(level, program.type_name(name), KType::ANY)
@@ -187,7 +187,10 @@ fn a_for_all_name_is_its_lexical_variable() {
         };
         let held = program.type_name("Held");
         let unused = program.type_name("Unused");
-        assert_eq!(callable.quantifier_map, [(held, 0), (unused, 1)]);
+        assert_eq!(
+            callable.quantifier_map,
+            FunctionGroupMap(&[(held, 0), (unused, 1)])
+        );
         let [Static::Rigid { variables, .. }] = [only(body)] else {
             unreachable!()
         };
@@ -289,7 +292,8 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
             typed => panic!("a rigid callable, not {typed:?}"),
         };
         assert_eq!(levels, [0]);
-        let TypeNode::KFunction { params, .. } = program.types.node(value.ktype) else {
+        let scheme = value.ktype.as_scheme().expect("`g` is quantified");
+        let TypeNode::KFunction { params, .. } = program.types.scheme_node(scheme) else {
             panic!("a function type")
         };
         assert!(
@@ -371,15 +375,13 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
         };
         let expected = types.function_type(
             program.scratch,
-            &[],
-            &[],
             &[
-                (field("y"), KType::NUMBER),
+                (field("y"), KType::NUMBER.into()),
                 (field("z"), lexical(program, 0, "Elt")),
             ],
-            KType::NUMBER,
+            KType::NUMBER.into(),
         );
-        assert_eq!(value, expected.handle);
+        assert_eq!(value, expected);
         assert_eq!(levels, [0]);
         let [met] = written_in(body, 5)[..] else {
             panic!("one expression in the last statement")
@@ -418,12 +420,15 @@ fn a_callable_and_its_registration_are_typed_at_load() {
         let Static::Closed(callable) = body.callable_type() else {
             panic!("the callable's type is closed")
         };
-        assert_eq!(callable.ktype, elaborated.ktype);
+        assert_eq!(DeclaredType::from(callable.ktype), elaborated.ktype);
         let registration = program.registration(body);
         let Static::Closed(registered) = shape.registered_type(registration.slot) else {
             panic!("the registration's shape is closed")
         };
-        assert_eq!(Some(registered), elaborated.registered);
+        let elaborated = elaborated.registered.expect("born for its registration");
+        assert_eq!(DeclaredType::from(registered.shape), elaborated.shape);
+        assert_eq!(registered.quantifier_map, elaborated.quantifier_map);
+        assert_eq!(registered.parameters, elaborated.parameters);
 
         let inner = nested(program.birth("f"), ShapeKind::Callable);
         let Static::Rigid { value, variables } = inner.callable_type() else {
@@ -437,8 +442,8 @@ fn a_callable_and_its_registration_are_typed_at_load() {
         assert_eq!(
             value.ktype,
             types
-                .function_type(program.scratch, &[], &[], &[(name, elt)], elt)
-                .handle
+                .function_type(program.scratch, &[(name, elt)], elt)
+                .into()
         );
         assert_eq!(variables.len(), 1);
     });
@@ -561,7 +566,11 @@ fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
         let Static::Rigid { value, .. } = inner.callable_type() else {
             panic!("the inner callable's type is rigid")
         };
-        let TypeNode::KFunction { ret, .. } = types.node(value.ktype) else {
+        let ktype = value
+            .ktype
+            .as_type()
+            .expect("the inner callable is unquantified");
+        let TypeNode::KFunction { ret, .. } = types.node(ktype) else {
             panic!("a function type")
         };
         assert_eq!(ret, elt, "its declared return is the same variable");

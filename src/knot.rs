@@ -63,7 +63,7 @@ use crate::parse::ExpressionPart;
 use crate::scope::Elaboration;
 use crate::scope::{Activation, ActivationView, Builtins, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry, display_name};
 use crate::values::{
     self, Circular, ConstructionRefused, KeyRejected, Resolved, Value, ValueCarrier, ValueFamily,
     Weight,
@@ -167,14 +167,14 @@ impl fmt::Debug for Knotted<'_, '_> {
 }
 
 impl values::Knotted for Knotted<'_, '_> {
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> DeclaredType<KType> {
         match self.node() {
             Node::Function(function) => function.ktype(),
-            Node::Builtin(builtin) => builtin.ktype(),
-            Node::Data { circular, .. } => circular.ktype(),
-            Node::Module(module) => module.ktype(),
+            Node::Builtin(builtin) => builtin.ktype().into(),
+            Node::Data { circular, .. } => circular.ktype().into(),
+            Node::Module(module) => module.ktype().into(),
             Node::Coerced(coerced) => coerced.ktype(),
-            Node::Code(code) => code.ktype(),
+            Node::Code(code) => code.ktype().into(),
         }
     }
 

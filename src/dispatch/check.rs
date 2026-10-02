@@ -13,7 +13,7 @@
 use crate::knot::KBuiltins;
 use crate::memory::BumpAllocator;
 use crate::scope::{BodyShape, ShapeError, ShapeKind, Static};
-use crate::type_lattice::{KType, TypeRegistry, meet, shape_slots};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry, meet, shape_slots};
 
 /// Refuse the first registration in `shape`, or in a body nested in it short of a quote's code,
 /// that overlaps a builtin overload at its key.
@@ -33,9 +33,10 @@ pub(super) fn overlaps<'graph>(
         let Static::Closed(registered) = shape.registered_type(registration.slot) else {
             continue;
         };
-        if !registered.quantifier_map.is_empty() {
+        // A quantified registration's slots read its own group, which the meet does not relate.
+        let DeclaredType::Type(registered) = registered.shape else {
             continue;
-        }
+        };
         for index in builtins.overloads(registration.key) {
             let Some(builtin) = builtins
                 .get(index)
@@ -48,7 +49,7 @@ pub(super) fn overlaps<'graph>(
             if shape_slots(builtin, types).all(|slot| slot == KType::ANY) {
                 continue;
             }
-            let met = shape_slots(registered.shape, types)
+            let met = shape_slots(registered, types)
                 .zip(shape_slots(builtin, types))
                 .all(|(own, theirs)| meet(types, scratch, own, theirs) != KType::NEVER);
             if met {

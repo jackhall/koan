@@ -6,7 +6,9 @@ use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Program};
 use crate::scope::{BodyShape, Narrowing, ShapeKind, Site, Slot, Static};
 use crate::symbols::TypeSymbol;
-use crate::type_lattice::{Interval, KType, Verdict, class_at_least, display_name};
+use crate::type_lattice::{
+    DeclaredType, Interval, KType, Parametric, Verdict, class_at_least, display_name,
+};
 
 use super::{Koan, output, run};
 
@@ -31,12 +33,26 @@ pub(super) fn slot(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> 
         .unwrap_or_else(|| panic!("`{name}` is bound here"))
 }
 
-/// The static type of the binder `name` in `shape`, rendered.
+/// The static type of the binder `name` in `shape`, rendered: its upper end, or a quantified
+/// callable's scheme.
 pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
     let typed = shape
         .binder_type(slot(program, shape, name))
         .expect("the load typed the shape");
-    display_name(typed.upper, program.types(), program.symbols()).to_string()
+    let rendered = match typed {
+        DeclaredType::Type(interval) => DeclaredType::Type(interval.upper),
+        DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
+    };
+    display_name(rendered, program.types(), program.symbols()).to_string()
+}
+
+/// The static type of the binder `name` in `shape`, which binds no quantified callable.
+pub(super) fn interval(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Interval {
+    shape
+        .binder_type(slot(program, shape, name))
+        .expect("the load typed the shape")
+        .as_type()
+        .expect("the binder binds no quantified callable")
 }
 
 /// The static type of the top-level binder `name` of `source`, rendered.
@@ -45,17 +61,14 @@ pub(super) fn top(source: &str, name: &str) -> String {
 }
 
 /// The lexical variable at `level` named `name`, bounded by `bound`.
-pub(super) fn lexical(program: &Program<'_>, level: usize, name: &str, bound: KType) -> KType {
+pub(super) fn lexical(program: &Program<'_>, level: usize, name: &str, bound: KType) -> Parametric {
     let name = TypeSymbol::declared(name, program.symbols()).expect("a Type token");
     program.types().lexical(level, name, bound)
 }
 
 /// The upper end of the static type of the binder `name` in `shape`.
-pub(super) fn upper(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> KType {
-    shape
-        .binder_type(slot(program, shape, name))
-        .expect("the load typed the shape")
-        .upper
+pub(super) fn upper(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Parametric {
+    interval(program, shape, name).upper
 }
 
 /// The body the binder `name` in `shape` births.
@@ -208,7 +221,11 @@ fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
         let (_, code) = program.shape().nested_shapes()[0];
         let statics = code.statics().expect("the load typed the code");
         assert_eq!(statics.parts.len(), 1);
-        assert_eq!(statics.parts[0].1.upper, KType::ANY, "a hole is `Any`");
+        assert_eq!(
+            statics.parts[0].1.upper,
+            KType::ANY.into(),
+            "a hole is `Any`"
+        );
         assert_eq!(
             statics.statements,
             [Interval::within(KType::ANY)],
@@ -410,10 +427,12 @@ fn a_surfaced_head_is_typed_at_load_and_returns_at_most() {
     );
     using_block(&source, |program, block| {
         let at_most = |name| {
-            let typed = block
-                .binder_type(slot(program, block, name))
-                .expect("the load typed the block");
-            assert_eq!(typed.lower, KType::NEVER, "`{name}` is at most its return");
+            let typed = interval(program, block, name);
+            assert_eq!(
+                typed.lower,
+                KType::NEVER.into(),
+                "`{name}` is at most its return"
+            );
             display_name(typed.upper, program.types(), program.symbols()).to_string()
         };
         assert_eq!(at_most("a"), ":(LIST OF Number)");
@@ -429,10 +448,8 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
     };
     let pinned = using("(Stack WITH {Elt = Number})", "LET a = (PUSH 1)");
     using_block(&pinned, |program, block| {
-        let typed = block
-            .binder_type(slot(program, block, "a"))
-            .expect("the load typed the block");
-        assert_eq!(typed.lower, KType::NEVER);
+        let typed = interval(program, block, "a");
+        assert_eq!(typed.lower, KType::NEVER.into());
         assert_eq!(
             display_name(typed.upper, program.types(), program.symbols()).to_string(),
             ":(LIST OF Number)"
@@ -444,9 +461,7 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
     );
     let open = using("Stack", "LET a = (PUSH 1)");
     using_block(&open, |program, block| {
-        let typed = block
-            .binder_type(slot(program, block, "a"))
-            .expect("the load typed the block");
+        let typed = interval(program, block, "a");
         assert_eq!(
             display_name(typed.upper, program.types(), program.symbols()).to_string(),
             ":(LIST OF Elt)",
@@ -464,7 +479,7 @@ fn a_surfaced_operator_head_is_typed_at_load() {
         )
     };
     using_block(&using("LET a = (1 <> 2)"), |program, block| {
-        assert_eq!(upper(program, block, "a"), KType::NUMBER);
+        assert_eq!(upper(program, block, "a"), KType::NUMBER.into());
     });
     assert_eq!(
         run(&using("\"s\" <> 2")),
@@ -522,6 +537,7 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
         };
         let (crates, boxes) = (pick(true), pick(false));
         let scratch = Bump::new();
+        let (crates, boxes) = (crates.into(), boxes.into());
         assert!(class_at_least(program.types(), &scratch, crates, boxes, 0));
         assert!(!class_at_least(program.types(), &scratch, boxes, crates, 0));
     });

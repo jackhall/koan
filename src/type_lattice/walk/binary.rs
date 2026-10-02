@@ -14,7 +14,7 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 
 use super::Variance;
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{Handle, wrap};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
@@ -62,7 +62,7 @@ impl Width {
 }
 
 /// A leftover child — one side's field that the other side does not name.
-pub type Leftover = (BinderSymbol, KType);
+pub type Leftover = (BinderSymbol, Handle);
 
 /// What an instance implements to become a binary walk.
 pub trait Lockstep {
@@ -74,8 +74,8 @@ pub trait Lockstep {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        a: KType,
-        b: KType,
+        a: Handle,
+        b: Handle,
         v: Variance,
     ) -> Option<Self::Out>;
 
@@ -85,8 +85,8 @@ pub trait Lockstep {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        a: KType,
-        b: KType,
+        a: Handle,
+        b: Handle,
         v: Variance,
     ) -> Self::Out;
 
@@ -95,10 +95,10 @@ pub trait Lockstep {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        a: &[KType],
-        b: &[KType],
+        a: &[Handle],
+        b: &[Handle],
         v: Variance,
-        recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> Self::Out,
+        recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Self::Out,
     ) -> Self::Out;
 
     /// The verdict for a structurally paired arm, from its children's verdicts and the arm itself.
@@ -120,8 +120,8 @@ pub trait Lockstep {
 pub fn lockstep<L: Lockstep>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    a: KType,
-    b: KType,
+    a: Handle,
+    b: Handle,
     v: Variance,
     rules: &mut L,
 ) -> L::Out {
@@ -196,7 +196,7 @@ enum Pairing<'n> {
     Leaf,
     SetWise,
     Structural {
-        pairs: BumpVec<'n, (KType, KType, Variance)>,
+        pairs: BumpVec<'n, (Handle, Handle, Variance)>,
         width: Width,
         only_a: BumpVec<'n, Leftover>,
         only_b: BumpVec<'n, Leftover>,
@@ -304,7 +304,7 @@ fn pairing<'n>(
                 width: Width::Positional,
                 only_a: BumpVec::new_in(scratch),
                 only_b: BumpVec::new_in(scratch),
-                assembly: Assembly::Shape(xe, xc),
+                assembly: Assembly::Shape(xe.raw(), xc),
             }
         }
         (
@@ -330,7 +330,7 @@ fn pairing<'n>(
 /// A structural arm whose children pair by position and leave nothing over.
 fn positional<'n>(
     scratch: BumpAllocator<'n>,
-    pairs: impl ExactSizeIterator<Item = (KType, KType, Variance)>,
+    pairs: impl ExactSizeIterator<Item = (Handle, Handle, Variance)>,
     assembly: Assembly<'n>,
 ) -> Pairing<'n> {
     let mut paired = BumpVec::with_capacity_in(pairs.len(), scratch);
@@ -380,9 +380,9 @@ fn by_name<'n>(
     }
 }
 
-fn union_members<'run>(node: &TypeNode<'run>) -> Option<&'run [KType]> {
+fn union_members<'run>(node: &TypeNode<'run>) -> Option<&'run [Handle]> {
     match *node {
-        TypeNode::Union { members } => Some(members),
+        TypeNode::Union { members } => Some(members.raw()),
         _ => None,
     }
 }
@@ -410,7 +410,7 @@ impl Rebuilder<'_, '_> {
     /// Rebuild this arm from its paired children, in the order the driver produced them, plus
     /// `extra` fields to carry over on a name-keyed arm. `extra` is ignored where the arm has no
     /// names to carry.
-    pub fn compose(&self, paired: &[KType], extra: &[Leftover]) -> KType {
+    pub fn compose(&self, paired: &[Handle], extra: &[Leftover]) -> Handle {
         let (types, scratch) = (self.types, self.scratch);
         match self.assembly {
             Assembly::List => types.list(paired[0]),
@@ -418,15 +418,7 @@ impl Rebuilder<'_, '_> {
             Assembly::Record(keys) => types.record(scratch, &named(scratch, keys, paired, extra)),
             Assembly::Function(keys) => {
                 let (values, ret) = paired.split_at(keys.len());
-                types
-                    .function_type(
-                        scratch,
-                        &[],
-                        &[],
-                        &named(scratch, keys, values, extra),
-                        ret[0],
-                    )
-                    .handle
+                types.function_type(scratch, &named(scratch, keys, values, extra), ret[0])
             }
             Assembly::Shape(elements, classes) => {
                 let mut slots = paired.iter();
@@ -438,13 +430,11 @@ impl Rebuilder<'_, '_> {
                     keyword => *keyword,
                 }));
                 let ret = *slots.next().expect("the return follows the slots");
-                types
-                    .shape_type(scratch, &[], &[], &rebuilt, classes, ret)
-                    .handle
+                types.shape_type(scratch, &rebuilt, classes, ret)
             }
             Assembly::Apply(keys) => types.constructor_apply(
                 scratch,
-                paired[0],
+                wrap(paired[0]),
                 &named(scratch, keys, &paired[1..], extra),
             ),
         }
@@ -454,9 +444,9 @@ impl Rebuilder<'_, '_> {
 fn named<'s>(
     scratch: BumpAllocator<'s>,
     keys: &[BinderSymbol],
-    values: &[KType],
+    values: &[Handle],
     extra: &[Leftover],
-) -> BumpVec<'s, (BinderSymbol, KType)> {
+) -> BumpVec<'s, (BinderSymbol, Handle)> {
     let mut fields = BumpVec::with_capacity_in(keys.len() + extra.len(), scratch);
     fields.extend(keys.iter().copied().zip(values.iter().copied()));
     fields.extend_from_slice(extra);

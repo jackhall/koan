@@ -9,7 +9,7 @@ use crate::memory::{Bump, BumpVec};
 use crate::tests::allocation_count;
 
 use crate::type_lattice::digest::TypeDigest;
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{KType, TypeHandle};
 use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::registry::{Relation, TypeRegistry};
 
@@ -83,7 +83,12 @@ fn the_table_is_laid_once_and_never_grows() {
 fn conflict_evictions_stay_rare_at_the_default_size() {
     let (region, scratch) = (Bump::new(), Bump::new());
     let types = TypeRegistry::in_region(&region);
-    let leaves = [KType::NUMBER, KType::STR, KType::BOOL, KType::NULL];
+    let leaves = [
+        KType::NUMBER.raw(),
+        KType::STR.raw(),
+        KType::BOOL.raw(),
+        KType::NULL.raw(),
+    ];
     let mut pool = leaves.to_vec();
     for leaf in leaves {
         pool.push(types.list(leaf));

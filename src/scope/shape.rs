@@ -50,13 +50,17 @@ use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredGroup, Interval, KType, TypeRegistry, display_name};
+use crate::type_lattice::{
+    DeclaredGroup, DeclaredType, Interval, KType, Parametric, TypeRegistry, display_name,
+};
 use crate::values::Knotted;
 
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
-use super::typed::{Callable, Elaboration, Narrowing, Registered, Static, Statics};
+use super::typed::{
+    Elaboration, Narrowing, Static, StaticCallable, StaticRegistered, StaticType, Statics,
+};
 
 mod build;
 
@@ -366,17 +370,17 @@ pub struct TypeExpression<'graph> {
     pub statement: u32,
     /// For a guard: the site of its arm set, and its place among the arms in written order.
     pub guard: Option<(Site, u32)>,
-    typed: Cell<Static<'graph, KType>>,
+    typed: Cell<StaticType<'graph>>,
 }
 
 impl<'graph> TypeExpression<'graph> {
     /// What the load pass fixed for this expression; `Unknown` before it runs.
-    pub fn typed(&self) -> Static<'graph, KType> {
+    pub fn typed(&self) -> StaticType<'graph> {
         self.typed.get()
     }
 
     /// Written once, by the load pass.
-    pub fn fix(&self, typed: Static<'graph, KType>) {
+    pub fn fix(&self, typed: StaticType<'graph>) {
         debug_assert!(matches!(self.typed.get(), Static::Unknown));
         self.typed.set(typed);
     }
@@ -436,13 +440,13 @@ pub struct BodyShape<'graph> {
     /// Each type expression this body records, by site.
     type_expressions: &'graph [TypeExpression<'graph>],
     /// Each type binder's load-time type, parallel to `declarations`.
-    declared: &'graph [Cell<Static<'graph, KType>>],
+    declared: &'graph [Cell<StaticType<'graph>>],
     /// Each registration's load-time bucket entry, parallel to `registrations`.
-    registered: &'graph [Cell<Static<'graph, Registered<'graph>>>],
+    registered: &'graph [Cell<StaticRegistered<'graph>>],
     /// A callable body's load-time type; `Unknown` for every other kind.
-    callable: &'graph Cell<Static<'graph, Callable<'graph>>>,
+    callable: &'graph Cell<StaticCallable<'graph>>,
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
-    group_levels: &'graph Cell<&'graph [KType]>,
+    group_levels: &'graph Cell<&'graph [Parametric]>,
     /// Why a code shape's code does not type, where the load pass found a refusal in it.
     typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
     /// The value channel's static types and narrowings, fixed by the language's load pass.
@@ -669,7 +673,7 @@ impl<'graph> BodyShape<'graph> {
 
     /// What the load pass fixed for the type expression at `site`: `Unknown` where this body
     /// records none there.
-    pub fn typed_expression(&self, site: Site) -> Static<'graph, KType> {
+    pub fn typed_expression(&self, site: Site) -> StaticType<'graph> {
         self.type_expressions
             .binary_search_by_key(&site, |recorded| recorded.site)
             .map_or(Static::Unknown, |index| {
@@ -678,26 +682,26 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// What the load pass fixed for the type binder at `slot`.
-    pub fn declared_type(&self, slot: Slot) -> Static<'graph, KType> {
+    pub fn declared_type(&self, slot: Slot) -> StaticType<'graph> {
         self.declarations
             .binary_search_by_key(&slot, |(binder, _)| *binder)
             .map_or(Static::Unknown, |index| self.declared[index].get())
     }
 
     /// What the load pass fixed for the registration at `slot`.
-    pub fn registered_type(&self, slot: Slot) -> Static<'graph, Registered<'graph>> {
+    pub fn registered_type(&self, slot: Slot) -> StaticRegistered<'graph> {
         self.registrations
             .binary_search_by_key(&slot, |registration| registration.slot)
             .map_or(Static::Unknown, |index| self.registered[index].get())
     }
 
     /// What the load pass fixed for this callable body's type.
-    pub fn callable_type(&self) -> Static<'graph, Callable<'graph>> {
+    pub fn callable_type(&self) -> StaticCallable<'graph> {
         self.callable.get()
     }
 
     /// Written once, by the load pass.
-    pub fn fix_declared(&self, slot: Slot, typed: Static<'graph, KType>) {
+    pub fn fix_declared(&self, slot: Slot, typed: StaticType<'graph>) {
         let index = self
             .declarations
             .binary_search_by_key(&slot, |(binder, _)| *binder)
@@ -707,7 +711,7 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// Written once, by the load pass.
-    pub fn fix_registered(&self, slot: Slot, typed: Static<'graph, Registered<'graph>>) {
+    pub fn fix_registered(&self, slot: Slot, typed: StaticRegistered<'graph>) {
         let index = self
             .registrations
             .binary_search_by_key(&slot, |registration| registration.slot)
@@ -717,7 +721,7 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// Written once, by the load pass.
-    pub fn fix_callable(&self, typed: Static<'graph, Callable<'graph>>) {
+    pub fn fix_callable(&self, typed: StaticCallable<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Callable);
         debug_assert!(matches!(self.callable.get(), Static::Unknown));
         self.callable.set(typed);
@@ -726,12 +730,12 @@ impl<'graph> BodyShape<'graph> {
     /// A callable body's own `FOR ALL` group as its body reads it: the lexical variable each
     /// variable of the group is, in group order. Empty for every other shape, and where the load
     /// did not type the callable.
-    pub fn group_levels(&self) -> &'graph [KType] {
+    pub fn group_levels(&self) -> &'graph [Parametric] {
         self.group_levels.get()
     }
 
     /// Written once, by the load pass.
-    pub fn fix_group_levels(&self, levels: &'graph [KType]) {
+    pub fn fix_group_levels(&self, levels: &'graph [Parametric]) {
         debug_assert_eq!(self.kind, ShapeKind::Callable);
         debug_assert!(self.group_levels.get().is_empty());
         self.group_levels.set(levels);
@@ -761,8 +765,8 @@ impl<'graph> BodyShape<'graph> {
         self.statics.get()?.statements.get(index).copied()
     }
 
-    /// The static type of the binder at `slot`.
-    pub fn binder_type(&self, slot: Slot) -> Option<Interval> {
+    /// The static type of the binder at `slot` — a quantified callable's binder its scheme.
+    pub fn binder_type(&self, slot: Slot) -> Option<DeclaredType<Interval>> {
         self.statics.get()?.binders.get(slot.index()).copied()
     }
 
@@ -1014,7 +1018,7 @@ pub enum ShapeError<'graph> {
     /// A keyworded use none of whose candidates can admit its arguments' static types.
     NoAdmittingCandidate {
         key: &'graph [KeyElement],
-        arguments: &'graph [KType],
+        arguments: &'graph [Parametric],
         at: SourceRef,
     },
     /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
@@ -1028,7 +1032,7 @@ pub enum ShapeError<'graph> {
     /// which ranks first, and no builtin among them.
     Ambiguous {
         key: &'graph [KeyElement],
-        arguments: &'graph [KType],
+        arguments: &'graph [Parametric],
         count: usize,
         at: SourceRef,
     },
@@ -1057,7 +1061,7 @@ pub enum ShapeError<'graph> {
     /// Two guards of one `MATCH … WITH` arm set that type to one handle, `guard`; `at` is the
     /// second's.
     RepeatedGuard {
-        guard: KType,
+        guard: Parametric,
         first: SourceRef,
         at: SourceRef,
     },
@@ -1363,7 +1367,7 @@ impl ShapeErrorDisplay<'_, '_> {
     }
 
     /// `arguments` as a parenthesized, comma-separated list of types.
-    fn arguments(&self, f: &mut fmt::Formatter<'_>, arguments: &[KType]) -> fmt::Result {
+    fn arguments(&self, f: &mut fmt::Formatter<'_>, arguments: &[Parametric]) -> fmt::Result {
         f.write_str("(")?;
         for (index, argument) in arguments.iter().enumerate() {
             if index > 0 {

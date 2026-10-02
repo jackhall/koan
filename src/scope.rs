@@ -52,6 +52,7 @@ pub use shape::{
     TypeExpression, Unit, UnitWork, Which, source_of, spelled,
 };
 pub use typed::{
-    Callable, Elaboration, ElaborationDisplay, Narrowing, ParameterBinding, Registered, Static,
-    Statics, Variable, solutions,
+    Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, Narrowing, ParameterBinding,
+    Registered, ShapeGroupMap, Static, StaticCallable, StaticRegistered, StaticType, Statics,
+    Variable, solutions,
 };

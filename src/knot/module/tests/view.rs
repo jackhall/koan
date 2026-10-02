@@ -99,7 +99,7 @@ fn an_opaque_view_mints_a_fresh_carrier_per_application() {
 
             // The value member is sealed at the mint, so it no longer reads as a number.
             let zero = member(fixture, first, "zero", types, scratch);
-            assert_eq!(zero.ktype(), mint);
+            assert_eq!(zero.concrete_ktype(), mint);
             assert!(
                 matches!(zero, Value::Tagged(_)),
                 "the member is behind the mint, not a bare number"

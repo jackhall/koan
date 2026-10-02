@@ -67,14 +67,16 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 use crate::memory::{DropFree, Edge, Ready, Writer, covariant, reattachable};
-use crate::type_lattice::KType;
+use crate::type_lattice::{DeclaredType, KType};
 
 /// What `values` asks of a knot member at one region lifetime — a function or a data node of a
 /// knot: its memoized type, what rebuilding its knot at a destination writes, the fellow member an
 /// edge of its own names, and what the node holds. A member is `Copy`, so it carries no drop glue
 /// and may rest in a region, and its equality and hash are node identity.
 pub trait Knotted: Copy + Eq + Hash {
-    fn ktype(&self) -> KType;
+    /// The member's type: a function's own type — a scheme where a `FOR ALL` group quantifies
+    /// it — and every other member's concrete type.
+    fn ktype(&self) -> DeclaredType<KType>;
 
     /// The bytes a rebuild of this member's knot at a destination writes, past the value word
     /// holding it.
@@ -138,7 +140,7 @@ pub type DeepCopy<'copy, 'from, 'to, X, Y> = dyn FnMut(&Value<'from, X>) -> Valu
 pub enum Nothing {}
 
 impl Knotted for Nothing {
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> DeclaredType<KType> {
         match *self {}
     }
 
@@ -231,22 +233,34 @@ pub enum Value<'cell, X = Nothing> {
 
 const _: () = assert!(size_of::<Value<'static>>() == 24);
 
+/// Why a value's type is concrete where [`Value::concrete_ktype`] reads it: a quantified callable
+/// is read only at the head of a call, so no other read reaches one
+/// ([scope/README.md § Resolution](scope/README.md#resolution)).
+pub const CALL_ONLY: &str = "a quantified callable is read only at the head of a call";
+
 impl<'cell, X: Knotted> Value<'cell, X> {
-    /// The value's type: a constant for a leaf and the stored handle for everything else. Reads no
+    /// The value's type: a constant for a leaf and the stored handle for everything else — a
+    /// concrete type for every value but a quantified callable, which answers its scheme. Reads no
     /// registry and walks nothing.
-    pub fn ktype(&self) -> KType {
+    pub fn ktype(&self) -> DeclaredType<KType> {
         match self {
-            Value::Number(_) => KType::NUMBER,
-            Value::Bool(_) => KType::BOOL,
-            Value::Null => KType::NULL,
-            Value::Str(_) => KType::STR,
-            Value::Type(value) => value.ktype(),
-            Value::List(list) => list.ktype(),
-            Value::Dict(dict) => dict.ktype(),
-            Value::Record(record) => record.ktype(),
-            Value::Tagged(tagged) => tagged.ktype(),
+            Value::Number(_) => KType::NUMBER.into(),
+            Value::Bool(_) => KType::BOOL.into(),
+            Value::Null => KType::NULL.into(),
+            Value::Str(_) => KType::STR.into(),
+            Value::Type(value) => value.ktype().into(),
+            Value::List(list) => list.ktype().into(),
+            Value::Dict(dict) => dict.ktype().into(),
+            Value::Record(record) => record.ktype().into(),
+            Value::Tagged(tagged) => tagged.ktype().into(),
             Value::Knotted(member) => member.ktype(),
         }
+    }
+
+    /// The value's concrete type, where the scope builder's call-only rule keeps a quantified
+    /// callable out — every read but a call's head ([`CALL_ONLY`]).
+    pub fn concrete_ktype(&self) -> KType {
+        self.ktype().as_type().expect(CALL_ONLY)
     }
 
     /// What rebuilding this value at a destination writes: the word itself and what it points at.

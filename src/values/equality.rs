@@ -28,7 +28,7 @@
 
 use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
-use crate::type_lattice::{KType, TypeRegistry, satisfied_by};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry, satisfied_by};
 
 use super::circular::{CodeView, Resolved};
 use super::surface::Parts;
@@ -43,7 +43,7 @@ type Pending<'x, 'left, 'right, X, Y> = BumpVec<'x, (Seen<'left, X>, Seen<'right
 
 /// The member pairs a comparison has entered, each member beside the type it is seen at: one node
 /// seen at two types shows two surfaces.
-type Entered<'x, X, Y> = BumpBackedSet<'x, ((X, KType), (Y, KType))>;
+type Entered<'x, X, Y> = BumpBackedSet<'x, ((X, DeclaredType<KType>), (Y, DeclaredType<KType>))>;
 
 impl<'left, X: Knotted> Value<'left, X> {
     /// Whether two values are equal. Numbers follow IEEE (`NaN != NaN`, `-0 == 0`); a tagged value
@@ -139,7 +139,10 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
         match (this.surface(types, scratch), that.surface(types, scratch)) {
             (Some(left), Some(right)) => {
                 if let (Some(left_node), Some(right_node)) = (left.node(), right.node())
-                    && !seen.insert(((left_node, left.ktype()), (right_node, right.ktype())))
+                    && !seen.insert((
+                        (left_node, left.ktype().into()),
+                        (right_node, right.ktype().into()),
+                    ))
                 {
                     return Ok(true);
                 }

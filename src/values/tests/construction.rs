@@ -268,7 +268,7 @@ fn a_retype_reads_a_union_member_by_member() {
             assert_eq!(
                 Value::List(list)
                     .retyped(writer, wide, types, scratch)
-                    .ktype(),
+                    .concrete_ktype(),
                 types.list(number_or_str),
                 "two unordered members it lies under meet"
             );
@@ -290,7 +290,7 @@ fn a_retype_reads_a_union_member_by_member() {
             assert_eq!(
                 Value::Dict(dict)
                     .retyped(writer, wide, types, scratch)
-                    .ktype(),
+                    .concrete_ktype(),
                 types.dict(KType::STR, number_or_str)
             );
 
@@ -303,7 +303,7 @@ fn a_retype_reads_a_union_member_by_member() {
             assert_eq!(
                 Value::Record(record)
                     .retyped(writer, wide, types, scratch)
-                    .ktype(),
+                    .concrete_ktype(),
                 types.record(scratch, &[(x, number_or_str)])
             );
         })
@@ -340,13 +340,13 @@ fn a_tagged_value_takes_the_application_it_lies_under() {
             assert_eq!(
                 Value::Tagged(built)
                     .retyped(writer, union, types, scratch)
-                    .ktype(),
+                    .concrete_ktype(),
                 applied(number_or_str)
             );
             assert_eq!(
                 Value::Tagged(built)
                     .retyped(writer, boxed, types, scratch)
-                    .ktype(),
+                    .concrete_ktype(),
                 boxed,
                 "a bare family names its own constructor"
             );
@@ -458,7 +458,7 @@ fn a_newtype_construction_is_checked_against_its_representation() {
             let built = Tagged::construct(writer, head(ring), fitting, types, scratch).unwrap();
             assert_eq!(built.ktype(), ring);
             assert_eq!(
-                construction(types, scratch, ring, fitting.ktype()),
+                construction(types, scratch, ring, fitting.concrete_ktype()),
                 Ok(ring)
             );
             let three =
@@ -547,7 +547,7 @@ fn a_family_construction_takes_the_application_its_payload_solves() {
             Ok(applied(listed, &[("Elem", KType::NEVER)]))
         );
         let option = fixture.family("Option", &["Elem"], |names| {
-            Some(types.union_of(scratch, &[parameter(names, "Elem"), KType::NULL]))
+            Some(types.union_of(scratch, &[parameter(names, "Elem"), KType::NULL.into()]))
         });
         assert_eq!(
             construction(types, scratch, option, KType::NULL),
@@ -588,8 +588,7 @@ fn a_member_seals_under_a_mint_its_source_binding_admits() {
         let distance = fixture.newtype("Distance", KType::NUMBER);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
         let nonce = ScopeId::next();
-        let declared = types.parameter(carrier, KType::ANY, None);
-        let mint = types.parameter(carrier, KType::ANY, Some(nonce));
+        let mint = types.carrier(carrier, KType::ANY, nonce);
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let sealed = Tagged::seal(
@@ -612,17 +611,17 @@ fn a_member_seals_under_a_mint_its_source_binding_admits() {
                 Tagged::seal(
                     writer,
                     Value::Number(1.0),
-                    declared,
+                    distance,
                     KType::NUMBER,
                     types,
                     scratch
                 )
                 .err(),
-                Some(SealRefused::NotAMint(declared)),
-                "a SIG-body declaration is no per-application mint",
+                Some(SealRefused::NotAMint(distance)),
+                "a nominal type is no per-application mint",
             );
             assert_eq!(
-                sealing(types, scratch, mint, KType::STR, KType::NUMBER),
+                sealing(types, scratch, mint, KType::STR, KType::NUMBER.into()),
                 Err(SealRefused::Misfit {
                     mint,
                     witness: KType::STR
@@ -672,7 +671,7 @@ fn a_payload_is_read_at_its_identitys_representation() {
         assert_eq!(representation(types, scratch, silent), None);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
         let nonce = ScopeId::next();
-        let mint = types.parameter(carrier, KType::ANY, Some(nonce));
+        let mint = types.carrier(carrier, KType::ANY, nonce);
         assert_eq!(representation(types, scratch, mint), None);
     });
 }

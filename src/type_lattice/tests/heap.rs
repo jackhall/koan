@@ -11,16 +11,16 @@ use crate::memory::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::tests::allocation_count;
 
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{KType, TypeHandle};
 use crate::type_lattice::kind::KKind;
-use crate::type_lattice::lattice::{join, meet};
 use crate::type_lattice::operators::ReductionMode;
-use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::DispatchTokenElement::{Keyword, Slot};
-use crate::type_lattice::sig_relations::{FitsFailure, shape_specificity, sig_fits};
-use crate::type_lattice::substitute::substitute_quantified;
+use crate::type_lattice::sig_relations::FitsFailure;
+use crate::type_lattice::typed::{
+    fits, is_subtype_of, join, meet, shape_specificity, sig_fits, substitute_quantified,
+};
 use crate::type_lattice::unify::{Collector, admits_with};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
@@ -58,14 +58,8 @@ fn interning_and_relations_touch_no_heap() {
     // join to, and a function position it reaches from above with two unrelated arguments.
     let open = types.quantified(0, KType::ANY);
     let mixed = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
-    let above = types
-        .function_type(scratch, &[], &[], &[(x, open)], KType::NULL)
-        .handle;
-    let takes = |t: KType| {
-        types
-            .function_type(scratch, &[], &[], &[(x, t)], KType::NULL)
-            .handle
-    };
+    let above = types.function_type(scratch, &[(x, open)], KType::NULL.into());
+    let takes = |t: KType| types.function_type(scratch, &[(x, t)], KType::NULL);
     let (takes_number, takes_str) = (takes(KType::NUMBER), takes(KType::STR));
 
     let before = allocation_count();
@@ -73,13 +67,11 @@ fn interning_and_relations_touch_no_heap() {
     // --- Interning ---
     let record = types.record(scratch, &[(x, KType::NUMBER), (y, KType::STR)]);
     let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
-    let function = types
-        .function_type(scratch, &[], &[], &[(x, KType::NUMBER)], record)
-        .handle;
+    let function = types.function_type(scratch, &[(x, KType::NUMBER)], record);
     let union = types.union_of(scratch, &[KType::NUMBER, KType::STR, record]);
     let variable = types.quantified(0, KType::NUMBER);
     let quantified_function = types
-        .function_type(
+        .function_scheme(
             scratch,
             &[elt],
             &[KType::NUMBER],
@@ -88,7 +80,7 @@ fn interning_and_relations_touch_no_heap() {
         )
         .handle;
     let shape = types
-        .shape_type(
+        .shape_scheme(
             scratch,
             &[elt],
             &[KType::NUMBER],
@@ -97,29 +89,21 @@ fn interning_and_relations_touch_no_heap() {
             variable,
         )
         .handle;
-    let plain = types
-        .shape_type(
-            scratch,
-            &[],
-            &[],
-            &[Keyword(pure), Slot(KType::NUMBER), Slot(KType::NUMBER)],
-            &[],
-            KType::NUMBER,
-        )
-        .handle;
+    let plain = types.shape_type(
+        scratch,
+        &[Keyword(pure), Slot(KType::NUMBER), Slot(KType::NUMBER)],
+        &[],
+        KType::NUMBER,
+    );
 
     // A signature with a head parameter, a member of every kind and a chaining record.
-    let member = types.parameter(elt, KType::ANY, None);
-    let operator = types
-        .shape_type(
-            scratch,
-            &[],
-            &[],
-            &[Slot(member), Keyword(plus), Slot(member)],
-            &[],
-            member,
-        )
-        .handle;
+    let member = types.head_parameter(elt, KType::ANY);
+    let operator = types.shape_type(
+        scratch,
+        &[Slot(member), Keyword(plus), Slot(member)],
+        &[],
+        member,
+    );
     let mut draft = SchemaDraft::new(scratch);
     draft.origin = SigOrigin::Declared;
     draft.insert_parameter(elt, member);
@@ -133,26 +117,18 @@ fn interning_and_relations_touch_no_heap() {
     draft.insert_manifest(elt, KType::NUMBER);
     let module = types.signature(scratch, draft);
     // A keyworded interface, and a module whose only overload under that key misses it.
-    let wants = types
-        .shape_type(
-            scratch,
-            &[],
-            &[],
-            &[Keyword(pure), Slot(KType::NUMBER)],
-            &[],
-            KType::NUMBER,
-        )
-        .handle;
-    let offers = types
-        .shape_type(
-            scratch,
-            &[],
-            &[],
-            &[Keyword(pure), Slot(KType::STR)],
-            &[],
-            KType::NUMBER,
-        )
-        .handle;
+    let wants = types.shape_type(
+        scratch,
+        &[Keyword(pure), Slot(KType::NUMBER)],
+        &[],
+        KType::NUMBER,
+    );
+    let offers = types.shape_type(
+        scratch,
+        &[Keyword(pure), Slot(KType::STR)],
+        &[],
+        KType::NUMBER,
+    );
     let mut draft = SchemaDraft::new(scratch);
     draft.origin = SigOrigin::Declared;
     draft.push_keyworded(wants);
@@ -185,7 +161,7 @@ fn interning_and_relations_touch_no_heap() {
         );
     }
     let back = window.sibling(elt, KKind::NewType, &types);
-    let constructor = RelativeSchema::constructor(host, scratch, Some(back), &[item]);
+    let constructor = RelativeSchema::constructor(host, scratch, Some(back.into()), &[item]);
     let sealed = window
         .fill_member(2, constructor, &types, scratch)
         .expect("the last fill seals");
@@ -205,20 +181,18 @@ fn interning_and_relations_touch_no_heap() {
     assert!(!is_subtype_of(&types, scratch, narrow, record));
     assert!(is_subtype_of(&types, scratch, pinned, interface));
     let _ = join(&types, scratch, record, function);
-    let _ = is_subtype_of(&types, scratch, quantified_function, function);
+    let _ = fits(&types, scratch, quantified_function, function);
     let _ = join(&types, scratch, group_member, KType::NUMBER);
     let _ = meet(&types, scratch, record, narrow);
     assert!(is_subtype_of(&types, scratch, applied, group_family));
-    let sink = types
-        .function_type(scratch, &[], &[], &[(x, variable)], KType::NUMBER)
-        .handle;
+    let sink = types.function_type(scratch, &[(x, variable)], KType::NUMBER.into());
     assert!(types.quantifies_contravariantly(scratch, sink, 1));
     let _ = meet(&types, scratch, union, record);
     // Two signature types meet at the set of both, which is never `Never`.
     assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);
     assert_ne!(meet(&types, scratch, module, clashing), KType::NEVER);
 
-    let mut collector = Collector::new(scratch, &[KType::ANY]);
+    let mut collector = Collector::<KType>::new(scratch, &[KType::ANY]);
     assert!(
         admits_with(
             &types,
@@ -231,7 +205,7 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(collector.solve(&types).is_ok());
-    let mut least = Collector::least(scratch, 2);
+    let mut least = Collector::<KType>::least(scratch, 2);
     assert!(
         admits_with(
             &types,
@@ -244,12 +218,12 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(least.solve(&types).is_ok());
-    let mut split = Collector::new(scratch, &[KType::ANY]);
+    let mut split = Collector::<KType>::new(scratch, &[KType::ANY]);
     for argument in [KType::NUMBER, KType::STR] {
         assert!(admits_with(&types, scratch, open, argument, Variance::Co, &mut split).is_ok());
     }
     assert!(split.solve(&types).is_ok_and(|s| s.as_slice() == [mixed]));
-    let mut from_above = Collector::new(scratch, &[KType::ANY]);
+    let mut from_above = Collector::<KType>::new(scratch, &[KType::ANY]);
     for argument in [takes_number, takes_str] {
         assert!(
             admits_with(
@@ -273,10 +247,10 @@ fn interning_and_relations_touch_no_heap() {
     ));
     // Two unordered signatures: the union door's subsumption pass takes both negative verdicts.
     let _ = types.union_of(scratch, &[interface, module]);
-    let _ = shape_specificity(&types, scratch, shape, plain);
+    let _ = shape_specificity(&types, scratch, shape, plain.into());
     let _ = substitute_quantified(&types, scratch, types.list(variable), &[KType::STR]);
-    assert!(types.contains_quantified(types.list(variable)));
-    assert!(types.contains_rigid(member));
+    assert!(types.contains_quantified(types.list(variable).raw()));
+    assert!(types.contains_rigid(member.raw()));
 
     let allocated = allocation_count() - before;
     assert_eq!(

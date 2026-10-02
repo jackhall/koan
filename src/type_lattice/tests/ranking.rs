@@ -10,21 +10,29 @@
 use crate::memory::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{Handle, KType, TypeHandle};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::order::fits;
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, select_by_class};
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::render::display_name;
+use crate::type_lattice::render::display_handle;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::{DispatchTokenElement, RawRank, Specificity, dense_classes};
 use crate::type_lattice::sig_relations::{FitsFailure, shape_specificity, sig_fits};
 use crate::type_lattice::unify::Interval;
 
+/// Anything under `kt`, read raw.
+fn within(kt: Handle) -> Interval<Handle> {
+    Interval {
+        lower: Handle::NEVER,
+        upper: kt,
+    }
+}
+
 /// One position of a test head: a keyword by its text, or a slot's type.
 enum Part<'a> {
     Kw(&'a str),
-    Slot(KType),
+    Slot(Handle),
 }
 use Part::{Kw, Slot};
 
@@ -50,22 +58,22 @@ impl<'r> World<'r> {
     }
 
     /// The `index`-th variable of a group, bounded by `Any`.
-    fn var(&self, index: usize) -> KType {
-        self.types.quantified(index, KType::ANY)
+    fn var(&self, index: usize) -> Handle {
+        self.types.quantified(index, KType::ANY).raw()
     }
 
-    fn union(&self, members: &[KType]) -> KType {
+    fn union(&self, members: &[Handle]) -> Handle {
         self.types.union_of(self.region, members)
     }
 
     /// The shape `FOR ALL #[<group>] #(<parts>) -> Any` under `classes`.
-    fn head(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8]) -> KType {
-        self.head_to(group, parts, classes, KType::ANY)
+    fn head(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8]) -> Handle {
+        self.head_to(group, parts, classes, Handle::ANY)
     }
 
     /// The shape `FOR ALL #[<group>] #(<parts>) -> <ret>` under `classes`, each variable bounded by
     /// `Any`.
-    fn head_to(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8], ret: KType) -> KType {
+    fn head_to(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8], ret: Handle) -> Handle {
         let names: Vec<TypeSymbol> = group.iter().map(|text| self.name(text)).collect();
         let bounds = vec![KType::ANY; names.len()];
         let elements: Vec<DispatchTokenElement> = parts
@@ -78,26 +86,32 @@ impl<'r> World<'r> {
             })
             .collect();
         self.types
-            .shape_type(self.region, &names, &bounds, &elements, classes, ret)
-            .handle
+            .shape_group(self.region, &names, &bounds, &elements, classes, ret)
+            .0
     }
 
     /// `FN :{v :<param>} -> Null`.
-    fn handler(&self, param: KType) -> KType {
+    fn handler(&self, param: Handle) -> Handle {
         let v = BinderSymbol::declared("v", &self.symbols).expect("a bindable token");
         self.types
-            .function_type(self.region, &[], &[], &[(v, param)], KType::NULL)
-            .handle
+            .function_type(self.region, &[(v, param)], KType::NULL.raw())
     }
 
     /// `shape`'s verdict over `arguments`, and its intervals.
-    fn judge(&self, shape: KType, arguments: &[Interval]) -> (Verdict, Option<Vec<Interval>>) {
+    fn judge(
+        &self,
+        shape: Handle,
+        arguments: &[Interval<Handle>],
+    ) -> (Verdict, Option<Vec<Interval<Handle>>>) {
         let judged = judge_by_class(&self.types, self.region, shape, arguments);
-        (judged.verdict, judged.intervals.map(<[Interval]>::to_vec))
+        let intervals = judged
+            .intervals
+            .map(|intervals| intervals.iter().map(|interval| interval.raw()).collect());
+        (judged.verdict, intervals)
     }
 
     /// The survivors of selection over `shapes`.
-    fn select(&self, shapes: &[KType]) -> Vec<usize> {
+    fn select(&self, shapes: &[Handle]) -> Vec<usize> {
         select_by_class(&self.types, self.region, shapes).to_vec()
     }
 }
@@ -127,7 +141,7 @@ fn a_written_ranking_normalizes_to_dense_classes() {
 fn a_ranking_is_part_of_a_shapes_identity() {
     let bump = Bump::new();
     let world = World::new(&bump);
-    let parts = [Kw("MOVE"), Slot(KType::ANY), Kw("TO"), Slot(KType::ANY)];
+    let parts = [Kw("MOVE"), Slot(Handle::ANY), Kw("TO"), Slot(Handle::ANY)];
     let raw = |ranks: &[RawRank]| dense_classes(&bump, ranks);
     let two_one = world.head(
         &[],
@@ -148,7 +162,7 @@ fn a_ranking_is_part_of_a_shapes_identity() {
     };
     assert!(classes.is_empty());
 
-    let render = |kt| display_name(kt, &world.types, &world.symbols).to_string();
+    let render = |kt| display_handle(kt, &world.types, &world.symbols).to_string();
     assert_eq!(render(two_one), ":(EXPR #(MOVE 2 :Any TO 1 :Any) -> Any)");
     assert_eq!(render(written), ":(EXPR #(MOVE _ :Any TO _ :Any) -> Any)");
 }
@@ -163,9 +177,11 @@ fn a_keyworded_call_solves_class_by_class() {
     let parts = [Kw("PAIR"), Slot(list_of_elt), Kw("WITH"), Slot(list_of_elt)];
     let written = world.head(&["Elt"], &parts, &[]);
     let joint = world.head(&["Elt"], &parts, &[0, 0]);
-    let numbers = world.types.list(KType::NUMBER);
-    let mixed = world.types.list(world.union(&[KType::NUMBER, KType::STR]));
-    let admits = |shape, arguments: &[KType]| {
+    let numbers = world.types.list(KType::NUMBER.raw());
+    let mixed = world
+        .types
+        .list(world.union(&[KType::NUMBER.raw(), KType::STR.raw()]));
+    let admits = |shape, arguments: &[Handle]| {
         admit_by_class(&world.types, world.region, shape, arguments).is_some()
     };
     assert!(!admits(written, &[numbers, mixed]));
@@ -174,7 +190,7 @@ fn a_keyworded_call_solves_class_by_class() {
     assert!(admits(joint, &[mixed, numbers]));
     assert_eq!(
         admit_by_class(&world.types, world.region, written, &[mixed, numbers]),
-        Some(&[world.union(&[KType::NUMBER, KType::STR])][..])
+        Some(&[world.union(&[KType::NUMBER.raw(), KType::STR.raw()])][..])
     );
 }
 
@@ -187,15 +203,20 @@ fn show_is_decided_by_its_first_class() {
         &[],
         &[
             Kw("SHOW"),
-            Slot(KType::NUMBER),
+            Slot(KType::NUMBER.raw()),
             Kw("WITH"),
-            Slot(KType::ANY),
+            Slot(Handle::ANY),
         ],
         &[],
     );
     let generic = world.head(
         &["Elt"],
-        &[Kw("SHOW"), Slot(world.var(0)), Kw("WITH"), Slot(KType::STR)],
+        &[
+            Kw("SHOW"),
+            Slot(world.var(0)),
+            Kw("WITH"),
+            Slot(KType::STR.raw()),
+        ],
         &[],
     );
     assert_eq!(world.select(&[concrete, generic]), [0]);
@@ -211,9 +232,9 @@ fn move_is_decided_by_its_second_class() {
         &[],
         &[
             Kw("MOVE"),
-            Slot(world.union(&[KType::STR, KType::BOOL])),
+            Slot(world.union(&[KType::STR.raw(), KType::BOOL.raw()])),
             Kw("TO"),
-            Slot(KType::NUMBER),
+            Slot(KType::NUMBER.raw()),
         ],
         &[],
     );
@@ -221,9 +242,9 @@ fn move_is_decided_by_its_second_class() {
         &[],
         &[
             Kw("MOVE"),
-            Slot(world.union(&[KType::NUMBER, KType::STR])),
+            Slot(world.union(&[KType::NUMBER.raw(), KType::STR.raw()])),
             Kw("TO"),
-            Slot(KType::ANY),
+            Slot(Handle::ANY),
         ],
         &[],
     );
@@ -278,13 +299,13 @@ fn a_later_class_reads_an_earlier_variable_at_its_interval() {
     let bump = Bump::new();
     let world = World::new(&bump);
     let below = |a, b| fits(&world.types, world.region, a, b);
-    let number_or_str = world.union(&[KType::NUMBER, KType::STR]);
+    let number_or_str = world.union(&[KType::NUMBER.raw(), KType::STR.raw()]);
     let pair = |group: &[&str], x, y, classes: &[u8]| {
         world.head_to(
             group,
             &[Kw("PAIR"), Slot(x), Kw("WITH"), Slot(y)],
             classes,
-            KType::STR,
+            KType::STR.raw(),
         )
     };
     let wide = pair(&[], number_or_str, number_or_str, &[]);
@@ -301,12 +322,12 @@ fn a_later_class_reads_an_earlier_variable_at_its_interval() {
             group,
             &[Kw("APPLY"), Slot(f), Kw("TO"), Slot(y)],
             &[],
-            KType::NULL,
+            KType::NULL.raw(),
         )
     };
     assert!(below(
         apply(&["Elt"], world.handler(world.var(0)), world.var(0)),
-        apply(&[], world.handler(KType::NUMBER), KType::NUMBER),
+        apply(&[], world.handler(KType::NUMBER.raw()), KType::NUMBER.raw()),
     ));
 }
 
@@ -320,9 +341,9 @@ fn take_reads_an_unadmitted_variable_as_its_bound() {
         &[],
         &[
             Kw("TAKE"),
-            Slot(world.union(&[KType::STR, world.types.list(KType::NUMBER)])),
+            Slot(world.union(&[KType::STR.raw(), world.types.list(KType::NUMBER.raw())])),
             Kw("WITH"),
-            Slot(KType::NUMBER),
+            Slot(KType::NUMBER.raw()),
         ],
         &[],
     );
@@ -330,7 +351,7 @@ fn take_reads_an_unadmitted_variable_as_its_bound() {
         &["Elt"],
         &[
             Kw("TAKE"),
-            Slot(world.union(&[KType::NUMBER, world.types.list(world.var(0))])),
+            Slot(world.union(&[KType::NUMBER.raw(), world.types.list(world.var(0))])),
             Kw("WITH"),
             Slot(world.var(0)),
         ],
@@ -347,12 +368,22 @@ fn heads_no_class_orders_both_survive() {
     let world = World::new(&bump);
     let left = world.head(
         &[],
-        &[Kw("MIX"), Slot(KType::NUMBER), Kw("AND"), Slot(KType::ANY)],
+        &[
+            Kw("MIX"),
+            Slot(KType::NUMBER.raw()),
+            Kw("AND"),
+            Slot(Handle::ANY),
+        ],
         &[0, 0],
     );
     let right = world.head(
         &[],
-        &[Kw("MIX"), Slot(KType::ANY), Kw("AND"), Slot(KType::NUMBER)],
+        &[
+            Kw("MIX"),
+            Slot(Handle::ANY),
+            Kw("AND"),
+            Slot(KType::NUMBER.raw()),
+        ],
         &[0, 0],
     );
     assert_eq!(world.select(&[left, right]), [0, 1]);
@@ -365,12 +396,17 @@ fn class_verdicts_are_recorded_and_reused() {
     let world = World::new(&bump);
     let a = world.head(
         &[],
-        &[Kw("MOVE"), Slot(KType::STR), Kw("TO"), Slot(KType::NUMBER)],
+        &[
+            Kw("MOVE"),
+            Slot(KType::STR.raw()),
+            Kw("TO"),
+            Slot(KType::NUMBER.raw()),
+        ],
         &[],
     );
     let b = world.head(
         &[],
-        &[Kw("MOVE"), Slot(KType::ANY), Kw("TO"), Slot(KType::ANY)],
+        &[Kw("MOVE"), Slot(Handle::ANY), Kw("TO"), Slot(Handle::ANY)],
         &[],
     );
     let _ = shape_specificity(&world.types, world.region, a, b);
@@ -384,14 +420,14 @@ fn class_verdicts_are_recorded_and_reused() {
 fn a_ranking_disagreement_refuses_in_fits() {
     let bump = Bump::new();
     let world = World::new(&bump);
-    let parts = [Kw("MOVE"), Slot(KType::ANY), Kw("TO"), Slot(KType::ANY)];
+    let parts = [Kw("MOVE"), Slot(Handle::ANY), Kw("TO"), Slot(Handle::ANY)];
     let ranked = world.head(&[], &parts, &[1, 0]);
     let written = world.head(&[], &parts, &[]);
     let signature = |member| {
         let mut draft = SchemaDraft::new(world.region);
         draft.origin = SigOrigin::Declared;
-        draft.keyworded.push(member);
-        world.types.signature(world.region, draft)
+        draft.keyworded.push(world.types.declared(member));
+        world.types.signature(world.region, draft).raw()
     };
     assert!(matches!(
         sig_fits(
@@ -426,12 +462,15 @@ fn a_bare_variable_always_admits() {
         world.var(0),
     );
     assert_eq!(
-        world.judge(only, &[Interval::within(KType::NUMBER)]),
-        (Verdict::Always, Some(vec![Interval::within(KType::NUMBER)]))
+        world.judge(only, &[within(KType::NUMBER.raw())]),
+        (Verdict::Always, Some(vec![within(KType::NUMBER.raw())]))
     );
     assert_eq!(
-        world.judge(only, &[Interval::point(KType::NUMBER)]),
-        (Verdict::Always, Some(vec![Interval::point(KType::NUMBER)]))
+        world.judge(only, &[Interval::point(KType::NUMBER.raw())]),
+        (
+            Verdict::Always,
+            Some(vec![Interval::point(KType::NUMBER.raw())])
+        )
     );
 }
 
@@ -441,7 +480,7 @@ fn a_bare_variable_always_admits() {
 fn pair_is_judged_through_its_first_class() {
     let bump = Bump::new();
     let world = World::new(&bump);
-    let number_or_str = world.union(&[KType::NUMBER, KType::STR]);
+    let number_or_str = world.union(&[KType::NUMBER.raw(), KType::STR.raw()]);
     let parts = [
         Kw("PAIR"),
         Slot(world.var(0)),
@@ -449,15 +488,17 @@ fn pair_is_judged_through_its_first_class() {
         Slot(world.var(0)),
     ];
     let pair = world.head(&["Elt"], &parts, &[]);
-    let number = Interval::point(KType::NUMBER);
+    let number = Interval::point(KType::NUMBER.raw());
     assert_eq!(world.judge(pair, &[number, number]).0, Verdict::Always);
-    let either = Interval::within(number_or_str);
+    let either = within(number_or_str);
     assert_eq!(
         world.judge(pair, &[either, either]),
         (Verdict::Maybe, Some(vec![either]))
     );
     assert_eq!(
-        world.judge(pair, &[number, Interval::point(KType::STR)]).0,
+        world
+            .judge(pair, &[number, Interval::point(KType::STR.raw())])
+            .0,
         Verdict::Never
     );
     // Ranked together, the two slots name one variable of one class.
@@ -480,16 +521,19 @@ fn a_later_slot_reads_an_earlier_variable_at_its_least_instance() {
             &[],
         )
     };
-    let within = Interval::within(KType::NUMBER);
-    let point = Interval::point(KType::NUMBER);
+    let under_number = within(KType::NUMBER.raw());
+    let point = Interval::point(KType::NUMBER.raw());
     let handler = feed(world.handler(world.var(0)));
-    let numbers = Interval::within(world.handler(KType::NUMBER));
-    assert_eq!(world.judge(handler, &[within, numbers]).0, Verdict::Always);
+    let numbers = within(world.handler(KType::NUMBER.raw()));
+    assert_eq!(
+        world.judge(handler, &[under_number, numbers]).0,
+        Verdict::Always
+    );
     assert_eq!(world.judge(handler, &[point, numbers]).0, Verdict::Always);
     let list = feed(world.types.list(world.var(0)));
-    let list_of_number = Interval::within(world.types.list(KType::NUMBER));
+    let list_of_number = within(world.types.list(KType::NUMBER.raw()));
     assert_eq!(
-        world.judge(list, &[within, list_of_number]).0,
+        world.judge(list, &[under_number, list_of_number]).0,
         Verdict::Maybe
     );
     assert_eq!(
@@ -503,14 +547,19 @@ fn a_later_slot_reads_an_earlier_variable_at_its_least_instance() {
 fn a_lexical_slot_admits_what_lies_under_it() {
     let bump = Bump::new();
     let world = World::new(&bump);
-    let elt = world.types.lexical(0, world.name("Elt"), KType::NUMBER);
+    let elt = world
+        .types
+        .lexical(0, world.name("Elt"), KType::NUMBER)
+        .raw();
     let inner = world.head(&[], &[Kw("INNER"), Slot(elt)], &[]);
     assert_eq!(
-        world.judge(inner, &[Interval::within(elt)]),
+        world.judge(inner, &[within(elt)]),
         (Verdict::Always, Some(vec![]))
     );
     assert_eq!(
-        world.judge(inner, &[Interval::point(KType::NUMBER)]).0,
+        world
+            .judge(inner, &[Interval::point(KType::NUMBER.raw())])
+            .0,
         Verdict::Maybe
     );
 }
@@ -523,16 +572,16 @@ fn a_slot_above_no_type_an_argument_can_carry_is_never() {
     let world = World::new(&bump);
     let field =
         |text: &str| BinderSymbol::declared(text, &world.symbols).expect("a bindable token");
-    let record = |fields: &[(BinderSymbol, KType)]| world.types.record(world.region, fields);
+    let record = |fields: &[(BinderSymbol, Handle)]| world.types.record(world.region, fields);
     let (numbers, anys) = (
-        world.types.list(KType::NUMBER),
-        world.types.list(KType::ANY),
+        world.types.list(KType::NUMBER.raw()),
+        world.types.list(Handle::ANY),
     );
 
     let which = world.head(&[], &[Kw("WHICH"), Slot(numbers)], &[]);
-    let verdict = |argument: Interval| world.judge(which, &[argument]).0;
+    let verdict = |argument: Interval<Handle>| world.judge(which, &[argument]).0;
     assert_eq!(verdict(Interval::point(anys)), Verdict::Never);
-    assert_eq!(verdict(Interval::within(anys)), Verdict::Maybe);
+    assert_eq!(verdict(within(anys)), Verdict::Maybe);
     assert_eq!(verdict(Interval::point(numbers)), Verdict::Always);
 
     let elements = world.types.list(world.var(0));
@@ -541,7 +590,7 @@ fn a_slot_above_no_type_an_argument_can_carry_is_never() {
         &[Kw("PAIR"), Slot(elements), Kw("WITH"), Slot(elements)],
         &[],
     );
-    for first in [Interval::point(numbers), Interval::within(numbers)] {
+    for first in [Interval::point(numbers), within(numbers)] {
         assert_eq!(
             world.judge(pair, &[first, Interval::point(anys)]).0,
             Verdict::Never,
@@ -550,10 +599,25 @@ fn a_slot_above_no_type_an_argument_can_carry_is_never() {
     }
 
     let (a, b) = (field("a"), field("b"));
-    let elt = world.types.lexical(0, world.name("Elt"), KType::NUMBER);
-    let strs = world.head(&[], &[Kw("STRS"), Slot(world.types.list(KType::STR))], &[]);
-    let needs_b = world.head(&[], &[Kw("GET"), Slot(record(&[(b, KType::NUMBER)]))], &[]);
-    let has_a = world.head(&[], &[Kw("GET"), Slot(record(&[(a, KType::NUMBER)]))], &[]);
+    let elt = world
+        .types
+        .lexical(0, world.name("Elt"), KType::NUMBER)
+        .raw();
+    let strs = world.head(
+        &[],
+        &[Kw("STRS"), Slot(world.types.list(KType::STR.raw()))],
+        &[],
+    );
+    let needs_b = world.head(
+        &[],
+        &[Kw("GET"), Slot(record(&[(b, KType::NUMBER.raw())]))],
+        &[],
+    );
+    let has_a = world.head(
+        &[],
+        &[Kw("GET"), Slot(record(&[(a, KType::NUMBER.raw())]))],
+        &[],
+    );
     assert_eq!(
         world
             .judge(strs, &[Interval::point(world.types.list(elt))])
@@ -568,8 +632,8 @@ fn a_slot_above_no_type_an_argument_can_carry_is_never() {
         Verdict::Never
     );
     let bounded_below = Interval {
-        lower: record(&[(a, KType::NEVER)]),
-        upper: record(&[(a, KType::ANY)]),
+        lower: record(&[(a, Handle::NEVER)]),
+        upper: record(&[(a, Handle::ANY)]),
     };
     assert_eq!(world.judge(needs_b, &[bounded_below]).0, Verdict::Never);
     assert_eq!(world.judge(has_a, &[bounded_below]).0, Verdict::Maybe);

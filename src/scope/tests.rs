@@ -22,7 +22,7 @@ use crate::memory::{
 use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
@@ -39,8 +39,8 @@ reattachable!(Step => ());
 pub(super) struct Probe(pub u32);
 
 impl Knotted for Probe {
-    fn ktype(&self) -> KType {
-        KType::ANY
+    fn ktype(&self) -> DeclaredType<KType> {
+        KType::ANY.into()
     }
 
     fn weight(&self) -> Weight {

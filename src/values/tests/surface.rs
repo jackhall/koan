@@ -21,7 +21,7 @@ fn a_retype_is_a_seen_type_restamped_over_the_same_runs() {
             let record = Record::new(writer, &fields, types, scratch);
             let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
             let seen = Seen::of(Value::Record(record)).seen_at(narrow, types, scratch);
-            assert_eq!(seen.ktype(), narrow);
+            assert_eq!(seen.ktype(), narrow.into());
             let Value::Record(restamped) = seen.restamped(writer) else {
                 panic!("a record restamps as a record");
             };
@@ -59,7 +59,7 @@ fn a_record_shows_only_the_fields_its_seen_type_names() {
             let read = retyped
                 .field(x.symbol(), types, scratch)
                 .expect("the type names `x`");
-            assert_eq!(read.ktype(), KType::NUMBER);
+            assert_eq!(read.ktype(), KType::NUMBER.into());
             assert!(matches!(read.value(), Value::Number(1.0)));
         })
     });
@@ -80,7 +80,7 @@ fn an_element_is_seen_at_the_type_its_list_names() {
             let retyped = Value::List(list).retyped(writer, types.list(narrow), types, scratch);
             let surface = retyped.surface(types, scratch).expect("a list opens");
             let element = surface.child(0, types, scratch);
-            assert_eq!(element.ktype(), narrow);
+            assert_eq!(element.ktype(), narrow.into());
             assert_eq!(
                 element.value().ktype(),
                 record.ktype(),
@@ -114,7 +114,7 @@ fn a_payload_is_seen_at_its_identitys_representation() {
                 .expect("a tagged value opens");
             assert_eq!(surface.len(), 1);
             let payload = surface.child(0, types, scratch);
-            assert_eq!(payload.ktype(), representation);
+            assert_eq!(payload.ktype(), representation.into());
             let opened = payload.surface(types, scratch).expect("a record opens");
             assert_eq!(opened.len(), 2);
         })

@@ -30,7 +30,7 @@ use crate::scheduler::{
 };
 use crate::scope::{Builtins, CaptureSlot, Offer, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{KType, TypeNode, TypeRegistry, satisfied_by};
+use crate::type_lattice::{DeclaredType, KType, TypeNode, TypeRegistry, satisfied_by};
 use crate::values::{Circular, Knotted as _, Link, List, Record, TypeValue, Value};
 
 thread_local! {
@@ -490,12 +490,13 @@ fn keeps(program: &Program<'_>, callee: KValue<'_, '_>, contract: Contract) -> b
     let Some(function) = callee.as_callable().and_then(Knotted::function) else {
         return false;
     };
-    match program.types().node(function.ktype()) {
-        TypeNode::KFunction {
-            quantifiers: [],
-            ret,
-            ..
-        } => satisfied_by(program.types(), &Bump::new(), contract.returns, ret),
+    let DeclaredType::Type(ktype) = function.ktype() else {
+        return false;
+    };
+    match program.types().node(ktype) {
+        TypeNode::KFunction { ret, .. } => {
+            satisfied_by(program.types(), &Bump::new(), contract.returns, ret)
+        }
         _ => false,
     }
 }

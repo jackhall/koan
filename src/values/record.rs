@@ -38,7 +38,9 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         let ktype = record_type(
             types,
             scratch,
-            fields.iter().map(|(name, cell)| (*name, cell.ktype())),
+            fields
+                .iter()
+                .map(|(name, cell)| (*name, cell.concrete_ktype())),
         );
         Self::weighed(writer, names, cells, ktype)
     }

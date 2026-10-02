@@ -43,7 +43,7 @@ impl<'cell> Key<'cell> {
             Value::Str(text) => Ok(Key::str(text)),
             Value::Number(number) => Key::number(number),
             Value::Bool(flag) => Ok(Key::bool(flag)),
-            _ => Err(KeyRejected::NotAScalar(value.ktype())),
+            _ => Err(KeyRejected::NotAScalar(value.concrete_ktype())),
         }
     }
 
@@ -174,7 +174,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
             scratch,
             keys.iter()
                 .zip(cells)
-                .map(|(key, cell)| (key.ktype(), cell.ktype())),
+                .map(|(key, cell)| (key.ktype(), cell.concrete_ktype())),
         );
         Self::weighed(writer, keys, cells, ktype)
     }

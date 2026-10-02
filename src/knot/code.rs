@@ -338,9 +338,10 @@ fn keyed<'graph, 'cell>(
             .and_then(Knotted::function)
             .and_then(|function| function.registered_shape())
             .expect("a registration member is the function born for it");
+        // Only the key and the ranking are read, which a scheme's node spells as a type's does.
         let TypeNode::ExpressionShape {
             elements, classes, ..
-        } = types.node(registered)
+        } = types.node(registered.raw())
         else {
             unreachable!("a registered shape is an expression shape")
         };

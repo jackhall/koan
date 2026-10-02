@@ -12,19 +12,23 @@
 //! seen at its type there. Equality, rendering, the mark pass and the deep copy walk it; a reader
 //! that hands a part on as a value of its own [restamps](Seen::restamped) it.
 
-use crate::memory::{BumpAllocator, Writer};
+use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::Symbol;
-use crate::type_lattice::{KType, TypeNode, TypeRegistry, fits, meet};
+use crate::type_lattice::{DeclaredType, KType, TypeNode, TypeRegistry, fits, meet, satisfied_by};
 
-use super::admission::type_satisfies;
 use super::circular::{Circular, Resolved};
 use super::{Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Value, representation};
 
-/// A value beside the type a read sees it at.
+/// Why the type a container, a tagged value or a data node is seen at is concrete: its memo is a
+/// type, and so is every type a holder names for a part. Only a callable is typed by a scheme.
+const SEEN: &str = "a value of a kind is seen at a type, never a scheme";
+
+/// A value beside the type a read sees it at: a quantified callable — a closure's capture, a
+/// candidate list's cell — at its scheme, every other value at a type.
 #[derive(Clone, Copy, Debug)]
 pub struct Seen<'cell, X = Nothing> {
     value: Value<'cell, X>,
-    ktype: KType,
+    ktype: DeclaredType<KType>,
 }
 
 impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
@@ -42,8 +46,13 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     }
 
     /// The type the read sees the value at.
-    pub fn ktype(&self) -> KType {
+    pub fn ktype(&self) -> DeclaredType<KType> {
         self.ktype
+    }
+
+    /// The type a value of a kind is seen at ([`SEEN`]).
+    fn concrete(&self) -> KType {
+        self.ktype.as_type().expect(SEEN)
     }
 
     /// Whether `slot` takes the value at the type it is seen at: [`satisfies`](super::satisfies)
@@ -54,7 +63,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> bool {
-        type_satisfies(slot, self.ktype, types, scratch)
+        satisfied_by(types, scratch, slot, self.ktype)
     }
 
     /// The value seen where a holder's type names `declared` for it, after the caller has checked
@@ -68,13 +77,13 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Self {
-        let own = self.ktype;
-        if declared == own {
-            return self;
-        }
         let Some(kind) = kind(self.value) else {
             return self;
         };
+        let own = self.concrete();
+        if declared == own {
+            return self;
+        }
         let constructor = |handle: KType| match types.node(handle) {
             TypeNode::ConstructorApply { constructor, .. } => constructor,
             _ => handle,
@@ -86,10 +95,11 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
             (Kind::Tagged, _) => constructor(member) == constructor(own),
             _ => false,
         };
-        let members = match types.node(declared) {
-            TypeNode::Union { members } => members,
-            _ => std::slice::from_ref(&declared),
-        };
+        let mut members = BumpVec::new_in(scratch);
+        match types.node(declared) {
+            TypeNode::Union { members: held } => members.extend(held.iter()),
+            _ => members.push(declared),
+        }
         let target = members
             .iter()
             .copied()
@@ -106,7 +116,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         match target {
             Some(ktype) => Seen {
                 value: self.value,
-                ktype,
+                ktype: ktype.into(),
             },
             None => self,
         }
@@ -117,10 +127,10 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     /// restamp, is laid down as a plain value of its kind over its cells, each edge resolved to its
     /// sibling.
     pub fn restamped(self, writer: Writer<'cell>) -> Value<'cell, X> {
-        let target = self.ktype;
-        if target == self.value.ktype() {
+        if self.value.ktype() == self.ktype {
             return self.value;
         }
+        let target = self.concrete();
         match self.value {
             Value::List(list) => Value::List(list.with_type(writer, target)),
             Value::Dict(dict) => Value::Dict(dict.with_type(writer, target)),
@@ -141,7 +151,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         scratch: BumpAllocator<'x>,
     ) -> Option<Surface<'x, 'cell, X>> {
         let (node, raw) = raw(self.value)?;
-        let ktype = self.ktype;
+        let ktype = self.concrete();
         let unexpected = || unreachable!("a value is seen only at a type of its own kind");
         let parts = match raw {
             Raw::List(cells) => match types.node(ktype) {
@@ -186,7 +196,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         let Some((_, Raw::Record(names, cells))) = raw(self.value) else {
             return None;
         };
-        let TypeNode::Record { fields } = types.node(self.ktype) else {
+        let TypeNode::Record { fields } = types.node(self.concrete()) else {
             unreachable!("a record is seen only at a record type")
         };
         let declared = fields.get(name)?;

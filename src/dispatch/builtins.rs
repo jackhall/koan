@@ -211,9 +211,7 @@ pub(super) fn table<'graph>(
             Element::Slot(Takes::Is(slot)) => DispatchTokenElement::Slot(*slot),
             Element::Slot(Takes::ListOf(item)) => DispatchTokenElement::Slot(types.list(*item)),
         }));
-        let shape = types
-            .shape_type(scratch, &[], &[], &elements, &[], overload.returns)
-            .handle;
+        let shape = types.shape_type(scratch, &elements, &[], overload.returns);
         let function = builtin(writer, shape, overload.native as u32);
         overloads.push((key, Value::Knotted(function)));
     }
@@ -288,8 +286,8 @@ pub(super) fn run<'graph, 'here>(
             match left.equals(&right, types, scratch) {
                 Ok(equal) => Value::Bool(equal),
                 Err(_) => raise(Raised::Incomparable {
-                    left: left.ktype(),
-                    right: right.ktype(),
+                    left: left.concrete_ktype(),
+                    right: right.concrete_ktype(),
                 }),
             }
         }
@@ -328,7 +326,7 @@ pub(super) fn run<'graph, 'here>(
             }
             field(record, name, writer, types, scratch).unwrap_or_else(|| {
                 raise(Raised::NoField {
-                    of: record.ktype(),
+                    of: record.concrete_ktype(),
                     field: name,
                 })
             })
@@ -346,7 +344,7 @@ pub(super) fn run<'graph, 'here>(
         // A projection restamps the record at the fields it names, sharing its runs.
         Native::Project => {
             let record = value(1);
-            let TypeNode::Record { fields } = types.node(record.ktype()) else {
+            let TypeNode::Record { fields } = types.node(record.concrete_ktype()) else {
                 unreachable!("a record slot admits records alone")
             };
             let mut names = BumpVec::new_in(scratch);
@@ -362,7 +360,7 @@ pub(super) fn run<'graph, 'here>(
                     Some(ktype) => projected.push((name, ktype)),
                     None => {
                         return raise(Raised::NoField {
-                            of: record.ktype(),
+                            of: record.concrete_ktype(),
                             field: name.symbol(),
                         });
                     }

@@ -43,10 +43,10 @@ use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, 
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    Collector, KType, TypeNode, TypeRegistry, Variance, admits_with, display_name,
-    substitute_quantified,
+    Collector, DeclaredType, KType, Parametric, TypeNode, TypeRegistry, Variance, admits_with,
+    display_name, substitute_quantified,
 };
-use crate::values::{Link, List, TypeValue, Value};
+use crate::values::{CALL_ONLY, Link, List, TypeValue, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
@@ -194,14 +194,15 @@ pub fn call<'graph, 'here>(
     owed: Option<Contract>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
-    let returns =
-        callee
-            .as_callable()
-            .and_then(Knotted::function)
-            .and_then(|function| match program.types().node(function.ktype()) {
+    let returns = callee
+        .as_callable()
+        .and_then(Knotted::function)
+        .and_then(
+            |function| match function_node(program.types(), function.ktype()) {
                 TypeNode::KFunction { ret, .. } => Some(ret),
                 _ => None,
-            });
+            },
+        );
     Request {
         placement: returns.map_or(Placement::Shares, placement_of),
         use_,
@@ -348,13 +349,33 @@ pub fn eval<'graph, 'here>(
 
 /// The derived placement bit: `Fresh` when the return type is `Number`, `Bool` or `Null` — the
 /// types no value of which shares bytes with an argument — and `Shares` otherwise.
-pub fn placement_of(returns: KType) -> Placement {
-    if [KType::NUMBER, KType::BOOL, KType::NULL].contains(&returns) {
+pub fn placement_of(returns: impl Into<Parametric>) -> Placement {
+    let returns = returns.into();
+    if [KType::NUMBER, KType::BOOL, KType::NULL]
+        .into_iter()
+        .any(|leaf| returns == leaf.into())
+    {
         Placement::Fresh
     } else {
         Placement::Shares
     }
 }
+
+/// A function's type's node, its positions read as the function's group may: a scheme's read its
+/// own variables.
+fn function_node<'run>(
+    types: &TypeRegistry<'run>,
+    ktype: DeclaredType<KType>,
+) -> TypeNode<'run, Parametric> {
+    match ktype {
+        DeclaredType::Type(ktype) => types.node(Parametric::from(ktype)),
+        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+    }
+}
+
+/// Why a callee's position read under its solution is concrete: a function is born with no
+/// variable outside its own group, and a run-time solution is concrete.
+const SOLVED: &str = "a run-time callee holds only its own group's variables";
 
 impl<'graph, 'cell> Runner<'graph, 'cell> {
     fn at(
@@ -502,7 +523,7 @@ fn frame<'graph, 'here>(
         bounds,
         params,
         ret,
-    } = types.node(function.ktype())
+    } = function_node(types, function.ktype())
     else {
         unreachable!("a function's type is a function type")
     };
@@ -526,21 +547,21 @@ fn frame<'graph, 'here>(
         CallKind::Keyworded if !quantifiers.is_empty() => {
             let mut solved = BumpVec::with_capacity_in(quantifiers.len(), scratch);
             solved.resize(quantifiers.len(), KType::NEVER);
-            for (name, index) in function.quantifier_map() {
-                solved[*index] = carried(*name).ok_or_else(misnamed)?;
+            for (name, index) in function.quantifier_map().iter() {
+                solved[index] = carried(name).ok_or_else(misnamed)?;
             }
             solution = Some(solved);
         }
         CallKind::Keyworded => {}
         CallKind::ByName => {
-            let mut collector = Collector::new(scratch, bounds);
+            let mut collector = Collector::<KType>::new(scratch, bounds);
             for (parameter, declared) in params.iter() {
                 let argument = argument(parameter.symbol())?;
                 admits_with(
                     types,
                     scratch,
                     declared,
-                    argument.ktype(),
+                    argument.ktype().as_type().expect(CALL_ONLY),
                     Variance::Co,
                     &mut collector,
                 )
@@ -578,11 +599,10 @@ fn frame<'graph, 'here>(
                     .get(name.symbol())
                     .expect("every value parameter is declared");
                 let declared = match &solution {
-                    Some(solution) if types.contains_quantified(declared) => {
-                        substitute_quantified(types, scratch, declared, solution)
-                    }
-                    _ => declared,
+                    Some(solution) => substitute_quantified(types, scratch, declared, solution),
+                    None => declared,
                 };
+                let declared = types.concrete(declared).expect(SOLVED);
                 debug_assert!(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
@@ -631,6 +651,7 @@ fn frame<'graph, 'here>(
         Some(solution) => substitute_quantified(types, scratch, ret, solution),
         None => ret,
     };
+    let returns = types.concrete(returns).expect(SOLVED);
     let contract = Contract {
         callee: Some(function.ktype()),
         returns,

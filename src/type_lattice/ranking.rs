@@ -28,14 +28,14 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 
-use super::handle::KType;
-use super::lattice::meet;
+use super::handle::{Handle, KType, Parametric, TypeHandle};
+use super::lattice::meet_through_variables;
 use super::node::TypeNode;
 use super::order::fits;
 use super::registry::{Relation, TypeRegistry};
 use super::shape::{DispatchTokenElement, class_of};
-use super::substitute::{Side, bound_above, read_through};
-use super::unify::{Collector, Interval, admits_with, intervals};
+use super::substitute::{Side, Variable, bound_above, read_through};
+use super::unify::{Collector, Interval, admits, intervals};
 use super::walk::Variance;
 
 /// An expression shape's parts, read once off its node for a class-by-class walk.
@@ -45,12 +45,12 @@ pub(super) struct Ranked<'run> {
     pub(super) bounds: &'run [KType],
     pub(super) elements: &'run [DispatchTokenElement],
     pub(super) classes: &'run [u8],
-    pub(super) ret: KType,
+    pub(super) ret: Handle,
 }
 
 impl<'run> Ranked<'run> {
     /// `kt`'s shape parts, or `None` for anything that is not a shape.
-    pub(super) fn of(types: &TypeRegistry<'run>, kt: KType) -> Option<Self> {
+    pub(super) fn of(types: &TypeRegistry<'run>, kt: Handle) -> Option<Self> {
         match types.node(kt) {
             TypeNode::ExpressionShape {
                 quantifiers,
@@ -61,7 +61,7 @@ impl<'run> Ranked<'run> {
             } => Some(Ranked {
                 quantifiers,
                 bounds,
-                elements,
+                elements: elements.raw(),
                 classes,
                 ret,
             }),
@@ -70,7 +70,7 @@ impl<'run> Ranked<'run> {
     }
 
     /// The slot types, in slot order.
-    pub(super) fn slots(self) -> impl Iterator<Item = KType> + use<'run> {
+    pub(super) fn slots(self) -> impl Iterator<Item = Handle> + use<'run> {
         self.elements.iter().filter_map(|element| match element {
             DispatchTokenElement::Slot(kt) => Some(*kt),
             DispatchTokenElement::Keyword(_) => None,
@@ -96,10 +96,10 @@ impl<'run> Ranked<'run> {
 /// variable, and what each variable an earlier class fixed reads as.
 struct ClassWalk<'s, 'run> {
     declared: Ranked<'run>,
-    slots: BumpVec<'s, KType>,
+    slots: BumpVec<'s, Handle>,
     /// Per variable, the lowest class whose slots mention it; `None` for one only the return does.
     first: BumpVec<'s, Option<u8>>,
-    fixed: BumpVec<'s, Option<KType>>,
+    fixed: BumpVec<'s, Option<Handle>>,
 }
 
 impl<'s, 'run> ClassWalk<'s, 'run> {
@@ -127,7 +127,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     }
 
     /// A collector with every fixed variable pinned to what it reads as.
-    fn collector(&self, scratch: BumpAllocator<'s>) -> Collector<'s> {
+    fn collector(&self, scratch: BumpAllocator<'s>) -> Collector<'s, Handle> {
         let mut collector = Collector::new(scratch, self.declared.bounds);
         for (index, fixed) in self.fixed.iter().enumerate() {
             if let Some(to) = fixed {
@@ -143,13 +143,13 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         &self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'s>,
-        arguments: &[KType],
+        arguments: &[Handle],
         class: u8,
-    ) -> Option<BumpVec<'s, KType>> {
+    ) -> Option<BumpVec<'s, Handle>> {
         let mut collector = self.collector(scratch);
         for (index, slot) in self.slots.iter().enumerate() {
             if class_of(self.declared.classes, index) == class
-                && admits_with(
+                && admits(
                     types,
                     scratch,
                     *slot,
@@ -166,7 +166,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     }
 
     /// Fix each variable `class` first mentions to `read(variable)`.
-    fn fix(&mut self, class: u8, mut read: impl FnMut(usize) -> KType) {
+    fn fix(&mut self, class: u8, mut read: impl FnMut(usize) -> Handle) {
         for variable in 0..self.fixed.len() {
             if self.first[variable] == Some(class) {
                 self.fixed[variable] = Some(read(variable));
@@ -182,7 +182,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'s>,
         class: u8,
-        solution: &[KType],
+        solution: &[Handle],
     ) {
         let declared = self.declared;
         let mut positions = BumpVec::new_in(scratch);
@@ -210,7 +210,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'s>,
-        arguments: &[KType],
+        arguments: &[Handle],
     ) -> Option<()> {
         for class in 0..self.declared.class_count() {
             let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
@@ -225,12 +225,12 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
 /// call admits by. The solution in the shape's group order, a variable no slot mentions
 /// reading as its bound; `None` when some class does not admit, when `declared` is not a shape,
 /// or when the arguments are not one per slot.
-pub fn admit_by_class<'s>(
+pub(super) fn admit_by_class<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
-    declared: KType,
-    arguments: &[KType],
-) -> Option<&'s [KType]> {
+    declared: Handle,
+    arguments: &[Handle],
+) -> Option<&'s [Handle]> {
     let declared = Ranked::of(types, declared)?;
     let mut walk = ClassWalk::new(types, scratch, declared);
     if walk.slots.len() != arguments.len() {
@@ -238,7 +238,7 @@ pub fn admit_by_class<'s>(
     }
     walk.admit_all(types, scratch, arguments)?;
     Some(scratch.alloc_slice_fill_iter(
-        (0..walk.fixed.len()).map(|index| walk.fixed[index].unwrap_or(declared.bound(index))),
+        (0..walk.fixed.len()).map(|index| walk.fixed[index].unwrap_or(declared.bound(index).raw())),
     ))
 }
 
@@ -259,7 +259,7 @@ pub enum Verdict {
 #[derive(Clone, Copy, Debug)]
 pub struct Judged<'s> {
     pub verdict: Verdict,
-    pub intervals: Option<&'s [Interval]>,
+    pub intervals: Option<&'s [Interval<Parametric>]>,
 }
 
 /// Judge `declared` against one static type per slot, class by class: see README § Priority
@@ -273,11 +273,11 @@ pub struct Judged<'s> {
 /// the call's; a slot whose least instance, earlier variables read at theirs, lies above its
 /// argument's upper end; or a bare variable of the class that no other slot of the class names,
 /// whose one contribution lies under its bound.
-pub fn judge_by_class<'s>(
+pub(super) fn judge_by_class<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
-    declared: KType,
-    arguments: &[Interval],
+    declared: Handle,
+    arguments: &[Interval<Handle>],
 ) -> Judged<'s> {
     let unjudged = Judged {
         verdict: Verdict::Maybe,
@@ -291,7 +291,8 @@ pub fn judge_by_class<'s>(
         return unjudged;
     }
     let arity = ranked.quantifiers.len();
-    let mut known: BumpVec<'s, Option<Interval>> = BumpVec::with_capacity_in(arity, scratch);
+    let mut known: BumpVec<'s, Option<Interval<Handle>>> =
+        BumpVec::with_capacity_in(arity, scratch);
     known.resize(arity, None);
     let mut uppers = BumpVec::with_capacity_in(arguments.len(), scratch);
     uppers.extend(arguments.iter().map(|argument| argument.upper));
@@ -312,9 +313,9 @@ pub fn judge_by_class<'s>(
                 scratch,
                 walk.slots[slot],
                 Side::Above,
-                &mut |node| match *node {
-                    TypeNode::Quantified { index, bound } => Some(earlier(index, bound)),
-                    _ => node.rigid_interval(),
+                &mut |variable| match variable {
+                    Variable::Quantified { index, bound } => Some(earlier(index, bound)),
+                    _ => Some(variable.interval().raw()),
                 },
             );
             let upper = bound_above(types, scratch, arguments[slot].upper);
@@ -323,9 +324,9 @@ pub fn judge_by_class<'s>(
                 scratch,
                 arguments[slot].lower,
                 Side::Below,
-                &mut |node| node.rigid_interval(),
+                &mut |variable| Some(variable.interval().raw()),
             );
-            if meet(types, scratch, greatest, upper) == KType::NEVER
+            if meet_through_variables(types, scratch, greatest, upper) == Handle::NEVER
                 || !fits(types, scratch, lower, greatest)
             {
                 return Judged {
@@ -350,19 +351,18 @@ pub fn judge_by_class<'s>(
             if exact_class && (0..arity).any(|v| own(v) && names(slot, v)) {
                 continue;
             }
-            let least =
-                read_through(
-                    types,
-                    scratch,
-                    walk.slots[slot],
-                    Side::Below,
-                    &mut |node| match *node {
-                        TypeNode::Quantified { index, bound } if !own(index) => {
-                            Some(earlier(index, bound))
-                        }
-                        _ => None,
-                    },
-                );
+            let least = read_through(
+                types,
+                scratch,
+                walk.slots[slot],
+                Side::Below,
+                &mut |variable| match variable {
+                    Variable::Quantified { index, bound } if !own(index) => {
+                        Some(earlier(index, bound))
+                    }
+                    _ => None,
+                },
+            );
             always = if !types.contains_quantified(least) {
                 fits(types, scratch, arguments[slot].upper, least)
             } else if let TypeNode::Quantified { index, bound } = types.node(least)
@@ -370,7 +370,7 @@ pub fn judge_by_class<'s>(
                 && !(0..walk.slots.len())
                     .any(|other| other != slot && in_class(other) && names(other, index))
             {
-                fits(types, scratch, arguments[slot].upper, bound)
+                fits(types, scratch, arguments[slot].upper, bound.raw())
             } else {
                 false
             };
@@ -399,7 +399,7 @@ pub fn judge_by_class<'s>(
             None => {
                 always = false;
                 solved = false;
-                walk.fix(class, |variable| ranked.bound(variable));
+                walk.fix(class, |variable| ranked.bound(variable).raw());
             }
         }
     }
@@ -409,12 +409,13 @@ pub fn judge_by_class<'s>(
         } else {
             Verdict::Maybe
         },
+        // The intervals are the static solve's, over parametric arguments.
         intervals: solved.then(|| {
-            &*scratch.alloc_slice_fill_iter(
-                (0..arity).map(|variable| {
-                    known[variable].unwrap_or(Interval::point(ranked.bound(variable)))
-                }),
-            )
+            &*scratch.alloc_slice_fill_iter((0..arity).map(|variable| {
+                known[variable]
+                    .unwrap_or(Interval::point(ranked.bound(variable).raw()))
+                    .typed()
+            }))
         }),
     }
 }
@@ -441,7 +442,7 @@ pub(super) fn admits_by_class<'run>(
         walk.fix_to_intervals(types, scratch, class, &solution);
     }
     let mut collector = walk.collector(scratch);
-    admits_with(
+    admits(
         types,
         scratch,
         declared.ret,
@@ -460,11 +461,11 @@ pub(super) fn admits_by_class<'run>(
 ///
 /// A function of the two shape types and the class alone, so it is recorded in the verdict table;
 /// one pass computes every class's verdict for the pair and records them all.
-pub fn class_at_least(
+pub(super) fn class_at_least(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    a: KType,
-    b: KType,
+    a: Handle,
+    b: Handle,
     class: u8,
 ) -> bool {
     let relation = Relation::ClassAtLeast(class);
@@ -492,7 +493,7 @@ pub fn class_at_least(
         }
         match solution {
             Some(solution) => walk.fix_to_intervals(types, scratch, each, &solution),
-            None => walk.fix(each, |variable| ranked_b.bound(variable)),
+            None => walk.fix(each, |variable| ranked_b.bound(variable).raw()),
         }
     }
     answer
@@ -510,28 +511,32 @@ fn read_later(
     scratch: BumpAllocator<'_>,
     shape: Ranked<'_>,
     variable: usize,
-    reach: Interval,
-    solution: KType,
-) -> KType {
+    reach: Interval<Handle>,
+    solution: Handle,
+) -> Handle {
     if reach.is_exact() || types.contains_rigid(solution) {
         return solution;
     }
-    types.lexical_between(
-        scratch,
-        STAND_IN_LEVEL,
-        shape.quantifiers[variable],
-        reach.lower,
-        reach.upper,
-    )
+    // Neither end holds a rigid variable: an end is the solution, a bound or `Never`, and the
+    // solution holds none here.
+    types
+        .lexical_between(
+            scratch,
+            STAND_IN_LEVEL,
+            shape.quantifiers[variable],
+            super::handle::wrap(reach.lower),
+            super::handle::wrap(reach.upper),
+        )
+        .raw()
 }
 
 /// The survivors of the class-by-class elimination over `shapes` — candidates under one key and
 /// one ranking — as indices into `shapes`. At each class, a candidate some other survivor strictly
 /// beats there drops out; a class that orders neither of two leaves both to the next.
-pub fn select_by_class<'s>(
+pub(super) fn select_by_class<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
-    shapes: &[KType],
+    shapes: &[Handle],
 ) -> BumpVec<'s, usize> {
     let mut survivors = BumpVec::with_capacity_in(shapes.len(), scratch);
     survivors.extend(0..shapes.len());

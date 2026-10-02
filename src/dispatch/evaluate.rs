@@ -45,7 +45,9 @@ use crate::scope::{
     BodyShape, Candidate, CandidateList, Elaboration, Narrowing, Offer, ShapeKind, Site,
 };
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, TypeNode, Verdict, bound_above, satisfied_by, substitute_levels};
+use crate::type_lattice::{
+    DeclaredType, KType, TypeNode, Verdict, bound_above, satisfied_by, substitute_levels,
+};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
@@ -258,16 +260,23 @@ fn denoted<'graph>(
     scratch: &Bump,
 ) -> Result<KType, Elaboration> {
     let types = at.program.types();
+    // Where it runs, every name a type reads is bound to a concrete type.
+    let concrete = |kt| {
+        types
+            .concrete(kt)
+            .expect("a type read where it runs holds no variable")
+    };
+    let elaborated = || type_expression(part, &at.view, types, scratch).map(concrete);
     let loaded = at.view.shape().typed_expression(Site::of(part)).solved(
         &at.view,
         scratch,
-        |value, bindings| substitute_levels(types, scratch, value, bindings),
+        |value, bindings| Some(concrete(substitute_levels(types, scratch, value, bindings))),
     );
     debug_assert!(
-        loaded.is_none() || loaded == type_expression(part, &at.view, types, scratch).ok(),
+        loaded.is_none() || loaded == elaborated().ok(),
         "the load-time type agrees with elaborating where it runs"
     );
-    loaded.map_or_else(|| type_expression(part, &at.view, types, scratch), Ok)
+    loaded.map_or_else(elaborated, Ok)
 }
 
 /// `<value> :! <Type>`: the operand checked against the type — where the load did not settle it —
@@ -310,7 +319,7 @@ fn ascribe<'graph, 'here>(
         );
     } else if !satisfies(ascribed, &value, types, &scratch) {
         let raised = Raised::Unascribable {
-            value: value.ktype(),
+            value: value.concrete_ktype(),
             ascribed,
         };
         return finish(step, at, raised.raise(program, writer));
@@ -344,7 +353,7 @@ fn evaluated<'graph, 'here>(
     let writer = step.writer();
     let Some(code) = value.as_code() else {
         let raised = Raised::NotCode {
-            value: value.ktype(),
+            value: value.concrete_ktype(),
         };
         return finish(step, at, raised.raise(program, writer));
     };
@@ -659,12 +668,13 @@ fn returns_within(
     let Some(function) = callee.as_callable().and_then(Knotted::function) else {
         return false;
     };
-    match program.types().node(function.ktype()) {
-        TypeNode::KFunction {
-            quantifiers: [],
-            ret,
-            ..
-        } => satisfied_by(program.types(), &Bump::new(), returns, ret),
+    let DeclaredType::Type(ktype) = function.ktype() else {
+        return false;
+    };
+    match program.types().node(ktype) {
+        TypeNode::KFunction { ret, .. } => {
+            satisfied_by(program.types(), &Bump::new(), returns, ret)
+        }
         _ => false,
     }
 }
@@ -701,7 +711,9 @@ fn carried_under_static<'graph, 'here>(
             &scratch,
             bound_above(types, &scratch, expected.upper),
             carried
-        ) && (types.contains_rigid(expected.lower)
+        ) && (types
+            .concrete(expected.lower)
+            .is_none_or(|lower| types.holds_carrier(lower))
             || satisfied_by(types, &scratch, carried, expected.lower)),
         "the carried type lies within the load-time static type"
     );

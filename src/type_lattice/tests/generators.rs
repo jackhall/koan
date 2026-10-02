@@ -10,6 +10,10 @@
 //! arena leaked for the rest of the test process. Everything transient — a generated value's
 //! scratch buffers, a sealed group's window — lives in a fresh arena dropped as soon as the value
 //! is built ([`with_scratch`]), so generation keeps nothing but interned content.
+//!
+//! Generation runs over raw [`Handle`]s, as the lattice itself does, and each public strategy hands
+//! its draw out typed: [`arb_concrete`] a [`KType`], every other one a [`DeclaredType`], since a
+//! draw may be a scheme.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -19,9 +23,8 @@ use proptest::prelude::*;
 use crate::memory::{Bump, BumpAllocator, ScopeId};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::type_lattice::kind::KKind;
-use crate::type_lattice::lattice::{join, meet};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
 use crate::type_lattice::registry::TypeRegistry;
@@ -29,6 +32,7 @@ use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::{
     DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes,
 };
+use crate::type_lattice::typed::{join, meet};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
 /// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
@@ -97,6 +101,18 @@ impl World {
             with_scratch(|scratch| self.types.union_of(scratch, &[KType::NUMBER, KType::STR])),
         ]
     }
+
+    /// A raw draw as what it is declared as: a scheme, or a type that may hold a variable.
+    pub fn declared(&self, raw: Handle) -> DeclaredType<Parametric> {
+        self.types.declared(raw)
+    }
+
+    /// A raw draw from a concrete strategy as the [`KType`] it is.
+    fn concrete(&self, raw: Handle) -> KType {
+        self.types
+            .concrete(wrap(raw))
+            .expect("a concrete strategy draws a concrete type")
+    }
 }
 
 impl Default for World {
@@ -106,8 +122,15 @@ impl Default for World {
 }
 
 /// A type tree of at most `depth` composite levels, interned as it is built: any type, parametric
-/// ones included.
-pub fn arb_type(world: World, depth: u32) -> BoxedStrategy<KType> {
+/// ones and schemes included.
+pub fn arb_any(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Parametric>> {
+    arb_raw(world.clone(), depth)
+        .prop_map(move |raw| world.declared(raw))
+        .boxed()
+}
+
+/// [`arb_any`]'s draw, raw.
+fn arb_raw(world: World, depth: u32) -> BoxedStrategy<Handle> {
     arb_type_in(
         world,
         depth,
@@ -119,9 +142,17 @@ pub fn arb_type(world: World, depth: u32) -> BoxedStrategy<KType> {
 
 /// A **concrete** type tree: no free `Quantified`, lexical variable, head parameter or quantified
 /// binder outside sealed content. Opaque carriers, signatures, sealed families and their
-/// applications are drawn as [`arb_type`] draws them.
+/// applications are drawn as [`arb_any`] draws them.
 pub fn arb_concrete(world: World, depth: u32) -> BoxedStrategy<KType> {
-    arb_type_in(world, depth, Rc::new(Vec::new()), Rc::new(Vec::new()), true)
+    arb_type_in(
+        world.clone(),
+        depth,
+        Rc::new(Vec::new()),
+        Rc::new(Vec::new()),
+        true,
+    )
+    .prop_map(move |raw| world.concrete(raw))
+    .boxed()
 }
 
 /// [`arb_type`] with the rigid variables in scope: `bound` are an enclosing shape's quantifiers,
@@ -130,10 +161,10 @@ pub fn arb_concrete(world: World, depth: u32) -> BoxedStrategy<KType> {
 fn arb_type_in(
     world: World,
     depth: u32,
-    bound: Rc<Vec<KType>>,
-    members: Rc<Vec<KType>>,
+    bound: Rc<Vec<Handle>>,
+    members: Rc<Vec<Handle>>,
     concrete: bool,
-) -> BoxedStrategy<KType> {
+) -> BoxedStrategy<Handle> {
     let leaf = arb_leaf(world.clone(), bound.clone(), members.clone(), concrete);
     if depth == 0 {
         return leaf;
@@ -153,6 +184,14 @@ fn arb_type_in(
     let (shape_world, sig_world, group_world) = (world.clone(), world.clone(), world.clone());
     let (family_world, applied_world) = (world.clone(), world.clone());
     let (shape_members, function_members) = (members.clone(), members.clone());
+    // A constructor is a concrete type, so an application draws one.
+    let constructor = arb_type_in(
+        world.clone(),
+        depth - 1,
+        bound.clone(),
+        members.clone(),
+        true,
+    );
     prop_oneof![
         6 => leaf,
         2 => inner().prop_map(move |element| list_world.types.list(element)),
@@ -165,8 +204,9 @@ fn arb_type_in(
         2 => prop::collection::vec(inner(), 1..4).prop_map(move |members| {
             with_scratch(|scratch| union_world.types.union_of(scratch, &members))
         }),
-        1 => (inner(), arb_fields(apply_world.clone(), inner())).prop_map(
+        1 => (constructor, arb_fields(apply_world.clone(), inner())).prop_map(
             move |(constructor, arguments)| {
+                let constructor = apply_world.concrete(constructor);
                 with_scratch(|scratch| {
                     apply_world
                         .types
@@ -175,9 +215,9 @@ fn arb_type_in(
             }
         ),
         3 => arb_shape(shape_world, depth, shape_members, concrete),
-        2 => arb_signature_type(sig_world, depth),
-        1 => arb_sealed_member(group_world, depth),
-        1 => arb_family(family_world.clone(), depth),
+        2 => arb_signature_type(sig_world, depth).prop_map(KType::raw),
+        1 => arb_sealed_member(group_world, depth).prop_map(KType::raw),
+        1 => arb_family(family_world.clone(), depth).prop_map(KType::raw),
         1 => (arb_family(family_world, depth), inner()).prop_map(move |(family, argument)| {
             let parameter = BinderSymbol::Type(applied_world.type_names[0]);
             with_scratch(|scratch| {
@@ -198,48 +238,55 @@ fn arb_type_in(
 /// guarantees: a nonce-free abstract sourced at the canonical binder *is* a declared member.
 fn arb_leaf(
     world: World,
-    bound: Rc<Vec<KType>>,
-    members: Rc<Vec<KType>>,
+    bound: Rc<Vec<Handle>>,
+    members: Rc<Vec<Handle>>,
     concrete: bool,
-) -> BoxedStrategy<KType> {
+) -> BoxedStrategy<Handle> {
     let grounds = world.grounds();
     let abstract_world = world.clone();
     let atoms = prop_oneof![
-        Just(KType::NUMBER),
-        Just(KType::STR),
-        Just(KType::BOOL),
-        Just(KType::ANY),
-        Just(KType::ANY_VALUE),
-        Just(KType::ANY_CODE),
-        Just(KType::NEVER),
-        Just(KType::IDENTIFIER),
-        Just(KType::SYMBOL),
-        Just(KType::TYPE_NAME_TOKEN),
-        Just(KType::EXPRESSION),
-        Just(KType::LITERAL),
-        Just(KType::BLOCK),
-        Just(KType::DECLARATION),
-        Just(KType::BINDER),
-        Just(KType::NAME),
-        Just(KType::KEYWORD),
-        Just(KType::of_kind(KKind::ProperType)),
-        Just(KType::of_kind(KKind::AnyType)),
-        Just(KType::of_kind(KKind::NewType)),
+        Just(KType::NUMBER.raw()),
+        Just(KType::STR.raw()),
+        Just(KType::BOOL.raw()),
+        Just(Handle::ANY),
+        Just(Handle::ANY_VALUE),
+        Just(Handle::ANY_CODE),
+        Just(Handle::NEVER),
+        Just(Handle::IDENTIFIER),
+        Just(Handle::SYMBOL),
+        Just(Handle::TYPE_NAME_TOKEN),
+        Just(Handle::EXPRESSION),
+        Just(Handle::LITERAL),
+        Just(Handle::BLOCK),
+        Just(Handle::DECLARATION),
+        Just(Handle::BINDER),
+        Just(Handle::NAME),
+        Just(Handle::KEYWORD),
+        Just(KType::of_kind(KKind::ProperType).raw()),
+        Just(KType::of_kind(KKind::AnyType).raw()),
+        Just(KType::of_kind(KKind::NewType).raw()),
     ];
     let deferred = {
         let names = world.type_names.clone();
         let types = world.types.clone();
         (0..names.len())
-            .prop_map(move |index| types.deferred_return(DeferredReturnSurface::Type(names[index])))
+            .prop_map(move |index| {
+                types
+                    .deferred_return(DeferredReturnSurface::Type(names[index]))
+                    .raw()
+            })
             .boxed()
     };
     let opaque =
         (0..abstract_world.type_names.len(), 0..grounds.len()).prop_map(move |(name, bound)| {
-            abstract_world.types.parameter(
-                abstract_world.type_names[name],
-                abstract_world.grounds()[bound],
-                Some(OPAQUE_MINT),
-            )
+            abstract_world
+                .types
+                .carrier(
+                    abstract_world.type_names[name],
+                    abstract_world.grounds()[bound],
+                    OPAQUE_MINT,
+                )
+                .raw()
         });
     // A lexical variable: one of two levels, named from the type alphabet, over a ground bound —
     // and over the `Number | Str` ground, sometimes above a lower end of one of its members.
@@ -254,7 +301,7 @@ fn arb_leaf(
             let (types, name) = (&lexical_world.types, lexical_world.type_names[name]);
             let bound = lexical_world.grounds()[bound];
             let spans = matches!(types.node(bound), TypeNode::Union { .. });
-            match lower {
+            let variable = match lower {
                 1 if spans => with_scratch(|scratch| {
                     types.lexical_between(scratch, level, name, KType::NUMBER, bound)
                 }),
@@ -262,7 +309,8 @@ fn arb_leaf(
                     types.lexical_between(scratch, level, name, KType::STR, bound)
                 }),
                 _ => types.lexical(level, name, bound),
-            }
+            };
+            variable.raw()
         });
     // A code kind needing names: a kind from three levels of the code tree, needing one to three
     // names of the binder alphabet.
@@ -272,12 +320,17 @@ fn arb_leaf(
         prop::sample::subsequence(world.binders.as_ref().clone(), 1..=3),
     )
         .prop_map(move |(kind, names)| {
-            with_scratch(|scratch| needing_world.types.code_needing(scratch, kind, &names))
+            with_scratch(|scratch| {
+                needing_world
+                    .types
+                    .code_needing(scratch, kind, &names)
+                    .raw()
+            })
         });
     if concrete {
         return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => needing].boxed();
     }
-    let mut rigid: Vec<KType> = bound.as_ref().clone();
+    let mut rigid: Vec<Handle> = bound.as_ref().clone();
     rigid.extend(members.iter().copied());
     if rigid.is_empty() {
         return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => lexical, 2 => needing]
@@ -304,10 +357,10 @@ const OPAQUE_MINT: ScopeId = ScopeId::from_raw(1, 1);
 /// duplicate fields would have kept.
 fn arb_fields(
     world: World,
-    value: BoxedStrategy<KType>,
-) -> impl Strategy<Value = Vec<(BinderSymbol, KType)>> + use<> {
+    value: BoxedStrategy<Handle>,
+) -> impl Strategy<Value = Vec<(BinderSymbol, Handle)>> + use<> {
     prop::collection::vec((0..world.binders.len(), value), 0..3).prop_map(move |drawn| {
-        let mut fields: Vec<(BinderSymbol, KType)> = Vec::new();
+        let mut fields: Vec<(BinderSymbol, Handle)> = Vec::new();
         for (name, kt) in drawn {
             let name = world.binders[name];
             match fields.iter_mut().find(|(held, _)| *held == name) {
@@ -330,9 +383,9 @@ fn arb_fields(
 fn arb_shape(
     world: World,
     depth: u32,
-    members: Rc<Vec<KType>>,
+    members: Rc<Vec<Handle>>,
     concrete: bool,
-) -> BoxedStrategy<KType> {
+) -> BoxedStrategy<Handle> {
     let grounds = world.grounds();
     let arity = if concrete { 0..1 } else { 0..2 };
     (
@@ -342,11 +395,13 @@ fn arb_shape(
     )
         .prop_flat_map(move |(positions, bounds, plantings)| {
             let world = world.clone();
-            let vars: Rc<Vec<KType>> = Rc::new(
+            let vars: Rc<Vec<Handle>> = Rc::new(
                 bounds
                     .iter()
                     .enumerate()
-                    .map(|(index, bound)| world.types.quantified(index, world.grounds()[*bound]))
+                    .map(|(index, bound)| {
+                        world.types.quantified(index, world.grounds()[*bound]).raw()
+                    })
                     .collect(),
             );
             let names: Vec<TypeSymbol> = world.type_names[..bounds.len()].to_vec();
@@ -373,7 +428,7 @@ fn arb_shape(
             )
                 .prop_map(move |(drawn, ret, ranks)| {
                     let mut keywords: Vec<KeywordSymbol> = Vec::new();
-                    let mut slots: Vec<KType> = Vec::new();
+                    let mut slots: Vec<Handle> = Vec::new();
                     for (keyword, slot) in drawn {
                         keywords.push(world.keywords[keyword]);
                         slots.push(slot);
@@ -402,8 +457,8 @@ fn arb_shape(
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_type(scratch, &names, &bounds, &run, classes, ret)
-                            .handle
+                            .shape_group(scratch, &names, &bounds, &run, classes, ret)
+                            .0
                     })
                 })
         })
@@ -419,9 +474,9 @@ fn arb_shape(
 fn arb_function(
     world: World,
     depth: u32,
-    members: Rc<Vec<KType>>,
+    members: Rc<Vec<Handle>>,
     concrete: bool,
-) -> BoxedStrategy<KType> {
+) -> BoxedStrategy<Handle> {
     let grounds = world.grounds();
     let arity = if concrete { 0..1 } else { 0..2 };
     (
@@ -431,11 +486,13 @@ fn arb_function(
     )
         .prop_flat_map(move |(arity, bounds, plantings)| {
             let world = world.clone();
-            let vars: Rc<Vec<KType>> = Rc::new(
+            let vars: Rc<Vec<Handle>> = Rc::new(
                 bounds
                     .iter()
                     .enumerate()
-                    .map(|(index, bound)| world.types.quantified(index, world.grounds()[*bound]))
+                    .map(|(index, bound)| {
+                        world.types.quantified(index, world.grounds()[*bound]).raw()
+                    })
                     .collect(),
             );
             let names: Vec<TypeSymbol> = world.type_names[..bounds.len()].to_vec();
@@ -471,13 +528,13 @@ fn arb_function(
                     positions[second] = planted;
                 }
                 let ret = positions.pop().expect("the return is the last position");
-                let params: Vec<(BinderSymbol, KType)> =
+                let params: Vec<(BinderSymbol, Handle)> =
                     world.binders.iter().copied().zip(positions).collect();
                 with_scratch(|scratch| {
                     world
                         .types
-                        .function_type(scratch, &names, &bounds, &params, ret)
-                        .handle
+                        .function_group(scratch, &names, &bounds, &params, ret)
+                        .0
                 })
             })
         })
@@ -486,7 +543,7 @@ fn arb_function(
 
 /// A planted variable in one of three forms: itself (`form` 0), a list's element (1), or a
 /// function's parameter (2), which reaches the variable from above.
-fn planted(world: &World, variable: KType, form: u8) -> KType {
+fn planted(world: &World, variable: Handle, form: u8) -> Handle {
     match form {
         0 => variable,
         1 => world.types.list(variable),
@@ -495,18 +552,11 @@ fn planted(world: &World, variable: KType, form: u8) -> KType {
 }
 
 /// `FN :{x :parameter} -> Null`.
-fn function_of(world: &World, parameter: KType) -> KType {
+fn function_of(world: &World, parameter: Handle) -> Handle {
     with_scratch(|scratch| {
         world
             .types
-            .function_type(
-                scratch,
-                &[],
-                &[],
-                &[(world.binders[0], parameter)],
-                KType::NULL,
-            )
-            .handle
+            .function_type(scratch, &[(world.binders[0], parameter)], KType::NULL.raw())
     })
 }
 
@@ -562,11 +612,11 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
     )
         .prop_flat_map(move |(declared, module)| {
             let world = outer.clone();
-            let mut parameters: Vec<(TypeSymbol, KType)> = Vec::new();
+            let mut parameters: Vec<(TypeSymbol, Parametric)> = Vec::new();
             for (name, bound) in declared {
                 let name = world.type_names[name];
                 if parameters.iter().all(|(held, _)| *held != name) {
-                    let parameter = world.types.parameter(name, world.grounds()[bound], None);
+                    let parameter = world.types.head_parameter(name, world.grounds()[bound]);
                     parameters.push((name, parameter));
                 }
             }
@@ -575,7 +625,8 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
             } else {
                 SigOrigin::Declared
             };
-            let members: Rc<Vec<KType>> = Rc::new(parameters.iter().map(|(_, kt)| *kt).collect());
+            let members: Rc<Vec<Handle>> =
+                Rc::new(parameters.iter().map(|(_, kt)| kt.raw()).collect());
             let none = Rc::new(Vec::new());
             let manifest = arb_type_in(
                 world.clone(),
@@ -601,21 +652,25 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
                 .prop_map(move |(manifests, slots, keyworded, operators)| {
                     with_scratch(|scratch| {
                         let mut draft = SchemaDraft::new(scratch);
+                        // A manifest member is a type: a scheme drawn for one is left out.
                         for (name, kt) in manifests {
                             let name = world.type_names[name];
+                            let DeclaredType::Type(kt) = world.declared(kt) else {
+                                continue;
+                            };
                             if parameters.iter().all(|(held, _)| *held != name) {
                                 draft.insert_manifest(name, kt);
                             }
                         }
                         for (name, kt) in slots {
-                            draft.insert_value_slot(world.values[name], kt);
+                            draft.insert_value_slot(world.values[name], world.declared(kt));
                         }
                         draft.origin = origin;
                         for (name, parameter) in &parameters {
                             draft.insert_parameter(*name, *parameter);
                         }
                         for shape in keyworded {
-                            draft.push_keyworded(shape);
+                            draft.push_keyworded(world.declared(shape));
                         }
                         let mut claimed: HashMap<KeywordSymbol, ReductionMode> = HashMap::new();
                         for (keyword, mode) in operators {
@@ -646,13 +701,7 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
 /// sibling references — the shape the seal's canonicalization claim is about. The window is hosted
 /// in the value's own scratch region, which it does not outlive.
 fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
-    let repr = arb_type_in(
-        world.clone(),
-        depth.saturating_sub(1),
-        Rc::new(Vec::new()),
-        Rc::new(Vec::new()),
-        false,
-    );
+    let repr = arb_concrete(world.clone(), depth.saturating_sub(1));
     (
         1..4usize,
         prop::collection::vec((repr, any::<bool>()), 1..4),
@@ -691,40 +740,42 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
 /// its parameter's quantifier, so the parameter occurs. The quantifier sits at a covariant
 /// position only, as a declared family's must.
 fn arb_family(world: World, depth: u32) -> BoxedStrategy<KType> {
-    arb_type_in(
-        world.clone(),
-        depth.saturating_sub(1),
-        Rc::new(Vec::new()),
-        Rc::new(Vec::new()),
-        false,
-    )
-    .prop_map(move |repr| {
-        let (parameter, name) = (world.type_names[0], world.type_names[2]);
-        with_scratch(|scratch| {
-            let body = world
-                .types
-                .union_of(scratch, &[repr, world.types.quantified(0, KType::ANY)]);
-            let window = RecursiveGroupWindow::new(scratch, &[(name, KKind::TypeConstructor)]);
-            let schema = RelativeSchema::constructor(scratch, scratch, Some(body), &[parameter]);
-            window
-                .fill_member(0, schema, &world.types, scratch)
-                .and_then(|sealed| sealed.member(0))
-                .expect("a singleton window seals on its fill")
+    arb_raw(world.clone(), depth.saturating_sub(1))
+        .prop_map(move |repr| {
+            let (parameter, name) = (world.type_names[0], world.type_names[2]);
+            with_scratch(|scratch| {
+                let quantifier = world.types.quantified(0, KType::ANY).raw();
+                let body = world.types.union_of(scratch, &[repr, quantifier]);
+                let body = world
+                    .declared(body)
+                    .as_type()
+                    .expect("a union with a quantifier binds no group");
+                let window = RecursiveGroupWindow::new(scratch, &[(name, KKind::TypeConstructor)]);
+                let schema =
+                    RelativeSchema::constructor(scratch, scratch, Some(body), &[parameter]);
+                window
+                    .fill_member(0, schema, &world.types, scratch)
+                    .and_then(|sealed| sealed.member(0))
+                    .expect("a singleton window seals on its fill")
+            })
         })
-    })
-    .boxed()
+        .boxed()
 }
 
 /// A generated expression shape, for the laws whose subject is a shape and which a draw from the
 /// whole vocabulary would leave mostly vacuous.
-pub fn arb_shape_type(world: World, depth: u32) -> BoxedStrategy<KType> {
-    arb_shape(world, depth, Rc::new(Vec::new()), false)
+pub fn arb_shape_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Parametric>> {
+    arb_shape(world.clone(), depth, Rc::new(Vec::new()), false)
+        .prop_map(move |raw| world.declared(raw))
+        .boxed()
 }
 
 /// A generated function type, for the laws whose subject is a function and which a draw from the
 /// whole vocabulary would leave mostly vacuous.
-pub fn arb_function_type(world: World, depth: u32) -> BoxedStrategy<KType> {
-    arb_function(world, depth, Rc::new(Vec::new()), false)
+pub fn arb_function_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Parametric>> {
+    arb_function(world.clone(), depth, Rc::new(Vec::new()), false)
+        .prop_map(move |raw| world.declared(raw))
+        .boxed()
 }
 
 /// A tuple of argument types for a shape of `arity` positions, drawn from the ground alphabet plus a
@@ -746,8 +797,8 @@ pub fn arb_arguments(world: World, arity: usize) -> impl Strategy<Value = Vec<KT
             world.types.union_of(scratch, &lists)
         }));
         let functions = [
-            function_of(&world, KType::NUMBER),
-            function_of(&world, KType::STR),
+            world.concrete(function_of(&world, KType::NUMBER.raw())),
+            world.concrete(function_of(&world, KType::STR.raw())),
         ];
         pool.push(with_scratch(|scratch| {
             world.types.union_of(scratch, &functions)
@@ -765,7 +816,13 @@ pub fn arb_arguments(world: World, arity: usize) -> impl Strategy<Value = Vec<KT
 /// The binder is a function, or a shape with both slots in one class. A position is the variable
 /// itself — two ground types join into it — or `FN :{x :_} -> Null` over it, where they meet. An
 /// optional filler position holds one generated type in all three.
-pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> {
+pub fn arb_instance_chain(
+    world: World,
+) -> BoxedStrategy<(
+    DeclaredType<Parametric>,
+    DeclaredType<Parametric>,
+    DeclaredType<Parametric>,
+)> {
     let pool = {
         let mut pool = world.grounds();
         pool.push(KType::BOOL);
@@ -773,7 +830,7 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
         pool.push(world.types.list(KType::STR));
         pool
     };
-    let filler = prop::option::of(arb_type(world.clone(), 1));
+    let filler = prop::option::of(arb_raw(world.clone(), 1));
     (
         any::<bool>(),
         0..pool.len(),
@@ -784,7 +841,7 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
         .prop_map(move |(shape, g1, g2, wrapped, filler)| {
             let (g1, g2) = (pool[g1], pool[g2]);
             let position = |kt| if wrapped { function_of(&world, kt) } else { kt };
-            let variable = world.types.quantified(0, KType::ANY);
+            let variable = world.types.quantified(0, KType::ANY).raw();
             let instance = with_scratch(|scratch| {
                 if wrapped {
                     meet(&world.types, scratch, g1, g2)
@@ -792,7 +849,8 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
                     join(&world.types, scratch, g1, g2)
                 }
             });
-            let build = |quantifiers: &[TypeSymbol], first: KType, second: KType| {
+            let (g1, g2, instance) = (g1.raw(), g2.raw(), instance.raw());
+            let build = |quantifiers: &[TypeSymbol], first: Handle, second: Handle| {
                 with_scratch(|scratch| {
                     if shape {
                         let (pure, wrap) = (world.keywords[0], world.keywords[1]);
@@ -811,15 +869,15 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_type(
+                            .shape_group(
                                 scratch,
                                 quantifiers,
                                 &[KType::ANY][..quantifiers.len()],
                                 &run,
                                 classes,
-                                KType::NULL,
+                                KType::NULL.raw(),
                             )
-                            .handle
+                            .0
                     } else {
                         let mut params =
                             vec![(world.binders[1], first), (world.binders[2], second)];
@@ -828,14 +886,14 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
                         }
                         world
                             .types
-                            .function_type(
+                            .function_group(
                                 scratch,
                                 quantifiers,
                                 &[KType::ANY][..quantifiers.len()],
                                 &params,
-                                KType::NULL,
+                                KType::NULL.raw(),
                             )
-                            .handle
+                            .0
                     }
                 })
             };
@@ -846,7 +904,7 @@ pub fn arb_instance_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> 
             );
             let b = build(&[], position(instance), position(instance));
             let c = build(&[], position(g1), position(g2));
-            (a, b, c)
+            (world.declared(a), world.declared(b), world.declared(c))
         })
         .boxed()
 }

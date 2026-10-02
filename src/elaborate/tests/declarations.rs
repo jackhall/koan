@@ -4,9 +4,9 @@
 use crate::memory::BumpAllocator;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, ValueSymbol};
 use crate::type_lattice::{
-    DispatchTokenElement, FoldDirection, KKind, KType, NodeSchema, ReductionMode, SigOrigin,
-    SigSchema, TypeNode, TypeRegistry, display_name, member, quantifier_bounds, shape_return,
-    shape_slots,
+    DeclaredType, DispatchTokenElement, FoldDirection, KKind, KType, NodeSchema, Parametric,
+    ReductionMode, SigOrigin, SigSchema, TypeNode, TypeRegistry, display_name, member,
+    quantifier_bounds, shape_return, shape_slots,
 };
 
 use super::{Held, Program, brought, declared, with_program};
@@ -69,7 +69,7 @@ fn an_alias_and_a_signature_are_each_their_own_member() {
                 panic!("a SIG binds a signature");
             };
             let label = ValueSymbol::declared("label", program.symbols).unwrap();
-            assert_eq!(member(schema.value_slots, label), Some(KType::STR));
+            assert_eq!(member(schema.value_slots, label), Some(KType::STR.into()));
         },
     );
 }
@@ -162,7 +162,7 @@ fn a_signature_declares_its_parameters_and_manifest_members() {
             );
             assert_eq!(
                 member(schema.manifest_members, program.type_name("Elem")),
-                Some(KType::NUMBER),
+                Some(KType::NUMBER.into()),
                 "a manifest member fixes its type"
             );
             let slot = |name| {
@@ -171,8 +171,12 @@ fn a_signature_declares_its_parameters_and_manifest_members() {
                     ValueSymbol::declared(name, program.symbols).unwrap(),
                 )
             };
-            assert_eq!(slot("x"), Some(KType::NUMBER), "read through the locals");
-            assert_eq!(slot("c"), Some(rigid));
+            assert_eq!(
+                slot("x"),
+                Some(KType::NUMBER.into()),
+                "read through the locals"
+            );
+            assert_eq!(slot("c"), Some(rigid.into()));
         },
     );
 }
@@ -232,13 +236,13 @@ fn a_bodyless_head_spells_the_shape_its_definition_spells() {
                     .expect("a registration")
                     .shape
             };
-            let mut declared: Vec<KType> = schema.keyworded.to_vec();
-            let mut satisfiers: Vec<KType> =
+            let mut declared: Vec<DeclaredType<Parametric>> = schema.keyworded.to_vec();
+            let mut satisfiers: Vec<DeclaredType<Parametric>> =
                 ["plus", "negate", "twice", "pair", "swap", "first", "least"]
                     .map(defined)
                     .to_vec();
-            declared.sort_unstable();
-            satisfiers.sort_unstable();
+            declared.sort_unstable_by_key(|shape| shape.digest());
+            satisfiers.sort_unstable_by_key(|shape| shape.digest());
             assert_eq!(declared, satisfiers);
         },
     );
@@ -636,7 +640,7 @@ fn a_meet_of_signatures_holds_both() {
             };
             let mut expected = [program.bound("Ranked"), program.bound("Written")];
             expected.sort_unstable();
-            assert_eq!(members, expected);
+            assert_eq!(members.iter().collect::<Vec<_>>(), expected);
         },
     );
 }
@@ -699,7 +703,7 @@ fn two_applications_meet_at_the_set_of_both() {
             };
             let mut expected = [program.bound("Numbers"), program.bound("Strings")];
             expected.sort_unstable();
-            assert_eq!(members, expected);
+            assert_eq!(members.iter().collect::<Vec<_>>(), expected);
         },
     );
 }
@@ -714,10 +718,10 @@ fn a_signatures_members_read_its_head_parameters() {
                 panic!("a SIG binds a signature");
             };
             let elt = member(schema.parameters, program.type_name("Elt")).expect("`Elt`");
-            let [push] = schema.keyworded else {
-                panic!("one keyworded member");
+            let [DeclaredType::Type(push)] = schema.keyworded else {
+                panic!("one unquantified keyworded member");
             };
-            let slots: Vec<KType> = shape_slots(*push, program.types).collect();
+            let slots: Vec<Parametric> = shape_slots(*push, program.types).collect();
             assert_eq!(slots, [elt]);
             assert_eq!(
                 shape_return(*push, program.types),
@@ -769,7 +773,11 @@ fn schema_of<'run>(program: &Program<'_, 'run, '_>, name: &str) -> SigSchema<'ru
 }
 
 /// A value member's type in the signature `name` binds.
-fn value_member(program: &Program<'_, '_, '_>, name: &str, member_name: &str) -> KType {
+fn value_member(
+    program: &Program<'_, '_, '_>,
+    name: &str,
+    member_name: &str,
+) -> DeclaredType<Parametric> {
     let slot = ValueSymbol::declared(member_name, program.symbols).unwrap();
     member(schema_of(program, name).value_slots, slot).expect("a value member")
 }
@@ -802,16 +810,14 @@ fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
             let (types, scratch) = (program.types, program.scratch);
             let quantified = types.quantified(0, KType::ANY);
             let x = BinderSymbol::classify("x").unwrap();
-            let inner = types
-                .function_type(scratch, &[], &[], &[(x, quantified)], quantified)
-                .handle;
+            let inner = types.function_type(scratch, &[(x, quantified)], quantified);
             let keyword = |text| {
                 DispatchTokenElement::Keyword(
                     KeywordSymbol::declared(text, program.symbols).unwrap(),
                 )
             };
             let expected = types
-                .shape_type(
+                .shape_scheme(
                     scratch,
                     &[program.type_name("Elt")],
                     &[KType::ANY],
@@ -841,8 +847,9 @@ fn a_bounded_quantifier_carries_its_bound() {
             (VAL spanning :(FN FOR ALL #{Elt: :(Number | Str | Bool)} :{x :Elt y :Elt} -> Elt))]",
         |program| {
             let (types, scratch) = (program.types, program.scratch);
-            let bounds = |kt| {
-                let mut bounds = quantifier_bounds(types, kt).to_vec();
+            let bounds = |kt: DeclaredType<Parametric>| {
+                let scheme = kt.as_scheme().expect("a quantified member is a scheme");
+                let mut bounds = quantifier_bounds(types, scheme).to_vec();
                 bounds.sort();
                 bounds
             };

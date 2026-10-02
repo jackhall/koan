@@ -14,21 +14,21 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, TypeSymbol, ValueSymbol};
 
-use super::handle::KType;
-use super::lattice::meet;
+use super::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
+use super::lattice::meet_through_variables;
 use super::node::TypeNode;
 use super::operators::ReductionMode;
 use super::order::{fits, satisfied_by};
 use super::ranking::{Ranked, STAND_IN_LEVEL, admits_by_class, class_at_least};
 use super::registry::TypeRegistry;
 use super::schema::{
-    DeclaredGroup, Members, SigOrigin, SigSchema, elements_key_equal, shape_classes,
-    shape_keys_equal, shape_quantifiers, shape_return, shape_slots,
+    DeclaredGroup, Members, SigOrigin, SigSchema, elements_key_equal, keys_equal, shape_classes,
+    shape_quantifiers, shape_return, shape_slots,
 };
 use super::shape::Specificity;
 use super::signatures::{Application, applications, applications_under};
 use super::substitute::{instantiate_quantified, substitute_parameters};
-use super::unify::{Collector, UnifyFailure, admits_with};
+use super::unify::{Collector, UnifyFailure, admits};
 use super::walk::Variance;
 
 // --- Specificity ---
@@ -49,8 +49,8 @@ use super::walk::Variance;
 pub(super) fn admits_shape(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    declared: KType,
-    candidate: KType,
+    declared: Handle,
+    candidate: Handle,
 ) -> bool {
     let (Some(declared), Some(candidate)) =
         (Ranked::of(types, declared), Ranked::of(types, candidate))
@@ -77,8 +77,8 @@ pub(super) fn admits_shape(
 pub(super) fn admits_function(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    declared: KType,
-    candidate: KType,
+    declared: Handle,
+    candidate: Handle,
 ) -> bool {
     let (
         TypeNode::KFunction {
@@ -96,16 +96,16 @@ pub(super) fn admits_function(
     else {
         return false;
     };
-    let mut collector = Collector::new(scratch, bounds);
+    let mut collector = Collector::<Handle>::new(scratch, bounds);
     for (name, slot) in declared_params.iter() {
         let Some(argument) = candidate_params.get(name.symbol()) else {
             return false;
         };
-        if admits_with(types, scratch, slot, argument, Variance::Co, &mut collector).is_err() {
+        if admits(types, scratch, slot, argument, Variance::Co, &mut collector).is_err() {
             return false;
         }
     }
-    if admits_with(
+    if admits(
         types,
         scratch,
         declared_ret,
@@ -128,11 +128,11 @@ pub(super) fn admits_function(
 /// classic "more specific method" rule, so `(f _ :Number)` beats `(f FOR ALL (Elt) _ :Elt)` and
 /// `(f _ :Any)` ties with it. Every class holding both ways is `Equal`; a pair no class orders and
 /// some class leaves unrelated is `Incomparable`, as are shapes under different keys or rankings.
-pub fn shape_specificity(
+pub(super) fn shape_specificity(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    a: KType,
-    b: KType,
+    a: Handle,
+    b: Handle,
 ) -> Specificity {
     let (Some(ranked_a), Some(ranked_b)) = (Ranked::of(types, a), Ranked::of(types, b)) else {
         // Two things that are not both shapes have no bucket in common to rank under, which is a
@@ -167,7 +167,8 @@ pub fn shape_specificity(
 // --- Fits ---
 
 /// Why `offered` does not fit an asked signature type — the per-member rule that rejected, carrying
-/// the offending member's symbol and the handles that disagreed.
+/// the offending member's symbol and the handles that disagreed, each typed as a member type is: a
+/// value slot or a keyworded member may be a scheme.
 ///
 /// Symbols and handles rather than rendered text: rendering needs the symbol interner, which is the
 /// caller's, so [`render_fits_failure`](super::render::render_fits_failure) produces the fragment.
@@ -180,39 +181,39 @@ pub enum FitsFailure<'run, 's> {
     },
     ManifestMismatch {
         name: TypeSymbol,
-        got: KType,
-        expected: KType,
+        got: Parametric,
+        expected: Parametric,
     },
     MissingValueSlot {
         name: ValueSymbol,
     },
     ValueSlotMismatch {
         name: ValueSymbol,
-        got: KType,
-        expected: KType,
+        got: DeclaredType<Parametric>,
+        expected: DeclaredType<Parametric>,
     },
     /// The offered side declares no dispatch bucket under the asked member's key at all.
     MissingKeyworded {
-        head: KType,
+        head: DeclaredType<Parametric>,
     },
     /// The bucket exists under a different ranking than the asked member's: one keyword pattern
     /// carries one order, so no overload in it can satisfy the member.
     RankingMismatch {
-        head: KType,
-        got: KType,
+        head: DeclaredType<Parametric>,
+        got: DeclaredType<Parametric>,
     },
     /// The bucket exists but no overload in it satisfies the asked member.
     KeywordedMismatch {
-        head: KType,
-        got: &'s [KType],
+        head: DeclaredType<Parametric>,
+        got: &'s [DeclaredType<Parametric>],
     },
     /// Every overload under the key failed, and the first failed at a position the asked member
     /// **quantifies** over: a concrete position there says the module implements one instantiation
     /// where the signature declares an operation holding at every one.
     QuantifiedMismatch {
-        head: KType,
+        head: DeclaredType<Parametric>,
         parameter: TypeSymbol,
-        got: KType,
+        got: Parametric,
     },
     /// No record in the offered operator registry covers the asked record's members.
     MissingOperatorGroup {
@@ -238,11 +239,11 @@ pub enum FitsFailure<'run, 's> {
 /// Whether `offered` fits every application `asked` holds — *fits*, the relation a question reads,
 /// over two signature types. Each asked application is fitted on its own
 /// ([`fits_application`]), so the solution each one takes is its own.
-pub fn sig_fits<'run, 's>(
+pub(super) fn sig_fits<'run, 's>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
-    offered: KType,
-    asked: KType,
+    offered: Handle,
+    asked: Handle,
 ) -> Result<(), FitsFailure<'run, 's>> {
     let asked = applications(types, scratch, asked).expect("fits asks a signature type");
     // *Fits* contains the order: a set under the asked one by R-5 fits it with nothing to solve.
@@ -259,13 +260,13 @@ pub fn sig_fits<'run, 's>(
 /// `offered` fitted against the one application of `signature` with `pins`, and what that solves
 /// each of `signature`'s head parameters to: the pins, then the solution for each unpinned one.
 /// What the view door reads as the source's bindings.
-pub fn fits_application<'run, 's>(
+pub(super) fn fits_application<'run, 's>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
-    offered: KType,
-    signature: KType,
-    pins: &[(BinderSymbol, KType)],
-) -> Result<Members<'s, TypeSymbol>, FitsFailure<'run, 's>> {
+    offered: Handle,
+    signature: Handle,
+    pins: &[(BinderSymbol, Handle)],
+) -> Result<Members<'s, TypeSymbol, Handle>, FitsFailure<'run, 's>> {
     let pins = scratch.alloc_slice_copy(pins);
     fits_one(types, scratch, offered, Application { signature, pins })
 }
@@ -280,15 +281,15 @@ const OFFERED_LEVEL: usize = STAND_IN_LEVEL - 1;
 struct Offered<'run, 's> {
     /// Every manifest binding, in application order: a name two applications fix is listed twice,
     /// and the first is the one read.
-    manifest: BumpVec<'s, (TypeSymbol, KType)>,
+    manifest: BumpVec<'s, (TypeSymbol, Handle)>,
     /// Each value slot once, at the meet of every type an application offers for it.
-    values: BumpVec<'s, (ValueSymbol, KType)>,
-    keyworded: BumpVec<'s, KType>,
+    values: BumpVec<'s, (ValueSymbol, Handle)>,
+    keyworded: BumpVec<'s, Handle>,
     operators: BumpVec<'s, DeclaredGroup<'run>>,
 }
 
 impl<'run, 's> Offered<'run, 's> {
-    fn pool(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, offered: KType) -> Self {
+    fn pool(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, offered: Handle) -> Self {
         let mut pool = Offered {
             manifest: BumpVec::new_in(scratch),
             values: BumpVec::new_in(scratch),
@@ -302,40 +303,40 @@ impl<'run, 's> Offered<'run, 's> {
             bindings.extend(schema.parameters.iter().map(|(name, parameter)| {
                 let read = application.pin(name.symbol()).unwrap_or_else(|| {
                     let bound = types.node(*parameter).rigid_bound().unwrap_or(KType::ANY);
-                    types.lexical(OFFERED_LEVEL - k, *name, bound)
+                    types.lexical(OFFERED_LEVEL - k, *name, bound).raw()
                 });
                 (*name, read)
             }));
             let bindings = Members::from_table(bindings);
-            let read = |kt| substitute_parameters(types, scratch, kt, bindings);
+            let read = |kt: Handle| substitute_parameters(types, scratch, kt, bindings);
             pool.manifest.extend(
                 schema
                     .manifest_members
                     .iter()
-                    .map(|(n, kt)| (*n, read(*kt))),
+                    .map(|(n, kt)| (*n, read(kt.raw()))),
             );
             for (name, kt) in schema.value_slots.iter().copied() {
-                let kt = read(kt);
+                let kt = read(kt.raw());
                 match pool.values.iter_mut().find(|(held, _)| *held == name) {
-                    Some(held) => held.1 = meet(types, scratch, held.1, kt),
+                    Some(held) => held.1 = meet_through_variables(types, scratch, held.1, kt),
                     None => pool.values.push((name, kt)),
                 }
             }
             pool.keyworded
-                .extend(schema.keyworded.iter().map(|kt| read(*kt)));
+                .extend(schema.keyworded.iter().map(|kt| read(kt.raw())));
             pool.operators.extend_from_slice(schema.operators);
         }
         pool
     }
 
-    fn manifest(&self, name: TypeSymbol) -> Option<KType> {
+    fn manifest(&self, name: TypeSymbol) -> Option<Handle> {
         self.manifest
             .iter()
             .find(|(held, _)| *held == name)
             .map(|(_, kt)| *kt)
     }
 
-    fn value(&self, name: ValueSymbol) -> Option<KType> {
+    fn value(&self, name: ValueSymbol) -> Option<Handle> {
         self.values
             .iter()
             .find(|(held, _)| *held == name)
@@ -347,9 +348,9 @@ impl<'run, 's> Offered<'run, 's> {
 fn fits_one<'run, 's>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
-    offered: KType,
+    offered: Handle,
     asked: Application<'_>,
-) -> Result<Members<'s, TypeSymbol>, FitsFailure<'run, 's>> {
+) -> Result<Members<'s, TypeSymbol, Handle>, FitsFailure<'run, 's>> {
     let schema = schema_of(types, asked.signature);
     // A module's self-signature on the asking side compares by handle.
     if schema.origin == SigOrigin::Module {
@@ -361,7 +362,7 @@ fn fits_one<'run, 's>(
             Ok(Members::EMPTY)
         } else {
             Err(FitsFailure::SelfSignature {
-                expected: asked.signature,
+                expected: wrap(asked.signature),
             })
         };
     }
@@ -379,7 +380,7 @@ fn fits_one<'run, 's>(
             .parameters
             .iter()
             .filter(|(name, _)| asked.pin(name.symbol()).is_none())
-            .copied(),
+            .map(|(name, parameter)| (*name, parameter.raw())),
     );
     if unpinned.is_empty() {
         let solution = Members::from_table(pinned);
@@ -404,14 +405,14 @@ struct Search<'a, 'run, 's> {
     scratch: BumpAllocator<'s>,
     schema: SigSchema<'run>,
     pool: &'a Offered<'run, 's>,
-    pinned: &'a [(TypeSymbol, KType)],
-    unpinned: &'a [(TypeSymbol, KType)],
+    pinned: &'a [(TypeSymbol, Handle)],
+    unpinned: &'a [(TypeSymbol, Handle)],
     /// The failure the first leaf gave, which is the one reported when no leaf passes.
     first: Option<FitsFailure<'run, 's>>,
 }
 
 impl<'run, 's> Search<'_, 'run, 's> {
-    fn solve(&mut self) -> Result<Members<'s, TypeSymbol>, FitsFailure<'run, 's>> {
+    fn solve(&mut self) -> Result<Members<'s, TypeSymbol, Handle>, FitsFailure<'run, 's>> {
         let (types, scratch) = (self.types, self.scratch);
         let mut bounds = BumpVec::with_capacity_in(self.unpinned.len(), scratch);
         bounds.extend(
@@ -425,7 +426,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
             let Some(got) = self.pool.manifest(name) else {
                 return Err(FitsFailure::MissingTypeMember { name });
             };
-            let asked = self.read_open(declared);
+            let asked = self.read_open(declared.raw());
             contribute(
                 types,
                 scratch,
@@ -444,7 +445,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
                 return Err(FitsFailure::MissingValueSlot { name });
             };
             if !types.node(got).binds_quantifiers() {
-                let asked = self.read_open(declared);
+                let asked = self.read_open(declared.raw());
                 contribute(
                     types,
                     scratch,
@@ -461,13 +462,13 @@ impl<'run, 's> Search<'_, 'run, 's> {
 
     /// `declared`, a member type of the asked schema, read for pass A: a binder's own group opened
     /// to stand-ins first, then each pin, and each unpinned parameter as the collector's variable.
-    fn read_open(&self, declared: KType) -> KType {
+    fn read_open(&self, declared: Handle) -> Handle {
         let opened = open_to_stand_ins(self.types, self.scratch, declared);
         self.read_quantified(opened)
     }
 
     /// `kt` with each pin, and each unpinned parameter as its `Quantified` in the collector.
-    fn read_quantified(&self, kt: KType) -> KType {
+    fn read_quantified(&self, kt: Handle) -> Handle {
         let mut bindings =
             BumpVec::with_capacity_in(self.pinned.len() + self.unpinned.len(), self.scratch);
         bindings.extend_from_slice(self.pinned);
@@ -481,7 +482,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
                         .node(*parameter)
                         .rigid_bound()
                         .unwrap_or(KType::ANY);
-                    (*name, self.types.quantified(j, bound))
+                    (*name, self.types.quantified(j, bound).raw())
                 }),
         );
         substitute_parameters(self.types, self.scratch, kt, Members::from_table(bindings))
@@ -492,18 +493,23 @@ impl<'run, 's> Search<'_, 'run, 's> {
     /// `Some` with the first solution pass C accepts.
     fn choose(
         &mut self,
-        collector: &mut Collector<'s>,
+        collector: &mut Collector<'s, Handle>,
         index: usize,
-    ) -> Option<Members<'s, TypeSymbol>> {
+    ) -> Option<Members<'s, TypeSymbol, Handle>> {
         let (types, scratch) = (self.types, self.scratch);
-        let Some(declared) = self.schema.keyworded.get(index).copied() else {
+        let Some(declared) = self
+            .schema
+            .keyworded
+            .get(index)
+            .map(|declared| declared.raw())
+        else {
             return self.leaf(collector);
         };
         let opened = open_to_stand_ins(types, scratch, declared);
         let mut contributed = false;
         let mut quantified_at_key = false;
         for candidate in self.pool.keyworded.iter().copied() {
-            if !shape_keys_equal(declared, candidate, types)
+            if !keys_equal(declared, candidate, types)
                 || shape_classes(declared, types) != shape_classes(candidate, types)
             {
                 continue;
@@ -539,7 +545,10 @@ impl<'run, 's> Search<'_, 'run, 's> {
     }
 
     /// Past the last keyworded member: solve, then pass C.
-    fn leaf(&mut self, collector: &Collector<'s>) -> Option<Members<'s, TypeSymbol>> {
+    fn leaf(
+        &mut self,
+        collector: &Collector<'s, Handle>,
+    ) -> Option<Members<'s, TypeSymbol, Handle>> {
         let (types, scratch) = (self.types, self.scratch);
         let outcome = match collector.solve(types) {
             Err(failure) => {
@@ -580,12 +589,12 @@ impl<'run, 's> Search<'_, 'run, 's> {
 fn contribute(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    collector: &mut Collector<'_>,
-    pairs: &[(KType, KType, Variance)],
+    collector: &mut Collector<'_, Handle>,
+    pairs: &[(Handle, Handle, Variance)],
 ) -> bool {
     let mark = collector.mark();
     for (asked, offered, variance) in pairs.iter().copied() {
-        if admits_with(types, scratch, asked, offered, variance, collector).is_err() {
+        if admits(types, scratch, asked, offered, variance, collector).is_err() {
             collector.rollback(mark);
             return false;
         }
@@ -596,7 +605,7 @@ fn contribute(
 /// `kt` with its own group, where it binds one, opened to the class walks' stand-ins: a rigid
 /// lexical variable per variable, named and bounded as declared. A shape keeps its node — its
 /// positions are paired by hand — and a function type loses its group.
-fn open_to_stand_ins(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
+fn open_to_stand_ins(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle) -> Handle {
     let (names, bounds) = match types.node(kt) {
         TypeNode::ExpressionShape {
             quantifiers,
@@ -618,7 +627,7 @@ fn open_to_stand_ins(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: K
         names
             .iter()
             .zip(bounds)
-            .map(|(name, bound)| types.lexical(STAND_IN_LEVEL, *name, *bound)),
+            .map(|(name, bound)| types.lexical(STAND_IN_LEVEL, *name, *bound).raw()),
     );
     instantiate_quantified(types, scratch, kt, &stand_ins)
 }
@@ -629,19 +638,19 @@ fn check<'run, 's>(
     scratch: BumpAllocator<'s>,
     schema: SigSchema<'run>,
     pool: &Offered<'run, 's>,
-    solution: Members<'_, TypeSymbol>,
+    solution: Members<'_, TypeSymbol, Handle>,
 ) -> Result<(), FitsFailure<'run, 's>> {
-    let read = |declared: KType| substitute_parameters(types, scratch, declared, solution);
+    let read = |declared: Handle| substitute_parameters(types, scratch, declared, solution);
 
     for (name, fixed) in schema.manifest_members.iter().copied() {
-        let expected = read(fixed);
+        let expected = read(fixed.raw());
         match pool.manifest(name) {
             Some(got) if got == expected => {}
             Some(got) => {
                 return Err(FitsFailure::ManifestMismatch {
                     name,
-                    got,
-                    expected,
+                    got: wrap(got),
+                    expected: wrap(expected),
                 });
             }
             None => return Err(FitsFailure::MissingTypeMember { name }),
@@ -652,27 +661,27 @@ fn check<'run, 's>(
         let Some(got) = pool.value(name) else {
             return Err(FitsFailure::MissingValueSlot { name });
         };
-        let expected = read(declared);
+        let expected = read(declared.raw());
         if !satisfied_by(types, scratch, expected, got) {
             return Err(FitsFailure::ValueSlotMismatch {
                 name,
-                got,
-                expected,
+                got: types.declared(got),
+                expected: types.declared(expected),
             });
         }
     }
 
     // Keyworded members: each needs some offered overload at its key that satisfies it. A tie
     // among several is an ambiguity where a call meets it, not here.
-    for declared in schema.keyworded.iter().copied() {
+    for head in schema.keyworded.iter().copied() {
+        let declared = head.raw();
         let ranking = shape_classes(declared, types);
         if let Some(got) = pool.keyworded.iter().copied().find(|candidate| {
-            shape_keys_equal(declared, *candidate, types)
-                && shape_classes(*candidate, types) != ranking
+            keys_equal(declared, *candidate, types) && shape_classes(*candidate, types) != ranking
         }) {
             return Err(FitsFailure::RankingMismatch {
-                head: declared,
-                got,
+                head,
+                got: types.declared(got),
             });
         }
         let mut candidates = BumpVec::with_capacity_in(pool.keyworded.len(), scratch);
@@ -680,7 +689,7 @@ fn check<'run, 's>(
             pool.keyworded
                 .iter()
                 .copied()
-                .filter(|candidate| shape_keys_equal(declared, *candidate, types)),
+                .filter(|candidate| keys_equal(declared, *candidate, types)),
         );
         let expected = read(declared);
         if candidates
@@ -690,19 +699,24 @@ fn check<'run, 's>(
             continue;
         }
         let Some(first) = candidates.first().copied() else {
-            return Err(FitsFailure::MissingKeyworded { head: declared });
+            return Err(FitsFailure::MissingKeyworded { head });
         };
         if let Some((parameter, got)) = quantified_position_failure(types, scratch, expected, first)
         {
+            // A slot holds no binder, so the candidate's slot is no scheme.
             return Err(FitsFailure::QuantifiedMismatch {
-                head: declared,
+                head,
                 parameter,
-                got,
+                got: wrap(got),
             });
         }
         return Err(FitsFailure::KeywordedMismatch {
-            head: declared,
-            got: candidates.leak(),
+            head,
+            got: scratch.alloc_slice_fill_iter(
+                candidates
+                    .iter()
+                    .map(|candidate| types.declared(*candidate)),
+            ),
         });
     }
 
@@ -731,7 +745,7 @@ fn check<'run, 's>(
 }
 
 /// The schema of `signature`, a [`TypeNode::Signature`].
-fn schema_of<'run>(types: &TypeRegistry<'run>, signature: KType) -> SigSchema<'run> {
+fn schema_of<'run>(types: &TypeRegistry<'run>, signature: Handle) -> SigSchema<'run> {
     match types.node(signature) {
         TypeNode::Signature { schema, .. } => schema,
         _ => unreachable!("an application applies a signature"),
@@ -744,9 +758,9 @@ fn schema_of<'run>(types: &TypeRegistry<'run>, signature: KType) -> SigSchema<'r
 fn quantified_position_failure(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    declared: KType,
-    candidate: KType,
-) -> Option<(TypeSymbol, KType)> {
+    declared: Handle,
+    candidate: Handle,
+) -> Option<(TypeSymbol, Handle)> {
     let quantifiers = shape_quantifiers(declared, types);
     if quantifiers.is_empty() {
         return None;

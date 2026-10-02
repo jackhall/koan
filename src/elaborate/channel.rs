@@ -29,12 +29,15 @@ use crate::parse::builtin_shapes::binder::quoted_body;
 use crate::parse::builtin_shapes::role::Role;
 use crate::scope::{
     BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
-    ParameterBinding, Registered, Registration, ShapeError, ShapeKind, Site, Slot, Static,
-    SurfacedHead, Target, UnitWork, Variable, source_of,
+    FunctionGroupMap, ParameterBinding, Registered, Registration, ShapeError, ShapeGroupMap,
+    ShapeKind, Site, Slot, Static, StaticRegistered, StaticType, SurfacedHead, Target, UnitWork,
+    Variable, source_of,
 };
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{KType, Members, TypeNode, TypeRegistry, substitute_parameters};
+use crate::symbols::BinderSymbol;
+use crate::type_lattice::{
+    DeclaredType, KType, Members, Parametric, TypeNode, TypeRegistry, substitute_parameters,
+};
 use crate::values::{Knotted, Value};
 
 use super::declaration::{HeadShape, signature_heads, type_declarations};
@@ -82,8 +85,8 @@ enum Key {
 /// its group, and the lexical variable each variable of the group is in its body.
 #[derive(Clone, Copy)]
 struct Own<'graph> {
-    map: &'graph [(TypeSymbol, usize)],
-    levels: &'graph [KType],
+    map: FunctionGroupMap<'graph>,
+    levels: &'graph [Parametric],
 }
 
 /// One shape on the chain, innermost last.
@@ -112,7 +115,7 @@ enum Class {
         bound: KType,
     },
     /// One of a callable's own `FOR ALL` names: this lexical variable.
-    Variable(KType),
+    Variable(Parametric),
 }
 
 /// Whether a reader is typing a type binder, which is closed or unknown, or anything else.
@@ -163,7 +166,7 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
 
 impl<X> Reader<'_, '_, '_, '_, X> {
     /// The lexical variable `variable`, read at `at`.
-    fn rigid(&self, variable: KType, at: Coordinate) -> TypeAt {
+    fn rigid(&self, variable: Parametric, at: Coordinate) -> TypeAt {
         let TypeNode::Lexical { level, .. } = self.pass.types.node(variable) else {
             unreachable!("a run-bound name reads as a lexical variable");
         };
@@ -202,7 +205,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
 
     /// The lexical variable the run-bound name `key` is, bounded by `bound`: its name, at the level
     /// its declaring shape numbered it.
-    fn variable(&self, key: Key, bound: KType) -> KType {
+    fn variable(&self, key: Key, bound: KType) -> Parametric {
         let (level, name) = match key {
             Key::Slot(level, slot) => (level, self.chain[level].shape.slot_name(slot)),
             Key::Capture(level, capture) => (
@@ -258,9 +261,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             return Class::NotAType;
         };
         if let Some(own) = self.chain[level].own
-            && let Some((_, index)) = own.map.iter().find(|(held, _)| *held == name)
+            && let Some(index) = own.map.get(name)
         {
-            return Class::Variable(own.levels[*index]);
+            return Class::Variable(own.levels[index]);
         }
         Class::RunBound {
             key,
@@ -298,16 +301,32 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         }
     }
 
-    /// `value`, typed through `reader`: closed when it read no rigid variable, else rigid over the
-    /// variables it read, laid down in program storage.
-    fn fixed<T>(&self, reader: &Reader<'_, 'p, 'graph, 'cell, X>, value: T) -> Static<'graph, T> {
+    /// `value`, typed through `reader`: closed when it read no lexical variable — then concrete,
+    /// through `close` — else rigid over the variables it read, laid down in program storage.
+    fn fixed<C, R>(
+        &self,
+        reader: &Reader<'_, 'p, 'graph, 'cell, X>,
+        value: R,
+        close: impl FnOnce(R) -> C,
+    ) -> Static<'graph, C, R> {
         if reader.rigid.get() == 0 {
-            return Static::Closed(value);
+            return Static::Closed(close(value));
         }
         let variables = edit(&reader.variables, self.scratch, |variables| {
             collect(self.writer, variables.iter().copied())
         });
         Static::Rigid { value, variables }
+    }
+
+    /// [`fixed`](Self::fixed) for a type.
+    fn fixed_type(
+        &self,
+        reader: &Reader<'_, 'p, 'graph, 'cell, X>,
+        value: Parametric,
+    ) -> StaticType<'graph> {
+        self.fixed(reader, value, |value| {
+            self.types.concrete(value).expect(FREE)
+        })
     }
 
     /// The bucket entry of `registration`, the surfaced head `head` of the block at chain level
@@ -322,16 +341,23 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         registration: &Registration<'graph>,
         head: &SurfacedHead<'graph>,
         signatures: &mut Signatures<'p>,
-    ) -> Option<Static<'graph, Registered<'graph>>> {
+    ) -> Option<StaticRegistered<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         let (hops, site) = head.ascription;
         let ascribing = self.chain[level - hops as usize].shape;
         let Static::Closed(ascribed) = ascribing.typed_expression(site) else {
             return None;
         };
-        let (signature, pins) = match types.node(ascribed) {
-            TypeNode::Signature { .. } => (ascribed, &[][..]),
-            TypeNode::SignatureApply { signature, pins } => (signature, pins.as_slice()),
+        let mut pins = BumpVec::new_in(scratch);
+        let signature = match types.node(ascribed) {
+            TypeNode::Signature { .. } => ascribed,
+            TypeNode::SignatureApply {
+                signature,
+                pins: pinned,
+            } => {
+                pins.extend(pinned.iter());
+                signature
+            }
             _ => return None,
         };
         let (hops, slot) = head.signature;
@@ -365,8 +391,8 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             let pinned = pins
                 .iter()
                 .find(|(pin, _)| *pin == BinderSymbol::Type(*name));
-            let bound = match pinned {
-                Some((_, pin)) => *pin,
+            let bound: Parametric = match pinned {
+                Some((_, pin)) => (*pin).into(),
                 None => {
                     let (slot, _) = block.slot(BinderSymbol::Type(*name))?;
                     let local = Coordinate::Activation {
@@ -374,7 +400,8 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                         target: Target::Local(slot),
                     };
                     match reader.type_at(local) {
-                        TypeAt::Type(handle) | TypeAt::Rigid(handle) => handle,
+                        TypeAt::Type(handle) => handle.into(),
+                        TypeAt::Rigid(handle) => handle,
                         TypeAt::NotAType | TypeAt::Unknown => return None,
                     }
                 }
@@ -384,10 +411,12 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         let read = substitute_parameters(types, scratch, *shape, Members::from_table(bindings));
         let registered = Registered {
             shape: ranked(types, scratch, read, registration.classes),
-            quantifier_map: &[],
+            quantifier_map: ShapeGroupMap::default(),
             parameters: ParameterBinding::Named(&[]),
         };
-        Some(self.fixed(&reader, registered))
+        Some(self.fixed(&reader, registered, |registered| {
+            close_registered(types, registered)
+        }))
     }
 
     /// Type the shape at chain level `level`, then every shape nested in it.
@@ -407,7 +436,6 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             match type_declarations(component, &reader, types, scratch) {
                 Ok(handles) => {
                     for (slot, handle) in component.members.iter().zip(handles) {
-                        debug_assert!(!types.contains_quantified(*handle), "{FREE}");
                         shape.fix_declared(*slot, Static::Closed(*handle));
                     }
                 }
@@ -451,10 +479,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 None => type_expression(expression.part, &reader, types, scratch),
             };
             match typed {
-                Ok(handle) => {
-                    debug_assert!(!types.contains_quantified(handle), "{FREE}");
-                    expression.fix(self.fixed(&reader, handle));
-                }
+                Ok(handle) => expression.fix(self.fixed_type(&reader, handle)),
                 Err(Elaboration::Unknown { .. }) => {}
                 Err(error) => {
                     let statement = &shape.body()[expression.statement as usize];
@@ -484,9 +509,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     let registered = callable
                         .registered
                         .expect("a callable born for a registration carries its bucket entry");
-                    debug_assert!(!types.contains_quantified(registered.shape), "{FREE}");
                     let registered = laid_registered(self.writer, registered);
-                    shape.fix_registered(registration.slot, self.fixed(&reader, registered));
+                    let typed = self.fixed(&reader, registered, |registered| {
+                        close_registered(types, registered)
+                    });
+                    shape.fix_registered(registration.slot, typed);
                 }
                 Err(Elaboration::Unknown { .. }) => {}
                 Err(error) => {
@@ -514,8 +541,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     let reader = self.reader(level, Mode::Typing);
                     let typed = match callable_type(form, &reader, types, scratch, None) {
                         Ok(callable) => {
-                            debug_assert!(!types.contains_quantified(callable.ktype), "{FREE}");
-                            self.fixed(&reader, laid_callable(self.writer, callable))
+                            self.fixed(&reader, laid_callable(self.writer, callable), |callable| {
+                                close_callable(types, callable)
+                            })
                         }
                         Err(Elaboration::Unknown { .. }) => Static::Unknown,
                         Err(error) => {
@@ -527,12 +555,18 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     };
                     drop(reader);
                     nested.fix_callable(typed);
-                    match typed {
-                        Static::Closed(callable)
-                        | Static::Rigid {
+                    let group = match typed {
+                        Static::Closed(callable) => {
+                            Some((callable.quantifier_map, callable.ktype.into()))
+                        }
+                        Static::Rigid {
                             value: callable, ..
-                        } if writes_for_all(form) => {
-                            let own = self.own(callable, base);
+                        } => Some((callable.quantifier_map, callable.ktype)),
+                        Static::Unknown => None,
+                    };
+                    match group {
+                        Some((map, ktype)) if writes_for_all(form) => {
+                            let own = self.own(map, ktype, base);
                             nested.fix_group_levels(own.levels);
                             Some(own)
                         }
@@ -566,21 +600,27 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
 fn ranked(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    shape: KType,
+    shape: DeclaredType<Parametric>,
     classes: &[u8],
-) -> KType {
+) -> DeclaredType<Parametric> {
+    let node = match shape {
+        DeclaredType::Type(shape) => types.node(shape),
+        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+    };
     let TypeNode::ExpressionShape {
         quantifiers,
         bounds,
         elements,
         ret,
         ..
-    } = types.node(shape)
+    } = node
     else {
         unreachable!("a head declares an expression shape");
     };
+    let mut written = BumpVec::with_capacity_in(elements.len(), scratch);
+    written.extend(elements.iter());
     types
-        .shape_type(scratch, quantifiers, bounds, elements, classes, ret)
+        .shape_scheme(scratch, quantifiers, bounds, &written, classes, ret)
         .handle
 }
 
@@ -588,8 +628,47 @@ fn ranked(
 /// and its heads' shapes — `None` where it does not type — so the block elaborates each once.
 type Signatures<'p> = BumpVec<'p, ((usize, Slot), Option<(KType, BumpVec<'p, HeadShape>)>)>;
 
-/// What [`Pass::fixed`]'s callers assert of every type they fix.
-const FREE: &str = "no load-time type holds a free `Quantified`";
+/// Why a load-time type that read no lexical variable is concrete: nothing it was elaborated under
+/// declares a `FOR ALL` group or a head parameter it could name, and every binder door binds its
+/// own group's variables, so none escapes free.
+const FREE: &str = "a load-time type that read no lexical variable holds no variable";
+
+/// `declared` where it read no lexical variable: a scheme as it is, a type narrowed to concrete.
+fn close_declared(
+    types: &TypeRegistry<'_>,
+    declared: DeclaredType<Parametric>,
+) -> DeclaredType<KType> {
+    match declared {
+        DeclaredType::Type(kt) => DeclaredType::Type(types.concrete(kt).expect(FREE)),
+        DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
+    }
+}
+
+/// [`close_declared`] over a callable and its bucket entry.
+fn close_callable<'graph>(
+    types: &TypeRegistry<'_>,
+    callable: Callable<'graph>,
+) -> Callable<'graph, KType> {
+    Callable {
+        ktype: close_declared(types, callable.ktype),
+        quantifier_map: callable.quantifier_map,
+        registered: callable
+            .registered
+            .map(|registered| close_registered(types, registered)),
+    }
+}
+
+/// [`close_declared`] over a bucket entry.
+fn close_registered<'graph>(
+    types: &TypeRegistry<'_>,
+    registered: Registered<'graph>,
+) -> Registered<'graph, KType> {
+    Registered {
+        shape: close_declared(types, registered.shape),
+        quantifier_map: registered.quantifier_map,
+        parameters: registered.parameters,
+    }
+}
 
 impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     /// Number the run-bound names the shape at chain level `level` declares, after its own group:
@@ -605,9 +684,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
             let BinderSymbol::Type(name) = shape.slot_name(slot) else {
                 continue;
             };
-            let own = at
-                .own
-                .is_some_and(|own| own.map.iter().any(|(held, _)| *held == name));
+            let own = at.own.is_some_and(|own| own.map.get(name).is_some());
             let closed = shape.declarations(slot).is_some()
                 && matches!(shape.declared_type(slot), Static::Closed(_));
             if !own && !closed {
@@ -630,24 +707,33 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         at.names = names;
     }
 
-    /// A quantified callable's own group, read off its load-time type `callable`: the group's
-    /// variable `i` is the lexical variable at level `base + i`, named as the declaration wrote
-    /// it, laid down in program storage.
-    fn own(&self, callable: Callable<'graph>, base: usize) -> Own<'graph> {
-        let TypeNode::KFunction { bounds, .. } = self.types.node(callable.ktype) else {
-            unreachable!("a callable's type is a function type");
+    /// A quantified callable's own group, read off its load-time type `ktype` and its group map
+    /// `map`: the group's variable `i` is the lexical variable at level `base + i`, named as the
+    /// declaration wrote it, laid down in program storage.
+    fn own(
+        &self,
+        map: FunctionGroupMap<'graph>,
+        ktype: DeclaredType<Parametric>,
+        base: usize,
+    ) -> Own<'graph> {
+        let bounds = match ktype {
+            DeclaredType::Scheme(scheme) => match self.types.scheme_node(scheme) {
+                TypeNode::KFunction { bounds, .. } => bounds,
+                _ => unreachable!("a callable's type is a function type"),
+            },
+            // An empty group binds nothing.
+            DeclaredType::Type(_) => &[],
         };
         let mut levels = BumpVec::with_capacity_in(bounds.len(), self.scratch);
         levels.extend(bounds.iter().enumerate().map(|(index, bound)| {
-            let (name, _) = callable
-                .quantifier_map
+            let (name, _) = map
                 .iter()
                 .find(|(_, at)| *at == index)
                 .expect("each variable of the group is a name the declaration wrote");
-            self.types.lexical(base + index, *name, *bound)
+            self.types.lexical(base + index, name, *bound)
         }));
         Own {
-            map: callable.quantifier_map,
+            map,
             levels: collect(self.writer, levels.iter().copied()),
         }
     }
@@ -656,8 +742,9 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
 /// Refuse the first `MATCH … WITH` guard of `shape` that types to the handle an earlier guard of
 /// its arm set does.
 fn repeated_guards<'graph>(shape: &'graph BodyShape<'graph>) -> Result<(), ShapeError<'graph>> {
-    let handle = |typed| match typed {
-        Static::Closed(handle) | Static::Rigid { value: handle, .. } => Some(handle),
+    let handle = |typed: StaticType<'_>| match typed {
+        Static::Closed(handle) => Some(Parametric::from(handle)),
+        Static::Rigid { value: handle, .. } => Some(handle),
         Static::Unknown => None,
     };
     let guards = || {
@@ -709,7 +796,7 @@ pub fn writes_for_all(form: &KExpression<'_>) -> bool {
 fn laid_callable<'graph>(writer: Writer<'graph>, callable: Callable<'_>) -> Callable<'graph> {
     Callable {
         ktype: callable.ktype,
-        quantifier_map: collect(writer, callable.quantifier_map.iter().copied()),
+        quantifier_map: FunctionGroupMap(collect(writer, callable.quantifier_map.iter())),
         registered: callable
             .registered
             .map(|registered| laid_registered(writer, registered)),
@@ -723,7 +810,7 @@ fn laid_registered<'graph>(
 ) -> Registered<'graph> {
     Registered {
         shape: registered.shape,
-        quantifier_map: collect(writer, registered.quantifier_map.iter().copied()),
+        quantifier_map: ShapeGroupMap(collect(writer, registered.quantifier_map.iter())),
         parameters: match registered.parameters {
             ParameterBinding::Named(names) => {
                 ParameterBinding::Named(collect(writer, names.iter().copied()))

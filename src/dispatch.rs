@@ -103,7 +103,7 @@ impl<'graph, 'here> Operand<'graph, 'here> {
     /// of the name a bare label is.
     fn ktype(&self) -> KType {
         match self {
-            Operand::Value(value) => value.ktype(),
+            Operand::Value(value) => value.concrete_ktype(),
             Operand::Label(BinderSymbol::Type(_)) => KType::TYPE_NAME_TOKEN,
             Operand::Label(_) => KType::IDENTIFIER,
         }

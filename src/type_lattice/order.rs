@@ -1,13 +1,15 @@
-//! `is_subtype_of` — the one order — and *fits*, the relation a question reads.
+//! `is_subtype_of` — the one order — and *fits*, the relation a question reads, over raw handles.
 //!
 //! Both are reflexive, memoized through the registry's verdict edges under their own
 //! [`Relation`], and share one descent, [`Order`], which differs between them at its leaf alone.
-//! The **order** never solves: a quantified binder lies under only itself, and two signature types
-//! compare by their applications' pins (R-5). It is what every construction reads — a join, a meet,
-//! a union's or an overload set's subsumption. ***Fits*** solves: a quantified binder fits another
-//! when some instantiation of its group puts the instance under the other, and a module's
-//! signature fits a declared one when its members do. It contains the order, and it is what every
-//! question reads — whether a value fills a slot, a return lies within its contract, a bound holds.
+//! The **order** never solves: two signature types compare by their applications' pins (R-5). It
+//! is what every construction reads — a join, a meet, a union's or an overload set's subsumption —
+//! and it relates concrete types: its public door ([`typed`](super::typed)) takes `KType`s, where
+//! the rigid clause below sees only an opaque carrier. ***Fits*** solves: a quantified binder fits
+//! another when some instantiation of its group puts the instance under the other, and a module's
+//! signature fits a declared one when its members do. It contains the order, relates a variable by
+//! the rigid rule, and it is what every question reads — whether a value fills a slot, a return lies
+//! within its contract, a bound holds.
 //!
 //! There are no tie-break tiers: nothing ranks a token leaf against `Str`, a nominal slot against
 //! a kind slot, or a constrained slot against an unconstrained one. Those are not subtype facts,
@@ -17,7 +19,7 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 
-use super::handle::KType;
+use super::handle::{Handle, KType, TypeHandle, wrap};
 use super::node::TypeNode;
 use super::registry::{Relation, TypeRegistry};
 use super::sig_relations::{admits_function, admits_shape, sig_fits};
@@ -48,11 +50,11 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 /// - A quantified shape or function type lies under only itself.
 /// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other.
 /// - Every other pair is unrelated.
-pub fn is_subtype_of(
+pub(super) fn is_subtype_of(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    a: KType,
-    b: KType,
+    a: Handle,
+    b: Handle,
 ) -> bool {
     related(types, scratch, a, b, Relation::Subtype)
 }
@@ -62,17 +64,22 @@ pub fn is_subtype_of(
 /// each under its bound, puts the instance under the other with the other's variables rigid. A
 /// signature type fits another when [`sig_fits`] accepts the pair. Everything the order relates
 /// fits.
-pub fn fits(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> bool {
+pub(super) fn fits(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: Handle,
+    b: Handle,
+) -> bool {
     related(types, scratch, a, b, Relation::Fits)
 }
 
 /// Whether the type a position carries fills the slot declared there — *fits*, read from the
 /// slot's side.
-pub fn satisfied_by(
+pub(super) fn satisfied_by(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    slot: KType,
-    carried: KType,
+    slot: Handle,
+    carried: Handle,
 ) -> bool {
     fits(types, scratch, carried, slot)
 }
@@ -81,14 +88,14 @@ pub fn satisfied_by(
 fn related(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    a: KType,
-    b: KType,
+    a: Handle,
+    b: Handle,
     relation: Relation,
 ) -> bool {
-    if a == b || b == KType::ANY || a == KType::NEVER {
+    if a == b || b == Handle::ANY || a == Handle::NEVER {
         return true;
     }
-    if a == KType::ANY || b == KType::NEVER {
+    if a == Handle::ANY || b == Handle::NEVER {
         return false;
     }
     if let Some(known) = types.verdict(a.digest(), b.digest(), relation) {
@@ -124,8 +131,8 @@ impl Lockstep for Order {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        a: KType,
-        b: KType,
+        a: Handle,
+        b: Handle,
         v: Variance,
     ) -> Option<bool> {
         if !self.root {
@@ -143,7 +150,7 @@ impl Lockstep for Order {
         if let Some(bound) = na.rigid_bound() {
             return Some(
                 matches!(types.node(b), TypeNode::Union { members } if members.contains(&a))
-                    || related(types, scratch, bound, b, self.relation),
+                    || related(types, scratch, bound.raw(), b, self.relation),
             );
         }
         // A union is below `b` when every member is below `b` whole, for the same reason.
@@ -161,15 +168,15 @@ impl Lockstep for Order {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        a: KType,
-        b: KType,
+        a: Handle,
+        b: Handle,
         _v: Variance,
     ) -> bool {
         let (na, nb) = (types.node(a), types.node(b));
         // A rigid variable's down-set is checked first: below one lie only itself — which the
         // caller's equality guard already answered — and whatever lies under its lower end.
         if let Some(lower) = nb.rigid_lower() {
-            return related(types, scratch, a, lower, self.relation);
+            return related(types, scratch, a, lower.raw(), self.relation);
         }
         let solves = self.relation == Relation::Fits;
         if is_signature_type(types, a) && is_signature_type(types, b) {
@@ -220,10 +227,10 @@ impl Lockstep for Order {
         &mut self,
         _types: &TypeRegistry<'_>,
         _scratch: BumpAllocator<'_>,
-        a: &[KType],
-        b: &[KType],
+        a: &[Handle],
+        b: &[Handle],
         v: Variance,
-        recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> bool,
+        recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> bool,
     ) -> bool {
         // `enter` takes every union on the left whole, so `a` is one non-rigid type here: it is
         // below a union when it is below some member.
@@ -249,11 +256,11 @@ impl Lockstep for Order {
 /// every other type.
 pub(super) fn code_needs<'run>(
     types: &TypeRegistry<'run>,
-    ktype: KType,
+    ktype: Handle,
 ) -> Option<(KType, &'run [BinderSymbol])> {
     match types.node(ktype) {
         TypeNode::CodeNeeding { kind, names } => Some((kind, names)),
-        _ if ktype.code_parent().is_some() => Some((ktype, &[])),
+        _ if ktype.code_parent().is_some() => Some((wrap(ktype), &[])),
         _ => None,
     }
 }
@@ -262,7 +269,7 @@ pub(super) fn code_needs<'run>(
 /// node whose family is decided elsewhere: the lattice's top and bottom, a union by its members, a
 /// type variable by its bound, and a deferred return by the return it defers. No arm is a wildcard,
 /// so a new variant does not compile until it is given a family.
-fn family_top(node: &TypeNode<'_>) -> Option<KType> {
+fn family_top(node: &TypeNode<'_>) -> Option<Handle> {
     match node {
         TypeNode::Number
         | TypeNode::Str
@@ -279,7 +286,7 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::SignatureMeet { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Sibling(_)
-        | TypeNode::AnyValue => Some(KType::ANY_VALUE),
+        | TypeNode::AnyValue => Some(Handle::ANY_VALUE),
         TypeNode::Identifier
         | TypeNode::Symbol
         | TypeNode::TypeNameToken
@@ -293,8 +300,8 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::Name
         | TypeNode::Keyword
         | TypeNode::CodeNeeding { .. }
-        | TypeNode::AnyCode => Some(KType::ANY_CODE),
-        TypeNode::OfKind(_) => Some(KType::ANY_TYPE),
+        | TypeNode::AnyCode => Some(Handle::ANY_CODE),
+        TypeNode::OfKind(_) => Some(Handle::ANY_TYPE),
         TypeNode::Any
         | TypeNode::Never
         | TypeNode::Union { .. }
@@ -329,10 +336,10 @@ pub(super) enum Dropped {
 pub(super) fn unsubsumed<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
-    members: &[KType],
+    members: &[Handle],
     dropped: Dropped,
 ) -> BumpVec<'s, bool> {
-    let subsumes = |member: KType, peer: KType| match dropped {
+    let subsumes = |member: Handle, peer: Handle| match dropped {
         Dropped::Below => is_subtype_of(types, scratch, member, peer),
         Dropped::Above => is_subtype_of(types, scratch, peer, member),
     };

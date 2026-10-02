@@ -10,7 +10,7 @@
 use crate::memory::BumpAllocator;
 use crate::scope::{ActivationView, ShapeKind};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, SchemaDraft, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, SchemaDraft, TypeRegistry};
 use crate::values::{KnottedFamily, Value};
 
 /// The self-signature of the module whose body `activation` ran, `keyworded` holding the shape each
@@ -18,7 +18,7 @@ use crate::values::{KnottedFamily, Value};
 /// completion and only then ties the binder.
 pub fn self_signature<'graph, XF: KnottedFamily<'graph>>(
     activation: &ActivationView<'graph, '_, XF>,
-    keyworded: &[KType],
+    keyworded: &[DeclaredType<KType>],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {

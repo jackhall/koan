@@ -205,7 +205,7 @@ fn written_as_read<'e>(
         if typed_by_code
             && !slot_types
                 .iter()
-                .any(|slot| admits_part(*slot, part, types))
+                .any(|slot| admits_part((*slot).into(), part, types))
         {
             return Err(inadmissible);
         }

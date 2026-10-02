@@ -10,18 +10,16 @@ use super::super::builtin_shape_types;
 
 /// The bucket key an interned handle's elements spell.
 fn erasure(types: &TypeRegistry<'_>, handle: KType) -> Vec<KeyElement> {
-    types.with_node(handle, |node| {
-        let TypeNode::ExpressionShape { elements, .. } = node else {
-            panic!("the door interns an expression shape");
-        };
-        elements
-            .iter()
-            .map(|element| match element {
-                DispatchTokenElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
-                DispatchTokenElement::Slot(_) => KeyElement::Slot,
-            })
-            .collect()
-    })
+    let TypeNode::ExpressionShape { elements, .. } = types.node(handle) else {
+        panic!("the door interns an expression shape");
+    };
+    elements
+        .iter()
+        .map(|element| match element {
+            DispatchTokenElement::Keyword(symbol) => KeyElement::Keyword(symbol),
+            DispatchTokenElement::Slot(_) => KeyElement::Slot,
+        })
+        .collect()
 }
 
 /// The entry a bucket key probes to, by identity.

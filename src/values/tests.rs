@@ -19,7 +19,9 @@ use crate::memory::{
 };
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
-use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
+use crate::type_lattice::{
+    DeclaredType, KType, Parametric, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
+};
 use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Weight};
 
 /// A value holding no callable — what every suite here builds, spelled once so a literal arm
@@ -189,10 +191,10 @@ impl std::hash::Hash for Stand<'_> {
 }
 
 impl Knotted for Stand<'_> {
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> DeclaredType<KType> {
         match self {
-            Stand::Code(node) => node.code_kind(),
-            Stand::Function(_) | Stand::Barrier => KType::ANY,
+            Stand::Code(node) => node.code_kind().into(),
+            Stand::Function(_) | Stand::Barrier => KType::ANY.into(),
         }
     }
 
@@ -245,8 +247,8 @@ pub(super) fn quote<'graph>(fixture: &Fixture<'_, 'graph>, source: &str) -> Prog
 pub(super) struct Node<'cell>(Member<'cell, Circular<'cell, Node<'cell>>>);
 
 impl Knotted for Node<'_> {
-    fn ktype(&self) -> KType {
-        self.0.payload().ktype()
+    fn ktype(&self) -> DeclaredType<KType> {
+        self.0.payload().ktype().into()
     }
 
     fn weight(&self) -> Weight {
@@ -358,7 +360,7 @@ impl<'graph> Fixture<'_, 'graph> {
         &self,
         name: &str,
         params: &[&str],
-        representation: impl FnOnce(&[TypeSymbol]) -> Option<KType>,
+        representation: impl FnOnce(&[TypeSymbol]) -> Option<Parametric>,
     ) -> KType {
         let mut names: Vec<TypeSymbol> = params
             .iter()
@@ -420,7 +422,7 @@ pub(super) fn ring<'graph, 'cell>(
         let (fields, memo): (Vec<_>, _) = match values[member] {
             Some(cell) => (
                 vec![(next, successor), (value, Link::Value(cell))],
-                types.record(scratch, &[(next, identity), (value, cell.ktype())]),
+                types.record(scratch, &[(next, identity), (value, cell.concrete_ktype())]),
             ),
             None => (
                 vec![(next, successor)],

@@ -32,7 +32,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, ConstructionRefused> {
-        let identity = construction(types, scratch, head.handle(), payload.ktype())?;
+        let identity = construction(types, scratch, head.handle(), payload.concrete_ktype())?;
         Ok(Self::hold(writer, payload, identity))
     }
 

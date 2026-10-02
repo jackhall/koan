@@ -41,7 +41,7 @@ mod tests;
 pub use birth::{body_activation, tie_member};
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
-use crate::type_lattice::KType;
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::{Knotted as _, Weight};
 
 use super::{KValue, Knotted, Node};
@@ -121,8 +121,8 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
 /// item's, which only gives the barrier somewhere to live.
 pub struct Coerced<'graph, 'cell> {
     underlying: Knotted<'graph, 'cell>,
-    ktype: KType,
-    declared: KType,
+    ktype: DeclaredType<KType>,
+    declared: DeclaredType<Parametric>,
     from: KType,
     to: KType,
     /// What rebuilding the whole knot this node sits in writes, the same on every node.
@@ -147,8 +147,8 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
     pub fn tie(
         writer: Writer<'cell>,
         underlying: Knotted<'graph, 'cell>,
-        ktype: KType,
-        declared: KType,
+        ktype: DeclaredType<KType>,
+        declared: DeclaredType<Parametric>,
         from: KType,
         to: KType,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
@@ -181,13 +181,15 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         self.underlying
     }
 
-    /// The function type at the view's substitution: what a caller sees.
-    pub fn ktype(&self) -> KType {
+    /// The function type at the view's substitution: what a caller sees — a scheme where the
+    /// member is quantified.
+    pub fn ktype(&self) -> DeclaredType<KType> {
         self.ktype
     }
 
-    /// The slot type the view's signature declares, which the coercion walk recurses on.
-    pub fn declared(&self) -> KType {
+    /// The slot type the view's signature declares, over its head parameters, which the coercion
+    /// walk recurses on.
+    pub fn declared(&self) -> DeclaredType<Parametric> {
         self.declared
     }
 

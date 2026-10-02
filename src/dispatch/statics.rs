@@ -39,6 +39,10 @@
 //! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing.
 //! Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running it reports it.
 //!
+//! A static type is over [`Parametric`] types: it may hold the lexical variables of its chain. A
+//! binder of a quantified callable is typed by its scheme, which only a call's head reads — the
+//! head reads it as a [`DeclaredType`] — so a part's and a statement's static type is never one.
+//!
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::knot::{BuiltinFunction, KBuiltins};
@@ -50,11 +54,14 @@ use crate::scope::{
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Collector, Interval, KType, Record, Side, TypeNode, TypeRegistry, Variance, Verdict,
-    admits_with, bound_above, class_at_least, fits, instantiate_quantified, intervals, join_iter,
-    judge_by_class, meet, quantifier_bounds, read_through, select_by_class, shape_return,
+    Collector, DeclaredType, Interval, KType, Parametric, Record, Side, TypeNode, TypeRegistry,
+    Variable, Variance, Verdict, admits_with, bound_above, class_at_least, fits,
+    instantiate_quantified, intervals, judge_by_class, meet, read_through, scheme_bound_above,
+    scheme_return, select_by_class, shape_return,
 };
-use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
+use crate::values::{
+    CALL_ONLY, ConstructionRefused, Value, construction, dict_type, list_type, record_type,
+};
 
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
@@ -87,18 +94,33 @@ pub(super) fn statics<'graph>(
 
 /// A static type under `upper` and bounded below by nothing — exact where `upper` is `Number`,
 /// `Str`, `Bool` or `Null`, since no value carries a type strictly under one.
-pub(super) fn under(upper: KType) -> Interval {
-    match upper {
-        KType::NUMBER | KType::STR | KType::BOOL | KType::NULL => Interval::point(upper),
-        _ => Interval::within(upper),
+pub(super) fn under(upper: Parametric) -> Interval {
+    let leaf = [KType::NUMBER, KType::STR, KType::BOOL, KType::NULL]
+        .into_iter()
+        .any(|leaf| upper == leaf.into());
+    if leaf {
+        Interval::point(upper)
+    } else {
+        Interval {
+            lower: KType::NEVER.into(),
+            upper,
+        }
     }
 }
+
+/// `[Never, Any]`: what the load cannot bound.
+fn unknown() -> Interval {
+    under(KType::ANY.into())
+}
+
+/// A binder's static type: a type's interval, or a quantified callable's scheme.
+type Bound = DeclaredType<Interval>;
 
 /// The static type of a value retyped to `declared` (an ascription's, a parameter's, a frame's
 /// return): exactly `declared` where every value satisfying it is retyped to it — a list, dict or
 /// record type, a family or its application, a newtype or a union's variant — and at most
 /// `declared` otherwise; a union keeps each variant's own type.
-pub(super) fn retyped_to(types: &TypeRegistry<'_>, declared: KType) -> Interval {
+pub(super) fn retyped_to(types: &TypeRegistry<'_>, declared: Parametric) -> Interval {
     match types.node(declared) {
         TypeNode::List { .. }
         | TypeNode::Dict { .. }
@@ -116,7 +138,7 @@ struct Level<'p, 'graph> {
     roots_chain: bool,
     parts: BumpVec<'p, (Site, Interval)>,
     statements: BumpVec<'p, Interval>,
-    binders: BumpVec<'p, Interval>,
+    binders: BumpVec<'p, Bound>,
     narrowings: BumpVec<'p, Narrowing<'graph>>,
     /// Each `:!` whose operand's static upper end lies under its type.
     settled: BumpVec<'p, Site>,
@@ -140,10 +162,21 @@ struct Pass<'p, 'x, 'graph> {
 #[derive(Clone, Copy)]
 enum Known {
     /// The same at every run.
-    Closed(KType),
+    Closed(DeclaredType<KType>),
     /// Over lexical variables the run supplies.
-    Rigid(KType),
+    Rigid(DeclaredType<Parametric>),
     Unknown,
+}
+
+impl Known {
+    /// The shape, where the load knows it.
+    fn shape(self) -> Option<DeclaredType<Parametric>> {
+        match self {
+            Known::Closed(shape) => Some(shape.into()),
+            Known::Rigid(shape) => Some(shape),
+            Known::Unknown => None,
+        }
+    }
 }
 
 /// One candidate a keyworded use kept: what the load knows of it, its verdict, its group's
@@ -162,11 +195,10 @@ struct Judgement<'x> {
 impl<'p, 'graph> Pass<'p, '_, 'graph> {
     fn push(&mut self, shape: &'graph BodyShape<'graph>, roots_chain: bool) {
         let scratch = self.scratch;
-        let unknown = under(KType::ANY);
         let mut statements = BumpVec::with_capacity_in(shape.body().len(), scratch);
-        statements.resize(shape.body().len(), unknown);
+        statements.resize(shape.body().len(), unknown());
         let mut binders = BumpVec::with_capacity_in(shape.slots(), scratch);
-        binders.resize(shape.slots(), unknown);
+        binders.resize(shape.slots(), DeclaredType::Type(unknown()));
         let mut narrowings = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
         narrowings.resize(shape.candidate_lists().len(), Narrowing::Full);
         self.chain.push(Level {
@@ -260,18 +292,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         if self.unfilled {
             return;
         }
-        let (writer, types) = (self.writer, self.types);
+        let writer = self.writer;
         let at = &mut self.chain[level];
         at.parts.sort_unstable_by_key(|(site, _)| *site);
         at.settled.sort_unstable();
-        debug_assert!(
-            (at.parts.iter().map(|(_, typed)| typed))
-                .chain(at.statements.iter())
-                .chain(at.binders.iter())
-                .all(|typed| !types.contains_quantified(typed.lower)
-                    && !types.contains_quantified(typed.upper)),
-            "no static type holds a free `Quantified`"
-        );
         at.shape.fix_statics(Statics {
             parts: collect(writer, at.parts.iter().copied()),
             statements: collect(writer, at.statements.iter().copied()),
@@ -284,25 +308,27 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// A slot's static type before any unit runs: a registration's function type, a type name's
     /// type value's, a parameter's declared type as its body reads it, and `[Never, Any]` for a
     /// local its unit sets.
-    fn seeded(&self, level: usize, slot: Slot) -> Interval {
+    fn seeded(&self, level: usize, slot: Slot) -> Bound {
         let shape = self.chain[level].shape;
         if shape.registration(slot).is_some() {
-            return shape.births(slot).map_or(under(KType::ANY), callable);
+            return shape
+                .births(slot)
+                .map_or(DeclaredType::Type(unknown()), callable);
         }
         let name = shape.slot_name(slot);
         if let BinderSymbol::Type(_) = name {
-            return match shape.declared_type(slot) {
+            return DeclaredType::Type(match shape.declared_type(slot) {
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {
-                    Interval::point(KType::of_kind(handle.kind_of(self.types)))
+                    Interval::point(KType::of_kind(handle.kind_of(self.types)).into())
                 }
-                _ => under(KType::ANY_TYPE),
-            };
+                _ => under(KType::ANY_TYPE.into()),
+            });
         }
         let is_parameter = shape
             .slot(name)
             .is_some_and(|(_, position)| position == Position::PARAMETER);
         if shape.kind() != ShapeKind::Callable || !is_parameter {
-            return under(KType::ANY);
+            return DeclaredType::Type(unknown());
         }
         let declared = self
             .in_body(shape)
@@ -310,34 +336,38 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 TypeNode::KFunction { params, .. } => params.get(name.symbol()),
                 _ => None,
             });
-        retyped_to(self.types, declared.unwrap_or(KType::ANY))
+        DeclaredType::Type(retyped_to(
+            self.types,
+            declared.unwrap_or_else(|| KType::ANY.into()),
+        ))
     }
 
     /// A callable body's function type as its body reads it: its own group instantiated at its
     /// group levels. `None` where the load did not type the callable.
-    fn in_body(&self, shape: &BodyShape<'graph>) -> Option<KType> {
+    fn in_body(&self, shape: &BodyShape<'graph>) -> Option<Parametric> {
         let ktype = match shape.callable_type() {
-            Static::Closed(callable)
-            | Static::Rigid {
+            Static::Closed(callable) => callable.ktype.into(),
+            Static::Rigid {
                 value: callable, ..
             } => callable.ktype,
             Static::Unknown => return None,
         };
-        let bounds = quantifier_bounds(self.types, ktype);
-        if bounds.is_empty() {
-            return Some(ktype);
+        match ktype {
+            DeclaredType::Type(ktype) => Some(ktype),
+            DeclaredType::Scheme(scheme) => {
+                debug_assert_eq!(
+                    crate::type_lattice::quantifier_bounds(self.types, scheme).len(),
+                    shape.group_levels().len(),
+                    "the type channel numbered the callable's own group"
+                );
+                Some(instantiate_quantified(
+                    self.types,
+                    self.scratch,
+                    scheme,
+                    shape.group_levels(),
+                ))
+            }
         }
-        debug_assert_eq!(
-            bounds.len(),
-            shape.group_levels().len(),
-            "the type channel numbered the callable's own group"
-        );
-        Some(instantiate_quantified(
-            self.types,
-            self.scratch,
-            ktype,
-            shape.group_levels(),
-        ))
     }
 
     /// Type a component's value binders: each callable or module it births first, then each data
@@ -353,7 +383,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if let Some(body) = shape.births(*member) {
                 self.chain[level].binders[member.index()] = match body.form() {
                     Some(_) => callable(body),
-                    None => under(KType::ANY),
+                    None => DeclaredType::Type(unknown()),
                 };
             }
         }
@@ -363,7 +393,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             }
             if let Some(rhs) = shape.rhs(*member) {
                 let typed = self.part(level, rhs)?;
-                self.chain[level].binders[member.index()] = typed;
+                self.chain[level].binders[member.index()] = DeclaredType::Type(typed);
             }
         }
         // A binding statement's value is the one binder it writes, where it writes only one.
@@ -373,9 +403,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             .filter(|member| shape.registration(**member).is_none());
         if let (Some(only), None) = (values.next(), values.next()) {
             let written = shape.slot(shape.slot_name(*only)).map(|(_, at)| at);
+            // A statement binding a quantified callable is typed by no scheme: its value is read
+            // only by name, at a call's head.
             if let Some(statement) = written.and_then(Position::statement_index) {
                 let typed = self.chain[level].binders[only.index()];
-                self.chain[level].statements[statement] = typed;
+                self.chain[level].statements[statement] = typed.as_type().unwrap_or_else(unknown);
             }
         }
         Ok(())
@@ -398,7 +430,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let body = at.statements[last].upper;
         let (types, scratch) = (self.types, self.scratch);
         // A body that never arrives returns nothing to check.
-        if body == KType::NEVER {
+        if body == KType::NEVER.into() {
             return Ok(());
         }
         // Compared, and named, through their bounds: a variable's name is its binder's.
@@ -438,24 +470,53 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         self.form(level, of_node(shape, node))
     }
 
-    /// The static type of a node or part the evaluator reads as `form`.
+    /// The static type of a node or part the evaluator reads as `form`. A quantified callable is
+    /// read only at a call's head ([`head`](Self::head)).
     fn form(&mut self, level: usize, form: Form<'graph>) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         Ok(match form {
             Form::Leaf(part) => self.leaf(level, part)?,
-            Form::Block(nested) => self
-                .nested(level, nested, false)?
-                .unwrap_or(under(KType::ANY)),
+            Form::Block(nested) => self.nested(level, nested, false)?.unwrap_or_else(unknown),
             Form::Lambda(node) => Site::of_body(node)
                 .and_then(|site| shape.nested(site))
-                .map_or(under(KType::ANY), callable),
-            Form::Declaration => Interval::point(KType::NULL),
+                .map_or(DeclaredType::Type(unknown()), callable)
+                .as_type()
+                .expect(CALL_ONLY),
+            Form::Declaration => Interval::point(KType::NULL.into()),
             Form::Ascribe(node) => self.ascribe(level, node)?,
             Form::Eval(node) => self.eval(level, node)?,
             Form::Call(node, list) => self.narrow(level, node, list)?,
             Form::Apply(head, argument) => self.apply(level, head, argument)?,
-            Form::Unevaluable(_) => under(KType::ANY),
+            Form::Unevaluable(_) => unknown(),
         })
+    }
+
+    /// The static type of a call's head `head`: a quantified callable's scheme where it reads one —
+    /// by name, or a quantified `FN` written in place — and otherwise its part's type, recorded by
+    /// its site.
+    fn head(
+        &mut self,
+        level: usize,
+        head: &'graph ExpressionPart<'graph>,
+    ) -> Result<Bound, ShapeError<'graph>> {
+        let shape = self.chain[level].shape;
+        let read = match of_part(shape, head) {
+            Form::Leaf(
+                ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(_)
+                | ExpressionPart::MarkedName(..),
+            ) => shape
+                .mention(Site::of(head))
+                .map(|mention| self.read_declared(level, mention.coordinate)),
+            Form::Lambda(node) => Site::of_body(node)
+                .and_then(|site| shape.nested(site))
+                .map(callable),
+            _ => None,
+        };
+        match read {
+            Some(DeclaredType::Scheme(scheme)) => Ok(DeclaredType::Scheme(scheme)),
+            _ => self.part(level, head).map(DeclaredType::Type),
+        }
     }
 
     /// `<value> :! <Type>`: its type, exactly where the retype makes it so ([`retyped_to`]). Where
@@ -471,11 +532,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         };
         let typed = self.part(level, &operand.value)?;
         // An operand that never arrives has no value to check.
-        if typed.upper == KType::NEVER {
-            return Ok(Interval::point(KType::NEVER));
+        if typed.upper == KType::NEVER.into() {
+            return Ok(Interval::point(KType::NEVER.into()));
         }
         let Some(ascribed) = self.declared(level, &ascribed.value) else {
-            return Ok(under(KType::ANY));
+            return Ok(unknown());
         };
         let (types, scratch) = (self.types, self.scratch);
         // Compared, and named, through their bounds: a variable's name is its binder's.
@@ -509,8 +570,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         };
         let typed = self.part(level, &operand.value)?;
         // An operand that never arrives runs nothing.
-        if typed.upper == KType::NEVER {
-            return Ok(Interval::point(KType::NEVER));
+        if typed.upper == KType::NEVER.into() {
+            return Ok(Interval::point(KType::NEVER.into()));
         }
         let (types, scratch) = (self.types, self.scratch);
         let value = bound_above(types, scratch, typed.upper);
@@ -521,7 +582,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             });
         }
         let Some(declared) = self.declared(level, &declared.value) else {
-            return Ok(under(KType::ANY));
+            return Ok(unknown());
         };
         // Code that never arrives returns nothing to check.
         if let Some(code) = self.traced(level, &operand.value)
@@ -540,9 +601,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     }
 
     /// The type the type part `part` of the shape at `level` denotes, where the load knows it.
-    fn declared(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<KType> {
+    fn declared(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Parametric> {
         match self.chain[level].shape.typed_expression(Site::of(part)) {
-            Static::Closed(handle) | Static::Rigid { value: handle, .. } => Some(handle),
+            Static::Closed(handle) => Some(handle.into()),
+            Static::Rigid { value: handle, .. } => Some(handle),
             Static::Unknown => None,
         }
     }
@@ -557,25 +619,25 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let shape = self.chain[level].shape;
         let (types, scratch) = (self.types, self.scratch);
         Ok(match part {
-            ExpressionPart::Literal(KLiteral::Number(_)) => Interval::point(KType::NUMBER),
-            ExpressionPart::Literal(KLiteral::String(_)) => Interval::point(KType::STR),
-            ExpressionPart::Literal(KLiteral::Boolean(_)) => Interval::point(KType::BOOL),
-            ExpressionPart::Literal(KLiteral::Null) => Interval::point(KType::NULL),
+            ExpressionPart::Literal(KLiteral::Number(_)) => Interval::point(KType::NUMBER.into()),
+            ExpressionPart::Literal(KLiteral::String(_)) => Interval::point(KType::STR.into()),
+            ExpressionPart::Literal(KLiteral::Boolean(_)) => Interval::point(KType::BOOL.into()),
+            ExpressionPart::Literal(KLiteral::Null) => Interval::point(KType::NULL.into()),
             ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
             | ExpressionPart::MarkedName(..) => match shape.mention(Site::of(part)) {
                 Some(mention) => self.read(level, mention.coordinate),
-                None => under(KType::ANY),
+                None => unknown(),
             },
             ExpressionPart::QuotedExpression(_) => shape
                 .nested(Site::of(part))
-                .map_or(under(KType::ANY), |code| Interval::point(code.code_type())),
+                .map_or_else(unknown, |code| Interval::point(code.code_type().into())),
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 match shape.typed_expression(Site::of(part)) {
                     Static::Closed(handle) => {
-                        Interval::point(KType::of_kind(handle.kind_of(types)))
+                        Interval::point(KType::of_kind(handle.kind_of(types)).into())
                     }
-                    _ => under(KType::ANY_TYPE),
+                    _ => under(KType::ANY_TYPE.into()),
                 }
             }
             ExpressionPart::ListLiteral(items) => {
@@ -618,15 +680,30 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             }
             ExpressionPart::Keyword(_)
             | ExpressionPart::Expression(_)
-            | ExpressionPart::MarkedUse(..) => under(KType::ANY),
+            | ExpressionPart::MarkedUse(..) => unknown(),
         })
     }
 
-    /// The static type of what `coordinate`, read in the shape at `level`, holds. A capture along
-    /// the chain reads its source's; one crossing into a quote's code reads it through its bounds.
+    /// The static type of what `coordinate`, read in the shape at `level`, holds — never a scheme,
+    /// which only a call's head reads.
     fn read(&self, level: usize, coordinate: Coordinate) -> Interval {
+        self.read_declared(level, coordinate)
+            .as_type()
+            .expect(CALL_ONLY)
+    }
+
+    /// The static type of what `coordinate`, read in the shape at `level`, holds, a quantified
+    /// callable's its scheme. A capture along the chain reads its source's; one crossing into a
+    /// quote's code reads it through its bounds.
+    fn read_declared(&self, level: usize, coordinate: Coordinate) -> Bound {
         let (hops, target) = match coordinate {
-            Coordinate::Builtin(index) => return Interval::point(self.builtins.get(index).ktype()),
+            Coordinate::Builtin(index) => {
+                return self
+                    .builtins
+                    .get(index)
+                    .ktype()
+                    .map(|ktype| Interval::point(ktype.into()));
+            }
             Coordinate::Activation { hops, target } => (hops, target),
         };
         let at = level - hops as usize;
@@ -639,18 +716,25 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             self.chain[at].shape.captures()[capture.index()].source,
             outer,
         ) {
-            (CaptureSource::Read(inner), Some(outer)) => self.read(outer, inner),
+            (CaptureSource::Read(inner), Some(outer)) => self.read_declared(outer, inner),
             (CaptureSource::Member { component, index }, Some(outer)) => {
                 let member =
                     self.chain[outer].shape.components()[component.index()].members[index as usize];
                 self.chain[outer].binders[member.index()]
             }
-            _ => return under(KType::ANY),
+            _ => return DeclaredType::Type(unknown()),
         };
-        if self.chain[at].roots_chain {
-            under(bound_above(self.types, self.scratch, read.upper))
-        } else {
-            read
+        if !self.chain[at].roots_chain {
+            return read;
+        }
+        let (types, scratch) = (self.types, self.scratch);
+        match read {
+            DeclaredType::Type(read) => {
+                DeclaredType::Type(under(bound_above(types, scratch, read.upper).into()))
+            }
+            DeclaredType::Scheme(scheme) => {
+                DeclaredType::Scheme(scheme_bound_above(types, scratch, scheme))
+            }
         }
     }
 
@@ -688,21 +772,26 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         head: &'graph ExpressionPart<'graph>,
         argument: &'graph ExpressionPart<'graph>,
     ) -> Result<Interval, ShapeError<'graph>> {
-        let callee = self.part(level, head)?;
+        let callee = self.head(level, head)?;
         let payload = self.part(level, argument)?;
         let (types, scratch) = (self.types, self.scratch);
         if let Some(identity) = self.head_handle(level, head) {
             let upper = match construction(types, scratch, identity, payload.upper) {
                 Ok(constructed) => constructed,
-                Err(ConstructionRefused::NotConstructible(_)) => KType::ANY,
+                Err(ConstructionRefused::NotConstructible(_)) => KType::ANY.into(),
                 // A misfit faults; an unsolved family lies under the bare family.
-                Err(_) => identity,
+                Err(_) => identity.into(),
             };
-            let lower =
-                construction(types, scratch, identity, payload.lower).unwrap_or(KType::NEVER);
+            let lower = construction(types, scratch, identity, payload.lower)
+                .unwrap_or_else(|_| KType::NEVER.into());
             return Ok(Interval { lower, upper });
         }
-        Ok(match types.node(callee.upper) {
+        // A scheme is one callee, so it is exact.
+        let (node, exact) = match callee {
+            DeclaredType::Type(callee) => (types.node(callee.upper), callee.is_exact()),
+            DeclaredType::Scheme(scheme) => (types.scheme_node(scheme), true),
+        };
+        Ok(match node {
             TypeNode::KFunction {
                 bounds,
                 params,
@@ -712,13 +801,13 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 let (returned, solved) = self.called(bounds, params, ret, payload);
                 // Only an exact callee: a function is never retyped, so one at most its type may
                 // return less.
-                if callee.is_exact() && solved {
+                if exact && solved {
                     retyped_to(types, returned)
                 } else {
                     under(returned)
                 }
             }
-            _ => under(KType::ANY),
+            _ => unknown(),
         })
     }
 
@@ -729,10 +818,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     fn called(
         &self,
         bounds: &[KType],
-        params: Record<'_>,
-        ret: KType,
+        params: Record<'_, Parametric>,
+        ret: Parametric,
         payload: Interval,
-    ) -> (KType, bool) {
+    ) -> (Parametric, bool) {
         let (types, scratch) = (self.types, self.scratch);
         if bounds.is_empty() {
             return (ret, true);
@@ -745,7 +834,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             return (self.through(ret, None), false);
         };
         let lower = fields(payload.lower);
-        let mut collector = Collector::new(scratch, bounds);
+        let mut collector = Collector::<Parametric>::new(scratch, bounds);
         let mut declared = BumpVec::with_capacity_in(params.len(), scratch);
         let mut exact = true;
         for (name, param) in params.iter() {
@@ -755,10 +844,12 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
                 return (self.through(ret, None), false);
             }
-            if types.contains_quantified(param) {
-                // As a keyworded use judges it: a rigid variable makes no solve the call's.
+            let quantified = (0..bounds.len())
+                .any(|variable| types.references_quantifier(scratch, param, variable));
+            if quantified {
+                // As a keyworded use judges it: a variable makes no solve the call's.
                 exact &= lower.and_then(|lower| lower.get(name.symbol())) == Some(field)
-                    && !types.contains_rigid(field);
+                    && types.concrete(field).is_some();
             }
             declared.push(param);
         }
@@ -773,14 +864,14 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
 
     /// `ret`, a return under its own group, read through that group's `intervals` — each variable
     /// at `[Never, bound]` where there are none — keeping every lexical variable.
-    fn through(&self, ret: KType, intervals: Option<&[Interval]>) -> KType {
+    fn through(&self, ret: Parametric, intervals: Option<&[Interval]>) -> Parametric {
         read_through(
             self.types,
             self.scratch,
             ret,
             Side::Above,
-            &mut |node| match *node {
-                TypeNode::Quantified { index, bound } => Some(
+            &mut |variable| match variable {
+                Variable::Quantified { index, bound } => Some(
                     intervals
                         .and_then(|all| all.get(index).copied())
                         .unwrap_or(Interval::within(bound)),
@@ -791,9 +882,16 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     }
 
     /// `shape`'s declared return read through its own group's `intervals`.
-    fn returned(&self, shape: KType, intervals: Option<&[Interval]>) -> KType {
-        let ret = shape_return(shape, self.types).expect("a registered shape returns");
-        self.through(ret, intervals)
+    fn returned(
+        &self,
+        shape: DeclaredType<Parametric>,
+        intervals: Option<&[Interval]>,
+    ) -> Parametric {
+        let ret = match shape {
+            DeclaredType::Type(shape) => shape_return(shape, self.types),
+            DeclaredType::Scheme(scheme) => scheme_return(scheme, self.types),
+        };
+        self.through(ret.expect("a registered shape returns"), intervals)
     }
 
     /// The type an application's head denotes, where the load knows it.
@@ -843,10 +941,13 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         for wanted in wanted.iter() {
             let each = match wanted {
                 Wanted::Label(name) => Given {
-                    typed: Interval::point(match name {
-                        BinderSymbol::Type(_) => KType::TYPE_NAME_TOKEN,
-                        _ => KType::IDENTIFIER,
-                    }),
+                    typed: Interval::point(
+                        match name {
+                            BinderSymbol::Type(_) => KType::TYPE_NAME_TOKEN,
+                            _ => KType::IDENTIFIER,
+                        }
+                        .into(),
+                    ),
                     names: Some(std::slice::from_ref(scratch.alloc(*name))),
                 },
                 Wanted::Evaluated(part) => Given {
@@ -865,9 +966,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         // A use one of whose arguments never arrives never runs its call.
         if arguments
             .iter()
-            .any(|argument| argument.upper == KType::NEVER)
+            .any(|argument| argument.upper == KType::NEVER.into())
         {
-            return Ok(Interval::point(KType::NEVER));
+            return Ok(Interval::point(KType::NEVER.into()));
         }
         let uppers = || collect(self.writer, arguments.iter().map(|argument| argument.upper));
 
@@ -880,12 +981,12 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 continue;
             }
             let known = self.candidate(level, *candidate);
-            let (mut verdict, intervals) = match known {
-                Known::Closed(registered) | Known::Rigid(registered) => {
+            let (mut verdict, intervals) = match known.shape() {
+                Some(registered) => {
                     let judged = judge_by_class(types, scratch, registered, &arguments);
                     (judged.verdict, judged.intervals)
                 }
-                Known::Unknown => (Verdict::Maybe, None),
+                None => (Verdict::Maybe, None),
             };
             let builtin = self.builtin(*candidate);
             let mut ruled = None;
@@ -926,7 +1027,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
         // A *maybe* an *always* one strictly outranks at the first class never runs: wherever it
         // admits, the *always* one does too, and beats it.
-        let beats = |a: KType, m: KType| {
+        let beats = |a: DeclaredType<KType>, m: DeclaredType<KType>| {
+            let (a, m) = (a.into(), m.into());
             class_at_least(types, scratch, a, m, 0) && !class_at_least(types, scratch, m, a, 0)
         };
         let outranked = |judgement: &Judgement<'_>| match judgement.known {
@@ -957,9 +1059,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     .iter()
                     .all(|judgement| matches!(judgement.known, Known::Closed(_))) =>
                 {
-                    let mut shapes = BumpVec::with_capacity_in(judged.len(), scratch);
+                    let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
+                        BumpVec::with_capacity_in(judged.len(), scratch);
                     shapes.extend(judged.iter().map(|judgement| match judgement.known {
-                        Known::Closed(registered) => registered,
+                        Known::Closed(registered) => DeclaredType::<Parametric>::from(registered),
                         _ => unreachable!("every candidate is closed"),
                     }));
                     let survivors = select_by_class(types, scratch, &shapes);
@@ -1009,11 +1112,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let mut returns = BumpVec::with_capacity_in(judged.len(), scratch);
         for judgement in judged.iter() {
             if let Known::Unknown = judgement.known {
-                return Ok(under(KType::ANY));
+                return Ok(unknown());
             }
             returns.push(self.candidate_return(*judgement).upper);
         }
-        Ok(under(join_iter(types, scratch, returns.iter().copied())))
+        Ok(under(types.union_of(scratch, &returns)))
     }
 
     /// What a judged candidate returns: a builtin's return as its [rule](super::rules) gives it; a
@@ -1026,9 +1129,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         if let Some(ruled) = judgement.ruled {
             return ruled;
         }
-        let registered = match judgement.known {
-            Known::Closed(registered) | Known::Rigid(registered) => registered,
-            Known::Unknown => return under(KType::ANY),
+        let Some(registered) = judgement.known.shape() else {
+            return unknown();
         };
         let returned = self.returned(registered, judgement.intervals);
         let solved = !judgement.surfaced
@@ -1043,7 +1145,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// Where a builtin's need `need` dropped a candidate over an argument whose lower end is
     /// `lower`, both records: that end, read through its bounds, and the first field the need names
     /// that it lacks.
-    fn missing(&self, lower: KType, need: KType) -> Option<(KType, BinderSymbol)> {
+    fn missing(&self, lower: Parametric, need: KType) -> Option<(KType, BinderSymbol)> {
         let (types, scratch) = (self.types, self.scratch);
         let (TypeNode::Record { fields: has }, TypeNode::Record { fields: needs }) =
             (types.node(lower), types.node(need))
@@ -1139,7 +1241,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             Candidate::Spread(_) => return Known::Unknown,
             Candidate::One(Coordinate::Builtin(_)) => {
                 return match self.builtin(candidate) {
-                    Some(builtin) => Known::Closed(builtin.ktype()),
+                    Some(builtin) => Known::Closed(builtin.ktype().into()),
                     None => Known::Unknown,
                 };
             }
@@ -1187,14 +1289,15 @@ fn done(nested: &BodyShape<'_>) -> bool {
     nested.statics().is_some() || (nested.kind() == ShapeKind::Code && nested.refusal().is_some())
 }
 
-/// The static type of the callable body `body`: a point at its function type where the load typed
-/// it, `[Never, Any]` elsewhere.
-fn callable(body: &BodyShape<'_>) -> Interval {
-    match body.callable_type() {
-        Static::Closed(callable)
-        | Static::Rigid {
+/// The static type of the callable body `body`: a point at its function type, or its scheme, where
+/// the load typed it, `[Never, Any]` elsewhere.
+fn callable(body: &BodyShape<'_>) -> Bound {
+    let ktype = match body.callable_type() {
+        Static::Closed(callable) => callable.ktype.into(),
+        Static::Rigid {
             value: callable, ..
-        } => Interval::point(callable.ktype),
-        Static::Unknown => under(KType::ANY),
-    }
+        } => callable.ktype,
+        Static::Unknown => return DeclaredType::Type(unknown()),
+    };
+    ktype.map(Interval::point)
 }

@@ -34,7 +34,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
                 .next()
                 .expect("an exact-size iterator yields its reported length")
         });
-        let ktype = list_type(types, scratch, cells.iter().map(Value::ktype));
+        let ktype = list_type(types, scratch, cells.iter().map(Value::concrete_ktype));
         Self::weighed(writer, cells, ktype)
     }
 

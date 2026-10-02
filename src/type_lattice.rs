@@ -61,11 +61,13 @@ mod ranking;
 mod record;
 mod registry;
 mod render;
+mod run;
 mod schema;
 mod shape;
 mod sig_relations;
 mod signatures;
 mod substitute;
+mod typed;
 mod unify;
 mod walk;
 mod window;
@@ -74,30 +76,30 @@ mod window;
 mod tests;
 
 pub use digest::TypeDigest;
-pub use handle::{KType, builtin_types};
+pub use handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, builtin_types};
 pub use kind::KKind;
-pub use lattice::{join, join_iter, meet};
 pub use node::{NodeSchema, TypeNode};
 pub use operators::{FoldDirection, ReductionMode};
-pub use order::{fits, is_subtype_of, satisfied_by};
-pub use ranking::{
-    Judged, Verdict, admit_by_class, class_at_least, judge_by_class, select_by_class,
-};
+pub use ranking::{Judged, Verdict};
 pub use record::Record;
 pub use registry::{GroupIntern, TypeRegistry};
 pub use render::{
     TypeNameDisplay, display_name, display_symbol, render_fits_failure, render_keyworded_head,
     render_symbol,
 };
+pub use run::{Elements, Run};
 pub use schema::{
     DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, constructor_param_names, is_shape,
-    member, shape_keys_equal, shape_return, shape_slots,
+    member, scheme_return, scheme_slots, shape_keys_equal, shape_return, shape_slots,
 };
 pub use shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, dense_classes};
-pub use sig_relations::{FitsFailure, fits_application, shape_specificity, sig_fits};
-pub use substitute::{
-    Side, bound_above, erase_rigid, instantiate_quantified, quantifier_bounds, read_through,
-    substitute_levels, substitute_parameters, substitute_quantified,
+pub use sig_relations::FitsFailure;
+pub use substitute::{Side, Variable};
+pub use typed::{
+    Substitutable, admit_by_class, bound_above, class_at_least, erase_rigid, fits,
+    fits_application, instantiate_quantified, is_subtype_of, join, join_iter, judge_by_class, meet,
+    quantifier_bounds, read_through, satisfied_by, scheme_bound_above, select_by_class,
+    shape_specificity, sig_fits, substitute_levels, substitute_parameters, substitute_quantified,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;

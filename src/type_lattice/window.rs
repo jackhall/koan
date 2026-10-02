@@ -51,7 +51,7 @@ use crate::memory::{BumpAllocator, BumpVec, ScopeId, strongly_connected_componen
 use crate::symbols::{Symbol, TypeSymbol};
 
 use super::digest::{ComponentMember, TypeDigest, component_digest, member_ref_digest};
-use super::handle::KType;
+use super::handle::{Handle, KType, Parametric, TypeHandle, wrap};
 use super::kind::KKind;
 use super::node::NodeSchema;
 use super::registry::TypeRegistry;
@@ -68,7 +68,7 @@ pub enum RelativeSchema<'w> {
     /// quantifiers, and the parameter names symbol-sorted, as a sealed member stores them. Built
     /// through [`RelativeSchema::constructor`].
     TypeConstructor {
-        representation: Option<KType>,
+        representation: Option<Parametric>,
         param_names: &'w [TypeSymbol],
     },
 }
@@ -80,7 +80,7 @@ impl<'w> RelativeSchema<'w> {
     pub fn constructor(
         host: BumpAllocator<'w>,
         scratch: BumpAllocator<'_>,
-        representation: Option<KType>,
+        representation: Option<Parametric>,
         param_names: &[TypeSymbol],
     ) -> Self {
         let mut names = BumpVec::with_capacity_in(param_names.len(), scratch);
@@ -111,16 +111,18 @@ impl<'w> RelativeSchema<'w> {
     where
         'w: 'x,
     {
+        // A sibling is concrete, as the member it resolves to is, so a rewrite keeps each
+        // representation what it was.
         match self {
             RelativeSchema::NewType(repr) => {
-                RelativeSchema::NewType(rewrite_siblings(types, scratch, repr, resolve))
+                RelativeSchema::NewType(wrap(rewrite_siblings(types, scratch, repr.raw(), resolve)))
             }
             RelativeSchema::TypeConstructor {
                 representation,
                 param_names,
             } => RelativeSchema::TypeConstructor {
                 representation: representation
-                    .map(|kt| rewrite_siblings(types, scratch, kt, resolve)),
+                    .map(|kt| wrap(rewrite_siblings(types, scratch, kt.raw(), resolve))),
                 param_names,
             },
         }
@@ -148,10 +150,10 @@ impl<'w> RelativeSchema<'w> {
         out: &mut BumpVec<'_, usize>,
     ) {
         match self {
-            RelativeSchema::NewType(repr) => collect_siblings(types, scratch, repr, out),
+            RelativeSchema::NewType(repr) => collect_siblings(types, scratch, repr.raw(), out),
             RelativeSchema::TypeConstructor { representation, .. } => {
                 if let Some(representation) = representation {
-                    collect_siblings(types, scratch, representation, out);
+                    collect_siblings(types, scratch, representation.raw(), out);
                 }
             }
         }
@@ -591,7 +593,9 @@ pub(super) fn seal_group<'w>(
         };
 
         for (position, member) in order.iter().enumerate() {
-            handles[*member] = Some(KType::from_digest(member_ref_digest(digest, position)));
+            handles[*member] = Some(wrap(Handle::from_digest(member_ref_digest(
+                digest, position,
+            ))));
             placement[*member] = Some((digest, position, order.len()));
         }
     }
@@ -619,13 +623,13 @@ pub(super) fn seal_group<'w>(
         );
         debug_assert_eq!(
             handle,
-            handles[index].expect("placed"),
+            handles[index].expect("placed").raw(),
             "the interned member node must key at the handle its component derived",
         );
         sealed.push(SealedMember {
             name: member.name,
             owner: member.owner,
-            kt: handle,
+            kt: wrap(handle),
         });
     }
     let mut binder_types = BumpVec::with_capacity_in(binders.len(), scratch);

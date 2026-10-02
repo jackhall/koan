@@ -63,8 +63,8 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                 f.ktype(),
                 fixture
                     .types
-                    .function_type(scratch, &[], &[], &[(x, KType::NUMBER)], KType::NUMBER)
-                    .handle
+                    .function_type(scratch, &[(x, KType::NUMBER)], KType::NUMBER)
+                    .into()
             );
             assert!(std::ptr::eq(
                 f.function().expect("a function").shape(),
@@ -101,11 +101,11 @@ fn a_function_born_for_a_registration_carries_its_shape() {
                 )
             };
             let number = DispatchTokenElement::Slot(KType::NUMBER);
-            let shape = |elements: &[DispatchTokenElement]| {
+            let shape = |elements: &[DispatchTokenElement<KType>]| {
                 Some(
                     types
-                        .shape_type(scratch, &[], &[], elements, &[], KType::NUMBER)
-                        .handle,
+                        .shape_type(scratch, elements, &[], KType::NUMBER)
+                        .into(),
                 )
             };
             let twice = registered(fixture, activation, "twice");
@@ -130,15 +130,13 @@ fn a_function_born_for_a_registration_carries_its_shape() {
                 types
                     .function_type(
                         scratch,
-                        &[],
-                        &[],
                         &[
                             (fixture.name("left"), KType::NUMBER),
                             (fixture.name("right"), KType::NUMBER)
                         ],
                         KType::NUMBER
                     )
-                    .handle
+                    .into()
             );
             let f = callable(fixture, activation, "f");
             assert_eq!(f.function().expect("a function").registered_shape(), None);
@@ -178,8 +176,6 @@ fn a_bare_definition_binds_its_function_to_its_registration_slot() {
                 types
                     .shape_type(
                         scratch,
-                        &[],
-                        &[],
                         &[
                             DispatchTokenElement::Keyword(keyword),
                             DispatchTokenElement::Slot(KType::NUMBER)
@@ -187,7 +183,7 @@ fn a_bare_definition_binds_its_function_to_its_registration_slot() {
                         &[],
                         KType::NUMBER
                     )
-                    .handle
+                    .into()
             );
             assert_eq!(
                 registered.parameters,
@@ -500,7 +496,12 @@ fn a_container_and_the_function_that_captures_it_share_a_knot() {
             };
             assert!(a.member().knot() == f.member().knot());
             assert!(follow(a, list.cells()[0]) == f);
-            assert_eq!(list.ktype(), fixture.types.list(f.ktype()));
+            assert_eq!(
+                list.ktype(),
+                fixture
+                    .types
+                    .list(f.ktype().as_type().expect("`f` is unquantified"))
+            );
             let Link::Edge(edge) = f
                 .function()
                 .expect("a function")

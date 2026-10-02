@@ -21,8 +21,8 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredGroup, FoldDirection, KKind, KType, RecursiveGroupWindow, ReductionMode,
-    RelativeSchema, SchemaDraft, SigOrigin, TypeRegistry,
+    DeclaredGroup, DeclaredType, FoldDirection, KKind, KType, Parametric, RecursiveGroupWindow,
+    ReductionMode, RelativeSchema, SchemaDraft, SigOrigin, TypeRegistry,
 };
 
 use super::expression::{Elaborator, Fellow, Groups};
@@ -133,7 +133,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
         };
         match member.kind {
             Declared::NewType { repr } => {
-                let repr = elaborator.part(repr, &TOP)?;
+                let repr = closed(types, elaborator.part(repr, &TOP)?);
                 sealed = window.fill_member(index, RelativeSchema::NewType(repr), types, scratch);
                 index += 1;
             }
@@ -150,7 +150,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 params: [],
             } => {
                 for (_, payload) in variants {
-                    let payload = elaborator.part(payload, &TOP)?;
+                    let payload = closed(types, elaborator.part(payload, &TOP)?);
                     sealed =
                         window.fill_member(index, RelativeSchema::NewType(payload), types, scratch);
                     index += 1;
@@ -211,6 +211,15 @@ const TOP: Groups<'static> = Groups {
     bounds: &[],
     outer: None,
 };
+
+/// Why a declared type is concrete: its part reads under no `FOR ALL` group and no head
+/// parameter, and a name a run binds is unknown where a declaration is typed at load.
+const DECLARED: &str = "a declared type reads no variable";
+
+/// A declared type, read under [`TOP`] with no head parameter in reach: concrete.
+fn closed(types: &TypeRegistry<'_>, declared: Parametric) -> KType {
+    types.concrete(declared).expect(DECLARED)
+}
 
 /// One member of a component, read off its declaration node before anything is elaborated.
 struct Declaration<'graph, 'x> {
@@ -341,7 +350,7 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
             binder: Cell::new(false),
         };
         match self.kind {
-            Declared::Alias(rhs) => elaborator.part(rhs, &TOP),
+            Declared::Alias(rhs) => Ok(closed(types, elaborator.part(rhs, &TOP)?)),
             Declared::Signature { group, body } => {
                 let mut heads = BumpVec::new_in(scratch);
                 signature_type(&elaborator, group, body, self.site, &mut heads)
@@ -351,8 +360,9 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
     }
 }
 
-/// A bodyless keyworded head's shape under one of its keys, by the head's site.
-pub(super) type HeadShape = (Site, Which, KType);
+/// A bodyless keyworded head's shape under one of its keys, by the head's site: a shape over the
+/// signature's head parameters, or a quantified head's scheme.
+pub(super) type HeadShape = (Site, Which, DeclaredType<Parametric>);
 
 /// The shape of each bodyless keyworded head of the signature the `SIG` `node` declares, by the
 /// head's site and which of its keys the shape is under — the shapes the signature holds, over its
@@ -458,14 +468,14 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
     let types = elaborator.types;
     let mut draft = SchemaDraft::new(scratch);
     draft.origin = SigOrigin::Declared;
-    let mut locals: BumpVec<'_, (TypeSymbol, KType)> = BumpVec::new_in(scratch);
+    let mut locals: BumpVec<'_, (TypeSymbol, Parametric)> = BumpVec::new_in(scratch);
     if let Some(group) = group {
         let group = elaborator.group(group, &TOP)?;
         for (index, (name, bound)) in group.names.iter().zip(&group.bounds).enumerate() {
             if group.names[..index].contains(name) {
                 return Err(unsupported);
             }
-            let handle = types.parameter(*name, *bound, None);
+            let handle = types.head_parameter(*name, *bound);
             draft.insert_parameter(*name, handle);
             locals.push((*name, handle));
         }
@@ -521,12 +531,12 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
                     return Err(unsupported);
                 };
                 member.binder.set(true);
-                let handle = member.part(type_parts[0].ok_or(unsupported)?, &TOP)?;
+                let handle = member.part_declared(type_parts[0].ok_or(unsupported)?, &TOP)?;
                 draft.insert_value_slot(*name, handle);
             }
             BuiltinShapeId::ExpressionHead | BuiltinShapeId::QuantifiedExpressionHead => {
                 member.binder.set(true);
-                let shape = member.node(site, node, &TOP)?;
+                let shape = member.node_declared(site, node, &TOP)?;
                 heads.push((site, Which::Only, shape));
                 draft.push_keyworded(shape);
             }

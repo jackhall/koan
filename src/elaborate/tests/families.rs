@@ -4,7 +4,9 @@
 //! `Never` builtin, so expected applications are built here.
 
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{KKind, KType, NodeSchema, TypeNode, is_subtype_of};
+use crate::type_lattice::{
+    KKind, KType, NodeSchema, Parametric, TypeHandle, TypeNode, is_subtype_of,
+};
 use crate::values::construction;
 
 use super::super::{builtin_error, builtin_result};
@@ -24,7 +26,10 @@ fn variant(program: &Program<'_, '_, '_>, binder: &str, tag: &str) -> KType {
 }
 
 /// A family member's representation and parameter names.
-fn family<'p>(program: &Program<'p, '_, '_>, handle: KType) -> (Option<KType>, &'p [TypeSymbol]) {
+fn family<'p>(
+    program: &Program<'p, '_, '_>,
+    handle: KType,
+) -> (Option<Parametric>, &'p [TypeSymbol]) {
     match program.types.node(handle) {
         TypeNode::SetMember {
             kind: KKind::TypeConstructor,
@@ -40,11 +45,11 @@ fn family<'p>(program: &Program<'p, '_, '_>, handle: KType) -> (Option<KType>, &
 }
 
 /// `constructor` applied to the named arguments.
-fn applied(
+fn applied<H: TypeHandle>(
     program: &Program<'_, '_, '_>,
     constructor: KType,
-    arguments: &[(&str, KType)],
-) -> KType {
+    arguments: &[(&str, H)],
+) -> H {
     let arguments: Vec<_> = arguments
         .iter()
         .map(|(name, ktype)| (BinderSymbol::Type(program.type_name(name)), *ktype))
@@ -55,7 +60,7 @@ fn applied(
 }
 
 /// The quantifier a family's representation reads for its parameter `name`.
-fn parameter(program: &Program<'_, '_, '_>, params: &[TypeSymbol], name: &str) -> KType {
+fn parameter(program: &Program<'_, '_, '_>, params: &[TypeSymbol], name: &str) -> Parametric {
     let index = params
         .iter()
         .position(|param| *param == program.type_name(name))

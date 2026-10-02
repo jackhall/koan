@@ -8,7 +8,7 @@
 //! may also answer a rigid variable standing for a type a run binds, or that it cannot know.
 
 use crate::scope::{Activation, ActivationView, BodyShape, Coordinate};
-use crate::type_lattice::KType;
+use crate::type_lattice::{KType, Parametric};
 use crate::values::{KnottedFamily, Value};
 
 /// What a reader answers for the binding at a coordinate.
@@ -16,8 +16,8 @@ use crate::values::{KnottedFamily, Value};
 pub enum TypeAt {
     /// It holds this type.
     Type(KType),
-    /// A run binds it: this rigid variable stands for its type.
-    Rigid(KType),
+    /// A run binds it: this lexical variable stands for its type.
+    Rigid(Parametric),
     /// It holds something other than a type.
     NotAType,
     /// This reader cannot know it before the program runs.

@@ -24,8 +24,8 @@ use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    FitsFailure, KType, Members, SchemaDraft, SigSchema, TypeNode, TypeRegistry, fits_application,
-    member as bound_member, substitute_parameters,
+    FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode, TypeRegistry,
+    fits_application, member as bound_member, substitute_parameters,
 };
 use crate::values::{TypeValue, Value};
 
@@ -68,9 +68,16 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
-    let (declared, pins) = match types.node(signature) {
-        TypeNode::Signature { .. } => (signature, &[][..]),
-        TypeNode::SignatureApply { signature, pins } => (signature, pins.as_slice()),
+    let mut pins = BumpVec::new_in(scratch);
+    let declared = match types.node(signature) {
+        TypeNode::Signature { .. } => signature,
+        TypeNode::SignatureApply {
+            signature,
+            pins: pinned,
+        } => {
+            pins.extend(pinned.iter());
+            signature
+        }
         _ => return Err(Unascribable::NotASignature(signature)),
     };
     let sig = layout::schema_of(declared, types).ok_or(Unascribable::NotASignature(signature))?;
@@ -79,16 +86,37 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
     let from = if sig.is_empty() {
         Members::EMPTY
     } else {
-        fits_application(types, scratch, held, declared, pins).map_err(Unascribable::Unsatisfied)?
+        let solution = fits_application(types, scratch, held, declared, &pins)
+            .map_err(Unascribable::Unsatisfied)?;
+        solved(types, scratch, solution)
     };
     let to = match mode {
         // Transparent: the parameters keep the source's bindings, so every slot type reads the
         // same either side and the coercion walk stops at its first comparison.
         Ascription::Transparent => from,
-        Ascription::Opaque => mint(&sig, from, pins, types, scratch),
+        Ascription::Opaque => mint(&sig, from, &pins, types, scratch),
     };
     let view = view_signature(&sig, to, types, scratch);
     build(writer, source, sig, view, from, to, types, scratch)
+}
+
+/// What *fits* solved a module's own signature against an application to. A module's
+/// self-signature declares no head parameter, so no offered stand-in reaches the solution, and
+/// each parameter is solved to a concrete type.
+pub(super) fn solved<'x>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'x>,
+    solution: Members<'_, TypeSymbol, Parametric>,
+) -> Members<'x, TypeSymbol, KType> {
+    Members::from_pairs(
+        scratch,
+        solution.iter().map(|(name, solved)| {
+            let solved = types
+                .concrete(*solved)
+                .expect("a module's signature offers no stand-in to what fits solves");
+            (*name, solved)
+        }),
+    )
 }
 
 /// Build the view's member run in layout order and lay the node down. `from` and `to` are what the
@@ -104,8 +132,8 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     source: Knotted<'graph, 'cell>,
     sig: SigSchema<'run>,
     view: KType,
-    from: Members<'x, TypeSymbol>,
-    to: Members<'x, TypeSymbol>,
+    from: Members<'x, TypeSymbol, KType>,
+    to: Members<'x, TypeSymbol, KType>,
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
@@ -129,7 +157,11 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
         members.push(member);
     }
     // Then the type members, at the handles the view's own schema fixed them to.
+    // A view's signature is a module's: every type member is fixed to a concrete type.
     for (_, handle) in layout::type_members(&view_schema, scratch).iter().copied() {
+        let handle = types
+            .concrete(handle)
+            .expect("a view's type members are bound");
         members.push(Value::Type(TypeValue::new(writer, handle, types)));
     }
     Ok(Knotted::of(Module::tie(writer, view, &members), 0))
@@ -140,11 +172,11 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
 /// bound the declaration gives it — and each pinned one at what `from` holds for it, its pin.
 fn mint<'x>(
     sig: &SigSchema<'_>,
-    from: Members<'_, TypeSymbol>,
+    from: Members<'_, TypeSymbol, KType>,
     pins: &[(BinderSymbol, KType)],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
-) -> Members<'x, TypeSymbol> {
+) -> Members<'x, TypeSymbol, KType> {
     let nonce = ScopeId::next();
     Members::from_pairs(
         scratch,
@@ -156,7 +188,7 @@ fn mint<'x>(
                 bound_member(from, *name).expect("fits binds every parameter")
             } else {
                 let bound = types.node(*declared).rigid_bound().unwrap_or(KType::ANY);
-                types.parameter(*name, bound, Some(nonce))
+                types.carrier(*name, bound, nonce)
             };
             (*name, to)
         }),
@@ -168,11 +200,10 @@ fn mint<'x>(
 /// signature is a module's, so it has no parameters, and a view lays out no keyworded member.
 pub(super) fn view_signature(
     sig: &SigSchema<'_>,
-    to: Members<'_, TypeSymbol>,
+    to: Members<'_, TypeSymbol, KType>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
-    let read = |declared: KType| substitute_parameters(types, scratch, declared, to);
     let mut draft = SchemaDraft::new(scratch);
     for (name, _) in sig.parameters.iter().copied() {
         draft.insert_manifest(
@@ -181,10 +212,10 @@ pub(super) fn view_signature(
         );
     }
     for (name, fixed) in sig.manifest_members.iter().copied() {
-        draft.insert_manifest(name, read(fixed));
+        draft.insert_manifest(name, substitute_parameters(types, scratch, fixed, to));
     }
     for (name, declared) in sig.value_slots.iter().copied() {
-        draft.insert_value_slot(name, read(declared));
+        draft.insert_value_slot(name, substitute_parameters(types, scratch, declared, to));
     }
     types.signature(scratch, draft)
 }

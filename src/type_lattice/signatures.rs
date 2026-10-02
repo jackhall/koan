@@ -12,7 +12,7 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol};
 
-use super::handle::KType;
+use super::handle::{Handle, TypeHandle, wrap};
 use super::node::TypeNode;
 use super::record::Record;
 use super::registry::TypeRegistry;
@@ -21,24 +21,24 @@ use super::registry::TypeRegistry;
 /// parameters by name. Empty pins for the signature on its own.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Application<'run> {
-    pub(super) signature: KType,
-    pub(super) pins: &'run [(BinderSymbol, KType)],
+    pub(super) signature: Handle,
+    pub(super) pins: &'run [(BinderSymbol, Handle)],
 }
 
 impl Application<'_> {
     /// The handle this application interns to: the signature itself for no pins.
-    pub(super) fn handle(self, types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>) -> KType {
-        types.signature_apply(scratch, self.signature, self.pins)
+    pub(super) fn handle(self, types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>) -> Handle {
+        types.signature_apply(scratch, wrap(self.signature), self.pins)
     }
 
     /// The type `self` pins the parameter named `name` to, if it pins it.
-    pub(super) fn pin(self, name: Symbol) -> Option<KType> {
-        Record::over(self.pins).get(name)
+    pub(super) fn pin(self, name: Symbol) -> Option<Handle> {
+        Record::<Handle>::over(self.pins).get(name)
     }
 }
 
 /// Whether `kt` is a signature type — one of the three nodes [`applications`] reads.
-pub(super) fn is_signature_type(types: &TypeRegistry<'_>, kt: KType) -> bool {
+pub(super) fn is_signature_type(types: &TypeRegistry<'_>, kt: Handle) -> bool {
     matches!(
         types.node(kt),
         TypeNode::Signature { .. }
@@ -52,11 +52,11 @@ pub(super) fn is_signature_type(types: &TypeRegistry<'_>, kt: KType) -> bool {
 pub(super) fn applications<'run, 's>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
-    kt: KType,
+    kt: Handle,
 ) -> Option<BumpVec<'s, Application<'run>>> {
     let mut set = BumpVec::new_in(scratch);
-    let mut one = |kt: KType| match types.node(kt) {
-        TypeNode::Signature { .. } if kt == KType::EMPTY_SIGNATURE => true,
+    let mut one = |kt: Handle| match types.node(kt) {
+        TypeNode::Signature { .. } if kt == Handle::EMPTY_SIGNATURE => true,
         TypeNode::Signature { .. } => {
             set.push(Application {
                 signature: kt,
@@ -66,8 +66,8 @@ pub(super) fn applications<'run, 's>(
         }
         TypeNode::SignatureApply { signature, pins } => {
             set.push(Application {
-                signature,
-                pins: pins.as_slice(),
+                signature: signature.raw(),
+                pins: pins.raw(),
             });
             true
         }
@@ -75,7 +75,7 @@ pub(super) fn applications<'run, 's>(
     };
     match types.node(kt) {
         TypeNode::SignatureMeet { members } => {
-            for member in members {
+            for member in members.iter() {
                 let read = one(*member);
                 debug_assert!(read, "a meet's members are applications");
             }
@@ -112,8 +112,8 @@ pub(super) fn applications_under(lower: &[Application<'_>], upper: &[Application
 pub(super) fn canonical_applications<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
-    members: &[KType],
-) -> BumpVec<'s, KType> {
+    members: &[Handle],
+) -> BumpVec<'s, Handle> {
     let mut all = BumpVec::new_in(scratch);
     for member in members {
         let set = applications(types, scratch, *member)

@@ -23,8 +23,8 @@ use crate::scope::{Candidate, Coordinate, IMPLICIT};
 use crate::scope::{ParameterBinding, Registered};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    KType, TypeRegistry, Verdict, admit_by_class, quantifier_bounds, satisfied_by, select_by_class,
-    shape_return, substitute_quantified,
+    DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, satisfied_by,
+    scheme_return, select_by_class, shape_return, substitute_quantified,
 };
 use crate::values::{List, Record, TypeValue, Value};
 
@@ -37,7 +37,7 @@ pub(super) enum Selection<'x, 'graph, 'here> {
     /// group order — empty for an unquantified one.
     Function {
         callee: KValue<'graph, 'here>,
-        registered: Registered<'here>,
+        registered: Registered<'here, KType>,
         solution: &'x [KType],
     },
     NoOverload,
@@ -48,7 +48,7 @@ pub(super) enum Selection<'x, 'graph, 'here> {
 #[derive(Clone, Copy)]
 struct Admitted<'x, 'graph, 'here> {
     callee: KValue<'graph, 'here>,
-    shape: KType,
+    shape: DeclaredType<KType>,
     solution: &'x [KType],
 }
 
@@ -66,7 +66,7 @@ pub(super) fn selected<'x, 'graph, 'here>(
         let Some(shape) = registered_shape(callee) else {
             return;
         };
-        let solution = if verdict == Verdict::Always && quantifier_bounds(types, shape).is_empty() {
+        let solution = if verdict == Verdict::Always && matches!(shape, DeclaredType::Type(_)) {
             Some(&[][..])
         } else {
             admit_by_class(types, scratch, shape, arguments)
@@ -98,8 +98,13 @@ pub(super) fn selected<'x, 'graph, 'here>(
     if admitted.is_empty() {
         return Selection::NoOverload;
     }
-    let mut shapes = BumpVec::with_capacity_in(admitted.len(), scratch);
-    shapes.extend(admitted.iter().map(|admitted| admitted.shape));
+    let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
+        BumpVec::with_capacity_in(admitted.len(), scratch);
+    shapes.extend(
+        admitted
+            .iter()
+            .map(|admitted| DeclaredType::<Parametric>::from(admitted.shape)),
+    );
     let survivors = select_by_class(types, scratch, &shapes);
     let builtin = |index: &usize| {
         admitted[*index]
@@ -153,7 +158,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
         .function()
         .and_then(|function| function.registered())
         .expect("a selected candidate is a builtin or a registration's function");
-    let solution = if quantifier_bounds(types, registered.shape).is_empty() {
+    let solution = if matches!(registered.shape, DeclaredType::Type(_)) {
         &[][..]
     } else {
         match admit_by_class(types, scratch, registered.shape, arguments) {
@@ -197,10 +202,10 @@ pub(super) fn agree<'graph, 'here>(
 
 /// The expression shape `candidate` is registered at: a builtin's, or a registration's function's.
 /// `None` for anything else a spread list holds.
-fn registered_shape(candidate: KValue<'_, '_>) -> Option<KType> {
+fn registered_shape(candidate: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
     let member = candidate.as_callable()?;
     match member.builtin() {
-        Some(builtin) => Some(builtin.ktype()),
+        Some(builtin) => Some(builtin.ktype().into()),
         None => member.function()?.registered_shape(),
     }
 }
@@ -210,7 +215,7 @@ fn registered_shape(candidate: KValue<'_, '_>) -> Option<KType> {
 pub(super) fn arguments<'graph, 'here>(
     types: &TypeRegistry<'_>,
     writer: Writer<'here>,
-    registered: Registered<'_>,
+    registered: Registered<'_, KType>,
     operands: &[Operand<'graph, 'here>],
     solution: &[KType],
     scratch: &Bump,
@@ -231,9 +236,9 @@ pub(super) fn arguments<'graph, 'here>(
             ));
         }
     }
-    for (name, index) in registered.quantifier_map {
-        let solved = TypeValue::new(writer, solution[*index], types);
-        fields.push((BinderSymbol::Type(*name), Value::Type(solved)));
+    for (name, index) in registered.quantifier_map.iter() {
+        let solved = TypeValue::new(writer, solution[index], types);
+        fields.push((BinderSymbol::Type(name), Value::Type(solved)));
     }
     Value::Record(Record::new(writer, &fields, types, scratch))
 }
@@ -242,18 +247,20 @@ pub(super) fn arguments<'graph, 'here>(
 /// type satisfying `contract` — so the evaluation owing the contract can hop to its frame.
 pub(super) fn keeps(
     types: &TypeRegistry<'_>,
-    shape: KType,
+    shape: DeclaredType<KType>,
     solution: &[KType],
     contract: Contract,
 ) -> bool {
     let scratch = Bump::new();
-    let Some(returns) = shape_return(shape, types) else {
-        return false;
+    let returns = match shape {
+        DeclaredType::Type(shape) => shape_return(shape, types),
+        // A run-time solution is concrete, and a scheme holds only its own group's variables.
+        DeclaredType::Scheme(scheme) => scheme_return(scheme, types).map(|returns| {
+            let returns = substitute_quantified(types, &scratch, returns, solution);
+            types
+                .concrete(returns)
+                .expect("a run-time scheme holds only its own group's variables")
+        }),
     };
-    let returns = if solution.is_empty() {
-        returns
-    } else {
-        substitute_quantified(types, &scratch, returns, solution)
-    };
-    satisfied_by(types, &scratch, contract.returns, returns)
+    returns.is_some_and(|returns| satisfied_by(types, &scratch, contract.returns, returns))
 }

@@ -113,7 +113,7 @@ fn ascribing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
         })
     };
     let types = program.types();
-    let module = read("m").ktype();
+    let module = read("m").concrete_ktype();
     let mover = read("Mover").as_type().expect("a type").handle();
     let verdict = match sig_fits(types, &Bump::new(), module, mover) {
         Ok(()) => String::from("satisfies"),

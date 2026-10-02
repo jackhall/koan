@@ -3,10 +3,10 @@
 
 use crate::program::Program;
 use crate::scope::{BodyShape, ShapeKind, Site, Static};
-use crate::type_lattice::{Interval, KType, quantifier_bounds, shape_slots};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
 
 use super::run;
-use super::statics::{body, let_narrowing, lexical, loaded, rendered, slot, top, upper};
+use super::statics::{body, interval, let_narrowing, lexical, loaded, rendered, top, upper};
 
 /// The body the registration of `shape` whose key leads with the keyword `lead` births.
 fn expressed<'graph>(
@@ -54,10 +54,7 @@ fn code<'graph>(shape: &'graph BodyShape<'graph>) -> &'graph BodyShape<'graph> {
 
 /// Whether the static type of the binder `name` in `shape` is exact.
 fn exact_in(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> bool {
-    shape
-        .binder_type(slot(program, shape, name))
-        .expect("the load typed the shape")
-        .is_exact()
+    interval(program, shape, name).is_exact()
 }
 
 /// Whether the static type of the top-level binder `name` of `source` is exact.
@@ -106,7 +103,9 @@ fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
             _ => panic!("`INNER` is rigid over `Elt`"),
         };
         let types = program.types();
-        assert!(quantifier_bounds(types, registered).is_empty());
+        let DeclaredType::Type(registered) = registered else {
+            panic!("an overload over an enclosing name binds no group of its own")
+        };
         assert_eq!(
             shape_slots(registered, types).collect::<Vec<_>>(),
             [lexical(program, 0, "Elt", KType::ANY)]
@@ -197,7 +196,7 @@ fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
                     .iter()
                     .map(|(_, typed)| *typed)
                     .collect::<Vec<_>>(),
-                [Interval::point(KType::NUMBER)]
+                [Interval::point(KType::NUMBER.into())]
             );
         },
     );
@@ -217,7 +216,7 @@ fn eval_is_its_declared_type() {
             code(program.shape())
                 .statement_type(0)
                 .map(|typed| typed.upper),
-            Some(KType::ANY),
+            Some(Parametric::from(KType::ANY)),
             "the code's own cell keeps the hole a `USING` may fill"
         );
     });

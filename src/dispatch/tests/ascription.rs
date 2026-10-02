@@ -9,13 +9,11 @@ use crate::scope::{BodyShape, Site};
 use crate::type_lattice::display_name;
 
 use super::run;
-use super::statics::{body, let_narrowing, loaded, slot};
+use super::statics::{body, interval, let_narrowing, loaded, slot};
 
 /// Both ends of the static type of the binder `name` in `shape`, rendered.
 pub(super) fn ends(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> (String, String) {
-    let typed = shape
-        .binder_type(slot(program, shape, name))
-        .expect("the load typed the shape");
+    let typed = interval(program, shape, name);
     let render = |handle| display_name(handle, program.types(), program.symbols()).to_string();
     (render(typed.lower), render(typed.upper))
 }

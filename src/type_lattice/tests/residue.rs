@@ -9,18 +9,19 @@ use crate::memory::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::digest::{TypeDigest, empty_schema_digest, node_digest};
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{Handle, KType, Parametric, TypeHandle};
 use crate::type_lattice::kind::KKind;
-use crate::type_lattice::lattice::{join, meet};
+use crate::type_lattice::lattice::{join, meet_through_variables as meet};
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::order::{fits, is_subtype_of};
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::{Relation, TypeRegistry};
-use crate::type_lattice::render::display_name;
+use crate::type_lattice::render::display_handle;
+use crate::type_lattice::run::Elements;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin, shape_slots};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
-use crate::type_lattice::sig_relations::sig_fits;
-use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
+use crate::type_lattice::typed;
+use crate::type_lattice::unify::{Collector, UnifyFailure, admits};
 use crate::type_lattice::walk::Variance;
 
 /// No law: a handle that names no interned node is a bug in whoever minted it, not a value the
@@ -30,8 +31,8 @@ use crate::type_lattice::walk::Variance;
 fn reading_an_uninterned_handle_panics() {
     let bump = Bump::new();
     let types = TypeRegistry::in_region(&bump);
-    let stranger = KType::from_digest(TypeDigest(0xdead_beef));
-    types.with_node(stranger, |_| ());
+    let stranger = Handle::from_digest(TypeDigest(0xdead_beef));
+    types.node(stranger);
 }
 
 /// No law: `union_of` of nothing has no operand for a property to quantify over. The empty union is
@@ -41,10 +42,10 @@ fn a_union_of_nothing_is_never() {
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    assert_eq!(types.union_of(region, &[]), KType::NEVER);
+    assert_eq!(types.union_of::<Handle>(region, &[]), Handle::NEVER);
     assert_eq!(
-        types.union_of(region, &[KType::NEVER, KType::NEVER]),
-        KType::NEVER
+        types.union_of(region, &[Handle::NEVER, Handle::NEVER]),
+        Handle::NEVER
     );
 }
 
@@ -75,10 +76,10 @@ fn a_twice_used_variable_takes_the_join() {
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
-    let element = types.quantified(0, KType::ANY);
+    let element = types.quantified(0, KType::ANY).raw();
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let shape = types
-        .shape_type(
+        .shape_group(
             region,
             &[name],
             &[KType::ANY],
@@ -88,11 +89,11 @@ fn a_twice_used_variable_takes_the_join() {
                 DispatchTokenElement::Slot(element),
             ],
             &[],
-            KType::NULL,
+            KType::NULL.raw(),
         )
-        .handle;
-    let slots: Vec<KType> = shape_slots(shape, &types).collect();
-    let mixed = types.union_of(region, &[KType::NUMBER, KType::STR]);
+        .0;
+    let slots: Vec<Handle> = shape_slots(shape, &types).collect();
+    let mixed = types.union_of(region, &[KType::NUMBER.raw(), KType::STR.raw()]);
     // Two arguments of one type solve to that type; any two others to their join, whether or not
     // either lies under the other.
     assert_eq!(
@@ -101,9 +102,9 @@ fn a_twice_used_variable_takes_the_join() {
             region,
             &slots,
             &[KType::ANY],
-            &[KType::NUMBER, KType::NUMBER]
+            &[KType::NUMBER.raw(), KType::NUMBER.raw()]
         ),
-        Ok(vec![KType::NUMBER])
+        Ok(vec![KType::NUMBER.raw()])
     );
     assert_eq!(
         solve_over(
@@ -111,7 +112,7 @@ fn a_twice_used_variable_takes_the_join() {
             region,
             &slots,
             &[KType::ANY],
-            &[KType::NUMBER, mixed]
+            &[KType::NUMBER.raw(), mixed]
         ),
         Ok(vec![mixed])
     );
@@ -121,7 +122,7 @@ fn a_twice_used_variable_takes_the_join() {
             region,
             &slots,
             &[KType::ANY],
-            &[KType::NUMBER, KType::STR]
+            &[KType::NUMBER.raw(), KType::STR.raw()]
         ),
         Ok(vec![mixed])
     );
@@ -136,22 +137,21 @@ fn a_variable_reached_from_above_takes_the_meet() {
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
-    let takes = |t: KType| {
-        types
-            .function_type(region, &[], &[], &[(x, t)], KType::NULL)
-            .handle
-    };
-    let position = takes(types.quantified(0, KType::ANY));
+    let takes = |t: Handle| types.function_type(region, &[(x, t)], KType::NULL.raw());
+    let position = takes(types.quantified(0, KType::ANY).raw());
     let slots = [position, position];
-    let solve = |a: KType, b: KType| {
+    let solve = |a: Handle, b: Handle| {
         solve_over(&types, region, &slots, &[KType::ANY], &[takes(a), takes(b)])
     };
-    assert_eq!(solve(KType::NUMBER, KType::STR), Ok(vec![KType::NEVER]));
-    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    let number_or_bool = types.union_of(region, &[KType::NUMBER, KType::BOOL]);
+    assert_eq!(
+        solve(KType::NUMBER.raw(), KType::STR.raw()),
+        Ok(vec![Handle::NEVER])
+    );
+    let number_or_str = types.union_of(region, &[KType::NUMBER.raw(), KType::STR.raw()]);
+    let number_or_bool = types.union_of(region, &[KType::NUMBER.raw(), KType::BOOL.raw()]);
     assert_eq!(
         solve(number_or_str, number_or_bool),
-        Ok(vec![KType::NUMBER])
+        Ok(vec![KType::NUMBER.raw()])
     );
 }
 
@@ -164,31 +164,27 @@ fn a_solve_fails_only_where_its_pair_denotes_nothing() {
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
-    let variable = types.quantified(0, KType::NUMBER);
+    let variable = types.quantified(0, KType::NUMBER).raw();
     assert_eq!(
         solve_over(
             &types,
             region,
             &[variable, variable],
             &[KType::NUMBER],
-            &[KType::NUMBER, KType::STR]
+            &[KType::NUMBER.raw(), KType::STR.raw()]
         ),
         Err(Some(0))
     );
-    let takes = |t: KType| {
-        types
-            .function_type(region, &[], &[], &[(x, t)], KType::NULL)
-            .handle
-    };
+    let takes = |t: Handle| types.function_type(region, &[(x, t)], KType::NULL.raw());
     assert_eq!(
         solve_over(
             &types,
             region,
             &[takes(variable)],
             &[KType::NUMBER],
-            &[takes(KType::ANY)]
+            &[takes(Handle::ANY)]
         ),
-        Ok(vec![KType::NUMBER])
+        Ok(vec![KType::NUMBER.raw()])
     );
 }
 
@@ -204,22 +200,22 @@ fn fits_closes_through_a_joined_instance() {
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
-    let takes = |group: &[TypeSymbol], first: KType, second: KType| {
+    let takes = |group: &[TypeSymbol], first: Handle, second: Handle| {
         types
-            .function_type(
+            .function_group(
                 region,
                 group,
                 &[KType::ANY][..group.len()],
                 &[(x, first), (y, second)],
-                KType::NULL,
+                KType::NULL.raw(),
             )
-            .handle
+            .0
     };
-    let variable = types.quantified(0, KType::ANY);
+    let variable = types.quantified(0, KType::ANY).raw();
     let generic = takes(&[elt], variable, variable);
-    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    let number_or_str = types.union_of(region, &[KType::NUMBER.raw(), KType::STR.raw()]);
     let joined = takes(&[], number_or_str, number_or_str);
-    let split = takes(&[], KType::NUMBER, KType::STR);
+    let split = takes(&[], KType::NUMBER.raw(), KType::STR.raw());
     assert!(fits(&types, region, generic, joined));
     assert!(is_subtype_of(&types, region, joined, split));
     assert!(fits(&types, region, generic, split));
@@ -232,13 +228,13 @@ fn fits_closes_through_a_joined_instance() {
 fn solve_over(
     types: &TypeRegistry<'_>,
     region: &Bump,
-    slots: &[KType],
+    slots: &[Handle],
     bounds: &[KType],
-    arguments: &[KType],
-) -> Result<Vec<KType>, Option<usize>> {
-    let mut collector = Collector::new(region, bounds);
+    arguments: &[Handle],
+) -> Result<Vec<Handle>, Option<usize>> {
+    let mut collector = Collector::<Handle>::new(region, bounds);
     for (slot, argument) in slots.iter().zip(arguments) {
-        if admits_with(
+        if admits(
             types,
             region,
             *slot,
@@ -271,9 +267,9 @@ fn a_binder_keeps_every_variable_it_declares() {
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
-    let head = |names: &[TypeSymbol], bounds: &[KType], slot: KType, ret: KType| {
+    let head = |names: &[TypeSymbol], bounds: &[KType], slot: Handle, ret: Handle| {
         types
-            .shape_type(
+            .shape_group(
                 region,
                 names,
                 bounds,
@@ -284,20 +280,23 @@ fn a_binder_keeps_every_variable_it_declares() {
                 &[],
                 ret,
             )
-            .handle
+            .0
     };
     let in_slot = head(
         &[elt],
         &[KType::NUMBER],
-        types.quantified(0, KType::NUMBER),
-        KType::NULL,
+        types.quantified(0, KType::NUMBER).raw(),
+        KType::NULL.raw(),
     );
-    assert_ne!(in_slot, head(&[], &[], KType::NUMBER, KType::NULL));
+    assert_ne!(
+        in_slot,
+        head(&[], &[], KType::NUMBER.raw(), KType::NULL.raw())
+    );
     let renamed = head(
         &[other],
         &[KType::NUMBER],
-        types.quantified(0, KType::NUMBER),
-        KType::NULL,
+        types.quantified(0, KType::NUMBER).raw(),
+        KType::NULL.raw(),
     );
     assert_eq!(in_slot, renamed, "the names are render-only");
     let TypeNode::ExpressionShape { bounds, .. } = types.node(in_slot) else {
@@ -307,31 +306,31 @@ fn a_binder_keeps_every_variable_it_declares() {
     let in_return = head(
         &[elt],
         &[KType::NUMBER],
-        KType::STR,
-        types.quantified(0, KType::NUMBER),
+        KType::STR.raw(),
+        types.quantified(0, KType::NUMBER).raw(),
     );
-    assert_ne!(in_return, head(&[], &[], KType::STR, KType::NEVER));
+    assert_ne!(in_return, head(&[], &[], KType::STR.raw(), Handle::NEVER));
 
     // `Other` is named nowhere. Declared first or second, it is numbered after `Elt`.
     let first = head(
         &[elt, other],
         &[KType::NUMBER, KType::STR],
-        types.quantified(0, KType::NUMBER),
-        KType::NULL,
+        types.quantified(0, KType::NUMBER).raw(),
+        KType::NULL.raw(),
     );
     let second = head(
         &[other, elt],
         &[KType::STR, KType::NUMBER],
-        types.quantified(1, KType::NUMBER),
-        KType::NULL,
+        types.quantified(1, KType::NUMBER).raw(),
+        KType::NULL.raw(),
     );
     assert_eq!(first, second);
     assert_ne!(first, in_slot);
     let other_bound = head(
         &[elt, other],
         &[KType::NUMBER, KType::BOOL],
-        types.quantified(0, KType::NUMBER),
-        KType::NULL,
+        types.quantified(0, KType::NUMBER).raw(),
+        KType::NULL.raw(),
     );
     assert_ne!(
         first, other_bound,
@@ -352,13 +351,13 @@ fn a_shape_with_no_group_is_transparent() {
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
-    let shape = |names: &[TypeSymbol], slots: &[KType], ret: KType| {
+    let shape = |names: &[TypeSymbol], slots: &[Handle], ret: Handle| {
         let mut run = Vec::new();
         for slot in slots {
             run.push(DispatchTokenElement::Keyword(keyword));
             run.push(DispatchTokenElement::Slot(*slot));
         }
-        types.shape_type(
+        types.shape_group(
             region,
             names,
             &vec![KType::ANY; names.len()],
@@ -368,24 +367,32 @@ fn a_shape_with_no_group_is_transparent() {
         )
     };
     // `Other`, declared second, is named first: inside the group-free slot.
-    let inner = shape(&[], &[types.quantified(1, KType::ANY)], KType::NULL).handle;
+    let inner = shape(
+        &[],
+        &[types.quantified(1, KType::ANY).raw()],
+        KType::NULL.raw(),
+    )
+    .0;
     assert!(!types.node(inner).binds_quantifiers());
     let scheme = shape(
         &[elt, other],
-        &[inner, types.quantified(0, KType::ANY)],
-        KType::NULL,
+        &[inner, types.quantified(0, KType::ANY).raw()],
+        KType::NULL.raw(),
     );
-    assert_eq!(scheme.quantifier_map, &[1, 0]);
-    let first = shape_slots(scheme.handle, &types).next().expect("a slot");
+    assert_eq!(scheme.1, &[1, 0]);
+    let first = shape_slots(scheme.0, &types).next().expect("a slot");
     let opened = crate::type_lattice::substitute::substitute_quantified(
         &types,
         region,
         first,
-        &[KType::NUMBER, KType::STR],
+        &[KType::NUMBER.raw(), KType::STR.raw()],
     );
-    assert_eq!(opened, shape(&[], &[KType::NUMBER], KType::NULL).handle);
     assert_eq!(
-        display_name(scheme.handle, &types, &symbols).to_string(),
+        opened,
+        shape(&[], &[KType::NUMBER.raw()], KType::NULL.raw()).0
+    );
+    assert_eq!(
+        display_handle(scheme.0, &types, &symbols).to_string(),
         ":(EXPR FOR ALL #[Other Elt] #(PURE _ :(EXPR #(PURE _ :Other) -> Null) PURE _ :Elt) -> Null)"
     );
 }
@@ -400,9 +407,9 @@ fn a_record_is_order_blind_in_identity_and_ordered_in_presentation() {
     let types = TypeRegistry::in_region(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
-    let forwards = [(x, KType::NUMBER), (y, KType::STR)];
-    let backwards = [(y, KType::STR), (x, KType::NUMBER)];
-    assert_eq!(Record::over(&forwards), Record::over(&backwards));
+    let forwards = [(x, KType::NUMBER.raw()), (y, KType::STR.raw())];
+    let backwards = [(y, KType::STR.raw()), (x, KType::NUMBER.raw())];
+    assert_eq!(Record::<Handle>::over(&forwards), Record::over(&backwards));
     let record = types.record(region, &forwards);
     assert_eq!(record, types.record(region, &backwards));
     let TypeNode::Record { fields } = types.node(record) else {
@@ -425,8 +432,8 @@ fn width_runs_the_way_each_arm_declares() {
     let types = TypeRegistry::in_region(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
-    let wide = types.record(region, &[(x, KType::NUMBER), (y, KType::STR)]);
-    let narrow = types.record(region, &[(x, KType::NUMBER)]);
+    let wide = types.record(region, &[(x, KType::NUMBER.raw()), (y, KType::STR.raw())]);
+    let narrow = types.record(region, &[(x, KType::NUMBER.raw())]);
     assert!(
         is_subtype_of(&types, region, wide, narrow),
         "records are width-superset"
@@ -435,18 +442,12 @@ fn width_runs_the_way_each_arm_declares() {
     assert_eq!(meet(&types, region, wide, narrow), wide);
     assert_eq!(join(&types, region, wide, narrow), narrow);
 
-    let few = types
-        .function_type(region, &[], &[], &[(x, KType::NUMBER)], KType::NULL)
-        .handle;
-    let many = types
-        .function_type(
-            region,
-            &[],
-            &[],
-            &[(x, KType::NUMBER), (y, KType::STR)],
-            KType::NULL,
-        )
-        .handle;
+    let few = types.function_type(region, &[(x, KType::NUMBER.raw())], KType::NULL.raw());
+    let many = types.function_type(
+        region,
+        &[(x, KType::NUMBER.raw()), (y, KType::STR.raw())],
+        KType::NULL.raw(),
+    );
     assert!(
         is_subtype_of(&types, region, few, many),
         "a function subtype asks for no name the supertype does not",
@@ -467,43 +468,41 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
-    let variable = types.quantified(0, KType::ANY);
+    let variable = types.quantified(0, KType::ANY).raw();
 
     // `FN FOR ALL (Elt) :{x :Elt} -> Elt` under either spelling, and with the fields in either
     // written order, is one handle: the names are render-only and the record is order-blind.
     let identity = |group, param| {
         types
-            .function_type(region, group, &[KType::ANY], &[(x, param)], param)
-            .handle
+            .function_group(region, group, &[KType::ANY], &[(x, param)], param)
+            .0
     };
     let (as_elt, as_other) = ([elt], [other]);
     assert_eq!(identity(&as_elt, variable), identity(&as_other, variable));
     let forward = types
-        .function_type(
+        .function_group(
             region,
             &[elt],
             &[KType::ANY],
-            &[(x, variable), (y, KType::STR)],
+            &[(x, variable), (y, KType::STR.raw())],
             variable,
         )
-        .handle;
+        .0;
     let reversed = types
-        .function_type(
+        .function_group(
             region,
             &[elt],
             &[KType::ANY],
-            &[(y, KType::STR), (x, variable)],
+            &[(y, KType::STR.raw()), (x, variable)],
             variable,
         )
-        .handle;
+        .0;
     assert_eq!(forward, reversed);
 
     // *Fits* instantiates: the quantified identity fits every monomorphic identity, and a quantified
     // function that promises less about its return. The order relates neither pair.
     let quantified_identity = identity(&as_elt, variable);
-    let on_numbers = types
-        .function_type(region, &[], &[], &[(x, KType::NUMBER)], KType::NUMBER)
-        .handle;
+    let on_numbers = types.function_type(region, &[(x, KType::NUMBER.raw())], KType::NUMBER.raw());
     assert!(fits(&types, region, quantified_identity, on_numbers));
     assert!(!is_subtype_of(
         &types,
@@ -518,8 +517,8 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         quantified_identity
     ));
     let to_any = types
-        .function_type(region, &[elt], &[KType::ANY], &[(x, variable)], KType::ANY)
-        .handle;
+        .function_group(region, &[elt], &[KType::ANY], &[(x, variable)], Handle::ANY)
+        .0;
     assert!(fits(&types, region, quantified_identity, to_any));
     assert!(!is_subtype_of(&types, region, quantified_identity, to_any));
 }
@@ -539,36 +538,34 @@ fn each_node_kind_lies_under_its_family_top() {
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let tops = [KType::ANY_VALUE, KType::ANY_TYPE, KType::ANY_CODE];
-    let under = |ktype: KType| -> Vec<KType> {
+    let tops = [Handle::ANY_VALUE, Handle::ANY_TYPE, Handle::ANY_CODE];
+    let under = |ktype: Handle| -> Vec<Handle> {
         tops.into_iter()
             .filter(|top| is_subtype_of(&types, region, ktype, *top))
             .collect()
     };
 
     let values = [
-        KType::NUMBER,
-        KType::STR,
-        KType::BOOL,
-        KType::NULL,
-        KType::LIST_OF_ANY,
-        KType::DICT_ANY_ANY,
-        types.record(region, &[(x, KType::ANY)]),
-        types
-            .function_type(region, &[], &[], &[(x, KType::ANY)], KType::ANY)
-            .handle,
+        KType::NUMBER.raw(),
+        KType::STR.raw(),
+        KType::BOOL.raw(),
+        KType::NULL.raw(),
+        KType::LIST_OF_ANY.raw(),
+        KType::DICT_ANY_ANY.raw(),
+        types.record(region, &[(x, Handle::ANY)]),
+        types.function_type(region, &[(x, Handle::ANY)], Handle::ANY),
         types.intern(
             region,
             TypeNode::ExpressionShape {
                 quantifiers: &[],
                 bounds: &[],
-                elements: &elements,
+                elements: Elements::over(&elements),
                 classes: &[],
-                ret: KType::NUMBER,
+                ret: KType::NUMBER.raw(),
             },
         ),
-        types.constructor_apply(region, KType::NUMBER, &[(x, KType::ANY)]),
-        KType::EMPTY_SIGNATURE,
+        types.constructor_apply(region, KType::NUMBER, &[(x, Handle::ANY)]),
+        Handle::EMPTY_SIGNATURE,
         types.intern(
             region,
             TypeNode::SetMember {
@@ -580,29 +577,29 @@ fn each_node_kind_lies_under_its_family_top() {
                 schema: NodeSchema::NewType(KType::NUMBER),
             },
         ),
-        types.sibling(0),
-        KType::ANY_VALUE,
+        types.sibling(0).raw(),
+        Handle::ANY_VALUE,
     ];
     for value in values {
-        assert_eq!(under(value), [KType::ANY_VALUE], "{value:?}");
+        assert_eq!(under(value), [Handle::ANY_VALUE], "{value:?}");
     }
     let codes = [
-        KType::IDENTIFIER,
-        KType::SYMBOL,
-        KType::TYPE_NAME_TOKEN,
-        KType::EXPRESSION,
-        KType::SIGILED_TYPE_EXPR,
-        KType::RECORD_TYPE,
-        KType::LITERAL,
-        KType::BLOCK,
-        KType::DECLARATION,
-        KType::BINDER,
-        KType::NAME,
-        KType::KEYWORD,
-        KType::ANY_CODE,
+        Handle::IDENTIFIER,
+        Handle::SYMBOL,
+        Handle::TYPE_NAME_TOKEN,
+        Handle::EXPRESSION,
+        Handle::SIGILED_TYPE_EXPR,
+        Handle::RECORD_TYPE,
+        Handle::LITERAL,
+        Handle::BLOCK,
+        Handle::DECLARATION,
+        Handle::BINDER,
+        Handle::NAME,
+        Handle::KEYWORD,
+        Handle::ANY_CODE,
     ];
     for code in codes {
-        assert_eq!(under(code), [KType::ANY_CODE], "{code:?}");
+        assert_eq!(under(code), [Handle::ANY_CODE], "{code:?}");
     }
     for kind in [
         KKind::ProperType,
@@ -611,33 +608,40 @@ fn each_node_kind_lies_under_its_family_top() {
         KKind::NewType,
         KKind::TypeConstructor,
     ] {
-        assert_eq!(under(KType::of_kind(kind)), [KType::ANY_TYPE]);
+        assert_eq!(under(KType::of_kind(kind).raw()), [Handle::ANY_TYPE]);
     }
 
     // A variable answers by its bound; one bounded by `Any` — a sealed member's default — lies
     // under no family top, since the view hides which family it stands for.
-    assert!(under(types.quantified(0, KType::ANY)).is_empty());
+    assert!(under(types.quantified(0, KType::ANY).raw()).is_empty());
     assert_eq!(
-        under(types.quantified(0, KType::ANY_VALUE)),
-        [KType::ANY_VALUE]
+        under(types.quantified(0, KType::ANY_VALUE).raw()),
+        [Handle::ANY_VALUE]
     );
     let sealed = types.parameter(name, KType::ANY, None);
     assert!(under(sealed).is_empty());
     // A union answers by its members, and a deferred return, whose return is unknown, by none.
-    let mixed = types.union_of(region, &[KType::NUMBER, KType::PROPER_TYPE]);
+    let mixed = types.union_of(region, &[KType::NUMBER.raw(), KType::PROPER_TYPE.raw()]);
     assert!(under(mixed).is_empty());
-    let pair_top = types.union_of(region, &[KType::ANY_VALUE, KType::ANY_TYPE]);
+    let pair_top = types.union_of(region, &[Handle::ANY_VALUE, Handle::ANY_TYPE]);
     assert!(is_subtype_of(&types, region, mixed, pair_top));
-    assert!(under(types.deferred_return(DeferredReturnSurface::Type(name))).is_empty());
-    assert!(under(KType::ANY).is_empty());
+    assert!(
+        under(
+            types
+                .deferred_return(DeferredReturnSurface::Type(name))
+                .raw()
+        )
+        .is_empty()
+    );
+    assert!(under(Handle::ANY).is_empty());
 
     // The families are disjoint and join to their union.
     assert_eq!(
-        meet(&types, region, KType::ANY_VALUE, KType::ANY_CODE),
-        KType::NEVER
+        meet(&types, region, Handle::ANY_VALUE, Handle::ANY_CODE),
+        Handle::NEVER
     );
     assert_eq!(
-        join(&types, region, KType::ANY_VALUE, KType::ANY_TYPE),
+        join(&types, region, Handle::ANY_VALUE, Handle::ANY_TYPE),
         pair_top
     );
 }
@@ -649,88 +653,88 @@ fn the_code_kinds_form_a_tree_under_code() {
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let below = |a: KType, b: KType| is_subtype_of(&types, region, a, b);
+    let below = |a: Handle, b: Handle| is_subtype_of(&types, region, a, b);
     let edges = [
-        (KType::BLOCK, KType::ANY_CODE),
-        (KType::EXPRESSION, KType::BLOCK),
-        (KType::DECLARATION, KType::EXPRESSION),
-        (KType::LITERAL, KType::EXPRESSION),
-        (KType::SYMBOL, KType::EXPRESSION),
-        (KType::SIGILED_TYPE_EXPR, KType::EXPRESSION),
-        (KType::RECORD_TYPE, KType::EXPRESSION),
-        (KType::BINDER, KType::DECLARATION),
-        (KType::NAME, KType::SYMBOL),
-        (KType::KEYWORD, KType::SYMBOL),
-        (KType::IDENTIFIER, KType::NAME),
-        (KType::TYPE_NAME_TOKEN, KType::NAME),
+        (Handle::BLOCK, Handle::ANY_CODE),
+        (Handle::EXPRESSION, Handle::BLOCK),
+        (Handle::DECLARATION, Handle::EXPRESSION),
+        (Handle::LITERAL, Handle::EXPRESSION),
+        (Handle::SYMBOL, Handle::EXPRESSION),
+        (Handle::SIGILED_TYPE_EXPR, Handle::EXPRESSION),
+        (Handle::RECORD_TYPE, Handle::EXPRESSION),
+        (Handle::BINDER, Handle::DECLARATION),
+        (Handle::NAME, Handle::SYMBOL),
+        (Handle::KEYWORD, Handle::SYMBOL),
+        (Handle::IDENTIFIER, Handle::NAME),
+        (Handle::TYPE_NAME_TOKEN, Handle::NAME),
     ];
     for (child, parent) in edges {
         assert!(below(child, parent), "{child:?} under {parent:?}");
         assert!(!below(parent, child), "{parent:?} not under {child:?}");
     }
     let chain = [
-        KType::IDENTIFIER,
-        KType::NAME,
-        KType::SYMBOL,
-        KType::EXPRESSION,
-        KType::BLOCK,
-        KType::ANY_CODE,
+        Handle::IDENTIFIER,
+        Handle::NAME,
+        Handle::SYMBOL,
+        Handle::EXPRESSION,
+        Handle::BLOCK,
+        Handle::ANY_CODE,
     ];
     for (index, lower) in chain.iter().enumerate() {
         for upper in &chain[index..] {
             assert!(below(*lower, *upper), "{lower:?} under {upper:?}");
         }
     }
-    assert!(below(KType::BINDER, KType::EXPRESSION));
+    assert!(below(Handle::BINDER, Handle::EXPRESSION));
     for (a, b) in [
-        (KType::KEYWORD, KType::NAME),
-        (KType::LITERAL, KType::SYMBOL),
-        (KType::BINDER, KType::SYMBOL),
-        (KType::DECLARATION, KType::BINDER),
-        (KType::BLOCK, KType::EXPRESSION),
-        (KType::EXPRESSION, KType::SYMBOL),
-        (KType::IDENTIFIER, KType::KEYWORD),
+        (Handle::KEYWORD, Handle::NAME),
+        (Handle::LITERAL, Handle::SYMBOL),
+        (Handle::BINDER, Handle::SYMBOL),
+        (Handle::DECLARATION, Handle::BINDER),
+        (Handle::BLOCK, Handle::EXPRESSION),
+        (Handle::EXPRESSION, Handle::SYMBOL),
+        (Handle::IDENTIFIER, Handle::KEYWORD),
     ] {
         assert!(!below(a, b), "{a:?} not under {b:?}");
     }
-    for kind in [KType::BLOCK, KType::NAME, KType::KEYWORD, KType::BINDER] {
-        assert!(!below(kind, KType::ANY_VALUE), "{kind:?} not a value");
-        assert!(!below(kind, KType::ANY_TYPE), "{kind:?} not a type");
+    for kind in [Handle::BLOCK, Handle::NAME, Handle::KEYWORD, Handle::BINDER] {
+        assert!(!below(kind, Handle::ANY_VALUE), "{kind:?} not a value");
+        assert!(!below(kind, Handle::ANY_TYPE), "{kind:?} not a type");
     }
 
     assert_eq!(
-        meet(&types, region, KType::EXPRESSION, KType::BLOCK),
-        KType::EXPRESSION
+        meet(&types, region, Handle::EXPRESSION, Handle::BLOCK),
+        Handle::EXPRESSION
     );
     assert_eq!(
-        meet(&types, region, KType::NAME, KType::KEYWORD),
-        KType::NEVER
+        meet(&types, region, Handle::NAME, Handle::KEYWORD),
+        Handle::NEVER
     );
     assert_eq!(
-        meet(&types, region, KType::LITERAL, KType::BINDER),
-        KType::NEVER
+        meet(&types, region, Handle::LITERAL, Handle::BINDER),
+        Handle::NEVER
     );
     assert_eq!(
-        meet(&types, region, KType::DECLARATION, KType::SYMBOL),
-        KType::NEVER
+        meet(&types, region, Handle::DECLARATION, Handle::SYMBOL),
+        Handle::NEVER
     );
     assert_eq!(
-        types.union_of(region, &[KType::LITERAL, KType::EXPRESSION]),
-        KType::EXPRESSION
+        types.union_of(region, &[Handle::LITERAL, Handle::EXPRESSION]),
+        Handle::EXPRESSION
     );
 
-    let list_of_code = types.list(KType::ANY_CODE);
-    assert!(below(KType::LIST_OF_NAME, list_of_code));
-    assert!(below(list_of_code, KType::ANY_VALUE));
+    let list_of_code = types.list(Handle::ANY_CODE);
+    assert!(below(Handle::LIST_OF_NAME, list_of_code));
+    assert!(below(list_of_code, Handle::ANY_VALUE));
     assert!(below(
-        KType::LIST_OF_DECLARATION,
-        types.list(KType::EXPRESSION)
+        KType::LIST_OF_DECLARATION.raw(),
+        types.list(Handle::EXPRESSION)
     ));
     assert!(below(
-        KType::DICT_NAME_BLOCK,
-        types.dict(KType::SYMBOL, KType::ANY_CODE)
+        KType::DICT_NAME_BLOCK.raw(),
+        types.dict(Handle::SYMBOL, Handle::ANY_CODE)
     ));
-    assert!(below(KType::TYPE_CODE, KType::EXPRESSION));
+    assert!(below(KType::TYPE_CODE.raw(), Handle::EXPRESSION));
 }
 
 /// A code kind needing names lies under `Code`, over the same kind needing more and over a kind
@@ -744,7 +748,7 @@ fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
     let symbols = SymbolInterner::new();
     let name = |text: &str| BinderSymbol::declared(text, &symbols).expect("a bindable token");
     let (y, z) = (name("y"), name("z"));
-    let below = |a: KType, b: KType| is_subtype_of(&types, region, a, b);
+    let below = |a: KType, b: KType| typed::is_subtype_of(&types, region, a, b);
     let needing = |kind: KType, names: &[BinderSymbol]| types.code_needing(region, kind, names);
 
     assert_eq!(needing(KType::EXPRESSION, &[]), KType::EXPRESSION);
@@ -778,23 +782,29 @@ fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
         assert!(!below(a, b), "{a:?} not under {b:?}");
     }
 
-    assert_eq!(meet(&types, region, expression_yz, block_y), expression_y);
     assert_eq!(
-        meet(&types, region, expression_y, expression_z),
+        typed::meet(&types, region, expression_yz, block_y),
+        expression_y
+    );
+    assert_eq!(
+        typed::meet(&types, region, expression_y, expression_z),
         KType::EXPRESSION
     );
     assert_eq!(
-        meet(&types, region, block_y, KType::LITERAL),
+        typed::meet(&types, region, block_y, KType::LITERAL),
         KType::LITERAL
     );
-    assert_eq!(meet(&types, region, binder_y, KType::LITERAL), KType::NEVER);
     assert_eq!(
-        join(&types, region, expression_y, expression_yz),
+        typed::meet(&types, region, binder_y, KType::LITERAL),
+        KType::NEVER
+    );
+    assert_eq!(
+        typed::join(&types, region, expression_y, expression_yz),
         expression_yz
     );
 
     assert_eq!(
-        display_name(block_y, &types, &symbols).to_string(),
+        display_handle(block_y.raw(), &types, &symbols).to_string(),
         ":(Block NEEDING #[y])"
     );
 }
@@ -808,20 +818,24 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    let elt = types.quantified(0, number_or_str);
-    let wider = types.union_of(region, &[KType::NUMBER, KType::STR, KType::BOOL]);
+    let elt = types.quantified(0, number_or_str).raw();
+    let number_or_str = number_or_str.raw();
+    let wider = types.union_of(
+        region,
+        &[KType::NUMBER.raw(), KType::STR.raw(), KType::BOOL.raw()],
+    );
     assert!(is_subtype_of(&types, region, elt, number_or_str));
     assert!(is_subtype_of(&types, region, elt, wider));
-    assert!(!is_subtype_of(&types, region, elt, KType::NUMBER));
+    assert!(!is_subtype_of(&types, region, elt, KType::NUMBER.raw()));
 
     // `Elt | Number | Str` holds nothing `Number | Str` does not, but the order relates concrete
     // types only, so the variable stays beside the members its bound lies under.
-    let spelled = types.union_of(region, &[elt, KType::NUMBER, KType::STR]);
+    let spelled = types.union_of(region, &[elt, KType::NUMBER.raw(), KType::STR.raw()]);
     assert!(
-        matches!(types.node(spelled), TypeNode::Union { members } if members == [elt, KType::NUMBER, KType::STR])
+        matches!(types.node(spelled), TypeNode::Union { members } if members[..] == [elt, KType::NUMBER.raw(), KType::STR.raw()])
     );
-    let elt_or_bool = types.union_of(region, &[elt, KType::BOOL]);
-    assert_ne!(elt_or_bool, types.union_of(region, &[KType::BOOL]));
+    let elt_or_bool = types.union_of(region, &[elt, KType::BOOL.raw()]);
+    assert_ne!(elt_or_bool, types.union_of(region, &[KType::BOOL.raw()]));
 
     // The meet keeps a variable whose bound spans the other side's members, from either side.
     assert_eq!(meet(&types, region, elt_or_bool, number_or_str), elt);
@@ -839,17 +853,15 @@ fn a_carrier_under_the_rest_of_a_union_is_dropped() {
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    let carrier = types.parameter(
-        name,
-        number_or_str,
-        Some(crate::memory::ScopeId::from_raw(1, 1)),
-    );
-    assert!(types.is_concrete(carrier));
+    let carrier = types.carrier(name, number_or_str, crate::memory::ScopeId::from_raw(1, 1));
     assert_eq!(
         types.union_of(region, &[carrier, KType::NUMBER, KType::STR]),
         number_or_str
     );
-    assert_eq!(join(&types, region, carrier, number_or_str), number_or_str);
+    assert_eq!(
+        typed::join(&types, region, carrier, number_or_str),
+        number_or_str
+    );
 }
 
 /// No law: the unifier's carried-variable rule is covered by a property, but the solution it
@@ -864,10 +876,10 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let name = TypeSymbol::declared("Held", &symbols).expect("a Type token");
     let list_of_number = types.list(KType::NUMBER);
     let carried = types.parameter(name, list_of_number, None);
-    let declared = types.list(types.quantified(0, KType::ANY));
-    let mut collector = Collector::new(region, &[KType::ANY]);
+    let declared = types.list(types.quantified(0, KType::ANY).raw());
+    let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
     assert_eq!(
-        admits_with(
+        admits(
             &types,
             region,
             declared,
@@ -879,7 +891,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     );
     assert_eq!(
         collector.solve(&types).map(|solution| solution.to_vec()),
-        Ok(vec![KType::NUMBER])
+        Ok(vec![KType::NUMBER.raw()])
     );
 
     // `FN FOR ALL #[Elt] :{y :(LIST OF Elt) z :(LIST OF Elt)} -> Null` fits the `Number` instance,
@@ -889,41 +901,37 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let z = BinderSymbol::declared("z", &symbols).expect("a bindable token");
     let x_name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let each_list = types
-        .function_type(
+        .function_group(
             region,
             &[x_name],
             &[KType::ANY],
             &[(y, declared), (z, declared)],
-            KType::NULL,
+            KType::NULL.raw(),
         )
-        .handle;
-    let on_numbers = types
-        .function_type(
-            region,
-            &[],
-            &[],
-            &[(y, list_of_number), (z, list_of_number)],
-            KType::NULL,
-        )
-        .handle;
-    let bounded = types.quantified(0, list_of_number);
+        .0;
+    let on_numbers = types.function_type(
+        region,
+        &[(y, list_of_number.raw()), (z, list_of_number.raw())],
+        KType::NULL.raw(),
+    );
+    let bounded = types.quantified(0, list_of_number).raw();
     let each_bounded = types
-        .function_type(
+        .function_group(
             region,
             &[name],
             &[list_of_number],
             &[(y, bounded), (z, bounded)],
-            KType::NULL,
+            KType::NULL.raw(),
         )
-        .handle;
+        .0;
     // A bound spanning two declared members is admitted member by member: `Held` bounded by
     // `LIST OF Number | Str` fills `LIST OF X | Str`, though neither member alone takes it.
     let spanning_bound = types.union_of(region, &[list_of_number, KType::STR]);
     let spanning = types.parameter(name, spanning_bound, None);
-    let either = types.union_of(region, &[declared, KType::STR]);
-    let mut collector = Collector::new(region, &[KType::ANY]);
+    let either = types.union_of(region, &[declared, KType::STR.raw()]);
+    let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
     assert_eq!(
-        admits_with(
+        admits(
             &types,
             region,
             either,
@@ -935,7 +943,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     );
     assert_eq!(
         collector.solve(&types).map(|solution| solution.to_vec()),
-        Ok(vec![KType::NUMBER])
+        Ok(vec![KType::NUMBER.raw()])
     );
 
     assert!(fits(&types, region, each_list, on_numbers));
@@ -953,10 +961,12 @@ fn a_carried_deferred_return_fills_no_slot_it_is_not_under() {
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
-    let deferred = types.deferred_return(DeferredReturnSurface::Type(name));
-    let admits = |declared: KType| {
-        let mut collector = Collector::new(region, &[KType::ANY]);
-        admits_with(
+    let deferred = types
+        .deferred_return(DeferredReturnSurface::Type(name))
+        .raw();
+    let admits = |declared: Handle| {
+        let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+        admits(
             &types,
             region,
             declared,
@@ -965,9 +975,9 @@ fn a_carried_deferred_return_fills_no_slot_it_is_not_under() {
             &mut collector,
         )
     };
-    let variable = types.quantified(0, KType::ANY);
+    let variable = types.quantified(0, KType::ANY).raw();
     assert_eq!(admits(types.list(variable)), Err(UnifyFailure::Mismatch));
-    assert_eq!(admits(types.list(KType::ANY)), Err(UnifyFailure::Mismatch));
+    assert_eq!(admits(types.list(Handle::ANY)), Err(UnifyFailure::Mismatch));
     assert_eq!(admits(variable), Ok(()));
 }
 
@@ -983,45 +993,45 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     let b = BinderSymbol::declared("b", &symbols).expect("a bindable token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let key = TypeSymbol::declared("Key", &symbols).expect("a Type token");
-    let value_bounded = types.quantified(0, KType::ANY_VALUE);
-    let free = types.quantified(1, KType::ANY);
+    let value_bounded = types.quantified(0, KType::ANY_VALUE).raw();
+    let free = types.quantified(1, KType::ANY).raw();
     let pair = types
-        .function_type(
+        .function_group(
             region,
             &[elt, key],
             &[KType::ANY_VALUE, KType::ANY],
             &[(a, value_bounded), (b, free)],
             types.dict(value_bounded, free),
         )
-        .handle;
+        .0;
     // The group is ordered by first occurrence, which puts `Key` first here.
     assert_eq!(
-        crate::type_lattice::display_name(pair, &types, &symbols).to_string(),
+        display_handle(pair, &types, &symbols).to_string(),
         ":(FN FOR ALL #{Key: Any, Elt: Value} :{a :Elt b :Key} -> :(MAP Elt -> Key))"
     );
     let alone = types
-        .function_type(
+        .function_group(
             region,
             &[elt],
             &[KType::ANY_VALUE],
             &[(a, value_bounded)],
             value_bounded,
         )
-        .handle;
-    let rendered = crate::type_lattice::display_name(alone, &types, &symbols).to_string();
+        .0;
+    let rendered = display_handle(alone, &types, &symbols).to_string();
     assert!(rendered.contains("FOR ALL #{Elt: Value} "), "{rendered}");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    let union_bounded = types.quantified(0, number_or_str);
+    let union_bounded = types.quantified(0, number_or_str).raw();
     let spanning = types
-        .function_type(
+        .function_group(
             region,
             &[elt],
             &[number_or_str],
             &[(a, union_bounded)],
             union_bounded,
         )
-        .handle;
-    let rendered = crate::type_lattice::display_name(spanning, &types, &symbols).to_string();
+        .0;
+    let rendered = display_handle(spanning, &types, &symbols).to_string();
     assert!(
         rendered.contains("FOR ALL #{Elt: :(Number | Str)} "),
         "{rendered}"
@@ -1037,27 +1047,26 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let above = |kt| crate::type_lattice::bound_above(&types, region, kt);
+    let above = |kt| crate::type_lattice::substitute::bound_above(&types, region, kt);
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let tee = TypeSymbol::declared("Tee", &symbols).expect("a Type token");
-    let elt = types.quantified(0, KType::ANY);
+    let elt = types.quantified(0, KType::ANY).raw();
 
-    assert_eq!(above(types.list(elt)), types.list(KType::ANY));
-    let taking = types
-        .function_type(region, &[], &[], &[(y, elt)], elt)
-        .handle;
-    let widest = types
-        .function_type(region, &[], &[], &[(y, KType::NEVER)], KType::ANY)
-        .handle;
+    assert_eq!(above(types.list(elt)), types.list(Handle::ANY));
+    let taking = types.function_type(region, &[(y, elt)], elt);
+    let widest = types.function_type(region, &[(y, Handle::NEVER)], Handle::ANY);
     assert_eq!(above(taking), widest);
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    assert_eq!(above(types.quantified(0, number_or_str)), number_or_str);
+    assert_eq!(
+        above(types.quantified(0, number_or_str).raw()),
+        number_or_str.raw()
+    );
 
     let closed = types
-        .function_type(region, &[tee], &[KType::ANY], &[(y, elt)], elt)
-        .handle;
+        .function_group(region, &[tee], &[KType::ANY], &[(y, elt)], elt)
+        .0;
     assert_eq!(above(closed), closed);
-    let list_of_number = types.list(KType::NUMBER);
+    let list_of_number = types.list(KType::NUMBER.raw());
     assert_eq!(above(list_of_number), list_of_number);
 }
 
@@ -1066,22 +1075,18 @@ fn head(
     types: &TypeRegistry<'_>,
     region: &Bump,
     keyword: KeywordSymbol,
-    slot: KType,
-    ret: KType,
-) -> KType {
-    types
-        .shape_type(
-            region,
-            &[],
-            &[],
-            &[
-                DispatchTokenElement::Keyword(keyword),
-                DispatchTokenElement::Slot(slot),
-            ],
-            &[],
-            ret,
-        )
-        .handle
+    slot: Handle,
+    ret: Handle,
+) -> Handle {
+    types.shape_type(
+        region,
+        &[
+            DispatchTokenElement::Keyword(keyword),
+            DispatchTokenElement::Slot(slot),
+        ],
+        &[],
+        ret,
+    )
 }
 
 /// A signature over `shapes`, declared over `parameters` or a module's when `module`.
@@ -1089,8 +1094,8 @@ fn keyworded(
     types: &TypeRegistry<'_>,
     region: &Bump,
     module: bool,
-    parameters: &[(TypeSymbol, KType)],
-    shapes: &[KType],
+    parameters: &[(TypeSymbol, Parametric)],
+    shapes: &[Handle],
 ) -> KType {
     let mut draft = SchemaDraft::new(region);
     if !module {
@@ -1100,7 +1105,7 @@ fn keyworded(
         draft.insert_parameter(*name, *parameter);
     }
     for shape in shapes {
-        draft.push_keyworded(*shape);
+        draft.push_keyworded(types.declared(*shape));
     }
     types.signature(region, draft)
 }
@@ -1118,33 +1123,34 @@ fn a_key_s_overloads_are_tried_one_at_a_time() {
     let types = TypeRegistry::in_region(region);
     let push = KeywordSymbol::declared("PUSH", &symbols).expect("a keyword token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
-    let parameter = types.parameter(elt, KType::ANY, None);
+    let parameter = types.head_parameter(elt, KType::ANY);
+    let raw = parameter.raw();
     let stack = keyworded(
         &types,
         region,
         false,
         &[(elt, parameter)],
-        &[head(&types, region, push, parameter, types.list(parameter))],
+        &[head(&types, region, push, raw, types.list(raw))],
     );
     let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
     let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));
-    let both = meet(&types, region, numbers, strs);
+    let both = typed::meet(&types, region, numbers, strs);
     let at = |kt| head(&types, region, push, kt, types.list(kt));
     let two = keyworded(
         &types,
         region,
         true,
         &[],
-        &[at(KType::NUMBER), at(KType::STR)],
+        &[at(KType::NUMBER.raw()), at(KType::STR.raw())],
     );
-    let one = keyworded(&types, region, true, &[], &[at(KType::NUMBER)]);
+    let one = keyworded(&types, region, true, &[], &[at(KType::NUMBER.raw())]);
     for asked in [stack, numbers, strs, both] {
-        assert!(sig_fits(&types, region, two, asked).is_ok());
+        assert!(typed::sig_fits(&types, region, two, asked).is_ok());
     }
-    assert!(is_subtype_of(&types, region, both, stack));
-    assert!(sig_fits(&types, region, one, stack).is_ok());
-    assert!(sig_fits(&types, region, one, numbers).is_ok());
-    assert!(sig_fits(&types, region, one, strs).is_err());
+    assert!(typed::is_subtype_of(&types, region, both, stack));
+    assert!(typed::sig_fits(&types, region, one, stack).is_ok());
+    assert!(typed::sig_fits(&types, region, one, numbers).is_ok());
+    assert!(typed::sig_fits(&types, region, one, strs).is_err());
 }
 
 /// No law: *fits* asks only that some overload satisfy each keyworded member, so a tie is no
@@ -1156,20 +1162,20 @@ fn a_tie_under_an_asked_member_still_fits() {
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let f = KeywordSymbol::declared("FIT", &symbols).expect("a keyword token");
-    let either = |other| types.union_of(region, &[KType::NUMBER, other]);
-    let at = |slot| head(&types, region, f, slot, KType::NUMBER);
+    let either = |other| types.union_of(region, &[KType::NUMBER.raw(), other]);
+    let at = |slot| head(&types, region, f, slot, KType::NUMBER.raw());
     let m = keyworded(
         &types,
         region,
         true,
         &[],
-        &[at(either(KType::STR)), at(either(KType::BOOL))],
+        &[at(either(KType::STR.raw())), at(either(KType::BOOL.raw()))],
     );
-    let wide = keyworded(&types, region, false, &[], &[at(either(KType::STR))]);
-    let narrow = keyworded(&types, region, false, &[], &[at(KType::NUMBER)]);
-    assert!(sig_fits(&types, region, m, wide).is_ok());
-    assert!(sig_fits(&types, region, wide, narrow).is_ok());
-    assert!(sig_fits(&types, region, m, narrow).is_ok());
+    let wide = keyworded(&types, region, false, &[], &[at(either(KType::STR.raw()))]);
+    let narrow = keyworded(&types, region, false, &[], &[at(KType::NUMBER.raw())]);
+    assert!(typed::sig_fits(&types, region, m, wide).is_ok());
+    assert!(typed::sig_fits(&types, region, wide, narrow).is_ok());
+    assert!(typed::sig_fits(&types, region, m, narrow).is_ok());
 }
 
 /// No law: the item's worked spellings of the two relations. The order compares applications by
@@ -1181,22 +1187,24 @@ fn the_order_never_solves_and_fits_does() {
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let below = |a, b| is_subtype_of(&types, region, a, b);
+    let below = |a: Handle, b: Handle| is_subtype_of(&types, region, a, b);
 
     // `Stack WITH {Elt = Number}` lies under `Stack`; its `Str` application is unordered with it,
     // and the meet of the two lies under each.
     let push = KeywordSymbol::declared("PUSH", &symbols).expect("a keyword token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
-    let parameter = types.parameter(elt, KType::ANY, None);
+    let parameter = types.head_parameter(elt, KType::ANY);
+    let raw = parameter.raw();
     let stack = keyworded(
         &types,
         region,
         false,
         &[(elt, parameter)],
-        &[head(&types, region, push, parameter, types.list(parameter))],
+        &[head(&types, region, push, raw, types.list(raw))],
     );
     let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
     let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));
+    let (stack, numbers, strs) = (stack.raw(), numbers.raw(), strs.raw());
     assert!(below(numbers, stack));
     assert!(!below(stack, numbers));
     assert!(!below(numbers, strs) && !below(strs, numbers));
@@ -1210,27 +1218,27 @@ fn the_order_never_solves_and_fits_does() {
     let left = TypeSymbol::declared("Left", &symbols).expect("a Type token");
     let right = TypeSymbol::declared("Right", &symbols).expect("a Type token");
     let (first, second) = (
-        types.quantified(0, KType::ANY),
-        types.quantified(1, KType::ANY),
+        types.quantified(0, KType::ANY).raw(),
+        types.quantified(1, KType::ANY).raw(),
     );
     let same = types
-        .function_type(
+        .function_group(
             region,
             &[elt],
             &[KType::ANY],
             &[(x, first), (y, first)],
             first,
         )
-        .handle;
+        .0;
     let either = types
-        .function_type(
+        .function_group(
             region,
             &[left, right],
             &[KType::ANY, KType::ANY],
             &[(x, first), (y, second)],
             types.union_of(region, &[first, second]),
         )
-        .handle;
+        .0;
     assert!(!below(same, either) && !below(either, same));
     assert!(fits(&types, region, same, either));
 

@@ -17,7 +17,7 @@ use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
 use crate::scope::{BodyShape, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry, display_name};
 use crate::values::{Record, Tagged, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle};
@@ -77,7 +77,7 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contract {
     /// The frame's function type, which a miss names; `None` for the frame an `EVAL` runs.
-    pub callee: Option<KType>,
+    pub callee: Option<DeclaredType<KType>>,
     pub returns: KType,
     /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
     /// that frame's caller asked for it.
@@ -237,8 +237,8 @@ impl<'graph> Program<'graph> {
         if satisfies(contract.returns, &value, self.types, &scratch) {
             return value.retyped(writer, contract.retype, self.types, &scratch);
         }
-        let name = |handle| display_name(handle, self.types, self.symbols);
-        let (value, returns) = (name(value.ktype()), name(contract.returns));
+        let name = |handle: DeclaredType<KType>| display_name(handle, self.types, self.symbols);
+        let (value, returns) = (name(value.ktype()), name(contract.returns.into()));
         match contract.callee {
             Some(callee) => self.error(
                 writer,

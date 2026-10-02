@@ -5,10 +5,10 @@
 use crate::memory::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{KType, Parametric};
 use crate::type_lattice::kind::KKind;
-use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::registry::TypeRegistry;
+use crate::type_lattice::typed::is_subtype_of;
 use crate::type_lattice::unify::{Collector, admits_with};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
@@ -74,7 +74,7 @@ fn least_solves_an_unreached_variable_to_never() {
     let types = TypeRegistry::in_region(region);
     let declared = types.record(region, &[(a, types.quantified(0, KType::ANY))]);
     let carried = types.record(region, &[(a, KType::NUMBER)]);
-    let solve = |mut collector: Collector<'_>| {
+    let solve = |mut collector: Collector<'_, KType>| {
         admits_with(
             &types,
             region,
@@ -112,14 +112,14 @@ fn a_contravariant_occurrence_is_found() {
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let variable = types.quantified(0, KType::ANY);
-    let function = |params: &[(BinderSymbol, KType)], ret| {
-        types.function_type(region, &[], &[], params, ret).handle
+    let function = |params: &[(BinderSymbol, Parametric)], ret: Parametric| {
+        types.function_type(region, params, ret)
     };
-    let sink = function(&[(x, variable)], KType::NULL);
+    let sink = function(&[(x, variable)], KType::NULL.into());
     assert!(types.quantifies_contravariantly(region, sink, 1));
     let give = function(&[], variable);
     assert!(!types.quantifies_contravariantly(region, give, 1));
-    let flipped_twice = function(&[(f, sink)], KType::NULL);
+    let flipped_twice = function(&[(f, sink)], KType::NULL.into());
     assert!(!types.quantifies_contravariantly(region, flipped_twice, 1));
     let boxed = family(&types, region, name, parameter);
     let applied =

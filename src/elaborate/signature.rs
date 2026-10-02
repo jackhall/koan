@@ -14,11 +14,13 @@ use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Callable, Elaboration, IMPLICIT, ParameterBinding, Registered, Registration, Site, Which,
-    is_equal, is_unequal,
+    Callable, Elaboration, FunctionGroupMap, IMPLICIT, ParameterBinding, Registered, Registration,
+    ShapeGroupMap, Site, Which, is_equal, is_unequal,
 };
-use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, TypeSymbol};
-use crate::type_lattice::{DispatchTokenElement, GroupIntern, KType, TypeNode, TypeRegistry};
+use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol};
+use crate::type_lattice::{
+    DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, TypeNode, TypeRegistry,
+};
 
 use super::expression::{Elaborator, Groups, HeadElement, QuantifierGroup, walk_head};
 use super::reads::Reads;
@@ -111,7 +113,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     .zip(interned.quantifier_map)
                     .map(|(name, index)| (*name, *index)),
             );
-            let map = map.leak();
+            let map = FunctionGroupMap(map.leak());
             let registered = registration.map(|registration| {
                 let head = head.expect("only an `EXPR` definition registers a lambda body");
                 registered(
@@ -141,11 +143,18 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     Which::Only | Which::Unary => Head::operator(unary, symbol),
                     Which::Binary => Head::Bridge(symbol, operand),
                 };
-                registered(types, scratch, function, &[], head, registration.classes)
+                registered(
+                    types,
+                    scratch,
+                    function.into(),
+                    FunctionGroupMap::default(),
+                    head,
+                    registration.classes,
+                )
             });
             Ok(Callable {
-                ktype: function,
-                quantifier_map: &[],
+                ktype: function.into(),
+                quantifier_map: FunctionGroupMap::default(),
                 registered,
             })
         }
@@ -169,10 +178,11 @@ pub(super) fn operator_shape<'graph, R: Reads<'graph> + ?Sized>(
     operand: &ExpressionPart<'graph>,
     ret: Option<&ExpressionPart<'graph>>,
     groups: &Groups<'_>,
-) -> Result<(KType, Option<KType>), Elaboration> {
+) -> Result<(DeclaredType<Parametric>, Option<DeclaredType<Parametric>>), Elaboration> {
     let (symbol, function, operand) =
         operator_function(elaborator, unary, symbol, operand, ret, groups)?;
     let (types, scratch) = (elaborator.types, elaborator.scratch);
+    let function = function.into();
     let (shape, _) = registered_shape(types, scratch, function, Head::operator(unary, symbol), &[]);
     let bridge = unary.then(|| {
         let head = Head::Bridge(symbol, operand);
@@ -195,7 +205,7 @@ fn operator_function<'graph, R: Reads<'graph> + ?Sized>(
     operand: &ExpressionPart<'graph>,
     ret: Option<&ExpressionPart<'graph>>,
     groups: &Groups<'_>,
-) -> Result<(KeywordSymbol, KType, KType), Elaboration> {
+) -> Result<(KeywordSymbol, Parametric, Parametric), Elaboration> {
     let unsupported = Elaboration::Unsupported {
         site: Site::of(symbol),
     };
@@ -216,19 +226,19 @@ fn operator_function<'graph, R: Reads<'graph> + ?Sized>(
     };
     // A result-less `OP #(==) OVER Foo` defaults its result to `Foo`, and so is refused here too:
     // the legal spelling states `-> Bool`.
-    if is_equal(symbol) && ret != KType::BOOL {
+    if is_equal(symbol) && ret != KType::BOOL.into() {
         return Err(unsupported);
     }
     let (types, scratch) = (elaborator.types, elaborator.scratch);
     let function = if unary {
         let operands = BinderSymbol::Value(IMPLICIT.operands.symbol());
-        types.function_type(scratch, &[], &[], &[(operands, types.list(operand))], ret)
+        types.function_type(scratch, &[(operands, types.list(operand))], ret)
     } else {
         let left = BinderSymbol::Value(IMPLICIT.left.symbol());
         let right = BinderSymbol::Value(IMPLICIT.right.symbol());
-        types.function_type(scratch, &[], &[], &[(left, operand), (right, operand)], ret)
+        types.function_type(scratch, &[(left, operand), (right, operand)], ret)
     };
-    Ok((symbol, function.handle, operand))
+    Ok((symbol, function, operand))
 }
 
 /// Where a registration's keywords and slots sit, in written order.
@@ -242,7 +252,7 @@ enum Head<'h, 'graph> {
     Unary(KeywordSymbol),
     /// A `UNARY OP`'s binary key, `<operand> <symbol> <operand>`, whose slots a call packs into
     /// `operands`.
-    Bridge(KeywordSymbol, KType),
+    Bridge(KeywordSymbol, Parametric),
 }
 
 impl Head<'_, '_> {
@@ -261,23 +271,30 @@ impl Head<'_, '_> {
 fn registered<'x>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
-    function: KType,
-    map: &[(TypeSymbol, usize)],
+    function: DeclaredType<Parametric>,
+    map: FunctionGroupMap<'_>,
     head: Head<'_, '_>,
     classes: &[u8],
 ) -> Registered<'x> {
     let (shape, parameters) = registered_shape(types, scratch, function, head, classes);
-    // The shape's group is the function's, renumbered.
-    let mut read_through = BumpVec::with_capacity_in(map.len(), scratch);
-    read_through.extend(
-        map.iter()
-            .map(|(name, index)| (*name, shape.quantifier_map[*index])),
-    );
     Registered {
         shape: shape.handle,
-        quantifier_map: read_through.leak(),
+        quantifier_map: shape_group_map(scratch, map, shape.quantifier_map),
         parameters,
     }
+}
+
+/// `map`, a function type's group map, read through `renumbered` — the function's group index to
+/// the registered shape's — into the shape's group map. The shape's group is the function's,
+/// renumbered.
+fn shape_group_map<'x>(
+    scratch: BumpAllocator<'x>,
+    map: FunctionGroupMap<'_>,
+    renumbered: &[usize],
+) -> ShapeGroupMap<'x> {
+    let mut read_through = BumpVec::with_capacity_in(map.0.len(), scratch);
+    read_through.extend(map.iter().map(|(name, index)| (name, renumbered[index])));
+    ShapeGroupMap(read_through.leak())
 }
 
 /// The expression shape a registration puts in its bucket, built from `function`, the definition's
@@ -291,16 +308,20 @@ fn registered<'x>(
 fn registered_shape<'x>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
-    function: KType,
+    function: DeclaredType<Parametric>,
     head: Head<'_, '_>,
     classes: &[u8],
 ) -> (GroupIntern<'x>, ParameterBinding<'x>) {
+    let node = match function {
+        DeclaredType::Type(function) => types.node(function),
+        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+    };
     let TypeNode::KFunction {
         quantifiers,
         bounds,
         params,
         ret,
-    } = types.node(function)
+    } = node
     else {
         unreachable!("a definition is typed by its function type")
     };
@@ -360,6 +381,6 @@ fn registered_shape<'x>(
             ParameterBinding::Operands
         }
     };
-    let shape = types.shape_type(scratch, quantifiers, bounds, &elements, classes, ret);
+    let shape = types.shape_scheme(scratch, quantifiers, bounds, &elements, classes, ret);
     (shape, parameters)
 }

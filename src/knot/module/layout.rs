@@ -86,7 +86,7 @@ pub fn registrations<'graph, 'cell>(
 
 /// Where `name` sits in a symbol-sorted member table — a binary search, since a table is built
 /// only sorted.
-fn rank<N: Ord + Copy>(table: &[(N, KType)], name: N) -> Option<usize> {
+fn rank<N: Ord + Copy, T>(table: &[(N, T)], name: N) -> Option<usize> {
     table.binary_search_by(|(held, _)| held.cmp(&name)).ok()
 }
 

@@ -69,7 +69,7 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
             assert_eq!(many.ktype(), list_of_mint);
             assert_eq!(many.len(), 2);
             for cell in parts(Value::List(many), types, scratch) {
-                assert_eq!(cell.ktype(), mint);
+                assert_eq!(cell.concrete_ktype(), mint);
             }
 
             // An empty list has no cell to join, so the plain door lands on `LIST OF Never` and
@@ -84,7 +84,10 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
                 panic!("a dict slot stays a dict");
             };
             assert_eq!(by_name.ktype(), types.dict(KType::STR, mint));
-            assert_eq!(parts(Value::Dict(by_name), types, scratch)[0].ktype(), mint);
+            assert_eq!(
+                parts(Value::Dict(by_name), types, scratch)[0].concrete_ktype(),
+                mint
+            );
 
             // A record coerces each field against its own declared type, so `b :Number` is
             // carried while `a :Carrier` seals.
@@ -99,8 +102,8 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
                     .expect("the field")
                     .value()
             };
-            assert_eq!(field(a).ktype(), mint);
-            assert_eq!(field(b).ktype(), KType::NUMBER);
+            assert_eq!(field(a).concrete_ktype(), mint);
+            assert_eq!(field(b).concrete_ktype(), KType::NUMBER);
             assert_eq!(
                 pair.ktype(),
                 types.record(
@@ -121,7 +124,7 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
                 types.record(scratch, &[(fixture.name("a"), mint)])
             );
             let fields = parts(Value::Record(wide), types, scratch);
-            assert_eq!(fields[0].ktype(), mint);
+            assert_eq!(fields[0].concrete_ktype(), mint);
             let alone = Record::new(writer, &[(fixture.name("a"), fields[0])], types, scratch);
             assert_eq!(wide.weight(), alone.weight(), "`b` is not laid down");
 
@@ -168,7 +171,11 @@ fn a_function_member_is_born_behind_a_barrier() {
 
             // The caller sees the function at the view's types; the declaration it recurses on and
             // the two substitutions ride along for the call to use.
-            let TypeNode::KFunction { params, ret, .. } = types.node(barrier.ktype()) else {
+            let ktype = barrier
+                .ktype()
+                .as_type()
+                .expect("the member is unquantified");
+            let TypeNode::KFunction { params, ret, .. } = types.node(ktype) else {
                 panic!("a barrier stands for a function");
             };
             assert_eq!(ret, mint);
@@ -265,7 +272,7 @@ MODULE m = ((LET Carrier = Number) (LET one = 1) \
             );
             // The carrier still mints, so the view is opaque; only this slot is untouched.
             assert_ne!(
-                member(fixture, view, "one", types, scratch).ktype(),
+                member(fixture, view, "one", types, scratch).concrete_ktype(),
                 KType::NUMBER
             );
         })
@@ -296,10 +303,10 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
             };
             // What `Inner WITH {Elem = Carrier}` elaborates to: `Elem` pinned to the enclosing
             // signature's own parameter `Carrier`.
-            let reference = types.parameter(carrier, KType::ANY, None);
+            let reference = types.head_parameter(carrier, KType::ANY);
             let slot = types.signature_apply(scratch, inner, &[(fixture.name("Elem"), reference)]);
 
-            let mint = types.parameter(carrier, KType::ANY, Some(ScopeId::next()));
+            let mint = types.carrier(carrier, KType::ANY, ScopeId::next());
             let cx = Coercion {
                 writer,
                 types,
@@ -309,7 +316,8 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
             };
 
             let held = member(fixture, m, "inner", types, scratch);
-            let Value::Knotted(view) = coerce(&cx, held, slot).expect("the nested module re-views")
+            let Value::Knotted(view) =
+                coerce(&cx, held, slot.into()).expect("the nested module re-views")
             else {
                 panic!("a signature slot stays a module");
             };
@@ -330,7 +338,7 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
                 "nothing is minted at a nested boundary"
             );
             assert_eq!(
-                member(fixture, view, "v", types, scratch).ktype(),
+                member(fixture, view, "v", types, scratch).concrete_ktype(),
                 mint,
                 "and the nested member is sealed at it"
             );
@@ -353,9 +361,9 @@ LET f = (FN :{} -> Number = #(1))";
             let BinderSymbol::Type(carrier) = fixture.name("Carrier") else {
                 panic!("`Carrier` is a Type token");
             };
-            let reference = types.parameter(carrier, KType::ANY, None);
+            let reference = types.head_parameter(carrier, KType::ANY);
             let slot = types.signature_apply(scratch, inner, &[(fixture.name("Elem"), reference)]);
-            let mint = types.parameter(carrier, KType::ANY, Some(ScopeId::next()));
+            let mint = types.carrier(carrier, KType::ANY, ScopeId::next());
             let cx = Coercion {
                 writer,
                 types,
@@ -366,7 +374,7 @@ LET f = (FN :{} -> Number = #(1))";
             let f = crate::knot::tests::callable(fixture, activation, "f");
             for value in [Value::Knotted(f), Value::Null] {
                 assert_eq!(
-                    coerce(&cx, value, slot).err(),
+                    coerce(&cx, value, slot.into()).err(),
                     Some(CoercionRefused::NotAModule)
                 );
             }

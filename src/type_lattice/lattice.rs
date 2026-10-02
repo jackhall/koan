@@ -1,17 +1,19 @@
-//! `join` and `meet` — the least upper bound and the greatest lower bound over the whole node
-//! vocabulary.
+//! `join` and the meet — the least upper bound and the greatest lower bound — over raw handles.
 //!
 //! `join` is not a walk. It is the larger operand when the two are ordered and their canonical
 //! union otherwise, which is what makes it associative: a structural join stops being associative
-//! the moment `a ≤ a | b`. `meet` is the binary driver's rebuilding instance, and is total — a pair
-//! with no common refinement meets at `Never`, which is always a sound lower bound.
+//! the moment `a ≤ a | b`. A parametric operand is ordered with nothing, so it joins to the union.
+//! The meet is the binary driver's rebuilding instance, and is total — a pair with no common
+//! refinement meets at `Never`, which is always a sound lower bound. Over a variable it relates by
+//! the rigid rule, which the solver's meet needs ([`meet_through_variables`]); the public meet
+//! takes concrete types ([`typed`](super::typed)).
 //!
-//! The four laws — commutativity, associativity, idempotence and absorption — hold over every node
-//! kind, and that is what fixes both operations.
+//! The four laws — commutativity, associativity, idempotence and absorption — hold over every
+//! concrete type, and that is what fixes both operations.
 
 use crate::memory::{BumpAllocator, BumpVec};
 
-use super::handle::KType;
+use super::handle::{Handle, TypeHandle, wrap};
 use super::node::TypeNode;
 use super::order::{code_needs, is_subtype_of};
 use super::registry::TypeRegistry;
@@ -22,7 +24,12 @@ use super::walk::binary::{Arm, Lockstep, Width, lockstep};
 /// The least upper bound: the larger operand when the two are ordered, otherwise their union. A
 /// parametric operand is related by no order, so it joins to the union, which keeps a variable
 /// beside every concrete member.
-pub fn join(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> KType {
+pub(super) fn join(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: Handle,
+    b: Handle,
+) -> Handle {
     if !types.is_concrete(a) || !types.is_concrete(b) {
         return types.union_of(scratch, &[a, b]);
     }
@@ -38,24 +45,31 @@ pub fn join(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: K
 /// Reduce an iterator of types to their least upper bound. An empty iterator is `Never`, the join's
 /// identity element: an empty container carries the bottom element type, which every typed element
 /// slot admits and which absorbs the first element joined against it.
-pub fn join_iter<I: IntoIterator<Item = KType>>(
+pub(super) fn join_iter<I: IntoIterator<Item = Handle>>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     iter: I,
-) -> KType {
+) -> Handle {
     iter.into_iter()
         .reduce(|a, b| join(types, scratch, a, b))
-        .unwrap_or(KType::NEVER)
+        .unwrap_or(Handle::NEVER)
 }
 
-/// The greatest lower bound.
+/// The greatest lower bound, relating a variable by the rigid rule — the solver's meet, which a
+/// variable's least instance over upper contributions and *fits*' pooled value slots read. Over
+/// concrete operands it is the lattice's meet.
 ///
 /// Pointwise through lists, dicts and constructor arguments; the union of both field sets with
 /// shared fields met for records; the intersection of parameter names with shared parameters joined
 /// and returns met for functions; distribution through a union; the set of both operands'
-/// applications for two signature types; the kinds' meet needing the names both need for two code kinds; `Never` where no
-/// common shape exists.
-pub fn meet(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> KType {
+/// applications for two signature types; the kinds' meet needing the names both need for two code
+/// kinds; `Never` where no common shape exists.
+pub(super) fn meet_through_variables(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: Handle,
+    b: Handle,
+) -> Handle {
     lockstep(types, scratch, a, b, Variance::Co, &mut Meet)
 }
 
@@ -67,16 +81,16 @@ pub fn meet(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: K
 struct Meet;
 
 impl Lockstep for Meet {
-    type Out = KType;
+    type Out = Handle;
 
     fn enter(
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        a: KType,
-        b: KType,
+        a: Handle,
+        b: Handle,
         v: Variance,
-    ) -> Option<KType> {
+    ) -> Option<Handle> {
         if v == Variance::Contra {
             return Some(join(types, scratch, a, b));
         }
@@ -99,10 +113,18 @@ impl Lockstep for Meet {
         }
         let mut met = BumpVec::new_in(scratch);
         if let TypeNode::Union { members } = na {
-            met.extend(members.iter().map(|x| meet(types, scratch, *x, b)));
+            met.extend(
+                members
+                    .iter()
+                    .map(|x| meet_through_variables(types, scratch, *x, b)),
+            );
         }
         if let TypeNode::Union { members } = nb {
-            met.extend(members.iter().map(|y| meet(types, scratch, a, *y)));
+            met.extend(
+                members
+                    .iter()
+                    .map(|y| meet_through_variables(types, scratch, a, *y)),
+            );
         }
         Some(types.union_of(scratch, &met))
     }
@@ -111,10 +133,10 @@ impl Lockstep for Meet {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        a: KType,
-        b: KType,
+        a: Handle,
+        b: Handle,
         _v: Variance,
-    ) -> KType {
+    ) -> Handle {
         // Two signature types meet at the set of both operands' applications, which is exact and
         // never `Never`.
         if is_signature_type(types, a) && is_signature_type(types, b) {
@@ -125,15 +147,15 @@ impl Lockstep for Meet {
         let needing = |kt| matches!(types.node(kt), TypeNode::CodeNeeding { .. });
         match (code_needs(types, a), code_needs(types, b)) {
             (Some((x, xs)), Some((y, ys))) if needing(a) || needing(b) => {
-                let kind = meet(types, scratch, x, y);
-                if kind == KType::NEVER {
-                    return KType::NEVER;
+                let kind = meet_through_variables(types, scratch, x.raw(), y.raw());
+                if kind == Handle::NEVER {
+                    return Handle::NEVER;
                 }
                 let mut both = BumpVec::new_in(scratch);
                 both.extend(xs.iter().filter(|name| ys.contains(name)).copied());
-                types.code_needing(scratch, kind, &both)
+                types.code_needing(scratch, wrap(kind), &both).raw()
             }
-            _ => KType::NEVER,
+            _ => Handle::NEVER,
         }
     }
 
@@ -141,11 +163,11 @@ impl Lockstep for Meet {
         &mut self,
         _types: &TypeRegistry<'_>,
         _scratch: BumpAllocator<'_>,
-        _a: &[KType],
-        _b: &[KType],
+        _a: &[Handle],
+        _b: &[Handle],
         _v: Variance,
-        _recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> KType,
-    ) -> KType {
+        _recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Handle,
+    ) -> Handle {
         // `enter` answers every pair with a union on either side.
         unreachable!("Meet::enter distributes every union")
     }
@@ -154,13 +176,13 @@ impl Lockstep for Meet {
         &mut self,
         _types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        paired: &[KType],
+        paired: &[Handle],
         arm: Arm<'_, '_>,
-    ) -> KType {
+    ) -> Handle {
         let leftovers = !(arm.only_a.is_empty() && arm.only_b.is_empty());
         if arm.width == Width::Exact && leftovers {
             // Two applications naming different parameters have no common application below them.
-            return KType::NEVER;
+            return Handle::NEVER;
         }
         if arm.width.bound_keeps_leftovers(false) {
             let mut extra = BumpVec::with_capacity_in(arm.only_a.len() + arm.only_b.len(), scratch);

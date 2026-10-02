@@ -20,8 +20,8 @@ use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    KType, Members, SchemaDraft, TypeNode, TypeRegistry, fits_application, satisfied_by,
-    substitute_parameters,
+    DeclaredType, KType, Members, Parametric, SchemaDraft, TypeNode, TypeRegistry,
+    fits_application, satisfied_by, substitute_parameters,
 };
 use crate::values::{Dict, List, Record, SealRefused, Tagged, Value};
 
@@ -44,7 +44,7 @@ pub enum CoercionRefused {
     /// its declaration took. A **cyclic data value** lands here: a container that is a knot's data
     /// node is a knot member, not a container word, and nothing yet rebuilds one through a
     /// barrier.
-    Unsupported(KType),
+    Unsupported(DeclaredType<Parametric>),
 }
 
 /// What a coercion reads: the region it writes into, the lattice, and the two substitutions a
@@ -54,25 +54,41 @@ pub struct Coercion<'a, 'cell, 'run, 'x> {
     pub types: &'a TypeRegistry<'run>,
     pub scratch: BumpAllocator<'x>,
     /// What the source module binds the signature's head parameters to.
-    pub from: Members<'x, TypeSymbol>,
+    pub from: Members<'x, TypeSymbol, KType>,
     /// What the view binds them to: the mints under `:|`, the source's own under `:!`.
-    pub to: Members<'x, TypeSymbol>,
+    pub to: Members<'x, TypeSymbol, KType>,
 }
 
+/// Why a member type read under a module's or a view's bindings is concrete: it reads only its
+/// signature's head parameters, and each is bound to a concrete type.
+const BOUND: &str = "a member type reads only head parameters, each bound";
+
 impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
+    /// `declared` read under `bindings`.
+    fn read(
+        &self,
+        declared: DeclaredType<Parametric>,
+        bindings: Members<'_, TypeSymbol, KType>,
+    ) -> DeclaredType<KType> {
+        match substitute_parameters(self.types, self.scratch, declared, bindings) {
+            DeclaredType::Type(kt) => DeclaredType::Type(self.types.concrete(kt).expect(BOUND)),
+            DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
+        }
+    }
+
     /// `declared` read under the source module's bindings.
-    fn source_side(&self, declared: KType) -> KType {
-        substitute_parameters(self.types, self.scratch, declared, self.from)
+    fn source_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
+        self.read(declared, self.from)
     }
 
     /// `declared` read under the view's bindings.
-    fn view_side(&self, declared: KType) -> KType {
-        substitute_parameters(self.types, self.scratch, declared, self.to)
+    fn view_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
+        self.read(declared, self.to)
     }
 
     /// A `Signature` handle whose manifest members are `table` — what a barrier node holds, since
     /// a node carries `Copy`, lifetime-free handles and not a borrowed table.
-    fn sig_of(&self, table: Members<'_, TypeSymbol>) -> KType {
+    fn sig_of(&self, table: Members<'_, TypeSymbol, KType>) -> KType {
         let mut draft = SchemaDraft::new(self.scratch);
         for (name, kt) in table.iter().copied() {
             draft.insert_manifest(name, kt);
@@ -86,7 +102,7 @@ impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
 pub fn coerce<'graph, 'cell>(
     cx: &Coercion<'_, 'cell, '_, '_>,
     value: KValue<'graph, 'cell>,
-    declared: KType,
+    declared: DeclaredType<Parametric>,
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
     let (src, dst) = (cx.source_side(declared), cx.view_side(declared));
     // The two sides agree, so the member already has the type the view declares: the whole of
@@ -94,23 +110,33 @@ pub fn coerce<'graph, 'cell>(
     if src == dst {
         return Ok(value);
     }
-    match cx.types.node(declared) {
+    let unsupported = CoercionRefused::Unsupported(declared);
+    let node = match declared {
+        DeclaredType::Type(declared) => cx.types.node(declared),
+        DeclaredType::Scheme(scheme) => cx.types.scheme_node(scheme),
+    };
+    // Only a function slot is a scheme, so every other arm's two sides are types.
+    let (src_type, dst_type) = (src.as_type(), dst.as_type());
+    match node {
         // A reference to a head parameter: the value takes the mint as its one tagged layer, the
         // barrier checking the mint is one and the payload fits.
         TypeNode::Parameter { nonce: None, .. } => {
+            let (Some(src), Some(dst)) = (src_type, dst_type) else {
+                return Err(unsupported);
+            };
             Tagged::seal(cx.writer, value, dst, src, cx.types, cx.scratch)
                 .map(Value::Tagged)
                 .map_err(CoercionRefused::Seal)
         }
         TypeNode::List { element } => {
-            let Value::List(list) = value else {
-                return Err(CoercionRefused::Unsupported(declared));
+            let (Value::List(list), Some(dst)) = (value, dst_type) else {
+                return Err(unsupported);
             };
             let surface = value.surface(cx.types, cx.scratch).expect("a list opens");
             let mut cells = BumpVec::with_capacity_in(list.len(), cx.scratch);
             for at in 0..surface.len() {
                 let cell = surface.child(at, cx.types, cx.scratch).value();
-                cells.push(coerce(cx, cell, element)?);
+                cells.push(coerce(cx, cell, element.into())?);
             }
             let built = List::new(cx.writer, cells.iter().copied(), cx.types, cx.scratch);
             Ok(Value::List(if built.ktype() == dst {
@@ -123,14 +149,14 @@ pub fn coerce<'graph, 'cell>(
         TypeNode::Dict {
             value: cell_type, ..
         } => {
-            let Value::Dict(dict) = value else {
-                return Err(CoercionRefused::Unsupported(declared));
+            let (Value::Dict(dict), Some(dst)) = (value, dst_type) else {
+                return Err(unsupported);
             };
             let surface = value.surface(cx.types, cx.scratch).expect("a dict opens");
             let mut entries = BumpVec::with_capacity_in(dict.len(), cx.scratch);
             for at in 0..surface.len() {
                 let cell = surface.child(at, cx.types, cx.scratch).value();
-                entries.push((*surface.key(at), coerce(cx, cell, cell_type)?));
+                entries.push((*surface.key(at), coerce(cx, cell, cell_type.into())?));
             }
             let built = Dict::new(cx.writer, &entries, cx.types, cx.scratch);
             Ok(Value::Dict(if built.ktype() == dst {
@@ -140,16 +166,16 @@ pub fn coerce<'graph, 'cell>(
             }))
         }
         TypeNode::Record { fields } => {
-            if !matches!(value, Value::Record(_)) {
-                return Err(CoercionRefused::Unsupported(declared));
-            }
+            let (Value::Record(_), Some(dst)) = (value, dst_type) else {
+                return Err(unsupported);
+            };
             let mut built = BumpVec::with_capacity_in(fields.len(), cx.scratch);
             for (binder, field_type) in fields.iter() {
                 let cell = value
                     .field(binder.symbol(), cx.types, cx.scratch)
                     .expect("the record satisfies the slot, so it has every declared field")
                     .value();
-                built.push((binder, coerce(cx, cell, field_type)?));
+                built.push((binder, coerce(cx, cell, field_type.into())?));
             }
             let built = Record::new(cx.writer, &built, cx.types, cx.scratch);
             Ok(Value::Record(if built.ktype() == dst {
@@ -161,13 +187,16 @@ pub fn coerce<'graph, 'cell>(
         // The first declared member whose source side admits the value, in the union's interned
         // order. Two members that both admit it — a slot declared `Carrier | Number` over a source
         // binding `Carrier` to `Number` — take whichever that order reaches first.
-        TypeNode::Union { .. } => {
+        TypeNode::Union { members } => {
             let carried = value.ktype();
-            let member = union_members(cx, declared)
-                .into_iter()
-                .find(|member| satisfied_by(cx.types, cx.scratch, cx.source_side(*member), carried))
+            let member = members
+                .iter()
+                .find(|member| {
+                    let source = cx.source_side((*member).into());
+                    satisfied_by(cx.types, cx.scratch, source, carried)
+                })
                 .ok_or(CoercionRefused::NoUnionMember)?;
-            coerce(cx, value, member)
+            coerce(cx, value, member.into())
         }
         TypeNode::KFunction { .. } => {
             let Value::Knotted(member) = value else {
@@ -198,6 +227,9 @@ pub fn coerce<'graph, 'cell>(
             let Some(module) = member.module() else {
                 return Err(CoercionRefused::NotAModule);
             };
+            let (Some(src), Some(dst)) = (src_type, dst_type) else {
+                return Err(unsupported);
+            };
             let (
                 TypeNode::SignatureApply {
                     pins: from_pins, ..
@@ -205,19 +237,16 @@ pub fn coerce<'graph, 'cell>(
                 TypeNode::SignatureApply { pins: to_pins, .. },
             ) = (cx.types.node(src), cx.types.node(dst))
             else {
-                return Err(CoercionRefused::Unsupported(declared));
+                return Err(unsupported);
             };
             let Some(schema) = super::layout::schema_of(signature, cx.types) else {
-                return Err(CoercionRefused::Unsupported(declared));
+                return Err(unsupported);
             };
-            let from = fits_application(
-                cx.types,
-                cx.scratch,
-                module.ktype(),
-                signature,
-                from_pins.as_slice(),
-            )
-            .map_err(|_| CoercionRefused::Nested)?;
+            let mut pins = BumpVec::with_capacity_in(from_pins.len(), cx.scratch);
+            pins.extend(from_pins.iter());
+            let from = fits_application(cx.types, cx.scratch, module.ktype(), signature, &pins)
+                .map_err(|_| CoercionRefused::Nested)?;
+            let from = view::solved(cx.types, cx.scratch, from);
             let to = Members::from_pairs(
                 cx.scratch,
                 from.iter().map(|(name, solved)| {
@@ -232,15 +261,6 @@ pub fn coerce<'graph, 'cell>(
             .map(Value::Knotted)
             .map_err(|_| CoercionRefused::Nested)
         }
-        _ => Err(CoercionRefused::Unsupported(declared)),
+        _ => Err(unsupported),
     }
-}
-
-/// The declared members of the union `declared`, staged in scratch.
-fn union_members<'x>(cx: &Coercion<'_, '_, '_, 'x>, declared: KType) -> BumpVec<'x, KType> {
-    let mut members = BumpVec::new_in(cx.scratch);
-    if let TypeNode::Union { members: run, .. } = cx.types.node(declared) {
-        members.extend_from_slice(run);
-    }
-    members
 }

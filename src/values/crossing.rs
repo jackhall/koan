@@ -249,7 +249,7 @@ where
         let value = seen.value();
         let composite = match value {
             Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => true,
-            Value::Knotted(member) => seen.ktype() != member.ktype(),
+            Value::Knotted(member) => member.ktype() != seen.ktype(),
             _ => false,
         };
         if composite {

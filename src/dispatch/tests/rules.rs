@@ -14,7 +14,8 @@ use crate::program::Program;
 use crate::scope::BuiltinIndex;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Interval, KType, TypeNode, TypeRegistry, display_name, is_subtype_of, shape_return, shape_slots,
+    Interval, KType, Parametric, TypeNode, TypeRegistry, display_name, is_subtype_of, shape_return,
+    shape_slots,
 };
 use crate::values::record_type;
 
@@ -190,13 +191,21 @@ impl World<'_, '_> {
         }
     }
 
-    fn below(&self, a: KType, b: KType) -> bool {
-        is_subtype_of(self.types, self.scratch, a, b)
+    /// The order over two ends. Every draw is concrete, and a rule over concrete intervals answers
+    /// concrete ones.
+    fn below(&self, a: Parametric, b: Parametric) -> bool {
+        let concrete = |end| {
+            self.types
+                .concrete(end)
+                .expect("a rule over concrete intervals answers concrete ends")
+        };
+        is_subtype_of(self.types, self.scratch, concrete(a), concrete(b))
     }
 
     /// Whether `x` lies within `y`: its upper end `Never`, or both ends inside `y`'s.
     fn within(&self, x: Interval, y: Interval) -> bool {
-        x.upper == KType::NEVER || (self.below(y.lower, x.lower) && self.below(x.upper, y.upper))
+        x.upper == KType::NEVER.into()
+            || (self.below(y.lower, x.lower) && self.below(x.upper, y.upper))
     }
 
     /// `lower` where the load can compute it as a lower end — no union and not `Any` — else
@@ -303,7 +312,7 @@ fn law(
     let returns = over(&|index, _| Interval::within(declared_slots[index]), true);
     let ret = shape_return(declared, world.types).expect("a builtin is a shape");
     prop_assert!(
-        world.below(returns.upper, ret),
+        world.below(returns.upper, ret.into()),
         "{} over its declared slots lies above its declared {}",
         world.render(returns),
         display_name(ret, world.types, program.symbols())
@@ -330,11 +339,12 @@ fn draw<'x>(world: &World<'x, '_>, slots: &[Slot], declared: &[KType]) -> Vec<Dr
                 lower => (world.carried(lowest), lower),
             };
             (
-                Interval { lower, upper },
+                Interval { lower, upper }.into(),
                 Interval {
                     lower: lowest,
                     upper: uppest,
-                },
+                }
+                .into(),
             )
         };
         drawn.push(Drawn {

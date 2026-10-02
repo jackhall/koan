@@ -20,7 +20,7 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Interval, KType, Side, TypeNode, TypeRegistry, bound_above, fits, join_iter, read_through,
+    Interval, KType, Parametric, Side, TypeNode, TypeRegistry, bound_above, fits, read_through,
     shape_return, shape_slots,
 };
 use crate::values::record_type;
@@ -61,7 +61,7 @@ pub(super) fn typed<'x>(
     let dropped = (given.iter().zip(needs.iter()))
         .position(|(given, need)| outside(types, scratch, given.typed, *need));
     let returns = match dropped {
-        Some(_) => Interval::point(KType::NEVER),
+        Some(_) => Interval::point(KType::NEVER.into()),
         None => returns(native, declared, given, types, scratch),
     };
     Typed {
@@ -103,7 +103,7 @@ fn returns(
                 under(upper)
             }
         }
-        _ => under(declared_return(declared, types)),
+        _ => under(declared_return(declared, types).into()),
     }
 }
 
@@ -115,10 +115,19 @@ fn outside(
     argument: Interval,
     needed: KType,
 ) -> bool {
-    let lower = read_through(types, scratch, argument.lower, Side::Below, &mut |node| {
-        node.rigid_interval()
-    });
-    !fits(types, scratch, lower, bound_above(types, scratch, needed))
+    let lower = read_through(
+        types,
+        scratch,
+        argument.lower,
+        Side::Below,
+        &mut |variable| Some(variable.interval().into()),
+    );
+    !fits(
+        types,
+        scratch,
+        lower,
+        bound_above(types, scratch, needed.into()),
+    )
 }
 
 /// The type each slot of `native`'s call needs: its declared slot, narrowed by a rule of its own
@@ -184,12 +193,13 @@ fn projection(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     names: &[BinderSymbol],
-    mut field: impl FnMut(BinderSymbol) -> KType,
-) -> KType {
+    mut field: impl FnMut(BinderSymbol) -> Parametric,
+) -> Parametric {
+    let never = Parametric::from(KType::NEVER);
     let mut fields = BumpVec::with_capacity_in(names.len(), scratch);
     for name in names {
         match field(*name) {
-            KType::NEVER => return KType::NEVER,
+            typed if typed == never => return never,
             typed => fields.push((*name, typed)),
         }
     }
@@ -202,33 +212,39 @@ fn projection(
 fn upper_field(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    ktype: KType,
+    ktype: Parametric,
     name: BinderSymbol,
-) -> KType {
+) -> Parametric {
     let node = types.node(ktype);
     if let Some(bound) = node.rigid_bound() {
-        return upper_field(types, scratch, bound, name);
+        return upper_field(types, scratch, bound.into(), name);
     }
     match node {
-        TypeNode::Never => KType::NEVER,
-        TypeNode::Record { fields } => fields.get(name.symbol()).unwrap_or(KType::ANY),
-        TypeNode::Union { members } => join_iter(
-            types,
-            scratch,
-            members
-                .iter()
-                .map(|member| upper_field(types, scratch, *member, name)),
-        ),
-        _ => KType::ANY,
+        TypeNode::Never => KType::NEVER.into(),
+        TypeNode::Record { fields } => fields
+            .get(name.symbol())
+            .unwrap_or_else(|| KType::ANY.into()),
+        TypeNode::Union { members } => {
+            let mut fields = BumpVec::with_capacity_in(members.len(), scratch);
+            fields.extend(
+                members
+                    .iter()
+                    .map(|member| upper_field(types, scratch, member, name)),
+            );
+            types.union_of(scratch, &fields)
+        }
+        _ => KType::ANY.into(),
     }
 }
 
 /// A type under the field `name` of every value above the lower end `ktype`: a record's field type,
 /// or `Never` where it names no such field.
-fn lower_field(types: &TypeRegistry<'_>, ktype: KType, name: BinderSymbol) -> KType {
+fn lower_field(types: &TypeRegistry<'_>, ktype: Parametric, name: BinderSymbol) -> Parametric {
     match types.node(ktype) {
-        TypeNode::Record { fields } => fields.get(name.symbol()).unwrap_or(KType::NEVER),
-        _ => KType::NEVER,
+        TypeNode::Record { fields } => fields
+            .get(name.symbol())
+            .unwrap_or_else(|| KType::NEVER.into()),
+        _ => KType::NEVER.into(),
     }
 }
 

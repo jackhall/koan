@@ -15,7 +15,7 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 
 use super::Variance;
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{Handle, TypeHandle, wrap};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
@@ -82,8 +82,8 @@ impl Context {
 pub fn visit<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    root: KType,
-    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
+    root: Handle,
+    at: &mut impl FnMut(Handle, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
     visit_in(types, scratch, root, Variance::Co, at)
 }
@@ -94,9 +94,9 @@ pub fn visit<'run>(
 pub fn visit_in<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    root: KType,
+    root: Handle,
     variance: Variance,
-    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
+    at: &mut impl FnMut(Handle, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
     let mut context = Context::root(variance);
     visit_at(types, scratch, root, &mut context, at)
@@ -105,9 +105,9 @@ pub fn visit_in<'run>(
 fn visit_at<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    kt: KType,
+    kt: Handle,
     context: &mut Context,
-    at: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Visit,
+    at: &mut impl FnMut(Handle, &TypeNode<'run>, &Context) -> Visit,
 ) -> bool {
     let node = types.node(kt);
     match at(kt, &node, context) {
@@ -147,10 +147,10 @@ fn visit_at<'run>(
 pub fn rebuild<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    root: KType,
+    root: Handle,
     cfg: Rebuild,
-    rule: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Option<KType>,
-) -> KType {
+    rule: &mut impl FnMut(Handle, &TypeNode<'run>, &Context) -> Option<Handle>,
+) -> Handle {
     let mut context = Context::root(Variance::Co);
     rebuild_at(types, scratch, root, cfg, &mut context, rule)
 }
@@ -158,11 +158,11 @@ pub fn rebuild<'run>(
 fn rebuild_at<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    kt: KType,
+    kt: Handle,
     cfg: Rebuild,
     context: &mut Context,
-    rule: &mut impl FnMut(KType, &TypeNode<'run>, &Context) -> Option<KType>,
-) -> KType {
+    rule: &mut impl FnMut(Handle, &TypeNode<'run>, &Context) -> Option<Handle>,
+) -> Handle {
     let node = types.node(kt);
     if let Some(replacement) = rule(kt, &node, context) {
         return replacement;
@@ -195,7 +195,7 @@ fn rebuild_at<'run>(
 }
 
 /// A node's children, in [`children`]'s order, in a buffer sized to their count.
-fn child_list<'s>(scratch: BumpAllocator<'s>, node: &TypeNode<'_>) -> BumpVec<'s, (KType, bool)> {
+fn child_list<'s>(scratch: BumpAllocator<'s>, node: &TypeNode<'_>) -> BumpVec<'s, (Handle, bool)> {
     let mut count = 0;
     children(node, &mut |_, _| count += 1);
     let mut kids = BumpVec::with_capacity_in(count, scratch);
@@ -208,7 +208,7 @@ fn child_list<'s>(scratch: BumpAllocator<'s>, node: &TypeNode<'_>) -> BumpVec<'s
 ///
 /// A signature and a sealed member are leaves: one is closed content, the other content-addressed
 /// by its component.
-pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(KType, bool)) {
+pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(Handle, bool)) {
     match *node {
         TypeNode::Number
         | TypeNode::Str
@@ -248,7 +248,7 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(KType, bool)) {
             out(ret, false);
         }
         TypeNode::ExpressionShape { elements, ret, .. } => {
-            for element in elements {
+            for element in elements.iter() {
                 if let DispatchTokenElement::Slot(kt) = element {
                     out(*kt, true);
                 }
@@ -256,6 +256,8 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(KType, bool)) {
             out(ret, false);
         }
         TypeNode::Union { members } => members.iter().for_each(|m| out(*m, false)),
+        // A bound is concrete, and a rebuild that reaches inside one keeps it concrete: no rule
+        // here finds a variable in a bound to replace.
         TypeNode::ConstructorApply {
             constructor,
             arguments,
@@ -265,11 +267,11 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(KType, bool)) {
         }
         // A rigid variable's one child is its bound; a lexical variable's are its two ends.
         TypeNode::Lexical { lower, bound, .. } => {
-            out(lower, false);
-            out(bound, false);
+            out(lower.raw(), false);
+            out(bound.raw(), false);
         }
         TypeNode::Quantified { bound, .. } | TypeNode::Parameter { bound, .. } => {
-            out(bound, false)
+            out(bound.raw(), false)
         }
         // An application's pins; its signature is closed.
         TypeNode::SignatureApply { pins, .. } => pins.values().for_each(|kt| out(kt, false)),
@@ -283,9 +285,9 @@ fn reassemble(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     node: &TypeNode<'_>,
-    new: &[KType],
+    new: &[Handle],
     cfg: Rebuild,
-) -> Option<KType> {
+) -> Option<Handle> {
     Some(match *node {
         TypeNode::List { .. } => types.list(new[0]),
         TypeNode::Dict { .. } => types.dict(new[0], new[1]),
@@ -298,14 +300,14 @@ fn reassemble(
         } => {
             let (values, ret) = new.split_at(params.len());
             types
-                .function_type(
+                .function_group(
                     scratch,
                     quantifiers,
                     bounds,
                     &rekey(scratch, params, values),
                     ret[0],
                 )
-                .handle
+                .0
         }
         TypeNode::ExpressionShape {
             quantifiers,
@@ -324,21 +326,21 @@ fn reassemble(
             }));
             let ret = *slots.next().expect("the return follows the slots");
             types
-                .shape_type(scratch, quantifiers, bounds, &rebuilt, classes, ret)
-                .handle
+                .shape_group(scratch, quantifiers, bounds, &rebuilt, classes, ret)
+                .0
         }
         TypeNode::Union { .. } => match cfg.union {
             UnionDoor::Canonical => types.union_of(scratch, new),
             UnionDoor::Flat => types.intern_union_flat(scratch, new),
         },
         TypeNode::ConstructorApply { arguments, .. } => {
-            types.constructor_apply(scratch, new[0], &rekey(scratch, arguments, &new[1..]))
+            types.constructor_apply(scratch, wrap(new[0]), &rekey(scratch, arguments, &new[1..]))
         }
-        TypeNode::Quantified { index, .. } => types.quantified(index, new[0]),
-        TypeNode::Lexical { level, name, .. } => {
-            types.lexical_between(scratch, level, name, new[0], new[1])
-        }
-        TypeNode::Parameter { name, nonce, .. } => types.parameter(name, new[0], nonce),
+        TypeNode::Quantified { index, .. } => types.quantified(index, wrap(new[0])).raw(),
+        TypeNode::Lexical { level, name, .. } => types
+            .lexical_between(scratch, level, name, wrap(new[0]), wrap(new[1]))
+            .raw(),
+        TypeNode::Parameter { name, nonce, .. } => types.parameter(name, wrap(new[0]), nonce),
         TypeNode::SignatureApply { signature, pins } => {
             types.signature_apply(scratch, signature, &rekey(scratch, pins, new))
         }
@@ -351,8 +353,8 @@ fn reassemble(
 fn rekey<'s>(
     scratch: BumpAllocator<'s>,
     record: Record<'_>,
-    values: &[KType],
-) -> BumpVec<'s, (BinderSymbol, KType)> {
+    values: &[Handle],
+) -> BumpVec<'s, (BinderSymbol, Handle)> {
     let mut fields = BumpVec::with_capacity_in(record.len(), scratch);
     fields.extend(record.keys().zip(values.iter().copied()));
     fields

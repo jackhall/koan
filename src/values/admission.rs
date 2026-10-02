@@ -14,42 +14,27 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with, fits, join,
-    satisfied_by, substitute_quantified,
+    Collector, DeclaredType, KKind, KType, NodeSchema, Parametric, TypeHandle, TypeNode,
+    TypeRegistry, Variance, admits_with, fits, satisfied_by, substitute_quantified,
 };
 
 use super::{Knotted, Resolved, Value, WorkingPart};
 
-/// Whether `slot` takes `value`: one relation over the value's memoized type. A slot reading a
-/// quantifier admits by unification against that type under a fresh collector, which checks the
-/// shape alone: a variable's bound, and two slots of one call agreeing on it, are what the caller's
-/// own collector checks when it solves.
+/// Whether `slot` takes `value`: *fits* over the value's memoized type — a quantified callable's
+/// scheme fitting a function slot through an instance.
 pub fn satisfies<X: Knotted>(
     slot: KType,
     value: &Value<'_, X>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
-    type_satisfies(slot, value.ktype(), types, scratch)
+    satisfied_by(types, scratch, slot, value.ktype())
 }
 
-/// [`satisfies`] over the type a value is carried or seen at.
-pub(super) fn type_satisfies(
-    slot: KType,
-    carried: KType,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> bool {
-    if types.contains_quantified(slot) {
-        let mut collector = Collector::new(scratch, &[]);
-        return admits_with(types, scratch, slot, carried, Variance::Co, &mut collector).is_ok();
-    }
-    satisfied_by(types, scratch, slot, carried)
-}
-
-/// What a construction `(Head payload)` refuses.
+/// What a construction `(Head payload)` refuses, its payload typed as the construction was asked
+/// over: a value's concrete type, or a static type at the load.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConstructionRefused {
+pub enum ConstructionRefused<T = KType> {
     /// The head names nothing a construction builds: no newtype, no family with a representation.
     /// An application of a family is no head either.
     NotConstructible(KType),
@@ -57,11 +42,11 @@ pub enum ConstructionRefused {
     Misfit {
         identity: KType,
         representation: KType,
-        payload: KType,
+        payload: T,
     },
     /// The payload's type cannot be solved against the family's representation: a structural
     /// mismatch, or contributions to one parameter joining outside its bound.
-    Unsolved { family: KType, payload: KType },
+    Unsolved { family: KType, payload: T },
 }
 
 /// The identity a construction whose head denotes `head` produces over a payload of type `payload`.
@@ -73,19 +58,22 @@ pub enum ConstructionRefused {
 /// representation gives its application at the least arguments `payload` solves the representation
 /// to, a parameter the payload does not reach taking `Never`: `Boxed` over a number gives
 /// `:(Boxed {Type = Number})`.
-pub fn construction(
+///
+/// Over a concrete payload the identity is concrete, and over a static type — which may hold a
+/// lexical variable — it may hold one too.
+pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     head: KType,
-    payload: KType,
-) -> Result<KType, ConstructionRefused> {
+    payload: T,
+) -> Result<T, ConstructionRefused<T>> {
     match types.node(head) {
         TypeNode::SetMember {
             schema: NodeSchema::NewType(representation),
             ..
         } => {
             if satisfied_by(types, scratch, representation, payload) {
-                Ok(head)
+                Ok(head.into())
             } else {
                 Err(ConstructionRefused::Misfit {
                     identity: head,
@@ -102,7 +90,8 @@ pub fn construction(
                 },
             ..
         } => {
-            let mut collector = Collector::least(scratch, param_names.len());
+            // What the payload solves the parameters to is a `T`, as the payload is.
+            let mut collector = Collector::<T>::least(scratch, param_names.len());
             let solved = admits_with(
                 types,
                 scratch,
@@ -167,13 +156,13 @@ pub fn representation(
             .and_then(|arguments| arguments.get(name.symbol()))
             .unwrap_or(KType::ANY)
     }));
-    Some(substitute_quantified(
-        types,
-        scratch,
-        representation,
-        &bindings,
-    ))
+    let read = substitute_quantified(types, scratch, representation, &bindings);
+    Some(types.concrete(read).expect(FAMILY))
 }
+
+/// Why a family's representation read at its arguments is concrete: it reads its own parameters
+/// and nothing else, and each argument is concrete.
+const FAMILY: &str = "a family's representation reads only its own parameters";
 
 /// Whether a construction through `head` solves its identity from its payload — `head` names a
 /// family with a representation — rather than taking `head` itself: a newtype, or a head that
@@ -211,7 +200,7 @@ pub fn sealing(
     scratch: BumpAllocator<'_>,
     mint: KType,
     witness: KType,
-    payload: KType,
+    payload: DeclaredType<KType>,
 ) -> Result<KType, SealRefused> {
     if !is_mint(types, mint) {
         return Err(SealRefused::NotAMint(mint));
@@ -320,36 +309,41 @@ pub fn part_ktype(
     })
 }
 
-fn joined(
-    items: impl Iterator<Item = KType>,
+fn joined<H: TypeHandle + From<KType>>(
+    items: impl Iterator<Item = H>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> KType {
-    items.fold(KType::NEVER, |acc, item| join(types, scratch, acc, item))
+) -> H {
+    // The canonical union of two types is their join where both are concrete, and keeps a
+    // variable beside the rest where one is not.
+    items.fold(KType::NEVER.into(), |acc, item| {
+        types.union_of(scratch, &[acc, item])
+    })
 }
 
 /// The type a list over cells of types `elements` memoizes: the list of their join, `Never` for
 /// none. Every list's memo is derived here — [`List::new`](super::List::new)'s over its cells, and
 /// the tie's over a data node's staged cells.
-pub fn list_type(
+pub fn list_type<H: TypeHandle + From<KType>>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    elements: impl Iterator<Item = KType>,
-) -> KType {
+    elements: impl Iterator<Item = H>,
+) -> H {
     types.list(joined(elements, types, scratch))
 }
 
 /// The type a dict over entries of key and value types `entries` memoizes: the dict of each side's
 /// join. Every dict's memo is derived here, over the entries a repeated key leaves.
-pub fn dict_type(
+pub fn dict_type<H: TypeHandle + From<KType>>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    entries: impl Iterator<Item = (KType, KType)>,
-) -> KType {
-    let (keys, values) = entries.fold((KType::NEVER, KType::NEVER), |(keys, values), entry| {
+    entries: impl Iterator<Item = (H, H)>,
+) -> H {
+    let never = H::from(KType::NEVER);
+    let (keys, values) = entries.fold((never, never), |(keys, values), entry| {
         (
-            join(types, scratch, keys, entry.0),
-            join(types, scratch, values, entry.1),
+            types.union_of(scratch, &[keys, entry.0]),
+            types.union_of(scratch, &[values, entry.1]),
         )
     });
     types.dict(keys, values)
@@ -357,11 +351,11 @@ pub fn dict_type(
 
 /// The type a record over `fields` memoizes: the record of each field's type. Every record's memo
 /// is derived here.
-pub fn record_type(
+pub fn record_type<H: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    fields: impl ExactSizeIterator<Item = (BinderSymbol, KType)>,
-) -> KType {
+    fields: impl ExactSizeIterator<Item = (BinderSymbol, H)>,
+) -> H {
     let mut field_types = BumpVec::with_capacity_in(fields.len(), scratch);
     field_types.extend(fields);
     types.record(scratch, &field_types)
@@ -373,11 +367,11 @@ pub fn record_type(
 /// slot takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its
 /// bound takes. A function, nominal, signature, shape, constructor-application, deferred or sibling
 /// slot admits no raw part — only a resolved value.
-pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
+pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
         TypeNode::Quantified { bound, .. } | TypeNode::Lexical { bound, .. } => {
-            admits_part(bound, part, types)
+            admits_part(bound.into(), part, types)
         }
         TypeNode::Never => false,
         TypeNode::AnyValue => matches!(
@@ -399,7 +393,9 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
         | TypeNode::Binder
         | TypeNode::Name
         | TypeNode::Keyword
-        | TypeNode::AnyCode => part.code_kind().is_some_and(|kind| kind.within_code(slot)),
+        | TypeNode::AnyCode => types
+            .concrete(slot)
+            .is_some_and(|slot| part.code_kind().is_some_and(|kind| kind.within_code(slot))),
         // A raw part reports its kind alone, so the names a slot offers constrain nothing here.
         TypeNode::CodeNeeding { kind, .. } => {
             part.code_kind().is_some_and(|part| part.within_code(kind))
@@ -434,7 +430,7 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
         }
         TypeNode::Union { members } => members
             .iter()
-            .any(|member| admits_part(*member, part, types)),
+            .any(|member| admits_part(member, part, types)),
         TypeNode::KFunction { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Parameter { .. }
@@ -457,7 +453,7 @@ pub fn admits<X: Knotted>(
     scratch: BumpAllocator<'_>,
 ) -> bool {
     match part {
-        WorkingPart::Ast(part) => admits_part(slot, part, types),
+        WorkingPart::Ast(part) => admits_part(slot.into(), part, types),
         WorkingPart::Spliced { value, .. } => satisfies(slot, value, types, scratch),
         WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => {
             slot == KType::ANY
