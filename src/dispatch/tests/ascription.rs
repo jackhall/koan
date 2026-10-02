@@ -9,7 +9,7 @@ use crate::scope::{BodyShape, Site};
 use crate::type_lattice::display_name;
 
 use super::run;
-use super::statics::{body, interval, let_narrowing, loaded, slot};
+use super::statics::{body, interval, let_narrowing, loaded, module_body, slot};
 
 /// Both ends of the static type of the binder `name` in `shape`, rendered.
 pub(super) fn ends(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> (String, String) {
@@ -273,14 +273,15 @@ fn a_call_is_exact_at_its_callee_s_return() {
         "{WHICH}EXPR #(ANYS) -> :(LIST OF Any) = #([1])\n\
          LET anys = (FN :{{}} -> :(LIST OF Any) = #([1]))\n\
          EXPR FOR ALL #[Elt] #(SAME xs :(LIST OF Elt)) -> :(LIST OF Elt) = #(xs)\n\
-         LET same = (FN FOR ALL #[Elt] :{{xs :(LIST OF Elt)}} -> :(LIST OF Elt) = #(xs))\n\
          LET ys = ([1] :! (LIST OF (Number | Str)))\n\
          NEWTYPE (Type AS Boxed)\n\
          EXPR #(BOX) -> Boxed = #((Boxed 7))\n\
          LET keyworded = (ANYS)\n\
          LET by_name = (anys {{}})\n\
          LET solved = (SAME ys)\n\
-         LET named = (same {{xs = ys}})\n\
+         MODULE lib = (\
+         (LET same = (FN FOR ALL #[Elt] :{{xs :(LIST OF Elt)}} -> :(LIST OF Elt) = #(xs))) \
+         (LET named = (same {{xs = ys}})))\n\
          LET which = (WHICH keyworded)\n\
          LET box = (BOX)\n"
     );
@@ -292,7 +293,7 @@ fn a_call_is_exact_at_its_callee_s_return() {
         let numbers_or_strs = point(":(LIST OF :(Number | Str))");
         assert_eq!(ends(program, top, "solved"), numbers_or_strs);
         assert_eq!(
-            ends(program, top, "named"),
+            ends(program, module_body(program, "lib"), "named"),
             numbers_or_strs,
             "a call by name whose solve is points is exact"
         );

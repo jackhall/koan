@@ -170,13 +170,15 @@ fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
         run("LET f = (FN :{x :Number} -> Str = #(\"ran\"))\nPRINT (f {x = \"s\"})"),
         "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}"
     );
-    let pair = "LET f = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Str = #((PRINT Elt) (\"ran\")))\n";
+    let pair = |call: &str| {
+        run(&format!(
+            "MODULE lib = ((LET f = (FN FOR ALL #[Elt] :{{x :Elt, y :Elt}} -> Str = \
+             #((PRINT Elt) (\"ran\")))) (PRINT {call}))"
+        ))
+    };
+    assert_eq!(pair("(f {x = 1, y = 2})"), "Number\nran");
     assert_eq!(
-        run(&format!("{pair}PRINT (f {{x = 1, y = 2}})")),
-        "Number\nran"
-    );
-    assert_eq!(
-        run(&format!("{pair}PRINT (f {{x = 1, y = 2, Elt = Str}})")),
+        pair("(f {x = 1, y = 2, Elt = Str})"),
         "error: arguments :{x :Number y :Number Elt :ProperType} do not name the parameters of \
          :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str)",
         "a type parameter is solved, never written"
@@ -428,12 +430,13 @@ fn the_overlap_check_reads_declared_types() {
 
 #[test]
 fn a_callable_over_a_run_bound_type_is_born_with_the_solution() {
-    let source = "LET mk = (FN FOR ALL #[Elt] :{x :Elt} -> :(FN :{y :Elt} -> Elt) = \
-                  #(FN :{y :Elt} -> Elt = #(y)))\n\
-                  LET g = (mk {x = 1})\n\
-                  PRINT g\n\
-                  PRINT (g {y = 2})\n\
-                  PRINT (g {y = \"s\"})";
+    let source = "MODULE lib = (\
+                  (LET mk = (FN FOR ALL #[Elt] :{x :Elt} -> :(FN :{y :Elt} -> Elt) = \
+                  #(FN :{y :Elt} -> Elt = #(y)))) \
+                  (LET g = (mk {x = 1})) \
+                  (PRINT g) \
+                  (PRINT (g {y = 2})) \
+                  (PRINT (g {y = \"s\"})))";
     assert_eq!(
         run(source),
         ":(FN :{y :Number} -> Number)\n2\n\
@@ -443,19 +446,21 @@ fn a_callable_over_a_run_bound_type_is_born_with_the_solution() {
 
 #[test]
 fn a_captured_type_parameter_reads_the_enclosing_call_s_solution() {
-    let source = "LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(FN :{} -> Any) = \
-                  #(FN :{} -> Any = #(:(LIST OF Elt))))\n\
-                  PRINT ((mk {x = 1, y = 2}) {})\n\
-                  PRINT ((mk {x = \"s\", y = \"t\"}) {})";
+    let source = "MODULE lib = (\
+                  (LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(FN :{} -> Any) = \
+                  #(FN :{} -> Any = #(:(LIST OF Elt))))) \
+                  (PRINT ((mk {x = 1, y = 2}) {})) \
+                  (PRINT ((mk {x = \"s\", y = \"t\"}) {})))";
     assert_eq!(run(source), ":(LIST OF Number)\n:(LIST OF Str)");
 }
 
 #[test]
 fn a_nominal_over_a_run_bound_type_is_declared_per_call() {
-    let source = "LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Any = \
-                  #((NEWTYPE Boxed = :{v :Elt}) (Boxed {v = x})))\n\
-                  PRINT (mk {x = 1, y = 2})\n\
-                  PRINT (mk {x = \"a\", y = \"b\"})";
+    let source = "MODULE lib = (\
+                  (LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Any = \
+                  #((NEWTYPE Boxed = :{v :Elt}) (Boxed {v = x})))) \
+                  (PRINT (mk {x = 1, y = 2})) \
+                  (PRINT (mk {x = \"a\", y = \"b\"})))";
     assert_eq!(run(source), "Boxed({v = 1})\nBoxed({v = a})");
 }
 
@@ -463,8 +468,9 @@ fn a_nominal_over_a_run_bound_type_is_declared_per_call() {
 #[test]
 fn a_variable_used_once_is_solved_by_each_call() {
     let source = "EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)\n\
-                  LET kind = (FN FOR ALL #[Elt] :{x :Elt} -> Type = #(Elt))\n\
-                  PRINT (KIND 1)\nPRINT (kind {x = \"s\"})";
+                  MODULE lib = (\
+                  (LET kind = (FN FOR ALL #[Elt] :{x :Elt} -> Type = #(Elt))) \
+                  (PRINT (KIND 1)) (PRINT (kind {x = \"s\"})))";
     assert_eq!(run(source), "Number\nStr");
 }
 

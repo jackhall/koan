@@ -82,6 +82,14 @@ pub(super) fn body<'graph>(
         .expect("the binder births a body")
 }
 
+/// The body of the top-level `MODULE` binder `name`.
+pub(super) fn module_body<'graph>(
+    program: &Program<'graph>,
+    name: &str,
+) -> &'graph BodyShape<'graph> {
+    body(program, program.shape(), name)
+}
+
 /// The narrowing of the keyworded use `LET name = <use>` in the top level of `source`.
 fn narrowing(source: &str, name: &str) -> String {
     loaded(source, |program| {
@@ -180,9 +188,9 @@ fn a_parameter_is_read_at_its_declared_type() {
         },
     );
     loaded(
-        "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  LET y = x\n  y\n))",
+        "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  LET y = x\n  y\n)))",
         |program| {
-            let f = body(program, program.shape(), "f");
+            let f = body(program, module_body(program, "lib"), "f");
             assert_eq!(
                 upper(program, f, "y"),
                 lexical(program, 0, "Elt", KType::ANY),
@@ -195,16 +203,16 @@ fn a_parameter_is_read_at_its_declared_type() {
 #[test]
 fn a_capture_keeps_its_type_along_the_chain() {
     loaded(
-        "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+        "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
          LET g = (FN :{} -> Any = #(\n    LET y = x\n    y\n  ))\n  \
-         LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Any = #(\n    LET z = x\n    z\n  ))\n  \
-         x\n))",
+         MODULE inner = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Any = #(\n    LET z = x\n    z\n  )))\n  \
+         x\n)))",
         |program| {
-            let f = body(program, program.shape(), "f");
+            let f = body(program, module_body(program, "lib"), "f");
             let variable = lexical(program, 0, "Elt", KType::ANY);
             let g = body(program, f, "g");
             assert_eq!(upper(program, g, "y"), variable);
-            let h = body(program, f, "h");
+            let h = body(program, body(program, f, "inner"), "h");
             assert_eq!(upper(program, h, "z"), variable);
         },
     );
@@ -326,12 +334,14 @@ fn a_body_that_can_never_meet_its_return_refuses_the_load() {
         "loaded"
     );
     assert_eq!(
-        run("LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nPRINT (id {x = 1})"),
+        run(
+            "MODULE lib = ((LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))) (PRINT (id {x = 1})))"
+        ),
         "1"
     );
     assert_eq!(
-        run("LET no = (FN FOR ALL #{Elt: Str} :{x :Elt} -> Elt = #(1))"),
-        "load: <test>:1:54: this body returns Number, which can never satisfy its declared \
+        run("MODULE lib = (LET no = (FN FOR ALL #{Elt: Str} :{x :Elt} -> Elt = #(1)))"),
+        "load: <test>:1:68: this body returns Number, which can never satisfy its declared \
          return Str"
     );
     assert_eq!(
@@ -389,15 +399,15 @@ fn a_quantified_candidate_is_selected_when_it_always_admits() {
 /// Each call of a quantified function solves its group from that call's arguments, at load.
 #[test]
 fn each_call_of_a_quantified_function_is_typed_by_its_arguments() {
-    let pick = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n";
-    assert_eq!(
-        top(&format!("{pick}LET n = (pick {{x = 1}})"), "n"),
-        "Number"
-    );
-    assert_eq!(
-        top(&format!("{pick}LET s = (pick {{x = \"s\"}})"), "s"),
-        "Str"
-    );
+    let pick = "(LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
+    let typed = |call: &str| {
+        loaded(
+            &format!("MODULE lib = ({pick} (LET n = {call}))"),
+            |program| binder(program, module_body(program, "lib"), "n"),
+        )
+    };
+    assert_eq!(typed("(pick {x = 1})"), "Number");
+    assert_eq!(typed("(pick {x = \"s\"})"), "Str");
 }
 
 /// The block a `USING … SCOPE` in the body of `source`'s one top-level callable builds.

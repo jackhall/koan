@@ -6,7 +6,9 @@ use crate::scope::{BodyShape, ShapeKind, Site, Static};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
 
 use super::run;
-use super::statics::{body, interval, let_narrowing, lexical, loaded, rendered, top, upper};
+use super::statics::{
+    binder, body, interval, let_narrowing, lexical, loaded, module_body, rendered, top, upper,
+};
 
 /// The body the registration of `shape` whose key leads with the keyword `lead` births.
 fn expressed<'graph>(
@@ -71,22 +73,24 @@ const OUTER: &str = "EXPR FOR ALL #[Elt] #(OUTER x :Elt) -> Elt = #(\n  \
 #[test]
 fn a_nested_callable_substitutes_its_enclosing_names_by_level() {
     assert_eq!(
-        run("LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
-             LET g = (FN FOR ALL #[Tee] :{t :Tee} -> Elt = #(x))\n  \
-             g {t = \"s\"}\n\
-             ))\n\
-             PRINT (f {x = 1})"),
+        run(
+            "MODULE lib = ((LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+             EXPR FOR ALL #[Tee] #(GEE t :Tee) -> Elt = #(x)\n  \
+             GEE \"s\"\n\
+             ))) \
+             (PRINT (f {x = 1})))"
+        ),
         "1"
     );
 }
 
 #[test]
 fn typing_a_quote_s_code_a_second_time_interns_no_type() {
-    let quote = "#(LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+    let quote = "#(MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
                  LET g = (FN :{} -> Elt = #(x))\n  \
                  PRINT y\n  \
                  x\n\
-                 )))";
+                 ))))";
     let count = |source: &str| loaded(source, |program| program.types().node_count());
     assert_eq!(
         count(&format!("LET q = {quote}")),
@@ -117,13 +121,13 @@ fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
 #[test]
 fn a_nested_quantified_callable_reads_its_own_names_and_checks_its_return() {
     loaded(
-        "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
-         LET h = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t))\n  \
+        "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+         MODULE inner = (LET h = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t)))\n  \
          x\n\
-         ))",
+         )))",
         |program| {
-            let f = body(program, program.shape(), "f");
-            let h = body(program, f, "h");
+            let f = body(program, module_body(program, "lib"), "f");
+            let h = body(program, body(program, f, "inner"), "h");
             assert_eq!(
                 upper(program, h, "t"),
                 lexical(program, 1, "Tee", KType::ANY)
@@ -132,12 +136,12 @@ fn a_nested_quantified_callable_reads_its_own_names_and_checks_its_return() {
     );
     assert_eq!(
         run(
-            "LET f = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(\n  \
-             LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Elt = #(\"no\"))\n  \
+            "MODULE lib = (LET f = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(\n  \
+             MODULE inner = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Elt = #(\"no\")))\n  \
              x\n\
-             ))"
+             )))"
         ),
-        "load: <test>:2:50: this body returns Str, which can never satisfy its declared return \
+        "load: <test>:2:66: this body returns Str, which can never satisfy its declared return \
          Number"
     );
 }
@@ -183,12 +187,12 @@ fn a_static_type_is_exact_where_the_load_knows_the_carried_type() {
 #[test]
 fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
     loaded(
-        "LET f = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(\n  \
+        "MODULE lib = (LET f = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(\n  \
          LET q = #(PRINT $x)\n  \
          x\n\
-         ))",
+         )))",
         |program| {
-            let f = body(program, program.shape(), "f");
+            let f = body(program, module_body(program, "lib"), "f");
             let statics = code(f).statics().expect("the load typed the code");
             assert_eq!(
                 statics
@@ -332,12 +336,10 @@ fn several_always_candidates_one_rigid_are_ranked_at_the_call() {
 
 #[test]
 fn a_generic_return_is_read_through_its_group_s_intervals() {
-    assert_eq!(
-        top(
-            "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET n = (id {x = 1})",
-            "n"
-        ),
-        "Number"
+    loaded(
+        "MODULE lib = ((LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))) \
+         (LET n = (id {x = 1})))",
+        |program| assert_eq!(binder(program, module_body(program, "lib"), "n"), "Number"),
     );
     let only = "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\n";
     let one = format!("{only}LET o = (ONLY 1)");
@@ -371,15 +373,16 @@ fn an_exact_argument_over_a_lexical_variable_is_no_solve_of_the_call_s_own() {
                   PRINT (OUTER [1] AND [2])\n\
                   PRINT (OUTER [] AND [])";
     assert_eq!(run(source), "generic\nany");
-    let by_name = "LET h = (FN FOR ALL #[Elt] :{f :(FN :{} -> :(LIST OF Elt))} -> \
-                   :(FN :{x :Elt} -> Null) = #(FN :{x :Elt} -> Null = #(null)))\n\
-                   EXPR FOR ALL #{Ll: :(LIST OF Number)} #(OUTER xs :Ll AND ys :Ll) -> Any = #(\n  \
+    let by_name = "MODULE lib = (\
+                   (LET h = (FN FOR ALL #[Elt] :{f :(FN :{} -> :(LIST OF Elt))} -> \
+                   :(FN :{x :Elt} -> Null) = #(FN :{x :Elt} -> Null = #(null)))) \
+                   (EXPR FOR ALL #{Ll: :(LIST OF Number)} #(OUTER xs :Ll AND ys :Ll) -> Any = #(\n  \
                    LET g = (FN :{} -> Ll = #(xs))\n  \
                    LET k = (h {f = g})\n  \
                    k\n\
-                   )\n\
-                   PRINT (OUTER [1] AND [2])\n\
-                   PRINT (OUTER [] AND [])";
+                   )) \
+                   (PRINT (OUTER [1] AND [2])) \
+                   (PRINT (OUTER [] AND [])))";
     assert_eq!(
         run(by_name),
         ":(FN :{x :Number} -> Null)\n:(FN :{x :Never} -> Null)",
