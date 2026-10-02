@@ -46,7 +46,9 @@ Rust the split is three handle types — `KType`, `Parametric` and `Scheme` —
 and passing one for another is a compile error
 ([typed handles](../src/type_lattice/identity.md#typed-handles)).
 [The laws](../src/type_lattice/laws.md) says what each side of the split
-guarantees and what breaks when the two are mixed.
+guarantees and what breaks when the two are mixed, and
+[quantified types](quantified-types.md) says where a `FOR ALL` may be written
+and what a program writes where it may not.
 
 ## Three moments
 
@@ -135,6 +137,29 @@ is *always*, while `PAIR a WITH b` over parameters `a :(Number | Str)` and
 Debug builds check the rule on every run: a finished value's carried type lies
 within its node's static type, and a call the load decided runs what selection
 over the full candidate list would.
+
+## In the literature
+
+| Koan | Known as | Source |
+|---|---|---|
+| A program typed where it states types and checked by the call elsewhere | gradual typing | Siek and Taha, *Gradual typing for functional languages* (2006) |
+| The load refuses only what can never succeed (*never*), and guesses nothing | success typings | Lindahl and Sagonas, *Practical type inference based on success typings* (2006) |
+| A static type as an interval of the types a run can carry | a gradual type read as the set of static types it stands for | Garcia, Clark and Tanter, *Abstracting gradual typing* (2016) |
+| A variable solved from lower and upper contributions to its least instance | local type argument synthesis: collect bound constraints, pick the minimal solution | Pierce and Turner, *Local type inference* (2000) |
+| A variable known by two ends; read from above or below by variance | polar types and bisubstitution | Dolan and Mycroft, *Polymorphism, subtyping, and type inference in MLsub* (2017) |
+| Selection among overloads by the carried types, ranked by specificity | multiple dispatch over a subtype lattice with unions | Zappa Nardelli et al., *Julia subtyping: a rational reconstruction* (2018) |
+| Polymorphism on declarations, modules for the rest | type schemes and the ML module system | [quantified types](quantified-types.md#in-the-literature) |
+
+Koan differs from the gradual-typing sources in one respect that the rest of
+the design follows from: `Any` is the lattice's top and a value always carries
+a concrete type, so the run checks by the order and *fits*, never by a
+consistency relation or a cast inserted at load.
+
+It also does not aim at the *gradual guarantee* (Siek, Vitousek, Cimini and
+Boyland, *Refined criteria for gradual typing*, 2015), under which removing an
+annotation changes no result. A koan annotation is a contract a value is
+retyped to, and dispatch selects by the type a value carries, so an ascription
+changes what a reader sees and which overload runs.
 
 ## Where each piece lives
 

@@ -30,10 +30,16 @@ handle only because no variable reaches it.
   is `:Any`, nothing is left to solve, and `KIND 1` answers `Any`. The same
   reading puts `FOR ALL #[Elt] :{x :Elt} -> Null` and `:{x :Any} -> Null`
   under each other, which costs [antisymmetry](#the-order-is-a-partial-order).
-- *A variable leaking into a value.* A `Quantified` is positional: the first
-  variable of any group is one handle. A value carrying it out of its frame
-  holds a type equal, by handle, to an unrelated function's first variable, so
-  two values of different types compare as the same type.
+- *A parametric type among concrete ones.* The concrete lattice promises more
+  than *fits* does: antisymmetry by handle, and an exact `join` and `meet`.
+  A scheme or a variable let into one concrete type does not stay there. The
+  list that holds it, the union that names it and the record with a field of
+  it are each built by the order, so each now holds two handles that fit each
+  other, or a join that is not least, and every reader of those inherits the
+  weaker guarantee. This is why a program may name a quantified type only as a
+  signature member's whole type: a signature is sealed content, a leaf no walk
+  enters, so the scheme inside it never reaches the order
+  ([quantified types](../../design/quantified-types.md)).
 - *A variable in a built type.* A list's type is the `join` of its cells'
   types. `join` reads the order, which has no rule for a variable, so a cell
   typed by one has no place in the result.
@@ -66,15 +72,21 @@ compares handles disagrees with every reader that asks the order:
   that names the other, since a manifest member must be *equal*;
 - a list's type depends on which cell came first.
 
-**What breaks without transitivity.** Suppose the order solved, so that a
-variable could stand for anything under its bound. Then `LIST OF Number` lies
-under `LIST OF Elt`, and `LIST OF Elt` under `LIST OF Str`, each by its own
-instance, while `LIST OF Number` does not lie under `LIST OF Str`.
+**What breaks without transitivity.** The usual way to lose it is to compare a
+concrete type with a parametric one by reading the variable as its upper
+bound. Take `Left` and `Right`, each bounded by `Number | Str`. `Left` lies
+under `Number | Str`, as the rigid rule says. Read `Right` as its bound and
+`Number | Str` lies under `Right`. Yet `Left` does not lie under `Right`: they
+are two variables, and a call may solve one to `Number` and the other to
+`Str`. The approximation is unsound on its own account too, since it puts
+`Str` under `Right` where a call binds `Right` to `Number`.
 
-- A union drops each member that lies under another. Over those three it drops
-  the first under the second and the second under the third, leaving
-  `LIST OF Str`: a type that no longer admits the list of numbers the union
-  was written to admit. Written in another order, it keeps a different member.
+- A union drops each member that lies under another. `Left | Number | Str |
+  Right` drops `Number` and `Str` under the approximated `Right` and keeps
+  `Left | Right`, which admits neither a number nor a string to any reader
+  holding the rigid rule. So [a union holding a variable keeps
+  it](relations.md#the-relations), and reduces its concrete members among
+  themselves alone.
 - Ranking eliminates a candidate another strictly beats. Three candidates that
   beat each other in a cycle eliminate each other, and no candidate survives a
   call that all three admit.

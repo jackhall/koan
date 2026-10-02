@@ -17,6 +17,10 @@ would memory safety.
   section for every law your change touches, not the headings.
 - [`design/gradual-typing.md`](../../../design/gradual-typing.md) — how a type
   goes from a declaration, through the load, to a call.
+- [`design/quantified-types.md`](../../../design/quantified-types.md) — where a
+  `FOR ALL` may live, how a signature keeps a scheme safe, and the workarounds
+  and limits for higher-ranked types. Read it before any work on signatures,
+  modules or quantified callables; do not re-derive it.
 - The part of [`src/type_lattice/README.md`](../../../src/type_lattice/README.md)
   that owns what you are changing.
 
@@ -57,6 +61,10 @@ options and ask; do not pick one to make a test pass.
 
 - a raw `Handle` wrapped into a typed handle outside the lattice's own doors;
 - a new `TypeRegistry::concrete` call with no named invariant behind it;
+- a concrete type compared with a parametric one by reading the variable as
+  its upper bound: this is the usual way transitivity is lost;
+- a scheme or variable inside a type a value carries or a container is built
+  from: parametric types are contagious, and weaken every type built over them;
 - `erase_rigid` where `bound_above` or an interval is meant;
 - a structural descent beside the two walk drivers, or a second guard set;
 - a law restated "up to equivalence", or a generator narrowed until it passes;
