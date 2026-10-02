@@ -206,6 +206,22 @@ fn a_for_all_name_is_its_lexical_variable() {
 }
 
 #[test]
+fn a_callable_records_where_its_for_all_names_live() {
+    typed(
+        "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)",
+        |program| {
+            let shape = program.activation.shape();
+            let body = shape
+                .births(shape.registrations()[0].slot)
+                .expect("the registration births its body");
+            assert_eq!(body.group_levels(), [lexical(program, 0, "Elt")]);
+            let slot = type_slot(program, body, "Elt");
+            assert_eq!(body.declared_variables(), [(0, Target::Local(slot))]);
+        },
+    );
+}
+
+#[test]
 fn a_for_all_name_one_slot_reads_is_rigid_in_the_body() {
     typed(
         "EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(:(LIST OF Elt))",

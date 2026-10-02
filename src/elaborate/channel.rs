@@ -673,7 +673,8 @@ fn close_registered<'graph>(
 impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     /// Number the run-bound names the shape at chain level `level` declares, after its own group:
     /// each type name in slot order but a closed type binder's, then, at a chain root, each
-    /// capture naming a type.
+    /// capture naming a type. The shape records each one's level beside where its activation
+    /// holds it.
     fn number(&mut self, level: usize) {
         let at = &self.chain[level];
         let shape = at.shape;
@@ -701,6 +702,22 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
                 names.push((Key::Capture(level, CaptureSlot(index as u32)), next));
                 next += 1;
             }
+        }
+        let mut homes = BumpVec::new_in(self.scratch);
+        if let Some(own) = at.own {
+            homes.extend(own.map.iter().map(|(name, index)| {
+                let (slot, _) = shape
+                    .slot(BinderSymbol::Type(name))
+                    .expect("a `FOR ALL` name has its slot");
+                (at.base + index, Target::Local(slot))
+            }));
+        }
+        homes.extend(names.iter().map(|(key, numbered)| match key {
+            Key::Slot(_, slot) => (*numbered, Target::Local(*slot)),
+            Key::Capture(_, capture) => (*numbered, Target::Capture(*capture)),
+        }));
+        if !homes.is_empty() {
+            shape.fix_declared_variables(collect(self.writer, homes.iter().copied()));
         }
         let at = &mut self.chain[level];
         at.count = next - at.base;

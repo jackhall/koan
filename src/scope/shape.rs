@@ -31,7 +31,10 @@
 //! registration, a callable body's own type, and a code shape's typing refusal — laid down empty by
 //! the builder, since `scope` sits below `elaborate`. One more cell holds the value channel's
 //! [`Statics`] — a static type per value expression and binder, and each keyworded use's
-//! [`Narrowing`] — which the language's load pass fixes. See [README.md § Load-time
+//! [`Narrowing`] — which the language's load pass fixes. Two more record where a run reads a
+//! lexical variable: each one the body declares, beside its slot or capture, and each **type
+//! capture** the static pass adds past the builder's captures, so a callable can read a type name
+//! its body never writes but a call in it solves from. See [README.md § Load-time
 //! types](README.md#load-time-types).
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
@@ -450,6 +453,13 @@ pub struct BodyShape<'graph> {
     /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born; empty
     /// where it is born quantified, and for every other kind.
     born_instance: &'graph Cell<&'graph [KType]>,
+    /// Each lexical variable this body declares, by level, beside where its activation holds the
+    /// type a run binds it to. Written once, by the type channel.
+    declared_variables: &'graph Cell<&'graph [(usize, Target)]>,
+    /// Each type capture the static pass added past `captures`, as the coordinate of the enclosing
+    /// activation its birth reads: closure slot `captures.len() + i`. Empty for every kind but a
+    /// callable and a module.
+    type_captures: &'graph Cell<&'graph [Coordinate]>,
     /// Why a code shape's code does not type, where the load pass found a refusal in it.
     typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
     /// The value channel's static types and narrowings, fixed by the language's load pass.
@@ -771,6 +781,38 @@ impl<'graph> BodyShape<'graph> {
         debug_assert_eq!(self.kind, ShapeKind::Callable);
         debug_assert!(self.born_instance.get().is_empty());
         self.born_instance.set(solution);
+    }
+
+    /// Each lexical variable this body declares, by level, beside where its activation holds the
+    /// type a run binds it to: a `FOR ALL` name's slot, a type binder's slot, or the capture a
+    /// surfaced type name is read through.
+    pub fn declared_variables(&self) -> &'graph [(usize, Target)] {
+        self.declared_variables.get()
+    }
+
+    /// Written once, by the type channel.
+    pub fn fix_declared_variables(&self, variables: &'graph [(usize, Target)]) {
+        debug_assert!(self.declared_variables.get().is_empty());
+        self.declared_variables.set(variables);
+    }
+
+    /// Each type capture the static pass added past [`captures`](Self::captures): a type name the
+    /// body never writes but a call in it contributes, read at birth from this coordinate of the
+    /// enclosing activation into closure slot `captures().len() + i`.
+    pub fn type_captures(&self) -> &'graph [Coordinate] {
+        self.type_captures.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_type_captures(&self, captures: &'graph [Coordinate]) {
+        debug_assert!(matches!(self.kind, ShapeKind::Callable | ShapeKind::Module));
+        debug_assert!(self.type_captures.get().is_empty());
+        self.type_captures.set(captures);
+    }
+
+    /// How many closure slots a birth fills: the builder's captures, then the type captures.
+    pub fn capture_count(&self) -> usize {
+        self.captures.len() + self.type_captures.get().len()
     }
 
     /// Written once, by the load pass, on a code shape whose code does not type.

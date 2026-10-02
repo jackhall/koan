@@ -3001,6 +3001,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 callable: resident_cell(writer, Static::Unknown),
                 group_levels: resident_cell(writer, &[][..]),
                 born_instance: resident_cell(writer, &[][..]),
+                declared_variables: resident_cell(writer, &[][..]),
+                type_captures: resident_cell(writer, &[][..]),
                 typing_refusal: resident_cell(writer, None),
                 statics: resident_cell(writer, None),
             },

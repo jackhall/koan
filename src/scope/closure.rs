@@ -29,8 +29,8 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     ///
     /// A `Read` source is what `enclosing` reads there — a capture of the enclosing callable's own
     /// knot arrives as the sibling member it names. A `Member` source is `edge(index)`, the edge the
-    /// caller minted for member `index` of the component the callable is born in. Nothing is written
-    /// to a region.
+    /// caller minted for member `index` of the component the callable is born in. Each type capture
+    /// follows, read from `enclosing` at its coordinate. Nothing is written to a region.
     pub fn read_captures<'x, XF: KnottedFamily<'graph, Closed<'cell> = X>>(
         shape: &BodyShape<'_>,
         enclosing: &ActivationView<'graph, 'cell, XF>,
@@ -38,7 +38,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         mut edge: impl FnMut(u32) -> Edge,
     ) -> BumpVec<'x, Link<'cell, X>> {
         let captures = shape.captures();
-        let mut read = BumpVec::with_capacity_in(captures.len(), scratch);
+        let mut read = BumpVec::with_capacity_in(shape.capture_count(), scratch);
         read.extend(captures.iter().map(|capture| match capture.source {
             CaptureSource::Read(coordinate) => Link::Value(enclosing.read(coordinate)),
             CaptureSource::Member { index, .. } => Link::Edge(edge(index)),
@@ -48,6 +48,12 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
                 )
             }
         }));
+        read.extend(
+            shape
+                .type_captures()
+                .iter()
+                .map(|at| Link::Value(enclosing.read(*at))),
+        );
         read
     }
 
