@@ -144,6 +144,9 @@ pub enum TypeNode<'run> {
     /// render-only too: the digest feeds the arity and the bounds, so alpha-variants intern once and
     /// `quantifiers` holds whichever spelling was interned first. A variable no position names
     /// carries its bound in `bounds` alone.
+    ///
+    /// A non-empty `quantifiers` makes it a binder, as it does a [`Self::KFunction`]. An empty one
+    /// binds nothing and is transparent: a free `Quantified` inside reads the enclosing group.
     ExpressionShape {
         /// The type parameters this shape binds, in `Quantified` index order. Render-only:
         /// the arity is identity, the names are not.
@@ -252,13 +255,14 @@ pub enum TypeNode<'run> {
 }
 
 impl TypeNode<'_> {
-    /// Whether this node binds a quantifier group of its own: a shape always — its group may be
-    /// empty — and a function only when it carries one. This is what every walk asks before
-    /// stepping into a child, so a `Quantified` under it reads against the right group.
+    /// Whether this node binds a quantifier group of its own: a shape or a function only when it
+    /// carries one. An empty group binds nothing, so a `Quantified` under it reads the enclosing
+    /// group. This is what every walk asks before stepping into a child, so a `Quantified` under it
+    /// reads against the right group.
     pub fn binds_quantifiers(&self) -> bool {
         match self {
-            TypeNode::ExpressionShape { .. } => true,
-            TypeNode::KFunction { quantifiers, .. } => !quantifiers.is_empty(),
+            TypeNode::ExpressionShape { quantifiers, .. }
+            | TypeNode::KFunction { quantifiers, .. } => !quantifiers.is_empty(),
             _ => false,
         }
     }

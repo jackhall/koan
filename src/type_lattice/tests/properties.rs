@@ -390,8 +390,18 @@ proptest! {
             | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
+        // A quantified binder is parametric itself, as is every variable but an opaque carrier;
+        // a signature and a sealed member are leaves to the walk.
+        let parametric = visit(&types, scratch, a, &mut |_, node, _| match node {
+            _ if node.binds_quantifiers() => Visit::Stop,
+            TypeNode::Quantified { .. }
+            | TypeNode::Lexical { .. }
+            | TypeNode::Parameter { nonce: None, .. } => Visit::Stop,
+            _ => Visit::Descend,
+        });
         prop_assert_eq!(types.contains_quantified(a), quantified);
         prop_assert_eq!(types.contains_rigid(a), rigid);
+        prop_assert_eq!(types.is_concrete(a), !parametric);
     }
 }
 

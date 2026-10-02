@@ -339,6 +339,57 @@ fn a_binder_keeps_every_variable_it_declares() {
     );
 }
 
+/// No law: the elaborator never builds a group-free shape over an enclosing group's variable, since
+/// an `EXPR` with no `FOR ALL` refuses outer names, so no generated type puts one there either. A
+/// shape with no group binds nothing: a variable inside one is the enclosing binder's, numbered by
+/// its occurrence there, and substitution reaches it.
+#[test]
+fn a_shape_with_no_group_is_transparent() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
+    let shape = |names: &[TypeSymbol], slots: &[KType], ret: KType| {
+        let mut run = Vec::new();
+        for slot in slots {
+            run.push(DispatchTokenElement::Keyword(keyword));
+            run.push(DispatchTokenElement::Slot(*slot));
+        }
+        types.shape_type(
+            region,
+            names,
+            &vec![KType::ANY; names.len()],
+            &run,
+            &[],
+            ret,
+        )
+    };
+    // `Other`, declared second, is named first: inside the group-free slot.
+    let inner = shape(&[], &[types.quantified(1, KType::ANY)], KType::NULL).handle;
+    assert!(!types.node(inner).binds_quantifiers());
+    let scheme = shape(
+        &[elt, other],
+        &[inner, types.quantified(0, KType::ANY)],
+        KType::NULL,
+    );
+    assert_eq!(scheme.quantifier_map, &[1, 0]);
+    let first = shape_slots(scheme.handle, &types).next().expect("a slot");
+    let opened = crate::type_lattice::substitute::substitute_quantified(
+        &types,
+        region,
+        first,
+        &[KType::NUMBER, KType::STR],
+    );
+    assert_eq!(opened, shape(&[], &[KType::NUMBER], KType::NULL).handle);
+    assert_eq!(
+        display_name(scheme.handle, &types, &symbols).to_string(),
+        ":(EXPR FOR ALL #[Other Elt] #(PURE _ :(EXPR #(PURE _ :Other) -> Null) PURE _ :Elt) -> Null)"
+    );
+}
+
 /// No law: `Record`'s order-blind equality and the digest agreeing with it are properties of the
 /// container, and the generated types never build two records differing only in field order.
 #[test]

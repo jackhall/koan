@@ -12,8 +12,9 @@
 //!
 //! A node is `Copy`: a read copies the entry out and releases the table borrow before the reader
 //! runs, so reads nest and a reader may intern. Beside each node the entry stores two flags
-//! computed off its children at intern — whether a free quantifier, and whether any rigid variable,
-//! is reachable — so both probes are one table read.
+//! computed off its children at intern — whether a free quantifier, whether any rigid variable, and
+//! whether any variable or quantified binder outside sealed content is reachable — so each probe is
+//! one table read.
 //!
 //! Verdicts are a separate table keyed by `(subject digest, candidate digest, relation)`: a fixed
 //! run of two-slot buckets laid in the region the first time a verdict is recorded, and never
@@ -50,7 +51,7 @@ use super::substitute::substitute_quantified;
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_in};
 
-/// One interned node, and the two probe answers computed off its children when it was interned.
+/// One interned node, and the three probe answers computed off its children when it was interned.
 #[derive(Clone, Copy)]
 struct Entry<'run> {
     node: TypeNode<'run>,
@@ -58,28 +59,34 @@ struct Entry<'run> {
     quantified: bool,
     /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable.
     rigid: bool,
+    /// Whether the type is **parametric** rather than concrete: whether a free `Quantified`, a
+    /// `Lexical`, a head `Parameter` or a quantified binder is reachable outside sealed content.
+    /// An opaque carrier is concrete, and so is everything inside a signature or a sealed member.
+    parametric: bool,
 }
 
 impl<'run> Entry<'run> {
     /// `node`'s entry, its flags folded from its children's own entries — one probe per child, since
     /// every child was interned first. A child not in the table reads as `false`, which is exact: the
     /// only such child is the handle of a group member mid-seal, which the seal's rebuilt schemas
-    /// name before its own node is interned, and a sealed member is a leaf for both probes.
+    /// name before its own node is interned, and a sealed member is a leaf for every probe.
     fn over(node: TypeNode<'run>, nodes: &NodeTable<'run>) -> Self {
-        let (mut quantified, mut rigid) = (false, false);
+        let (mut quantified, mut rigid, mut parametric) = (false, false, false);
         children(&node, &mut |child, _| {
             if let Some(entry) = nodes.get(&child.digest()) {
                 quantified |= entry.quantified;
                 rigid |= entry.rigid;
+                parametric |= entry.parametric;
             }
         });
-        // A binder — a shape, or a function carrying a group — binds its own variables, so
-        // nothing under one is free here.
+        // A binder — a shape or a function carrying a group — binds its own variables, so
+        // nothing under one is free here, and the binder itself is a quantified callable's type.
         if node.binds_quantifiers() {
             return Entry {
                 node,
                 quantified: false,
                 rigid,
+                parametric: true,
             };
         }
         match node {
@@ -87,16 +94,26 @@ impl<'run> Entry<'run> {
                 node,
                 quantified: true,
                 rigid: true,
+                parametric: true,
             },
-            TypeNode::Parameter { .. } | TypeNode::Lexical { .. } => Entry {
+            TypeNode::Lexical { .. } | TypeNode::Parameter { nonce: None, .. } => Entry {
                 node,
                 quantified,
                 rigid: true,
+                parametric: true,
+            },
+            // An opaque carrier: a value carries it and dispatches on it, so it is concrete.
+            TypeNode::Parameter { nonce: Some(_), .. } => Entry {
+                node,
+                quantified,
+                rigid: true,
+                parametric,
             },
             _ => Entry {
                 node,
                 quantified,
                 rigid,
+                parametric,
             },
         }
     }
@@ -1092,6 +1109,13 @@ impl<'run> TypeRegistry<'run> {
     /// caller that reaches for a rigid bound fails a test rather than producing a wrong verdict.
     pub fn contains_rigid(&self, kt: KType) -> bool {
         self.entry(kt).rigid
+    }
+
+    /// Whether `kt` is concrete: no free `Quantified`, `Lexical`, head `Parameter` or quantified
+    /// binder is reachable outside sealed content. Read off the flag interning stored beside the
+    /// node.
+    pub fn is_concrete(&self, kt: KType) -> bool {
+        !self.entry(kt).parametric
     }
 
     /// Whether `kt` reads the `index`-th quantifier of the enclosing shape — what a definition asks

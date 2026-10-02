@@ -148,7 +148,7 @@ fn write_name_in(
                 classes,
                 ret: *ret,
             };
-            write_shape_surface(f, shape, types, symbols)?;
+            write_shape_surface(f, shape, types, symbols, binder)?;
             f.write_str(")")
         }
         // A quantified position renders as the name its enclosing binder bound it to. The
@@ -329,25 +329,26 @@ fn write_param_record(
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.
 ///
-/// The group's bounds are read as the shape node stores them, one per quantifier.
+/// The group's bounds are read as the shape node stores them, one per quantifier. Slots and return
+/// read against the shape's own group where it has one, and against the enclosing `binder`'s where
+/// it has none, as a function type's do.
 fn write_shape_surface(
     f: &mut std::fmt::Formatter<'_>,
     shape: Ranked<'_>,
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
+    binder: &[TypeSymbol],
 ) -> std::fmt::Result {
     let quantifiers = shape.quantifiers;
+    let inner = if quantifiers.is_empty() {
+        binder
+    } else {
+        quantifiers
+    };
     write_quantifier_group(f, quantifiers, shape.bounds, types, symbols)?;
-    write_shape_head(
-        f,
-        shape.elements,
-        shape.classes,
-        types,
-        symbols,
-        quantifiers,
-    )?;
+    write_shape_head(f, shape.elements, shape.classes, types, symbols, inner)?;
     f.write_str(" -> ")?;
-    write_name_in(shape.ret, f, types, symbols, quantifiers)
+    write_name_in(shape.ret, f, types, symbols, inner)
 }
 
 /// `FOR ALL #[<names>] ` — the quantifier group a binder's surface opens with, or nothing at all
@@ -537,7 +538,7 @@ struct ShapeSurface<'r, 'run> {
 
 impl std::fmt::Display for ShapeSurface<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write_shape_surface(f, self.shape, self.types, self.symbols)
+        write_shape_surface(f, self.shape, self.types, self.symbols, &[])
     }
 }
 
