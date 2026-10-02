@@ -2,7 +2,8 @@
 
 Where a `FOR ALL` may be written, why it may be written nowhere else, and what
 a program writes instead. Koan's polymorphism is on declarations: a quantified
-function is called, and each call solves its group. Anything that needs a
+function is called, and each call solves its group, or it is instantiated where
+the type it is wanted at solves its group once. Anything that needs a
 polymorphic function *as a value* — a higher-ranked slot, a polymorphic payload
 — takes a module typed by a signature.
 
@@ -21,16 +22,16 @@ a type.
 
 | Refusal | What it refuses | Owner |
 |---|---|---|
-| `QuantifiedLambda` | a quantified `FN` written anywhere but a binder's right-hand side or the head of a call | [scope](../src/scope/README.md#resolution) |
-| `QuantifiedRead` | a name bound to a quantified function, read anywhere but the head of a call by name — in a list, as an argument, through `$` in a quote, as an `EVAL` offer | [scope](../src/scope/README.md#resolution) |
-| `QuantifiedValue` | a body whose last statement binds a quantified function, which would be the body's value | [scope](../src/scope/README.md#resolution) |
+| `QuantifiedRead` | a name a keyworded form binds, or a quantified member `USING … SCOPE` surfaces, read anywhere but the head of a call; a module's quantified member read through `$` in a quote or as an `EVAL` offer | [scope](../src/scope/README.md#resolution) |
+| `QuantifiedValue` | a body whose last statement binds a quantified function by a keyworded form, which would be the body's value | [scope](../src/scope/README.md#resolution) |
 | `Quantified` | a type expression `:(FN FOR ALL …)` or `:(EXPR FOR ALL …)` anywhere but as the whole type of a signature's `VAL` member or a signature's keyworded head, one nested inside an admitted one included | [elaborator](../src/elaborate/README.md#what-a-type-expression-is) |
 | `MeetOverVariable` | `&` with an operand naming a `FOR ALL` variable or a head parameter | [elaborator](../src/elaborate/README.md#what-a-type-expression-is) |
 | `Bound` | a bound that names a type variable, or is `Never` | [elaborator](../src/elaborate/README.md#what-a-type-expression-is) |
 
-So a quantified function is **call-only**: every binding of one — a `LET`, a
-module member, a name `USING … SCOPE` surfaces — stands only at the head of a
-call, and its type enters no other type.
+So a quantified function's type enters no other type. A binding keeps the
+scheme in two places only: a `MODULE` or `GROUP` body's member,
+`LET pick = (FN FOR ALL …)`, and a name a keyworded form binds. Anywhere else a quantified function is made
+concrete ([below](#where-a-quantified-function-is-instantiated)), or refused.
 
 In Rust the same rule is the handle types
 ([typed handles](../src/type_lattice/identity.md#typed-handles)). A quantified
@@ -42,7 +43,8 @@ other value, and every reader but a call's head takes `Value::concrete_ktype`.
 ## Where a scheme is held
 
 - **A callable's own type**: a function value's memo, and a registered shape.
-  Only a call's head reads it, and the call solves its group.
+  A call's head reads it, and the call solves its group; an instance site reads
+  it, and the load solves its group.
 - **A signature member**: a keyworded head with a `FOR ALL` of its own, or a
   `VAL` member whose whole type is a quantified function type.
 - **Lists the interpreter holds and no name reaches**: a registration bucket,
@@ -51,6 +53,42 @@ other value, and every reader but a call's head takes `Value::concrete_ktype`.
   types ([values](../src/values/README.md#the-type-memo-and-satisfies)), and
   the load reads it as unknown. A container a program can read holds concrete
   types only.
+
+## Where a quantified function is instantiated
+
+An **instance site** is a quantified function, a name bound to one or a
+`FN FOR ALL` literal, written anywhere but the head of a call or a `MODULE` or
+`GROUP` body's binding. The load solves its group there from the type it is **wanted**
+at, and the value read there is the **instance**: a function stamped with the
+concrete type its group was solved at, which is stored, passed, returned and
+dispatched on like any unquantified function. A type is wanted at:
+
+- an annotated binding's right-hand side, `LET inc :(FN :{x :Number} -> Number) = pick`;
+- an ascription's operand, `pick :! :(FN :{x :Str} -> Str)`;
+- a callable body's last statement, at the body's declared return;
+- a call by name's argument, at the callee's parameters;
+- a keyworded argument, at the slot of each candidate the use keeps;
+- a list, dict or record literal's parts, at that container's own type.
+
+A `LET` of a quantified `FN` outside a `MODULE` or `GROUP` body is an instance
+site too, whether or not its name is read, wanted at its annotation or, as a
+callable body's last statement, at the declared return. So a plain
+`LET pick = (FN FOR ALL …)` at the top level, or anywhere in a callable's,
+block's or quote's body but its last statement, refuses the load, even where
+`pick` is only called by name: nothing wants it at a type. A body that wants a
+local generic helper binds it under the type it is used at,
+`LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL …)`, or moves it into a
+module body, where it stays generic and each call solves its group.
+
+The solve is the least instance of the scheme under the wanted type
+([`instance_under`](../src/type_lattice/relations.md#quantified-binders)). A
+variable no contribution from the wanted type reaches is refused and named,
+never read as its bound; one some contribution reaches binds its least
+instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A quantified
+callee's other arguments solve its group first, and the slot is read through
+that solve. The candidates a keyworded use keeps must agree on each instance.
+[Dispatch](../src/dispatch/README.md#static-types) owns the rule and its
+refusals.
 
 ## How a signature keeps a scheme safe
 
@@ -103,7 +141,8 @@ module's exact content.
 
 | Wanted | Written |
 |---|---|
-| A generic function passed or stored at one type | an unquantified `FN` that calls it: `(FN :{x :Number} -> Number = #(pick {x = x}))` |
+| A generic function passed or stored at one type | the function where a type is wanted that solves its group: `LET inc :(FN :{x :Number} -> Number) = pick`, `[pick] :! :(LIST OF (FN :{x :Number} -> Number))`, a slot typed `:(FN :{x :Number} -> Number)` |
+| A generic function bound outside a module | the binding under a type that solves its group: `LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))` |
 | A slot taking a function usable at several types (a rank-2 parameter) | a slot typed by a signature with a quantified member, `m :Boxes`, taking a module |
 | Several instances used in one body | `USING (m :! Boxes) SCOPE (…)`: each keyworded use of a surfaced head solves the member's variables afresh, so `BOX 1` is at most `LIST OF Number` and `BOX "s"` at most `LIST OF Str` through the one `m` |
 | A polymorphic function held in data | a module held in data, typed by its signature |
@@ -136,8 +175,18 @@ module's exact content.
 - **A surfaced head is typed only through a closed signature.** Under a rigid
   ascription or a meet, the `USING … SCOPE` registration is unknown to the
   load, and each use is decided by the call.
-- **A quantified function is instantiated only by a call.** No ascription,
-  annotation or declared return solves its group.
+- **An instance is made only where the program loads.** A site whose wanted
+  type the load does not know is refused; nothing is solved at run time.
+- **A wanted type is a function type itself.** A union, `Any` or anything else
+  fixes nothing, and is never split. A container literal passes a type to its
+  parts only where that type is the container's own, and a keyworded argument
+  takes one only where it is itself an instance site: `KEEP [pick]` is refused,
+  and `KEEP ([pick] :! :(LIST OF (FN :{x :Number} -> Number)))` loads.
+- **A solution is closed.** An instance solving a variable to a type a run
+  binds, such as an enclosing `EXPR FOR ALL #[Outer]`'s `Outer`, is refused.
+- **A keyworded form's function is call-only.** The name `LET id = FN EXPR FOR ALL …`
+  binds, a quantified member `USING … SCOPE` surfaces, a `$pick` and an `EVAL`
+  offer stand only at the head of a call.
 
 ## In the literature
 
@@ -146,7 +195,8 @@ Each rule above is a known one, and the source says what it buys and costs.
 | Koan | Known as | Source |
 |---|---|---|
 | `KType` and `Scheme`; a `FOR ALL` on a declaration, solved at each use | types and type schemes; let-polymorphism | Damas and Milner, *Principal type-schemes for functional programs* (1982) |
-| Call-only, and the wrapping `FN` | a scheme is instantiated at each use and is no first-class value; the wrapper is an eta-expansion at one instance | the same |
+| A call solving its group, and an instance site | a scheme is instantiated at each use and is no first-class value | the same |
+| An instance site's type read from the type it is wanted at | checking mode: type arguments propagated from the expected type | Pierce and Turner, *Local type inference* (2000) |
 | A rank-2 slot spelled as a signature with a quantified member | higher-rank polymorphism packaged in a module or a record with a polymorphic field | Russo, *First-class structures for Standard ML* (2000); Rossberg, *1ML* (2015) |
 | *Fits*' table: the offered side solved afresh, the asked side rigid | subsumption between polymorphic types: instantiate the offered type, skolemize the asked one | Mitchell, *Polymorphic type inference and containment* (1988); Peyton Jones, Vytiniotis, Weirich and Shields, *Practical type inference for arbitrary-rank types* (2007) |
 | A sealed signature; a variable that never leaves its binder | the skolem escape check | the same |
@@ -163,9 +213,10 @@ lattice, not an unknown type, so nothing here is checked by consistency.
 
 ## Open work
 
-- [Instantiating a quantified function](../roadmap/gradual-typing/instantiating-quantified-functions.md)
-  — a quantified function made concrete by a solve, an annotation or an
-  ascription, and where one may be bound at all.
 - [Modules](../roadmap/rewrite/modules.md) — carriers keyed on their root, a
   carrier as a bound, higher-kinded head parameters, `m.f` outside the head of
-  a call, and calling through an opaque view's quantified member.
+  a call, calling through an opaque view's quantified member, and whether a
+  keyworded form's name counts as a module member's binding.
+- [Calls solved from their static types](../roadmap/gradual-typing/static-solutions.md)
+  — capturing a lexical variable a solution names, which would let such an
+  instance load.

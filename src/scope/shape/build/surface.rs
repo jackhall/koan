@@ -20,6 +20,11 @@
 //! The reader records no mention and pushes no capture: it only reads names. The operand itself is
 //! walked as an ordinary eager argument by the mention pass.
 //!
+//! It also answers how a value name is bound to a quantified function ([`Quantified`]): a module
+//! body's member, read unmarked anywhere the static pass instantiates it; a keyworded form's name
+//! or a surfaced member, read only at a call's head; or any other binding, the static pass's to
+//! instantiate or refuse.
+//!
 //! See [README.md § Names that arrive at run time](../../README.md#names-that-arrive-at-run-time).
 
 use crate::memory::{BumpAllocator, BumpVec, collect, resident};
@@ -375,9 +380,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         Ok(())
     }
 
-    /// Whether the value `name`, read through `mark` in the draft at `level` at `at`, is bound to a
-    /// quantified function: by a statement [`quantified_statement`] reads as one, or as a quantified
-    /// member a `USING … SCOPE` body surfaces. [`Builder::resolve`]'s walk, with nothing recorded:
+    /// How the value `name`, read through `mark` in the draft at `level` at `at`, is bound to a
+    /// quantified function: see [`Quantified`]. [`Builder::resolve`]'s walk, with nothing recorded:
     /// a `$` name skips each local up to its code and reads outward from there, unmarked, and any
     /// other name stops at its code, since a `\` name is what an `EVAL` offers, checked there.
     pub(super) fn quantified(
@@ -386,9 +390,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         name: BinderSymbol,
         at: Position,
         mark: Option<Mark>,
-    ) -> bool {
+    ) -> Quantified {
         if !matches!(name, BinderSymbol::Value(_)) {
-            return false;
+            return Quantified::No;
         }
         let (mut level, mut at, mut mark) = (level, at, mark);
         loop {
@@ -399,17 +403,31 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 && at.sees(names.get(index))
             {
                 return match names.get(index).0.checked_sub(1) {
-                    Some(statement) => quantified_statement(&draft.nodes[statement as usize]),
-                    None => draft.quantified.contains(&name),
+                    Some(statement) => {
+                        let statement = &draft.nodes[statement as usize];
+                        match statement.cache().builtin_shape().map(|shape| shape.id) {
+                            Some(BuiltinShapeId::CombinedQuantifiedExpression) => {
+                                Quantified::CallOnly
+                            }
+                            _ if draft.kind == ShapeKind::Module
+                                && quantified_statement(statement) =>
+                            {
+                                Quantified::Member
+                            }
+                            _ => Quantified::No,
+                        }
+                    }
+                    None if draft.quantified.contains(&name) => Quantified::CallOnly,
+                    None => Quantified::No,
                 };
             }
             match (draft.kind, mark) {
                 (ShapeKind::Code, Some(Mark::Written)) => mark = None,
-                (ShapeKind::Program | ShapeKind::Code, _) => return false,
+                (ShapeKind::Program | ShapeKind::Code, _) => return Quantified::No,
                 _ => {}
             }
             let Some(parent) = level.checked_sub(1) else {
-                return false;
+                return Quantified::No;
             };
             level = parent;
             at = self.chain[level].boundary();
@@ -464,12 +482,30 @@ fn body_binders<'graph>(
     Ok(())
 }
 
-/// Whether `statement`'s value is a quantified function it binds: [`quantified_statement`], or a
-/// bare `EXPR FOR ALL …` definition.
+/// How a value name is bound to a quantified function, which decides where it may be read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Quantified {
+    /// Not quantified, or a plain `LET` of a quantified `FN` outside a module body: the static pass
+    /// instantiates that binding or refuses it.
+    No,
+    /// A module body's plain `LET` of a quantified `FN`: read at the head of a call, or unmarked
+    /// where the static pass instantiates it.
+    Member,
+    /// A keyworded form's name, or a quantified member a `USING … SCOPE` body surfaces: read only at
+    /// the head of a call.
+    CallOnly,
+}
+
+/// Whether `statement`'s value is a quantified function a keyworded form binds: a
+/// `LET … = FN EXPR FOR ALL …`, or a bare `EXPR FOR ALL …` definition.
 pub(super) fn quantified_value(statement: &KExpression<'_>) -> bool {
-    quantified_statement(statement)
-        || statement.cache().builtin_shape().map(|shape| shape.id)
-            == Some(BuiltinShapeId::QuantifiedExpressionDefinition)
+    matches!(
+        statement.cache().builtin_shape().map(|shape| shape.id),
+        Some(
+            BuiltinShapeId::CombinedQuantifiedExpression
+                | BuiltinShapeId::QuantifiedExpressionDefinition
+        )
+    )
 }
 
 /// Whether `statement` binds a quantified function: a `LET` of a quantified `FN`, or a

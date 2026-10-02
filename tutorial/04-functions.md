@@ -238,7 +238,7 @@ first
 first
 ```
 
-Leaving out a required name is an error:
+Leaving out a required name is an error, found before the program runs:
 
 ```koan
 LET pick = ,

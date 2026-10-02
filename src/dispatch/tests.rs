@@ -5,6 +5,7 @@ mod annotation;
 mod ascription;
 mod boundary;
 mod generic;
+mod instances;
 mod programs;
 mod quotes;
 mod rankings;

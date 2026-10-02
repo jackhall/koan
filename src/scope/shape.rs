@@ -49,9 +49,9 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredGroup, DeclaredType, Interval, KType, Parametric, TypeRegistry, display_name,
+    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
 };
 use crate::values::Knotted;
 
@@ -952,14 +952,40 @@ pub enum ShapeError<'graph> {
         site: Site,
         at: SourceRef,
     },
-    /// A quantified `FN` written at `at`, anywhere but a binder's right-hand side or the head of a
-    /// call.
-    QuantifiedLambda { at: SourceRef },
     /// The last statement of a body whose value is read — a callable's, an arm's, a quote's —
-    /// binding a quantified function at `at`: the statement's value is the body's, and nothing
-    /// solves the function's group to give it a concrete type.
+    /// binding a quantified function by a keyworded form at `at`: the statement's value is the
+    /// body's, and a keyworded form's function is read only at the head of a call.
     QuantifiedValue { at: SourceRef },
-    /// A name bound to a quantified function, read at `at` anywhere but the head of a call.
+    /// A quantified function read or bound where nothing fixes `variables`, in group order: no type
+    /// is wanted there, the `wanted` type is no function type, or it reaches none of them.
+    Unfixed {
+        variables: &'graph [TypeSymbol],
+        wanted: Option<KType>,
+        at: SourceRef,
+    },
+    /// A quantified function wanted at a type no instance of it lies under.
+    NoInstance {
+        scheme: Scheme,
+        wanted: KType,
+        at: SourceRef,
+    },
+    /// An instance solving `variable` to a type each run binds: a solution must be closed.
+    OpenInstance { variable: TypeSymbol, at: SourceRef },
+    /// A keyworded use whose kept candidates want a quantified function argument at different
+    /// instances.
+    AmbiguousInstance {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A keyworded use of several candidates, each dropped where none takes a quantified function
+    /// argument at a type that fixes its group.
+    NoInstanceAtCandidates {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A name a keyworded form binds or a `USING … SCOPE` surfaces, bound to a quantified function
+    /// and read at `at` anywhere but the head of a call; or a module's quantified member read
+    /// through `$` or offered by an `EVAL`.
     QuantifiedRead {
         name: BinderSymbol,
         site: Site,
@@ -1173,8 +1199,12 @@ impl ShapeError<'_> {
             ShapeError::Rebind { second, .. } => *second,
             ShapeError::ShadowsBuiltin { at, .. }
             | ShapeError::Unbound { at, .. }
-            | ShapeError::QuantifiedLambda { at }
             | ShapeError::QuantifiedValue { at }
+            | ShapeError::Unfixed { at, .. }
+            | ShapeError::NoInstance { at, .. }
+            | ShapeError::OpenInstance { at, .. }
+            | ShapeError::AmbiguousInstance { at, .. }
+            | ShapeError::NoInstanceAtCandidates { at, .. }
             | ShapeError::QuantifiedRead { at, .. }
             | ShapeError::EagerCycle { at, .. }
             | ShapeError::MarkOutsideQuote { at }
@@ -1251,13 +1281,50 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             ShapeError::Unbound { name: read, .. } => {
                 write!(f, "`{}` names no binding visible here", name(read))
             }
-            ShapeError::QuantifiedLambda { .. } => f.write_str(
-                "a quantified `FN` is written only as a binder's right-hand side or the head of a \
-                 call",
-            ),
             ShapeError::QuantifiedValue { .. } => f.write_str(
-                "this binds a quantified function as the body's value, and nothing solves its \
-                 group to a concrete type; end the body with another statement",
+                "this keyworded form binds a quantified function as the body's value, which is \
+                 read only at the head of a call; end the body with another statement",
+            ),
+            ShapeError::Unfixed {
+                variables, wanted, ..
+            } => {
+                let types = |f: &mut fmt::Formatter<'_>| {
+                    for (index, variable) in variables.iter().enumerate() {
+                        let gap = if index == 0 { "" } else { " " };
+                        write!(f, "{gap}`{}`", self.symbols.display(variable.symbol()))?;
+                    }
+                    Ok(())
+                };
+                match wanted {
+                    None => {
+                        f.write_str("nothing fixes ")?;
+                        types(f)?;
+                        f.write_str(
+                            " here: a quantified function is read only at the head of a call, as \
+                             the binding of a `MODULE` member, or where the type it is wanted at solves \
+                             its group",
+                        )
+                    }
+                    Some(wanted) => {
+                        write!(
+                            f,
+                            "{} does not fix ",
+                            display_name(*wanted, self.types, self.symbols)
+                        )?;
+                        types(f)
+                    }
+                }
+            }
+            ShapeError::NoInstance { scheme, wanted, .. } => write!(
+                f,
+                "{} has no instance under {}",
+                display_name(*scheme, self.types, self.symbols),
+                display_name(*wanted, self.types, self.symbols)
+            ),
+            ShapeError::OpenInstance { variable, .. } => write!(
+                f,
+                "this solves `{}` to a type each run binds; ascribe a type no `FOR ALL` names",
+                self.symbols.display(variable.symbol())
             ),
             ShapeError::QuantifiedRead { name: read, .. } => write!(
                 f,
@@ -1363,6 +1430,17 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "this overload of `{}` takes operands the builtin {} already takes",
                 self.key(key),
                 display_name(*builtin, self.types, self.symbols)
+            ),
+            ShapeError::AmbiguousInstance { key, .. } => write!(
+                f,
+                "the overloads of `{}` this call keeps want this function at different types; \
+                 ascribe it",
+                self.key(key)
+            ),
+            ShapeError::NoInstanceAtCandidates { key, .. } => write!(
+                f,
+                "no overload of `{}` takes this function at a type that fixes its group",
+                self.key(key)
             ),
             ShapeError::NoAdmittingCandidate { key, arguments, .. } => {
                 write!(f, "no overload of `{}` admits ", self.key(key))?;

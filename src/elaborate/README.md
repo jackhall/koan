@@ -69,8 +69,8 @@ registry's own doors:
   `FOR ALL` group only as the whole type of a signature's `VAL` member or as a
   signature's keyworded head ([below](#what-a-signature-declares)): anywhere
   else a quantified type is refused as `Quantified`, one nested inside an
-  admitted one included, since a quantified function is
-  [called and never passed or stored](../scope/README.md#resolution);
+  admitted one included, since a quantified function is passed or stored only
+  as a concrete [instance](../../design/quantified-types.md#where-a-quantified-function-is-instantiated);
 - `Sig WITH {Param = Type, …}` is an **application** of a declared signature,
   pinning the head parameters it names, each a type expression; a key naming no
   parameter, or a head that is no declared signature, is `Unsupported`;

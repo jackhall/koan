@@ -175,7 +175,7 @@ seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
   without matching parameter names.
 - *A quantified registration's name — open.* A quantified `FN` may be bound
   only as a module member or under a declared type that solves its group
-  ([instantiating a quantified function](../gradual-typing/instantiating-quantified-functions.md)).
+  ([quantified types](../../design/quantified-types.md#where-a-quantified-function-is-instantiated)).
   Whether the keyworded forms that bind one — `EXPR FOR ALL …` and
   `LET id = FN EXPR FOR ALL …` — count as a module member's binding, so they
   stay allowed in any body, or fall under the same rule, is open. Today both

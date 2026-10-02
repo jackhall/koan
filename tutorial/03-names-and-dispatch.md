@@ -20,6 +20,31 @@ PRINT copy
 42
 ```
 
+`LET <name> :<Type> = <value>` binds the value at a type you state. The value
+is held to it as [`:!`](02-values-and-types.md#ascribing-a-type-with-) holds
+its operand: checked against it, and viewed at it by whatever reads the name:
+
+```koan
+EXPR #(DESCRIBE xs :(LIST OF Number)) -> Str = #("numbers")
+EXPR #(DESCRIBE xs :(LIST OF Any)) -> Str = #("anything")
+LET xs :(LIST OF Any) = [1, 2]
+PRINT (DESCRIBE xs)
+```
+
+```text
+anything
+```
+
+A value that can never satisfy its type is refused before the program runs:
+
+```koan
+LET n :Number = "s"
+```
+
+```text
+error: <input>:1:1: this value is Str, which can never satisfy its annotation Number
+```
+
 A declaration may appear only at **statement position**: a line of a program, or
 a line of a body that is evaluated later — a function, module, or group body.
 Anywhere that is evaluated eagerly — a call argument, a list or dict element, an

@@ -32,7 +32,9 @@ statements the shape owns, [rewritten](../scope/README.md#the-four-rewrites),
 never the parse — as one of:
 
 - a **leaf**: a literal, lowered; a name, read through its mention's
-  coordinate; a quote, born through the [quote door](../knot/README.md#a-quote);
+  coordinate — at an [instance site](#static-types) the load recorded, made
+  into the instance through the knot's
+  [instance door](../knot/README.md#an-instance); a quote, born through the [quote door](../knot/README.md#a-quote);
   a type expression, the type value of its
   [load-time type](../scope/README.md#load-time-types) — as it is when closed,
   its variables substituted with what their coordinates read when rigid — or,
@@ -44,7 +46,7 @@ never the parse — as one of:
   shared operand evaluates once;
 - a `FN`, born through the [lambda door](../knot/README.md#a-lambda), so a
   callable no binder names is born where it is evaluated, with the captures it
-  reads there;
+  reads there — a `FN FOR ALL` the load instantiated born as its instance;
 - an **ascription** `<value> :! <Type>`: the operand, evaluated, checked against
   the type its type part denotes — read as a type expression leaf's is — unless
   the load [settled](#static-types) it, and
@@ -202,12 +204,15 @@ fixed:
   application, a newtype or a union's variant — since its frame
   [retypes](../program/README.md#the-body-runner) the argument to it, and at
   most its declared type otherwise, a union keeping each variant's own type; a
-  local has its right-hand side's, a
+  local has its right-hand side's, an annotated local, `LET n :T = v`, what
+  the ascription `v :! T` would have, a
   registration is exactly its function type, and a type name its type value's; a block's `it`, an arm's `it`, a name a
   `USING` surfaces and a quote's hole are at most `Any`;
 - a block has its last statement's type, and a bucket declaration is `Null`;
 - an ascription `e :! T` is, like a parameter, exactly `T` where the retype
-  makes it so and at most `T` otherwise. An operand whose static type is `Never`
+  makes it so and at most `T` otherwise — save an exact function operand
+  settled at a function type `T`, which keeps its own exact type, since a
+  function's retype is the identity. An operand whose static type is `Never`
   never arrives, and the ascription is `Never`; a type the load leaves unknown
   makes it at most `Any`;
 - a keyworded call is its selected candidate's return — a builtin's as its
@@ -271,10 +276,62 @@ strictly under one.
 A static type's ends are
 [parametric](../type_lattice/identity.md#typed-handles), since they may hold
 lexical variables, and are compared by *fits*; what a call reads at run time
-is concrete. A binder of a quantified callable is typed by its scheme, which
-only a call's head reads, as the
-[call-only rule](../scope/README.md#resolution) reads the name: a call solves
-the scheme's group there, and the statement binding it is at most `Any`.
+is concrete. A binder of a quantified callable — a `MODULE` or `GROUP` body's member, or a
+name a keyworded form binds — is typed by its scheme, which a call's head reads
+and solves, and the statement binding it is at most `Any`. A part's or a
+statement's static type is never a scheme.
+
+**Instance sites.** A quantified function anywhere else — a name bound to one,
+read where the [resolution rule](../scope/README.md#resolution) lets it be, or
+a `FN FOR ALL` literal — is an **instance site**, typed with the type it is
+**wanted** at:
+
+- an annotated binder's right-hand side, at its annotation;
+- an ascription's operand, at its type;
+- a callable body's last statement, at the declared return — a `LET` there
+  hands it to its right-hand side;
+- a call by name's argument, at the callee's parameter record, which a record
+  literal hands each field;
+- a list, dict or record literal's parts, at its element, value or field type,
+  only where the wanted type is that container's own;
+- a keyworded argument that is itself an instance site, at the slot of each
+  candidate, typed per candidate.
+
+A wanted type is never split: a union or `Any` fixes nothing. The site is
+instantiated at the least instance of its scheme under the wanted type
+([`instance_under`](../type_lattice/relations.md#quantified-binders)), its
+static type exactly that instance. A `LET` of a quantified `FN` outside a
+`MODULE` or `GROUP` body is an instance site whether or not its name is read, wanted at
+its annotation or, as a callable body's last statement, at the declared return;
+so a bare `LET pick = (FN FOR ALL …)` at the top level refuses the load. A
+name's solution is recorded by its site in the shape's cell, and a literal's in
+its body's write-once born-instance cell. Each refusal names the group's
+variables in group order:
+
+```text
+nothing fixes `Elt` here: a quantified function is read only at the head of a call, as the binding of a `MODULE` member, or where the type it is wanted at solves its group
+:(FN :{x :Number} -> Number) does not fix `Elt`
+:(FN FOR ALL #[Elt] :{x :Elt} -> Elt) has no instance under :(FN :{x :Number} -> Str)
+this solves `Elt` to a type each run binds; ascribe a type no `FOR ALL` names
+```
+
+— `ShapeError::Unfixed` with no wanted type or one that reaches a variable with
+nothing, `NoInstance` where the scheme does not fit the wanted type, and
+`OpenInstance` where a solution names a lexical variable: a solution is closed,
+the same at every run. A quantified callee's slot is read through its group
+solved from its **other** arguments first: a variable the slot shares with them
+must come out one closed point, and one only the slot names is read through
+`[Never, bound]`, so under
+`EXPR FOR ALL #[Elt Out] #(MAP f :(FN :{x :Elt} -> Out) AT y :Elt) -> Out`,
+`MAP pick AT 1` instantiates `pick` at `Elt = Number` and is `Number`, while
+`MAP pick AT y` over a parameter `y :(Number | Str)` refuses. An other argument
+that does not admit its slot fixes nothing either, so it refuses the load as
+`Unfixed` too — save, at a keyworded use, one that can never fit its slot, its
+upper end meeting the slot at `Never`, both read through their bounds: that
+candidate is dropped and left to the judge's own refusal. A candidate whose
+slot gives no instance is *never*. The rest are judged with the instance as an
+exact argument, and must agree on it (`AmbiguousInstance`). A lone candidate
+dropped this way reports its own refusal, and several `NoInstanceAtCandidates`.
 
 **Generic calls.** A quantified callee's group is solved from the arguments'
 static types to an
@@ -401,6 +458,26 @@ One whose operand's upper end [fits](../type_lattice/relations.md#the-relations)
 its type is **settled**: every value the run carries there satisfies it, so the
 run retypes without checking. *Fits* is rigid-aware, so an operand typed by a lexical variable settles an
 ascription to that variable. The cell records each settled ascription by site.
+
+An annotated binder, `LET <name> <type> = <value>`, is held to its type the same
+way, refused `ShapeError::AnnotationNeverSatisfied` at its statement and settled
+by its type part's site:
+
+```text
+this value is Str, which can never satisfy its annotation Number
+```
+
+**The call-by-name check.** A call by name whose callee's static type is exactly
+an unquantified function refuses the load (`ShapeError::CallNeverSatisfied`)
+where its argument's upper end lacks a parameter or meets one at `Never`, or,
+the argument exact, names a field no parameter declares:
+
+```text
+:(FN :{x :Number} -> Str) can never be called with :{x :Str}
+```
+
+A callee the load knows only at most, such as a parameter of function type, is
+the call's to admit.
 
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
@@ -545,8 +622,9 @@ call, and returns read through a group's intervals, by keyword and by name;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
-builtin library, combined definitions, lambdas, type parameters, a quantified
-function run only through a call, modules fitting a signature's quantified head
+builtin library, combined definitions, lambdas, type parameters, a module's
+quantified function run through a call, a call by name refused at load,
+modules fitting a signature's quantified head
 and each application their overloads answer, contracts,
 record access, construction, error values, and a program nested to the
 [syntax depth limit](../parse/README.md#the-syntax-depth-limit) in each nesting
@@ -565,6 +643,16 @@ ascription, a refused one, a generic use over an exact parameter selected, a
 candidate *never* over an argument's lower end, a call exact at its callee's
 return — by keyword, by name, in tail position — and one the load cannot solve
 exactly, and `FROM`'s projection over an exact record;
+[annotation](tests/annotation.rs) — an annotated binder retyped to its type,
+refused, settled at load and missed at run, a function recursing through its
+annotated name, and a `USING` over an annotated binder;
+[instances](tests/instances.rs) — each instance site and its refusals: a
+quantified binding outside a module, an annotation, an ascription, a declared
+return, a container's element type, a keyworded slot solved from the other
+arguments first, candidates disagreeing, a call by name's record, a closed
+solution, an instance's body reading its solution and calling its siblings, its
+equality, and one made in a frame and called where it lands, which is on the
+[Miri slate](../../observe/miri_slate.md);
 [rules](tests/rules.rs) — the law every native's type rule obeys over drawn
 argument intervals and names, and what `FROM`'s and `ATTR`'s rules make
 the load type and refuse and the run carry;

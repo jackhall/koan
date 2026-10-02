@@ -199,8 +199,11 @@ was declared first and drop the other's registration; a union canonicalized by
 *fits* would have a handle that depends on the order of its members.
 
 **What enforces it.** `fits_is_reflexive`, `fits_is_transitive`,
-`fits_is_transitive_through_an_instance`, `fits_contains_the_order` and
-`fits_bounds_the_signature_meet`. The typed handles keep a scheme out of every
+`fits_is_transitive_through_an_instance`, `fits_contains_the_order`,
+`fits_bounds_the_signature_meet`, and, for
+[`instance_under`](relations.md#quantified-binders),
+`an_instance_exists_where_its_scheme_fits` and
+`an_instance_fits_the_type_it_is_wanted_at`. The typed handles keep a scheme out of every
 construction: the order, `join` and `meet` take `KType`s.
 
 ## A solve does not depend on the order of its slots

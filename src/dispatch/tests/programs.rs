@@ -483,33 +483,34 @@ fn a_variable_used_once_is_solved_by_each_call() {
     assert_eq!(run(source), "Number\nStr");
 }
 
-/// A quantified function runs only through a call: by name, written at a call's head, or wrapped in
-/// an unquantified `FN` that calls it.
+/// A module's quantified member runs through a call: by name, written at a call's head, or wrapped
+/// in an unquantified `FN` that calls it. A body binding one where nothing fixes its group is
+/// refused where it is written, not when its value is read.
 #[test]
 fn a_quantified_function_runs_through_a_call() {
-    let pick = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n";
-    assert_eq!(run(&format!("{pick}PRINT (pick {{x = 1}})")), "1");
-    // A body returning one is refused where it is written, not when its value is read.
+    let pick = "(LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
+    let module = |rest: &str| format!("MODULE lib = ({pick} {rest})");
+    assert_eq!(run(&module("(PRINT (pick {x = 1}))")), "1");
     assert_eq!(
         run(
             "LET f = (FN :{} -> Any = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))))\n\
              PRINT (f {})"
         ),
-        "load: <test>:1:27: this binds a quantified function as the body's value, and nothing \
-         solves its group to a concrete type; end the body with another statement"
+        "load: <test>:1:27: Any does not fix `Elt`"
     );
     assert_eq!(
         run(
             "LET q = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\nPRINT (EVAL q -> Any)"
         ),
-        "error: <test>:1:10: this binds a quantified function as the body's value, and nothing \
-         solves its group to a concrete type; end the body with another statement"
+        "error: <test>:1:10: nothing fixes `Elt` here: a quantified function is read only at the \
+         head of a call, as the binding of a `MODULE` member, or where the type it is wanted at \
+         solves its group"
     );
     assert_eq!(
-        run(&format!(
-            "{pick}LET wrap = (FN :{{x :Number}} -> Number = #(pick {{x = x}}))\n\
-             LET keep = [wrap]\n\
-             PRINT (wrap {{x = 2}})"
+        run(&module(
+            "(LET wrap = (FN :{x :Number} -> Number = #(pick {x = x}))) \
+             (LET keep = [wrap]) \
+             (PRINT (wrap {x = 2}))"
         )),
         "2"
     );
@@ -518,19 +519,20 @@ fn a_quantified_function_runs_through_a_call() {
         "3"
     );
     assert_eq!(
-        run("LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))\nPRINT \"loaded\""),
+        run(
+            "MODULE lib = ((LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))) \
+             (PRINT \"loaded\"))"
+        ),
         "loaded"
     );
     assert_eq!(
-        run(&format!(
-            "{pick}LET q = #($pick)\nLET keep = [(EVAL q -> Any)]"
-        )),
-        "load: <test>:2:11: `pick` is quantified, so it is read only at the head of a call; wrap it in \
-         an unquantified `FN` to pass it"
+        run(&module("(LET q = #($pick)) (LET keep = [(EVAL q -> Any)])")),
+        "load: <test>:1:83: `pick` is quantified, so it is read only at the head of a call; wrap it \
+         in an unquantified `FN` to pass it"
     );
     assert_eq!(
-        run(&format!(
-            "{pick}LET q = #($pick {{x = 4}})\nPRINT (EVAL q -> Any)"
+        run(&module(
+            "(LET q = #($pick {x = 4})) (PRINT (EVAL q -> Any))"
         )),
         "4"
     );

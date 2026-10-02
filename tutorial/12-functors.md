@@ -319,12 +319,15 @@ Number
 Without the first line, `BOTH 1 AND "x"` is refused: `1` fixes `Elt` to
 `Number`, and `"x"` does not lie under it.
 
-A quantified `FN` works the same way, called by name:
+A quantified `FN` works the same way, called by name. Bound with a plain `LET`,
+it lives in a module, where each call works out `Elt` afresh:
 
 ```koan
-LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
-PRINT (pick {x = 1})
-PRINT (pick {x = "s"})
+MODULE lib = (
+  LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+  PRINT (pick {x = 1})
+  PRINT (pick {x = "s"})
+)
 ```
 
 ```text
@@ -332,15 +335,44 @@ PRINT (pick {x = "s"})
 s
 ```
 
-A quantified function is **called, never passed**: its name may stand only at
-the head of a call, so `LET keep = [pick]` is an error, and so is a
-`(FN FOR ALL …)` written anywhere but bound to a name or called on the spot. A
-body hands back its last statement's value, so a body cannot end by binding one
-either. To pass one, wrap it in an ordinary `FN` that calls it —
-`(FN :{x :Number} -> Number = #(pick {x = x}))` goes anywhere a function does.
-For the same reason a quantified type such as `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`
-is written only as a signature member's type, below; a slot that wants a
-function usable at several types takes a module instead.
+Anywhere but the head of a call, a quantified function is used at **one** type,
+the type it is wanted at there: a `LET`'s stated type, a `:!`, a slot's type, a
+function's declared return, or the element type of a list that is itself
+wanted at a type. Koan works out `Elt` from that type when the program loads,
+and what you get is an ordinary function at that type, which you can store,
+pass and return like any other:
+
+```koan
+EXPR #(TWICE f :(FN :{x :Number} -> Number) AT y :Number) -> Number = #(f {x = (f {x = y})})
+MODULE lib = (
+  LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+  LET inc :(FN :{x :Number} -> Number) = pick
+  LET keep = ([pick] :! :(LIST OF (FN :{x :Str} -> Str)))
+  PRINT inc
+  PRINT keep
+  PRINT (TWICE pick AT 3)
+)
+```
+
+```text
+:(FN :{x :Number} -> Number)
+[:(FN :{x :Str} -> Str)]
+3
+```
+
+Where nothing says which type is wanted, as in `LET keep = [pick]`, the program
+is refused before it runs, naming the type parameter left open:
+
+```text
+error: <input>:3:14: nothing fixes `Elt` here: a quantified function is read only at the head of a call, as the binding of a `MODULE` member, or where the type it is wanted at solves its group
+```
+
+Outside a module, a quantified `FN` is bound only under a type that settles it,
+`LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))`;
+a plain `LET pick = (FN FOR ALL …)` there is refused the same way. A quantified
+type such as `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)` is written only as a
+signature member's type, below; a slot that wants a function usable at several
+types takes a module instead.
 
 A signature can declare a quantified member the same way, and a module satisfies it
 with a single implementation:

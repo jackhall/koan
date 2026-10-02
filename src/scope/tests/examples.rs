@@ -957,14 +957,15 @@ fn a_lambdas_body_is_found_by_its_forms_body_site() {
 
 const PICK: &str = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
 
+/// A keyworded form's name and a surfaced quantified member are read only at the head of a call; a
+/// module body's quantified member is read unmarked anywhere, the static pass instantiating it, and
+/// any other quantified binding is the static pass's to instantiate or refuse.
 #[test]
-fn a_quantified_function_is_read_only_at_the_head_of_a_call() {
+fn a_call_only_quantified_function_is_read_only_at_the_head_of_a_call() {
     let module = "MODULE m = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
     let identity = "SIG Ident = #[(VAL identity :(FN FOR ALL #[Item] :{x :Item} -> Item))]";
+    let member = |rest: &str| format!("MODULE lib = (({PICK}) ({rest}))");
     for (source, name) in [
-        (format!("{PICK}\nLET keep = [pick]"), "pick"),
-        (format!("{PICK}\nPRINT pick"), "pick"),
-        (format!("{PICK}\nLET alias = pick"), "pick"),
         (
             "LET pick = FN EXPR FOR ALL #[Elt] #(PICK x :Elt) -> Elt = #(x)\nLET keep = [pick]"
                 .to_string(),
@@ -975,17 +976,17 @@ fn a_quantified_function_is_read_only_at_the_head_of_a_call() {
             format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity)"),
             "identity",
         ),
-        // A `$` name reads where the quote is written.
-        (format!("{PICK}\nLET q = #($pick)"), "pick"),
+        // A `$` name reads where the quote is written, and is never an instance site.
+        (member("LET q = #($pick)"), "pick"),
         (
-            format!("{PICK}\nLET q = #(LET f = (FN :{{}} -> Any = #([$pick])))"),
+            member("LET q = #(LET f = (FN :{} -> Any = #([$pick])))"),
             "pick",
         ),
         // An `EVAL` offering the name passes its value into the code.
         (
-            format!(
-                "{PICK}\nLET run = (FN :{{body :(Expression NEEDING #[pick])}} -> Any = \
-                 #(EVAL body -> Any))"
+            member(
+                "LET run = (FN :{body :(Expression NEEDING #[pick])} -> Any = \
+                 #(EVAL body -> Any))",
             ),
             "pick",
         ),
@@ -1005,11 +1006,16 @@ fn a_quantified_function_is_read_only_at_the_head_of_a_call() {
         format!("{PICK}\nLET keep = [(FN :{{x :Number}} -> Number = #(pick {{x = x}}))]"),
         format!("{PICK}\nPRINT (pick {{x = 1}})"),
         format!("{PICK}\nPRINT ((pick) {{x = 1}})"),
+        format!("{PICK}\nLET keep = [pick]"),
+        member("LET keep = [pick]"),
+        member("LET f = (FN :{} -> Any = #([pick]))"),
         format!("{module}\nUSING m SCOPE (pick {{x = 1}})"),
         format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity {{x = 1}})"),
         // A quantified function calling itself by name.
         "LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))".to_string(),
-        format!("{PICK}\nLET q = #($pick {{x = 1}})"),
+        member("LET q = #($pick {x = 1})"),
+        "LET keep = [(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))]".to_string(),
+        "PRINT ((FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)) {x = 1})".to_string(),
     ] {
         shaped(&source, |fixture, _, shape| {
             if let Err(error) = shape {
@@ -1022,46 +1028,17 @@ fn a_quantified_function_is_read_only_at_the_head_of_a_call() {
     }
 }
 
+/// A body whose value is read takes its last statement's, so one binding a quantified function by a
+/// keyworded form there would hand on a value read only at a call's head; a plain `LET` there is
+/// the static pass's to instantiate at the body's return.
 #[test]
-fn a_quantified_fn_is_written_only_where_a_binder_or_a_call_takes_it() {
-    let lambda = "(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
-    for source in [
-        format!("LET keep = [{lambda}]"),
-        format!("PRINT {lambda}"),
-        lambda.to_string(),
-        format!("LET f = (FN :{{}} -> Any = #({lambda}))"),
-    ] {
-        shaped(&source, |_, _, shape| {
-            assert!(
-                matches!(shape.err(), Some(ShapeError::QuantifiedLambda { .. })),
-                "`{source}` refuses the lambda"
-            );
-        });
-    }
-    for source in [
-        format!("LET f = {lambda}"),
-        format!("PRINT ({lambda} {{x = 1}})"),
-    ] {
-        shaped(&source, |fixture, _, shape| {
-            if let Err(error) = shape {
-                panic!(
-                    "`{source}` shapes: {}",
-                    error.display(fixture.symbols, fixture.types)
-                );
-            }
-        });
-    }
-}
-
-/// A body whose value is read takes its last statement's, so one binding a quantified function there
-/// would hand on a value nothing solves; anywhere else the binding's value goes unread.
-#[test]
-fn a_body_s_value_binds_no_quantified_function() {
+fn a_body_s_value_binds_no_keyworded_quantified_function() {
     let expression = "EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)";
+    let combined = "LET id = FN EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)";
     for source in [
-        format!("LET f = (FN :{{}} -> Any = #({PICK}))"),
         format!("LET f = (FN :{{}} -> Any = #({expression}))"),
-        format!("LET f = (FN :{{}} -> Any = #(\n  LET y = 1\n  {PICK}\n))"),
+        format!("LET f = (FN :{{}} -> Any = #({combined}))"),
+        format!("LET f = (FN :{{}} -> Any = #(\n  LET y = 1\n  {expression}\n))"),
     ] {
         shaped(&source, |_, _, shape| {
             assert!(
@@ -1073,6 +1050,7 @@ fn a_body_s_value_binds_no_quantified_function() {
     for source in [
         PICK.to_string(),
         format!("LET f = (FN :{{}} -> Number = #(\n  {PICK}\n  pick {{x = 1}}\n))"),
+        format!("LET f = (FN :{{}} -> Any = #({PICK}))"),
         format!("MODULE m = ({PICK})"),
     ] {
         shaped(&source, |fixture, _, shape| {

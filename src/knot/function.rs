@@ -31,8 +31,8 @@ pub struct Function<'graph, 'cell, X> {
     /// concrete, every lexical variable its declaration read bound where it was born.
     ktype: DeclaredType<KType>,
     /// The quantifier map, registered shape and instance solution, or `None` where the function has
-    /// none of them — an unquantified `FN`, almost every function, which costs nothing. Homed out of line for the
-    /// reason [`Node::Coerced`] is.
+    /// none of them — an unquantified `FN`, almost every function, which costs nothing. Homed out
+    /// of line for the reason [`Node::Coerced`] is.
     ///
     /// [`Node::Coerced`]: super::Node::Coerced
     typing: Option<&'cell Typing<'cell>>,

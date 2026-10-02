@@ -234,9 +234,11 @@ pub enum Value<'cell, X = Nothing> {
 const _: () = assert!(size_of::<Value<'static>>() == 24);
 
 /// Why a value's type is concrete where [`Value::concrete_ktype`] reads it: a quantified callable
-/// is read only at the head of a call, so no other read reaches one
+/// is read only at the head of a call, or as a module member's binding, and an instance site reads
+/// its instance, so no other read reaches one
 /// ([scope/README.md § Resolution](scope/README.md#resolution)).
-pub const CALL_ONLY: &str = "a quantified callable is read only at the head of a call";
+pub const CALL_ONLY: &str = "a quantified callable is read only at the head of a call, or as the \
+                             binding of a module member; an instance site reads its instance";
 
 impl<'cell, X: Knotted> Value<'cell, X> {
     /// The value's type: a constant for a leaf and the stored handle for everything else — a
@@ -257,8 +259,8 @@ impl<'cell, X: Knotted> Value<'cell, X> {
         }
     }
 
-    /// The value's concrete type, where the scope builder's call-only rule keeps a quantified
-    /// callable out — every read but a call's head ([`CALL_ONLY`]).
+    /// The value's concrete type, where the load keeps a quantified callable out — every read but
+    /// a call's head, which an instance site reads instantiated ([`CALL_ONLY`]).
     pub fn concrete_ktype(&self) -> KType {
         self.ktype().as_type().expect(CALL_ONLY)
     }

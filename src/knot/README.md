@@ -46,7 +46,8 @@ activation. This module closes it:
   function's memoized type — a concrete type, or a quantified function's
   [scheme](../type_lattice/identity.md#typed-handles) — the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and its
-  **typing record**: its quantifier map and its registered shape. The
+  **typing record**: its quantifier map, its registered shape and, for an
+  [instance](#an-instance), the solution its group was instantiated at. The
   **registered shape** is the expression shape a function born for a
   definition's registration puts in its bucket — beside how a keyworded call
   binds that shape's slots to the function's parameters — which the
@@ -62,7 +63,7 @@ activation. This module closes it:
   record is homed out of line for the reason a barrier's fields are, below: the
   node holds one nullable pointer, eight bytes, where a second type handle inline
   would widen every node from 64 to 80 bytes. An unquantified `FN` — which is
-  almost every function — has neither, stores `None` and allocates nothing. A `Data`
+  almost every function — has none of them, stores `None` and allocates nothing. A `Data`
   node holds a [`Circular`](../values/circular.rs) — a list, dict, record or
   tagged resident whose cells are links — and the same knot weight. A `Module`
   node holds its self-signature, its members in
@@ -266,6 +267,24 @@ the tie never asks the evaluator for. Its type is read as the tie's is, and a
 signature the load left unknown that does not elaborate refuses `Type` and
 writes nothing.
 
+## An instance
+
+A quantified function the load instantiated at an
+[instance site](../dispatch/README.md#static-types) is a function node like any
+other, typed by the concrete instance of its scheme, with the solution in group
+order in its typing record. A frame calling it binds its `FOR ALL` names from
+that solution and solves nothing. Two doors make one:
+
+- a `FN FOR ALL` the load instantiated where it is written, or as a binder's
+  right-hand side, is **born** as its instance: staging reads the solution off
+  its body shape's born-instance cell, so the tie and the lambda door both
+  birth it typed by the instance;
+- a name read at an instance site goes through [`instance`](function.rs), a
+  one-node knot in the reader's region over the member's body and captures,
+  typed by the instance. An edge in the member's closure is relative to the
+  member's own knot, so each is **rehomed** as the value of the sibling it
+  names.
+
 ## A builtin overload
 
 A builtin overload is a function value like any other, so a keyworded use's
@@ -358,9 +377,10 @@ would be.
 
 ## Equality and rendering
 
-A function compares by its shape and its captures: two functions are equal
-when they hold the same shape handle — one per written `FN`, `EXPR` or `OP`, so
-a copy keeps it — and their closure bindings compare equal as a bisimulation,
+A function compares by its shape, its instance and its captures: two functions
+are equal when they hold the same shape handle — one per written `FN`, `EXPR` or
+`OP`, so a copy keeps it — the same instance solution, empty for anything no
+instance, and their closure bindings compare equal as a bisimulation,
 under the pair set circular data uses. Bindings are immutable and no shape
 retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
 shape and captures fix what it does. The same text written at another site is

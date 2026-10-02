@@ -39,8 +39,9 @@ working expression, and every door and relation over them carry the same
 parameter.
 
 **What a member holds** is the one total answer `Knotted::resolve` gives, a
-[`Resolved`](circular.rs): a **function**, as its identity and its closure
-bindings; a quote's **code**, as a `CodeView` of its body as written and the
+[`Resolved`](circular.rs): a **function**, as its identity, the solution it
+was instantiated at where it is an instance of a quantified function, and its
+closure bindings; a quote's **code**, as a `CodeView` of its body as written and the
 bindings its names carry; a **module** or a **barrier**, both opaque to
 `values` — a module carries no type this module names; or a **data node**, a
 [`Circular`](circular.rs). A function's identity is a `usize` the layer above
@@ -169,8 +170,9 @@ holding a number and a type memoizes `List<(Number | ProperType)>`.
 registry and walks nothing. It answers a
 [`DeclaredType`](../type_lattice/identity.md#typed-handles): a concrete `KType`
 for every value but a quantified callable, which answers its `Scheme`. A
-quantified callable is read only at the head of a call
-([resolution](../scope/README.md#resolution)), so every other reader —
+quantified callable is read only at the head of a call or as a `MODULE` or
+`GROUP` member's binding, and the load makes every other read of one an instance with a concrete
+type ([resolution](../scope/README.md#resolution)), so every other reader —
 a container's join, a construction, a diagnostic — takes
 `Value::concrete_ktype`, which names that rule where it narrows. A key's
 candidates — the functions a `USING` hole or an `EVAL` offer gathers at one
@@ -423,8 +425,8 @@ numbers are unequal. That makes `==` intransitive across ascriptions by design.
 `Result<bool, Incomparable>`: a comparison with a module or a barrier on either
 side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
-A function compares by its identity, then its closure bindings under the same
-pair set ([knots](../knot/README.md#equality-and-rendering)).
+A function compares by its identity and its instance solution, then its
+closure bindings under the same pair set ([knots](../knot/README.md#equality-and-rendering)).
 Every aligned pair is compared, so an unequal pair before an opaque member does
 not hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.

@@ -78,7 +78,7 @@ mod surface;
 pub(in crate::scope) use locate::source_within;
 
 use rewrite::{Built, BuiltKind, chained};
-use surface::{Surfaced, SurfacedKey, quantified_value};
+use surface::{Quantified, Surfaced, SurfacedKey, quantified_value};
 
 /// The names a body binds that no signature writes. The shape builder binds them, and the
 /// elaborator reads an operator's function type over them, so the two cannot disagree.
@@ -302,16 +302,13 @@ fn part_marks<'graph>(
     }
 }
 
-/// What the next part the walk reaches may be beyond what any part may: set right before a
-/// binder's right-hand side or a call's head is walked, and taken by the first part there that is
-/// not a one-part wrapper. A quantified `FN` is written only where this admits it, and a name bound
-/// to one is read only at a call's head.
+/// What the next part the walk reaches may be beyond what any part may: set right before a call's
+/// head is walked, and taken by the first part there that is not a one-part wrapper. A name bound
+/// to a quantified function is read anywhere else only where [`Quantified`] allows it.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum Admits {
     #[default]
     Nothing,
-    /// A binder's right-hand side: a quantified `FN` written there.
-    Lambda,
     /// A call's head: a quantified `FN` written there, or a name bound to one.
     Head,
 }
@@ -1215,11 +1212,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Result<(), ShapeError<'graph>> {
         let wrapper = node.cache().builtin_shape().is_none()
             && matches!(node.parts, [only] if !matches!(only.value, ExpressionPart::Keyword(_)));
-        let admits = if wrapper {
-            self.admits
-        } else {
-            std::mem::take(&mut self.admits)
-        };
+        if !wrapper {
+            self.admits = Admits::Nothing;
+        }
         let declares = node.cache().binder_plan().is_some()
             || node
                 .cache()
@@ -1279,9 +1274,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 form: form.id,
                 at: node.source,
             });
-        }
-        if form.id == BuiltinShapeId::QuantifiedLambda && admits == Admits::Nothing {
-            return Err(ShapeError::QuantifiedLambda { at: node.source });
         }
         debug_assert_eq!(
             form.elements.len(),
@@ -1391,14 +1383,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 Role::Rhs => {
                     let draft = &mut self.chain[level];
-                    let mut binds = false;
                     let mut declares_type = false;
                     if state == State::Root
                         && let Some(binder) = draft.statement_binders[statement as usize].first()
                     {
                         draft.rhs.push((binder, Site::of(part)));
                         self.parts.insert(Site::of(part), part);
-                        binds = true;
                         declares_type = draft.is_type_slot(binder);
                     }
                     // A type `LET`'s right-hand side is its declaration's definition, typed with
@@ -1406,9 +1396,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     if declares_type {
                         self.typed(|builder| builder.walk_part(level, statement, part, state))?
                     } else {
-                        if binds {
-                            self.admits = Admits::Lambda;
-                        }
                         self.walk_part(level, statement, part, state)?
                     }
                 }
@@ -2190,7 +2177,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             if let Some(name) = needed_name(entry) {
                 // An offer passes the name's value into the code, which a quantified function's
                 // name never is.
-                if self.quantified(level, name, at, None) {
+                if self.quantified(level, name, at, None) != Quantified::No {
                     return Err(ShapeError::QuantifiedRead {
                         name,
                         site: Site::of(operand),
@@ -2545,24 +2532,34 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 at: self.part_source(level, statement, Site::of(part)),
             });
         }
-        let class = state.class();
-        let at = match class {
+        let mut class = state.class();
+        let mut at = match class {
             MentionClass::Eager => Position::statement(statement as usize),
             MentionClass::Deferred => self.chain[level].end(),
         };
+        let site = Site::of(part);
+        if !head {
+            match self.quantified(level, name, at, mark) {
+                Quantified::No => {}
+                // A module member read where it is instantiated needs its value then.
+                Quantified::Member if mark.is_none() => {
+                    class = MentionClass::Eager;
+                    at = Position::statement(statement as usize);
+                }
+                Quantified::Member | Quantified::CallOnly => {
+                    return Err(ShapeError::QuantifiedRead {
+                        name,
+                        site,
+                        at: self.part_source(level, statement, site),
+                    });
+                }
+            }
+        }
         let reader = Reader {
             level,
             statement,
             class,
         };
-        let site = Site::of(part);
-        if !head && self.quantified(level, name, at, mark) {
-            return Err(ShapeError::QuantifiedRead {
-                name,
-                site,
-                at: self.part_source(level, statement, site),
-            });
-        }
         let coordinate = match self.builtins.lookup(name) {
             Some(index) => Coordinate::Builtin(index),
             None => {

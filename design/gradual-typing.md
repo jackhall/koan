@@ -88,13 +88,21 @@ Each candidate of each keyworded call then gets a verdict:
 | *always* | every such call is admitted | may select the winner, which the call then runs without admitting or ranking |
 | *maybe* | anything else | leaves the candidate to the call |
 
-The same reading refuses a body that can never satisfy its declared return and
-an ascription that can never hold, and settles an ascription that always does:
+The same reading refuses a body that can never satisfy its declared return, an
+ascription or an annotated binding that can never hold, and a call by name of an
+exactly known function its argument can never satisfy; it settles an ascription
+or annotation that always holds:
 
 ```text
 no overload of `_ + _` admits (Str, Number)
 this body returns Number, which can never satisfy its declared return Str
 ```
+
+A quantified function written anywhere but the head of a call or a `MODULE` or
+`GROUP` member's binding is instantiated where the load reads it, at the type it is
+wanted at there — an annotation, an ascription, a declared return, a slot — or
+refused where that type fixes nothing
+([quantified types](quantified-types.md#where-a-quantified-function-is-instantiated)).
 
 ### Where a call runs
 
@@ -169,7 +177,7 @@ changes what a reader sees and which overload runs.
 | The laws and what breaks without them | [type lattice: laws](../src/type_lattice/laws.md) |
 | The solve, intervals, priority classes, verdicts | [type lattice: solving](../src/type_lattice/solving.md) |
 | A written type read into a handle; closed, rigid, unknown | [elaborator](../src/elaborate/README.md) |
-| Static types, static selection, the return and ascription checks | [dispatch: static types](../src/dispatch/README.md#static-types) |
+| Static types, static selection, instance sites, the return, ascription and annotation checks | [dispatch: static types](../src/dispatch/README.md#static-types) |
 | Admission and ranking at a call | [dispatch: selection](../src/dispatch/README.md#selection) |
 | A value's carried type, `satisfies`, retyping | [values: the type memo](../src/values/README.md#the-type-memo-and-satisfies) |
 | Binding arguments and holding the return contract | [program: the body runner](../src/program/README.md#the-body-runner) |
@@ -181,8 +189,5 @@ changes what a reader sees and which overload runs.
   items.
 - [Calls solved from their static types](../roadmap/gradual-typing/static-solutions.md)
   — a call's group solved from what the load knows of its arguments.
-- [Instantiating a quantified function](../roadmap/gradual-typing/instantiating-quantified-functions.md)
-  — a quantified callable made concrete by a solve, an annotation or an
-  ascription.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)

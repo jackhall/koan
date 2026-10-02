@@ -186,25 +186,31 @@ read of a capture that is an edge resolves through it to the sibling the edge
 names — a function or a data node — a bound value like any other. A capture read at birth through
 such a coordinate is therefore the sibling's value word.
 
-**A quantified function is read only at the head of a call.** A name bound to
-a quantified `FN` — by a `LET` of one, a `LET … = FN EXPR FOR ALL …`, a module
-body's binder of either, or a quantified `VAL` member a `USING … SCOPE` surfaces
-— resolves only as the head of a call by name, `(pick {x = 1})`; anywhere else
-it is refused `QuantifiedRead`, so its quantified type enters no other type. A
-`$pick` in a quote's code reads where the quote is written, so the same rule
-holds there, and a bare `$pick` refuses the program rather than the code; an
-`EVAL` refuses to offer `pick` to the code it runs, since an offer passes the
-name's value in. A
-quantified `FN` itself is written only as a binder's right-hand side or the head
-of a call, and is refused `QuantifiedLambda` elsewhere. A body whose value is
-read — a callable's, a block's, a quote's code — takes its last statement's, so
-that statement binds no quantified function: a `LET` of a quantified `FN`, a
-`LET … = FN EXPR FOR ALL …` or a bare `EXPR FOR ALL …` definition there is
-refused `QuantifiedValue`, since nothing solves the function's group to a
-concrete type. Inside a quote's code the refusal waits for the `EVAL` that runs
-it. All three rules read the syntax a name's declaration has, so no type is
-needed. To pass one, wrap it in
-an unquantified `FN` that calls it. A keyworded hole filled from a module and
+**Where a quantified function is read.** A name bound to a quantified
+function resolves by how it is bound, read off the syntax of its declaration:
+
+- a **call-only** name — one a `LET … = FN EXPR FOR ALL …` binds, or a
+  quantified `VAL` member a `USING … SCOPE` surfaces — resolves only as the
+  head of a call by name, `(pick {x = 1})`, and is refused `QuantifiedRead`
+  anywhere else;
+- a **member** — a `MODULE` or `GROUP` body's `LET pick = (FN FOR ALL …)` — resolves at
+  the head of a call, and unmarked anywhere else, where the
+  [static pass](../dispatch/README.md#static-types) instantiates it at the type
+  it is wanted at. Such a read is eager whatever its position, since making the
+  instance needs the member's value. A `$pick` in a quote's code is refused
+  `QuantifiedRead`, and a bare `$pick` refuses the program rather than the code;
+  an `EVAL` refuses to offer either kind of name, since an offer passes the
+  name's value in;
+- any other binding of a quantified `FN`, a `LET` outside a `MODULE` or `GROUP`
+  body included, resolves as an ordinary name: the static pass instantiates it where
+  it is bound, or refuses the load.
+
+A quantified `FN` literal is written anywhere; outside a call's head, the
+static pass instantiates it where it is written. A body whose value is read — a
+callable's, a block's, a quote's code — takes its last statement's, so that
+statement binds no call-only function: a `LET … = FN EXPR FOR ALL …` or a bare
+`EXPR FOR ALL …` definition there is refused `QuantifiedValue`. Inside a quote's
+code the refusal waits for the `EVAL` that runs it. A keyworded hole filled from a module and
 the candidates an `EVAL` offers are lists, not names, so either may hold a
 quantified registration; such a list is typed `List<Any>` without reading its
 functions' types ([values](../values/README.md#the-type-memo-and-satisfies)),
@@ -469,8 +475,10 @@ elaborated — and the pass fills it, once, where the program loads:
   binder, and a type nested in a recorded one is part of it;
 - each **type binder**, beside its declaration node;
 - each **registration**, its expression shape;
-- a callable body's own **callable type**, and the lexical variable each name of
-  its own `FOR ALL` group is in the body (`BodyShape::group_levels`);
+- a callable body's own **callable type**, the lexical variable each name of
+  its own `FOR ALL` group is in the body (`BodyShape::group_levels`), and the
+  solution a `FN FOR ALL` the load instantiated is born at
+  (`BodyShape::born_instance`), written by dispatch's static pass;
 - a quote's code shape's **typing refusal**, which `BodyShape::refusal` reports
   as it reports the code's own error.
 
@@ -488,11 +496,13 @@ One more cell per shape holds the **value channel**: the `Statics` dispatch's
 a static type, an interval, for each part the evaluator reads as a value (by
 site), each statement (by index) and each slot (by index), and one `Narrowing` per keyworded
 use, parallel to its candidate list: the one candidate selected, or each
-candidate kept beside its verdict, *always* or *maybe*; and the site of each
-**settled** `:!`, whose operand's static type lies under its type, so the run
-checks nothing there. It lives here for the
-same reason the type channel's cells do, and the shape reads it by site
-(`value_type`, `narrowing`, `settled`), statement index or slot; a shape the
+candidate kept beside its verdict, *always* or *maybe*; the site of each
+**settled** `:!` or annotation, whose value's static type lies under its type,
+so the run checks nothing there; and the solution each name read at an
+[instance site](../dispatch/README.md#static-types) is instantiated at. It
+lives here for the same reason the type channel's cells do, and the shape reads
+it by site (`value_type`, `narrowing`, `settled`, `instance_at`), statement
+index or slot; a shape the
 pass has not fixed — a quote's code it refused — has no static types, every
 candidate of every use in it is *maybe*, and no ascription in it is settled.
 
@@ -919,13 +929,12 @@ program only for a `$` name nothing binds where the quote is written:
 - an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
   rewrite home yet, and the reserved forms that exist only to diagnose a miss,
   `TYPE` among them, since a signature hides a type through a head parameter;
-- a **quantified lambda** — a quantified `FN` written anywhere but a binder's
-  right-hand side or the head of a call;
-- a **quantified read** — a name bound to a quantified function read anywhere
-  but the head of a call ([resolution](#resolution));
+- a **quantified read** — a call-only name read anywhere but the head of a
+  call, or a module's quantified member read through `$` or offered by an
+  `EVAL` ([resolution](#resolution));
 - a **quantified value** — the last statement of a callable's, a block's or a
-  quote's body binding a quantified function, which would be the body's value
-  ([resolution](#resolution));
+  quote's body binding a quantified function by a keyworded form, which would
+  be the body's value ([resolution](#resolution));
 - an **unquoted** part — one its role reads as a quote or a container of
   quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
   body. The message says how the part is written;
@@ -961,7 +970,9 @@ candidate**, a keyworded use every candidate of which
 its arguments' static types; an **ambiguity**, a keyworded use every candidate
 of which always admits and none of which ranks first, naming the same; and a
 **return never satisfied**, a callable body whose static type meets its declared
-return at `Never`;
+return at `Never` — beside the refusals of its
+[instance sites](../dispatch/README.md#static-types), an annotated binder or a
+call by name that can never be satisfied, and the static pass's other checks;
 
 two the [elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
 finds — a **type** that does not elaborate, carrying the elaborator's refusal,

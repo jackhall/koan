@@ -228,7 +228,17 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         },
         E::ShadowsBuiltin { name, .. } => E::ShadowsBuiltin { name, at },
         E::Unbound { name, site, .. } => E::Unbound { name, site, at },
-        E::QuantifiedLambda { .. } => E::QuantifiedLambda { at },
+        E::Unfixed {
+            variables, wanted, ..
+        } => E::Unfixed {
+            variables,
+            wanted,
+            at,
+        },
+        E::NoInstance { scheme, wanted, .. } => E::NoInstance { scheme, wanted, at },
+        E::OpenInstance { variable, .. } => E::OpenInstance { variable, at },
+        E::AmbiguousInstance { key, .. } => E::AmbiguousInstance { key, at },
+        E::NoInstanceAtCandidates { key, .. } => E::NoInstanceAtCandidates { key, at },
         E::QuantifiedValue { .. } => E::QuantifiedValue { at },
         E::QuantifiedRead { name, site, .. } => E::QuantifiedRead { name, site, at },
         E::EagerCycle {

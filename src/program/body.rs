@@ -463,11 +463,11 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 
 /// A frame's activation, laid down for `callee` with every value parameter bound from `arguments`,
 /// retyped to its declared type with the call's solution substituted, and every type parameter
-/// bound to its solution — the one a keyworded call's selection carried in
-/// `arguments`, or, for a call by name, the one solved here while each argument is admitted against
-/// its parameter's declared type — beside the contract the frame ends under. The error value's
-/// message when the callee is no function, the arguments do not name its parameters exactly, an
-/// argument does not fit its parameter, or the group has no solution.
+/// bound to its solution — the one an instance carries, the one a keyworded call's selection
+/// carried in `arguments`, or, for a call by name, the one solved here while each argument is
+/// admitted against its parameter's declared type — beside the contract the frame ends under. The
+/// error value's message when the callee is no function, the arguments do not name its parameters
+/// exactly, an argument does not fit its parameter, or the group has no solution.
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     program: &'graph Program<'graph>,

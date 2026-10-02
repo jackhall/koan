@@ -43,28 +43,39 @@
 //! Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running it reports it.
 //!
 //! A static type is over [`Parametric`] types: it may hold the lexical variables of its chain. A
-//! binder of a quantified callable is typed by its scheme, which only a call's head reads — the
-//! head reads it as a [`DeclaredType`] — so a part's and a statement's static type is never one.
+//! binder of a quantified callable is typed by its scheme — a module body's plain `LET` member, or a
+//! keyworded form's name — and a call's head reads it as a [`DeclaredType`]. Anywhere else a
+//! quantified function is an **instance site**: a part is typed with the type it is **wanted** at —
+//! an annotation's, an ascription's, a callable body's declared return for its last statement, a
+//! container's element type where that is the container's own type, a call by name's parameter
+//! record, and a keyworded argument's slot at each candidate — and the site is instantiated at the
+//! least instance under it ([`instance_under`]). A quantified callee's other arguments solve its
+//! group first, and the slot is read through that solve; the candidates a use keeps must agree on
+//! each instance. A name's solution is recorded by its site
+//! and a literal's in its body's born-instance cell; a site the wanted type fixes nothing at, or
+//! fixes to no closed instance, refuses the load. So a part's and a statement's static type is
+//! never a scheme.
 //!
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
+use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyShape, Candidate, CandidateList, CaptureSource, Coordinate, Narrowing, Position,
-    ShapeError, ShapeKind, Site, Slot, Static, Statics, Target, UnitWork,
+    ShapeError, ShapeKind, Site, Slot, Static, Statics, Target, UnitWork, source_of,
 };
+use crate::source::SourceRef;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Collector, DeclaredType, Interval, KType, Parametric, Record, Side, TypeNode, TypeRegistry,
-    Variable, Variance, Verdict, admits_with, bound_above, class_at_least, fits,
-    instantiate_quantified, intervals, judge_by_class, meet, read_through, scheme_bound_above,
-    scheme_return, select_by_class, shape_return,
+    Collector, DeclaredType, InstanceFailure, Interval, KType, Parametric, Record, Scheme, Side,
+    TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above, class_at_least,
+    fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
+    quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
+    select_by_class, shape_return, shape_slots,
 };
-use crate::values::{
-    CALL_ONLY, ConstructionRefused, Value, construction, dict_type, list_type, record_type,
-};
+use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
 
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
@@ -188,7 +199,7 @@ impl Known {
 /// One candidate a keyworded use kept: what the load knows of it, its verdict, its group's
 /// intervals where the static solve succeeded, and a builtin's return as its rule gives it.
 #[derive(Clone, Copy)]
-struct Judgement<'x> {
+struct Judgement<'x, 'graph> {
     candidate: Candidate,
     known: Known,
     /// Whether the candidate is a `USING … SCOPE` block's surfaced head, whose return is at most.
@@ -196,6 +207,39 @@ struct Judgement<'x> {
     verdict: Verdict,
     intervals: Option<&'x [Interval]>,
     ruled: Option<Interval>,
+    /// The instance each of the use's instance arguments takes at this candidate, in argument
+    /// order.
+    instances: &'x [Made<'graph>],
+}
+
+/// An instance: its exact static type beside the solution it is made at.
+type Made<'graph> = (Interval, &'graph [KType]);
+
+/// Where an instance site is written: a name read there, or a quantified `FN` written in place,
+/// whose body the instance is born from.
+#[derive(Clone, Copy)]
+enum Instanced<'graph> {
+    Name(&'graph ExpressionPart<'graph>),
+    Literal(&'graph BodyShape<'graph>),
+}
+
+/// An instance argument of a keyworded use: its slot's position, its part as written, where its
+/// instance is made, its scheme and where it is written.
+#[derive(Clone, Copy)]
+struct InstanceArgument<'graph> {
+    position: usize,
+    part: &'graph ExpressionPart<'graph>,
+    instanced: Instanced<'graph>,
+    scheme: Scheme,
+    at: SourceRef,
+}
+
+/// Why a quantified callee's other arguments give an instance argument's slot no wanted type.
+enum Unsolved<'p> {
+    /// One can never fit its own slot: the call can never be admitted.
+    Misfit,
+    /// They leave these variables of the group the slot names open.
+    Open(BumpVec<'p, usize>),
 }
 
 impl<'p, 'graph> Pass<'p, '_, 'graph> {
@@ -235,7 +279,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         for unit in shape.units() {
             match unit.work {
                 UnitWork::Statement(index) => {
-                    let typed = self.node(level, &shape.body()[index as usize])?;
+                    let wanted = self.tail(level, index as usize);
+                    let typed = self.node(level, &shape.body()[index as usize], wanted)?;
                     self.chain[level].statements[index as usize] = typed;
                 }
                 UnitWork::Component(index) => self.component(level, index.index())?,
@@ -394,6 +439,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     Some(_) => callable(body),
                     None => DeclaredType::Type(unknown()),
                 };
+                let typed = match typed {
+                    DeclaredType::Scheme(scheme) => self.bound(level, *member, body, scheme)?,
+                    typed => typed,
+                };
                 self.chain[level].binders[member.index()] = typed;
                 // A function's retype is the identity, so it keeps its own exact type.
                 if let (DeclaredType::Type(typed), Some(annotation)) =
@@ -408,7 +457,13 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 continue;
             }
             if let Some(rhs) = shape.rhs(*member) {
-                let mut typed = self.part(level, rhs)?;
+                let wanted = match shape.annotation(*member) {
+                    Some(annotation) => self.declared(level, annotation),
+                    None => self
+                        .statement_of(level, *member)
+                        .and_then(|index| self.tail(level, index)),
+                };
+                let mut typed = self.part_at(level, rhs, wanted)?;
                 if let Some(annotation) = shape.annotation(*member) {
                     typed = self.annotated(level, *member, annotation, typed)?;
                 }
@@ -421,15 +476,337 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             .iter()
             .filter(|member| shape.registration(**member).is_none());
         if let (Some(only), None) = (values.next(), values.next()) {
-            let written = shape.slot(shape.slot_name(*only)).map(|(_, at)| at);
             // A statement binding a quantified callable is typed by no scheme: its value is read
             // only by name, at a call's head.
-            if let Some(statement) = written.and_then(Position::statement_index) {
+            if let Some(statement) = self.statement_of(level, *only) {
                 let typed = self.chain[level].binders[only.index()];
                 self.chain[level].statements[statement] = typed.as_type().unwrap_or_else(unknown);
             }
         }
         Ok(())
+    }
+
+    /// The index of the statement that binds `member` in the shape at `level`, where one does.
+    fn statement_of(&self, level: usize, member: Slot) -> Option<usize> {
+        let shape = self.chain[level].shape;
+        let written = shape.slot(shape.slot_name(member)).map(|(_, at)| at);
+        written.and_then(Position::statement_index)
+    }
+
+    /// The type the statement at `index` of the shape at `level` is wanted at: a callable body's
+    /// declared return for its last statement, whose value is the body's.
+    fn tail(&self, level: usize, index: usize) -> Option<Parametric> {
+        let shape = self.chain[level].shape;
+        if shape.kind() != ShapeKind::Callable || index + 1 != shape.body().len() {
+            return None;
+        }
+        match self.in_body(shape).map(|ktype| self.types.node(ktype)) {
+            Some(TypeNode::KFunction { ret, .. }) => Some(ret),
+            _ => None,
+        }
+    }
+
+    /// The static type of `member`, a binder of the shape at `level` whose statement births the
+    /// quantified function `body` typed by `scheme`. A module body's plain `LET` keeps the scheme —
+    /// a member, read at a call's head or instantiated where it is read. Any other `LET` is an
+    /// instance site wanted at its annotation, or at the declared return for a callable body's last
+    /// statement, and is refused where that fixes nothing. A keyworded form keeps its scheme.
+    fn bound(
+        &mut self,
+        level: usize,
+        member: Slot,
+        body: &'graph BodyShape<'graph>,
+        scheme: Scheme,
+    ) -> Result<Bound, ShapeError<'graph>> {
+        let shape = self.chain[level].shape;
+        let Some(index) = self.statement_of(level, member) else {
+            return Ok(DeclaredType::Scheme(scheme));
+        };
+        let statement = &shape.body()[index];
+        let wanted = match statement.cache().builtin_shape().map(|form| form.id) {
+            Some(BuiltinShapeId::LetAnnotated) => shape
+                .annotation(member)
+                .and_then(|annotation| self.declared(level, annotation)),
+            Some(BuiltinShapeId::LetValue) if shape.kind() == ShapeKind::Module => {
+                return Ok(DeclaredType::Scheme(scheme));
+            }
+            Some(BuiltinShapeId::LetValue) => self.tail(level, index),
+            _ => return Ok(DeclaredType::Scheme(scheme)),
+        };
+        let (typed, solution) = self.instantiate(scheme, wanted, statement.source)?;
+        if !self.unfilled {
+            body.fix_born_instance(solution);
+        }
+        Ok(DeclaredType::Type(typed))
+    }
+
+    /// The instance of the quantified function typed by `scheme` at an instance site `at` wanted at
+    /// `wanted`: its exact static type beside the solution it is made at. Refused where no function
+    /// type is wanted, where the wanted type reaches some variable of the group with nothing, where
+    /// no instance lies under it, and where the solution is not closed.
+    fn instantiate(
+        &self,
+        scheme: Scheme,
+        wanted: Option<Parametric>,
+        at: SourceRef,
+    ) -> Result<(Interval, &'graph [KType]), ShapeError<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let TypeNode::KFunction { quantifiers, .. } = types.scheme_node(scheme) else {
+            unreachable!("a scheme is a function type over a group")
+        };
+        let Some(wanted) =
+            wanted.filter(|wanted| matches!(types.node(*wanted), TypeNode::KFunction { .. }))
+        else {
+            return Err(self.unfixed(scheme, wanted, at));
+        };
+        let solution = match instance_under(types, scratch, scheme, wanted) {
+            Ok(solution) => solution,
+            Err(InstanceFailure::NoInstance) => {
+                return Err(ShapeError::NoInstance {
+                    scheme,
+                    wanted: bound_above(types, scratch, wanted),
+                    at,
+                });
+            }
+            Err(InstanceFailure::Unfixed(unfixed)) => {
+                return Err(ShapeError::Unfixed {
+                    variables: collect(
+                        self.writer,
+                        unfixed.iter().map(|index| quantifiers[*index]),
+                    ),
+                    wanted: Some(bound_above(types, scratch, wanted)),
+                    at,
+                });
+            }
+        };
+        let mut closed = BumpVec::with_capacity_in(solution.len(), scratch);
+        for (index, solved) in solution.iter().enumerate() {
+            match types.concrete(*solved) {
+                Some(solved) => closed.push(solved),
+                None => {
+                    return Err(ShapeError::OpenInstance {
+                        variable: quantifiers[index],
+                        at,
+                    });
+                }
+            }
+        }
+        let solution = collect(self.writer, closed.iter().copied());
+        let instance = instantiate_quantified(types, scratch, scheme, solution);
+        Ok((Interval::point(instance), solution))
+    }
+
+    /// Where the part at `site` of the shape at `level` is written.
+    fn source(&self, level: usize, site: Site) -> SourceRef {
+        let shape = self.chain[level].shape;
+        shape
+            .body()
+            .iter()
+            .find_map(|node| source_of(node, site))
+            .expect("a part lies in its shape's statements")
+    }
+
+    /// The instance site `part` of the shape at `level` is, through one-part parentheses: a name
+    /// bound to a quantified function, or a quantified `FN` written in place; beside its scheme and
+    /// where it is written. `None` for any other part.
+    fn instance_site(
+        &self,
+        level: usize,
+        part: &'graph ExpressionPart<'graph>,
+    ) -> Option<(Instanced<'graph>, Scheme, SourceRef)> {
+        let shape = self.chain[level].shape;
+        match of_part(shape, part) {
+            Form::Leaf(
+                leaf @ (ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(_)
+                | ExpressionPart::MarkedName(..)),
+            ) => {
+                let mention = shape.mention(Site::of(leaf))?;
+                match self.read_declared(level, mention.coordinate) {
+                    DeclaredType::Scheme(scheme) => Some((
+                        Instanced::Name(leaf),
+                        scheme,
+                        self.source(level, Site::of(leaf)),
+                    )),
+                    DeclaredType::Type(_) => None,
+                }
+            }
+            Form::Lambda(node) => {
+                let body = Site::of_body(node).and_then(|site| shape.nested(site))?;
+                match callable(body) {
+                    DeclaredType::Scheme(scheme) => {
+                        Some((Instanced::Literal(body), scheme, node.source))
+                    }
+                    DeclaredType::Type(_) => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The type a quantified function argument at the slot `slot` of a callee whose group is
+    /// bounded by `bounds` is wanted at: the group solved from the `others` first — each other slot
+    /// beside its argument's static type — then `slot` read from above through it. A variable the
+    /// slot shares with them must come out one closed type; one only the slot names is read through
+    /// `[Never, bound]`. Refused where the others admit no solve, or leave a shared variable open.
+    fn slot_wanted(
+        &self,
+        bounds: &[KType],
+        slot: Parametric,
+        others: &[(Parametric, Interval)],
+    ) -> Result<Parametric, Unsolved<'p>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let names = |declared: Parametric, variable: usize| {
+            types.references_quantifier(scratch, declared, variable)
+        };
+        let named = || {
+            let mut named = BumpVec::new_in(scratch);
+            named.extend((0..bounds.len()).filter(|variable| names(slot, *variable)));
+            Unsolved::Open(named)
+        };
+        let mut collector = Collector::<Parametric>::new(scratch, bounds);
+        let mut declared = BumpVec::with_capacity_in(others.len(), scratch);
+        let mut exact = true;
+        for (other, argument) in others.iter() {
+            if !(0..bounds.len()).any(|variable| names(*other, variable)) {
+                continue;
+            }
+            let admitted = admits_with(
+                types,
+                scratch,
+                *other,
+                argument.upper,
+                Variance::Co,
+                &mut collector,
+            );
+            if admitted.is_err() {
+                // Only an argument meeting its slot at `Never` never fits; an imprecise one fixes
+                // nothing.
+                let (other, argument) = (
+                    bound_above(types, scratch, *other),
+                    bound_above(types, scratch, argument.upper),
+                );
+                return Err(
+                    match meet(types, scratch, other, argument) == KType::NEVER {
+                        true => Unsolved::Misfit,
+                        false => named(),
+                    },
+                );
+            }
+            exact &= argument.is_exact() && types.concrete(argument.upper).is_some();
+            declared.push(*other);
+        }
+        let Ok(solution) = collector.solve(types) else {
+            return Err(named());
+        };
+        let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
+        let mut chosen = BumpVec::with_capacity_in(bounds.len(), scratch);
+        let mut open = BumpVec::new_in(scratch);
+        for (variable, bound) in bounds.iter().enumerate() {
+            // Never `intervals`' answer for a variable no other slot names: it reads as the bound.
+            if !declared.iter().any(|other| names(*other, variable)) {
+                chosen.push(Interval::within(*bound));
+                continue;
+            }
+            let interval = solved[variable];
+            if names(slot, variable)
+                && !(interval.is_exact() && types.concrete(interval.upper).is_some())
+            {
+                open.push(variable);
+            }
+            chosen.push(interval);
+        }
+        if !open.is_empty() {
+            return Err(Unsolved::Open(open));
+        }
+        Ok(read_through(
+            types,
+            scratch,
+            slot,
+            Side::Above,
+            &mut |variable| match variable {
+                Variable::Quantified { index, .. } => chosen.get(index).copied(),
+                _ => None,
+            },
+        ))
+    }
+
+    /// The instance each of `sites`, the instance arguments of a keyworded use whose arguments'
+    /// static types are `arguments`, takes at a candidate the load knows as `known`: wanted at its
+    /// slot's type, read through the candidate's group solved from its other arguments where it
+    /// has one. Refused where the load does not know the candidate's shape or makes no instance;
+    /// `None` where the other arguments do not fit their slots, which the judge refuses.
+    fn instances(
+        &self,
+        known: Known,
+        sites: &[InstanceArgument<'graph>],
+        arguments: &[Interval],
+    ) -> Result<&'p [Made<'graph>], Option<ShapeError<'graph>>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let mut slots = BumpVec::new_in(scratch);
+        let (bounds, quantifiers) = match known.shape() {
+            Some(DeclaredType::Type(shape)) => {
+                slots.extend(shape_slots(shape, types));
+                (&[][..], &[][..])
+            }
+            Some(DeclaredType::Scheme(scheme)) => {
+                slots.extend(scheme_slots(scheme, types));
+                let quantifiers = match types.scheme_node(scheme) {
+                    TypeNode::ExpressionShape { quantifiers, .. } => quantifiers,
+                    _ => &[],
+                };
+                (quantifier_bounds(types, scheme), quantifiers)
+            }
+            None => return Err(Some(self.unfixed(sites[0].scheme, None, sites[0].at))),
+        };
+        let mut others = BumpVec::with_capacity_in(slots.len(), scratch);
+        for (position, slot) in slots.iter().enumerate() {
+            if !sites.iter().any(|site| site.position == position) {
+                others.push((*slot, arguments[position]));
+            }
+        }
+        let mut made = BumpVec::with_capacity_in(sites.len(), scratch);
+        for site in sites.iter() {
+            let slot = slots[site.position];
+            let wanted = if bounds.is_empty() {
+                slot
+            } else {
+                match self.slot_wanted(bounds, slot, &others) {
+                    Ok(wanted) => wanted,
+                    Err(Unsolved::Misfit) => return Err(None),
+                    Err(Unsolved::Open(open)) => {
+                        return Err(Some(ShapeError::Unfixed {
+                            variables: collect(
+                                self.writer,
+                                open.iter().map(|index| quantifiers[*index]),
+                            ),
+                            wanted: None,
+                            at: site.at,
+                        }));
+                    }
+                }
+            };
+            made.push(self.instantiate(site.scheme, Some(wanted), site.at)?);
+        }
+        Ok(made.leak())
+    }
+
+    /// `Unfixed` for the quantified function typed by `scheme` at `at`, naming its whole group.
+    fn unfixed(
+        &self,
+        scheme: Scheme,
+        wanted: Option<Parametric>,
+        at: SourceRef,
+    ) -> ShapeError<'graph> {
+        let (types, scratch) = (self.types, self.scratch);
+        let TypeNode::KFunction { quantifiers, .. } = types.scheme_node(scheme) else {
+            unreachable!("a scheme is a function type over a group")
+        };
+        ShapeError::Unfixed {
+            variables: quantifiers,
+            wanted: wanted.map(|wanted| bound_above(types, scratch, wanted)),
+            at,
+        }
     }
 
     /// Refuse a callable body whose static type can never satisfy its declared return — every call
@@ -467,40 +844,66 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         Ok(())
     }
 
-    /// The static type of the part `part` of the shape at `level`, recorded by its site.
+    /// The static type of the part `part` of the shape at `level`, wanted at no type.
     fn part(
         &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
     ) -> Result<Interval, ShapeError<'graph>> {
+        self.part_at(level, part, None)
+    }
+
+    /// The static type of the part `part` of the shape at `level`, wanted at `wanted`, recorded by
+    /// its site.
+    fn part_at(
+        &mut self,
+        level: usize,
+        part: &'graph ExpressionPart<'graph>,
+        wanted: Option<Parametric>,
+    ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
-        let typed = self.form(level, of_part(shape, part))?;
+        let typed = self.form(level, of_part(shape, part), wanted)?;
         self.chain[level].parts.push((Site::of(part), typed));
         Ok(typed)
     }
 
-    /// The static type of the statement `node` of the shape at `level`.
+    /// The static type of the statement `node` of the shape at `level`, wanted at `wanted`.
     fn node(
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
+        wanted: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
-        self.form(level, of_node(shape, node))
+        self.form(level, of_node(shape, node), wanted)
     }
 
-    /// The static type of a node or part the evaluator reads as `form`. A quantified callable is
-    /// read only at a call's head ([`head`](Self::head)).
-    fn form(&mut self, level: usize, form: Form<'graph>) -> Result<Interval, ShapeError<'graph>> {
+    /// The static type of a node or part the evaluator reads as `form`, wanted at `wanted`. A
+    /// quantified `FN` written here is an instance site, born as the instance `wanted` fixes; at a
+    /// call's head it is read by [`head`](Self::head).
+    fn form(
+        &mut self,
+        level: usize,
+        form: Form<'graph>,
+        wanted: Option<Parametric>,
+    ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         Ok(match form {
-            Form::Leaf(part) => self.leaf(level, part)?,
+            Form::Leaf(part) => self.leaf(level, part, wanted)?,
             Form::Block(nested) => self.nested(level, nested, false)?.unwrap_or_else(unknown),
-            Form::Lambda(node) => Site::of_body(node)
-                .and_then(|site| shape.nested(site))
-                .map_or(DeclaredType::Type(unknown()), callable)
-                .as_type()
-                .expect(CALL_ONLY),
+            Form::Lambda(node) => match Site::of_body(node).and_then(|site| shape.nested(site)) {
+                Some(body) => match callable(body) {
+                    DeclaredType::Type(typed) => typed,
+                    DeclaredType::Scheme(scheme) => {
+                        let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
+                        if !self.unfilled {
+                            body.fix_born_instance(solution);
+                        }
+                        typed
+                    }
+                },
+                None => unknown(),
+            },
             Form::Declaration => Interval::point(KType::NULL.into()),
             Form::Ascribe(node) => self.ascribe(level, node)?,
             Form::Eval(node) => self.eval(level, node)?,
@@ -549,7 +952,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let [operand, _, ascribed] = node.parts else {
             unreachable!("an ascription has an operand, its keyword and a type")
         };
-        let typed = self.part(level, &operand.value)?;
+        let declared = self.declared(level, &ascribed.value);
+        let typed = self.part_at(level, &operand.value, declared)?;
         let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
         held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
             value,
@@ -582,7 +986,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
 
     /// A value of the static type `typed` held to the type part `part`: that type, exactly where
     /// the retype makes it so ([`retyped_to`]), and settled at `site` where `typed`'s upper end
-    /// lies under it. Where the two meet at `Never`, both read through their bounds.
+    /// lies under it — where an exact function's, that function's own type. Where the two meet at
+    /// `Never`, both read through their bounds.
     fn held(
         &mut self,
         level: usize,
@@ -608,6 +1013,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
         if fits(types, scratch, typed.upper, declared) {
             self.chain[level].settled.push(site);
+            // A function's retype is the identity, so an exact one keeps its own type.
+            if typed.is_exact() && matches!(types.node(declared), TypeNode::KFunction { .. }) {
+                return Ok(typed);
+            }
         }
         Ok(retyped_to(types, declared))
     }
@@ -664,12 +1073,15 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// A leaf part: a literal's type, a name's binder's, a quote's code type, a type value's kind,
-    /// or a container's over its parts, end by end.
+    /// A leaf part wanted at `wanted`: a literal's type, a name's binder's, a quote's code type, a
+    /// type value's kind, or a container's over its parts, end by end. A name bound to a quantified
+    /// function is an instance site, recorded by its site; a container passes `wanted` on to its
+    /// parts only where it is that container's own type.
     fn leaf(
         &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
+        wanted: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         let (types, scratch) = (self.types, self.scratch);
@@ -681,7 +1093,18 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
             | ExpressionPart::MarkedName(..) => match shape.mention(Site::of(part)) {
-                Some(mention) => self.read(level, mention.coordinate),
+                Some(mention) => match self.read_declared(level, mention.coordinate) {
+                    DeclaredType::Type(typed) => typed,
+                    DeclaredType::Scheme(scheme) => {
+                        let site = Site::of(part);
+                        let at = self.source(level, site);
+                        let (typed, solution) = self.instantiate(scheme, wanted, at)?;
+                        if !self.unfilled {
+                            self.chain[level].instances.push((site, solution));
+                        }
+                        typed
+                    }
+                },
                 None => unknown(),
             },
             ExpressionPart::QuotedExpression(_) => shape
@@ -696,9 +1119,13 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 }
             }
             ExpressionPart::ListLiteral(items) => {
+                let element = wanted.and_then(|wanted| match types.node(wanted) {
+                    TypeNode::List { element } => Some(element),
+                    _ => None,
+                });
                 let mut typed = BumpVec::with_capacity_in(items.len(), scratch);
                 for item in items.iter() {
-                    typed.push(self.part(level, item)?);
+                    typed.push(self.part_at(level, item, element)?);
                 }
                 Interval {
                     lower: list_type(types, scratch, typed.iter().map(|each| each.lower)),
@@ -706,9 +1133,13 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 }
             }
             ExpressionPart::DictLiteral(pairs) => {
+                let values = wanted.and_then(|wanted| match types.node(wanted) {
+                    TypeNode::Dict { value, .. } => Some(value),
+                    _ => None,
+                });
                 let mut typed = BumpVec::with_capacity_in(pairs.len(), scratch);
                 for (key, value) in pairs.iter() {
-                    typed.push((self.part(level, key)?, self.part(level, value)?));
+                    typed.push((self.part(level, key)?, self.part_at(level, value, values)?));
                 }
                 Interval {
                     lower: dict_type(
@@ -724,9 +1155,14 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 }
             }
             ExpressionPart::RecordLiteral(fields) => {
+                let declared = wanted.and_then(|wanted| match types.node(wanted) {
+                    TypeNode::Record { fields } => Some(fields),
+                    _ => None,
+                });
                 let mut typed = BumpVec::with_capacity_in(fields.len(), scratch);
                 for (name, value) in fields.iter() {
-                    typed.push((*name, self.part(level, value)?));
+                    let field = declared.and_then(|declared| declared.get(name.symbol()));
+                    typed.push((*name, self.part_at(level, value, field)?));
                 }
                 Interval {
                     lower: record_type(types, scratch, typed.iter().map(|(n, v)| (*n, v.lower))),
@@ -737,14 +1173,6 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             | ExpressionPart::Expression(_)
             | ExpressionPart::MarkedUse(..) => unknown(),
         })
-    }
-
-    /// The static type of what `coordinate`, read in the shape at `level`, holds — never a scheme,
-    /// which only a call's head reads.
-    fn read(&self, level: usize, coordinate: Coordinate) -> Interval {
-        self.read_declared(level, coordinate)
-            .as_type()
-            .expect(CALL_ONLY)
     }
 
     /// The static type of what `coordinate`, read in the shape at `level`, holds, a quantified
@@ -831,7 +1259,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         };
         let (head, argument) = (&head.value, &argument.value);
         let callee = self.head(level, head)?;
-        let payload = self.part(level, argument)?;
+        let payload = self.payload(level, callee, argument)?;
         let (types, scratch) = (self.types, self.scratch);
         if let Some(identity) = self.head_handle(level, head) {
             let upper = match construction(types, scratch, identity, payload.upper) {
@@ -870,6 +1298,104 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             }
             _ => unknown(),
         })
+    }
+
+    /// The static type of a call by name's `argument`, its callee's static type `callee`. An
+    /// unquantified function's argument is wanted at its parameter record. A quantified callee's
+    /// record literal types its other fields first, and each field that is an instance site at its
+    /// parameter read through the group they solve.
+    fn payload(
+        &mut self,
+        level: usize,
+        callee: Bound,
+        argument: &'graph ExpressionPart<'graph>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let scheme = match callee {
+            DeclaredType::Type(callee) => {
+                let wanted = match types.node(callee.upper) {
+                    TypeNode::KFunction { params, .. } => {
+                        Some(record_type(types, scratch, params.iter()))
+                    }
+                    _ => None,
+                };
+                return self.part_at(level, argument, wanted);
+            }
+            DeclaredType::Scheme(scheme) => scheme,
+        };
+        let ExpressionPart::RecordLiteral(fields) = argument else {
+            return self.part(level, argument);
+        };
+        let TypeNode::KFunction {
+            quantifiers,
+            bounds,
+            params,
+            ..
+        } = types.scheme_node(scheme)
+        else {
+            unreachable!("a call by name's scheme is a function type")
+        };
+        let mut typed = BumpVec::with_capacity_in(fields.len(), scratch);
+        for (_, value) in fields.iter() {
+            typed.push(match self.instance_site(level, value) {
+                Some(_) => None,
+                None => Some(self.part(level, value)?),
+            });
+        }
+        let mut others = BumpVec::with_capacity_in(fields.len(), scratch);
+        for ((name, _), each) in fields.iter().zip(typed.iter()) {
+            if let (Some(each), Some(param)) = (each, params.get(name.symbol())) {
+                others.push((param, *each));
+            }
+        }
+        for (index, (name, value)) in fields.iter().enumerate() {
+            if typed[index].is_some() {
+                continue;
+            }
+            let wanted = match params.get(name.symbol()) {
+                Some(slot) => match self.slot_wanted(bounds, slot, &others) {
+                    Ok(wanted) => Some(wanted),
+                    // A call by name is one callee: nothing else could take the argument.
+                    Err(unsolved) => {
+                        let open = match unsolved {
+                            Unsolved::Open(open) => open,
+                            Unsolved::Misfit => {
+                                let mut named = BumpVec::new_in(scratch);
+                                named.extend((0..bounds.len()).filter(|variable| {
+                                    types.references_quantifier(scratch, slot, *variable)
+                                }));
+                                named
+                            }
+                        };
+                        return Err(ShapeError::Unfixed {
+                            variables: collect(
+                                self.writer,
+                                open.iter().map(|index| quantifiers[*index]),
+                            ),
+                            wanted: None,
+                            at: self.source(level, Site::of(value)),
+                        });
+                    }
+                },
+                None => None,
+            };
+            typed[index] = Some(self.part_at(level, value, wanted)?);
+        }
+        let field = |index: usize| typed[index].expect("every field is typed");
+        let ends = |end: fn(Interval) -> Parametric| {
+            let each = fields.iter().enumerate();
+            record_type(
+                types,
+                scratch,
+                each.map(|(index, (name, _))| (*name, end(field(index)))),
+            )
+        };
+        let interval = Interval {
+            lower: ends(|each| each.lower),
+            upper: ends(|each| each.upper),
+        };
+        self.chain[level].parts.push((Site::of(argument), interval));
+        Ok(interval)
     }
 
     /// Refuse a call by name, `node`, whose callee is exactly an unquantified function the argument
@@ -1045,7 +1571,28 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let wanted = slots(node, scratch);
         let mut arguments = BumpVec::with_capacity_in(wanted.len(), scratch);
         let mut given = BumpVec::with_capacity_in(wanted.len(), scratch);
-        for wanted in wanted.iter() {
+        // Each argument that is an instance site is typed per candidate, at the slot it fills.
+        let mut sites = BumpVec::new_in(scratch);
+        for (position, wanted) in wanted.iter().enumerate() {
+            let site = match wanted {
+                Wanted::Evaluated(part) => self.instance_site(level, part).map(|site| (part, site)),
+                Wanted::Label(_) => None,
+            };
+            if let Some((part, (instanced, scheme, at))) = site {
+                sites.push(InstanceArgument {
+                    position,
+                    part,
+                    instanced,
+                    scheme,
+                    at,
+                });
+                arguments.push(unknown());
+                given.push(Given {
+                    typed: unknown(),
+                    names: None,
+                });
+                continue;
+            }
             let each = match wanted {
                 Wanted::Label(name) => Given {
                     typed: Interval::point(
@@ -1082,15 +1629,38 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let mut judged = BumpVec::with_capacity_in(list.candidates.len(), scratch);
         // The first argument a builtin's need dropped a candidate over, beside that need.
         let mut dropped = None;
+        // The last refusal of an instance argument a candidate was dropped over.
+        let mut refused = None;
         for candidate in list.candidates {
             // Unfilled code holds no function at an unmarked key's hole.
             if self.unfilled && self.hole(level, *candidate) {
                 continue;
             }
             let known = self.candidate(level, *candidate);
+            // At this candidate, each instance argument is exactly the instance its slot makes.
+            let (mut here, mut given_here) = (&arguments[..], &given[..]);
+            let mut instances: &[Made<'graph>] = &[];
+            if !sites.is_empty() {
+                match self.instances(known, &sites, &arguments) {
+                    Ok(made) => instances = made,
+                    Err(error) => {
+                        refused = error.or(refused);
+                        continue;
+                    }
+                }
+                let mut typed = BumpVec::with_capacity_in(arguments.len(), scratch);
+                typed.extend(arguments.iter().copied());
+                let mut read = BumpVec::with_capacity_in(given.len(), scratch);
+                read.extend(given.iter().copied());
+                for (site, (instance, _)) in sites.iter().zip(instances.iter()) {
+                    typed[site.position] = *instance;
+                    read[site.position].typed = *instance;
+                }
+                (here, given_here) = (typed.leak(), read.leak());
+            }
             let (mut verdict, intervals) = match known.shape() {
                 Some(registered) => {
-                    let judged = judge_by_class(types, scratch, registered, &arguments);
+                    let judged = judge_by_class(types, scratch, registered, here);
                     (judged.verdict, judged.intervals)
                 }
                 None => (Verdict::Maybe, None),
@@ -1099,7 +1669,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             let mut ruled = None;
             if let Some(builtin) = builtin.filter(|_| verdict != Verdict::Never) {
                 let native = Native::of(builtin.id());
-                let typed = rules::typed(native, builtin.ktype(), &given, types, scratch);
+                let typed = rules::typed(native, builtin.ktype(), given_here, types, scratch);
                 if let Some(slot) = typed.dropped {
                     verdict = Verdict::Never;
                     dropped = dropped.or(Some((arguments[slot].lower, typed.needs[slot])));
@@ -1114,10 +1684,21 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     verdict,
                     intervals,
                     ruled,
+                    instances,
                 });
             }
         }
         if judged.is_empty() {
+            // One candidate's own instance refusal, or every candidate's at once.
+            if let Some(refused) = refused {
+                return Err(match list.candidates {
+                    [_] => refused,
+                    _ => ShapeError::NoInstanceAtCandidates {
+                        key: list.elements,
+                        at: node.source,
+                    },
+                });
+            }
             let missing = dropped.and_then(|(lower, need)| self.missing(lower, need));
             return Err(match missing {
                 Some((of, field)) => ShapeError::NoField {
@@ -1138,7 +1719,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             let (a, m) = (a.into(), m.into());
             class_at_least(types, scratch, a, m, 0) && !class_at_least(types, scratch, m, a, 0)
         };
-        let outranked = |judgement: &Judgement<'_>| match judgement.known {
+        let outranked = |judgement: &Judgement<'_, 'graph>| match judgement.known {
             Known::Closed(m) if judgement.verdict == Verdict::Maybe => {
                 judged.iter().any(|other| match other.known {
                     Known::Closed(a) if other.verdict == Verdict::Always => beats(a, m),
@@ -1199,6 +1780,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 let Candidate::One(coordinate) = chosen.candidate else {
                     unreachable!("an always candidate is no spread");
                 };
+                self.made(level, node, list, &sites, &[chosen])?;
                 self.chain[level].narrowings[index] = Narrowing::Selected(coordinate);
                 return Ok(self.candidate_return(chosen));
             }
@@ -1216,6 +1798,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             );
             self.chain[level].narrowings[index] = Narrowing::Kept(kept);
         }
+        self.made(level, node, list, &sites, &judged)?;
         let mut returns = BumpVec::with_capacity_in(judged.len(), scratch);
         for judgement in judged.iter() {
             if let Known::Unknown = judgement.known {
@@ -1226,13 +1809,48 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         Ok(under(types.union_of(scratch, &returns)))
     }
 
+    /// Record the instance each of `sites`, the instance arguments of the keyworded use `node`,
+    /// takes at the candidates `kept`, which must agree on it.
+    fn made(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        list: &'graph CandidateList<'graph>,
+        sites: &[InstanceArgument<'graph>],
+        kept: &[Judgement<'_, 'graph>],
+    ) -> Result<(), ShapeError<'graph>> {
+        for (index, site) in sites.iter().enumerate() {
+            let (typed, solution) = kept[0].instances[index];
+            if kept
+                .iter()
+                .any(|judgement| judgement.instances[index].1 != solution)
+            {
+                return Err(ShapeError::AmbiguousInstance {
+                    key: list.elements,
+                    at: node.source,
+                });
+            }
+            self.chain[level].parts.push((Site::of(site.part), typed));
+            if self.unfilled {
+                continue;
+            }
+            match site.instanced {
+                Instanced::Name(leaf) => {
+                    self.chain[level].instances.push((Site::of(leaf), solution))
+                }
+                Instanced::Literal(body) => body.fix_born_instance(solution),
+            }
+        }
+        Ok(())
+    }
+
     /// What a judged candidate returns: a builtin's return as its [rule](super::rules) gives it; a
     /// registration's shape's return read through its group's intervals — exactly that return where
     /// the retype makes it so and the solve is the call's, the group empty or every interval a
     /// point, since its frame retypes its value to it, and at most it otherwise. A surfaced head's
     /// return is at most whatever the solve: the module's own definition answers the call, and the
     /// signature states only a bound on what it returns.
-    fn candidate_return(&self, judgement: Judgement<'_>) -> Interval {
+    fn candidate_return(&self, judgement: Judgement<'_, '_>) -> Interval {
         if let Some(ruled) = judgement.ruled {
             return ruled;
         }

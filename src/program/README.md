@@ -202,7 +202,9 @@ the caller, so the frame **admits** every argument against its parameter's
 declared type under one collector — `:(FN :{x :Number} -> Str) cannot be called
 with :{x :Str}` when one does not fit — and, for a **quantified** callee, solves
 the group from that collector itself; a type parameter the caller writes into
-the record names no parameter, and misnames the call. A **`:Type` parameter** —
+the record names no parameter, and misnames the call. An
+[instance](../knot/README.md#an-instance) carries the solution the load made it
+at, so its frame takes that solution and solves nothing. A **`:Type` parameter** —
 a type-channel parameter that is no `FOR ALL` name — is an argument like any
 other: the frame binds it to the type value the call passed, by keyword or by
 name. Either way a value parameter is an ascription: its argument is
@@ -247,6 +249,12 @@ interleaving. Per unit:
   supplied by site.
 - **A lone data binder** is one evaluation of its right-hand side, asked with
   `Keeps`, and bound on the wake.
+- **An annotated binder**, `LET <name> <type> = <value>`, binds its value held
+  to the type as an ascription holds its operand: checked against it unless the
+  load [settled](../dispatch/README.md#static-types) it, and retyped to it. A
+  miss is a [fault](#faults-and-output),
+  `:{v :Any} does not satisfy its annotation :{v :Number}`. A tied member is
+  held the same way; a function's retype is the identity.
 - **A statement that binds nothing** is one evaluation, asked with `Reads` —
   save a frame's last unit, which the runner [tails](#frames-contracts-and-tails)
   into, and a block's last statement, asked with `Forwards` so the value is
