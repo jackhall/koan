@@ -524,6 +524,26 @@ fn a_spelled_quantified_type_refuses_the_load() {
     }
 }
 
+/// A meet over a `FOR ALL` variable or a head parameter refuses the load where it is written: each
+/// call solves the variable, so the meet cannot be taken there. A meet of concrete types still
+/// elaborates.
+#[test]
+fn a_meet_over_a_variable_refuses_the_load() {
+    assert_eq!(
+        run("EXPR FOR ALL #[Elt] #(PICK x :(Elt & Number)) -> Elt = #(x)"),
+        "load: <test>:1:36: a meet's operands name no `FOR ALL` variable or head parameter"
+    );
+    assert_eq!(
+        run("SIG Sg FOR ALL #[Elt] = #[(VAL x :(Elt & Number))]"),
+        "load: <test>:1:40: a meet's operands name no `FOR ALL` variable or head parameter"
+    );
+    assert_eq!(
+        run("EXPR FOR ALL #[Elt] #(PICK x :(Number & Elt & Str)) -> Elt = #(x)"),
+        "load: <test>:1:39: a meet's operands name no `FOR ALL` variable or head parameter"
+    );
+    assert_eq!(run("PRINT :(Number & (Number | Str))"), "Number");
+}
+
 /// `SIG Boxes`, a `MODULE` its `BOX` fits and one it does not, and a function taking a `Boxes`.
 const BOXES: &str = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n\
                      MODULE poly = (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x]))\n\

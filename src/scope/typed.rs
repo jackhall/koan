@@ -86,6 +86,9 @@ pub enum Elaboration {
     /// A quantified function type or expression shape at `site`, written anywhere but as the whole
     /// type of a signature's `VAL` member or a signature's keyworded head.
     Quantified { site: Site },
+    /// A meet at `site` with an operand naming a `FOR ALL` variable or a signature's head
+    /// parameter: each call solves the variable, so the meet cannot be taken where it is written.
+    MeetOverVariable { site: Site },
     /// The load-time reader cannot know the type at `site` before the program runs: the load
     /// pass's cue to leave it for the run, never reported.
     Unknown { site: Site },
@@ -100,6 +103,7 @@ impl Elaboration {
             | Elaboration::NoSuchMember { site, .. }
             | Elaboration::Bound { site }
             | Elaboration::Quantified { site }
+            | Elaboration::MeetOverVariable { site }
             | Elaboration::Unknown { site } => *site,
         }
     }
@@ -142,6 +146,9 @@ impl fmt::Display for ElaborationDisplay<'_, '_> {
             Elaboration::Bound { .. } => f.write_str("a bound names a type variable or Never"),
             Elaboration::Quantified { .. } => {
                 f.write_str("a quantified type is written only as a signature's `VAL` member type")
+            }
+            Elaboration::MeetOverVariable { .. } => {
+                f.write_str("a meet's operands name no `FOR ALL` variable or head parameter")
             }
             Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
         }

@@ -362,30 +362,47 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 Ok(self.types.union_of(self.scratch, &members))
             }
             // `A & B`, and `& [A B C]`, its chained form — the meet, as a union is the join. A meet
-            // that comes out `Never` is a type like any other; only a bound refuses it.
+            // that comes out `Never` is a type like any other; only a bound refuses it. An operand
+            // naming a `FOR ALL` variable or a head parameter is refused: each call solves the
+            // variable, so the meet cannot be taken here.
             3 if keyword(1, &CONNECTORS.meet) => {
-                let (left, right) = self.closed_operands(site, || {
-                    Ok((
+                let operands = self.closed_operands(site, || {
+                    Ok([
                         self.part(&parts[0].value, groups)?,
                         self.part(&parts[2].value, groups)?,
-                    ))
+                    ])
                 })?;
-                Ok(meet(self.types, self.scratch, left, right))
+                self.meet(Site::of(&parts[1].value), &operands)
             }
             2 if keyword(0, &CONNECTORS.meet) => {
-                let ExpressionPart::ListLiteral(operands) = parts[1].value else {
+                let ExpressionPart::ListLiteral(written) = parts[1].value else {
                     return Err(unsupported);
                 };
-                self.closed_operands(site, || {
-                    let mut met = KType::ANY;
-                    for operand in operands.iter() {
-                        met = meet(self.types, self.scratch, met, self.part(operand, groups)?);
+                let operands = self.closed_operands(site, || {
+                    let mut operands = BumpVec::with_capacity_in(written.len(), self.scratch);
+                    for operand in written.iter() {
+                        operands.push(self.part(operand, groups)?);
                     }
-                    Ok(met)
-                })
+                    Ok(operands)
+                })?;
+                self.meet(Site::of(&parts[0].value), &operands)
             }
             _ => Err(unsupported),
         }
+    }
+
+    /// The meet of `operands`, refused at `site` — the `&` — when one names a `FOR ALL` variable or
+    /// a head parameter.
+    fn meet(&self, site: Site, operands: &[KType]) -> Result<KType, Elaboration> {
+        if !operands
+            .iter()
+            .all(|operand| self.types.is_concrete(*operand))
+        {
+            return Err(Elaboration::MeetOverVariable { site });
+        }
+        Ok(operands.iter().fold(KType::ANY, |met, operand| {
+            meet(self.types, self.scratch, met, *operand)
+        }))
     }
 
     /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
