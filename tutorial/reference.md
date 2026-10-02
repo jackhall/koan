@@ -19,7 +19,7 @@ the link in each section to the relevant chapter.
 | `EXPR FOR ALL #[<names>] #(<head>) -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry. |
 | `LET <name> = FN EXPR #(<head>) -> <Type> = #(<body>)` | Both channels from one statement: the value name and the shape's bucket. |
 | `FN :{<fields>} -> <Type> = #(<body>)`     | A lambda: keyword-less, reached by name, called with a record of named arguments. |
-| `FN FOR ALL #[<names>] :{<fields>} -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. Written only bound to a name or called on the spot, and its name is read only at the head of a call; wrap it in an unquantified `FN` to pass it. |
+| `FN FOR ALL #[<names>] :{<fields>} -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. Written only bound to a name or called on the spot, and its name is read only at the head of a call; a body's last statement does not bind one. Wrap it in an unquantified `FN` to pass it. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
 | `CLOSE OVER (<captures>) (<block>)`        | Run a block over a region of its own, copying the named values in; only the block's last expression escapes, and it holds copies rather than the enclosing call. |

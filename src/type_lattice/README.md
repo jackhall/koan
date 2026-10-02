@@ -41,7 +41,7 @@ family](#the-code-family), below) crosses back.
 
 ## Identity: a handle *is* a content digest
 
-A [`KType`](handle.rs) is a bare `u128` — no pointer, no index, no reference to
+A [`Handle`](handle.rs) is a bare `u128` — no pointer, no index, no reference to
 the registry that minted it. That one word is the type's content digest, so
 equality, hashing and ordering all derive on it: **comparing two types is
 comparing two integers**, and no structural descent exists to fall back to. The
@@ -68,6 +68,41 @@ The hasher lives in `digest.rs` and only there. Every payload begins with a
 distinct domain tag byte so no two variants can share a digest, every text run is
 length-prefixed so concatenation is unambiguous, and every child digest,
 `ScopeId` and integer is fed little-endian.
+
+### Typed handles
+
+A raw `Handle` is identity only. Every door and relation the rest of koan calls
+takes a **typed handle** over it, which adds nothing at run time and says what
+the type may hold:
+
+- a [`KType`](handle.rs) is **concrete**: outside a sealed `Signature` or
+  `SetMember` node it holds no free `Quantified`, no lexical variable, no head
+  `Parameter` and no quantified binder. An opaque carrier is concrete, since a
+  value carries it and dispatch reads it. Every value but a quantified callable
+  carries one;
+- a `Parametric` may hold a variable, but no quantified binder;
+- a `Scheme` is a quantified callable's type: a function type or an expression
+  shape over a non-empty `FOR ALL` group. Its positions read, through
+  `TypeRegistry::scheme_node`, as `Parametric`;
+- a `DeclaredType` is a type or a `Scheme` — what a callable, a registered
+  shape, a signature member and a function value are typed by.
+
+Only the lattice wraps a raw handle into a typed one: the wrapping trait is
+sealed. So a `KType` is concrete because every door that yields one builds it
+from concrete children or checks it. A `KType` converts into a `Parametric`; a
+`Parametric` becomes a `KType` only by a substitution that answers every
+variable, or through [`TypeRegistry::concrete`](registry.rs), the one checked
+conversion, which reads a flag interning stored. Every door that builds a type
+from child types is generic over the handle, so it yields a `KType` from
+`KType` children and a `Parametric` from parametric ones. A `KType` asked of a
+parametric child is a compile error, which a `compile_fail` doctest on
+`TypeRegistry::list` pins. A quantified binder is minted only by
+`function_scheme` and `shape_scheme`, which answer a `DeclaredType`: the plain
+type where the group is empty.
+
+Inside the lattice every walk and relation runs over raw handles, and
+[typed.rs](typed.rs) wraps each relation for the rest of koan, saying where it
+wraps a result why the result keeps its handle's promise.
 
 ## The node vocabulary
 
@@ -113,6 +148,9 @@ subtree.
   erases. So no shape is ever equal to, satisfies, or is satisfied by a lambda
   type. What the two *share* is the binder: both carry a quantifier group, and
   every walk asks [`binds_quantifiers`](node.rs) rather than naming either arm.
+  Only a non-empty group binds: a shape or a function type with none binds
+  nothing, so a `Quantified` inside one reads the enclosing group, and one
+  holding no variable is concrete.
 - **Three rigid variables**, and the split is deliberate. `Quantified` is
   positional and bound by the enclosing binder, so two binders alpha-equivalent
   under a renaming intern to one node, and a free one in a declared slot is what
@@ -124,9 +162,9 @@ subtree.
   it is positional by its level along the lexical chain that declares it, and
   carries its name, which renders it. No binder captures it and no solve binds
   it. The three share the rigid rule in
-  the order, the substitution mechanism, and the role of the rigid side in a
-  specificity check. Each is **bounded by** a closed type —
-  one that names no variable and is not `Never` — and lies under its bound and
+  *fits*, the substitution mechanism, and the role of the rigid side in a
+  specificity check. Each is **bounded by** a closed type — a `KType` that holds
+  no opaque carrier and is not `Never` — and lies under its bound and
   under everything above it, a union included: a variable bounded by
   `Number | Str` lies under `Number | Str | Bool`, though under neither member.
   A lexical variable has a **lower end** too, a closed type under its bound:
@@ -174,8 +212,11 @@ The handle *is* the lookup key and the digest is already uniformly distributed,
 so the node map hashes it with an identity hasher and a lookup costs about what
 an array index would. Interning is insert-if-absent, so building the same content
 twice in a run yields one node and two equal handles. Beside each node the entry
-stores two flags computed off its children at intern — whether a free quantifier,
-and whether any rigid variable, is reachable — so both probes are one table read.
+stores three flags computed off its children at intern — whether a free
+quantifier, whether any rigid variable, and whether anything parametric is
+reachable — so each probe is one table read. The probes are the lattice's own;
+the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
+concreteness through `concrete`.
 
 The **verdict table** is keyed by `(subject, candidate, relation)`. It is a
 fixed run of two-slot buckets, laid in the same region the first time a verdict
@@ -199,18 +240,22 @@ heap nowhere — a bracket the suite asserts directly ([tests/heap.rs](tests/hea
 
 Two relations, and the split is the point. [`is_subtype_of`](order.rs) is **the
 order**: reflexive, transitive and antisymmetric, memoized through the
-registry's verdict edges, and it **never solves** — a quantified binder lies
-under only itself, and two signature types compare by their applications' pins.
-It is what every construction reads: interning, a canonical union, `join`,
-`meet`, an overload set's subsumption, a cache key. [`fits`](order.rs) is what
-every **question** reads: admission, a static verdict, ranking, a settled
-ascription, the return check, the view door. It solves: a quantified binder
-fits another when some instantiation of its group puts the instance under the
-other, and a module's signature fits a declared one when its members do. *Fits*
-contains the order and is reflexive and transitive, but two handles may fit each
-other, so nothing is built from it. `satisfied_by` is *fits* read from a slot's
-side. Each relation records its verdict under its own `Relation`, by handle pair,
-so a caller compares no slot types of its own.
+registry's verdict edges, and it **never solves**. It relates **concrete types
+and nothing else** — it takes `KType`s — and two signature types compare by
+their applications' pins. It is what every construction reads: interning, a
+canonical union, `join`, `meet`, an overload set's subsumption, a cache key.
+[`fits`](order.rs) is what every **question** reads: admission, a static
+verdict, ranking, a settled ascription, the return check, the view door. It
+takes parametric types and schemes, and solves: a quantified binder fits
+another when some instantiation of its group puts the instance under the other,
+and a module's signature fits a declared one when its members do. It holds the
+**rigid rule**: a variable lies under its bound and everything above it, and
+above only itself, `Never` and its lower end. *Fits* contains the order and is
+reflexive and transitive, but two handles may fit each other, so nothing is
+built from it. `satisfied_by` is *fits* read from a slot's side. Each relation
+records its verdict under its own `Relation`, by handle pair, so a caller
+compares no slot types of its own. *Fits*, the unifier, and the ranking and
+judging relations are the only relations that read a parametric type.
 
 There are no tie-break tiers: nothing ranks a token leaf against `Str`, a
 nominal slot against a kind slot, or a constrained slot against an
@@ -236,19 +281,39 @@ ordered and their canonical union otherwise, which is what makes it associative 
 a structural join stops being associative the moment `a ≤ a | b`. `meet`,
 spelled `A & B`, is the binary driver's rebuilding instance and is total: a pair
 with no common refinement meets at `Never`, which is always a sound lower bound.
-A union meets member by member, each member against the other side *whole*, so
-a variable whose bound spans several members survives: with `Elt` bounded by
-`Number | Str`, `(Elt | Bool) & (Number | Str)` is `Elt`. The four
-laws — commutativity, associativity, idempotence and absorption — hold over every
-node kind by handle, and that is what fixes both operations.
+Both take and return `KType`s. The four laws — commutativity, associativity,
+idempotence and absorption — hold by handle over every concrete type, and that
+is what fixes both operations. A meet over a `FOR ALL` variable or a head
+parameter is refused where the program writes it
+([the elaborator](../elaborate/README.md#what-a-type-expression-is)): each call
+solves the variable, so the meet cannot be taken at load, and no intersection
+type keeps it symbolic.
 
-Because the order never solves, its laws hold **by handle over every type**,
-binders and signature types included: two handles that lie under each other are
-one handle. Two binders that admit each other do so in *fits* alone —
-`∀Elt :{x :Elt, y :Elt} -> Elt` fits `∀A B :{x :A, y :B} -> A | B` at its
-instance over `A | B`, and the two are unordered. A union and an overload set
-keep the first of two members that lie under each other, and
-[`unsubsumed`](order.rs) is where they do.
+**A union holding a variable keeps it.** [`union_of`](registry.rs) reduces the
+concrete members among themselves by the order and keeps every parametric
+member beside them, even one whose bound lies under a concrete member:
+`Elt | Number | Str` stays three members with `Elt` bounded by `Number | Str`,
+and fits `Number | Str` both ways. `Any` absorbs a variable too, since that is
+the top's definition rather than the order. An opaque carrier is concrete, so
+the order reduces it like any member, under the union of the rest as well as
+under one member.
+
+**The solver's meet** is private to the lattice. Where a solve meets two
+parametric types — a variable's least instance over its upper contributions
+alone, or the value slots *fits* pools from an offered signature — it relates a
+variable by the rigid rule. A union meets member by member, each member against
+the other side *whole*, so a variable whose bound spans several members
+survives: with `Elt` bounded by `Number | Str`, `(Elt | Bool)` met with
+`Number | Str` is `Elt`.
+
+Because the order never solves, its laws hold **by handle over every concrete
+type**, signature types included: two handles that lie under each other are one
+handle. A quantified binder never reaches the order, and two that admit each
+other do so in *fits* alone — `∀Elt :{x :Elt, y :Elt} -> Elt` fits
+`∀A B :{x :A, y :B} -> A | B` at its instance over `A | B`. A union and an
+overload set keep the first of two concrete members that lie under each other,
+and [`unsubsumed`](order.rs) is where they do; an overload set keeps every
+scheme it holds, deduplicated by handle.
 
 ### Signature types
 
@@ -317,10 +382,11 @@ lie under the declared one and the return pair the reverse, then one `solve`.
 The solve asks only that each variable's pair of ends denote some type
 ([the unifier](#the-unifier-collects-it-does-not-bind)); it picks no instance.
 Width is the order's own either way: a function subtype asks for no name its
-supertype does not. In the order a quantified binder lies under only itself.
+supertype does not. A quantified binder is a `Scheme`, which the order never
+takes.
 
-**A binder keeps every variable it declares.** Both interning doors —
-[`shape_type`](registry.rs) and [`function_type`](registry.rs) — number a group
+**A binder keeps every variable it declares.** Both doors that mint one —
+[`shape_scheme`](registry.rs) and [`function_scheme`](registry.rs) — number a group
 over the positions it binds: first the variables some position names, by first
 occurrence, a shape walking its slots in element order and a function its
 parameters in **symbol-sorted key order** — a record's identity is order-blind,
@@ -492,6 +558,13 @@ A load-time type is read where it runs by replacing each lexical variable with
 the binding at its level ([`substitute_levels`](substitute.rs)). No binder
 captures a lexical variable, so the substitution asks no binder depth.
 
+A substitution keeps its operand's kind: a `Parametric` comes back a
+`Parametric`, and a `Scheme` a `Scheme`, its own group still bound. A caller
+whose bindings answer every variable narrows the result through `concrete`,
+naming the invariant that makes it concrete. `bound_above` and `erase_rigid`
+answer every free variable of a `Parametric` by its ends, so they yield a
+`KType`.
+
 A type is **read through intervals** ([`read_through`](substitute.rs)). Each
 variable stands for some type between a lower and an upper end. Read from
 above, a variable takes its upper end at a covariant position and its lower end
@@ -544,6 +617,11 @@ for.
 A variable no contribution reaches has the pair `[Never, bound]`, so a call
 binds it to its declared bound: a collector holds the group's bounds from the
 start (`Collector::new`).
+
+A collector is typed by what it takes: every contribution and pin is a `T`,
+every bound a `KType`, so its solution is a `T`. A call's collector takes the
+concrete types its arguments carry, so a run-time solution is concrete by its
+type; one over static types, which may hold lexical variables, is parametric.
 
 **A binding does not grow with its arguments; an interval does.** Beside the
 pair, the unifier reports an **interval** per variable
@@ -650,8 +728,9 @@ canonical after it.
 
 Every structural recursion here goes through one of the two drivers in
 [walk](walk.rs), with rendering the single hand-written exhaustive match. Adding
-a compound node variant is a compile error at the drivers' arm tables and in the
-renderer — **and nowhere else**. That is the
+a compound node variant is a compile error at the drivers' arm tables, in the
+renderer, and at [`TypeNode::view`](node.rs), which reads a node's children as
+another typed handle — **and nowhere else**. That is the
 property the drivers exist for. Adding any variant, leaf or compound, is also a
 compile error at [`family_top`](order.rs), which has no wildcard arm, so no
 type goes without a family.
@@ -659,7 +738,7 @@ type goes without a family.
 Ask first whether the walk is unary or binary, then whether it rebuilds.
 
 - **Unary rebuild** ([walk/unary.rs](walk/unary.rs)) — supply a leaf rule
-  `FnMut(KType, &TypeNode, &Context) -> Option<KType>`: `Some(k)` replaces the
+  `FnMut(Handle, &TypeNode, &Context) -> Option<Handle>`: `Some(k)` replaces the
   node and stops, `None` lets the driver descend, and the one knob picks which
   union door reassembles a union. A signature and a sealed member are leaves to
   both unary drivers: one is closed content, the other content-addressed by its
@@ -669,7 +748,8 @@ Ask first whether the walk is unary or binary, then whether it rebuilds.
 - **Binary** ([walk/binary.rs](walk/binary.rs)) — implement `Lockstep`: an entry
   guard, a leaf verdict, a set-wise rule for unions, and a structural combine that
   reads the arm's width verdict generically. The order — serving *fits* too —
-  the meet and the unifier's collector are the three instances. Two signature
+  the solver's meet, which the public `meet` runs over concrete operands, and
+  the unifier's collector are the three instances. Two signature
   types, and two callables of which one is quantified, reach the leaf verdict
   rather than a child pairing, because their relations are application-level and
   instantiation-level doors.
@@ -694,13 +774,16 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 The lattice is tested by its **laws**, as properties over generated type trees
 interned into a live registry ([tests/properties.rs](tests/properties.rs)). The
 order's reflexivity, antisymmetry and transitivity; join and meet's four laws;
-substitution's fixpoints; the digest's agreement with structural equality. Each
-holds **by handle** over every generated type, quantified binders and signature
-types included, and no law has a twin stated up to equivalence: the order never
-solves, so two handles that lie under each other are one. *Fits* has laws of its
-own — it is reflexive and transitive, contains the order, and fits the meet of
-two signature types to each — and a quantified binder lies under only itself in
-the order. The generators draw signatures over head parameters, applications
+substitution's fixpoints; the digest's agreement with structural equality. The
+order's, join's and meet's laws hold **by handle** over every generated
+**concrete** type (`arb_concrete`, a `KType` strategy, which builds no
+parametric type into a concrete one), signature types included, and no law has
+a twin stated up to equivalence: the order never solves, so two handles that
+lie under each other are one. *Fits* has laws of its own over every generated
+type, parametric ones and schemes included (`arb_any`) — it is reflexive and
+transitive, contains the order over concrete types, and fits the meet of two
+signature types to each. Laws about the lattice's machinery — the unifier,
+ranking, substitution, interning — read their draws raw. The generators draw signatures over head parameters, applications
 pinning some of them and meets of two applications, and put carried unions under
 quantified positions, where a solve joins and meets.
 Hand-written tests remain only where a law cannot express the shape

@@ -196,11 +196,20 @@ holds there, and a bare `$pick` refuses the program rather than the code; an
 `EVAL` refuses to offer `pick` to the code it runs, since an offer passes the
 name's value in. A
 quantified `FN` itself is written only as a binder's right-hand side or the head
-of a call, and is refused `QuantifiedLambda` elsewhere. Both rules read the
-syntax a name's declaration has, so no type is needed. To pass one, wrap it in
+of a call, and is refused `QuantifiedLambda` elsewhere. A body whose value is
+read — a callable's, a block's, a quote's code — takes its last statement's, so
+that statement binds no quantified function: a `LET` of a quantified `FN`, a
+`LET … = FN EXPR FOR ALL …` or a bare `EXPR FOR ALL …` definition there is
+refused `QuantifiedValue`, since nothing solves the function's group to a
+concrete type. Inside a quote's code the refusal waits for the `EVAL` that runs
+it. All three rules read the syntax a name's declaration has, so no type is
+needed. To pass one, wrap it in
 an unquantified `FN` that calls it. A keyworded hole filled from a module and
 the candidates an `EVAL` offers are lists, not names, so either may hold a
-quantified registration.
+quantified registration; such a list is typed `List<Any>` without reading its
+functions' types ([values](../values/README.md#the-type-memo-and-satisfies)),
+and dispatch reads each function by its own. Every other value's type is
+concrete, which is what lets a reader outside a call's head take it as one.
 
 A search by symbol happens only where a shape is built.
 How the shape's runs are searched — linear below some length, binary above —
@@ -914,6 +923,9 @@ program only for a `$` name nothing binds where the quote is written:
   right-hand side or the head of a call;
 - a **quantified read** — a name bound to a quantified function read anywhere
   but the head of a call ([resolution](#resolution));
+- a **quantified value** — the last statement of a callable's, a block's or a
+  quote's body binding a quantified function, which would be the body's value
+  ([resolution](#resolution));
 - an **unquoted** part — one its role reads as a quote or a container of
   quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
   body. The message says how the part is written;

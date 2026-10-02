@@ -166,7 +166,17 @@ cells, a record the record type of its fields in written order, a type value
 knot member reports its own. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
 `Value::ktype` copies that handle or names a leaf constant, and reads no
-registry and walks nothing. A quote's type is its carried type, memoized on its
+registry and walks nothing. It answers a
+[`DeclaredType`](../type_lattice/README.md#typed-handles): a concrete `KType`
+for every value but a quantified callable, which answers its `Scheme`. A
+quantified callable is read only at the head of a call
+([resolution](../scope/README.md#resolution)), so every other reader —
+a container's join, a construction, a diagnostic — takes
+`Value::concrete_ktype`, which names that rule where it narrows. A key's
+candidates — the functions a `USING` hole or an `EVAL` offer gathers at one
+key — are laid down by `List::of_candidates`, typed `List<Any>` without reading
+any function's type: dispatch alone reads such a list, each function by its own
+type, and a quantified registration's scheme joins into no list type. A quote's type is its carried type, memoized on its
 node: its [code kind](../type_lattice/README.md#the-code-family), read off its
 body as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)),
 needing the `\` names no binder in its code fills
@@ -187,10 +197,9 @@ alone, which no finite type describes
 is therefore the same one relation against that memo.
 
 A type check against a value — [`satisfies`](admission.rs) — is therefore one
-lattice relation between the slot and that handle. A slot that reads a
-quantifier admits by unification against the handle under a fresh collector,
-which checks shape alone: a variable's bound, and two slots of one call agreeing
-on a variable, are the caller's collector to solve. Nothing descends into a
+lattice relation between the slot and that handle: *fits*, read from the
+slot's side (`satisfied_by`). A slot whose variables a call solves is the
+caller's collector to admit through, never `satisfies`. Nothing descends into a
 value to type it, so a value's precision is whatever its type says, and **an
 ascription changes it** — a `:!`, a parameter binding its argument, a frame
 returning under its contract. `Value::retyped` reads the declared type member
@@ -225,7 +234,10 @@ whose join widens a record hides that record's extra fields.
 
 A read carries a `Seen`: a value beside the type the read sees it at — its own
 memo at the top of a read, and below it what the holder's seen type names for
-the part there, narrowed as a retype narrows. `Seen::surface` opens a container
+the part there, narrowed as a retype narrows. A value walk can meet a
+quantified callable — a closure's capture, a candidate list's cell — so a
+`Seen` holds a `DeclaredType`, and a callable is seen at its own scheme; a value
+of a kind is always seen at a type. `Seen::surface` opens a container
 or tagged value at that type as a `Surface`, whose parts are each seen at their
 type there. A reader that only inspects a part — equality, rendering, a name, a
 function to consider — takes its value and writes nothing; a reader that hands a

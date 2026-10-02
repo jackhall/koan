@@ -43,7 +43,8 @@ activation. This module closes it:
   pair, sixteen bytes — so a value holding one stays a twenty-four-byte word.
   Its equality is node identity.
 - The knot's payload is a `Node`, of six arms. A `Function` node holds the
-  function's memoized type handle, the body shape it runs (in program storage),
+  function's memoized type — a concrete type, or a quantified function's
+  [scheme](../type_lattice/README.md#typed-handles) — the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and its
   **typing record**: its quantifier map and its registered shape. The
   **registered shape** is the expression shape a function born for a

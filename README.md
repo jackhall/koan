@@ -257,10 +257,12 @@ src/
 │   └── eval.rs               # surface form `$(expr)`
 ├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols, `ScopeId` and the region bump seam and nothing else
 ├── type_lattice/
-│   ├── node.rs           TypeNode — one interned type's content; every child position is a KType handle, so a node is shallow
-│   ├── handle.rs         KType — the Copy content-digest handle, the pinned builtin constants, and the name/kind readings off one
+│   ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle
+│   ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType; the pinned builtin constants, and the name/kind readings off one
+│   ├── run.rs            Run / Elements — typed views over a node's raw child runs
+│   ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
 │   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the fixed two-way verdict cache laid in the same region, the composite doors, canonical `union_of`, the binder doors `shape_type` and `function_type` keeping every variable, and the signature doors `signature`, `signature_apply` and `signature_meet`
+│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the fixed two-way verdict cache laid in the same region, the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the binder doors `shape_scheme` and `function_scheme` keeping every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
 │   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
 │   ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
 │   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity — the non-type payloads a node carries
@@ -270,7 +272,7 @@ src/
 │   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the union door and the position context
 │   ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
 │   ├── order.rs          is_subtype_of — the order, which never solves — and fits, the relation a question reads, as one Lockstep instance differing at its leaf; satisfied_by
-│   ├── lattice.rs        join (subsumption-or-union, not a walk) and meet (the rebuilding Lockstep instance)
+│   ├── lattice.rs        join (subsumption-or-union, not a walk) and the meet (the rebuilding Lockstep instance, relating a variable by the rigid rule for the solver)
 │   ├── unify.rs          admits_with and the Collector: contributions solved to a pair of ends and bound at its least instance; the Interval a solve reports per variable
 │   ├── substitute.rs     the quantifier, level and head-parameter substitutions, instantiation and erasure, and a type read through intervals (bound_above among them)
 │   ├── signatures.rs     a signature type as a set of applications: the order between two sets and the meet the signature_meet door interns
@@ -294,7 +296,7 @@ src/
 ├── values/
 │   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite
 │   ├── type_value.rs     TypeValue — a type in value position beside its memoized OfKind type
-│   ├── list.rs           List — one run of cells typed by the join of its elements
+│   ├── list.rs           List — one run of cells typed by the join of its elements, or a key's candidates typed `List<Any>`
 │   ├── dict.rs           Dict / Key — sorted keys and aligned cells, a binary-search lookup, entry order key order
 │   ├── record.rs         Record — symbol-sorted names and aligned cells, typed by the record of its fields
 │   ├── tagged.rs         Tagged — the one nominal wrap: a payload under a type identity, constructed through the checked door, held or peeled

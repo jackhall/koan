@@ -33,6 +33,16 @@ A parameter and return type of a callable are eager mentions of the enclosing
 shape, so a signature is read through the enclosing shape's reader: at load, the
 shape the callable is written in; at a birth, the activation it is born in.
 
+A type expression elaborates to a
+[parametric type](../type_lattice/README.md#typed-handles): a `FOR ALL` name
+reads as its quantified variable, a head parameter as itself, and a run-bound
+name at load as its lexical variable. A quantified callable's type is a
+`Scheme`, and only a signature member's whole type may be one. Where a spelling
+reads an operand concrete — an application's head, a `NEEDING` kind, a
+`WITH`'s signature — an operand naming a `FOR ALL` variable or a head parameter
+is unsupported, and a projection's owner naming one declares no member. A
+run-bound name there is left to the run ([below](#the-type-channel-at-load)).
+
 Every composite is built from the handles its parts elaborate to, through the
 registry's own doors:
 
@@ -47,7 +57,11 @@ registry's own doors:
   already rewrote it into, so nothing here walks a union part by part;
 - `Left & Right` is the [meet](../type_lattice/README.md#the-relations) of its
   two members, and `& [Left Right …]` its chained form — a meet that comes out
-  `Never` is a type like any other;
+  `Never` is a type like any other. The meet relates concrete types, so an
+  operand naming a `FOR ALL` variable or a signature's head parameter is
+  refused as `MeetOverVariable`, located at the `&`: under
+  `EXPR FOR ALL #[Elt] #(PICK x :(Elt & Number)) -> Elt`, each call solves
+  `Elt`, so no meet can be taken where the program loads;
 - `:{x :Elem, …}` is the record type of its fields in written order;
 - `FN :{x :Elem, …} -> Ret` is the function type over the schema's fields and
   the return, and `EXPR #(head) -> Ret` the expression shape over the keywords
@@ -464,6 +478,8 @@ never a guess:
 - `Quantified` — a quantified function type or expression shape written
   anywhere but as the whole type of a signature's `VAL` member or a signature's
   keyworded head;
+- `MeetOverVariable` — a meet one of whose operands names a `FOR ALL` variable
+  or a signature's head parameter;
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
   parameters its constructor declares, a `WITH` over anything but a declared

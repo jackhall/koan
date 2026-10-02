@@ -334,8 +334,9 @@ s
 
 A quantified function is **called, never passed**: its name may stand only at
 the head of a call, so `LET keep = [pick]` is an error, and so is a
-`(FN FOR ALL …)` written anywhere but bound to a name or called on the spot. To
-pass one, wrap it in an ordinary `FN` that calls it —
+`(FN FOR ALL …)` written anywhere but bound to a name or called on the spot. A
+body hands back its last statement's value, so a body cannot end by binding one
+either. To pass one, wrap it in an ordinary `FN` that calls it —
 `(FN :{x :Number} -> Number = #(pick {x = x}))` goes anywhere a function does.
 For the same reason a quantified type such as `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`
 is written only as a signature member's type, below; a slot that wants a
@@ -429,6 +430,12 @@ LET Named = :(:{x :Number} & :{y :Str})
 at `Never`. Koan has no operator precedence, so `|` and `&` mix only through
 parentheses: `Number | Str & Bool` is an error, and `:((Number | Str) & Bool)` says
 which one you mean.
+
+A meet must know both of its sides when the program loads, so neither may name a
+`FOR ALL` variable or a signature's head parameter: in
+`EXPR FOR ALL #[Elt] #(PICK x :(Elt & Number)) -> Elt`, each call picks its own
+`Elt`, and the program is refused at the `&`. Bound the variable instead, with
+`FOR ALL #{Elt: Number}`.
 
 ---
 

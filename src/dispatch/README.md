@@ -268,6 +268,14 @@ fixed:
 `Number`, `Str`, `Bool` or `Null` is exact, since no value carries a type
 strictly under one.
 
+A static type's ends are
+[parametric](../type_lattice/README.md#typed-handles), since they may hold
+lexical variables, and are compared by *fits*; what a call reads at run time
+is concrete. A binder of a quantified callable is typed by its scheme, which
+only a call's head reads, as the
+[call-only rule](../scope/README.md#resolution) reads the name: a call solves
+the scheme's group there, and the statement binding it is at most `Any`.
+
 **Generic calls.** A quantified callee's group is solved from the arguments'
 static types to an
 [interval](../type_lattice/README.md#the-unifier-collects-it-does-not-bind) per

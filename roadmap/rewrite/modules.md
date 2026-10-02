@@ -18,6 +18,15 @@ types each keyworded use of its operand signature's member heads at load
 ([static types](../../src/dispatch/README.md#static-types)), but nothing binds
 those registrations where the body runs.
 
+The property law `monomorphic_specificity_is_the_lexicographic_pointwise_fold`
+([properties](../../src/type_lattice/tests/properties.rs)) fails rarely above
+the routine tier's 64 cases. Its oracle compares slots by the order, while
+ranking admits through *fits*, and the two disagree for slots typed by
+signatures of different declarations — `SIG (GROUP PAIRWISE FOLD …)` against
+`SIG FOR ALL #{Elt: Code} (…) WITH {Elt = :(Number | Str)}`, where
+`shape_specificity` answers `StrictlyLess` and the oracle `Incomparable`. The
+seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
+
 **Acceptance criteria.**
 
 - An ascription expression evaluates: `:|` and `:!` run the view door where they
@@ -77,6 +86,9 @@ those registrations where the body runs.
   when its module arrived through `Any`.
 - The old runtime's tutorial programs that use modules run on the rewritten
   stack and print the same output.
+- `monomorphic_specificity_is_the_lexicographic_pointwise_fold` holds over
+  signature-typed slots at the total tier's 2048 cases, the seed above
+  included.
 
 **Directions.**
 
@@ -161,6 +173,13 @@ those registrations where the body runs.
   builtin `List` or `Dict` stands as a family; `FN` never does, since its
   parameters are contravariant. A family satisfies a constructor parameter
   without matching parameter names.
+- *A quantified registration's name — open.* A quantified `FN` may be bound
+  only as a module member or under a declared type that solves its group
+  ([instantiating a quantified function](../gradual-typing/instantiating-quantified-functions.md)).
+  Whether the keyworded forms that bind one — `EXPR FOR ALL …` and
+  `LET id = FN EXPR FOR ALL …` — count as a module member's binding, so they
+  stay allowed in any body, or fall under the same rule, is open. Today both
+  stay as they are.
 
 ## Dependencies
 
