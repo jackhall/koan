@@ -510,3 +510,80 @@ fn a_union_wanted_type_fixes_nothing_and_renders_as_written() {
         )
     );
 }
+
+const RANKED_APPLY: &str = "EXPR #(APPLY 2 TO 1)\n\
+                            EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :Elt) -> Elt = \
+                            #(f {x = y})\n";
+
+/// `g` calls `call` over a parameter `b` declared `Number | Str`, once with each.
+fn over_b(call: &str) -> String {
+    module(&format!(
+        "(LET g = (FN :{{b :(Number | Str)}} -> Any = #({call}))) \
+         (PRINT (g {{b = 1}})) (PRINT (g {{b = \"s\"}}))"
+    ))
+}
+
+/// The column of the last `pick` on the last line of `source`.
+fn pick_column(source: &str) -> usize {
+    let line = &source[source.rfind('\n').unwrap() + 1..];
+    line.rfind("pick").expect("the argument is written") + 1
+}
+
+#[test]
+fn an_instance_argument_ranked_after_its_variables_solve_takes_their_solution() {
+    assert_eq!(
+        run(&format!("{RANKED_APPLY}{}", over_b("APPLY pick TO b"))),
+        "1\ns"
+    );
+}
+
+#[test]
+fn a_written_order_instance_argument_after_its_variables_solve_takes_their_solution() {
+    let with = "EXPR FOR ALL #[Elt] #(WITH y :Elt DO f :(FN :{x :Elt} -> Elt)) -> Elt = \
+                #(f {x = y})\n";
+    assert_eq!(run(&format!("{with}{}", over_b("WITH b DO pick"))), "1\ns");
+}
+
+#[test]
+fn a_variable_the_instance_arguments_own_class_solves_keeps_the_closed_point_rule() {
+    let map = "EXPR #(MAP 2 AT 1)\n\
+               EXPR FOR ALL #[Elt Out] #(MAP f :(FN :{x :Elt} -> Out) AT y :Elt) -> Out = \
+               #(f {x = y})\n";
+    assert_eq!(run(&format!("{map}{}", over_b("MAP pick AT b"))), "1\ns");
+}
+
+#[test]
+fn an_earlier_argument_the_load_knows_nothing_of_fixes_nothing() {
+    let source = format!(
+        "{RANKED_APPLY}{}",
+        module("(LET g = (FN :{z :Any} -> Any = #(APPLY pick TO z)))")
+    );
+    let column = pick_column(&source);
+    assert_eq!(run(&source), format!("load: <test>:3:{column}: {UNFIXED}"));
+}
+
+#[test]
+fn an_earlier_argument_over_a_lexical_variable_fixes_nothing() {
+    // `rigid-solves.md` turns this into a load.
+    let source = format!(
+        "{RANKED_APPLY}{}",
+        module("(EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any = #(APPLY pick TO xs))")
+    );
+    let column = pick_column(&source);
+    assert_eq!(run(&source), format!("load: <test>:3:{column}: {UNFIXED}"));
+}
+
+#[test]
+fn an_earlier_contribution_that_never_admits_drops_the_candidate() {
+    let apply = "EXPR #(APPLY 2 TO 1)\n\
+                 EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :(LIST OF Elt)) -> Elt = \
+                 #(f {x = 1})\n";
+    let refused = run(&format!(
+        "{apply}{}",
+        module("(LET g = (FN :{m :((LIST OF Number) | Null)} -> Any = #(APPLY pick TO m)))")
+    ));
+    assert!(
+        refused.starts_with("load:") && refused.contains("no overload of `APPLY _ TO _`"),
+        "{refused}"
+    );
+}
