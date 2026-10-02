@@ -305,10 +305,11 @@ proptest! {
         );
     }
 
-    /// A least instance under a concrete type is concrete, and the instance it makes lies under
-    /// the type it was wanted at.
+    /// A least instance under a concrete type is concrete, and the instance it makes fits the type
+    /// it was wanted at. *Fits*, not the order: a signature is ordered by its applications, so an
+    /// instance returning a signature fits a wanted one that asks no member without lying under it.
     #[test]
-    fn an_instance_lies_under_the_type_it_is_wanted_at(
+    fn an_instance_fits_the_type_it_is_wanted_at(
         (scheme, wanted) in arb_wanted_instance(world(), 3)
     ) {
         let types = registry();
@@ -324,7 +325,7 @@ proptest! {
         // A variable free in the scheme outside its own group stays free in the instance.
         prop_assume!(instance.is_some());
         let instance = instance.expect("assumed");
-        prop_assert!(is_subtype_of(&types, scratch, instance, wanted));
+        prop_assert!(fits(&types, scratch, instance, wanted));
     }
 }
 

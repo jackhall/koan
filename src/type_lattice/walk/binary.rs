@@ -432,6 +432,9 @@ impl Rebuilder<'_, '_> {
                 let ret = *slots.next().expect("the return follows the slots");
                 types.shape_type(scratch, &rebuilt, classes, ret)
             }
+            // Two constructors with no common refinement apply to nothing: no application is
+            // headed by `Never`.
+            Assembly::Apply(_) if paired[0] == Handle::NEVER => Handle::NEVER,
             Assembly::Apply(keys) => types.constructor_apply(
                 scratch,
                 wrap(paired[0]),
