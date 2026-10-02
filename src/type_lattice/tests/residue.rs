@@ -799,9 +799,9 @@ fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
     );
 }
 
-/// No law: the order's laws hold over union-bounded variables without naming one. These pin the
-/// worked examples — a variable bounded by `Number | Str` against the unions above and around its
-/// bound, in the order, a union's canonical form and the meet.
+/// No law: the order's laws hold over concrete types, and these pin the worked examples — a variable
+/// bounded by `Number | Str` against the unions above and around its bound, in the order, a union's
+/// canonical form and the meet.
 #[test]
 fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     let bump = Bump::new();
@@ -814,10 +814,11 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     assert!(is_subtype_of(&types, region, elt, wider));
     assert!(!is_subtype_of(&types, region, elt, KType::NUMBER));
 
-    // `Elt | Number | Str` holds nothing `Number | Str` does not.
-    assert_eq!(
-        types.union_of(region, &[elt, KType::NUMBER, KType::STR]),
-        number_or_str
+    // `Elt | Number | Str` holds nothing `Number | Str` does not, but the order relates concrete
+    // types only, so the variable stays beside the members its bound lies under.
+    let spelled = types.union_of(region, &[elt, KType::NUMBER, KType::STR]);
+    assert!(
+        matches!(types.node(spelled), TypeNode::Union { members } if members == [elt, KType::NUMBER, KType::STR])
     );
     let elt_or_bool = types.union_of(region, &[elt, KType::BOOL]);
     assert_ne!(elt_or_bool, types.union_of(region, &[KType::BOOL]));

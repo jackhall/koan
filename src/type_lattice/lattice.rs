@@ -19,8 +19,13 @@ use super::signatures::is_signature_type;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, Width, lockstep};
 
-/// The least upper bound: the larger operand when the two are ordered, otherwise their union.
+/// The least upper bound: the larger operand when the two are ordered, otherwise their union. A
+/// parametric operand is related by no order, so it joins to the union, which keeps a variable
+/// beside every concrete member.
 pub fn join(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> KType {
+    if !types.is_concrete(a) || !types.is_concrete(b) {
+        return types.union_of(scratch, &[a, b]);
+    }
     if is_subtype_of(types, scratch, a, b) {
         return b;
     }

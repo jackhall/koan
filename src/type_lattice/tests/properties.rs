@@ -25,8 +25,8 @@ use crate::type_lattice::shape::Specificity;
 use crate::type_lattice::sig_relations::{admits_shape, shape_specificity, sig_fits};
 use crate::type_lattice::signatures::{applications, applications_under, is_signature_type};
 use crate::type_lattice::substitute::{
-    Side, bound_above, erase_quantified, instantiate_quantified, quantifier_bounds, read_through,
-    substitute_parameters, substitute_quantified,
+    Side, bound_above, quantifier_bounds, read_through, substitute_parameters,
+    substitute_quantified,
 };
 use crate::type_lattice::unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 use crate::type_lattice::walk::Variance;
@@ -34,7 +34,8 @@ use crate::type_lattice::walk::unary::{Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
 use super::generators::{
-    World, arb_arguments, arb_function_type, arb_instance_chain, arb_shape_type, arb_type,
+    World, arb_arguments, arb_concrete, arb_function_type, arb_instance_chain, arb_shape_type,
+    arb_type,
 };
 
 thread_local! {
@@ -59,6 +60,16 @@ fn one() -> BoxedStrategy<KType> {
 /// A shallower one, for the ternary laws that would otherwise multiply three deep trees.
 fn small() -> BoxedStrategy<KType> {
     arb_type(world(), 2)
+}
+
+/// A generated concrete type at the standard depth: what the order, join and meet relate.
+fn concrete() -> BoxedStrategy<KType> {
+    arb_concrete(world(), 3)
+}
+
+/// A shallower concrete one, for the ternary laws over the concrete lattice.
+fn small_concrete() -> BoxedStrategy<KType> {
+    arb_concrete(world(), 2)
 }
 
 /// A generated expression shape. The laws whose subject is a shape draw from here rather than from
@@ -97,7 +108,7 @@ proptest! {
     #![proptest_config(binary())]
 
     #[test]
-    fn join_and_meet_are_commutative_and_idempotent(a in one(), b in one()) {
+    fn join_and_meet_are_commutative_and_idempotent(a in concrete(), b in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -108,7 +119,7 @@ proptest! {
     }
 
     #[test]
-    fn join_and_meet_absorb_each_other(a in one(), b in one()) {
+    fn join_and_meet_absorb_each_other(a in concrete(), b in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -117,7 +128,7 @@ proptest! {
     }
 
     #[test]
-    fn never_and_any_are_the_identities(a in one()) {
+    fn never_and_any_are_the_identities(a in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -130,7 +141,7 @@ proptest! {
     #![proptest_config(ternary())]
 
     #[test]
-    fn join_and_meet_are_associative(a in small(), b in small(), c in small()) {
+    fn join_and_meet_are_associative(a in small_concrete(), b in small_concrete(), c in small_concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -152,7 +163,7 @@ proptest! {
     #![proptest_config(binary())]
 
     #[test]
-    fn the_order_is_reflexive_and_bounded(a in one()) {
+    fn the_order_is_reflexive_and_bounded(a in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -162,7 +173,7 @@ proptest! {
     }
 
     #[test]
-    fn the_order_is_antisymmetric(a in one(), b in one()) {
+    fn the_order_is_antisymmetric(a in concrete(), b in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -172,7 +183,7 @@ proptest! {
     }
 
     #[test]
-    fn the_order_agrees_with_join_and_meet(a in one(), b in one()) {
+    fn the_order_agrees_with_join_and_meet(a in concrete(), b in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -181,8 +192,9 @@ proptest! {
         prop_assert_eq!(below, meet(&types, scratch, a, b) == a);
     }
 
+    /// The rigid rule belongs to *fits*: the order relates concrete types only.
     #[test]
-    fn below_a_rigid_variable_lie_itself_and_what_lies_under_its_lower_end(
+    fn below_a_rigid_variable_fit_itself_and_what_fits_its_lower_end(
         a in one(),
         b in one(),
     ) {
@@ -191,8 +203,8 @@ proptest! {
         let scratch = &bump;
         if let Some(lower) = types.node(b).rigid_lower() {
             prop_assert_eq!(
-                is_subtype_of(&types, scratch, a, b),
-                a == b || is_subtype_of(&types, scratch, a, lower)
+                fits(&types, scratch, a, b),
+                a == b || fits(&types, scratch, a, lower)
             );
         }
     }
@@ -206,7 +218,7 @@ proptest! {
     }
 
     #[test]
-    fn fits_contains_the_order(a in one(), b in one()) {
+    fn fits_contains_the_order(a in concrete(), b in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -232,7 +244,7 @@ proptest! {
     }
 
     #[test]
-    fn no_type_lies_below_two_family_tops(a in one()) {
+    fn no_type_lies_below_two_family_tops(a in concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -248,7 +260,7 @@ proptest! {
     #![proptest_config(ternary())]
 
     #[test]
-    fn the_order_is_transitive(a in small(), b in small(), c in small()) {
+    fn the_order_is_transitive(a in small_concrete(), b in small_concrete(), c in small_concrete()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -290,7 +302,7 @@ proptest! {
     #![proptest_config(binary())]
 
     #[test]
-    fn union_of_is_canonical(members in prop::collection::vec(one(), 1..5)) {
+    fn union_of_is_canonical(members in prop::collection::vec(concrete(), 1..5)) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -338,7 +350,7 @@ proptest! {
 
     #[test]
     fn a_union_holding_the_three_family_tops_is_any(
-        members in prop::collection::vec(one(), 0..4),
+        members in prop::collection::vec(concrete(), 0..4),
     ) {
         let types = registry();
         let bump = Bump::new();
@@ -420,18 +432,6 @@ proptest! {
             prop_assert_eq!(substitute_quantified(&types, scratch, a, &[b, b, b]), a);
         }
         prop_assert_eq!(substitute_parameters(&types, scratch, a, Members::EMPTY), a);
-    }
-
-    #[test]
-    fn erasing_is_instantiating_at_the_bounds(a in one()) {
-        let types = registry();
-        let bump = Bump::new();
-        let scratch = &bump;
-        let bounds = quantifier_bounds(&types, a);
-        prop_assert_eq!(
-            erase_quantified(&types, scratch, a),
-            instantiate_quantified(&types, scratch, a, bounds)
-        );
     }
 
     // A type holding a binder is left out: relating two of them runs the unifier, whose
@@ -865,8 +865,8 @@ fn instance(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType, dra
 }
 
 /// Static arguments for `a`, one per slot, beside carried arguments within them. Slot `k`'s static
-/// type is drawn by `draw.picks[k]` from `a`'s own slot with its group erased, from one of `b`'s so
-/// erased, or from the argument pool. Its mode is the pick's second element: `1` is exactly the
+/// type is drawn by `draw.picks[k]` from `a`'s own slot at its group's bounds, from one of `b`'s so
+/// read, or from the argument pool. Its mode is the pick's second element: `1` is exactly the
 /// static type, carried as the run carries it; `2`, where the static type holds no rigid variable
 /// and meets a drawn type above `Never`, is bounded below by that meet, which it carries; anything
 /// else is within the static type, carrying it met with a drawn type. `None` where some argument is
@@ -878,8 +878,15 @@ fn static_and_carried(
     b: KType,
     draw: &Draw,
 ) -> Option<(Vec<Interval>, Vec<KType>)> {
-    let own: Vec<KType> = shape_slots(erase_quantified(types, scratch, a), types).collect();
-    let other: Vec<KType> = shape_slots(erase_quantified(types, scratch, b), types).collect();
+    // Each slot at its group's bounds: the instance a call reaches when every variable takes its
+    // bound.
+    let at_bounds = |shape: KType| -> Vec<KType> {
+        let bounds = quantifier_bounds(types, shape);
+        shape_slots(shape, types)
+            .map(|slot| substitute_quantified(types, scratch, slot, bounds))
+            .collect()
+    };
+    let (own, other) = (at_bounds(a), at_bounds(b));
     let mut arguments = Vec::with_capacity(own.len());
     let mut carried = Vec::with_capacity(own.len());
     for (k, (source, mode)) in draw.picks.iter().take(own.len()).enumerate() {

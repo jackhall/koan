@@ -321,7 +321,8 @@ pub(super) fn canonical_overloads(
         return;
     }
     // Quadratic in a bucket's width, which is the width an interface declares overloads at. The
-    // order runs the other way from a union's: a shape *above* another is the one dropped.
+    // order runs the other way from a union's: a shape *above* another is the one dropped. A
+    // parametric overload — over a head parameter, or a scheme — is deduplicated by handle alone.
     let keep = unsubsumed(types, scratch, overloads, Dropped::Above);
     let mut keep = keep.iter();
     overloads.retain(|_| *keep.next().unwrap_or(&true));

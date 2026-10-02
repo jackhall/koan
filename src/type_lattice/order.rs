@@ -316,8 +316,11 @@ pub(super) enum Dropped {
 }
 
 /// One flag per member: `false` where the member lies on the `dropped` side of some *other*
-/// member, so the survivors form an antichain — the subsumption rule a union and an overload set
-/// canonicalize by, each from its own side.
+/// member, so the concrete survivors form an antichain — the subsumption rule a union and an
+/// overload set canonicalize by, each from its own side.
+///
+/// The order relates concrete types only, so a parametric member is kept as it is and holds no
+/// other member up: a variable stands beside every concrete member, even one its bound lies under.
 ///
 /// Two distinct handles can subsume each other — a union spelled two ways, two shapes whose slots
 /// admit each other — and they stand for one promise, so the run's **first** of them survives for
@@ -333,13 +336,17 @@ pub(super) fn unsubsumed<'s>(
         Dropped::Below => is_subtype_of(types, scratch, member, peer),
         Dropped::Above => is_subtype_of(types, scratch, peer, member),
     };
+    let mut concrete = BumpVec::with_capacity_in(members.len(), scratch);
+    concrete.extend(members.iter().map(|member| types.is_concrete(*member)));
     let mut keep = BumpVec::with_capacity_in(members.len(), scratch);
     keep.extend(members.iter().enumerate().map(|(index, member)| {
-        !members.iter().enumerate().any(|(other, peer)| {
-            other != index
-                && subsumes(*member, *peer)
-                && (other < index || !subsumes(*peer, *member))
-        })
+        !concrete[index]
+            || !members.iter().enumerate().any(|(other, peer)| {
+                other != index
+                    && concrete[other]
+                    && subsumes(*member, *peer)
+                    && (other < index || !subsumes(*peer, *member))
+            })
     }));
     keep
 }

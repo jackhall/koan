@@ -96,8 +96,8 @@ pub use schema::{
 pub use shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, dense_classes};
 pub use sig_relations::{FitsFailure, fits_application, shape_specificity, sig_fits};
 pub use substitute::{
-    Side, bound_above, erase_quantified, erase_rigid, instantiate_quantified, quantifier_bounds,
-    read_through, substitute_levels, substitute_parameters, substitute_quantified,
+    Side, bound_above, erase_rigid, instantiate_quantified, quantifier_bounds, read_through,
+    substitute_levels, substitute_parameters, substitute_quantified,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;

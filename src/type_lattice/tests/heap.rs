@@ -20,7 +20,7 @@ use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::DispatchTokenElement::{Keyword, Slot};
 use crate::type_lattice::sig_relations::{FitsFailure, shape_specificity, sig_fits};
-use crate::type_lattice::substitute::{erase_quantified, substitute_quantified};
+use crate::type_lattice::substitute::substitute_quantified;
 use crate::type_lattice::unify::{Collector, admits_with};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
@@ -275,7 +275,6 @@ fn interning_and_relations_touch_no_heap() {
     let _ = types.union_of(scratch, &[interface, module]);
     let _ = shape_specificity(&types, scratch, shape, plain);
     let _ = substitute_quantified(&types, scratch, types.list(variable), &[KType::STR]);
-    let _ = erase_quantified(&types, scratch, shape);
     assert!(types.contains_quantified(types.list(variable)));
     assert!(types.contains_rigid(member));
 

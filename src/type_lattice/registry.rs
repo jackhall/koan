@@ -975,10 +975,12 @@ impl<'run> TypeRegistry<'run> {
     /// The canonicalizing constructor for a union — the single entry point that builds one.
     ///
     /// Flattens any nested union member into its members, drops [`KType::NEVER`] (the identity
-    /// element: it admits nothing, so it widens nothing), deduplicates by handle, then drops every
-    /// member that is a subtype of the rest, so [`KType::ANY`] absorbs, a union holding all three
-    /// family tops is [`KType::ANY`], and no member lies under the union of the others. One survivor
-    /// collapses to that member; none is `Never`.
+    /// element: it admits nothing, so it widens nothing), and deduplicates by handle. A member
+    /// [`KType::ANY`] absorbs the rest. The order relates concrete types only, so it reduces the
+    /// concrete members among themselves — no concrete member lies under another — and keeps every
+    /// parametric member beside them, even one whose bound lies under a concrete member. A union
+    /// holding all three family tops is [`KType::ANY`]. One survivor collapses to that member; none
+    /// is `Never`.
     pub fn union_of(&self, scratch: BumpAllocator<'_>, members: &[KType]) -> KType {
         let width: usize = members
             .iter()
@@ -1003,14 +1005,17 @@ impl<'run> TypeRegistry<'run> {
                 _ => push_unique(*member, &mut flat),
             }
         }
+        // The top's own definition, not the order: every type lies under `Any`, a variable too.
+        if flat.contains(&KType::ANY) {
+            return KType::ANY;
+        }
         if flat.len() > 1 {
-            // Subsumption: a member below another contributes nothing the other does not already
-            // admit. Mutually ordered members are equal handles, which the dedup above removed, so
-            // the surviving set is an antichain and dropping is order-insensitive.
+            // Subsumption: a concrete member below another contributes nothing the other does not
+            // already admit. Mutually ordered members are equal handles, which the dedup above
+            // removed, so the surviving set is an antichain and dropping is order-insensitive.
             let keep = unsubsumed(self, scratch, &flat, Dropped::Below);
             let mut keep = keep.iter();
             flat.retain(|_| *keep.next().unwrap_or(&true));
-            self.drop_variables_under_the_rest(scratch, &mut flat);
         }
         // The three family tops together hold every type, so their union is `Any` — and must be, or
         // a type variable bounded by `Any` would lie under `Any` but not under the union that equals it.
@@ -1025,38 +1030,6 @@ impl<'run> TypeRegistry<'run> {
             1 => flat[0],
             _ => self.intern_union_members(scratch, &flat),
         }
-    }
-
-    /// Drop from the antichain `flat` every rigid variable whose bound lies under the union of the
-    /// other members — a bound spanning several members, which the pairwise pass cannot see. Only
-    /// the non-rigid members are read: a bound is variable-free, so no rigid member holds one up.
-    fn drop_variables_under_the_rest(
-        &self,
-        scratch: BumpAllocator<'_>,
-        flat: &mut BumpVec<'_, KType>,
-    ) {
-        let bounded = |member: KType| {
-            self.node(member)
-                .rigid_bound()
-                .filter(|bound| *bound != KType::ANY)
-        };
-        if !flat.iter().any(|member| bounded(*member).is_some()) {
-            return;
-        }
-        let mut concrete = BumpVec::with_capacity_in(flat.len(), scratch);
-        concrete.extend(
-            flat.iter()
-                .copied()
-                .filter(|member| self.node(*member).rigid_bound().is_none()),
-        );
-        // With one concrete member the pairwise pass already decided.
-        if concrete.len() < 2 {
-            return;
-        }
-        let rest = self.intern_union_members(scratch, &concrete);
-        flat.retain(|member| {
-            bounded(*member).is_none_or(|bound| !is_subtype_of(self, scratch, bound, rest))
-        });
     }
 
     /// Intern a union from members that are already flat and already an antichain — dedup by handle

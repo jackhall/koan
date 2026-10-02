@@ -23,8 +23,7 @@ const CANONICAL: Rebuild = Rebuild {
 };
 
 /// Rewrite every **free** `Quantified(i)` inside `kt` to `bindings[i]` — the per-call substitution
-/// a solved call applies to a shape's return, and what erasure runs with each variable's bound in
-/// every cell.
+/// a solved call applies to a shape's return.
 ///
 /// A **nested** binder — a shape, or a function type carrying a group — rebinds the indices with
 /// its own group, exactly as it shadows them in the relations, so a variable under one is not free
@@ -120,16 +119,6 @@ pub fn instantiate_quantified(
         }
         _ => unreachable!("only a binder carries a group"),
     }
-}
-
-/// `kt` with every variable of its own group replaced by that variable's bound — what a quantified
-/// callable reports where the reader has no binder to carry the parameter.
-pub fn erase_quantified(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
-    let bounds = quantifier_bounds(types, kt);
-    if bounds.is_empty() {
-        return kt;
-    }
-    instantiate_quantified(types, scratch, kt, bounds)
 }
 
 /// `kt` with every rigid variable reachable from it replaced by its bound — the
