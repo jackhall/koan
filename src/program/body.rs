@@ -146,8 +146,9 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             callee,
             arguments,
             kind,
+            contributed,
             owed,
-        }) => match frame(&step, program, callee, arguments, kind, owed) {
+        }) => match frame(&step, program, callee, arguments, kind, contributed, owed) {
             Ok((activation, contract)) => {
                 Runner::at(program, activation, Level::Frame, Some(contract))
             }
@@ -187,12 +188,14 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
 /// What an evaluator asks for to call `callee` over `arguments`, a record of its parameters by
 /// name — and, for a quantified callee a keyworded call selected, of its type parameters, each a
 /// type value: a frame running the callee's body, placed by the bit its return type derives.
-/// `kind` says whether the arguments were admitted before the call or are checked by the frame.
+/// `kind` says whether the arguments were admitted before the call or are checked by the frame,
+/// and `contributed` what a call by name solves each parameter it names from.
 pub fn call<'graph, 'here>(
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
+    contributed: &'here [(Symbol, KType)],
     owed: Option<Contract>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
@@ -215,6 +218,7 @@ pub fn call<'graph, 'here>(
                 callee,
                 arguments,
                 kind,
+                contributed,
                 owed,
             },
         },
@@ -465,7 +469,8 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 /// retyped to its declared type with the call's solution substituted, and every type parameter
 /// bound to its solution — the one an instance carries, the one a keyworded call's selection
 /// carried in `arguments`, or, for a call by name, the one solved here while each argument is
-/// admitted against its parameter's declared type — beside the contract the frame ends under. The
+/// admitted against its parameter's declared type — at the type `contributed` names it beside, and
+/// its carried type elsewhere — beside the contract the frame ends under. The
 /// error value's message when the callee is no function, the arguments do not name its parameters
 /// exactly, an argument does not fit its parameter, or the group has no solution.
 fn frame<'graph, 'here>(
@@ -474,6 +479,7 @@ fn frame<'graph, 'here>(
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
+    contributed: &[(Symbol, KType)],
     owed: Option<Contract>,
 ) -> Result<(&'here KActivation<'graph, 'here>, Contract), &'here str> {
     let types = program.types();
@@ -569,11 +575,16 @@ fn frame<'graph, 'here>(
             let mut collector = Collector::<KType>::new(scratch, bounds);
             for (parameter, declared) in params.iter() {
                 let argument = argument(parameter.symbol())?;
+                let carried = argument.ktype().as_type().expect(CALL_ONLY);
+                let solved_from = contributed
+                    .iter()
+                    .find(|(name, _)| *name == parameter.symbol())
+                    .map_or(carried, |(_, contribution)| *contribution);
                 admits_with(
                     types,
                     scratch,
                     declared,
-                    argument.ktype().as_type().expect(CALL_ONLY),
+                    solved_from,
                     Variance::Co,
                     &mut collector,
                 )

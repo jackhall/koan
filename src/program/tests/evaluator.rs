@@ -416,6 +416,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                     callee,
                     Value::Record(arguments),
                     CallKind::ByName,
+                    &[],
                     owed,
                     Use::Forwards,
                 )

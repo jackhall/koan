@@ -1193,9 +1193,10 @@ pub enum ShapeError<'graph> {
         at: SourceRef,
     },
     /// A call by name whose callee is exactly an unquantified function its argument's static type
-    /// can never satisfy the parameters of.
+    /// can never satisfy the parameters of, or a quantified one whose group the argument's static
+    /// type can never solve.
     CallNeverSatisfied {
-        callee: KType,
+        callee: DeclaredType<KType>,
         arguments: KType,
         at: SourceRef,
     },

@@ -4,9 +4,10 @@
 
 use crate::scope::ShapeKind;
 
+use super::ascription::ends;
 use super::generic::{expressed, last_in};
 use super::run;
-use super::statics::loaded;
+use super::statics::{body, loaded};
 
 /// `PAIR` returns the type it solved `Elt` to; `USE` calls it over two parameters declared
 /// `Number | Str`.
@@ -129,4 +130,68 @@ fn a_closure_captures_a_type_only_where_a_call_in_it_contributes_it() {
     };
     assert_eq!(run(&make("PAIR a WITH b", "Type")), "false");
     assert_eq!(run(&make("a", "Any")), "true");
+}
+
+/// `pair` is called by name; `USE` calls it over two parameters declared `Number | Str`.
+fn by_name(ret: &str, body: &str, call: &str) -> String {
+    format!(
+        "LET pair = FN EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> {ret} = #({body})\n\
+         LET use = FN EXPR #(USE a :(Number | Str) AND b :(Number | Str) WITH e :Any) -> Any = #(\n  \
+         LET called = ({call})\n  \
+         called\n\
+         )\n"
+    )
+}
+
+#[test]
+fn a_call_by_name_solves_its_group_from_its_argument_records_static_type() {
+    let source = by_name("Type", "Elt", "pair {x = a, y = b}");
+    assert_eq!(
+        run(&format!("{source}PRINT (USE 1 AND 2 WITH 3)")),
+        ":(Number | Str)"
+    );
+    let named = by_name("Type", "Elt", "pair {x = a, y = e}");
+    assert_eq!(
+        run(&format!("{named}PRINT (USE 1 AND 2 WITH \"s\")")),
+        ":(Number | Str)",
+        "a field the load knows nothing of contributes its carried type"
+    );
+    let bound = by_name("Type", "Elt", "pair r")
+        .replace("  LET called", "  LET r = {x = a, y = b}\n  LET called");
+    assert_eq!(
+        run(&format!("{bound}PRINT (USE 1 AND 2 WITH 3)")),
+        ":(Number | Str)",
+        "a record bound to a name contributes its fields as a literal does"
+    );
+}
+
+#[test]
+fn a_call_by_name_solved_at_load_is_exactly_its_return() {
+    let source = by_name(":(LIST OF Elt)", "[x, y]", "pair {x = a, y = b}");
+    loaded(&source, |program| {
+        let used = body(program, program.shape(), "use");
+        let list = ":(LIST OF :(Number | Str))".to_string();
+        assert_eq!(ends(program, used, "called"), (list.clone(), list));
+    });
+}
+
+#[test]
+fn a_call_by_name_whose_closed_solve_fails_refuses_the_load() {
+    let source = "LET only = FN EXPR FOR ALL #{Elt: Number} #(ONLY x :Elt) -> Elt = #(x)\n\
+                  EXPR #(USE a :(Number | Str)) -> Any = #(only {x = a})";
+    let refused = run(source);
+    assert!(
+        refused.starts_with("load:") && refused.contains("can never be called with"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_call_by_name_reads_a_rigid_contribution_where_it_runs() {
+    let source = "LET pair = FN EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Type = #(Elt)\n\
+                  EXPR FOR ALL #[Outer] #(BOTH a :Outer AND b :Outer) -> Type = \
+                  #(pair {x = a, y = b})\n\
+                  EXPR #(WIDE p :(Number | Str) AND q :(Number | Str)) -> Type = #(BOTH p AND q)\n\
+                  PRINT (WIDE 1 AND 2)";
+    assert_eq!(run(source), ":(Number | Str)");
 }

@@ -33,7 +33,7 @@
 
 use crate::elaborate::denoted;
 use crate::knot::{KValue, Knotted, instance, lambda, quote, refused_construction};
-use crate::memory::{Bump, BumpVec, Writer};
+use crate::memory::{Bump, BumpVec, Writer, collect};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::Role;
 use crate::parse::{ExpressionPart, KExpression};
@@ -533,6 +533,7 @@ fn call<'graph, 'here>(
                     callee,
                     arguments,
                     CallKind::Keyworded,
+                    &[],
                     owed,
                     Use::Forwards,
                 )
@@ -633,6 +634,7 @@ fn apply<'graph, 'here>(
         Gathered::Ready(operands) => operands,
         other => return unready(step, at, other),
     };
+    let recorded = at.view.shape().named_contributions(Site::of(argument));
     let [Operand::Value(head), Operand::Value(argument)] = operands[..] else {
         unreachable!("both parts of an application are evaluated")
     };
@@ -647,12 +649,26 @@ fn apply<'graph, 'here>(
         };
         return finish(step, at, value);
     }
+    // What the frame solves each parameter the load recorded a contribution for from.
+    let contributed = {
+        let mut statics = BumpVec::with_capacity_in(recorded.len(), &scratch);
+        statics.extend(recorded.iter().map(|(_, each)| *each));
+        let solved = contributed(at, &statics, &scratch);
+        let pairs = recorded.iter().zip(solved.iter()).map(|((name, _), each)| {
+            (
+                *name,
+                each.expect("a call by name records only known contributions"),
+            )
+        });
+        collect(writer, pairs)
+    };
     let call = |owed| {
         crate::program::call(
             program,
             head,
             argument,
             CallKind::ByName,
+            contributed,
             owed,
             Use::Forwards,
         )

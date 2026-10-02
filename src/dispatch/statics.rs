@@ -38,7 +38,10 @@
 //! checks nothing. An annotated binder, `LET <name> <type> = <value>`, is held to its type as an
 //! ascription holds its operand, settled by its type part's site. A call by name whose callee is
 //! exactly an unquantified function refuses the load where its argument can never satisfy the
-//! parameters. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
+//! parameters. A call by name of a quantified function solves its group from its argument record's
+//! fields, each contributing as a keyworded argument does, and records the contributions by its
+//! argument's site for the frame; it refuses the load where a closed contribution misses its
+//! parameter or closed ones leave the group unsolved. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
 //! [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
@@ -1389,18 +1392,29 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             self.admissible(callee, payload, node)?;
         }
         // A scheme is one callee, so it is exact.
-        let (node, exact) = match callee {
+        let (function, exact) = match callee {
             DeclaredType::Type(callee) => (types.node(callee.upper), callee.is_exact()),
             DeclaredType::Scheme(scheme) => (types.scheme_node(scheme), true),
         };
-        Ok(match node {
+        Ok(match function {
             TypeNode::KFunction {
                 bounds,
                 params,
                 ret,
                 ..
             } => {
-                let (returned, solved) = self.called(bounds, params, ret, payload);
+                let scheme = match callee {
+                    DeclaredType::Scheme(scheme) => Some(scheme),
+                    DeclaredType::Type(_) => None,
+                };
+                let (returned, solved) = self.called(
+                    level,
+                    scheme,
+                    argument,
+                    node,
+                    (bounds, params, ret),
+                    payload,
+                )?;
                 // Only an exact callee: a function is never retyped, so one at most its type may
                 // return less.
                 if exact && solved {
@@ -1549,7 +1563,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 .any(|name| params.get(name.symbol()).is_none());
         if missed || extra {
             return Err(ShapeError::CallNeverSatisfied {
-                callee: bound_above(types, scratch, callee.upper),
+                callee: DeclaredType::Type(bound_above(types, scratch, callee.upper)),
                 arguments: bound_above(types, scratch, payload.upper),
                 at: node.source,
             });
@@ -1561,50 +1575,88 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// `bounds`, returns for an argument of the static type `payload`: `ret` read through the
     /// intervals the argument's fields solve the group to, or its bounds where they do not; beside
     /// whether that solve is the call's — the group empty, or every interval a point.
+    ///
+    /// Where the callee is the quantified function typed by `scheme`, each parameter naming its
+    /// group solves from its field's contribution, which the call records by `argument`'s site; the
+    /// load refuses the call where a closed contribution does not fit its parameter, or where every
+    /// solving parameter's contribution is closed and the group has no solution.
     fn called(
-        &self,
-        bounds: &[KType],
-        params: Record<'_, Parametric>,
-        ret: Parametric,
+        &mut self,
+        level: usize,
+        scheme: Option<Scheme>,
+        argument: &'graph ExpressionPart<'graph>,
+        node: &'graph KExpression<'graph>,
+        (bounds, params, ret): (&[KType], Record<'_, Parametric>, Parametric),
         payload: Interval,
-    ) -> (Parametric, bool) {
+    ) -> Result<(Parametric, bool), ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         if bounds.is_empty() {
-            return (ret, true);
+            return Ok((ret, true));
         }
         let fields = |typed| match types.node(typed) {
             TypeNode::Record { fields } => Some(fields),
             _ => None,
         };
         let Some(upper) = fields(payload.upper) else {
-            return (self.through(ret, None), false);
+            return Ok((self.through(ret, None), false));
         };
         let lower = fields(payload.lower);
+        let never = || ShapeError::CallNeverSatisfied {
+            callee: DeclaredType::Scheme(scheme_bound_above(
+                types,
+                scratch,
+                scheme.expect("only a scheme refuses"),
+            )),
+            arguments: bound_above(types, scratch, payload.upper),
+            at: node.source,
+        };
         let mut collector = Collector::<Parametric>::new(scratch, bounds);
         let mut declared = BumpVec::with_capacity_in(params.len(), scratch);
-        let mut exact = true;
+        let mut contributed = BumpVec::new_in(scratch);
+        let (mut exact, mut closed) = (true, true);
         for (name, param) in params.iter() {
             let Some(field) = upper.get(name.symbol()) else {
-                return (self.through(ret, None), false);
+                return Ok((self.through(ret, None), false));
+            };
+            let solving = (0..bounds.len())
+                .any(|variable| types.references_quantifier(scratch, param, variable));
+            let contribution = match scheme {
+                Some(_) if solving => self.contribution(level, field),
+                _ => Static::Unknown,
             };
             if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
-                return (self.through(ret, None), false);
+                if let Static::Closed(_) = contribution {
+                    return Err(never());
+                }
+                return Ok((self.through(ret, None), false));
             }
-            let quantified = (0..bounds.len())
-                .any(|variable| types.references_quantifier(scratch, param, variable));
-            if quantified {
-                // As a keyworded use judges it: a variable makes no solve the call's.
-                exact &= lower.and_then(|lower| lower.get(name.symbol())) == Some(field)
-                    && types.concrete(field).is_some();
+            if solving {
+                // As a keyworded use judges it: a variable makes no solve the call's, save where
+                // the call solves from this closed type itself.
+                let contributes = matches!(contribution, Static::Closed(_));
+                closed &= contributes;
+                exact &= contributes
+                    || lower.and_then(|lower| lower.get(name.symbol())) == Some(field)
+                        && types.concrete(field).is_some();
+            }
+            if !matches!(contribution, Static::Unknown) {
+                contributed.push((name.symbol(), contribution));
             }
             declared.push(param);
         }
         match collector.solve(types) {
             Ok(solution) => {
+                if !self.unfilled && !contributed.is_empty() {
+                    let contributed = collect(self.writer, contributed.iter().copied());
+                    self.chain[level]
+                        .named
+                        .push((Site::of(argument), contributed));
+                }
                 let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
-                (self.through(ret, Some(&solved)), exact)
+                Ok((self.through(ret, Some(&solved)), exact))
             }
-            Err(_) => (self.through(ret, None), false),
+            Err(_) if scheme.is_some() && closed => Err(never()),
+            Err(_) => Ok((self.through(ret, None), false)),
         }
     }
 
