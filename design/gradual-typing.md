@@ -192,7 +192,8 @@ changes what a reader sees and which overload runs.
 
 - [Gradual typing](../roadmap/gradual-typing/README.md) — the project's open
   items.
-- [Instances over a lexical variable](../roadmap/gradual-typing/open-instances.md)
-  — a quantified function instantiated at a type each run binds.
+- [Solves over a lexical variable](../roadmap/gradual-typing/rigid-solves.md)
+  — a load-time solve that each run reproduces where an argument's static type
+  names a type the run binds.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)

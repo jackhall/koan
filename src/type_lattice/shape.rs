@@ -112,7 +112,7 @@ pub(super) fn written_order(classes: &[u8]) -> bool {
 }
 
 /// The class of slot `index` under `classes` — its own index where the shape is written-order.
-pub(super) fn class_of(classes: &[u8], index: usize) -> u8 {
+pub fn class_of(classes: &[u8], index: usize) -> u8 {
     classes
         .get(index)
         .copied()

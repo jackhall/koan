@@ -60,10 +60,11 @@
 //! least instance under it ([`instance_under`]). A quantified callee's other arguments solve its
 //! group first, and the slot is read through that solve: a variable a class before the slot's
 //! solves is taken from that class's solving slots at their contributions, as the call solves it.
-//! The candidates a use keeps must agree on each instance. A name's solution is recorded by its site and a literal's in its body's
-//! born-instance cell; a site the wanted type fixes nothing at refuses the load. A solution naming
-//! a lexical variable records where the site reads it, as a contribution does, and the run reads
-//! the type it binds there. So a part's and a statement's static type is never a scheme.
+//! The candidates a use keeps must agree on each instance. A name's solution is recorded by its
+//! site and a literal's in its body's born-instance cell; a site the wanted type fixes nothing at
+//! refuses the load. A solution naming a lexical variable records where the site reads it, as a
+//! contribution does, and the run reads the type it binds there. So a part's and a statement's
+//! static type is never a scheme.
 //!
 //! See [README.md § Static types](README.md#static-types).
 
@@ -81,7 +82,7 @@ use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{
     Collector, DeclaredType, InstanceFailure, Interval, KType, Parametric, Record, Scheme, Side,
     TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above, class_at_least,
-    fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
+    class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
     quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
     select_by_class, shape_return, shape_slots, solving_slots,
 };
@@ -464,11 +465,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// variable an entry names.
     fn solution(&mut self, level: usize, solution: &[Parametric]) -> StaticSolution<'graph> {
         let types = self.types;
-        if solution.iter().all(|each| types.concrete(*each).is_some()) {
-            let closed = solution
-                .iter()
-                .map(|each| types.concrete(*each).expect("concrete"));
-            return Static::Closed(collect(self.writer, closed));
+        let mut closed = BumpVec::with_capacity_in(solution.len(), self.scratch);
+        closed.extend(solution.iter().map_while(|each| types.concrete(*each)));
+        if closed.len() == solution.len() {
+            return Static::Closed(collect(self.writer, closed.iter().copied()));
         }
         let variables = self.located(level, solution);
         assert!(
@@ -890,13 +890,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// classes, each at its argument's closed contribution among `contributions`. `None` for every
     /// other variable, and empty where there is none. `Misfit` where those contributions never
     /// admit, since the call then never runs; `Open` naming a variable a slot that solves it reads
-    /// no closed contribution at — an instance argument among `sites`, or a contribution that is
-    /// unknown or over a lexical variable.
+    /// no closed contribution at — an instance argument's, unknown, or over a lexical variable.
     fn solved_earlier(
         &self,
         shape: DeclaredType<KType>,
         position: usize,
-        sites: &[InstanceArgument<'graph>],
         contributions: &[StaticType<'graph>],
     ) -> Result<&'p [Option<KType>], Unsolved<'p>> {
         let (types, scratch) = (self.types, self.scratch);
@@ -909,8 +907,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let TypeNode::ExpressionShape { classes, .. } = types.scheme_node(scheme) else {
             unreachable!("a candidate's shape is an expression shape")
         };
-        // As the lattice reads a ranking: empty is written order, slot `i` in class `i`.
-        let class = |slot: usize| classes.get(slot).copied().unwrap_or(slot as u8);
+        let class = |slot: usize| class_of(classes, slot);
         let solving = solving_slots(types, scratch, shape.into());
         let names = |slot: usize, variable: usize| {
             types.references_quantifier(scratch, slots[slot], variable)
@@ -929,12 +926,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             if !(earlier(slot) && solving[slot] && shared.iter().any(|v| names(slot, *v))) {
                 continue;
             }
-            let contribution = match contributions[slot] {
-                Static::Closed(contribution) => Some(contribution),
-                _ => None,
-            };
-            let instance = sites.iter().any(|site| site.position == slot);
-            let Some(contribution) = contribution.filter(|_| !instance) else {
+            let Static::Closed(contribution) = contributions[slot] else {
                 let mut open = BumpVec::new_in(scratch);
                 open.extend(shared.iter().copied().filter(|v| names(slot, *v)));
                 return Err(Unsolved::Open(open));
@@ -1005,7 +997,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             } else {
                 let fixed = match known {
                     Known::Closed(shape) => {
-                        self.solved_earlier(shape, site.position, sites, contributions)
+                        self.solved_earlier(shape, site.position, contributions)
                     }
                     _ => Ok(&[][..]),
                 };

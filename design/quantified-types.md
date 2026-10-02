@@ -84,9 +84,13 @@ The solve is the least instance of the scheme under the wanted type
 ([`instance_under`](../src/type_lattice/relations.md#quantified-binders)). A
 variable no contribution from the wanted type reaches is refused and named,
 never read as its bound; one some contribution reaches binds its least
-instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A quantified
-callee's other arguments solve its group first, and the slot is read through
-that solve. The candidates a keyworded use keeps must agree on each instance.
+instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A solution
+may name a type a run binds, such as an enclosing `EXPR FOR ALL #[Outer]`'s
+`Outer`, and the instance is then made at the type each run binds it to. A
+quantified callee's other arguments solve its group first, a variable a class
+ranked before the slot's solves taken as the call solves it, and the slot is
+read through that solve. The candidates a keyworded use keeps must agree on each
+instance.
 [Dispatch](../src/dispatch/README.md#static-types) owns the rule and its
 refusals.
 
@@ -182,8 +186,6 @@ module's exact content.
   parts only where that type is the container's own, and a keyworded argument
   takes one only where it is itself an instance site: `KEEP [pick]` is refused,
   and `KEEP ([pick] :! :(LIST OF (FN :{x :Number} -> Number)))` loads.
-- **A solution is closed.** An instance solving a variable to a type a run
-  binds, such as an enclosing `EXPR FOR ALL #[Outer]`'s `Outer`, is refused.
 - **A keyworded form's function is call-only.** The name `LET id = FN EXPR FOR ALL …`
   binds, a quantified member `USING … SCOPE` surfaces, a `$pick` and an `EVAL`
   offer stand only at the head of a call.
@@ -219,6 +221,6 @@ lattice, not an unknown type, so nothing here is checked by consistency.
   carrier as a bound, higher-kinded head parameters, `m.f` outside the head of
   a call, calling through an opaque view's quantified member, and whether a
   keyworded form's name counts as a module member's binding.
-- [Instances over a lexical variable](../roadmap/gradual-typing/open-instances.md)
-  — an instance whose solution names a type a run binds, read through the type
-  captures a call's contribution already uses.
+- [Solves over a lexical variable](../roadmap/gradual-typing/rigid-solves.md)
+  — a class solve over a static type naming a type a run binds, taken as the
+  call's own, and an instance argument whose variables it solves.

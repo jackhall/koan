@@ -272,8 +272,11 @@ writes nothing.
 A quantified function the load instantiated at an
 [instance site](../dispatch/README.md#static-types) is a function node like any
 other, typed by the concrete instance of its scheme, with the solution in group
-order in its typing record. A frame calling it binds its `FOR ALL` names from
-that solution and solves nothing. Two doors make one:
+order in its typing record. Where the load's solution names a lexical
+variable, each door reads the type the run binds it to where the site runs and
+substitutes it, so the record holds the solution so bound. A frame calling it
+binds its `FOR ALL` names from that solution and solves nothing. Two doors make
+one:
 
 - a `FN FOR ALL` the load instantiated where it is written, or as a binder's
   right-hand side, is **born** as its instance: staging reads the solution off
@@ -386,11 +389,11 @@ under the pair set circular data uses. Bindings are immutable and no shape
 retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
 shape and captures fix what it does. A closure holds a
 [type capture](../scope/README.md#resolution) — an enclosing call's binding of
-a type name — only where a call in its body reads it for a solve: at a slot
-that solves in one of the call's candidates, including one the load judged
-*never* and dropped, since the call runs what selection over the full list
-would. So a function born under two bindings of a type name compares equal
-wherever no call in it reads that name. The same text written at another site is
+a type name — only where a call in its body reads it for a solve, or an
+instance site in it is made at it: at a slot that solves in one of the call's
+candidates, including one the load judged *never* and dropped, since the call
+runs what selection over the full list would. So a function born under two
+bindings of a type name compares equal wherever nothing in it reads that name. The same text written at another site is
 unequal, and a builtin compares by its table identity. `values` compares by an
 identity rather than a shape, since it names none: `Knotted::resolve` hands it
 the shape's address. A quote's code compares as its syntax and the values its

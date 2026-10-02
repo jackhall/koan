@@ -166,13 +166,14 @@ caller mints. That covers a callable a binder births and a `FN` a data binder's
 constructor slot holds alike.
 
 A callable or module also holds a **type capture** past the builder's captures
-for each lexical variable of an enclosing body that a call in it solves from:
-the static pass adds one where a
-[contribution](../dispatch/README.md#static-types) names such a variable, with
+for each lexical variable of an enclosing body that a call in it solves from or
+an instance site in it is made at: the static pass adds one where a
+[contribution](../dispatch/README.md#static-types) or an instance's solution
+names such a variable, with
 the coordinate of the enclosing activation its birth reads
 (`BodyShape::type_captures`), and a callable between the two passes it on
 through a type capture of its own. So a body reads a type name it never writes,
-and a closure holds one only where a call in it reads it. Births read the
+and a closure holds one only where a call or an instance site in it reads it. Births read the
 builder's captures, then the type captures, so the closure is `capture_count()`
 slots long. A type capture is never merged with a builder capture of the same
 name.
@@ -489,7 +490,7 @@ elaborated — and the pass fills it, once, where the program loads:
 - each **registration**, its expression shape;
 - a callable body's own **callable type**, the lexical variable each name of
   its own `FOR ALL` group is in the body (`BodyShape::group_levels`), and the
-  solution a `FN FOR ALL` the load instantiated is born at
+  solution a `FN FOR ALL` the load instantiated is born at, closed or rigid
   (`BodyShape::born_instance`), written by dispatch's static pass;
 - each lexical variable a body declares, by level, beside the slot or capture
   its activation holds the bound type at (`BodyShape::declared_variables`),
@@ -515,7 +516,8 @@ use, parallel to its candidate list: the one candidate selected, or each
 candidate kept beside its verdict, *always* or *maybe*; the site of each
 **settled** `:!` or annotation, whose value's static type lies under its type,
 so the run checks nothing there; the solution each name read at an
-[instance site](../dispatch/README.md#static-types) is instantiated at; each
+[instance site](../dispatch/README.md#static-types) is instantiated at, closed
+or rigid; each
 keyworded use's **contributions**, parallel to its candidate list, a static type
 per argument the call solves from, `Unknown` where it reads the carried type;
 and each call by name's contributions, by its argument's site, a static type

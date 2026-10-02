@@ -307,26 +307,39 @@ static type exactly that instance. A `LET` of a quantified `FN` outside a
 its annotation or, as a callable body's last statement, at the declared return;
 so a bare `LET pick = (FN FOR ALL …)` at the top level refuses the load. A
 name's solution is recorded by its site in the shape's cell, and a literal's in
-its body's write-once born-instance cell. Each refusal names the group's
-variables in group order:
+its body's write-once born-instance cell. A solution may name a lexical
+variable: in the body of
+`EXPR FOR ALL #[Outer] #(WRAP a :Outer) -> :(FN :{x :Outer} -> Outer)`, `pick`
+as the last statement solves `Elt` to `Outer`, its static type exactly the
+instance over `Outer`. The cell then records where the site reads each variable
+it names, as a contribution's does (below), and the run substitutes the type it
+binds there where the name is read or the literal is born, so `WRAP 1` returns
+a `FN :{x :Number} -> Number` and nothing is solved at run time. Each refusal
+names the group's variables in group order:
 
 ```text
 nothing fixes `Elt` here: a quantified function is read only at the head of a call, as the binding of a `MODULE` member, or where the type it is wanted at solves its group
 :(FN :{x :Number} -> Number) does not fix `Elt`
 :(FN FOR ALL #[Elt] :{x :Elt} -> Elt) has no instance under :(FN :{x :Number} -> Str)
-this solves `Elt` to a type each run binds; ascribe a type no `FOR ALL` names
 ```
 
 — `ShapeError::Unfixed` with no wanted type or one that reaches a variable with
-nothing, `NoInstance` where the scheme does not fit the wanted type, and
-`OpenInstance` where a solution names a lexical variable: a solution is closed,
-the same at every run. A quantified callee's slot is read through its group
-solved from its **other** arguments first: a variable the slot shares with them
-must come out one closed point, and one only the slot names is read through
-`[Never, bound]`, so under
+nothing, and `NoInstance` where the scheme does not fit the wanted type. A
+quantified callee's slot is read through its group solved from its **other**
+arguments first. A variable that a class before the slot's
+[solves](../type_lattice/solving.md#priority-classes) is taken as the call
+solves it, from those classes' solving slots, each at its argument's closed
+contribution: under `EXPR #(APPLY 2 TO 1)` and
+`EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :Elt) -> Elt`,
+`APPLY pick TO b` over a parameter `b :(Number | Str)` instantiates `pick` at
+`Elt = Number | Str`. A solving argument there that is itself an instance site,
+or whose contribution is unknown or holds a lexical variable, fixes nothing. Any
+other variable the slot shares with the other arguments must come out one closed
+point, and one only the slot names is read through `[Never, bound]`, so under
 `EXPR FOR ALL #[Elt Out] #(MAP f :(FN :{x :Elt} -> Out) AT y :Elt) -> Out`,
 `MAP pick AT 1` instantiates `pick` at `Elt = Number` and is `Number`, while
-`MAP pick AT y` over a parameter `y :(Number | Str)` refuses. An other argument
+`MAP pick AT y` over a parameter `y :(Number | Str)` refuses — and loads under
+`EXPR #(MAP 2 AT 1)`, `Elt` taken from `y`. An other argument
 that does not admit its slot fixes nothing either, so it refuses the load as
 `Unfixed` too — save, at a keyworded use, one that can never fit its slot, its
 upper end meeting the slot at `Never`, both read through their bounds: that
@@ -384,7 +397,7 @@ variable — a hop per block, and a
 [type capture](../scope/README.md#load-time-types) in each callable or module
 between the use and the body declaring the variable — so a callable nested in a
 generic body solves as that body itself would, and a closure holds a type
-capture only where one of its calls reads it. The pass computes a
+capture only where one of its calls or instance sites reads it. The pass computes a
 contribution only at a position some candidate's slot solves, whether or not
 the load keeps that candidate, since a call runs what selection over the full
 list would and a candidate the load judged *never* from a contribution must stay
@@ -704,8 +717,12 @@ annotated name, and a `USING` over an annotated binder;
 quantified binding outside a module, an annotation, an ascription, a declared
 return, a container's element type, a keyworded slot solved from the other
 arguments first, candidates disagreeing, a call by name's record, a closed
-solution, an instance's body reading its solution and calling its siblings, its
-equality, and one made in a frame and called where it lands, which is on the
+solution, a solution over a type each run binds — at each kind of site, through
+nested callables and a block, and its equality under one binding and two — a
+keyworded slot's variables an earlier class solves, ranked, in written order
+and pooled over two earlier classes, and refused over an unknown or rigid
+earlier argument, an instance's body reading
+its solution and calling its siblings, its equality, and one made in a frame and called where it lands, which is on the
 [Miri slate](../../observe/miri_slate.md);
 [contributions](tests/contributions.rs) — a call solved from its arguments'
 contributions: a declared argument's static type, an `EVAL`'s carried one at a

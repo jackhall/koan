@@ -587,3 +587,21 @@ fn an_earlier_contribution_that_never_admits_drops_the_candidate() {
         "{refused}"
     );
 }
+
+#[test]
+fn an_instance_argument_after_two_earlier_classes_takes_their_pooled_solution() {
+    // `y` solves `Elt` at class 0; `h`, at class 1, solves `Key` and reads `Elt` again.
+    let pick3 = "EXPR #(PICK 3 AT 1 OR 2)\n\
+                 EXPR FOR ALL #[Elt Key] \
+                 #(PICK f :(FN :{x :Elt} -> Elt) AT y :Elt OR h :(FN :{x :Elt} -> Key)) -> Elt = \
+                 #(f {x = y})\n";
+    let source = format!(
+        "{pick3}{}",
+        module(
+            "(LET h = (FN :{x :Any} -> Bool = #(true))) \
+             (LET g = (FN :{b :(Number | Str)} -> Any = #(PICK pick AT b OR h))) \
+             (PRINT (g {b = 1})) (PRINT (g {b = \"s\"}))"
+        )
+    );
+    assert_eq!(run(&source), "1\ns");
+}

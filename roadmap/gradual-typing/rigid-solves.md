@@ -44,8 +44,9 @@ body of an `EXPR FOR ALL #[Outer]` with a parameter `xs :(LIST OF Outer)`,
 
 ## Dependencies
 
-**Requires:**
+Builds on the rigid solution an
+[instance site](../../src/dispatch/README.md#static-types) records.
 
-- [Instances over a lexical variable](open-instances.md) — records a rigid instance solution.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

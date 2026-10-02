@@ -152,7 +152,9 @@ where the scheme does not fit that type, and names each variable no
 contribution reaches rather than read it as its bound. The instance fits the
 wanted type, and need not lie under it in the order: a signature is ordered by
 its applications, so an instance returning a signature fits a wanted
-signature asking for no member without lying under it.
+signature asking for no member without lying under it. Where the wanted type
+names lexical variables, the instance fits it at every binding of them, each
+entry of the solution so bound within its variable's bound.
 Width is the order's own either way: a function subtype asks for no name its
 supertype does not. A quantified binder is a `Scheme`, which the order never
 takes.

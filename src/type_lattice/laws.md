@@ -202,8 +202,10 @@ was declared first and drop the other's registration; a union canonicalized by
 `fits_is_transitive_through_an_instance`, `fits_contains_the_order`,
 `fits_bounds_the_signature_meet`, and, for
 [`instance_under`](relations.md#quantified-binders),
-`an_instance_exists_where_its_scheme_fits` and
-`an_instance_fits_the_type_it_is_wanted_at`. The typed handles keep a scheme out of every
+`an_instance_exists_where_its_scheme_fits`,
+`an_instance_fits_the_type_it_is_wanted_at` and, over a wanted type naming
+lexical variables bound as a run binds them,
+`an_instance_over_lexical_variables_holds_at_every_binding`. The typed handles keep a scheme out of every
 construction: the order, `join` and `meet` take `KType`s.
 
 ## A solve does not depend on the order of its slots
