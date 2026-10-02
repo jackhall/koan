@@ -102,7 +102,7 @@ seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
   and its `:|` mint carries a nonce that this item removes. Ascription solves the head quantifier against the
   module's member types with the unifier a call solves a `FOR ALL` with, and
   `ints :! (Ordered WITH {Carrier = …})` stays writable. It takes the
-  [least instance](../../src/type_lattice/README.md#the-unifier-collects-it-does-not-bind)
+  [least instance](../../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
   a call does: a module whose members contribute `Number` and `Str` to a
   covariant `Carrier` satisfies the signature at `Number | Str`. Under `:!` the view's
   `Carrier` is the solution; under `:|` it is an unbounded carrier, so no slot
@@ -117,7 +117,7 @@ seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
   [dispatch](../../src/dispatch/README.md#selection) solves `Elt` through the module's member types as it
   solves through a list's element type.
 - *Type identity — decided.* A `NEWTYPE` is the digest of its name and schema
-  ([recursive groups](../../src/type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)),
+  ([recursive groups](../../src/type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)),
   so two declarations with one name and schema are one type wherever they are
   written, and a `NEWTYPE` in a functor body is one type across the calls that
   instantiate it alike. It is constructed and matched wherever its name
@@ -155,7 +155,7 @@ seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
 - *An unpinned signature parameter — decided.* An application may leave a head
   parameter unpinned, and it then stands for one type per module, as the
   annotation's check reads it, as
-  [*fits*](../../src/type_lattice/README.md#the-relations) reads an unpinned
+  [*fits*](../../src/type_lattice/relations.md#the-relations) reads an unpinned
   parameter. A variable a member needs per use is written on the member.
 - *Leaving a constructor's parameter unpinned — open.* Whether a type
   constructor's application may pin some parameters and leave the rest

@@ -34,7 +34,7 @@ shape, so a signature is read through the enclosing shape's reader: at load, the
 shape the callable is written in; at a birth, the activation it is born in.
 
 A type expression elaborates to a
-[parametric type](../type_lattice/README.md#typed-handles): a `FOR ALL` name
+[parametric type](../type_lattice/identity.md#typed-handles): a `FOR ALL` name
 reads as its quantified variable, a head parameter as itself, and a run-bound
 name at load as its lexical variable. A quantified callable's type is a
 `Scheme`, and only a signature member's whole type may be one. Where a spelling
@@ -55,7 +55,7 @@ registry's own doors:
   union arrives as `| [Left Right …]` — the
   [chained form](../scope/README.md#operator-groups) the shape builder
   already rewrote it into, so nothing here walks a union part by part;
-- `Left & Right` is the [meet](../type_lattice/README.md#the-relations) of its
+- `Left & Right` is the [meet](../type_lattice/relations.md#the-relations) of its
   two members, and `& [Left Right …]` its chained form — a meet that comes out
   `Never` is a type like any other. The meet relates concrete types, so an
   operand naming a `FOR ALL` variable or a signature's head parameter is
@@ -74,7 +74,7 @@ registry's own doors:
 - `Sig WITH {Param = Type, …}` is an **application** of a declared signature,
   pinning the head parameters it names, each a type expression; a key naming no
   parameter, or a head that is no declared signature, is `Unsupported`;
-- `Kind NEEDING #[y …]` is the [code kind](../type_lattice/README.md#the-code-family)
+- `Kind NEEDING #[y …]` is the [code kind](../type_lattice/vocabulary.md#the-code-family)
   `Kind` needing the names its one-name quotes spell; a kind that is no code
   kind, or an element that is no one-name quote, is unsupported;
 - `Union.Tag` is the member of the union whose tag it names;
@@ -150,7 +150,7 @@ registers nothing, and neither does a combined statement's name, which is born
 over the same body without the registration.
 
 A function type numbers its group by
-[first occurrence](../type_lattice/README.md#quantified-binders), which may
+[first occurrence](../type_lattice/relations.md#quantified-binders), which may
 differ from the order the group was written in, so `callable_type` hands back a
 **quantifier map** beside the handle: each `FOR ALL` name the declaration wrote,
 paired with its index in the group. The group keeps every name, so the map is a
@@ -239,7 +239,7 @@ above's, exactly as they are for the tie.
 Every member is read, and the whole member and binder list fixed, before any
 schema elaborates — a schema naming a fellow must already have an index to name
 it by. The component then opens one
-[`RecursiveGroupWindow`](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration):
+[`RecursiveGroupWindow`](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration):
 one member per standalone declaration and one per union variant, each variant
 owned by its `UNION` binder. A mention of a fellow elaborates to the relative
 handle the still-open window minted — a member's own sibling, or a binder's
@@ -271,7 +271,7 @@ the union's parameters, so `Result.Ok` takes `Error` too. Each payload is read
 with the parameters as the innermost quantifier group, bounded by `Any`, so a
 nested `EXPR` type's group shadows them like any other outer group.
 Parameters take no bound. An application is covariant in its arguments
-([the order](../type_lattice/README.md#the-relations)), so a payload placing a
+([the order](../type_lattice/relations.md#the-relations)), so a payload placing a
 parameter at a contravariant position — inside a function type's parameter
 list — is refused rather than given an unsound order.
 
@@ -294,7 +294,7 @@ What a construction through a family carries is the construction rule's
 A `SIG` declares a signature over an optional **head group**,
 `SIG Stack FOR ALL #{Elt: Any} = #[…]`, and a body that is a list of member
 quotes. Each name of the head group is a head parameter — a named rigid variable
-([`Parameter`](../type_lattice/README.md#the-node-vocabulary)) under its written
+([`Parameter`](../type_lattice/vocabulary.md#the-node-vocabulary)) under its written
 bound, which the closed-bound rule reads as it reads a `FOR ALL` name's — and a
 repeated name is `Unsupported`. A parameter is one type per module: an
 application `Stack WITH {Elt = Number}` pins it, or leaves it unpinned. Each
@@ -350,7 +350,7 @@ A [`BUILTIN_SHAPES`](../parse/builtin_shapes.rs) entry states its bucket's
 overloads as `static` data — a slot type per slot per overload, one return apiece
 — because the parser probes that table before any registry exists.
 [`builtin_shape_types`](builtin.rs) is the one door that turns such an entry into
-[`ExpressionShape`](../type_lattice/README.md#the-node-vocabulary) handles: one
+[`ExpressionShape`](../type_lattice/vocabulary.md#the-node-vocabulary) handles: one
 per overload, in overload order. A reserved bucket interns nothing — its slot
 types exist to keep its parts raw so its miss stays a miss, not to name a callable
 anything can reach.
@@ -380,7 +380,7 @@ one of three:
   from. It serves comparisons where the shape is built, since a relation that
   holds over a rigid variable holds for every type the run can put there; where
   it runs it is the handle with each variable replaced by what its coordinate
-  reads, one [substitution](../type_lattice/README.md#substitute-then-ask);
+  reads, one [substitution](../type_lattice/solving.md#substitute-then-ask);
 - **unknown** — left to the run, which elaborates it where it is read, through
   the activation.
 
@@ -389,7 +389,7 @@ callable's `FOR ALL` parameter, a `:Type` parameter, a name
 [`USING … SCOPE`](../scope/README.md#names-that-arrive-at-run-time) surfaces, a
 quote's hole, `\` mark or `$` name whose source is not closed, and a type binder
 the load left unknown. The load-time reader answers each with a **lexical
-variable**, a [rigid node](../type_lattice/README.md#the-node-vocabulary) of its
+variable**, a [rigid node](../type_lattice/vocabulary.md#the-node-vocabulary) of its
 own: positional by its **level**, named as the name is, and lying between
 `Never` and its bound where it is a `FOR ALL` name and `Any` otherwise. A name takes its level where
 it is declared, along the lexical chain of bodies: the names of every enclosing
@@ -405,7 +405,7 @@ shape interns nothing that typing a shape like it has not.
 **One chain.** A rigid load-time type is compared only along the lexical chain
 it was typed in. A quote's code is built from the code alone, so it roots a
 chain of its own, and a type leaving it is read through
-[`bound_above`](../type_lattice/README.md#substitute-then-ask). Anything else
+[`bound_above`](../type_lattice/solving.md#substitute-then-ask). Anything else
 that reaches a reader from outside its chain reaches it unknown.
 
 A callable's function type binds its own group by position. Its body reads

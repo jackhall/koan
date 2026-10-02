@@ -130,7 +130,7 @@ as surprises, not scheduled.
   admit it — a slot declared `Carrier | Number` over a source solving `Carrier`
   to `Number` — which one is reached decides whether the member is wrapped in the
   view's carrier or carried as a plain number. Union identity is order-blind
-  ([the type lattice](../../src/type_lattice/README.md#the-node-vocabulary)), so
+  ([the type lattice](../../src/type_lattice/vocabulary.md#the-node-vocabulary)), so
   the stored member order is whichever spelling interned first anywhere in the
   program, and an unrelated `:(Number | Carrier)` elsewhere can change what this
   slot builds. A rule that does not depend on interning order — the carrier

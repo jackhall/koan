@@ -132,7 +132,7 @@ closes a cycle without a placeholder. It is the shape both circular data and a
 group of mutually recursive functions are born in.
 
 **Not the type lattice's recursive group.** A sealed group in the
-[type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+[type lattice](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
 is never stored as a run: each member is its own entry in the bump-tier
 registry, keyed by the digest of `(SCC digest, index)`, and a sibling reference
 is an ordinary `KType` resolved through the registry's table. Its identity is
@@ -207,7 +207,7 @@ program's chain of bindings is as long as its author writes it.
 
 It lives here because it names nothing of what a node stands for and has two
 callers above `memory` that must not depend on each other: the
-[type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+[type lattice](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
 condenses a recursive group's members to digest them, and a
 [scope's shape](../scope/README.md#visibility) condenses a body's bindings to
 find the components a knot can tie and the eager cycles it refuses.

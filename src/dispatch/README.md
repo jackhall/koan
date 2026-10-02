@@ -10,7 +10,7 @@ under it.
 What a keyworded use may select is fixed where its shape is built
 ([keyworded uses](../scope/README.md#keyworded-uses)); how two candidates rank
 is a relation of the type lattice
-([priority classes](../type_lattice/README.md#priority-classes)). Dispatch is
+([priority classes](../type_lattice/solving.md#priority-classes)). Dispatch is
 what runs between the two: it evaluates a call's slots, admits and ranks the
 candidates by the arguments' carried types, and runs the one that wins.
 
@@ -184,7 +184,7 @@ record is trusted to carry type parameters.
 [`statics`](statics.rs) runs as `Language::check`, after the overlap check,
 over the program's shape and every shape nested in it, a quote's code included.
 It gives every value expression and value binder a **static type**: an
-[interval](../type_lattice/README.md#the-unifier-collects-it-does-not-bind)
+[interval](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
 within which every type the run carries there lies — its upper end `Any` where
 the load cannot bound it from above, its lower end `Never` where it cannot bound
 it from below. A static type is **exact** where its ends meet: the run carries
@@ -255,7 +255,7 @@ fixed:
   unknown makes it at most `Any`. Where the load traces the code
   to a written quote — its operand, or a name `LET` binds to one — it types the
   code's last statement as the code runs there, read through
-  [`bound_above`](../type_lattice/README.md#substitute-then-ask) since the code
+  [`bound_above`](../type_lattice/solving.md#substitute-then-ask) since the code
   roots a chain of its own, and checks that type against the declared return as
   the return check below checks a body's. An `EVAL` fills only the code's
   `\` keys, so an unmarked keyworded use's hole holds nothing as the traced code
@@ -269,7 +269,7 @@ fixed:
 strictly under one.
 
 A static type's ends are
-[parametric](../type_lattice/README.md#typed-handles), since they may hold
+[parametric](../type_lattice/identity.md#typed-handles), since they may hold
 lexical variables, and are compared by *fits*; what a call reads at run time
 is concrete. A binder of a quantified callable is typed by its scheme, which
 only a call's head reads, as the
@@ -278,9 +278,9 @@ the scheme's group there, and the statement binding it is at most `Any`.
 
 **Generic calls.** A quantified callee's group is solved from the arguments'
 static types to an
-[interval](../type_lattice/README.md#the-unifier-collects-it-does-not-bind) per
+[interval](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind) per
 variable, which holds every solution a call can reach, and its return is
-[read through the intervals](../type_lattice/README.md#substitute-then-ask): a
+[read through the intervals](../type_lattice/solving.md#substitute-then-ask): a
 variable's upper end at a covariant position, its lower end at a contravariant
 one. So under `EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)`, `ONLY 1` is
 `Number`. Where every argument whose slot names a variable is exact and holds
@@ -294,7 +294,7 @@ contents. An exact argument over a lexical variable
 is no such solve: the load solves through the variable's bound, where the call
 solves through the type the run binds it to. A call binds each variable to one
 type, the
-[least instance](../type_lattice/README.md#the-unifier-collects-it-does-not-bind)
+[least instance](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
 of the pair its carried types solve it to, so it still solves its group from
 the carried types.
 
@@ -309,7 +309,7 @@ own, so a static type crossing into it, a `$` name's, or leaving it, an
 `EVAL`'s, is read through `bound_above` too.
 
 **Verdicts.** Each keyworded use gives each candidate one of three, as
-[`judge_by_class`](../type_lattice/README.md#priority-classes) judges it:
+[`judge_by_class`](../type_lattice/solving.md#priority-classes) judges it:
 
 - *never* — some slot meets its argument's upper end at `Never`, or its
   argument's lower end does not fit it, since the carried type lies above that
@@ -320,13 +320,13 @@ own, so a static type crossing into it, a `$` name's, or leaving it, an
   admits under the variable's bound, and a class whose arguments naming its own
   variables are exact and hold no lexical variable admits when its static
   solve does. Each admission reads
-  [*fits*](../type_lattice/README.md#the-relations), so a module argument at
+  [*fits*](../type_lattice/relations.md#the-relations), so a module argument at
   most a signature declaring all of `Boxes`'s members and more is *always* at a
   slot `:Boxes`;
 - *maybe* — any other, and every candidate the load cannot read.
 
 A slot naming a variable an earlier
-[class](../type_lattice/README.md#priority-classes) solved is read through that
+[class](../type_lattice/solving.md#priority-classes) solved is read through that
 variable's interval: at its least instance for *always*, at its greatest for
 *never*. So under `EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`,
 `PAIR 1 WITH 2` is *always*, while `PAIR a WITH b` over parameters
@@ -397,7 +397,7 @@ read through `bound_above`:
 this value is Str, which can never satisfy its ascription Number
 ```
 
-One whose operand's upper end [fits](../type_lattice/README.md#the-relations)
+One whose operand's upper end [fits](../type_lattice/relations.md#the-relations)
 its type is **settled**: every value the run carries there satisfies it, so the
 run retypes without checking. *Fits* is rigid-aware, so an operand typed by a lexical variable settles an
 ascription to that variable. The cell records each settled ascription by site.

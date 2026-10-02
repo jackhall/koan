@@ -9,7 +9,8 @@ program that states its types is refused early where they decide it, and a
 program that leaves them out still runs, each call checking what the load could
 not.
 
-The pieces sit in the [type lattice](../../src/type_lattice/README.md), the
+[The design](../../design/gradual-typing.md) follows a type from its
+declaration to a call. The pieces sit in the [type lattice](../../src/type_lattice/README.md), the
 [elaborator](../../src/elaborate/README.md) and
 [dispatch](../../src/dispatch/README.md#static-types).
 

@@ -452,9 +452,9 @@ from that module's top-of-file comment. The kept modules carry theirs:
   and rankings, write-once slots, and the operator groups a body's statements
   are chained under.
 - [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
-  digest identity, the node vocabulary, the interning registry, the one order
-  and the lattice operations over it, and the unifier that solves a quantified
-  position.
+  its invariants, and an index of its parts — identity, the node vocabulary,
+  the relations, solving, and [the laws](src/type_lattice/laws.md) with what
+  breaks without each.
 - [src/elaborate/README.md](src/elaborate/README.md) — type expressions
   elaborated into lattice handles through the activation they are read in, and
   why one did not.
@@ -481,6 +481,10 @@ from that module's top-of-file comment. The kept modules carry theirs:
   verbs, with [cellgraph/src/graph/README.md](cellgraph/src/graph/README.md) for
   matrix liveness, the sealed tier and pricing, and
   [cellgraph/src/tree/README.md](cellgraph/src/tree/README.md) for tree cells.
+
+A design no single module owns sits in [design/](design/gradual-typing.md):
+[gradual typing](design/gradual-typing.md) follows a type from its declaration,
+through the load, to a call.
 
 Each rewrite item writes its own module's README the same way, fresh against the
 code it lands. The topical tree the old runtime was documented under is frozen at

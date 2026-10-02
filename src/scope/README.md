@@ -272,7 +272,7 @@ unbound-name error.
 
 **Components.** With every mention resolved, the shape's bindings form a
 reference graph, and the shape computes its strongly connected components, as
-the [type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+the [type lattice](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
 does for a group of recursive types. A component whose internal mentions are
 all deferred is a group of values that only store and capture one another. Its
 members can be born together as one [knot](../memory/README.md#the-knot) once
@@ -413,7 +413,7 @@ refused.
 
 **One ranking per key.** A bucket declaration, `EXPR #(MOVE 2 TO 1)`, binds
 nothing: it gives its key a ranking, each slot's
-[priority class](../type_lattice/README.md#priority-classes). A definition
+[priority class](../type_lattice/solving.md#priority-classes). A definition
 takes the ranking of the declaration visible where it is written — visible as a
 name read at its statement is — and with none, its slots' written order; an
 operator takes its chaining's, fold left and pairwise ranking `left` first and

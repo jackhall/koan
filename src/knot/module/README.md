@@ -76,7 +76,7 @@ one copy, and nothing downstream asks which it holds.
 The ascribed type must be one application of a declared signature,
 `Counter` or `Counter WITH {Carrier = Number}`; a meet of several is refused,
 since a view lays out one signature's members. The door checks that the source's
-self-signature [*fits*](../../type_lattice/README.md#signature-types) the
+self-signature [*fits*](../../type_lattice/relations.md#signature-types) the
 application, which solves each head parameter the application leaves unpinned
 from what the source's members offer, and then fixes two substitutions over the
 signature's head parameters:

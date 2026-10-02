@@ -167,7 +167,7 @@ knot member reports its own. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
 `Value::ktype` copies that handle or names a leaf constant, and reads no
 registry and walks nothing. It answers a
-[`DeclaredType`](../type_lattice/README.md#typed-handles): a concrete `KType`
+[`DeclaredType`](../type_lattice/identity.md#typed-handles): a concrete `KType`
 for every value but a quantified callable, which answers its `Scheme`. A
 quantified callable is read only at the head of a call
 ([resolution](../scope/README.md#resolution)), so every other reader —
@@ -177,7 +177,7 @@ candidates — the functions a `USING` hole or an `EVAL` offer gathers at one
 key — are laid down by `List::of_candidates`, typed `List<Any>` without reading
 any function's type: dispatch alone reads such a list, each function by its own
 type, and a quantified registration's scheme joins into no list type. A quote's type is its carried type, memoized on its
-node: its [code kind](../type_lattice/README.md#the-code-family), read off its
+node: its [code kind](../type_lattice/vocabulary.md#the-code-family), read off its
 body as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)),
 needing the `\` names no binder in its code fills
 ([code parameters](../scope/README.md#code-parameters)): `#(y)` is a `Name`,

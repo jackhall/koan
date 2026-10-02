@@ -44,7 +44,7 @@ activation. This module closes it:
   Its equality is node identity.
 - The knot's payload is a `Node`, of six arms. A `Function` node holds the
   function's memoized type — a concrete type, or a quantified function's
-  [scheme](../type_lattice/README.md#typed-handles) — the body shape it runs (in program storage),
+  [scheme](../type_lattice/identity.md#typed-handles) — the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and its
   **typing record**: its quantifier map and its registered shape. The
   **registered shape** is the expression shape a function born for a

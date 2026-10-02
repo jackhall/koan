@@ -61,7 +61,7 @@ value is wanted at.
   `(… :! T)` instantiates as well.
 - *A variable nothing fixes — decided.* It is refused and never read as its
   bound, as the
-  [least instance](../../src/type_lattice/README.md#the-unifier-collects-it-does-not-bind)
+  [least instance](../../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
   rule already requires.
 - *Keyworded forms — deferred.* `EXPR FOR ALL …` and `LET id = FN EXPR FOR ALL …`
   stay as they are. Whether a registration's name counts as a module member's
