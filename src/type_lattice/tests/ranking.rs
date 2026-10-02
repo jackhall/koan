@@ -13,7 +13,9 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::handle::{Handle, KType, TypeHandle};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::order::fits;
-use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, select_by_class};
+use crate::type_lattice::ranking::{
+    Verdict, admit_by_class, judge_by_class, select_by_class, solving_slots,
+};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_handle;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
@@ -637,4 +639,88 @@ fn a_slot_above_no_type_an_argument_can_carry_is_never() {
     };
     assert_eq!(world.judge(needs_b, &[bounded_below]).0, Verdict::Never);
     assert_eq!(world.judge(has_a, &[bounded_below]).0, Verdict::Maybe);
+}
+
+/// A slot is read by its group's solve where it names a variable its own class first mentions.
+#[test]
+fn a_solve_reads_the_slots_naming_its_own_classes_variables() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let solving = |shape| solving_slots(&world.types, world.region, shape).to_vec();
+    let pair_parts = [
+        Kw("PAIR"),
+        Slot(world.var(0)),
+        Kw("WITH"),
+        Slot(world.var(0)),
+    ];
+    let pair = world.head(&["Elt"], &pair_parts, &[]);
+    assert_eq!(solving(pair), [true, false]);
+    let joint = world.head(&["Elt"], &pair_parts, &[0, 0]);
+    assert_eq!(solving(joint), [true, true]);
+    let tagged = world.head(
+        &["Elt"],
+        &[
+            Kw("TAG"),
+            Slot(KType::STR.raw()),
+            Kw("ON"),
+            Slot(world.var(0)),
+        ],
+        &[0, 0],
+    );
+    assert_eq!(solving(tagged), [false, true]);
+    let plain = world.head(&[], &[Kw("WHICH"), Slot(KType::NUMBER.raw())], &[]);
+    assert_eq!(solving(plain), [false]);
+    // `y` names `Elt`, which `x` solved, and `Key`, which it solves itself.
+    let both = world.types.list(world.union(&[world.var(0), world.var(1)]));
+    let keyed = world.head(
+        &["Elt", "Key"],
+        &[Kw("PUT"), Slot(world.var(0)), Kw("AT"), Slot(both)],
+        &[],
+    );
+    assert_eq!(solving(keyed), [true, true]);
+    assert!(solving(KType::NUMBER.raw()).is_empty());
+}
+
+/// An exact class's static solve is the call's own: where it succeeds the class admits every call,
+/// and where it fails over the slots that solve, none.
+#[test]
+fn an_exact_class_is_judged_by_its_static_solve() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let number_or_str = Interval::point(world.union(&[KType::NUMBER.raw(), KType::STR.raw()]));
+    let pair = world.head(
+        &["Elt"],
+        &[
+            Kw("PAIR"),
+            Slot(world.var(0)),
+            Kw("WITH"),
+            Slot(world.var(0)),
+        ],
+        &[],
+    );
+    assert_eq!(
+        world.judge(pair, &[number_or_str, number_or_str]),
+        (Verdict::Always, Some(vec![number_or_str]))
+    );
+    let apply = world.head(
+        &["Elt"],
+        &[
+            Kw("APPLY"),
+            Slot(world.handler(world.var(0))),
+            Kw("TO"),
+            Slot(world.var(0)),
+        ],
+        &[0, 0],
+    );
+    let on_numbers = Interval::point(world.handler(KType::NUMBER.raw()));
+    assert_eq!(
+        world.judge(apply, &[on_numbers, number_or_str]).0,
+        Verdict::Never
+    );
+    assert_eq!(
+        world
+            .judge(apply, &[on_numbers, within(number_or_str.upper)])
+            .0,
+        Verdict::Maybe
+    );
 }

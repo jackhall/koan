@@ -17,7 +17,7 @@ use crate::symbols::TypeSymbol;
 use crate::type_lattice::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle};
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::TypeNode;
-use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class};
+use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{
     Members, canonical_overloads, is_shape, keys_equal, shape_classes, shape_quantifiers,
@@ -1119,6 +1119,46 @@ proptest! {
                 );
             }
         }
+    }
+
+    /// A solve reads only its solving slots: with any argument another slot admits in place of the
+    /// carried one, the solution is the same.
+    #[test]
+    fn a_solution_reads_only_its_solving_slots(
+        a in shape(),
+        b in shape(),
+        draw in draw(),
+    ) {
+        let (a, b) = (a.raw(), b.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some((_, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
+            return Ok(());
+        };
+        let run_shape = instance(&types, scratch, a, &draw);
+        let Some(solution) = admit_by_class(&types, scratch, run_shape, &carried) else {
+            return Ok(());
+        };
+        let solving = solving_slots(&types, scratch, run_shape);
+        // A slot that solves nothing names only variables an earlier class solved, so the slot read
+        // at the solution is an argument it admits.
+        let read: Vec<Handle> = shape_slots(run_shape, &types)
+            .zip(&carried)
+            .zip(solving)
+            .map(|((slot, argument), solves)| {
+                if *solves {
+                    *argument
+                } else {
+                    substitute_quantified(&types, scratch, slot, solution)
+                }
+            })
+            .collect();
+        prop_assert_eq!(
+            admit_by_class(&types, scratch, run_shape, &read),
+            Some(solution),
+            "a solve read a slot that solves nothing",
+        );
     }
 }
 

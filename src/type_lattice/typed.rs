@@ -103,6 +103,16 @@ pub fn admit_by_class<'s>(
     Some(scratch.alloc_slice_fill_iter(solution.iter().map(|solved| wrap(*solved))))
 }
 
+/// Which slots of `declared` its group's solve reads: each naming a variable its own priority class
+/// is the first to mention. Empty for anything that is not a shape.
+pub fn solving_slots<'s>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    declared: DeclaredType<Parametric>,
+) -> &'s [bool] {
+    ranking::solving_slots(types, scratch, declared.raw())
+}
+
 /// Judge `declared` against one static type per slot, class by class: *never*, *always* or *maybe*,
 /// beside each variable's interval.
 pub fn judge_by_class<'s>(
