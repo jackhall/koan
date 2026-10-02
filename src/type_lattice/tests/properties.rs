@@ -327,6 +327,48 @@ proptest! {
         let instance = instance.expect("assumed");
         prop_assert!(fits(&types, scratch, instance, wanted));
     }
+
+    /// An instance made under a wanted type holding lexical variables holds at every run: with each
+    /// lexical variable bound as a run binds it, the instance at the solution so bound fits the
+    /// wanted type so bound, each entry lies within its variable's bound, and binding commutes with
+    /// instantiating — the run's instance is the load's, bound.
+    #[test]
+    fn an_instance_over_lexical_variables_holds_at_every_binding(
+        (scheme, wanted) in arb_wanted_instance(world(), 3),
+        draw in draw(),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Ok(solution) = instance_under(&types, scratch, scheme, wanted) else {
+            return Ok(());
+        };
+        // Where nothing names a lexical variable, the closed law above says it all.
+        if types.is_concrete(wanted.raw())
+            && solution.iter().all(|each| types.is_concrete(each.raw()))
+        {
+            return Ok(());
+        }
+        let bind = |kt: Handle| instance(&types, scratch, kt, &draw);
+        let run_solution: Vec<Handle> = solution.iter().map(|each| bind(each.raw())).collect();
+        let made = instantiate_quantified(&types, scratch, scheme, &solution);
+        let (run_made, run_wanted) = (bind(made.raw()), bind(wanted.raw()));
+        // A variable free in the scheme outside its group and every lexical level stays free.
+        if !(types.is_concrete(run_made)
+            && types.is_concrete(run_wanted)
+            && run_solution.iter().all(|each| types.is_concrete(*each)))
+        {
+            return Ok(());
+        }
+        prop_assert!(order::fits(&types, scratch, run_made, run_wanted));
+        for (entry, bound) in run_solution.iter().zip(quantifier_bounds(&types, scheme.raw())) {
+            prop_assert!(order::fits(&types, scratch, *entry, bound.raw()));
+        }
+        prop_assert_eq!(
+            bind(instantiate_quantified(&types, scratch, scheme, &run_solution).raw()),
+            run_made
+        );
+    }
 }
 
 // --- 3. Unions ---
