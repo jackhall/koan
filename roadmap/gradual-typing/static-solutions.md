@@ -46,6 +46,9 @@ again.
   variable a contribution reaches, or such an argument can contribute its
   carried type, which may bind `Number` where the enclosing call bound
   `Number | Str`. Relying on the load wherever it can favours capture.
+  [Instantiating a quantified function](instantiating-quantified-functions.md)
+  refuses an instance whose solution names such a variable until this is
+  settled; capture would let it load.
 - *A call by name — open.* The frame solves a call by name from the record it
   is handed, which carries no type parameter; contributing a static type needs
   a channel into it, or leaves calls by name to their carried solve.
