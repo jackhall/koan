@@ -152,6 +152,12 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         let rhs = role_part(statement, Role::Rhs).ok_or(())?;
                         self.value_names(level, at, rhs, out, fuel)
                     }
+                    // An annotated binder holds its value to its type, as `:!` does.
+                    Some(BuiltinShapeId::LetAnnotated) => {
+                        let annotation = role_part(statement, Role::TypeExpression).ok_or(())?;
+                        let ascription = (level, Site::of(annotation));
+                        self.type_names(level, at, annotation, ascription, out, fuel)
+                    }
                     _ => Err(()),
                 }
             }

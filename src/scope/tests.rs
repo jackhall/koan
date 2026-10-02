@@ -65,6 +65,7 @@ impl Knotted for Probe {
     fn resolve<'a>(&self) -> Resolved<'a, Self> {
         Resolved::Function {
             identity: self.0 as usize,
+            instance: &[],
             closure: &[],
         }
     }
@@ -289,6 +290,20 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         } => E::AscriptionNeverSatisfied {
             value,
             ascribed,
+            at,
+        },
+        E::AnnotationNeverSatisfied {
+            value, annotated, ..
+        } => E::AnnotationNeverSatisfied {
+            value,
+            annotated,
+            at,
+        },
+        E::CallNeverSatisfied {
+            callee, arguments, ..
+        } => E::CallNeverSatisfied {
+            callee,
+            arguments,
             at,
         },
         E::NotCode { value, .. } => E::NotCode { value, at },

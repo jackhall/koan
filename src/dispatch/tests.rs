@@ -1,6 +1,7 @@
 //! Dispatch's suites, over programs run end to end: each is loaded under [`Koan`], run, and read
 //! back as what it wrote to either sink.
 
+mod annotation;
 mod ascription;
 mod boundary;
 mod generic;

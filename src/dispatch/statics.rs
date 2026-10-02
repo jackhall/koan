@@ -30,7 +30,10 @@
 //! typed as any other. A callable body whose static type meets its declared return at `Never`
 //! refuses the load too, as does an ascription whose operand's static type meets its type at
 //! `Never`; one whose operand's static upper end lies under its type is **settled**, and the run
-//! checks nothing. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
+//! checks nothing. An annotated binder, `LET <name> <type> = <value>`, is held to its type as an
+//! ascription holds its operand, settled by its type part's site. A call by name whose callee is
+//! exactly an unquantified function refuses the load where its argument can never satisfy the
+//! parameters. What the pass fixes rests in each shape's write-once [`Statics`] cell, which
 //! [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
@@ -140,8 +143,11 @@ struct Level<'p, 'graph> {
     statements: BumpVec<'p, Interval>,
     binders: BumpVec<'p, Bound>,
     narrowings: BumpVec<'p, Narrowing<'graph>>,
-    /// Each `:!` whose operand's static upper end lies under its type.
+    /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
+    /// type part whose value's does.
     settled: BumpVec<'p, Site>,
+    /// Each name read at an instance site, beside the solution its function is instantiated at.
+    instances: BumpVec<'p, (Site, &'graph [KType])>,
 }
 
 /// The walk's state: the chain of enclosing shapes.
@@ -209,6 +215,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             binders,
             narrowings,
             settled: BumpVec::new_in(scratch),
+            instances: BumpVec::new_in(scratch),
         });
     }
 
@@ -296,12 +303,14 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let at = &mut self.chain[level];
         at.parts.sort_unstable_by_key(|(site, _)| *site);
         at.settled.sort_unstable();
+        at.instances.sort_unstable_by_key(|(site, _)| *site);
         at.shape.fix_statics(Statics {
             parts: collect(writer, at.parts.iter().copied()),
             statements: collect(writer, at.statements.iter().copied()),
             binders: collect(writer, at.binders.iter().copied()),
             narrowings: collect(writer, at.narrowings.iter().copied()),
             settled: collect(writer, at.settled.iter().copied()),
+            instances: collect(writer, at.instances.iter().copied()),
         });
     }
 
@@ -381,10 +390,17 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
         for member in component.members {
             if let Some(body) = shape.births(*member) {
-                self.chain[level].binders[member.index()] = match body.form() {
+                let typed = match body.form() {
                     Some(_) => callable(body),
                     None => DeclaredType::Type(unknown()),
                 };
+                self.chain[level].binders[member.index()] = typed;
+                // A function's retype is the identity, so it keeps its own exact type.
+                if let (DeclaredType::Type(typed), Some(annotation)) =
+                    (typed, shape.annotation(*member))
+                {
+                    self.annotated(level, *member, annotation, typed)?;
+                }
             }
         }
         for member in component.members {
@@ -392,7 +408,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 continue;
             }
             if let Some(rhs) = shape.rhs(*member) {
-                let typed = self.part(level, rhs)?;
+                let mut typed = self.part(level, rhs)?;
+                if let Some(annotation) = shape.annotation(*member) {
+                    typed = self.annotated(level, *member, annotation, typed)?;
+                }
                 self.chain[level].binders[member.index()] = DeclaredType::Type(typed);
             }
         }
@@ -486,7 +505,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             Form::Ascribe(node) => self.ascribe(level, node)?,
             Form::Eval(node) => self.eval(level, node)?,
             Form::Call(node, list) => self.narrow(level, node, list)?,
-            Form::Apply(head, argument) => self.apply(level, head, argument)?,
+            Form::Apply(node) => self.apply(level, node)?,
             Form::Unevaluable(_) => unknown(),
         })
     }
@@ -531,30 +550,66 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             unreachable!("an ascription has an operand, its keyword and a type")
         };
         let typed = self.part(level, &operand.value)?;
-        // An operand that never arrives has no value to check.
+        let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
+        held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
+            value,
+            ascribed,
+            at: node.source,
+        })
+    }
+
+    /// `LET <name> <type> = <value>`, the binder at `member` of the shape at `level`, whose value
+    /// is `typed`: held to `annotation` as `:!` holds its operand, settled by the annotation's site.
+    fn annotated(
+        &mut self,
+        level: usize,
+        member: Slot,
+        annotation: &'graph ExpressionPart<'graph>,
+        typed: Interval,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let held = self.held(level, typed, annotation, Site::of(annotation));
+        held.map_err(|(value, annotated)| {
+            let shape = self.chain[level].shape;
+            let written = shape.slot(shape.slot_name(member)).map(|(_, at)| at);
+            let statement = written.and_then(Position::statement_index);
+            ShapeError::AnnotationNeverSatisfied {
+                value,
+                annotated,
+                at: shape.body()[statement.expect("an annotated binder is a statement's")].source,
+            }
+        })
+    }
+
+    /// A value of the static type `typed` held to the type part `part`: that type, exactly where
+    /// the retype makes it so ([`retyped_to`]), and settled at `site` where `typed`'s upper end
+    /// lies under it. Where the two meet at `Never`, both read through their bounds.
+    fn held(
+        &mut self,
+        level: usize,
+        typed: Interval,
+        part: &'graph ExpressionPart<'graph>,
+        site: Site,
+    ) -> Result<Interval, (KType, KType)> {
+        // A value that never arrives has nothing to check.
         if typed.upper == KType::NEVER.into() {
             return Ok(Interval::point(KType::NEVER.into()));
         }
-        let Some(ascribed) = self.declared(level, &ascribed.value) else {
+        let Some(declared) = self.declared(level, part) else {
             return Ok(unknown());
         };
         let (types, scratch) = (self.types, self.scratch);
         // Compared, and named, through their bounds: a variable's name is its binder's.
         let (value, bounded) = (
             bound_above(types, scratch, typed.upper),
-            bound_above(types, scratch, ascribed),
+            bound_above(types, scratch, declared),
         );
         if meet(types, scratch, value, bounded) == KType::NEVER {
-            return Err(ShapeError::AscriptionNeverSatisfied {
-                value,
-                ascribed: bounded,
-                at: node.source,
-            });
+            return Err((value, bounded));
         }
-        if fits(types, scratch, typed.upper, ascribed) {
-            self.chain[level].settled.push(Site::of_node(node));
+        if fits(types, scratch, typed.upper, declared) {
+            self.chain[level].settled.push(site);
         }
-        Ok(retyped_to(types, ascribed))
+        Ok(retyped_to(types, declared))
     }
 
     /// `EVAL <code> -> <Type>`: its declared type, exactly where the retype makes it so
@@ -769,9 +824,12 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     fn apply(
         &mut self,
         level: usize,
-        head: &'graph ExpressionPart<'graph>,
-        argument: &'graph ExpressionPart<'graph>,
+        node: &'graph KExpression<'graph>,
     ) -> Result<Interval, ShapeError<'graph>> {
+        let [head, argument] = node.parts else {
+            unreachable!("an application is a head and its argument")
+        };
+        let (head, argument) = (&head.value, &argument.value);
         let callee = self.head(level, head)?;
         let payload = self.part(level, argument)?;
         let (types, scratch) = (self.types, self.scratch);
@@ -785,6 +843,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             let lower = construction(types, scratch, identity, payload.lower)
                 .unwrap_or_else(|_| KType::NEVER.into());
             return Ok(Interval { lower, upper });
+        }
+        if let DeclaredType::Type(callee) = callee {
+            self.admissible(callee, payload, node)?;
         }
         // A scheme is one callee, so it is exact.
         let (node, exact) = match callee {
@@ -809,6 +870,52 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             }
             _ => unknown(),
         })
+    }
+
+    /// Refuse a call by name, `node`, whose callee is exactly an unquantified function the argument
+    /// of the static type `payload` can never satisfy the parameters of: a parameter the payload
+    /// lacks, a field meeting its parameter at `Never`, or a field no parameter declares where the
+    /// payload is exact. Any other callee is the call's to admit.
+    fn admissible(
+        &self,
+        callee: Interval,
+        payload: Interval,
+        node: &'graph KExpression<'graph>,
+    ) -> Result<(), ShapeError<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let TypeNode::KFunction { bounds, params, .. } = types.node(callee.upper) else {
+            return Ok(());
+        };
+        let TypeNode::Record { fields } = types.node(payload.upper) else {
+            return Ok(());
+        };
+        if !callee.is_exact() || !bounds.is_empty() {
+            return Ok(());
+        }
+        let met = |param: Parametric, field: Parametric| {
+            let (param, field) = (
+                bound_above(types, scratch, param),
+                bound_above(types, scratch, field),
+            );
+            meet(types, scratch, param, field) != KType::NEVER
+        };
+        let missed = params.iter().any(|(name, param)| {
+            fields
+                .get(name.symbol())
+                .is_none_or(|field| !met(param, field))
+        });
+        let extra = payload.is_exact()
+            && fields
+                .keys()
+                .any(|name| params.get(name.symbol()).is_none());
+        if missed || extra {
+            return Err(ShapeError::CallNeverSatisfied {
+                callee: bound_above(types, scratch, callee.upper),
+                arguments: bound_above(types, scratch, payload.upper),
+                at: node.source,
+            });
+        }
+        Ok(())
     }
 
     /// What a call by name of a function over `params` returning `ret`, its group bounded by

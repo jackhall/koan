@@ -382,6 +382,22 @@ fn a_quantified_return_shares_its_frame() {
 }
 
 #[test]
+fn an_annotated_binder_is_held_to_its_annotation() {
+    // Mini runs no static pass, so nothing is settled and every annotation is checked here.
+    let mut substrate = loaded("LET n :Number = 1\nLET xs :(LIST OF Any) = [1]", 2);
+    assert_eq!(run_and_read(&mut substrate, &["n"]), ["1"]);
+    let mut substrate = loaded("LET s :Number = \"a\"", 2);
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
+    );
+    assert_eq!(
+        written(),
+        ["error: Str does not satisfy its annotation Number"]
+    );
+}
+
+#[test]
 fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
     let mut substrate = loaded(
         "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num 7)",

@@ -52,7 +52,7 @@ pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
 pub use code::{Code, UsingRefused, quote, using};
-pub use function::{Function, lambda};
+pub use function::{Function, instance, lambda};
 pub use module::{Coerced, Module};
 pub use tie::tie;
 
@@ -209,11 +209,13 @@ impl values::Knotted for Knotted<'_, '_> {
             // One shape per function written, so its address is the function's identity.
             Node::Function(function) => Resolved::Function {
                 identity: std::ptr::from_ref(function.shape()).addr(),
+                instance: function.instance().unwrap_or(&[]),
                 closure: function.closure().links(),
             },
             // One record per overload, so its address is the builtin's identity.
             Node::Builtin(builtin) => Resolved::Function {
                 identity: std::ptr::from_ref(*builtin).addr(),
+                instance: &[],
                 closure: &[],
             },
             Node::Data { circular, .. } => Resolved::Circular(*circular),

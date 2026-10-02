@@ -3003,6 +3003,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 registered: writer.fill(registrations.len(), |_| Cell::new(Static::Unknown)),
                 callable: resident_cell(writer, Static::Unknown),
                 group_levels: resident_cell(writer, &[][..]),
+                born_instance: resident_cell(writer, &[][..]),
                 typing_refusal: resident_cell(writer, None),
                 statics: resident_cell(writer, None),
             },
@@ -3012,19 +3013,21 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
 /// Whether an expression shape's type parts are typed with the callable it births or the binder it
 /// declares, rather than each as a type expression of its own: a signature, a head, a `FOR ALL`
-/// group, a declared name or definition, or a callable body.
+/// group, a declared name or definition, or a callable body. An annotated `LET`'s type is the one
+/// its value is held to, a type expression of its own.
 fn types_with_its_binder(form: &BuiltinShape) -> bool {
-    form.roles().any(|role| {
-        matches!(
-            role,
-            Role::Signature
-                | Role::Head
-                | Role::Quantifiers
-                | Role::Name
-                | Role::Definition(_)
-                | Role::Body(BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator)
-        )
-    })
+    form.id != BuiltinShapeId::LetAnnotated
+        && form.roles().any(|role| {
+            matches!(
+                role,
+                Role::Signature
+                    | Role::Head
+                    | Role::Quantifiers
+                    | Role::Name
+                    | Role::Definition(_)
+                    | Role::Body(BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator)
+            )
+        })
 }
 
 /// One write-once cell laid down in program storage.

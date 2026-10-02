@@ -329,6 +329,7 @@ const _: () = assert!(roles_agree_with_code_types(BUILTIN_SHAPE_SPEC));
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuiltinShapeId {
     LetValue,
+    LetAnnotated,
     TypeDeclaration,
     Module,
     GroupFoldLeft,
@@ -482,6 +483,27 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         returns: &[ANY],
         binder: Some(BinderFacts {
             names: &[identifier_part_binder_name, type_part_binder_name],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: Some(1),
+            type_slots: &[],
+        }),
+        reserved: false,
+    },
+    // LET <name> <type> = <value> — a value binder bound at a stated type: the value is held to
+    // the type as `:!` holds its operand.
+    BuiltinShape {
+        id: BuiltinShapeId::LetAnnotated,
+        elements: &[
+            Kw(&KEYWORDS.let_),
+            slot(Name, &[IDENTIFIER]),
+            slot(Te, &[PROPER_TYPE]),
+            Kw(&KEYWORDS.equals),
+            slot(Rhs, &[ANY]),
+        ],
+        returns: &[ANY],
+        binder: Some(BinderFacts {
+            names: &[identifier_part_binder_name],
             bucket: None,
             surface: BinderSurface::Other,
             name_slot: Some(1),

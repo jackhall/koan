@@ -31,8 +31,8 @@
 //! lies under its node's static type, and a narrowed or selected call runs what selection over the
 //! full list would.
 
-use crate::elaborate::type_expression;
-use crate::knot::{KValue, Knotted, lambda, quote, refused_construction};
+use crate::elaborate::denoted;
+use crate::knot::{KValue, Knotted, instance, lambda, quote, refused_construction};
 use crate::memory::{Bump, BumpVec, Writer};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::Role;
@@ -41,13 +41,9 @@ use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, bloc
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{
-    BodyShape, Candidate, CandidateList, Elaboration, Narrowing, Offer, ShapeKind, Site,
-};
+use crate::scope::{BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{
-    DeclaredType, KType, TypeNode, Verdict, bound_above, satisfied_by, substitute_levels,
-};
+use crate::type_lattice::{DeclaredType, TypeNode, Verdict, bound_above, satisfied_by};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
@@ -77,10 +73,8 @@ pub(super) enum Form<'graph> {
     Eval(&'graph KExpression<'graph>),
     Declaration,
     Call(&'graph KExpression<'graph>, &'graph CandidateList<'graph>),
-    Apply(
-        &'graph ExpressionPart<'graph>,
-        &'graph ExpressionPart<'graph>,
-    ),
+    /// `(<head> <argument>)`: a call by name, or a construction.
+    Apply(&'graph KExpression<'graph>),
     Unevaluable(&'graph KExpression<'graph>),
 }
 
@@ -152,7 +146,12 @@ pub(super) fn evaluate<'graph>(
         Form::Ascribe(node) => ascribe(step, &at, node, stage),
         Form::Eval(node) => evaluated(step, &at, node, stage),
         Form::Call(node, list) => call(step, &at, node, list, stage),
-        Form::Apply(head, argument) => apply(step, &at, head, argument, stage),
+        Form::Apply(node) => {
+            let [head, argument] = node.parts else {
+                unreachable!("an application is a head and its argument")
+            };
+            apply(step, &at, &head.value, &argument.value, stage)
+        }
         Form::Unevaluable(node) => {
             let error = Raised::Unevaluable { node }.raise(program, step.writer());
             finish(step, &at, error)
@@ -209,9 +208,7 @@ pub(super) fn of_node<'graph>(
     let keyword = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::Keyword(_));
     match node.parts {
         [only] => of_part(shape, &only.value),
-        [head, argument] if !keyword(&head.value) && !keyword(&argument.value) => {
-            Form::Apply(&head.value, &argument.value)
-        }
+        [head, argument] if !keyword(&head.value) && !keyword(&argument.value) => Form::Apply(node),
         _ => Form::Unevaluable(node),
     }
 }
@@ -237,7 +234,7 @@ fn leaf<'graph, 'here>(
         },
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
-            let value = match denoted(at, part, &scratch) {
+            let value = match denoted(part, &at.view, types, &scratch) {
                 Ok(handle) => Value::Type(TypeValue::new(writer, handle, types)),
                 Err(refused) => program.error(writer, refused.display(program.symbols(), types)),
             };
@@ -250,33 +247,6 @@ fn leaf<'graph, 'here>(
         | ExpressionPart::Expression(_)
         | ExpressionPart::MarkedUse(..) => step.failed(StepError::Refused),
     }
-}
-
-/// The type a type part denotes: the load fixed it where it could, and only what it left unknown is
-/// elaborated here.
-fn denoted<'graph>(
-    at: &Evaluation<'graph, '_>,
-    part: &'graph ExpressionPart<'graph>,
-    scratch: &Bump,
-) -> Result<KType, Elaboration> {
-    let types = at.program.types();
-    // Where it runs, every name a type reads is bound to a concrete type.
-    let concrete = |kt| {
-        types
-            .concrete(kt)
-            .expect("a type read where it runs holds no variable")
-    };
-    let elaborated = || type_expression(part, &at.view, types, scratch).map(concrete);
-    let loaded = at.view.shape().typed_expression(Site::of(part)).solved(
-        &at.view,
-        scratch,
-        |value, bindings| Some(concrete(substitute_levels(types, scratch, value, bindings))),
-    );
-    debug_assert!(
-        loaded.is_none() || loaded == elaborated().ok(),
-        "the load-time type agrees with elaborating where it runs"
-    );
-    loaded.map_or_else(elaborated, Ok)
 }
 
 /// `<value> :! <Type>`: the operand checked against the type — where the load did not settle it —
@@ -305,7 +275,7 @@ fn ascribe<'graph, 'here>(
     if value.as_module().is_some() {
         return finish(step, at, Raised::ModuleAscription.raise(program, writer));
     }
-    let ascribed = match denoted(at, &ascribed.value, &scratch) {
+    let ascribed = match denoted(&ascribed.value, &at.view, types, &scratch) {
         Ok(ascribed) => ascribed,
         Err(refused) => {
             let error = program.error(writer, refused.display(program.symbols(), types));
@@ -357,7 +327,7 @@ fn evaluated<'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer));
     };
-    let returns = match denoted(at, &declared.value, &scratch) {
+    let returns = match denoted(&declared.value, &at.view, types, &scratch) {
         Ok(returns) => returns,
         Err(refused) => {
             let error = program.error(writer, refused.display(symbols, types));
@@ -731,8 +701,9 @@ fn read_in_place(part: &ExpressionPart<'_>) -> bool {
     )
 }
 
-/// The value of a part read in place: a literal lowered, a name read through its mention, a quote
-/// born. `None` for a name the shape resolved no mention of, which is an invariant break.
+/// The value of a part read in place: a literal lowered, a name read through its mention — a
+/// quantified function at the instance the load solved there, where it solved one — a quote born.
+/// `None` for a name the shape resolved no mention of, which is an invariant break.
 fn in_place<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     at: &Evaluation<'graph, 'here>,
@@ -740,14 +711,25 @@ fn in_place<'graph, 'here>(
     scratch: &Bump,
 ) -> Option<KValue<'graph, 'here>> {
     let writer = step.writer();
+    let types = at.program.types();
     match part {
-        ExpressionPart::Literal(_) => Value::lower_part(writer, part, at.program.types(), scratch),
+        ExpressionPart::Literal(_) => Value::lower_part(writer, part, types, scratch),
         ExpressionPart::QuotedExpression(_) => {
             Some(Value::Knotted(quote(writer, &at.view, part, scratch)))
         }
         _ => {
-            let mention = at.view.shape().mention(Site::of(part))?;
-            Some(at.view.read(mention.coordinate))
+            let shape = at.view.shape();
+            let mention = shape.mention(Site::of(part))?;
+            let read = at.view.read(mention.coordinate);
+            let Some(solution) = shape.instance_at(Site::of(part)) else {
+                return Some(read);
+            };
+            let Value::Knotted(member) = read else {
+                unreachable!("an instance site reads a quantified function")
+            };
+            Some(Value::Knotted(instance(
+                writer, member, solution, types, scratch,
+            )))
         }
     }
 }

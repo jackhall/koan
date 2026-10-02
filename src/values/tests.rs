@@ -222,6 +222,7 @@ impl Knotted for Stand<'_> {
         match *self {
             Stand::Function(identity) => Resolved::Function {
                 identity,
+                instance: &[],
                 closure: &[],
             },
             Stand::Barrier => Resolved::Barrier,

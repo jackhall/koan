@@ -411,7 +411,10 @@ fn each_call_of_a_quantified_function_is_typed_by_its_arguments() {
 }
 
 /// The block a `USING … SCOPE` in the body of `source`'s one top-level callable builds.
-fn using_block<R>(source: &str, inspect: impl FnOnce(&Program<'_>, &BodyShape<'_>) -> R) -> R {
+pub(super) fn using_block<R>(
+    source: &str,
+    inspect: impl FnOnce(&Program<'_>, &BodyShape<'_>) -> R,
+) -> R {
     loaded(source, |program| {
         let (_, callable) = program
             .shape()

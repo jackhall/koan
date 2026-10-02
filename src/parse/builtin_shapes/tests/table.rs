@@ -34,6 +34,7 @@ fn key_elements(form: &BuiltinShape) -> Vec<KeyElement> {
 /// program must write there.
 const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::LetValue, &[(1, B)]),
+    (BuiltinShapeId::LetAnnotated, &[(1, B), (2, B)]),
     (BuiltinShapeId::TypeDeclaration, &[]),
     (BuiltinShapeId::Module, &[(1, B), (3, B)]),
     (BuiltinShapeId::GroupFoldLeft, &[(1, B), (5, B)]),

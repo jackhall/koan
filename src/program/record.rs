@@ -254,6 +254,38 @@ impl<'graph> Program<'graph> {
         }
     }
 
+    /// `value`, bound by `LET <name> <type> = …`, held to `annotation`: an error value passes
+    /// unchanged, a value satisfying it — `settled` where the load showed it always does — is
+    /// retyped to it, and anything else is the error naming the miss.
+    pub fn annotated<'cell>(
+        &self,
+        writer: Writer<'cell>,
+        value: KValue<'graph, 'cell>,
+        annotation: KType,
+        settled: bool,
+    ) -> KValue<'graph, 'cell> {
+        if self.message(&value).is_some() {
+            return value;
+        }
+        let scratch = Bump::new();
+        debug_assert!(
+            !settled || satisfies(annotation, &value, self.types, &scratch),
+            "a settled annotation always holds"
+        );
+        if settled || satisfies(annotation, &value, self.types, &scratch) {
+            return value.retyped(writer, annotation, self.types, &scratch);
+        }
+        let name = |handle: DeclaredType<KType>| display_name(handle, self.types, self.symbols);
+        self.error(
+            writer,
+            format_args!(
+                "{} does not satisfy its annotation {}",
+                name(value.ktype()),
+                name(annotation.into())
+            ),
+        )
+    }
+
     /// The top-level slot `name` binds, if the program declares it.
     pub fn binding(&self, name: &str) -> Option<Slot> {
         let name = BinderSymbol::declared(name, self.symbols)?;

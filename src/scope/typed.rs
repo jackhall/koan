@@ -257,9 +257,12 @@ pub struct Statics<'graph> {
     pub binders: &'graph [DeclaredType<Interval<Parametric>>],
     /// Each keyworded use's narrowing, parallel to the shape's candidate lists.
     pub narrowings: &'graph [Narrowing<'graph>],
-    /// Each `:!` whose operand's static upper end lies under its type, sorted by site: the run
-    /// checks nothing there.
+    /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
+    /// type part whose value's does, sorted by site: the run checks nothing there.
     pub settled: &'graph [Site],
+    /// Each name read at an instance site, by site, sorted by site, beside the solution the load
+    /// instantiated its quantified function at.
+    pub instances: &'graph [(Site, &'graph [KType])],
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

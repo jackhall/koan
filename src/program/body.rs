@@ -18,7 +18,9 @@
 //! [`StepError::Refused`] is left for invariant breaks alone.
 //!
 //! **A declared parameter is an ascription.** A frame binds each value parameter to its argument
-//! retyped to the parameter's declared type, with the call's solution substituted.
+//! retyped to the parameter's declared type, with the call's solution substituted. So is an
+//! annotated binder, `LET <name> <type> = <value>`: its value is checked against the type, unless
+//! the load settled it, and retyped to it before it is bound.
 //!
 //! **Frames end under a contract.** A called frame owes its caller a value satisfying its declared
 //! return, with its own type-parameter solution substituted, retyped to it; a miss is an error
@@ -30,7 +32,7 @@
 
 use std::fmt;
 
-use crate::elaborate::type_declarations;
+use crate::elaborate::{denoted, type_declarations};
 use crate::knot::module::body_activation;
 use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Untieable, tie};
 use crate::memory::{Bump, BumpVec, resident};
@@ -542,8 +544,17 @@ fn frame<'graph, 'here>(
     // The group's solution in group order. A keyworded call's selection carried it by name; a
     // call by name's is solved here, every value parameter's declared type against its argument's
     // carried type under one collector — which, for an unquantified callee, is the arguments'
-    // admission alone.
-    let mut solution: Option<BumpVec<'_, KType>> = None;
+    // admission alone. An instance's group was solved where the load made it, and is never
+    // solved again.
+    let mut solution: Option<BumpVec<'_, KType>> = function.instance().map(|instance| {
+        let mut solved = BumpVec::with_capacity_in(instance.len(), scratch);
+        solved.extend_from_slice(instance);
+        solved
+    });
+    debug_assert!(
+        solution.is_none() || kind == CallKind::ByName,
+        "an instance has no registration, so only a call by name reaches it"
+    );
     match kind {
         CallKind::Keyworded if quantified => {
             let mut solved = BumpVec::with_capacity_in(quantifiers.len(), scratch);
@@ -735,6 +746,7 @@ fn woken<'graph, 'here, 'scratch>(
                         )
                     };
                     let slot = runner.shape().components()[component.index()].members[0];
+                    let value = held(step, runner, slot, value)?;
                     runner.bind(unit, slot, value);
                 }
                 UnitWork::Statement(_) => {
@@ -814,7 +826,13 @@ fn tied<'graph, 'here>(
     match tied {
         Ok(knot) => {
             for (index, slot) in component.members.iter().enumerate() {
-                runner.bind(unit, *slot, Value::Knotted(Knotted::of(knot, index)));
+                let value = held(
+                    step,
+                    runner,
+                    *slot,
+                    Value::Knotted(Knotted::of(knot, index)),
+                )?;
+                runner.bind(unit, *slot, value);
             }
             Ok(())
         }
@@ -823,6 +841,31 @@ fn tied<'graph, 'here>(
         }
         Err(error) => Err(untied(step, runner, &error)),
     }
+}
+
+/// `value`, about to be bound at `slot`, held to the type its `LET <name> <type> = …` states, if
+/// it states one ([`Program::annotated`]).
+fn held<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_>,
+    runner: &Runner<'graph, 'here>,
+    slot: Slot,
+    value: KValue<'graph, 'here>,
+) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
+    let shape = runner.shape();
+    let Some(annotation) = shape.annotation(slot) else {
+        return Ok(value);
+    };
+    let program = runner.program;
+    let (types, writer, scratch) = (program.types(), step.writer(), Bump::new());
+    let held = match denoted(annotation, &runner.activation.view(), types, &scratch) {
+        Ok(annotated) => {
+            let settled = shape.settled(Site::of(annotation));
+            program.annotated(writer, value, annotated, settled)
+        }
+        Err(refused) => program.error(writer, refused.display(program.symbols(), types)),
+    };
+    runner.check(&held)?;
+    Ok(held)
 }
 
 /// Perform units until one parks or the body ends.
@@ -951,7 +994,13 @@ fn first_tie<'graph, 'here, 'scratch>(
     match tied {
         Ok(knot) => {
             for (index, slot) in component.members.iter().enumerate() {
-                runner.bind(unit, *slot, Value::Knotted(Knotted::of(knot, index)));
+                let value = held(
+                    step,
+                    runner,
+                    *slot,
+                    Value::Knotted(Knotted::of(knot, index)),
+                )?;
+                runner.bind(unit, *slot, value);
             }
             Ok(None)
         }

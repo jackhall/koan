@@ -261,17 +261,14 @@ fn sibling_quantified_bodies_number_their_own_names_alike() {
                   LET h = (FN FOR ALL #[Be] :{b :Be} -> Be = #(b))\n  \
                   x\n))";
     typed(source, |program| {
+        // Nested shapes sit in site order, which is address order, so the two may come either way.
         let levels: Vec<_> = callables(program.birth("f"))
             .iter()
             .map(|body| body.group_levels().to_vec())
             .collect();
-        assert_eq!(
-            levels,
-            [
-                vec![lexical(program, 1, "Ay")],
-                vec![lexical(program, 1, "Be")]
-            ]
-        );
+        let (ay, be) = (lexical(program, 1, "Ay"), lexical(program, 1, "Be"));
+        assert_eq!(levels.len(), 2);
+        assert!(levels.contains(&vec![ay]) && levels.contains(&vec![be]));
     });
 }
 

@@ -247,7 +247,7 @@ pick {a = "only"}
 ```
 
 ```text
-error: arguments :{a :Str} do not name the parameters of :(FN :{a :Str b :Str} -> Str)
+error: <input>:3:1: :(FN :{a :Str b :Str} -> Str) can never be called with :{a :Str}
 ```
 
 ### Anonymous functions

@@ -7,9 +7,13 @@
 //! binding holds, as a [`TypeAt`]. An activation answers a type or not one; the load-time reader
 //! may also answer a rigid variable standing for a type a run binds, or that it cannot know.
 
-use crate::scope::{Activation, ActivationView, BodyShape, Coordinate};
-use crate::type_lattice::{KType, Parametric};
+use crate::memory::BumpAllocator;
+use crate::parse::ExpressionPart;
+use crate::scope::{Activation, ActivationView, BodyShape, Coordinate, Elaboration, Site};
+use crate::type_lattice::{KType, Parametric, TypeRegistry, substitute_levels};
 use crate::values::{KnottedFamily, Value};
+
+use super::expression::type_expression;
 
 /// What a reader answers for the binding at a coordinate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,4 +64,32 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
     fn type_at(&self, at: Coordinate) -> TypeAt {
         ActivationView::type_at(self, at)
     }
+}
+
+/// The type the type part `part` of `view`'s shape denotes where it runs: the load fixed it where
+/// it could, and only what it left unknown is elaborated here.
+pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
+    part: &'graph ExpressionPart<'graph>,
+    view: &ActivationView<'graph, '_, XF>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Result<KType, Elaboration> {
+    // Where it runs, every name a type reads is bound to a concrete type.
+    let concrete = |kt| {
+        types
+            .concrete(kt)
+            .expect("a type read where it runs holds no variable")
+    };
+    let elaborated = || type_expression(part, view, types, scratch).map(concrete);
+    let loaded =
+        view.shape()
+            .typed_expression(Site::of(part))
+            .solved(view, scratch, |value, bindings| {
+                Some(concrete(substitute_levels(types, scratch, value, bindings)))
+            });
+    debug_assert!(
+        loaded.is_none() || loaded == elaborated().ok(),
+        "the load-time type agrees with elaborating where it runs"
+    );
+    loaded.map_or_else(elaborated, Ok)
 }

@@ -447,6 +447,9 @@ pub struct BodyShape<'graph> {
     callable: &'graph Cell<StaticCallable<'graph>>,
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
     group_levels: &'graph Cell<&'graph [Parametric]>,
+    /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born; empty
+    /// where it is born quantified, and for every other kind.
+    born_instance: &'graph Cell<&'graph [KType]>,
     /// Why a code shape's code does not type, where the load pass found a refusal in it.
     typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
     /// The value channel's static types and narrowings, fixed by the language's load pass.
@@ -642,6 +645,21 @@ impl<'graph> BodyShape<'graph> {
         Some(self.rhs[index].1)
     }
 
+    /// The type the value binder at `slot` is annotated with — the type part of the
+    /// `LET <name> <type> = <value>` declaring it — or `None` for any other binder.
+    pub fn annotation(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {
+        let statement = self.names.get(slot.index()).statement_index()?;
+        let node = self.body.get(statement)?.statement_spine();
+        let form = node.cache().builtin_shape()?;
+        if form.id != BuiltinShapeId::LetAnnotated {
+            return None;
+        }
+        form.roles()
+            .zip(node.parts)
+            .find(|(role, _)| *role == Role::TypeExpression)
+            .map(|(_, part)| &part.value)
+    }
+
     /// The declaration node of the type binder at `slot` — a `NEWTYPE`, `UNION`, `SIG` or a `LET`
     /// of a type name, whole, so the door reads which declaration it is and where its
     /// declared part sits off the node's builtin shape, as [`form`](Self::form) is where a
@@ -741,6 +759,20 @@ impl<'graph> BodyShape<'graph> {
         self.group_levels.set(levels);
     }
 
+    /// The solution this callable body's `FOR ALL` is born instantiated at, where the load solved
+    /// its group at the type its value is wanted at: a literal written where a type fixes it, or
+    /// the right-hand side of a binder whose declared type does.
+    pub fn born_instance(&self) -> Option<&'graph [KType]> {
+        Some(self.born_instance.get()).filter(|solution| !solution.is_empty())
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_born_instance(&self, solution: &'graph [KType]) {
+        debug_assert_eq!(self.kind, ShapeKind::Callable);
+        debug_assert!(self.born_instance.get().is_empty());
+        self.born_instance.set(solution);
+    }
+
     /// Written once, by the load pass, on a code shape whose code does not type.
     pub fn refuse_typing(&self, refusal: &'graph ShapeError<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Code);
@@ -789,6 +821,14 @@ impl<'graph> BodyShape<'graph> {
         self.statics
             .get()
             .is_some_and(|statics| statics.settled.binary_search(&site).is_ok())
+    }
+
+    /// The solution the load instantiated the quantified function read at `site` at, where it read
+    /// one there.
+    pub fn instance_at(&self, site: Site) -> Option<&'graph [KType]> {
+        let instances = self.statics.get()?.instances;
+        let index = instances.binary_search_by_key(&site, |(at, _)| *at).ok()?;
+        Some(instances[index].1)
     }
 
     /// Written once, by the language's load pass.
@@ -1052,6 +1092,19 @@ pub enum ShapeError<'graph> {
         ascribed: KType,
         at: SourceRef,
     },
+    /// An annotated binder whose value's static type can never satisfy its annotation.
+    AnnotationNeverSatisfied {
+        value: KType,
+        annotated: KType,
+        at: SourceRef,
+    },
+    /// A call by name whose callee is exactly an unquantified function its argument's static type
+    /// can never satisfy the parameters of.
+    CallNeverSatisfied {
+        callee: KType,
+        arguments: KType,
+        at: SourceRef,
+    },
     /// An `EVAL` whose operand's static type can never be code.
     NotCode { value: KType, at: SourceRef },
     /// An `EVAL` of traced code whose static type can never satisfy the type the `EVAL` declares.
@@ -1149,6 +1202,8 @@ impl ShapeError<'_> {
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::AscriptionNeverSatisfied { at, .. }
+            | ShapeError::AnnotationNeverSatisfied { at, .. }
+            | ShapeError::CallNeverSatisfied { at, .. }
             | ShapeError::NotCode { at, .. }
             | ShapeError::EvalNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
@@ -1346,6 +1401,22 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "this value is {}, which can never satisfy its ascription {}",
                 display_name(*value, self.types, self.symbols),
                 display_name(*ascribed, self.types, self.symbols)
+            ),
+            ShapeError::AnnotationNeverSatisfied {
+                value, annotated, ..
+            } => write!(
+                f,
+                "this value is {}, which can never satisfy its annotation {}",
+                display_name(*value, self.types, self.symbols),
+                display_name(*annotated, self.types, self.symbols)
+            ),
+            ShapeError::CallNeverSatisfied {
+                callee, arguments, ..
+            } => write!(
+                f,
+                "{} can never be called with {}",
+                display_name(*callee, self.types, self.symbols),
+                display_name(*arguments, self.types, self.symbols)
             ),
             ShapeError::NotCode { value, .. } => write!(
                 f,

@@ -20,9 +20,11 @@ use super::{DeepCopy, Dict, Knotted, Link, List, Nothing, Record, Tagged, Value,
 #[derive(Clone, Copy)]
 pub enum Resolved<'a, X> {
     /// A function, rendered as its type's name. It compares by `identity` — one per `FN`, `EXPR` or
-    /// `OP` written, so a copy keeps it — and by its closure bindings, read through the member.
+    /// `OP` written, so a copy keeps it — by the solution an instance of a quantified function was
+    /// made at, empty for anything else, and by its closure bindings, read through the member.
     Function {
         identity: usize,
+        instance: &'a [KType],
         closure: &'a [Link<'a, X>],
     },
     /// A module: opaque to `values`, incomparable, rendered as its type's name.

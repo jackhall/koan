@@ -109,16 +109,21 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
         let entered = ((left, this.ktype()), (right, that.ktype()));
         match (left.resolve(), right.resolve()) {
             (
-                Resolved::Function { identity, closure },
+                Resolved::Function {
+                    identity,
+                    instance,
+                    closure,
+                },
                 Resolved::Function {
                     identity: other,
+                    instance: solved,
                     closure: others,
                 },
             ) => {
                 if !seen.insert(entered) {
                     return Ok(true);
                 }
-                if identity != other || closure.len() != others.len() {
+                if identity != other || instance != solved || closure.len() != others.len() {
                     return Ok(false);
                 }
                 pending.extend(closure.iter().zip(others).map(|(this, that)| {

@@ -168,7 +168,16 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
 fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
     assert_eq!(
         run("LET f = (FN :{x :Number} -> Str = #(\"ran\"))\nPRINT (f {x = \"s\"})"),
-        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}"
+        "load: <test>:2:7: :(FN :{x :Number} -> Str) can never be called with :{x :Str}",
+        "an exact callee its argument can never satisfy refuses the load"
+    );
+    assert_eq!(
+        run(
+            "LET call = (FN :{f :(FN :{x :Number} -> Str), y :Any} -> Str = #(f {x = y}))\n\
+             PRINT (call {f = (FN :{x :Number} -> Str = #(\"ran\")), y = \"s\"})"
+        ),
+        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}",
+        "a callee the load knows at most is the call's to admit"
     );
     let pair = |call: &str| {
         run(&format!(
