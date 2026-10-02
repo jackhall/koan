@@ -518,6 +518,7 @@ fn frame<'graph, 'here>(
     };
     arguments.as_record().ok_or_else(misnamed)?;
     let shape = function.shape();
+    let quantified = matches!(function.ktype(), DeclaredType::Scheme(_));
     let TypeNode::KFunction {
         quantifiers,
         bounds,
@@ -544,7 +545,7 @@ fn frame<'graph, 'here>(
     // admission alone.
     let mut solution: Option<BumpVec<'_, KType>> = None;
     match kind {
-        CallKind::Keyworded if !quantifiers.is_empty() => {
+        CallKind::Keyworded if quantified => {
             let mut solved = BumpVec::with_capacity_in(quantifiers.len(), scratch);
             solved.resize(quantifiers.len(), KType::NEVER);
             for (name, index) in function.quantifier_map().iter() {
@@ -567,7 +568,7 @@ fn frame<'graph, 'here>(
                 )
                 .map_err(|_| unfit())?;
             }
-            if !quantifiers.is_empty() {
+            if quantified {
                 solution = Some(collector.solve(types).map_err(|_| unsolved())?);
             }
         }

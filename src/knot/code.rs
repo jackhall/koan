@@ -15,7 +15,9 @@ use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, res
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeySymbol};
-use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
+use crate::type_lattice::{
+    DeclaredType, DispatchTokenElement, KType, Parametric, TypeNode, TypeRegistry,
+};
 use crate::values::{CodeView, Link, List, Value, Weight};
 
 use super::{KActivationView, KValue, Knotted, Node};
@@ -339,22 +341,28 @@ fn keyed<'graph, 'cell>(
             .and_then(|function| function.registered_shape())
             .expect("a registration member is the function born for it");
         // Only the key and the ranking are read, which a scheme's node spells as a type's does.
+        let node = match registered {
+            DeclaredType::Type(shape) => types.node(Parametric::from(shape)),
+            DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+        };
         let TypeNode::ExpressionShape {
             elements, classes, ..
-        } = types.node(registered.raw())
+        } = node
         else {
             unreachable!("a registered shape is an expression shape")
         };
-        let run = elements.iter().map(|element| match element {
-            DispatchTokenElement::Keyword(keyword) => Some(*keyword),
-            DispatchTokenElement::Slot(_) => None,
-        });
-        if KeySymbol::of(run.clone()) != key {
+        let run = || {
+            elements.iter().map(|element| match element {
+                DispatchTokenElement::Keyword(keyword) => Some(keyword),
+                DispatchTokenElement::Slot(_) => None,
+            })
+        };
+        if KeySymbol::of(run()) != key {
             continue;
         }
         // The lattice stores written order as no classes; the shape spells every class out.
         let ranking = if classes.is_empty() {
-            let slots = run.filter(Option::is_none).count();
+            let slots = run().filter(Option::is_none).count();
             scratch.alloc_slice_fill_iter((0..slots).map(|class| class as u8))
         } else {
             classes

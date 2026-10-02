@@ -238,7 +238,8 @@ impl Scheme {
         self.0.0
     }
 
-    pub fn raw(self) -> Handle {
+    /// The raw handle — the lattice's alone, so no scheme reaches a door or a binding as a type.
+    pub(super) fn raw(self) -> Handle {
         self.0
     }
 }
@@ -313,8 +314,8 @@ impl<T> DeclaredType<T> {
 }
 
 impl<T: TypeHandle> DeclaredType<T> {
-    /// The raw handle either arm names — identity only.
-    pub fn raw(self) -> Handle {
+    /// The raw handle either arm names — identity only, and the lattice's alone.
+    pub(super) fn raw(self) -> Handle {
         match self {
             DeclaredType::Type(kt) => kt.raw(),
             DeclaredType::Scheme(scheme) => scheme.raw(),
