@@ -246,6 +246,11 @@ in a tenant's storage and crossed into the callee's birth.
   captured string, instantiated at a frame's last statement: its knot re-tied through the frame's
   writer with the edge rehomed to the sibling's value, handed back across the frame's crossing, and
   called after, every captured byte read back.
+- `a_closure_captures_a_type_only_where_a_call_in_it_contributes_it`
+  a closure born as a frame's last statement holding a type capture past its builder's captures —
+  the enclosing call's binding of a type name its body never writes, read from the frame's
+  activation into the closure run — handed back across the frame's crossing and compared where it
+  lands with one born under another binding.
 
 ## Recent full-slate run durations
 
