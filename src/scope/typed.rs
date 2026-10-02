@@ -220,6 +220,10 @@ pub enum Static<'graph, C, R = C> {
 /// What the load fixed for a type: concrete where closed, parametric over the run's variables.
 pub type StaticType<'graph> = Static<'graph, KType, Parametric>;
 
+/// What the load fixed for an instance's solution, in group order: concrete where closed,
+/// parametric over the run's variables where it names a type a run binds.
+pub type StaticSolution<'graph> = Static<'graph, &'graph [KType], &'graph [Parametric]>;
+
 /// What the load fixed for a callable's type.
 pub type StaticCallable<'graph> =
     Static<'graph, Callable<'graph, KType>, Callable<'graph, Parametric>>;
@@ -261,8 +265,8 @@ pub struct Statics<'graph> {
     /// type part whose value's does, sorted by site: the run checks nothing there.
     pub settled: &'graph [Site],
     /// Each name read at an instance site, by site, sorted by site, beside the solution the load
-    /// instantiated its quantified function at.
-    pub instances: &'graph [(Site, &'graph [KType])],
+    /// instantiated its quantified function at, closed or over the run's variables.
+    pub instances: &'graph [(Site, StaticSolution<'graph>)],
     /// Each keyworded use's contributions, parallel to the shape's candidate lists: per argument,
     /// the static type its solving slot is solved from — `Unknown` where the call reads the carried
     /// type. Empty for a use every argument of which does.

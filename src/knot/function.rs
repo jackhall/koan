@@ -10,13 +10,15 @@
 //!
 //! A quantified function is made concrete where the load solved its group at the type it is wanted
 //! at: born so, where its body shape holds the solution ([`BodyShape::born_instance`]), or read so
-//! through [`instance`], a one-node knot over the same body and captures. Either way the typing
-//! record carries the solution, and a frame binds the body's `FOR ALL` names from it.
+//! through [`instance`], a one-node knot over the same body and captures. Either way each lexical
+//! variable the solution names is read where the site runs, the typing record carries the solution
+//! so bound, and a frame binds the body's `FOR ALL` names from it.
 
 use crate::elaborate::callable_type;
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
+use crate::scope::{Static, StaticSolution, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, instantiate_quantified, substitute_levels,
@@ -232,8 +234,9 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     pub quantifier_map: FunctionGroupMap<'x>,
     /// What the elaborator built for the registration the function is born for.
     pub registered: Option<Registered<'x, KType>>,
-    /// The solution a quantified function is born instantiated at; empty where it is born as it is.
-    pub instance: &'graph [KType],
+    /// The solution a quantified function is born instantiated at, bound where it is born; empty
+    /// where it is born as it is.
+    pub instance: &'x [KType],
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
 }
 
@@ -290,6 +293,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     let (ktype, instance) = match (body.born_instance(), callable.ktype) {
         (Some(solution), DeclaredType::Scheme(scheme)) => {
             debug_assert!(registration.is_none(), "a registration binds its scheme");
+            let solution = solved(solution, activation, types, scratch);
             let instance = instantiate_quantified(types, scratch, scheme, solution);
             let instance = types.concrete(instance).expect(INSTANCE);
             (DeclaredType::Type(instance), solution)
@@ -309,8 +313,36 @@ pub(super) fn staged<'graph, 'cell, 'x>(
 }
 
 /// Why an instance's type is concrete: the scheme it instantiates is born with its levels bound,
-/// and the load instantiates one only at a closed solution.
-const INSTANCE: &str = "a born scheme instantiated at a closed solution is concrete";
+/// and its solution is bound where it runs.
+const INSTANCE: &str = "a born scheme instantiated at a solution solved where it runs is concrete";
+
+/// Why an instance's variables are bound where it is read or born: the wanted type names each of
+/// them, and the run reads that type at or before the site.
+const BOUND: &str = "an instance's lexical variables are bound where it is read or born";
+
+/// `solution`, an instance's solution in group order as the load recorded it, where the site runs:
+/// as it is when closed, and with each lexical variable it names replaced by the type `activation`
+/// reads at its coordinate when rigid.
+fn solved<'x>(
+    solution: StaticSolution<'_>,
+    activation: &KActivationView<'_, '_>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'x>,
+) -> &'x [KType] {
+    match solution {
+        Static::Closed(solution) => scratch.alloc_slice_copy(solution),
+        Static::Rigid { value, variables } => {
+            let bindings = solutions(variables, activation, scratch).expect(BOUND);
+            let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
+            solved.extend(value.iter().map(|each| {
+                let each = substitute_levels(types, scratch, *each, &bindings);
+                types.concrete(each).expect(BOUND)
+            }));
+            solved.leak()
+        }
+        Static::Unknown => unreachable!("the load fixes every instance's solution"),
+    }
+}
 
 /// Why a callable's type is concrete outside its own group where it is born: every lexical variable
 /// its declaration read is bound there.
@@ -474,16 +506,20 @@ pub fn lambda<'graph, 'cell, 'x>(
 
 /// `member`, a quantified function, read where the load solved its group to `solution`: a one-node
 /// knot in `writer`'s region running the same body over the same captures, typed by its instance.
+/// Each lexical variable `solution` names is read through `activation`, the activation the site
+/// runs in.
 ///
 /// An edge in `member`'s closure is relative to its own knot, so each is rehomed as the sibling
 /// value it names.
 pub fn instance<'graph, 'cell>(
     writer: Writer<'cell>,
     member: Knotted<'graph, 'cell>,
-    solution: &[KType],
+    solution: StaticSolution<'graph>,
+    activation: &KActivationView<'graph, '_>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
+    let solution = solved(solution, activation, types, scratch);
     let function = member
         .function()
         .expect("an instance is read of a function member");

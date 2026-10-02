@@ -3000,7 +3000,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 registered: writer.fill(registrations.len(), |_| Cell::new(Static::Unknown)),
                 callable: resident_cell(writer, Static::Unknown),
                 group_levels: resident_cell(writer, &[][..]),
-                born_instance: resident_cell(writer, &[][..]),
+                born_instance: resident_cell(writer, Static::Unknown),
                 declared_variables: resident_cell(writer, &[][..]),
                 type_captures: resident_cell(writer, &[][..]),
                 typing_refusal: resident_cell(writer, None),

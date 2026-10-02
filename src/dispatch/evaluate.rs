@@ -782,7 +782,7 @@ fn in_place<'graph, 'here>(
                 unreachable!("an instance site reads a quantified function")
             };
             Some(Value::Knotted(instance(
-                writer, member, solution, types, scratch,
+                writer, member, solution, &at.view, types, scratch,
             )))
         }
     }

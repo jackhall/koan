@@ -53,6 +53,6 @@ pub use shape::{
 };
 pub use typed::{
     Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, Narrowing, ParameterBinding,
-    Registered, ShapeGroupMap, Static, StaticCallable, StaticRegistered, StaticType, Statics,
-    Variable, solutions,
+    Registered, ShapeGroupMap, Static, StaticCallable, StaticRegistered, StaticSolution,
+    StaticType, Statics, Variable, solutions,
 };

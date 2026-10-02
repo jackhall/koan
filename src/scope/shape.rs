@@ -62,7 +62,8 @@ use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::typed::{
-    Elaboration, Narrowing, Static, StaticCallable, StaticRegistered, StaticType, Statics,
+    Elaboration, Narrowing, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
+    Statics,
 };
 
 mod build;
@@ -450,9 +451,9 @@ pub struct BodyShape<'graph> {
     callable: &'graph Cell<StaticCallable<'graph>>,
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
     group_levels: &'graph Cell<&'graph [Parametric]>,
-    /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born; empty
-    /// where it is born quantified, and for every other kind.
-    born_instance: &'graph Cell<&'graph [KType]>,
+    /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born;
+    /// `Unknown` where it is born quantified, and for every other kind.
+    born_instance: &'graph Cell<StaticSolution<'graph>>,
     /// Each lexical variable this body declares, by level, beside where its activation holds the
     /// type a run binds it to. Written once, by the type channel.
     declared_variables: &'graph Cell<&'graph [(usize, Target)]>,
@@ -772,14 +773,18 @@ impl<'graph> BodyShape<'graph> {
     /// The solution this callable body's `FOR ALL` is born instantiated at, where the load solved
     /// its group at the type its value is wanted at: a literal written where a type fixes it, or
     /// the right-hand side of a binder whose declared type does.
-    pub fn born_instance(&self) -> Option<&'graph [KType]> {
-        Some(self.born_instance.get()).filter(|solution| !solution.is_empty())
+    pub fn born_instance(&self) -> Option<StaticSolution<'graph>> {
+        match self.born_instance.get() {
+            Static::Unknown => None,
+            solution => Some(solution),
+        }
     }
 
     /// Written once, by the load pass.
-    pub fn fix_born_instance(&self, solution: &'graph [KType]) {
+    pub fn fix_born_instance(&self, solution: StaticSolution<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Callable);
-        debug_assert!(self.born_instance.get().is_empty());
+        debug_assert!(matches!(self.born_instance.get(), Static::Unknown));
+        debug_assert!(!matches!(solution, Static::Unknown));
         self.born_instance.set(solution);
     }
 
@@ -867,7 +872,7 @@ impl<'graph> BodyShape<'graph> {
 
     /// The solution the load instantiated the quantified function read at `site` at, where it read
     /// one there.
-    pub fn instance_at(&self, site: Site) -> Option<&'graph [KType]> {
+    pub fn instance_at(&self, site: Site) -> Option<StaticSolution<'graph>> {
         let instances = self.statics.get()?.instances;
         let index = instances.binary_search_by_key(&site, |(at, _)| *at).ok()?;
         Some(instances[index].1)

@@ -72,8 +72,8 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyShape, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate, Narrowing,
-    Position, ShapeError, ShapeKind, Site, Slot, Static, StaticType, Statics, Target, UnitWork,
-    Variable as Located, source_of,
+    Position, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution, StaticType, Statics,
+    Target, UnitWork, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, Symbol};
@@ -167,7 +167,7 @@ struct Level<'p, 'graph> {
     /// type part whose value's does.
     settled: BumpVec<'p, Site>,
     /// Each name read at an instance site, beside the solution its function is instantiated at.
-    instances: BumpVec<'p, (Site, &'graph [KType])>,
+    instances: BumpVec<'p, (Site, StaticSolution<'graph>)>,
     /// Each keyworded use's contributions, parallel to the candidate lists.
     contributions: BumpVec<'p, &'graph [StaticType<'graph>]>,
     /// Each call by name's contributions, by its argument part's site.
@@ -649,7 +649,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         };
         let (typed, solution) = self.instantiate(scheme, wanted, statement.source)?;
         if !self.unfilled {
-            body.fix_born_instance(solution);
+            body.fix_born_instance(Static::Closed(solution));
         }
         Ok(DeclaredType::Type(typed))
     }
@@ -1011,7 +1011,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     DeclaredType::Scheme(scheme) => {
                         let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
                         if !self.unfilled {
-                            body.fix_born_instance(solution);
+                            body.fix_born_instance(Static::Closed(solution));
                         }
                         typed
                     }
@@ -1214,7 +1214,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                         let at = self.source(level, site);
                         let (typed, solution) = self.instantiate(scheme, wanted, at)?;
                         if !self.unfilled {
-                            self.chain[level].instances.push((site, solution));
+                            self.chain[level]
+                                .instances
+                                .push((site, Static::Closed(solution)));
                         }
                         typed
                     }
@@ -2058,10 +2060,10 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 continue;
             }
             match site.instanced {
-                Instanced::Name(leaf) => {
-                    self.chain[level].instances.push((Site::of(leaf), solution))
-                }
-                Instanced::Literal(body) => body.fix_born_instance(solution),
+                Instanced::Name(leaf) => self.chain[level]
+                    .instances
+                    .push((Site::of(leaf), Static::Closed(solution))),
+                Instanced::Literal(body) => body.fix_born_instance(Static::Closed(solution)),
             }
         }
         Ok(())
