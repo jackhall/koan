@@ -49,6 +49,9 @@ those registrations where the body runs.
   two signatures, yield carriers that do not unify.
 - `(ints :| Counter) :| (Counter WITH {Carrier = Number})` is refused, and
   `(ints :| Counter) :! Counter` shows the carrier, never `Number`.
+- An opaque carrier may bound a type variable. A `FOR ALL` variable or a head
+  parameter bounded by a `:|` view's carrier lies under that carrier, as one
+  bounded by a `NEWTYPE` lies under the `NEWTYPE`.
 - A head quantifier's bound gates satisfaction only: a signature quantified over
   `#{Carrier: Number}` refuses a module whose carrier solves to `Str`, and a
   `:|` view's carrier is a non-match at a `:Number` slot.

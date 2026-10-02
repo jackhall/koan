@@ -62,6 +62,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Calls solved from their static types](gradual-typing/static-solutions.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
+- [Concrete and parametric types](rewrite/concrete-and-parametric-types.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Modules](rewrite/modules.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
