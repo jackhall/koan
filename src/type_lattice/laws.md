@@ -319,10 +319,13 @@ variable as a run does.
 
 A law draws a case that meets its precondition by construction rather than by
 filtering, since a case that passes without reaching the law is invisible: an
-ordered pair or chain is built by widening, two shapes share one key, an
-argument shape is mostly its candidate's own instance, and a scheme comes with
-its own instance. What still misses is a counted rejection, capped per law, so
-a generator that drifts off a precondition fails the suite.
+ordered pair or chain is built by widening — a step up the order, read down it
+at a contravariant child, so a function's parameter narrows and a record drops
+a field — two shapes share one key, an argument shape is mostly its candidate's
+own instance, and a scheme comes with its own instance, widened half the time
+so the solve has an interval to choose from. What still misses is a counted
+rejection, capped per law, so a generator that drifts off a precondition fails
+the suite.
 
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in

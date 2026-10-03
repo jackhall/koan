@@ -45,11 +45,12 @@ use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::{
     DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes,
 };
-use crate::type_lattice::substitute;
 use crate::type_lattice::typed::{
     instantiate_quantified, is_subtype_of, join, meet, quantifier_bounds,
 };
+use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
+use crate::type_lattice::{lattice, substitute};
 
 /// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
 fn leaked_arena() -> BumpAllocator<'static> {
@@ -1120,8 +1121,8 @@ pub fn arb_function_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType
 
 /// A function scheme drawn under `scheme` and a function type it may be wanted at, drawn under
 /// `wanted`: an unrelated function type, or — three times as often — the scheme's own instance at
-/// bindings within its bounds, under which an instance always lies. An unrelated draw alone almost
-/// never meets its scheme.
+/// bindings within its bounds, as it is or widened, under which an instance always lies. An
+/// unrelated draw alone almost never meets its scheme.
 ///
 /// `scheme` binds its group at the outermost function, so it is `Always` or `Outer`; the unrelated
 /// type binds none. Where `wanted` has variables an own instance binds each variable to a lexical
@@ -1158,7 +1159,9 @@ pub fn arb_wanted_instance(
 }
 
 /// [`arb_wanted_instance`]'s own instances alone: a scheme and its instance at bindings within its
-/// bounds, so an instance always lies under the wanted type.
+/// bounds — half the time widened by a [`Widening`] that keeps it a function type, so the instance
+/// lies strictly under the wanted type and the solve has an interval to choose from — so an
+/// instance always lies under the wanted type.
 pub fn arb_own_instance(
     world: World,
     depth: u32,
@@ -1166,10 +1169,12 @@ pub fn arb_own_instance(
     wanted: Vocabulary,
 ) -> BoxedStrategy<(Scheme, Parametric)> {
     let grounds = world.grounds();
+    let pool = world.widening_pool();
     let bindings =
         prop::collection::vec((0..2usize, 0..world.type_names.len(), 0..grounds.len()), 1);
-    (arb_scheme(world.clone(), depth, scheme), bindings)
-        .prop_map(move |(scheme, picks)| {
+    let widening = prop::option::of(arb_function_widening(pool.len(), 2));
+    (arb_scheme(world.clone(), depth, scheme), bindings, widening)
+        .prop_map(move |(scheme, picks, widening)| {
             with_scratch(|scratch| {
                 let types = &world.types;
                 let bindings: Vec<Handle> = quantifier_bounds(types, scheme)
@@ -1182,10 +1187,22 @@ pub fn arb_own_instance(
                         world.ground_within(scratch, *bound, *ground).raw()
                     })
                     .collect();
-                (
-                    scheme,
-                    instantiate_quantified(types, scratch, scheme, &bindings),
-                )
+                let instance = instantiate_quantified(types, scratch, scheme, &bindings).raw();
+                let wanted = match &widening {
+                    Some(widening) => widen(&world, scratch, &pool, instance, widening),
+                    None => instance,
+                };
+                // A function of full arity has no parameter to gain, so its step of width is a
+                // union: an instance is wanted at a function type.
+                let wanted = match types.node(wanted) {
+                    TypeNode::KFunction { .. } => wanted,
+                    _ => instance,
+                };
+                let wanted = world
+                    .declared(wanted)
+                    .as_type()
+                    .expect("a function binding no group is a type");
+                (scheme, wanted)
             })
         })
         .boxed()
@@ -1212,13 +1229,40 @@ pub fn arb_arguments(world: World, arity: usize) -> impl Strategy<Value = Vec<KT
         .prop_map(move |picks| picks.into_iter().map(|index| pool[index]).collect())
 }
 
-/// One step up the order: to the top, to a union with a pool type, or the same step at one
-/// covariant child.
+/// One step up the order, read down it at a contravariant child ([`Way`]): to the top, beside a
+/// pool type, a step of width, or the same step at one child.
 #[derive(Clone, Debug)]
 pub enum Widening {
+    /// `Any` upward, `Never` downward.
     Top,
+    /// The union with a pool type upward, the meet with one downward.
     UnionWith(usize),
+    /// Upward, a record drops a field, a function gains a parameter, a signature application
+    /// drops a pin, a meet of applications keeps one member and an application of a family steps
+    /// to the family; downward, a record gains a field and a function drops a parameter. Where the
+    /// node has no such step, [`Widening::UnionWith`].
+    Width(usize),
+    /// The same step at one child, read the other way at a contravariant one: a function's
+    /// parameter or a monomorphic shape's slot.
     Inside(usize, Box<Widening>),
+}
+
+/// Which way a [`Widening`] is read: up the order, or down it under a contravariant child.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Way {
+    Up,
+    Down,
+}
+
+impl Way {
+    /// The way a child of `variance` reads a step taken this way.
+    fn through(self, variance: Variance) -> Way {
+        match (self, variance) {
+            (way, Variance::Co) => way,
+            (Way::Up, Variance::Contra) => Way::Down,
+            (Way::Down, Variance::Contra) => Way::Up,
+        }
+    }
 }
 
 /// A [`Widening`] over a pool of `pool` types, reaching at most `depth` children down. The top is
@@ -1226,7 +1270,8 @@ pub enum Widening {
 fn arb_widening(pool: usize, depth: u32) -> BoxedStrategy<Widening> {
     let leaf = prop_oneof![
         1 => Just(Widening::Top),
-        6 => (0..pool).prop_map(Widening::UnionWith),
+        5 => (0..pool).prop_map(Widening::UnionWith),
+        2 => (0..pool).prop_map(Widening::Width),
     ];
     if depth == 0 {
         return leaf.boxed();
@@ -1236,8 +1281,17 @@ fn arb_widening(pool: usize, depth: u32) -> BoxedStrategy<Widening> {
     prop_oneof![7 => leaf, 6 => inside].boxed()
 }
 
-/// `kt` widened by `widening` over `pool`. Above `kt` whatever its node: where the node has no
-/// covariant child to step inside, the step is the union with a pool type.
+/// A [`Widening`] that keeps a function type one: a step inside it, or one of width.
+fn arb_function_widening(pool: usize, depth: u32) -> BoxedStrategy<Widening> {
+    prop_oneof![
+        3 => (0..4usize, arb_widening(pool, depth))
+            .prop_map(|(index, inner)| Widening::Inside(index, Box::new(inner))),
+        1 => (0..pool).prop_map(Widening::Width),
+    ]
+    .boxed()
+}
+
+/// `kt` widened by `widening` over `pool`: above `kt` whatever its node.
 fn widen(
     world: &World,
     scratch: BumpAllocator<'_>,
@@ -1245,38 +1299,188 @@ fn widen(
     kt: Handle,
     widening: &Widening,
 ) -> Handle {
+    step(world, scratch, pool, kt, widening, Way::Up)
+}
+
+/// `kt` stepped by `widening` the way `way` reads it: above `kt` upward, below it downward.
+fn step(
+    world: &World,
+    scratch: BumpAllocator<'_>,
+    pool: &[KType],
+    kt: Handle,
+    widening: &Widening,
+    way: Way,
+) -> Handle {
     let types = &world.types;
-    let union_with = |index: usize| types.union_of(scratch, &[kt, pool[index % pool.len()].raw()]);
+    let beside = |index: usize| {
+        let other = pool[index % pool.len()].raw();
+        match way {
+            Way::Up => types.union_of(scratch, &[kt, other]),
+            Way::Down => lattice::meet_through_variables(types, scratch, kt, other),
+        }
+    };
     let (index, inner) = match widening {
-        Widening::Top => return Handle::ANY,
-        Widening::UnionWith(index) => return union_with(*index),
+        Widening::Top => {
+            return match way {
+                Way::Up => Handle::ANY,
+                Way::Down => Handle::NEVER,
+            };
+        }
+        Widening::UnionWith(index) => return beside(*index),
+        Widening::Width(index) => {
+            return step_width(world, scratch, pool, kt, *index, way)
+                .unwrap_or_else(|| beside(*index));
+        }
         Widening::Inside(index, inner) => (*index, inner),
     };
-    let step = |child: Handle| widen(world, scratch, pool, child, inner);
+    let at = |child: Handle, variance: Variance| {
+        step(world, scratch, pool, child, inner, way.through(variance))
+    };
     match types.node(kt) {
-        TypeNode::List { element } => types.list(step(element)),
-        TypeNode::Dict { key, value } if index % 2 == 0 => types.dict(key, step(value)),
-        TypeNode::Dict { key, value } => types.dict(step(key), value),
+        TypeNode::List { element } => types.list(at(element, Variance::Co)),
+        TypeNode::Dict { key, value } if index % 2 == 0 => types.dict(key, at(value, Variance::Co)),
+        TypeNode::Dict { key, value } => types.dict(at(key, Variance::Co), value),
         TypeNode::Record { fields } if !fields.raw().is_empty() => {
             let mut fields = fields.raw().to_vec();
-            let at = index % fields.len();
-            fields[at].1 = step(fields[at].1);
+            let chosen = index % fields.len();
+            fields[chosen].1 = at(fields[chosen].1, Variance::Co);
             types.record(scratch, &fields)
         }
         TypeNode::Union { members } => {
             let mut members = members.to_vec();
-            let at = index % members.len();
-            members[at] = step(members[at]);
+            let chosen = index % members.len();
+            members[chosen] = at(members[chosen], Variance::Co);
             types.union_of(scratch, &members)
         }
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } if !arguments.raw().is_empty() => {
+            let mut arguments = arguments.raw().to_vec();
+            let chosen = index % arguments.len();
+            arguments[chosen].1 = at(arguments[chosen].1, Variance::Co);
+            types.constructor_apply(scratch, world.concrete(constructor), &arguments)
+        }
+        // A parameter is contravariant and the return, the last position, covariant.
         TypeNode::KFunction {
             quantifiers: &[],
             params,
             ret,
             ..
-        } => types.function_type(scratch, params.raw(), step(ret)),
-        _ => union_with(index),
+        } => {
+            let mut params = params.raw().to_vec();
+            let chosen = index % (params.len() + 1);
+            if chosen == params.len() {
+                return types.function_type(scratch, &params, at(ret, Variance::Co));
+            }
+            params[chosen].1 = at(params[chosen].1, Variance::Contra);
+            types.function_type(scratch, &params, ret)
+        }
+        // A monomorphic shape's slot is contravariant and its return, the last position, covariant.
+        TypeNode::ExpressionShape {
+            quantifiers: &[],
+            elements,
+            classes,
+            ret,
+            ..
+        } => {
+            let slots = elements
+                .iter()
+                .filter(|element| matches!(element, DispatchTokenElement::Slot(_)))
+                .count();
+            let chosen = index % (slots + 1);
+            if chosen == slots {
+                let ret = at(ret, Variance::Co);
+                return types
+                    .shape_group(scratch, &[], &[], &elements[..], classes, ret)
+                    .0;
+            }
+            let mut seen = 0;
+            let run: Vec<DispatchTokenElement> = elements
+                .iter()
+                .map(|element| match element {
+                    DispatchTokenElement::Slot(slot) => {
+                        let slot = if seen == chosen {
+                            at(*slot, Variance::Contra)
+                        } else {
+                            *slot
+                        };
+                        seen += 1;
+                        DispatchTokenElement::Slot(slot)
+                    }
+                    keyword => *keyword,
+                })
+                .collect();
+            types.shape_group(scratch, &[], &[], &run, classes, ret).0
+        }
+        _ => beside(index),
     }
+}
+
+/// [`Widening::Width`] at `kt`, or `None` where its node has no step of width the way `way` reads
+/// it. A name a record or function gains is the first of the binder alphabet, from `index`, it
+/// lacks; a function drops a parameter only when it keeps one.
+fn step_width(
+    world: &World,
+    scratch: BumpAllocator<'_>,
+    pool: &[KType],
+    kt: Handle,
+    index: usize,
+    way: Way,
+) -> Option<Handle> {
+    let types = &world.types;
+    let other = pool[index % pool.len()].raw();
+    let gain = |held: &[(BinderSymbol, Handle)]| -> Option<Vec<(BinderSymbol, Handle)>> {
+        let binders = &world.binders;
+        let name = (0..binders.len())
+            .map(|offset| binders[(index + offset) % binders.len()])
+            .find(|name| held.iter().all(|(taken, _)| taken != name))?;
+        let mut fields = held.to_vec();
+        fields.push((name, other));
+        Some(fields)
+    };
+    let drop = |held: &[(BinderSymbol, Handle)]| -> Vec<(BinderSymbol, Handle)> {
+        let mut fields = held.to_vec();
+        fields.remove(index % fields.len());
+        fields
+    };
+    Some(match (types.node(kt), way) {
+        (TypeNode::Record { fields }, Way::Up) if !fields.raw().is_empty() => {
+            types.record(scratch, &drop(fields.raw()))
+        }
+        (TypeNode::Record { fields }, Way::Down) => types.record(scratch, &gain(fields.raw())?),
+        (
+            TypeNode::KFunction {
+                quantifiers: &[],
+                params,
+                ret,
+                ..
+            },
+            Way::Up,
+        ) => types.function_type(scratch, &gain(params.raw())?, ret),
+        (
+            TypeNode::KFunction {
+                quantifiers: &[],
+                params,
+                ret,
+                ..
+            },
+            Way::Down,
+        ) if params.raw().len() >= 2 => types.function_type(scratch, &drop(params.raw()), ret),
+        (TypeNode::SignatureApply { signature, pins }, Way::Up) => {
+            types.signature_apply(scratch, signature, &drop(pins.raw()))
+        }
+        (TypeNode::SignatureMeet { members }, Way::Up) => members[index % members.len()],
+        (TypeNode::ConstructorApply { constructor, .. }, Way::Up)
+            if matches!(
+                types.node(constructor),
+                TypeNode::SetMember { .. } | TypeNode::Sibling(_)
+            ) =>
+        {
+            constructor
+        }
+        _ => return None,
+    })
 }
 
 /// `a ≤ b` by construction: `b` is `a` restated — a union of one member, or its node re-interned —
