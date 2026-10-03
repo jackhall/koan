@@ -930,7 +930,18 @@ proptest! {
             let bound = collector.bound(index).raw();
             // The least instance of the pair: its lower end where a lower contribution reached the
             // variable, and its upper end otherwise. An end is the extremum of its contributions
-            // where they have one.
+            // where they have one: the very handle over concrete contributions, and over
+            // parametric ones a handle lying under it and over it, since a parametric operand
+            // joins to the union, which keeps a variable beside a member the rigid rule orders
+            // with it.
+            let agrees = |solved: Handle, extremum: Handle, concrete: bool| {
+                if concrete {
+                    solved == extremum
+                } else {
+                    order::is_subtype_of(&types, scratch, solved, extremum)
+                        && order::is_subtype_of(&types, scratch, extremum, solved)
+                }
+            };
             if !lower.is_empty() {
                 prop_assert_eq!(*solved, lattice::join_iter(&types, scratch, lower.iter().copied()));
                 for ceiling in upper.iter().chain([&bound]) {
@@ -940,7 +951,8 @@ proptest! {
                     lower.iter().all(|other| order::is_subtype_of(&types, scratch, *other, **candidate))
                 });
                 if let Some(maximum) = maximum {
-                    prop_assert_eq!(*solved, *maximum);
+                    let concrete = lower.iter().all(|each| types.is_concrete(*each));
+                    prop_assert!(agrees(*solved, *maximum, concrete));
                 }
             } else {
                 let met = upper
@@ -953,7 +965,8 @@ proptest! {
                     })
                 });
                 if let Some(minimum) = minimum {
-                    prop_assert_eq!(*solved, *minimum);
+                    let concrete = upper.iter().all(|each| types.is_concrete(*each));
+                    prop_assert!(agrees(*solved, *minimum, concrete));
                 }
             }
             // Every solution fits its variable's declared bound.

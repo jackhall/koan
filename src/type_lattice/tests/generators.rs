@@ -604,15 +604,6 @@ fn arb_key(
         .prop_map(move |picks| picks.into_iter().map(|k| world.keywords[k]).collect())
 }
 
-/// The shortest key a shape drawn under `vocabulary` may have: one that must bind a group needs two
-/// slots to plant its variable at.
-fn least_key(vocabulary: Vocabulary) -> usize {
-    match vocabulary.groups {
-        Groups::Always | Groups::Outer => 2,
-        Groups::Never | Groups::Maybe => 1,
-    }
-}
-
 /// An expression shape over a key of one to four keywords — see [`arb_shape_over`].
 fn arb_shape(
     world: World,
@@ -620,7 +611,7 @@ fn arb_shape(
     members: Rc<Vec<Handle>>,
     vocabulary: Vocabulary,
 ) -> BoxedStrategy<Handle> {
-    arb_key(world.clone(), least_key(vocabulary)..5)
+    arb_key(world.clone(), 1..5)
         .prop_flat_map(move |key| {
             arb_shape_over(world.clone(), key, depth, members.clone(), vocabulary)
         })
@@ -630,12 +621,13 @@ fn arb_shape(
 /// An expression shape over `key`, over a quantifier group of its own where `vocabulary` allows or
 /// demands one. Every variable is minted under a variable-free bound.
 ///
-/// Each variable is planted at **two** slots on purpose, so the laws about quantified shapes run
-/// over variables that relate two positions, which a group sprinkled at random would rarely give;
-/// the group has at most `key.len() / 2` variables, so no planting overwrites another. Each slot is
-/// ranked `_` or by a small integer, so written order and rankings with ties both occur. Both
-/// occurrences take one [`planted`] form, so a union argument can pour its members into one
-/// variable through a list or a function's parameter.
+/// Each variable is planted at **two** positions on purpose — two slots, or a slot and the return,
+/// so a one-slot shape binds a group too — so the laws about quantified shapes run over variables
+/// that relate two positions, which a group sprinkled at random would rarely give; the group has
+/// at most `(key.len() + 1) / 2` variables, so no planting overwrites another. Each slot is ranked
+/// `_` or by a small integer, so written order and rankings with ties both occur. Both occurrences
+/// take one [`planted`] form, so a union argument can pour its members into one variable through a
+/// list or a function's parameter.
 fn arb_shape_over(
     world: World,
     key: Vec<KeywordSymbol>,
@@ -645,7 +637,8 @@ fn arb_shape_over(
 ) -> BoxedStrategy<Handle> {
     let grounds = world.grounds();
     let positions = key.len();
-    prop::collection::vec(0..grounds.len(), vocabulary.group_sizes(positions))
+    // The return is the last plantable position, as in `arb_function`.
+    prop::collection::vec(0..grounds.len(), vocabulary.group_sizes(positions + 1))
         .prop_flat_map(move |bounds| {
             let world = world.clone();
             let key = key.clone();
@@ -670,18 +663,18 @@ fn arb_shape_over(
                 )
             };
             (
-                prop::collection::vec(position(), positions),
-                position(),
+                prop::collection::vec(position(), positions + 1),
                 prop::collection::vec(prop::option::of(0..3u32), positions),
-                arb_plantings(positions, vars.len()),
+                arb_plantings(positions + 1, vars.len()),
             )
-                .prop_map(move |(mut slots, ret, ranks, plantings)| {
+                .prop_map(move |(mut slots, ranks, plantings)| {
                     for (variable, (pair, form)) in vars.iter().zip(&plantings) {
                         let planted = planted(&world, *variable, *form);
                         for position in pair {
                             slots[*position] = planted;
                         }
                     }
+                    let ret = slots.pop().expect("the return is the last position");
                     let run: Vec<DispatchTokenElement> = key
                         .iter()
                         .zip(slots)
@@ -733,7 +726,7 @@ fn arb_plantings(
 /// `vocabulary` allows or demands one. Every variable is minted under a variable-free bound.
 ///
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
-/// for the reason [`arb_shape_over`] plants one at two slots. Both occurrences take one [`planted`]
+/// for the reason [`arb_shape_over`] plants one at two. Both occurrences take one [`planted`]
 /// form.
 fn arb_function(
     world: World,
@@ -1035,7 +1028,7 @@ pub fn arb_shape_pair(
     vocabulary: Vocabulary,
 ) -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
     let shapes = world.clone();
-    arb_key(world.clone(), least_key(vocabulary)..5)
+    arb_key(world.clone(), 1..5)
         .prop_flat_map(move |key| {
             let shape = || {
                 let none = Rc::new(Vec::new());
@@ -1047,12 +1040,14 @@ pub fn arb_shape_pair(
         .boxed()
 }
 
-/// A candidate shape drawn under `candidate` and a shape over its key, binding no group, whose
-/// slots are arguments for it: three times in four the candidate's own slots at bindings within
-/// its group's bounds — ground types, or half the time where `candidate` has variables, lexical
-/// variables over them — each kept or met with a pool type; otherwise an unrelated draw. A slot
-/// whose instance holds a binder takes the unrelated draw's slot, and one whose meet is `Never`
-/// stays unmet. Two independent draws admit one another only by accident.
+/// A candidate shape drawn under `candidate` and a shape over its key and ranking, binding no
+/// group, whose slots are arguments for it: three times in four the candidate's own slots at
+/// bindings within its group's bounds — each slot at a ground type or, where `candidate` has
+/// variables and the slot's coin says so, at the lexical variable over that ground, so one slot
+/// sits at the ground another holds the variable over — each kept or met with a pool type;
+/// otherwise an unrelated draw. A slot whose instance holds a binder takes the unrelated draw's
+/// slot, and one whose meet is `Never` stays unmet. Two independent draws admit one another only
+/// by accident.
 pub fn arb_argument_pair(
     world: World,
     depth: u32,
@@ -1061,7 +1056,7 @@ pub fn arb_argument_pair(
     let pool = world.argument_pool();
     let (shapes, pools) = (world.clone(), pool.len());
     let bindings = world.clone();
-    arb_key(world.clone(), least_key(candidate)..5)
+    arb_key(world.clone(), 1..5)
         .prop_flat_map(move |key| {
             let positions = key.len();
             let none = || Rc::new(Vec::new());
@@ -1070,39 +1065,41 @@ pub fn arb_argument_pair(
                 arb_shape_over(shapes.clone(), key, depth, none(), Vocabulary::CONCRETE),
                 prop::bool::weighted(0.75),
                 prop::collection::vec(arb_binding(&bindings), 1),
-                any::<bool>(),
+                prop::collection::vec(any::<bool>(), positions),
                 prop::collection::vec(prop::option::of(0..pools), positions),
             )
         })
-        .prop_map(move |(a, unrelated, own, picks, lexical, narrowings)| {
+        .prop_map(move |(a, unrelated, own, picks, lexicals, narrowings)| {
             if !own {
                 return (world.declared(a), world.declared(unrelated));
             }
             let types = &world.types;
-            let TypeNode::ExpressionShape {
-                elements,
-                classes,
-                ret,
-                ..
-            } = types.node(unrelated)
+            let (
+                TypeNode::ExpressionShape { classes, .. },
+                TypeNode::ExpressionShape { elements, ret, .. },
+            ) = (types.node(a), types.node(unrelated))
             else {
                 unreachable!("a drawn shape is one");
             };
             let b = with_scratch(|scratch| {
-                let lexical = candidate.variables && lexical;
-                let bindings: Vec<Handle> = substitute::quantifier_bounds(types, a)
-                    .iter()
-                    .zip(&picks)
-                    .map(|(bound, pick)| world.bind_within(scratch, *bound, pick, lexical))
-                    .collect();
-                let mut own = shape_slots(a, types).zip(&narrowings);
+                let bind = |lexical: bool| -> Vec<Handle> {
+                    substitute::quantifier_bounds(types, a)
+                        .iter()
+                        .zip(&picks)
+                        .map(|(bound, pick)| world.bind_within(scratch, *bound, pick, lexical))
+                        .collect()
+                };
+                let (grounds, variables) = (bind(false), bind(candidate.variables));
+                let mut own = shape_slots(a, types).zip(&narrowings).zip(&lexicals);
                 let run: Vec<DispatchTokenElement> = elements
                     .iter()
                     .map(|element| match element {
                         DispatchTokenElement::Slot(unrelated) => {
-                            let (slot, narrowing) = own.next().expect("one key, one arity");
+                            let ((slot, narrowing), lexical) =
+                                own.next().expect("one key, one arity");
+                            let bindings = if *lexical { &variables } else { &grounds };
                             let instance =
-                                substitute::substitute_quantified(types, scratch, slot, &bindings);
+                                substitute::substitute_quantified(types, scratch, slot, bindings);
                             DispatchTokenElement::Slot(if holds_binder(types, scratch, instance) {
                                 *unrelated
                             } else {
