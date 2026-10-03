@@ -8,6 +8,10 @@
 //! The order, join and meet are laws over concrete types, stated through the typed relations;
 //! *fits* is stated over every generated type. The laws about the lattice's own machinery — the
 //! unifier, ranking, substitution, interning — read their draws raw, as the lattice does.
+//!
+//! A law draws a case that meets its precondition by construction ([`super::generators`]); an
+//! assertion a generator guarantees says so in its message. What remains is a `prop_assume!`, and
+//! each config caps the rejects, so a law whose draws drift off their precondition fails loudly.
 
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -41,8 +45,10 @@ use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 use crate::type_lattice::{lattice, order};
 
 use super::generators::{
-    World, arb_any, arb_arguments, arb_concrete, arb_function_type, arb_instance_chain,
-    arb_shape_type, arb_wanted_instance,
+    Groups, Vocabulary, World, arb_any, arb_any_with, arb_argument_pair, arb_arguments, arb_chain,
+    arb_concrete, arb_fits_chain, arb_function_type, arb_instance_chain, arb_ordered_pair,
+    arb_own_instance, arb_rigid, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
+    arb_signature_type, arb_wanted_instance,
 };
 
 thread_local! {
@@ -64,11 +70,6 @@ fn one() -> BoxedStrategy<DeclaredType<Parametric>> {
     arb_any(world(), 3)
 }
 
-/// A shallower one, for the ternary laws that would otherwise multiply three deep trees.
-fn small() -> BoxedStrategy<DeclaredType<Parametric>> {
-    arb_any(world(), 2)
-}
-
 /// A generated concrete type at the standard depth: what the order, join and meet relate.
 fn concrete() -> BoxedStrategy<KType> {
     arb_concrete(world(), 3)
@@ -85,26 +86,66 @@ fn shape() -> BoxedStrategy<DeclaredType<Parametric>> {
     arb_shape_type(world(), 3)
 }
 
+/// A generated signature type, for the laws whose subject is one.
+fn signature_type() -> BoxedStrategy<KType> {
+    arb_signature_type(world(), 3)
+}
+
 /// A generated function type, for the same reason [`shape`] exists: the laws about a binder's
 /// group have nothing to say about a draw that is not one.
 fn function() -> BoxedStrategy<DeclaredType<Parametric>> {
     arb_function_type(world(), 3)
 }
 
+/// A binder over a group of its own, over anything, nested binders included.
+const BINDER: Vocabulary = Vocabulary {
+    groups: Groups::Always,
+    ..Vocabulary::ANY
+};
+
+/// A binder whose only variables are its own group's, and which nests no binder: its instance at
+/// concrete bindings is concrete.
+const CLOSED_BINDER: Vocabulary = Vocabulary {
+    variables: false,
+    groups: Groups::Outer,
+};
+
+/// A binder that may name lexical variables, and which nests no binder: its instance is concrete
+/// once a run binds them.
+const OPEN_BINDER: Vocabulary = Vocabulary {
+    variables: true,
+    groups: Groups::Outer,
+};
+
 /// The binary laws take the whole of whatever depth the tier asks for: the space two generated
 /// types range over is the widest any law here draws from, and a thin sweep of it proves little.
+///
+/// A law may reject at most as many cases as it runs, so one whose draws meet its precondition
+/// less than half the time fails with proptest's table of reasons rather than passing thinly.
 fn binary() -> ProptestConfig {
     ProptestConfig {
         cases: crate::tests::case_share(1, 1),
+        max_global_rejects: crate::tests::case_share(1, 1),
         ..ProptestConfig::default()
     }
 }
 
+/// [`binary`] for the laws whose draws meet their precondition almost always: a law may reject a
+/// quarter as many cases as it runs, so a generator drifting off its precondition shows early.
+fn strict() -> ProptestConfig {
+    ProptestConfig {
+        max_global_rejects: crate::tests::case_share(1, 4),
+        ..binary()
+    }
+}
+
 /// Three deep trees per case, so the ternary laws take three-eighths of the binary depth to land
-/// near the same wall-clock — the ratio holds at whatever the tier sets.
+/// near the same wall-clock — the ratio holds at whatever the tier sets, and so does the reject
+/// budget's.
 fn ternary() -> ProptestConfig {
     ProptestConfig {
         cases: crate::tests::case_share(3, 8),
+        max_global_rejects: crate::tests::case_share(3, 8),
         ..ProptestConfig::default()
     }
 }
@@ -180,11 +221,12 @@ proptest! {
     }
 
     #[test]
-    fn the_order_is_antisymmetric(a in concrete(), b in concrete()) {
+    fn the_order_is_antisymmetric((a, b) in arb_ordered_pair(world(), 3)) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if is_subtype_of(&types, scratch, a, b) && is_subtype_of(&types, scratch, b, a) {
+        prop_assert!(is_subtype_of(&types, scratch, a, b), "the pair is ordered");
+        if is_subtype_of(&types, scratch, b, a) {
             prop_assert_eq!(a, b);
         }
     }
@@ -203,17 +245,19 @@ proptest! {
     #[test]
     fn below_a_rigid_variable_fit_itself_and_what_fits_its_lower_end(
         a in one(),
-        b in one(),
+        b in arb_rigid(world()),
+        same in any::<bool>(),
     ) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if let Some(lower) = types.node(b.raw()).rigid_lower() {
-            prop_assert_eq!(
-                fits(&types, scratch, a, b),
-                a == b || fits(&types, scratch, a, lower)
-            );
-        }
+        let b = DeclaredType::Type(b);
+        let a = if same { b } else { a };
+        let lower = types.node(b.raw()).rigid_lower().expect("a rigid variable has a lower end");
+        prop_assert_eq!(
+            fits(&types, scratch, a, b),
+            a == b || fits(&types, scratch, a, lower)
+        );
     }
 
     #[test]
@@ -225,14 +269,13 @@ proptest! {
     }
 
     #[test]
-    fn fits_contains_the_order(a in concrete(), b in concrete()) {
+    fn fits_contains_the_order((a, b) in arb_ordered_pair(world(), 3)) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if is_subtype_of(&types, scratch, a, b) {
-            prop_assert!(fits(&types, scratch, a, b));
-            prop_assert!(satisfied_by(&types, scratch, b, a));
-        }
+        prop_assert!(is_subtype_of(&types, scratch, a, b), "the pair is ordered");
+        prop_assert!(fits(&types, scratch, a, b));
+        prop_assert!(satisfied_by(&types, scratch, b, a));
     }
 
     #[test]
@@ -252,23 +295,23 @@ proptest! {
     #![proptest_config(ternary())]
 
     #[test]
-    fn the_order_is_transitive(a in small_concrete(), b in small_concrete(), c in small_concrete()) {
+    fn the_order_is_transitive((a, b, c) in arb_chain(world(), 2)) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if is_subtype_of(&types, scratch, a, b) && is_subtype_of(&types, scratch, b, c) {
-            prop_assert!(is_subtype_of(&types, scratch, a, c));
-        }
+        prop_assert!(is_subtype_of(&types, scratch, a, b), "the chain's first step is ordered");
+        prop_assert!(is_subtype_of(&types, scratch, b, c), "the chain's second step is ordered");
+        prop_assert!(is_subtype_of(&types, scratch, a, c));
     }
 
     #[test]
-    fn fits_is_transitive(a in small(), b in small(), c in small()) {
+    fn fits_is_transitive((a, b, c) in arb_fits_chain(world(), 2)) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if fits(&types, scratch, a, b) && fits(&types, scratch, b, c) {
-            prop_assert!(fits(&types, scratch, a, c));
-        }
+        prop_assert!(fits(&types, scratch, a, b), "the chain's first step fits");
+        prop_assert!(fits(&types, scratch, b, c), "the chain's second step fits");
+        prop_assert!(fits(&types, scratch, a, c));
     }
 }
 
@@ -289,12 +332,17 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(binary())]
+    #![proptest_config(strict())]
 
     /// An instance is taken of a scheme exactly where the scheme fits the type it is wanted at:
     /// the door answers *fits*' instantiation clause, and only adds which instance.
     #[test]
-    fn an_instance_exists_where_its_scheme_fits((scheme, wanted) in arb_wanted_instance(world(), 3)) {
+    fn an_instance_exists_where_its_scheme_fits(
+        (scheme, wanted) in prop_oneof![
+            arb_wanted_instance(world(), 3, BINDER, Vocabulary::CLOSED),
+            arb_wanted_instance(world(), 3, BINDER, Vocabulary::CONCRETE),
+        ]
+    ) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -310,21 +358,18 @@ proptest! {
     /// instance returning a signature fits a wanted one that asks no member without lying under it.
     #[test]
     fn an_instance_fits_the_type_it_is_wanted_at(
-        (scheme, wanted) in arb_wanted_instance(world(), 3)
+        (scheme, wanted) in arb_own_instance(world(), 3, CLOSED_BINDER, Vocabulary::CONCRETE)
     ) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some(wanted) = types.concrete(wanted) else {
-            return Ok(());
-        };
-        let Ok(solution) = instance_under(&types, scratch, scheme, wanted) else {
-            return Ok(());
-        };
-        let instance = types.concrete(instantiate_quantified(&types, scratch, scheme, &solution));
-        // A variable free in the scheme outside its own group stays free in the instance.
-        prop_assume!(instance.is_some());
-        let instance = instance.expect("assumed");
+        let wanted = types.concrete(wanted).expect("a concrete scheme's ground instance is concrete");
+        let solution = instance_under(&types, scratch, scheme, wanted).ok();
+        prop_assume!(solution.is_some());
+        let solution = solution.expect("assumed");
+        let instance = types
+            .concrete(instantiate_quantified(&types, scratch, scheme, &solution))
+            .expect("a concrete scheme's instance under a concrete type is concrete");
         prop_assert!(fits(&types, scratch, instance, wanted));
     }
 
@@ -334,32 +379,30 @@ proptest! {
     /// instantiating — the run's instance is the load's, bound.
     #[test]
     fn an_instance_over_lexical_variables_holds_at_every_binding(
-        (scheme, wanted) in arb_wanted_instance(world(), 3),
+        (scheme, wanted) in arb_own_instance(world(), 3, OPEN_BINDER, Vocabulary::CLOSED),
         draw in draw(),
     ) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Ok(solution) = instance_under(&types, scratch, scheme, wanted) else {
-            return Ok(());
-        };
-        // Where nothing names a lexical variable, the closed law above says it all.
-        if types.is_concrete(wanted.raw())
-            && solution.iter().all(|each| types.is_concrete(each.raw()))
-        {
-            return Ok(());
-        }
+        let solution = instance_under(&types, scratch, scheme, wanted).ok();
+        prop_assume!(solution.is_some());
+        let solution = solution.expect("assumed");
+        prop_assert!(
+            !types.is_concrete(wanted.raw()),
+            "an instance at lexical bindings names a lexical variable"
+        );
         let bind = |kt: Handle| instance(&types, scratch, kt, &draw);
         let run_solution: Vec<Handle> = solution.iter().map(|each| bind(each.raw())).collect();
         let made = instantiate_quantified(&types, scratch, scheme, &solution);
         let (run_made, run_wanted) = (bind(made.raw()), bind(wanted.raw()));
-        // A variable free in the scheme outside its group and every lexical level stays free.
-        if !(types.is_concrete(run_made)
-            && types.is_concrete(run_wanted)
-            && run_solution.iter().all(|each| types.is_concrete(*each)))
-        {
-            return Ok(());
-        }
+        // A scheme binding no nested group holds no variable a run leaves free.
+        prop_assert!(
+            types.is_concrete(run_made)
+                && types.is_concrete(run_wanted)
+                && run_solution.iter().all(|each| types.is_concrete(*each)),
+            "a run binds every lexical variable"
+        );
         prop_assert!(order::fits(&types, scratch, run_made, run_wanted));
         for (entry, bound) in run_solution.iter().zip(quantifier_bounds(&types, scheme.raw())) {
             prop_assert!(order::fits(&types, scratch, *entry, bound.raw()));
@@ -520,17 +563,14 @@ proptest! {
         prop_assert_eq!(substitute_parameters(&types, scratch, a, none), a);
     }
 
-    // A type holding a binder is left out: relating two of them runs the unifier, whose
+    // A type holding a binder is not drawn: relating two of them runs the unifier, whose
     // completeness is not this law's subject.
     #[test]
-    fn bounding_above_lies_over_every_instance(a in one()) {
+    fn bounding_above_lies_over_every_instance(a in arb_any_with(world(), 3, Vocabulary::CLOSED)) {
         let a = a.raw();
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        prop_assume!(!visit(&types, scratch, a, &mut |_, node, _| {
-            if node.binds_quantifiers() { Visit::Stop } else { Visit::Descend }
-        }));
         let above = bound_above(&types, scratch, a);
         prop_assert!(!types.contains_rigid(above));
         prop_assert!(order::is_subtype_of(&types, scratch, a, above));
@@ -543,7 +583,7 @@ proptest! {
 // --- 6. Shapes ---
 
 proptest! {
-    #![proptest_config(binary())]
+    #![proptest_config(strict())]
 
     /// Re-interning a shape through its door with the group it already carries returns the very
     /// handle: the group order is idempotent.
@@ -676,23 +716,26 @@ proptest! {
         }
     }
 
-    /// Over monomorphic shapes the ranking is the pointwise order folded class by class: the first
-    /// class whose slots order the pair one way only decides, and two rankings of one key are
-    /// unrelated.
+    /// Over monomorphic shapes the ranking is pointwise *fits* folded class by class: the first class
+    /// whose slots fit the pair one way only decides, and two rankings of one key are unrelated.
+    /// *Fits*, not the order: a slot ranks by what it admits, and a signature asking more members
+    /// fits one asking fewer without lying under it.
     #[test]
-    fn monomorphic_specificity_is_the_lexicographic_pointwise_fold(a in shape(), b in shape()) {
+    fn monomorphic_specificity_is_the_lexicographic_pointwise_fold(
+        (a, b) in arb_shape_pair(world(), 3, Vocabulary::CONCRETE),
+    ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let monomorphic = shape_quantifiers(a, &types).is_empty()
-            && shape_quantifiers(b, &types).is_empty()
-            && shape_return(a, &types).is_some()
-            && shape_return(b, &types).is_some()
-            && keys_equal(a, b, &types);
-        if !monomorphic {
-            return Ok(());
-        }
+        prop_assert!(
+            shape_quantifiers(a, &types).is_empty()
+                && shape_quantifiers(b, &types).is_empty()
+                && shape_return(a, &types).is_some()
+                && shape_return(b, &types).is_some()
+                && keys_equal(a, b, &types),
+            "the pair is two monomorphic shapes over one key"
+        );
         let actual = shape_specificity(&types, scratch, a, b);
         let (ranking, other) = (shape_classes(a, &types), shape_classes(b, &types));
         if ranking != other {
@@ -705,8 +748,8 @@ proptest! {
         let mut expected = Specificity::Equal;
         for current in 0..left.len() {
             let in_class = || (0..left.len()).filter(|index| class(*index) == current);
-            let more = in_class().all(|i| order::is_subtype_of(&types, scratch, left[i], right[i]));
-            let less = in_class().all(|i| order::is_subtype_of(&types, scratch, right[i], left[i]));
+            let more = in_class().all(|i| order::fits(&types, scratch, left[i], right[i]));
+            let less = in_class().all(|i| order::fits(&types, scratch, right[i], left[i]));
             match (more, less) {
                 (true, false) => {
                     expected = Specificity::StrictlyMore;
@@ -724,19 +767,20 @@ proptest! {
     }
 
     #[test]
-    fn a_shape_below_another_admits_what_it_admits(a in shape(), b in shape()) {
+    fn a_shape_below_another_admits_what_it_admits((a, b) in arb_shape_below(world(), 3)) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let comparable = shape_return(a, &types).is_some()
-            && shape_return(b, &types).is_some()
-            && shape_quantifiers(a, &types).is_empty()
-            && shape_quantifiers(b, &types).is_empty()
-            && keys_equal(a, b, &types);
-        if !comparable || !order::fits(&types, scratch, a, b) {
-            return Ok(());
-        }
+        prop_assert!(
+            shape_return(a, &types).is_some()
+                && shape_return(b, &types).is_some()
+                && shape_quantifiers(a, &types).is_empty()
+                && shape_quantifiers(b, &types).is_empty()
+                && keys_equal(a, b, &types),
+            "the pair is two monomorphic shapes over one key"
+        );
+        prop_assume!(order::fits(&types, scratch, a, b));
         // `a ≤ b` on monomorphic shapes means every position `b` accepts, `a` accepts too.
         let arity = shape_slots(a, &types).count();
         let world = world();
@@ -784,28 +828,26 @@ proptest! {
     #![proptest_config(binary())]
 
     #[test]
-    fn admission_without_quantifiers_is_the_order(a in one(), b in one()) {
+    fn admission_without_quantifiers_is_the_order(
+        a in arb_any_with(world(), 3, Vocabulary::CLOSED),
+        b in one(),
+    ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if types.contains_quantified(a) {
-            return Ok(());
-        }
         let mut collector = Collector::<Handle>::new(scratch, &[]);
         let admitted = admits(&types, scratch, a, b, Variance::Co, &mut collector).is_ok();
         prop_assert_eq!(admitted, order::satisfied_by(&types, scratch, a, b));
     }
 
     #[test]
-    fn a_carried_variable_is_admitted_where_its_bound_is(a in one(), b in one()) {
+    fn a_carried_variable_is_admitted_where_its_bound_is(a in one(), b in arb_rigid(world())) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some(bound) = types.node(b).rigid_bound() else {
-            return Ok(());
-        };
+        let bound = types.node(b).rigid_bound().expect("a rigid variable has a bound");
         // A generated type holds no free quantifier, so a declared side that has one is built:
         // `a | LIST OF X` reaches the unifier's leaf through the list, and a union bound spanning
         // `a`'s members and the list reaches its member-by-member fallback.
@@ -826,26 +868,22 @@ proptest! {
     }
 
     #[test]
-    fn a_solution_is_the_least_instance_of_its_contributions(a in shape(), b in shape()) {
+    fn a_solution_is_the_least_instance_of_its_contributions(
+        (a, b) in arb_argument_pair(world(), 3, BINDER),
+    ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
         let bounds = quantifier_bounds(&types, a);
-        if bounds.is_empty() {
-            return Ok(());
-        }
+        prop_assert!(!bounds.is_empty(), "the candidate binds a group");
         let slots: Vec<Handle> = shape_slots(a, &types).collect();
         let arguments: Vec<Handle> = shape_slots(b, &types).collect();
-        if slots.len() != arguments.len() || !keys_equal(a, b, &types) {
-            return Ok(());
-        }
+        prop_assert!(keys_equal(a, b, &types), "the pair shares one key");
         let mut collector = Collector::<Handle>::new(scratch, bounds);
-        for (slot, argument) in slots.iter().zip(arguments.iter()) {
-            if admits(&types, scratch, *slot, *argument, Variance::Co, &mut collector).is_err() {
-                return Ok(());
-            }
-        }
+        prop_assume!(slots.iter().zip(arguments.iter()).all(|(slot, argument)| {
+            admits(&types, scratch, *slot, *argument, Variance::Co, &mut collector).is_ok()
+        }));
         let solution = match collector.solve(&types) {
             Ok(solution) => solution,
             // A solve fails only where the set its pair denotes is empty.
@@ -918,10 +956,26 @@ struct Draw {
     instances: Vec<u8>,
 }
 
-/// A [`Draw`], weighted toward the candidate's own slot so the static solve succeeds often enough
-/// for the laws to bite.
+/// A candidate shape over anything, and a concrete shape over its key, mostly its own instance,
+/// whose slots a call's static types may be drawn from.
+fn candidate_pair() -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
+    arb_argument_pair(world(), 3, Vocabulary::ANY)
+}
+
+/// A [`Draw`], weighted toward the candidate's own slot and the argument shape's, mostly its
+/// instance, so the static solve succeeds often enough for the laws to bite.
 fn draw() -> impl Strategy<Value = Draw> {
-    let source = prop_oneof![3 => Just(0u8), 1 => Just(1u8), 1 => Just(2u8)];
+    draw_from(prop_oneof![4 => Just(0u8), 2 => Just(1u8), 1 => Just(2u8)])
+}
+
+/// A [`Draw`] for the laws that need a call to be admitted: a static type from the pool is almost
+/// never admitted, so only the candidate's own slots and the argument shape's are drawn from.
+fn admitted_draw() -> impl Strategy<Value = Draw> {
+    draw_from(prop_oneof![2 => Just(0u8), 1 => Just(1u8)])
+}
+
+/// A [`Draw`] whose static types come from where `source` says.
+fn draw_from(source: impl Strategy<Value = u8>) -> impl Strategy<Value = Draw> {
     (
         prop::collection::vec((source, 0u8..3), 4),
         arb_arguments(world(), 4),
@@ -979,8 +1033,8 @@ fn instance(
 /// read, or from the argument pool. Its mode is the pick's second element: `1` is exactly the
 /// static type, carried as the run carries it; `2`, where the static type holds no rigid variable
 /// and meets a drawn type above `Never`, is bounded below by that meet, which it carries; anything
-/// else is within the static type, carrying it met with a drawn type. `None` where some argument is
-/// `Never`.
+/// else is within the static type, carrying it met with a drawn type, or as the run carries it where
+/// that meet is `Never`. `None` where some static type is `Never`.
 fn static_and_carried(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -1022,7 +1076,10 @@ fn static_and_carried(
                     lower: Handle::NEVER,
                     upper: static_type,
                 },
-                lattice::meet_through_variables(types, scratch, run, draw.drawn[k].raw()),
+                match lattice::meet_through_variables(types, scratch, run, draw.drawn[k].raw()) {
+                    Handle::NEVER => run,
+                    met => met,
+                },
             ),
         };
         if argument.upper == Handle::NEVER || one == Handle::NEVER {
@@ -1100,26 +1157,22 @@ proptest! {
     /// lies in the interval reported over the static ones.
     #[test]
     fn a_carried_solution_lies_in_its_static_interval(
-        a in shape(),
-        b in shape(),
-        draw in draw(),
+        (a, b) in candidate_pair(),
+        draw in admitted_draw(),
     ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
-            return Ok(());
-        };
+        let pair = static_and_carried(&types, scratch, a, b, &draw);
+        prop_assume!(pair.is_some());
+        let (arguments, carried) = pair.expect("assumed");
         let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
         let uppers: Vec<Handle> = arguments.iter().map(|argument| argument.upper).collect();
         let (statics, collector) = collect_jointly(&types, scratch, a, &uppers);
-        let (Some(statics), Some(solution)) = (
-            statics,
-            solve_jointly(&types, scratch, instance(&types, scratch, a, &draw), &carried),
-        ) else {
-            return Ok(());
-        };
+        let solution = solve_jointly(&types, scratch, instance(&types, scratch, a, &draw), &carried);
+        prop_assume!(statics.is_some() && solution.is_some());
+        let (statics, solution) = (statics.expect("assumed"), solution.expect("assumed"));
         let slots: Vec<Handle> = shape_slots(a, &types).collect();
         // Over exact arguments the static solve is the call's own where a run reproduces it.
         let all_exact = arguments.iter().all(|argument| argument.is_exact())
@@ -1145,26 +1198,23 @@ proptest! {
     /// solving gives the static solution so bound, and fails exactly where the static solve fails.
     #[test]
     fn a_reproducible_solve_commutes_with_binding(
-        a in shape(),
-        b in shape(),
+        (a, b) in candidate_pair(),
         draw in draw(),
     ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some((arguments, _)) = static_and_carried(&types, scratch, a, b, &draw) else {
-            return Ok(());
-        };
+        let pair = static_and_carried(&types, scratch, a, b, &draw);
+        prop_assume!(pair.is_some());
+        let (arguments, _) = pair.expect("assumed");
         let uppers: Vec<Handle> = arguments.iter().map(|argument| argument.upper).collect();
         // A closed solve is the closed laws' to state.
-        if !types.contains_rigid(a) && !uppers.iter().any(|upper| types.contains_rigid(*upper)) {
-            return Ok(());
-        }
+        prop_assume!(
+            types.contains_rigid(a) || uppers.iter().any(|upper| types.contains_rigid(*upper))
+        );
         let (statics, collector) = collect_jointly(&types, scratch, a, &uppers);
-        if !collector.reproducible(&types) {
-            return Ok(());
-        }
+        prop_assume!(collector.reproducible(&types));
         let bound: Vec<Handle> = uppers
             .iter()
             .map(|upper| instance(&types, scratch, *upper, &draw))
@@ -1182,62 +1232,26 @@ proptest! {
         }
     }
 
-    /// A verdict holds of every call within the static types: *always* admits, *never* does not,
-    /// and a solution lies in the intervals judging reported.
-    #[test]
-    fn a_verdict_holds_of_every_call_within_its_static_types(
-        a in shape(),
-        b in shape(),
-        draw in draw(),
-    ) {
-        let (a, b) = (a.raw(), b.raw());
-        let types = registry();
-        let bump = Bump::new();
-        let scratch = &bump;
-        let Some((arguments, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
-            return Ok(());
-        };
-        let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
-        let judged = judge_by_class(&types, scratch, a, &arguments);
-        // The run binds the candidate's lexical variables as it binds its arguments'.
-        let run_shape = instance(&types, scratch, a, &draw);
-        let admitted = admit_by_class(&types, scratch, run_shape, &carried);
-        match judged.verdict {
-            Verdict::Always => prop_assert!(admitted.is_some(), "an always candidate refused"),
-            Verdict::Never => prop_assert!(admitted.is_none(), "a never candidate admitted"),
-            Verdict::Maybe => {}
-        }
-        if let (Some(reported), Some(solution)) = (judged.intervals, admitted) {
-            for (solved, interval) in solution.iter().zip(reported) {
-                prop_assert!(
-                    within(&types, scratch, *solved, run_interval(interval.raw())),
-                    "a class-by-class solution left its judged interval",
-                );
-            }
-        }
-    }
-
     /// A solve reads only its solving slots: with other calls' arguments at the slots that solve
     /// nothing, wherever the shape admits them, the solution is the same. A slot the door misses
     /// would carry another call's argument into the solve.
     #[test]
     fn a_solution_reads_only_its_solving_slots(
-        a in shape(),
-        b in shape(),
-        draw in draw(),
+        (a, b) in candidate_pair(),
+        draw in admitted_draw(),
         others in prop::collection::vec(draw(), 4),
     ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let Some((_, carried)) = static_and_carried(&types, scratch, a, b, &draw) else {
-            return Ok(());
-        };
+        let pair = static_and_carried(&types, scratch, a, b, &draw);
+        prop_assume!(pair.is_some());
+        let (_, carried) = pair.expect("assumed");
         let run_shape = instance(&types, scratch, a, &draw);
-        let Some(solution) = admit_by_class(&types, scratch, run_shape, &carried) else {
-            return Ok(());
-        };
+        let solution = admit_by_class(&types, scratch, run_shape, &carried);
+        prop_assume!(solution.is_some());
+        let solution = solution.expect("assumed");
         let solving = solving_slots(&types, scratch, run_shape);
         for other in &others {
             let Some((_, elsewhere)) = static_and_carried(&types, scratch, a, b, other) else {
@@ -1260,6 +1274,44 @@ proptest! {
                 if let Some(mixed) = admit_by_class(&types, scratch, run_shape, &mixed) {
                     prop_assert_eq!(mixed, solution, "a solve read a slot that solves nothing");
                 }
+            }
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(strict())]
+
+    /// A verdict holds of every call within the static types: *always* admits, *never* does not,
+    /// and a solution lies in the intervals judging reported.
+    #[test]
+    fn a_verdict_holds_of_every_call_within_its_static_types(
+        (a, b) in candidate_pair(),
+        draw in draw(),
+    ) {
+        let (a, b) = (a.raw(), b.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let pair = static_and_carried(&types, scratch, a, b, &draw);
+        prop_assume!(pair.is_some());
+        let (arguments, carried) = pair.expect("assumed");
+        let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
+        let judged = judge_by_class(&types, scratch, a, &arguments);
+        // The run binds the candidate's lexical variables as it binds its arguments'.
+        let run_shape = instance(&types, scratch, a, &draw);
+        let admitted = admit_by_class(&types, scratch, run_shape, &carried);
+        match judged.verdict {
+            Verdict::Always => prop_assert!(admitted.is_some(), "an always candidate refused"),
+            Verdict::Never => prop_assert!(admitted.is_none(), "a never candidate admitted"),
+            Verdict::Maybe => {}
+        }
+        if let (Some(reported), Some(solution)) = (judged.intervals, admitted) {
+            for (solved, interval) in solution.iter().zip(reported) {
+                prop_assert!(
+                    within(&types, scratch, *solved, run_interval(interval.raw())),
+                    "a class-by-class solution left its judged interval",
+                );
             }
         }
     }
@@ -1330,14 +1382,15 @@ proptest! {
     /// *Fits* holds of a signature type and itself and of anything and `Module`, and the meet of
     /// two signature types fits both.
     #[test]
-    fn fits_bounds_the_signature_meet(a in one(), b in one()) {
+    fn fits_bounds_the_signature_meet(a in signature_type(), b in signature_type()) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if !is_signature_type(&types, a) || !is_signature_type(&types, b) {
-            return Ok(());
-        }
+        prop_assert!(
+            is_signature_type(&types, a) && is_signature_type(&types, b),
+            "the pair is two signature types"
+        );
         prop_assert!(sig_fits(&types, scratch, a, a).is_ok());
         prop_assert!(sig_fits(&types, scratch, a, Handle::EMPTY_SIGNATURE).is_ok());
         let met = lattice::meet_through_variables(&types, scratch, a, b);
@@ -1347,16 +1400,13 @@ proptest! {
 
     /// For two signature types the order is R-5 over their applications, and nothing solves.
     #[test]
-    fn the_signature_order_is_its_rule(a in one(), b in one()) {
+    fn the_signature_order_is_its_rule(a in signature_type(), b in signature_type()) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let (Some(lower), Some(upper)) =
-            (applications(&types, scratch, a), applications(&types, scratch, b))
-        else {
-            return Ok(());
-        };
+        let lower = applications(&types, scratch, a).expect("a signature type has applications");
+        let upper = applications(&types, scratch, b).expect("a signature type has applications");
         prop_assert_eq!(
             order::is_subtype_of(&types, scratch, a, b),
             applications_under(&lower, &upper)
@@ -1366,11 +1416,10 @@ proptest! {
     /// Every interned schema is stored in its canonical order — the invariant that lets every
     /// reader walk a table straight through and look a name up by binary search.
     #[test]
-    fn a_schema_is_stored_in_canonical_order(a in one()) {
-        let a = a.raw();
+    fn a_schema_is_stored_in_canonical_order(a in arb_signature(world(), 3)) {
         let types = registry();
         let TypeNode::Signature { schema, .. } = types.node(a) else {
-            return Ok(());
+            unreachable!("a drawn signature is one");
         };
         prop_assert!(schema.parameters.windows(2).all(|w| w[0].0 < w[1].0));
         prop_assert!(schema.manifest_members.windows(2).all(|w| w[0].0 < w[1].0));

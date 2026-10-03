@@ -179,10 +179,12 @@ pub(super) fn instance_under<'s, T: TypeHandle>(
 ///
 /// At each class in turn, `a` is at least as specific as `b` when `b`'s slots there admit `a`'s
 /// ([`class_at_least`]); the first class at which exactly one side holds decides. For monomorphic
-/// shapes each class is the pointwise order over its slots; for a generic candidate it is the
-/// classic "more specific method" rule, so `(f _ :Number)` beats `(f FOR ALL (Elt) _ :Elt)` and
-/// `(f _ :Any)` ties with it. Every class holding both ways is `Equal`; a pair no class orders and
-/// some class leaves unrelated is `Incomparable`, as are shapes under different keys or rankings.
+/// shapes each class is pointwise *fits* over its slots — wider than the order for signature
+/// types, where a signature asking more members fits one asking fewer; for a generic candidate it
+/// is the classic "more specific method" rule, so `(f _ :Number)` beats `(f FOR ALL (Elt) _ :Elt)`
+/// and `(f _ :Any)` ties with it. Every class holding both ways is `Equal`; a pair no class orders
+/// and some class leaves unrelated is `Incomparable`, as are shapes under different keys or
+/// rankings.
 pub(super) fn shape_specificity(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,

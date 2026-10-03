@@ -61,8 +61,9 @@ type Statement = Vec<Tree>;
 /// token is a keyword whatever it spells.
 const KEYWORD_POOL: &[&str] = &["ZZ", "QQ", "WW", "+", "*", "<", ">", "|"];
 
-/// Whether `text` reaches [`classify_token`] as a part `want` accepts. Every generated token
-/// passes through here, so a spelling the classifier rejects never reaches the renderer.
+/// Whether `text` reaches [`classify_token`] as a part `want` accepts. Every generated identifier
+/// and type name passes through here, and the keyword pool once in [`keyword_pool_classifies`], so
+/// a spelling the classifier rejects never reaches the renderer.
 fn classifies(text: &str, want: fn(&ExpressionPart<'_>) -> bool) -> bool {
     let program = program_storage();
     let symbols = SymbolInterner::new();
@@ -73,11 +74,18 @@ fn classifies(text: &str, want: fn(&ExpressionPart<'_>) -> bool) -> bool {
 }
 
 fn keyword() -> impl Strategy<Value = String> {
-    prop::sample::select(KEYWORD_POOL)
-        .prop_map(String::from)
-        .prop_filter("classifies as a keyword", |text| {
-            classifies(text, |part| matches!(part, ExpressionPart::Keyword(_)))
-        })
+    prop::sample::select(KEYWORD_POOL).prop_map(String::from)
+}
+
+/// Every [`KEYWORD_POOL`] spelling classifies as a keyword, so [`keyword`] draws one unfiltered.
+#[test]
+fn keyword_pool_classifies() {
+    for text in KEYWORD_POOL {
+        assert!(
+            classifies(text, |part| matches!(part, ExpressionPart::Keyword(_))),
+            "{text} does not classify as a keyword"
+        );
+    }
 }
 
 fn identifier() -> impl Strategy<Value = String> {

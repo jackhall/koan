@@ -317,6 +317,13 @@ quantified positions, where a solve joins and meets. The interval and verdict
 laws draw their carried types within the static ones, binding each lexical
 variable as a run does.
 
+A law draws a case that meets its precondition by construction rather than by
+filtering, since a case that passes without reaching the law is invisible: an
+ordered pair or chain is built by widening, two shapes share one key, an
+argument shape is mostly its candidate's own instance, and a scheme comes with
+its own instance. What still misses is a counted rejection, capped per law, so
+a generator that drifts off a precondition fails the suite.
+
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in
 [tests/families.rs](tests/families.rs), an interval's in

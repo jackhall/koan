@@ -12,8 +12,18 @@
 //! is built ([`with_scratch`]), so generation keeps nothing but interned content.
 //!
 //! Generation runs over raw [`Handle`]s, as the lattice itself does, and each public strategy hands
-//! its draw out typed: [`arb_concrete`] a [`KType`], every other one a [`DeclaredType`], since a
-//! draw may be a scheme.
+//! its draw out at the narrowest type it guarantees: a [`KType`] where the draw is concrete, a
+//! [`Parametric`] for a variable, a [`Scheme`] for a binder, and a [`DeclaredType`] where it may be
+//! either.
+//!
+//! A law draws its precondition by construction rather than filtering for it, since a case that
+//! passes without exercising the law is invisible to proptest. A [`Vocabulary`] says what a draw
+//! may hold — variables, and whether a shape or function binds a group of its own — and the paired
+//! strategies build what independent draws line up only by accident: two shapes over one key
+//! ([`arb_shape_pair`]), arguments a candidate admits ([`arb_argument_pair`]), a shape below
+//! another ([`arb_shape_below`]), an ordered pair or chain by [`Widening`]s ([`arb_chain`]), and a
+//! scheme with its own instance ([`arb_own_instance`]). What still misses a precondition is a
+//! `prop_assume!` the laws' reject budget counts.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -30,11 +40,15 @@ use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
 use crate::type_lattice::registry::TypeRegistry;
+use crate::type_lattice::schema::shape_slots;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
 use crate::type_lattice::shape::{
     DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes,
 };
-use crate::type_lattice::typed::{instantiate_quantified, join, meet, quantifier_bounds};
+use crate::type_lattice::substitute;
+use crate::type_lattice::typed::{
+    instantiate_quantified, is_subtype_of, join, meet, quantifier_bounds,
+};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
 /// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
@@ -104,6 +118,55 @@ impl World {
         ]
     }
 
+    /// The `pick`th ground within `bound`, counting round: `bound` is a ground itself, so one is.
+    fn ground_within(&self, scratch: BumpAllocator<'_>, bound: KType, pick: usize) -> KType {
+        let within: Vec<KType> = self
+            .grounds()
+            .into_iter()
+            .filter(|ground| is_subtype_of(&self.types, scratch, *ground, bound))
+            .collect();
+        within[pick % within.len()]
+    }
+
+    /// The index of the ground spanning two members among [`grounds`](World::grounds).
+    fn spanning_ground(&self) -> usize {
+        self.grounds()
+            .iter()
+            .position(|kt| matches!(self.types.node(*kt), TypeNode::Union { .. }))
+            .expect("one ground is a union")
+    }
+
+    /// The grounds plus a few composites: what an argument is drawn from, and what a widening
+    /// unions in.
+    fn argument_pool(&self) -> Vec<KType> {
+        let mut pool = self.grounds();
+        pool.push(KType::BOOL);
+        pool.push(KType::NEVER);
+        pool.push(with_scratch(|scratch| {
+            self.types.union_of(scratch, &[KType::NUMBER, KType::STR])
+        }));
+        // Unions whose members pour into one planted variable, through a list or a parameter.
+        let lists = [self.types.list(KType::NUMBER), self.types.list(KType::STR)];
+        pool.push(with_scratch(|scratch| self.types.union_of(scratch, &lists)));
+        let functions = [
+            self.concrete(function_of(self, KType::NUMBER.raw())),
+            self.concrete(function_of(self, KType::STR.raw())),
+        ];
+        pool.push(with_scratch(|scratch| {
+            self.types.union_of(scratch, &functions)
+        }));
+        pool
+    }
+
+    /// What a widening unions in: the argument pool, less `Never`, which widens nothing, and `Any`,
+    /// which is the top step.
+    fn widening_pool(&self) -> Vec<KType> {
+        self.argument_pool()
+            .into_iter()
+            .filter(|kt| *kt != KType::NEVER && *kt != KType::ANY)
+            .collect()
+    }
+
     /// A raw draw as what it is declared as: a scheme, or a type that may hold a variable.
     pub fn declared(&self, raw: Handle) -> DeclaredType<Parametric> {
         self.types.declared(raw)
@@ -123,10 +186,90 @@ impl Default for World {
     }
 }
 
+/// What a draw may contain beyond the atoms and composites.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Vocabulary {
+    /// Rigid variables outside sealed content: lexical variables and whatever an enclosing shape's
+    /// group or signature's head hands down.
+    pub variables: bool,
+    /// Whether a shape or function may (or must) bind a quantifier group of its own.
+    pub groups: Groups,
+}
+
+/// Whether a drawn shape or function binds a quantifier group of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Groups {
+    Never,
+    Maybe,
+    /// The outermost shape or function binds one; what lies under it may.
+    Always,
+    /// The outermost shape or function binds one; nothing under it does.
+    Outer,
+}
+
+impl Vocabulary {
+    /// No variable and no binder: a concrete type.
+    pub const CONCRETE: Vocabulary = Vocabulary {
+        variables: false,
+        groups: Groups::Never,
+    };
+    /// Everything.
+    pub const ANY: Vocabulary = Vocabulary {
+        variables: true,
+        groups: Groups::Maybe,
+    };
+    /// Variables but no binder anywhere: a type, never a scheme.
+    pub const CLOSED: Vocabulary = Vocabulary {
+        variables: true,
+        groups: Groups::Never,
+    };
+
+    /// What the positions under the outermost shape or function draw: `Always` and `Outer` bind the
+    /// outermost group only.
+    fn nested(self) -> Vocabulary {
+        let groups = match self.groups {
+            Groups::Always => Groups::Maybe,
+            Groups::Outer => Groups::Never,
+            groups => groups,
+        };
+        Vocabulary { groups, ..self }
+    }
+
+    /// The group sizes a binder over `positions` plantable positions may draw: each variable takes
+    /// two of them.
+    fn group_sizes(self, positions: usize) -> std::ops::Range<usize> {
+        let most = positions / 2;
+        match self.groups {
+            Groups::Never => 0..1,
+            Groups::Maybe => 0..most.min(1) + 1,
+            Groups::Always | Groups::Outer => {
+                assert!(
+                    most >= 1,
+                    "a binder that must bind a group has two positions"
+                );
+                1..2
+            }
+        }
+    }
+}
+
 /// A type tree of at most `depth` composite levels, interned as it is built: any type, parametric
 /// ones and schemes included.
 pub fn arb_any(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Parametric>> {
     arb_raw(world.clone(), depth)
+        .prop_map(move |raw| world.declared(raw))
+        .boxed()
+}
+
+/// [`arb_any`] under `vocabulary`, which may not demand a group: a mixed draw has no one outermost
+/// binder to demand it of.
+pub fn arb_any_with(
+    world: World,
+    depth: u32,
+    vocabulary: Vocabulary,
+) -> BoxedStrategy<DeclaredType<Parametric>> {
+    let none = || Rc::new(Vec::new());
+    arb_type_in(world.clone(), depth, none(), none(), vocabulary)
         .prop_map(move |raw| world.declared(raw))
         .boxed()
 }
@@ -138,7 +281,7 @@ fn arb_raw(world: World, depth: u32) -> BoxedStrategy<Handle> {
         depth,
         Rc::new(Vec::new()),
         Rc::new(Vec::new()),
-        false,
+        Vocabulary::ANY,
     )
 }
 
@@ -151,23 +294,25 @@ pub fn arb_concrete(world: World, depth: u32) -> BoxedStrategy<KType> {
         depth,
         Rc::new(Vec::new()),
         Rc::new(Vec::new()),
-        true,
+        Vocabulary::CONCRETE,
     )
     .prop_map(move |raw| world.concrete(raw))
     .boxed()
 }
 
-/// [`arb_type`] with the rigid variables in scope: `bound` are an enclosing shape's quantifiers,
+/// [`arb_any`] with the rigid variables in scope: `bound` are an enclosing shape's quantifiers,
 /// which do not cross into a nested shape's own binder, and `members` are an enclosing signature's
-/// head parameters, which do. `concrete` draws no variable and no binder outside sealed content.
+/// head parameters, which do. `vocabulary` says what may occur outside sealed content; a group it
+/// demands belongs to a shape or function drawn directly, not to this mixed draw.
 fn arb_type_in(
     world: World,
     depth: u32,
     bound: Rc<Vec<Handle>>,
     members: Rc<Vec<Handle>>,
-    concrete: bool,
+    vocabulary: Vocabulary,
 ) -> BoxedStrategy<Handle> {
-    let leaf = arb_leaf(world.clone(), bound.clone(), members.clone(), concrete);
+    debug_assert!(matches!(vocabulary.groups, Groups::Never | Groups::Maybe));
+    let leaf = arb_leaf(world.clone(), bound.clone(), members.clone(), vocabulary);
     if depth == 0 {
         return leaf;
     }
@@ -177,7 +322,7 @@ fn arb_type_in(
             depth - 1,
             bound.clone(),
             members.clone(),
-            concrete,
+            vocabulary,
         )
     };
     let (list_world, dict_world) = (world.clone(), world.clone());
@@ -192,7 +337,7 @@ fn arb_type_in(
         depth - 1,
         bound.clone(),
         members.clone(),
-        true,
+        Vocabulary::CONCRETE,
     );
     prop_oneof![
         6 => leaf,
@@ -202,7 +347,7 @@ fn arb_type_in(
         2 => arb_fields(record_world.clone(), inner()).prop_map(move |fields| {
             with_scratch(|scratch| record_world.types.record(scratch, &fields))
         }),
-        2 => arb_function(function_world, depth, function_members, concrete),
+        2 => arb_function(function_world, depth, function_members, vocabulary),
         2 => prop::collection::vec(inner(), 1..4).prop_map(move |members| {
             with_scratch(|scratch| union_world.types.union_of(scratch, &members))
         }),
@@ -216,7 +361,7 @@ fn arb_type_in(
                 })
             }
         ),
-        3 => arb_shape(shape_world, depth, shape_members, concrete),
+        3 => arb_shape(shape_world, depth, shape_members, vocabulary),
         2 => arb_signature_type(sig_world, depth).prop_map(KType::raw),
         1 => arb_sealed_member(group_world, depth).prop_map(KType::raw),
         1 => arb_family(family_world.clone(), depth).prop_map(KType::raw),
@@ -242,10 +387,8 @@ fn arb_leaf(
     world: World,
     bound: Rc<Vec<Handle>>,
     members: Rc<Vec<Handle>>,
-    concrete: bool,
+    vocabulary: Vocabulary,
 ) -> BoxedStrategy<Handle> {
-    let grounds = world.grounds();
-    let abstract_world = world.clone();
     let atoms = prop_oneof![
         Just(KType::NUMBER.raw()),
         Just(KType::STR.raw()),
@@ -279,41 +422,8 @@ fn arb_leaf(
             })
             .boxed()
     };
-    let opaque =
-        (0..abstract_world.type_names.len(), 0..grounds.len()).prop_map(move |(name, bound)| {
-            abstract_world
-                .types
-                .carrier(
-                    abstract_world.type_names[name],
-                    abstract_world.grounds()[bound],
-                    OPAQUE_MINT,
-                )
-                .raw()
-        });
-    // A lexical variable: one of two levels, named from the type alphabet, over a ground bound —
-    // and over the `Number | Str` ground, sometimes above a lower end of one of its members.
-    let lexical_world = world.clone();
-    let lexical = (
-        0..2usize,
-        0..world.type_names.len(),
-        0..grounds.len(),
-        0..3u8,
-    )
-        .prop_map(move |(level, name, bound, lower)| {
-            let (types, name) = (&lexical_world.types, lexical_world.type_names[name]);
-            let bound = lexical_world.grounds()[bound];
-            let spans = matches!(types.node(bound), TypeNode::Union { .. });
-            let variable = match lower {
-                1 if spans => with_scratch(|scratch| {
-                    types.lexical_between(scratch, level, name, KType::NUMBER, bound)
-                }),
-                2 if spans => with_scratch(|scratch| {
-                    types.lexical_between(scratch, level, name, KType::STR, bound)
-                }),
-                _ => types.lexical(level, name, bound),
-            };
-            variable.raw()
-        });
+    let opaque = arb_opaque(world.clone()).prop_map(KType::raw);
+    let lexical = arb_lexical(world.clone()).prop_map(|variable| variable.raw());
     // A code kind needing names: a kind from three levels of the code tree, needing one to three
     // names of the binder alphabet.
     let needing_world = world.clone();
@@ -329,7 +439,7 @@ fn arb_leaf(
                     .raw()
             })
         });
-    if concrete {
+    if !vocabulary.variables {
         return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => needing].boxed();
     }
     let mut rigid: Vec<Handle> = bound.as_ref().clone();
@@ -348,6 +458,50 @@ fn arb_leaf(
         4 => in_scope
     ]
     .boxed()
+}
+
+/// An opaque carrier, named from the type alphabet, over a ground bound.
+fn arb_opaque(world: World) -> BoxedStrategy<KType> {
+    (0..world.type_names.len(), 0..world.grounds().len())
+        .prop_map(move |(name, bound)| {
+            let bound = world.grounds()[bound];
+            world
+                .types
+                .carrier(world.type_names[name], bound, OPAQUE_MINT)
+        })
+        .boxed()
+}
+
+/// A rigid variable a generated type may be at its top: a lexical variable, or an opaque carrier.
+pub fn arb_rigid(world: World) -> BoxedStrategy<Parametric> {
+    prop_oneof![
+        2 => arb_lexical(world.clone()),
+        1 => arb_opaque(world).prop_map(Parametric::from),
+    ]
+    .boxed()
+}
+
+/// A lexical variable: one of two levels, named from the type alphabet, over a ground bound —
+/// weighted toward the `Number | Str` ground, where it may sit above a lower end of one member.
+pub fn arb_lexical(world: World) -> BoxedStrategy<Parametric> {
+    let grounds = world.grounds().len();
+    let bound = prop_oneof![2 => Just(world.spanning_ground()), 1 => 0..grounds];
+    (0..2usize, 0..world.type_names.len(), bound, 0..3u8)
+        .prop_map(move |(level, name, bound, lower)| {
+            let (types, name) = (&world.types, world.type_names[name]);
+            let bound = world.grounds()[bound];
+            let spans = matches!(types.node(bound), TypeNode::Union { .. });
+            match lower {
+                1 if spans => with_scratch(|scratch| {
+                    types.lexical_between(scratch, level, name, KType::NUMBER, bound)
+                }),
+                2 if spans => with_scratch(|scratch| {
+                    types.lexical_between(scratch, level, name, KType::STR, bound)
+                }),
+                _ => types.lexical(level, name, bound),
+            }
+        })
+        .boxed()
 }
 
 /// The declaring scope a generated opaque mint is sourced at — any id that is not the canonical
@@ -374,29 +528,60 @@ fn arb_fields(
     })
 }
 
-/// An expression shape, sometimes over a quantifier group of its own — never under `concrete`.
-/// Every variable is minted under a variable-free bound.
-///
-/// A variable is planted at **two** argument positions on purpose, so the laws about quantified
-/// shapes run over variables that relate two positions, which a group sprinkled at random would
-/// rarely give. Each slot is ranked `_` or by a small integer, so written order and rankings with ties
-/// both occur. Both occurrences take one [`planted`] form, so a union argument can pour its
-/// members into one variable through a list or a function's parameter.
+/// A bucket key: a run of keywords from the keyword alphabet, `positions` long.
+fn arb_key(
+    world: World,
+    positions: std::ops::Range<usize>,
+) -> impl Strategy<Value = Vec<KeywordSymbol>> + use<> {
+    prop::collection::vec(0..world.keywords.len(), positions)
+        .prop_map(move |picks| picks.into_iter().map(|k| world.keywords[k]).collect())
+}
+
+/// The shortest key a shape drawn under `vocabulary` may have: one that must bind a group needs two
+/// slots to plant its variable at.
+fn least_key(vocabulary: Vocabulary) -> usize {
+    match vocabulary.groups {
+        Groups::Always | Groups::Outer => 2,
+        Groups::Never | Groups::Maybe => 1,
+    }
+}
+
+/// An expression shape over a key of one to four keywords — see [`arb_shape_over`].
 fn arb_shape(
     world: World,
     depth: u32,
     members: Rc<Vec<Handle>>,
-    concrete: bool,
+    vocabulary: Vocabulary,
+) -> BoxedStrategy<Handle> {
+    arb_key(world.clone(), least_key(vocabulary)..5)
+        .prop_flat_map(move |key| {
+            arb_shape_over(world.clone(), key, depth, members.clone(), vocabulary)
+        })
+        .boxed()
+}
+
+/// An expression shape over `key`, over a quantifier group of its own where `vocabulary` allows or
+/// demands one. Every variable is minted under a variable-free bound.
+///
+/// Each variable is planted at **two** slots on purpose, so the laws about quantified shapes run
+/// over variables that relate two positions, which a group sprinkled at random would rarely give;
+/// the group has at most `key.len() / 2` variables, so no planting overwrites another. Each slot is
+/// ranked `_` or by a small integer, so written order and rankings with ties both occur. Both
+/// occurrences take one [`planted`] form, so a union argument can pour its members into one
+/// variable through a list or a function's parameter.
+fn arb_shape_over(
+    world: World,
+    key: Vec<KeywordSymbol>,
+    depth: u32,
+    members: Rc<Vec<Handle>>,
+    vocabulary: Vocabulary,
 ) -> BoxedStrategy<Handle> {
     let grounds = world.grounds();
-    let arity = if concrete { 0..1 } else { 0..2 };
-    (
-        1..4usize,
-        prop::collection::vec(0..grounds.len(), arity),
-        prop::collection::vec((0..4usize, 0..4usize, 0..3u8), 0..2),
-    )
-        .prop_flat_map(move |(positions, bounds, plantings)| {
+    let positions = key.len();
+    prop::collection::vec(0..grounds.len(), vocabulary.group_sizes(positions))
+        .prop_flat_map(move |bounds| {
             let world = world.clone();
+            let key = key.clone();
             let vars: Rc<Vec<Handle>> = Rc::new(
                 bounds
                     .iter()
@@ -408,49 +593,38 @@ fn arb_shape(
             );
             let names: Vec<TypeSymbol> = world.type_names[..bounds.len()].to_vec();
             let bounds: Vec<KType> = bounds.iter().map(|bound| world.grounds()[*bound]).collect();
-            let positions = positions.max(bounds.len() * 2).min(4);
-            let slot = arb_type_in(
-                world.clone(),
-                depth.saturating_sub(1),
-                vars.clone(),
-                members.clone(),
-                concrete,
-            );
-            let ret = arb_type_in(
-                world.clone(),
-                depth.saturating_sub(1),
-                vars.clone(),
-                members.clone(),
-                concrete,
-            );
+            let position = || {
+                arb_type_in(
+                    world.clone(),
+                    depth.saturating_sub(1),
+                    vars.clone(),
+                    members.clone(),
+                    vocabulary.nested(),
+                )
+            };
             (
-                prop::collection::vec((0..world.keywords.len(), slot), positions),
-                ret,
+                prop::collection::vec(position(), positions),
+                position(),
                 prop::collection::vec(prop::option::of(0..3u32), positions),
+                arb_plantings(positions, vars.len()),
             )
-                .prop_map(move |(drawn, ret, ranks)| {
-                    let mut keywords: Vec<KeywordSymbol> = Vec::new();
-                    let mut slots: Vec<Handle> = Vec::new();
-                    for (keyword, slot) in drawn {
-                        keywords.push(world.keywords[keyword]);
-                        slots.push(slot);
-                    }
-                    for (index, variable) in vars.iter().enumerate() {
-                        let (first, second, form) =
-                            plantings.get(index).copied().unwrap_or((0, 1, 0));
-                        let (first, second) = (first % slots.len(), second % slots.len());
-                        if first == second {
-                            continue;
+                .prop_map(move |(mut slots, ret, ranks, plantings)| {
+                    for (variable, (pair, form)) in vars.iter().zip(&plantings) {
+                        let planted = planted(&world, *variable, *form);
+                        for position in pair {
+                            slots[*position] = planted;
                         }
-                        let planted = planted(&world, *variable, form);
-                        slots[first] = planted;
-                        slots[second] = planted;
                     }
-                    let mut run: Vec<DispatchTokenElement> = Vec::new();
-                    for (keyword, slot) in keywords.into_iter().zip(slots) {
-                        run.push(DispatchTokenElement::Keyword(keyword));
-                        run.push(DispatchTokenElement::Slot(slot));
-                    }
+                    let run: Vec<DispatchTokenElement> = key
+                        .iter()
+                        .zip(slots)
+                        .flat_map(|(keyword, slot)| {
+                            [
+                                DispatchTokenElement::Keyword(*keyword),
+                                DispatchTokenElement::Slot(slot),
+                            ]
+                        })
+                        .collect();
                     let ranks: Vec<RawRank> = ranks
                         .into_iter()
                         .map(|rank| rank.map_or(RawRank::Unnumbered, RawRank::Numbered))
@@ -467,26 +641,47 @@ fn arb_shape(
         .boxed()
 }
 
-/// A function type, sometimes over a quantifier group of its own — never under `concrete`. Every
-/// variable is minted under a variable-free bound.
+/// Where a binder's `variables` are planted among its `positions`: two distinct positions each,
+/// no position shared between two variables, and a [`planted`] form each.
+fn arb_plantings(
+    positions: usize,
+    variables: usize,
+) -> impl Strategy<Value = Vec<([usize; 2], u8)>> {
+    debug_assert!(positions >= 2 * variables, "two positions per variable");
+    (
+        prop::sample::subsequence((0..positions).collect::<Vec<usize>>(), 2 * variables)
+            .prop_shuffle(),
+        prop::collection::vec(0..3u8, variables),
+    )
+        .prop_map(|(picked, forms)| {
+            picked
+                .chunks(2)
+                .map(|pair| [pair[0], pair[1]])
+                .zip(forms)
+                .collect()
+        })
+}
+
+/// A function type of one to three parameters, over a quantifier group of its own where
+/// `vocabulary` allows or demands one. Every variable is minted under a variable-free bound.
 ///
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
-/// for the reason [`arb_shape`] plants one at two slots. Both occurrences take one [`planted`]
+/// for the reason [`arb_shape_over`] plants one at two slots. Both occurrences take one [`planted`]
 /// form.
 fn arb_function(
     world: World,
     depth: u32,
     members: Rc<Vec<Handle>>,
-    concrete: bool,
+    vocabulary: Vocabulary,
 ) -> BoxedStrategy<Handle> {
     let grounds = world.grounds();
-    let arity = if concrete { 0..1 } else { 0..2 };
+    // The return is the last plantable position, so even a one-parameter function gives a variable
+    // two places to occur.
     (
-        1..4usize,
-        prop::collection::vec(0..grounds.len(), arity),
-        prop::collection::vec((0..4usize, 0..4usize, 0..3u8), 0..2),
+        1..=world.binders.len(),
+        prop::collection::vec(0..grounds.len(), vocabulary.group_sizes(2)),
     )
-        .prop_flat_map(move |(arity, bounds, plantings)| {
+        .prop_flat_map(move |(arity, bounds)| {
             let world = world.clone();
             let vars: Rc<Vec<Handle>> = Rc::new(
                 bounds
@@ -499,46 +694,34 @@ fn arb_function(
             );
             let names: Vec<TypeSymbol> = world.type_names[..bounds.len()].to_vec();
             let bounds: Vec<KType> = bounds.iter().map(|bound| world.grounds()[*bound]).collect();
-            let arity = arity.min(world.binders.len());
-            let value = arb_type_in(
+            let position = arb_type_in(
                 world.clone(),
                 depth.saturating_sub(1),
                 vars.clone(),
                 members.clone(),
-                concrete,
+                vocabulary.nested(),
             );
-            let ret = arb_type_in(
-                world.clone(),
-                depth.saturating_sub(1),
-                vars.clone(),
-                members.clone(),
-                concrete,
-            );
-            (prop::collection::vec(value, arity), ret).prop_map(move |(drawn, ret)| {
-                // The return is the last plantable position, so even a one-parameter function
-                // gives a variable two places to occur.
-                let mut positions = drawn;
-                positions.push(ret);
-                for (index, variable) in vars.iter().enumerate() {
-                    let (first, second, form) = plantings.get(index).copied().unwrap_or((0, 1, 0));
-                    let (first, second) = (first % positions.len(), second % positions.len());
-                    if first == second {
-                        continue;
+            (
+                prop::collection::vec(position, arity + 1),
+                arb_plantings(arity + 1, vars.len()),
+            )
+                .prop_map(move |(mut positions, plantings)| {
+                    for (variable, (pair, form)) in vars.iter().zip(&plantings) {
+                        let planted = planted(&world, *variable, *form);
+                        for position in pair {
+                            positions[*position] = planted;
+                        }
                     }
-                    let planted = planted(&world, *variable, form);
-                    positions[first] = planted;
-                    positions[second] = planted;
-                }
-                let ret = positions.pop().expect("the return is the last position");
-                let params: Vec<(BinderSymbol, Handle)> =
-                    world.binders.iter().copied().zip(positions).collect();
-                with_scratch(|scratch| {
-                    world
-                        .types
-                        .function_group(scratch, &names, &bounds, &params, ret)
-                        .0
+                    let ret = positions.pop().expect("the return is the last position");
+                    let params: Vec<(BinderSymbol, Handle)> =
+                        world.binders.iter().copied().zip(positions).collect();
+                    with_scratch(|scratch| {
+                        world
+                            .types
+                            .function_group(scratch, &names, &bounds, &params, ret)
+                            .0
+                    })
                 })
-            })
         })
         .boxed()
 }
@@ -564,7 +747,7 @@ fn function_of(world: &World, parameter: Handle) -> Handle {
 
 /// A signature type: a signature, an application of one pinning some of its head parameters at
 /// ground types, or the meet of two applications.
-fn arb_signature_type(world: World, depth: u32) -> BoxedStrategy<KType> {
+pub fn arb_signature_type(world: World, depth: u32) -> BoxedStrategy<KType> {
     let meet_world = world.clone();
     prop_oneof![
         2 => arb_signature(world.clone(), depth),
@@ -605,7 +788,7 @@ fn arb_application(world: World, depth: u32) -> BoxedStrategy<KType> {
 /// The parameters are chosen first and their handles handed down to every member type, so a slot
 /// that names `Elt` names the very handle the schema binds it to — which is what the elaborator
 /// produces and what the relations assume.
-fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
+pub fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
     let grounds = world.grounds();
     let outer = world.clone();
     (
@@ -635,16 +818,21 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
                 depth - 1,
                 none.clone(),
                 members.clone(),
-                false,
+                Vocabulary::CLOSED,
             );
             let slot = arb_type_in(
                 world.clone(),
                 depth - 1,
                 none.clone(),
                 members.clone(),
-                false,
+                Vocabulary::ANY,
             );
-            let keyworded = arb_shape(world.clone(), depth.clamp(1, 2), members.clone(), false);
+            let keyworded = arb_shape(
+                world.clone(),
+                depth.clamp(1, 2),
+                members.clone(),
+                Vocabulary::ANY,
+            );
             (
                 prop::collection::vec((0..world.type_names.len(), manifest), 0..2),
                 prop::collection::vec((0..world.values.len(), slot), 0..2),
@@ -654,12 +842,12 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
                 .prop_map(move |(manifests, slots, keyworded, operators)| {
                     with_scratch(|scratch| {
                         let mut draft = SchemaDraft::new(scratch);
-                        // A manifest member is a type: a scheme drawn for one is left out.
                         for (name, kt) in manifests {
                             let name = world.type_names[name];
-                            let DeclaredType::Type(kt) = world.declared(kt) else {
-                                continue;
-                            };
+                            let kt = world
+                                .declared(kt)
+                                .as_type()
+                                .expect("a closed draw is a type");
                             if parameters.iter().all(|(held, _)| *held != name) {
                                 draft.insert_manifest(name, kt);
                             }
@@ -767,54 +955,251 @@ fn arb_family(world: World, depth: u32) -> BoxedStrategy<KType> {
 /// A generated expression shape, for the laws whose subject is a shape and which a draw from the
 /// whole vocabulary would leave mostly vacuous.
 pub fn arb_shape_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Parametric>> {
-    arb_shape(world.clone(), depth, Rc::new(Vec::new()), false)
+    arb_shape(world.clone(), depth, Rc::new(Vec::new()), Vocabulary::ANY)
         .prop_map(move |raw| world.declared(raw))
+        .boxed()
+}
+
+/// Two shapes over one bucket key — what every law that ranks or admits one shape against another
+/// needs, and which two independent draws share only by accident.
+pub fn arb_shape_pair(
+    world: World,
+    depth: u32,
+    vocabulary: Vocabulary,
+) -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
+    let shapes = world.clone();
+    arb_key(world.clone(), least_key(vocabulary)..5)
+        .prop_flat_map(move |key| {
+            let shape = || {
+                let none = Rc::new(Vec::new());
+                arb_shape_over(shapes.clone(), key.clone(), depth, none, vocabulary)
+            };
+            (shape(), shape())
+        })
+        .prop_map(move |(a, b)| (world.declared(a), world.declared(b)))
+        .boxed()
+}
+
+/// A candidate shape drawn under `candidate` and a concrete shape over its key whose slots are
+/// arguments for it: three times in four the candidate's own slots at ground bindings within its
+/// group's bounds, each kept or met with a pool type; otherwise an unrelated draw. A slot whose
+/// instance is not concrete takes the unrelated draw's slot, and one whose meet is `Never` stays
+/// unmet. Two independent draws admit one another only by accident.
+pub fn arb_argument_pair(
+    world: World,
+    depth: u32,
+    candidate: Vocabulary,
+) -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
+    let pool = world.argument_pool();
+    let (shapes, pools, grounds) = (world.clone(), pool.len(), world.grounds().len());
+    arb_key(world.clone(), least_key(candidate)..5)
+        .prop_flat_map(move |key| {
+            let positions = key.len();
+            let none = || Rc::new(Vec::new());
+            (
+                arb_shape_over(shapes.clone(), key.clone(), depth, none(), candidate),
+                arb_shape_over(shapes.clone(), key, depth, none(), Vocabulary::CONCRETE),
+                prop::bool::weighted(0.75),
+                prop::collection::vec(0..grounds, 1),
+                prop::collection::vec(prop::option::of(0..pools), positions),
+            )
+        })
+        .prop_map(move |(a, unrelated, own, picks, narrowings)| {
+            if !own {
+                return (world.declared(a), world.declared(unrelated));
+            }
+            let types = &world.types;
+            let TypeNode::ExpressionShape {
+                elements,
+                classes,
+                ret,
+                ..
+            } = types.node(unrelated)
+            else {
+                unreachable!("a drawn shape is one");
+            };
+            let b = with_scratch(|scratch| {
+                let bindings: Vec<KType> = substitute::quantifier_bounds(types, a)
+                    .iter()
+                    .zip(&picks)
+                    .map(|(bound, pick)| world.ground_within(scratch, *bound, *pick))
+                    .collect();
+                let mut own = shape_slots(a, types).zip(&narrowings);
+                let run: Vec<DispatchTokenElement> = elements
+                    .iter()
+                    .map(|element| match element {
+                        DispatchTokenElement::Slot(unrelated) => {
+                            let (slot, narrowing) = own.next().expect("one key, one arity");
+                            let instance =
+                                substitute::substitute_quantified(types, scratch, slot, &bindings);
+                            DispatchTokenElement::Slot(match types.concrete(wrap(instance)) {
+                                None => *unrelated,
+                                Some(instance) => narrowing
+                                    .map(|index| meet(types, scratch, instance, pool[index]))
+                                    .filter(|met| *met != KType::NEVER)
+                                    .unwrap_or(instance)
+                                    .raw(),
+                            })
+                        }
+                        keyword => *keyword,
+                    })
+                    .collect();
+                types.shape_group(scratch, &[], &[], &run, classes, ret).0
+            });
+            (world.declared(a), world.declared(b))
+        })
+        .boxed()
+}
+
+/// A monomorphic shape `b` and a shape `a` below it, over one key and one ranking: each of `b`'s
+/// slots kept or widened, since a slot is contravariant, and its return kept or met with a pool
+/// type.
+pub fn arb_shape_below(
+    world: World,
+    depth: u32,
+) -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
+    let pool = world.widening_pool();
+    let (shapes, pools) = (world.clone(), pool.len());
+    arb_key(world.clone(), 1..5)
+        .prop_flat_map(move |key| {
+            let positions = key.len();
+            let none = Rc::new(Vec::new());
+            (
+                arb_shape_over(shapes.clone(), key, depth, none, Vocabulary::CONCRETE),
+                prop::collection::vec(prop::option::of(arb_widening(pools, 1)), positions),
+                prop::option::of(0..pools),
+            )
+        })
+        .prop_map(move |(b, widenings, narrowing)| {
+            let TypeNode::ExpressionShape {
+                elements,
+                classes,
+                ret,
+                ..
+            } = world.types.node(b)
+            else {
+                unreachable!("a drawn shape is one");
+            };
+            let a = with_scratch(|scratch| {
+                let mut widenings = widenings.iter();
+                let run: Vec<DispatchTokenElement> = elements
+                    .iter()
+                    .map(|element| match element {
+                        DispatchTokenElement::Slot(slot) => {
+                            DispatchTokenElement::Slot(match widenings.next() {
+                                Some(Some(widening)) => {
+                                    widen(&world, scratch, &pool, *slot, widening)
+                                }
+                                _ => *slot,
+                            })
+                        }
+                        keyword => *keyword,
+                    })
+                    .collect();
+                let ret = match narrowing {
+                    Some(index) => meet(&world.types, scratch, world.concrete(ret), pool[index]),
+                    None => world.concrete(ret),
+                };
+                world
+                    .types
+                    .shape_group(scratch, &[], &[], &run, classes, ret.raw())
+                    .0
+            });
+            (world.declared(a), world.declared(b))
+        })
         .boxed()
 }
 
 /// A generated function type, for the laws whose subject is a function and which a draw from the
 /// whole vocabulary would leave mostly vacuous.
 pub fn arb_function_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType<Parametric>> {
-    arb_function(world.clone(), depth, Rc::new(Vec::new()), false)
+    arb_function(world.clone(), depth, Rc::new(Vec::new()), Vocabulary::ANY)
         .prop_map(move |raw| world.declared(raw))
         .boxed()
 }
 
-/// A function scheme and a function type it may be wanted at: an unrelated function type, or the
-/// scheme's own instance at drawn ground bindings, under which an instance always lies. An
-/// unrelated draw alone almost never meets its scheme.
-pub fn arb_wanted_instance(world: World, depth: u32) -> BoxedStrategy<(Scheme, Parametric)> {
-    let grounds = world.grounds();
-    let scheme = arb_function(world.clone(), depth, Rc::new(Vec::new()), false).prop_filter_map(
-        "a scheme",
-        {
-            let world = world.clone();
-            move |raw| world.declared(raw).as_scheme()
+/// A function scheme drawn under `scheme` and a function type it may be wanted at, drawn under
+/// `wanted`: an unrelated function type, or — three times as often — the scheme's own instance at
+/// bindings within its bounds, under which an instance always lies. An unrelated draw alone almost
+/// never meets its scheme.
+///
+/// `scheme` binds its group at the outermost function, so it is `Always` or `Outer`; the unrelated
+/// type binds none. Where `wanted` has variables an own instance binds each variable to a lexical
+/// variable under its bound, and to a ground type within it otherwise.
+pub fn arb_wanted_instance(
+    world: World,
+    depth: u32,
+    scheme: Vocabulary,
+    wanted: Vocabulary,
+) -> BoxedStrategy<(Scheme, Parametric)> {
+    let unrelated = arb_function(
+        world.clone(),
+        depth,
+        Rc::new(Vec::new()),
+        Vocabulary {
+            groups: Groups::Never,
+            ..wanted
         },
-    );
-    let unrelated = arb_function(world.clone(), depth, Rc::new(Vec::new()), false).prop_filter_map(
-        "an unquantified function type",
-        {
-            let world = world.clone();
-            move |raw| world.declared(raw).as_type()
-        },
-    );
-    (
-        scheme,
-        unrelated,
-        prop::collection::vec(0..grounds.len(), 3),
-        any::<bool>(),
     )
-        .prop_map(move |(scheme, unrelated, picks, own)| {
-            if !own {
-                return (scheme, unrelated);
-            }
-            let bindings: Vec<KType> = picks.iter().map(|pick| grounds[*pick]).collect();
-            let instance = with_scratch(|scratch| {
-                let bindings = &bindings[..quantifier_bounds(&world.types, scheme).len()];
-                instantiate_quantified(&world.types, scratch, scheme, bindings)
-            });
-            (scheme, instance)
+    .prop_map({
+        let world = world.clone();
+        move |raw| {
+            world
+                .declared(raw)
+                .as_type()
+                .expect("a function without a group is a type")
+        }
+    });
+    prop_oneof![
+        3 => arb_own_instance(world.clone(), depth, scheme, wanted),
+        1 => (arb_scheme(world, depth, scheme), unrelated),
+    ]
+    .boxed()
+}
+
+/// [`arb_wanted_instance`]'s own instances alone: a scheme and its instance at bindings within its
+/// bounds, so an instance always lies under the wanted type.
+pub fn arb_own_instance(
+    world: World,
+    depth: u32,
+    scheme: Vocabulary,
+    wanted: Vocabulary,
+) -> BoxedStrategy<(Scheme, Parametric)> {
+    let grounds = world.grounds();
+    let bindings =
+        prop::collection::vec((0..2usize, 0..world.type_names.len(), 0..grounds.len()), 1);
+    (arb_scheme(world.clone(), depth, scheme), bindings)
+        .prop_map(move |(scheme, picks)| {
+            with_scratch(|scratch| {
+                let types = &world.types;
+                let bindings: Vec<Handle> = quantifier_bounds(types, scheme)
+                    .iter()
+                    .zip(&picks)
+                    .map(|(bound, (level, name, ground))| {
+                        if wanted.variables {
+                            return types.lexical(*level, world.type_names[*name], *bound).raw();
+                        }
+                        world.ground_within(scratch, *bound, *ground).raw()
+                    })
+                    .collect();
+                (
+                    scheme,
+                    instantiate_quantified(types, scratch, scheme, &bindings),
+                )
+            })
+        })
+        .boxed()
+}
+
+/// A function scheme drawn under `vocabulary`, which binds its group at the outermost function.
+fn arb_scheme(world: World, depth: u32, vocabulary: Vocabulary) -> BoxedStrategy<Scheme> {
+    assert!(matches!(vocabulary.groups, Groups::Always | Groups::Outer));
+    arb_function(world.clone(), depth, Rc::new(Vec::new()), vocabulary)
+        .prop_map(move |raw| {
+            world
+                .declared(raw)
+                .as_scheme()
+                .expect("a function with a group is a scheme")
         })
         .boxed()
 }
@@ -822,35 +1207,145 @@ pub fn arb_wanted_instance(world: World, depth: u32) -> BoxedStrategy<(Scheme, P
 /// A tuple of argument types for a shape of `arity` positions, drawn from the ground alphabet plus a
 /// couple of composites — what the admission laws feed a candidate.
 pub fn arb_arguments(world: World, arity: usize) -> impl Strategy<Value = Vec<KType>> + use<> {
-    let pool = {
-        let mut pool = world.grounds();
-        pool.push(KType::BOOL);
-        pool.push(KType::NEVER);
-        pool.push(with_scratch(|scratch| {
-            world.types.union_of(scratch, &[KType::NUMBER, KType::STR])
-        }));
-        // Unions whose members pour into one planted variable, through a list or a parameter.
-        let lists = [
-            world.types.list(KType::NUMBER),
-            world.types.list(KType::STR),
-        ];
-        pool.push(with_scratch(|scratch| {
-            world.types.union_of(scratch, &lists)
-        }));
-        let functions = [
-            world.concrete(function_of(&world, KType::NUMBER.raw())),
-            world.concrete(function_of(&world, KType::STR.raw())),
-        ];
-        pool.push(with_scratch(|scratch| {
-            world.types.union_of(scratch, &functions)
-        }));
-        pool
-    };
+    let pool = world.argument_pool();
     prop::collection::vec(0..pool.len(), arity)
         .prop_map(move |picks| picks.into_iter().map(|index| pool[index]).collect())
 }
 
-/// A chain `a ≤ b ≤ c` through an instance, which [`arb_type`]'s draws almost never line up: `a` is
+/// One step up the order: to the top, to a union with a pool type, or the same step at one
+/// covariant child.
+#[derive(Clone, Debug)]
+pub enum Widening {
+    Top,
+    UnionWith(usize),
+    Inside(usize, Box<Widening>),
+}
+
+/// A [`Widening`] over a pool of `pool` types, reaching at most `depth` children down. The top is
+/// rare: a chain that reaches it early says nothing past it.
+fn arb_widening(pool: usize, depth: u32) -> BoxedStrategy<Widening> {
+    let leaf = prop_oneof![
+        1 => Just(Widening::Top),
+        6 => (0..pool).prop_map(Widening::UnionWith),
+    ];
+    if depth == 0 {
+        return leaf.boxed();
+    }
+    let inside = (0..4usize, arb_widening(pool, depth - 1))
+        .prop_map(|(index, inner)| Widening::Inside(index, Box::new(inner)));
+    prop_oneof![7 => leaf, 6 => inside].boxed()
+}
+
+/// `kt` widened by `widening` over `pool`. Above `kt` whatever its node: where the node has no
+/// covariant child to step inside, the step is the union with a pool type.
+fn widen(
+    world: &World,
+    scratch: BumpAllocator<'_>,
+    pool: &[KType],
+    kt: Handle,
+    widening: &Widening,
+) -> Handle {
+    let types = &world.types;
+    let union_with = |index: usize| types.union_of(scratch, &[kt, pool[index % pool.len()].raw()]);
+    let (index, inner) = match widening {
+        Widening::Top => return Handle::ANY,
+        Widening::UnionWith(index) => return union_with(*index),
+        Widening::Inside(index, inner) => (*index, inner),
+    };
+    let step = |child: Handle| widen(world, scratch, pool, child, inner);
+    match types.node(kt) {
+        TypeNode::List { element } => types.list(step(element)),
+        TypeNode::Dict { key, value } if index % 2 == 0 => types.dict(key, step(value)),
+        TypeNode::Dict { key, value } => types.dict(step(key), value),
+        TypeNode::Record { fields } if !fields.raw().is_empty() => {
+            let mut fields = fields.raw().to_vec();
+            let at = index % fields.len();
+            fields[at].1 = step(fields[at].1);
+            types.record(scratch, &fields)
+        }
+        TypeNode::Union { members } => {
+            let mut members = members.to_vec();
+            let at = index % members.len();
+            members[at] = step(members[at]);
+            types.union_of(scratch, &members)
+        }
+        TypeNode::KFunction {
+            quantifiers: &[],
+            params,
+            ret,
+            ..
+        } => types.function_type(scratch, params.raw(), step(ret)),
+        _ => union_with(index),
+    }
+}
+
+/// `a ≤ b` by construction: `b` is `a` restated — a union of one member, or its node re-interned —
+/// or `a` widened.
+pub fn arb_ordered_pair(world: World, depth: u32) -> BoxedStrategy<(KType, KType)> {
+    let pool = world.widening_pool();
+    (
+        arb_concrete(world.clone(), depth),
+        prop::option::weighted(0.8, arb_widening(pool.len(), 2)),
+        any::<bool>(),
+    )
+        .prop_map(move |(a, widening, union)| {
+            let b = with_scratch(|scratch| match widening {
+                Some(widening) => widen(&world, scratch, &pool, a.raw(), &widening),
+                None if union => world.types.union_of(scratch, &[a.raw()]),
+                None => world.types.intern(scratch, world.types.node(a.raw())),
+            });
+            (a, world.concrete(b))
+        })
+        .boxed()
+}
+
+/// `a ≤ b ≤ c` by construction, each step a widening.
+pub fn arb_chain(world: World, depth: u32) -> BoxedStrategy<(KType, KType, KType)> {
+    let pool = world.widening_pool();
+    (
+        arb_concrete(world.clone(), depth),
+        arb_widening(pool.len(), 2),
+        arb_widening(pool.len(), 2),
+    )
+        .prop_map(move |(a, first, second)| {
+            with_scratch(|scratch| {
+                let b = widen(&world, scratch, &pool, a.raw(), &first);
+                let c = widen(&world, scratch, &pool, b, &second);
+                (a, world.concrete(b), world.concrete(c))
+            })
+        })
+        .boxed()
+}
+
+/// A *fits* chain: an order chain, or one whose bottom is a lexical variable bounded by the chain's
+/// bottom, which fits what that bottom lies under. A bottom holding an opaque carrier bounds no
+/// variable, so its chain is drawn as the order's.
+pub fn arb_fits_chain(
+    world: World,
+    depth: u32,
+) -> BoxedStrategy<(
+    DeclaredType<Parametric>,
+    DeclaredType<Parametric>,
+    DeclaredType<Parametric>,
+)> {
+    (arb_chain(world.clone(), depth), any::<bool>())
+        .prop_map(move |((a, b, c), lexical)| {
+            let types = &world.types;
+            let a = if lexical && !types.contains_rigid(a.raw()) {
+                types.lexical(0, world.type_names[0], a).raw()
+            } else {
+                a.raw()
+            };
+            (
+                world.declared(a),
+                world.declared(b.raw()),
+                world.declared(c.raw()),
+            )
+        })
+        .boxed()
+}
+
+/// A chain `a ≤ b ≤ c` through an instance, which [`arb_any`]'s draws almost never line up: `a` is
 /// a binder over one variable at two positions, `b` its instance at the least instance `c`'s two
 /// positions give that variable, and `c` puts two ground types at those positions.
 ///
