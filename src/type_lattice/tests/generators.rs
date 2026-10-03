@@ -149,12 +149,15 @@ impl World {
         within[pick % within.len()]
     }
 
-    /// `binding` within `bound`: its type, or where `lexical` the lexical variable over that type —
-    /// an inhabited one, since a variable over `Never` would be its point.
+    /// `binding` within `bound`, for the `index`th variable of a group: its type, or where `lexical`
+    /// the lexical variable over that type — an inhabited one, since a variable over `Never` would
+    /// be its point. The drawn name is shifted by `index`, so a group's lexical bindings are named
+    /// apart: a scope binds a name once at a level.
     fn bind_within(
         &self,
         scratch: BumpAllocator<'_>,
         bound: KType,
+        index: usize,
         binding: &Binding,
         lexical: bool,
     ) -> Handle {
@@ -162,7 +165,7 @@ impl World {
         if !lexical {
             return within.raw();
         }
-        let name = self.type_names[binding.name];
+        let name = self.type_names[(binding.name + index) % self.type_names.len()];
         lexical_over(self, scratch, binding.level, name, within, binding.lower).raw()
     }
 
@@ -274,18 +277,18 @@ impl Vocabulary {
     }
 
     /// The group sizes a binder over `positions` plantable positions may draw: each variable takes
-    /// two of them.
+    /// two of them, so a group has up to `positions / 2`.
     fn group_sizes(self, positions: usize) -> std::ops::Range<usize> {
         let most = positions / 2;
         match self.groups {
             Groups::Never => 0..1,
-            Groups::Maybe => 0..most.min(1) + 1,
+            Groups::Maybe => 0..most + 1,
             Groups::Always | Groups::Outer => {
                 assert!(
                     most >= 1,
                     "a binder that must bind a group has two positions"
                 );
-                1..2
+                1..most + 1
             }
         }
     }
@@ -748,21 +751,24 @@ fn arb_plantings(
 /// `vocabulary` allows or demands one. Every variable is minted under a variable-free bound.
 ///
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
-/// for the reason [`arb_shape_over`] plants one at two. Both occurrences take one [`planted`]
-/// form.
+/// for the reason [`arb_shape_over`] plants one at two, so the group has at most
+/// `(arity + 1) / 2` variables. Both occurrences take one [`planted`] form.
 fn arb_function(
     world: World,
     depth: u32,
     members: Rc<Vec<Handle>>,
     vocabulary: Vocabulary,
 ) -> BoxedStrategy<Handle> {
-    let grounds = world.grounds();
+    let grounds = world.grounds().len();
     // The return is the last plantable position, so even a one-parameter function gives a variable
     // two places to occur.
-    (
-        1..=world.binders.len(),
-        prop::collection::vec(0..grounds.len(), vocabulary.group_sizes(2)),
-    )
+    (1..=world.binders.len())
+        .prop_flat_map(move |arity| {
+            (
+                Just(arity),
+                prop::collection::vec(0..grounds, vocabulary.group_sizes(arity + 1)),
+            )
+        })
         .prop_flat_map(move |(arity, bounds)| {
             let world = world.clone();
             let vars: Rc<Vec<Handle>> = Rc::new(
@@ -1086,7 +1092,8 @@ pub fn arb_argument_pair(
                 arb_shape_over(shapes.clone(), key.clone(), depth, none(), candidate),
                 arb_shape_over(shapes.clone(), key, depth, none(), Vocabulary::CONCRETE),
                 prop::bool::weighted(0.75),
-                prop::collection::vec(arb_binding(&bindings), 1),
+                // One binding per name: more than any group binds, and zipped with the bounds.
+                prop::collection::vec(arb_binding(&bindings), bindings.type_names.len()),
                 prop::collection::vec(any::<bool>(), positions),
                 prop::collection::vec(prop::option::of(0..pools), positions),
             )
@@ -1108,7 +1115,10 @@ pub fn arb_argument_pair(
                     substitute::quantifier_bounds(types, a)
                         .iter()
                         .zip(&picks)
-                        .map(|(bound, pick)| world.bind_within(scratch, *bound, pick, lexical))
+                        .enumerate()
+                        .map(|(index, (bound, pick))| {
+                            world.bind_within(scratch, *bound, index, pick, lexical)
+                        })
                         .collect()
                 };
                 let (plain, variables) = (bind(false), bind(candidate.variables));
@@ -1264,7 +1274,8 @@ pub fn arb_own_instance(
     wanted: Vocabulary,
 ) -> BoxedStrategy<(Scheme, Parametric)> {
     let pool = world.widening_pool();
-    let bindings = prop::collection::vec(arb_binding(&world), 1);
+    // One binding per name: more than any group binds, and zipped with the bounds.
+    let bindings = prop::collection::vec(arb_binding(&world), world.type_names.len());
     let widening = prop::option::of(arb_function_widening(pool.len(), 2));
     (arb_scheme(world.clone(), depth, scheme), bindings, widening)
         .prop_map(move |(scheme, picks, widening)| {
@@ -1273,7 +1284,10 @@ pub fn arb_own_instance(
                 let bindings: Vec<Handle> = quantifier_bounds(types, scheme)
                     .iter()
                     .zip(&picks)
-                    .map(|(bound, pick)| world.bind_within(scratch, *bound, pick, wanted.variables))
+                    .enumerate()
+                    .map(|(index, (bound, pick))| {
+                        world.bind_within(scratch, *bound, index, pick, wanted.variables)
+                    })
                     .collect();
                 let instance = instantiate_quantified(types, scratch, scheme, &bindings).raw();
                 let wanted = match &widening {
