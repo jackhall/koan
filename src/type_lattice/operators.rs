@@ -34,3 +34,30 @@ pub enum ReductionMode {
         direction: FoldDirection,
     },
 }
+
+impl FoldDirection {
+    /// The byte the digest and the canonical order both read.
+    pub(super) fn byte(self) -> u8 {
+        match self {
+            FoldDirection::Left => 0,
+            FoldDirection::Right => 1,
+        }
+    }
+}
+
+impl ReductionMode {
+    /// The mode's total order and its digest encoding in one: a discriminant byte, a pairwise
+    /// mode's combiner, and its direction byte. The digest feeds exactly these, in this order, so
+    /// the two cannot drift.
+    pub(super) fn canonical_key(self) -> (u8, Option<KeywordSymbol>, u8) {
+        match self {
+            ReductionMode::Unary => (0, None, 0),
+            ReductionMode::FoldLeft => (1, None, 0),
+            ReductionMode::FoldRight => (2, None, 0),
+            ReductionMode::Pairwise {
+                combiner,
+                direction,
+            } => (3, Some(combiner), direction.byte()),
+        }
+    }
+}

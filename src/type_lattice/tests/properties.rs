@@ -20,19 +20,16 @@ use crate::memory::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle};
 use crate::type_lattice::kind::KKind;
-use crate::type_lattice::node::TypeNode;
+use crate::type_lattice::node::{TypeNode, Variable};
 use crate::type_lattice::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::{
-    Members, canonical_overloads, is_shape, keys_equal, shape_classes, shape_quantifiers,
-    shape_return, shape_slots,
-};
-use crate::type_lattice::shape::Specificity;
+use crate::type_lattice::schema::{Members, canonical_overloads};
+use crate::type_lattice::shape::{Shape, Specificity, keys_equal, shape_classes, shape_slots};
 use crate::type_lattice::sig_relations::InstanceFailure;
 use crate::type_lattice::sig_relations::{admits_shape, shape_specificity, sig_fits};
 use crate::type_lattice::signatures::{applications, applications_under, is_signature_type};
 use crate::type_lattice::substitute::{
-    Side, Variable, bound_above, quantifier_bounds, read_through, substitute_parameters,
+    Side, bound_above, quantifier_bounds, read_through, substitute_parameters,
     substitute_quantified,
 };
 use crate::type_lattice::typed::{
@@ -724,7 +721,7 @@ proptest! {
         let scratch = &bump;
         // Two things that are not both shapes share no bucket to rank under. The empty element run
         // a non-shape reads as would otherwise make every pair of leaves compare `Equal`.
-        if !is_shape(a, &types) {
+        if !matches!(types.node(a.raw()), TypeNode::ExpressionShape { .. }) {
             let (a, b) = (a.raw(), b.raw());
             prop_assert_eq!(shape_specificity(&types, scratch, a, b), Specificity::Incomparable);
             prop_assert_eq!(shape_specificity(&types, scratch, b, a), Specificity::Incomparable);
@@ -746,10 +743,8 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         prop_assert!(
-            shape_quantifiers(a, &types).is_empty()
-                && shape_quantifiers(b, &types).is_empty()
-                && shape_return(a, &types).is_some()
-                && shape_return(b, &types).is_some()
+            Shape::of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
+                && Shape::of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
                 && keys_equal(a, b, &types),
             "the pair is two monomorphic shapes over one key"
         );
@@ -790,10 +785,8 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         prop_assert!(
-            shape_return(a, &types).is_some()
-                && shape_return(b, &types).is_some()
-                && shape_quantifiers(a, &types).is_empty()
-                && shape_quantifiers(b, &types).is_empty()
+            Shape::of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
+                && Shape::of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
                 && keys_equal(a, b, &types),
             "the pair is two monomorphic shapes over one key"
         );

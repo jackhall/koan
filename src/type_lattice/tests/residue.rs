@@ -8,20 +8,22 @@
 use crate::memory::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
-use crate::type_lattice::digest::{TypeDigest, empty_schema_digest, node_digest};
+use crate::type_lattice::digest::{TypeDigest, node_digest, schema_content_digest};
 use crate::type_lattice::handle::{Handle, KType, Parametric, TypeHandle};
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::lattice::{join, meet_through_variables as meet};
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::order::{fits, is_subtype_of};
 use crate::type_lattice::record::Record;
-use crate::type_lattice::registry::{Relation, TypeRegistry};
+use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_handle;
 use crate::type_lattice::run::Elements;
-use crate::type_lattice::schema::{SchemaDraft, SigOrigin, shape_slots};
+use crate::type_lattice::schema::{SchemaDraft, SigOrigin, SigSchema};
+use crate::type_lattice::shape::shape_slots;
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 use crate::type_lattice::typed;
 use crate::type_lattice::unify::{Collector, UnifyFailure, admits};
+use crate::type_lattice::verdicts::Relation;
 use crate::type_lattice::walk::Variance;
 
 /// No law: a handle that names no interned node is a bug in whoever minted it, not a value the
@@ -61,7 +63,7 @@ fn the_empty_schema_digest_is_the_module_top() {
     assert_eq!(empty, KType::EMPTY_SIGNATURE);
     match types.node(empty) {
         TypeNode::Signature { schema_digest, .. } => {
-            assert_eq!(schema_digest, empty_schema_digest());
+            assert_eq!(schema_digest, schema_content_digest(SigSchema::EMPTY));
         }
         _ => panic!("the signature door interned something else"),
     }

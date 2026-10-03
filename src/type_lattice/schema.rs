@@ -26,13 +26,12 @@ use std::ops::Deref;
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
-use super::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle};
+use super::handle::{DeclaredType, Handle, KType, Parametric};
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
-use super::operators::{FoldDirection, ReductionMode};
+use super::operators::ReductionMode;
 use super::order::{Dropped, unsubsumed};
 use super::registry::TypeRegistry;
-use super::shape::DispatchTokenElement;
 
 /// A named member table: `(name, T)` pairs, symbol-sorted by name with each name once. The shape
 /// every name-keyed channel of a schema is stored in, and the shape a substitution's bindings
@@ -134,7 +133,7 @@ pub struct SigSchema<'run> {
     pub value_slots: Members<'run, ValueSymbol, DeclaredType<Parametric>>,
     /// Keyworded (dispatch-bucket) members: the expression shapes the interface declares, each a
     /// type or a scheme, in [`canonical_overloads`] order. The bucket key is each member's own
-    /// element run with its slot types erased ([`shape_keys_equal`]) — read off the member's type,
+    /// element run with its slot types erased ([`elements_key_equal`]) — read off the member's type,
     /// never stored beside it — so two overloads under one key are two entries here.
     pub keyworded: &'run [DeclaredType<Parametric>],
     /// Operator members: the chaining records the interface declares, in [`canonical_groups`]
@@ -182,11 +181,6 @@ impl SigSchema<'_> {
             && self.value_slots.is_empty()
             && self.keyworded.is_empty()
             && self.operators.is_empty()
-    }
-
-    /// This schema's manifest binding for the type member `name`.
-    pub fn type_member(&self, name: TypeSymbol) -> Option<Parametric> {
-        member(self.manifest_members, name)
     }
 }
 
@@ -275,31 +269,9 @@ pub(super) fn canonical_groups(groups: &mut BumpVec<'_, DeclaredGroup<'_>>) {
     groups.sort_by(|a, b| {
         a.members
             .cmp(b.members)
-            .then_with(|| mode_order(a.mode).cmp(&mode_order(b.mode)))
+            .then_with(|| a.mode.canonical_key().cmp(&b.mode.canonical_key()))
     });
     groups.dedup();
-}
-
-/// A mode's total order, for [`canonical_groups`] — the same discriminant the digest feeds, with a
-/// pairwise mode's combiner and direction breaking its own ties.
-fn mode_order(mode: ReductionMode) -> (u8, Option<KeywordSymbol>, u8) {
-    match mode {
-        ReductionMode::Unary => (0, None, 0),
-        ReductionMode::FoldLeft => (1, None, 0),
-        ReductionMode::FoldRight => (2, None, 0),
-        ReductionMode::Pairwise {
-            combiner,
-            direction,
-        } => (3, Some(combiner), direction_byte(direction)),
-    }
-}
-
-/// A fold direction as the byte the digest and the mode order both read.
-fn direction_byte(direction: FoldDirection) -> u8 {
-    match direction {
-        FoldDirection::Left => 0,
-        FoldDirection::Right => 1,
-    }
 }
 
 /// Put a keyworded member set in canonical order — sorted by content digest, exact duplicates
@@ -335,124 +307,12 @@ pub(super) fn canonical_overloads(
     overloads.retain(|_| *keep.next().unwrap_or(&true));
 }
 
-/// Whether two shapes key the same dispatch bucket — each one's element sequence with the slot
-/// types erased, compared position by position.
-///
-/// The bucket key is a *reading* of the member's type, never a second copy of it, and a reading
-/// only ever has to be compared, so no consumer materializes one and the pairwise readers
-/// allocate nothing at all.
-pub fn shape_keys_equal(
-    left: impl Into<DeclaredType<Parametric>>,
-    right: impl Into<DeclaredType<Parametric>>,
-    types: &TypeRegistry<'_>,
-) -> bool {
-    keys_equal(left.into().raw(), right.into().raw(), types)
-}
-
-/// [`shape_keys_equal`] over raw handles.
-pub(super) fn keys_equal(left: Handle, right: Handle, types: &TypeRegistry<'_>) -> bool {
-    elements_key_equal(
-        shape_elements(&types.node(left)),
-        shape_elements(&types.node(right)),
-    )
-}
-
-/// [`shape_keys_equal`] over two element runs already in hand.
-pub(super) fn elements_key_equal(
-    left: &[DispatchTokenElement],
-    right: &[DispatchTokenElement],
-) -> bool {
-    left.len() == right.len()
-        && left.iter().zip(right).all(|(a, b)| match (a, b) {
-            (DispatchTokenElement::Keyword(x), DispatchTokenElement::Keyword(y)) => x == y,
-            (DispatchTokenElement::Slot(_), DispatchTokenElement::Slot(_)) => true,
-            _ => false,
-        })
-}
-
-/// A shape node's element sequence; empty for a node that is not a shape, which no schema member
-/// ever is. The one place the "not a shape reads as the empty key" convention lives.
-pub(super) fn shape_elements<'run, H>(node: &TypeNode<'run, H>) -> &'run [DispatchTokenElement] {
-    match node {
-        TypeNode::ExpressionShape { elements, .. } => elements.raw(),
-        _ => &[],
-    }
-}
-
-/// A shape's ranking — each slot's dense priority class, empty for written order — or empty for
-/// anything that is not a shape.
-pub(super) fn shape_classes<'run>(kt: Handle, types: &TypeRegistry<'run>) -> &'run [u8] {
-    match types.node(kt) {
-        TypeNode::ExpressionShape { classes, .. } => classes,
-        _ => &[],
-    }
-}
-
-/// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
-/// compare or render one position at a time. Read straight off the node's element run, so the
-/// read builds nothing.
-pub fn shape_slots<'run, H: TypeHandle>(
-    kt: H,
-    types: &TypeRegistry<'run>,
-) -> impl Iterator<Item = H::Child> + use<'run, H> {
-    slots_of(shape_elements(&types.node(kt.raw())))
-}
-
-/// A scheme's argument-position types, in order, each of which may read the scheme's own group.
-pub fn scheme_slots<'run>(
-    scheme: Scheme,
-    types: &TypeRegistry<'run>,
-) -> impl Iterator<Item = Parametric> + use<'run> {
-    slots_of(shape_elements(&types.node(scheme.raw())))
-}
-
-/// The slot types of an element run, read as `C`.
-fn slots_of<C: TypeHandle>(
-    elements: &[DispatchTokenElement],
-) -> impl Iterator<Item = C> + use<'_, C> {
-    elements.iter().filter_map(|element| match element {
-        DispatchTokenElement::Slot(kt) => Some(super::handle::wrap(*kt)),
-        DispatchTokenElement::Keyword(_) => None,
-    })
-}
-
-/// Whether `kt` names an expression shape.
-///
-/// The relations keyed on a bucket read a non-shape as the *empty* key, so two unrelated leaves
-/// would compare key-equal; every door that ranks or admits by key asks this first, so a caller
-/// that hands one a plain type gets a refusal rather than a vacuous verdict.
-pub fn is_shape(kt: impl Into<DeclaredType<Parametric>>, types: &TypeRegistry<'_>) -> bool {
-    matches!(
-        types.node(kt.into().raw()),
-        TypeNode::ExpressionShape { .. }
-    )
-}
-
-/// A shape's return type, or `None` for anything that is not a shape.
-pub fn shape_return<H: TypeHandle>(kt: H, types: &TypeRegistry<'_>) -> Option<H::Child> {
-    match types.node(kt) {
-        TypeNode::ExpressionShape { ret, .. } => Some(ret),
-        _ => None,
-    }
-}
-
-/// A scheme's return type, which may read the scheme's own group; `None` for a function scheme.
-pub fn scheme_return(scheme: Scheme, types: &TypeRegistry<'_>) -> Option<Parametric> {
-    match types.scheme_node(scheme) {
-        TypeNode::ExpressionShape { ret, .. } => Some(ret),
-        _ => None,
-    }
-}
-
-/// A shape's quantifier group — the render-only names, in index order. Empty for a monomorphic
-/// shape and for anything that is not a shape.
-pub(super) fn shape_quantifiers<'run>(
-    kt: Handle,
-    types: &TypeRegistry<'run>,
-) -> &'run [TypeSymbol] {
-    match types.node(kt) {
-        TypeNode::ExpressionShape { quantifiers, .. } => quantifiers,
-        _ => &[],
+/// The bound a head parameter is declared with. `parameter` is a [`TypeNode::Parameter`], as every
+/// entry of [`SigSchema::parameters`] is.
+pub(super) fn parameter_bound(types: &TypeRegistry<'_>, parameter: Handle) -> KType {
+    match types.node(parameter) {
+        TypeNode::Parameter { bound, .. } => bound,
+        _ => unreachable!("a head parameter is a Parameter node"),
     }
 }
 

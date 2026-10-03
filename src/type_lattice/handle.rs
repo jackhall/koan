@@ -363,6 +363,51 @@ static LIST_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "List
 static DICT_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Dict");
 static SIGNATURE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Signature");
 
+/// The fixed spelling of a singly-named builtin leaf, or `None` for every other node — the one
+/// table [`KType::name_symbol`] and [`render`](super::render) both read.
+pub(super) fn leaf_name<H>(node: &TypeNode<'_, H>) -> Option<&'static StaticName<TypeSymbol>> {
+    Some(match node {
+        TypeNode::Number => &NUMBER_NAME,
+        TypeNode::Str => &STR_NAME,
+        TypeNode::Bool => &BOOL_NAME,
+        TypeNode::Null => &NULL_NAME,
+        TypeNode::Identifier => &IDENTIFIER_NAME,
+        TypeNode::Symbol => &SYMBOL_NAME,
+        TypeNode::TypeNameToken => &TYPE_NAME_TOKEN_NAME,
+        TypeNode::Expression => &EXPRESSION_NAME,
+        TypeNode::SigiledTypeExpr => &SIGILED_TYPE_EXPR_NAME,
+        TypeNode::RecordType => &RECORD_TYPE_NAME,
+        TypeNode::Literal => &LITERAL_NAME,
+        TypeNode::Block => &BLOCK_NAME,
+        TypeNode::Declaration => &DECLARATION_NAME,
+        TypeNode::Binder => &BINDER_NAME,
+        TypeNode::Name => &NAME_NAME,
+        TypeNode::Keyword => &KEYWORD_NAME,
+        TypeNode::Any => &ANY_NAME,
+        TypeNode::AnyValue => &VALUE_NAME,
+        TypeNode::AnyCode => &CODE_NAME,
+        TypeNode::Never => &NEVER_NAME,
+        TypeNode::OfKind(_)
+        | TypeNode::CodeNeeding { .. }
+        | TypeNode::Parameter { .. }
+        | TypeNode::SetMember { .. }
+        | TypeNode::Signature { .. }
+        | TypeNode::List { .. }
+        | TypeNode::Dict { .. }
+        | TypeNode::Record { .. }
+        | TypeNode::KFunction { .. }
+        | TypeNode::ExpressionShape { .. }
+        | TypeNode::Quantified { .. }
+        | TypeNode::Lexical { .. }
+        | TypeNode::DeferredReturn(_)
+        | TypeNode::Union { .. }
+        | TypeNode::ConstructorApply { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. }
+        | TypeNode::Sibling(_) => return None,
+    })
+}
+
 /// Declares each fixed handle as a `KType` constant the rest of koan names.
 macro_rules! fixed_handles {
     ($($(#[$doc:meta])* $name:ident = $digest:literal;)*) => {
@@ -498,48 +543,17 @@ impl KType {
         types: &TypeRegistry<'_>,
         symbols: &crate::symbols::SymbolInterner,
     ) -> Option<TypeSymbol> {
-        let fixed = |name: &StaticName<TypeSymbol>| Some(symbols.record(name));
-        match types.node(self) {
-            TypeNode::Number => fixed(&NUMBER_NAME),
-            TypeNode::Str => fixed(&STR_NAME),
-            TypeNode::Bool => fixed(&BOOL_NAME),
-            TypeNode::Null => fixed(&NULL_NAME),
-            TypeNode::Identifier => fixed(&IDENTIFIER_NAME),
-            TypeNode::Symbol => fixed(&SYMBOL_NAME),
-            TypeNode::TypeNameToken => fixed(&TYPE_NAME_TOKEN_NAME),
-            TypeNode::Expression => fixed(&EXPRESSION_NAME),
-            TypeNode::SigiledTypeExpr => fixed(&SIGILED_TYPE_EXPR_NAME),
-            TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),
-            TypeNode::Literal => fixed(&LITERAL_NAME),
-            TypeNode::Block => fixed(&BLOCK_NAME),
-            TypeNode::Declaration => fixed(&DECLARATION_NAME),
-            TypeNode::Binder => fixed(&BINDER_NAME),
-            TypeNode::Name => fixed(&NAME_NAME),
-            TypeNode::Keyword => fixed(&KEYWORD_NAME),
-            TypeNode::Any => fixed(&ANY_NAME),
-            TypeNode::AnyValue => fixed(&VALUE_NAME),
-            TypeNode::AnyCode => fixed(&CODE_NAME),
-            TypeNode::Never => fixed(&NEVER_NAME),
+        let node = types.node(self);
+        if let Some(name) = leaf_name(&node) {
+            return Some(symbols.record(name));
+        }
+        match node {
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(symbols)),
-            TypeNode::Parameter { name, .. } => Some(name),
-            TypeNode::SetMember { name, .. } => Some(name),
-            TypeNode::Signature { schema_digest, .. } => (schema_digest
-                == super::digest::empty_schema_digest())
-            .then(|| symbols.record(&MODULE_NAME)),
-            TypeNode::List { .. }
-            | TypeNode::Dict { .. }
-            | TypeNode::Record { .. }
-            | TypeNode::KFunction { .. }
-            | TypeNode::ExpressionShape { .. }
-            | TypeNode::Quantified { .. }
-            | TypeNode::Lexical { .. }
-            | TypeNode::DeferredReturn(_)
-            | TypeNode::Union { .. }
-            | TypeNode::ConstructorApply { .. }
-            | TypeNode::CodeNeeding { .. }
-            | TypeNode::SignatureApply { .. }
-            | TypeNode::SignatureMeet { .. }
-            | TypeNode::Sibling(_) => None,
+            TypeNode::Parameter { name, .. } | TypeNode::SetMember { name, .. } => Some(name),
+            TypeNode::Signature { .. } => {
+                (self == KType::EMPTY_SIGNATURE).then(|| symbols.record(&MODULE_NAME))
+            }
+            _ => None,
         }
     }
 

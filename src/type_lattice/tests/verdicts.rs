@@ -11,7 +11,8 @@ use crate::tests::allocation_count;
 use crate::type_lattice::digest::TypeDigest;
 use crate::type_lattice::handle::{KType, TypeHandle};
 use crate::type_lattice::order::is_subtype_of;
-use crate::type_lattice::registry::{Relation, TypeRegistry};
+use crate::type_lattice::registry::TypeRegistry;
+use crate::type_lattice::verdicts::Relation;
 
 fn key(n: u128) -> TypeDigest {
     TypeDigest(n)

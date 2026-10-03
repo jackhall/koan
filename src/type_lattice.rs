@@ -70,6 +70,7 @@ mod signatures;
 mod substitute;
 mod typed;
 mod unify;
+mod verdicts;
 mod walk;
 mod window;
 
@@ -79,7 +80,7 @@ mod tests;
 pub use digest::TypeDigest;
 pub use handle::{DeclaredType, KType, Parametric, Scheme, TypeHandle, builtin_types};
 pub use kind::KKind;
-pub use node::{NodeSchema, TypeNode};
+pub use node::{NodeSchema, TypeNode, Variable};
 pub use operators::{FoldDirection, ReductionMode};
 pub use ranking::{Judged, Verdict};
 pub use record::Record;
@@ -90,14 +91,14 @@ pub use render::{
 };
 pub use run::{Elements, Run};
 pub use schema::{
-    DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, constructor_param_names, is_shape,
-    member, scheme_return, scheme_slots, shape_keys_equal, shape_return, shape_slots,
+    DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, constructor_param_names, member,
 };
 pub use shape::{
     DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, class_of, dense_classes,
+    scheme_return, scheme_slots, shape_return, shape_slots,
 };
 pub use sig_relations::{FitsFailure, InstanceFailure};
-pub use substitute::{Side, Variable};
+pub use substitute::Side;
 pub use typed::{
     Substitutable, admit_by_class, bound_above, class_at_least, erase_rigid, fits,
     fits_application, instance_under, instantiate_quantified, is_subtype_of, join, join_iter,

@@ -18,7 +18,7 @@ use crate::type_lattice::handle::{Handle, wrap};
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::shape::DispatchTokenElement;
+use crate::type_lattice::shape::{DispatchTokenElement, map_slots};
 
 /// What an arm's leftover children mean. The instance reads it rather than knowing which arm it is
 /// looking at: the order turns each into an emptiness requirement, the meet into a keep-or-drop.
@@ -422,13 +422,9 @@ impl Rebuilder<'_, '_> {
             }
             Assembly::Shape(elements, classes) => {
                 let mut slots = paired.iter();
-                let mut rebuilt = BumpVec::with_capacity_in(elements.len(), scratch);
-                rebuilt.extend(elements.iter().map(|element| match element {
-                    DispatchTokenElement::Slot(_) => DispatchTokenElement::Slot(
-                        *slots.next().expect("one child per slot position"),
-                    ),
-                    keyword => *keyword,
-                }));
+                let rebuilt = map_slots(scratch, elements, |_| {
+                    *slots.next().expect("one child per slot position")
+                });
                 let ret = *slots.next().expect("the return follows the slots");
                 types.shape_type(scratch, &rebuilt, classes, ret)
             }

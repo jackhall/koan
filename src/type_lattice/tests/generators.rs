@@ -40,8 +40,8 @@ use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::shape_slots;
 use crate::type_lattice::schema::{SchemaDraft, SigOrigin};
+use crate::type_lattice::shape::shape_slots;
 use crate::type_lattice::shape::{
     DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes,
 };

@@ -131,10 +131,6 @@ macro_rules! typed_runs {
                 self.handles.get(index).map(|raw| wrap(*raw))
             }
 
-            pub fn first(self) -> Option<$handle> {
-                self.get(0)
-            }
-
             pub fn contains(self, handle: $handle) -> bool {
                 self.handles.contains(&handle.raw())
             }
@@ -167,14 +163,6 @@ macro_rules! typed_runs {
 
             pub fn is_empty(self) -> bool {
                 self.elements.is_empty()
-            }
-
-            /// The slot types, in slot order.
-            pub fn slots(self) -> impl Iterator<Item = $handle> + 'run {
-                self.elements.iter().filter_map(|element| match element {
-                    DispatchTokenElement::Slot(raw) => Some(wrap(*raw)),
-                    DispatchTokenElement::Keyword(_) => None,
-                })
             }
         }
     )*};

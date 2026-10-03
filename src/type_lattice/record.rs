@@ -9,10 +9,8 @@
 //!
 //! Identity is the key's [`Symbol`] bits alone — equality and the type digest both read
 //! `key.symbol()` and never the variant tag, so a schema's class rides past the intern boundary
-//! without widening what makes two records the same. Probe doors ([`Record::get`],
-//! [`Record::get_index_of`]) take a bare [`Symbol`] for the same reason; a stored key's class comes
-//! back through [`Record::get_key_value`], witnessed because the interning door took a classified
-//! key.
+//! without widening what makes two records the same. The probe door [`Record::get`] takes a bare
+//! [`Symbol`] for the same reason.
 //!
 //! A record is one `Copy` fat pointer into the run region — no index table. At record sizes a
 //! linear symbol compare beats hashing. Only the registry's record doors build one, bumping the
@@ -30,6 +28,7 @@
 
 use std::marker::PhantomData;
 
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol};
 
 use super::handle::{Handle, TypeHandle, wrap};
@@ -85,11 +84,6 @@ impl<'run, H> Record<'run, H> {
     pub fn keys(self) -> impl DoubleEndedIterator<Item = BinderSymbol> + ExactSizeIterator + 'run {
         self.fields.iter().map(|(name, _)| *name)
     }
-
-    /// The field's position in declaration order — the index a positional view aligns against.
-    pub fn get_index_of(self, name: Symbol) -> Option<usize> {
-        self.fields.iter().position(|(key, _)| key.symbol() == name)
-    }
 }
 
 impl<'run, H: TypeHandle> Record<'run, H> {
@@ -112,15 +106,18 @@ impl<'run, H: TypeHandle> Record<'run, H> {
             .find(|(key, _)| key.symbol() == name)
             .map(|(_, value)| wrap(*value))
     }
+}
 
-    /// Recover a stored key's binding class alongside its value. Witnessed: the interning door took
-    /// a classified key, so a hit hands back the class its declaration established.
-    pub fn get_key_value(self, name: Symbol) -> Option<(BinderSymbol, H)> {
-        self.fields
-            .iter()
-            .find(|(key, _)| key.symbol() == name)
-            .map(|(key, value)| (*key, wrap(*value)))
-    }
+/// `fields` in declaration order with each value mapped through `map` — the one way a field run is
+/// rebuilt. Staged in `scratch`.
+pub(super) fn map_fields<'s, H: TypeHandle>(
+    scratch: BumpAllocator<'s>,
+    fields: &[(BinderSymbol, H)],
+    mut map: impl FnMut(H) -> Handle,
+) -> BumpVec<'s, (BinderSymbol, Handle)> {
+    let mut out = BumpVec::with_capacity_in(fields.len(), scratch);
+    out.extend(fields.iter().map(|(name, value)| (*name, map(*value))));
+    out
 }
 
 /// Order-blind: same set of `(symbol, value)` pairs, regardless of declaration order. Keys are

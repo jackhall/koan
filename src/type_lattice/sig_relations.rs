@@ -19,13 +19,12 @@ use super::lattice::meet_through_variables;
 use super::node::TypeNode;
 use super::operators::ReductionMode;
 use super::order::{fits, satisfied_by};
-use super::ranking::{Ranked, STAND_IN_LEVEL, admits_by_class, class_at_least};
+use super::ranking::{STAND_IN_LEVEL, admits_by_class, class_at_least};
 use super::registry::TypeRegistry;
-use super::schema::{
-    DeclaredGroup, Members, SigOrigin, SigSchema, elements_key_equal, keys_equal, shape_classes,
-    shape_quantifiers, shape_return, shape_slots,
+use super::schema::{DeclaredGroup, Members, SigOrigin, SigSchema, parameter_bound};
+use super::shape::{
+    Shape, Specificity, elements_key_equal, keys_equal, shape_classes, shape_return, shape_slots,
 };
-use super::shape::Specificity;
 use super::signatures::{Application, applications, applications_under};
 use super::substitute::{instantiate_quantified, substitute_parameters};
 use super::unify::{Collector, UnifyFailure, admits};
@@ -53,7 +52,7 @@ pub(super) fn admits_shape(
     candidate: Handle,
 ) -> bool {
     let (Some(declared), Some(candidate)) =
-        (Ranked::of(types, declared), Ranked::of(types, candidate))
+        (Shape::of(types, declared), Shape::of(types, candidate))
     else {
         return false;
     };
@@ -191,7 +190,7 @@ pub(super) fn shape_specificity(
     a: Handle,
     b: Handle,
 ) -> Specificity {
-    let (Some(ranked_a), Some(ranked_b)) = (Ranked::of(types, a), Ranked::of(types, b)) else {
+    let (Some(ranked_a), Some(ranked_b)) = (Shape::of(types, a), Shape::of(types, b)) else {
         // Two things that are not both shapes have no bucket in common to rank under, which is a
         // refusal rather than a tie: the empty element run a non-shape reads as would otherwise
         // make every pair of leaves compare `Equal`.
@@ -203,8 +202,7 @@ pub(super) fn shape_specificity(
         return Specificity::Incomparable;
     }
     let mut every_class_both = true;
-    for class in 0..ranked_a.class_count() {
-        let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
+    for class in ranked_a.class_indices() {
         let more = class_at_least(types, scratch, a, b, class);
         let less = class_at_least(types, scratch, b, a, class);
         match (more, less) {
@@ -359,7 +357,7 @@ impl<'run, 's> Offered<'run, 's> {
             let mut bindings = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
             bindings.extend(schema.parameters.iter().map(|(name, parameter)| {
                 let read = application.pin(name.symbol()).unwrap_or_else(|| {
-                    let bound = types.node(*parameter).rigid_bound().unwrap_or(KType::ANY);
+                    let bound = parameter_bound(types, parameter.raw());
                     types.lexical(OFFERED_LEVEL - k, *name, bound).raw()
                 });
                 (*name, read)
@@ -475,7 +473,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
         bounds.extend(
             self.unpinned
                 .iter()
-                .map(|(_, parameter)| types.node(*parameter).rigid_bound().unwrap_or(KType::ANY)),
+                .map(|(_, parameter)| parameter_bound(types, *parameter)),
         );
         let mut collector = Collector::new(scratch, &bounds);
         // Manifest members and value slots involve no choice, so they contribute first.
@@ -534,11 +532,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
                 .iter()
                 .enumerate()
                 .map(|(j, (name, parameter))| {
-                    let bound = self
-                        .types
-                        .node(*parameter)
-                        .rigid_bound()
-                        .unwrap_or(KType::ANY);
+                    let bound = parameter_bound(self.types, *parameter);
                     (*name, self.types.quantified(j, bound).raw())
                 }),
         );
@@ -571,7 +565,9 @@ impl<'run, 's> Search<'_, 'run, 's> {
             {
                 continue;
             }
-            if !shape_quantifiers(candidate, types).is_empty() {
+            if Shape::of(types, candidate)
+                .is_some_and(|candidate| !candidate.quantifiers.is_empty())
+            {
                 quantified_at_key = true;
                 continue;
             }
@@ -663,18 +659,8 @@ fn contribute(
 /// lexical variable per variable, named and bounded as declared. A shape keeps its node — its
 /// positions are paired by hand — and a function type loses its group.
 fn open_to_stand_ins(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle) -> Handle {
-    let (names, bounds) = match types.node(kt) {
-        TypeNode::ExpressionShape {
-            quantifiers,
-            bounds,
-            ..
-        }
-        | TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            ..
-        } => (quantifiers, bounds),
-        _ => return kt,
+    let Some((names, bounds)) = types.node(kt).group() else {
+        return kt;
     };
     if names.is_empty() {
         return kt;
@@ -818,12 +804,17 @@ fn quantified_position_failure(
     declared: Handle,
     candidate: Handle,
 ) -> Option<(TypeSymbol, Handle)> {
-    let quantifiers = shape_quantifiers(declared, types);
+    let (Some(declared), Some(candidate)) =
+        (Shape::of(types, declared), Shape::of(types, candidate))
+    else {
+        return None;
+    };
+    let quantifiers = declared.quantifiers;
     if quantifiers.is_empty() {
         return None;
     }
-    let mut candidate_slots = shape_slots(candidate, types);
-    for declared_slot in shape_slots(declared, types) {
+    let mut candidate_slots = candidate.slots();
+    for declared_slot in declared.slots() {
         let candidate_slot = candidate_slots.next()?;
         // Contravariance: a candidate position fills a declared one by being equal or more general.
         if fits(types, scratch, declared_slot, candidate_slot) {

@@ -85,7 +85,8 @@ reachable — so each probe is one table read. The probes are the lattice's own;
 the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
 concreteness through `concrete`.
 
-The **verdict table** is keyed by `(subject, candidate, relation)`. It is a
+The **verdict table** ([verdicts.rs](verdicts.rs)) is keyed by
+`(subject, candidate, relation)`. It is a
 fixed run of two-slot buckets, laid in the same region the first time a verdict
 is recorded and never resized, so it strands nothing in a bump that releases
 nothing before the run ends. A key's two digests fold into its bucket, and a

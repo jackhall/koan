@@ -93,8 +93,10 @@ a compound node variant is a compile error at the drivers' arm tables, in the
 renderer, and at [`TypeNode::view`](node.rs), which reads a node's children as
 another typed handle — **and nowhere else**. That is the
 property the drivers exist for. Adding any variant, leaf or compound, is also a
-compile error at [`family_top`](order.rs), which has no wildcard arm, so no
-type goes without a family.
+compile error at [`family_top`](order.rs), [`leaf_name`](handle.rs) and
+[`TypeNode::group`](node.rs), which have no wildcard arm, so no type goes
+without a family, no leaf without its spelling, and no binder without its
+group.
 
 Ask first whether the walk is unary or binary, then whether it rebuilds.
 
@@ -105,7 +107,9 @@ Ask first whether the walk is unary or binary, then whether it rebuilds.
   both unary drivers: one is closed content, the other content-addressed by its
   component. Substitution and sibling rewriting are this.
 - **Unary visit** — supply a pre-order rule returning descend / skip / stop.
-  Occurrence censuses and reference folds are this.
+  Occurrence censuses and reference folds are this. A probe over the free
+  `Quantified` positions alone takes `visit_free_quantified`, which skips nested
+  binders for it.
 - **Binary** ([walk/binary.rs](walk/binary.rs)) — implement `Lockstep`: an entry
   guard, a leaf verdict, a set-wise rule for unions, and a structural combine that
   reads the arm's width verdict generically. The order — serving *fits* too —

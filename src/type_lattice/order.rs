@@ -21,9 +21,10 @@ use crate::symbols::BinderSymbol;
 
 use super::handle::{Handle, KType, TypeHandle, wrap};
 use super::node::TypeNode;
-use super::registry::{Relation, TypeRegistry};
+use super::registry::TypeRegistry;
 use super::sig_relations::{admits_function, admits_shape, sig_fits};
 use super::signatures::{applications, applications_under, is_signature_type};
+use super::verdicts::Relation;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 

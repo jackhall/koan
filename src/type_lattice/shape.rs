@@ -3,13 +3,16 @@
 //! four-verdict specificity a dispatch ranks candidates by.
 //!
 //! A shape node itself lives in [`node`](super::node); this file owns the pieces that appear
-//! *inside* one, plus the specificity verdict [`shape_specificity`](super::sig_relations)
-//! produces.
+//! *inside* one, the one reader of a shape's parts ([`Shape`], and the free readers over a handle
+//! such as [`shape_slots`] and [`keys_equal`]), [`map_slots`], the one way an element run is
+//! rebuilt, plus the specificity verdict [`shape_specificity`](super::sig_relations) produces.
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
 
-use super::handle::{Handle, TypeHandle, wrap};
+use super::handle::{Handle, KType, Parametric, Scheme, TypeHandle, wrap};
+use super::node::TypeNode;
+use super::registry::TypeRegistry;
 
 /// One position of an expression shape: a fixed token as its [`KeywordSymbol`], or an argument
 /// slot carrying its declared type as `H`. Both arms are `Copy` handles — a symbol is `u128` bits,
@@ -34,6 +37,170 @@ impl<H: TypeHandle> DispatchTokenElement<H> {
     /// The element with its slot raw.
     pub(super) fn raw(self) -> DispatchTokenElement {
         self.view()
+    }
+}
+
+/// `elements` with each slot type mapped through `map` and every keyword kept — the one way an
+/// element run is rebuilt. Staged in `scratch`.
+pub(super) fn map_slots<'s, H: TypeHandle>(
+    scratch: BumpAllocator<'s>,
+    elements: &[DispatchTokenElement<H>],
+    mut map: impl FnMut(H) -> Handle,
+) -> BumpVec<'s, DispatchTokenElement> {
+    let mut out = BumpVec::with_capacity_in(elements.len(), scratch);
+    out.extend(elements.iter().map(|element| match *element {
+        DispatchTokenElement::Slot(slot) => DispatchTokenElement::Slot(map(slot)),
+        DispatchTokenElement::Keyword(keyword) => DispatchTokenElement::Keyword(keyword),
+    }));
+    out
+}
+
+/// An expression shape's parts, read once off its node — the one reader every class-by-class
+/// walk, relation and render shares.
+#[derive(Clone, Copy)]
+pub(super) struct Shape<'run> {
+    pub(super) quantifiers: &'run [TypeSymbol],
+    pub(super) bounds: &'run [KType],
+    pub(super) elements: &'run [DispatchTokenElement],
+    pub(super) classes: &'run [u8],
+    pub(super) ret: Handle,
+}
+
+impl<'run> Shape<'run> {
+    /// `kt`'s shape parts, or `None` for anything that is not a shape.
+    pub(super) fn of(types: &TypeRegistry<'run>, kt: Handle) -> Option<Self> {
+        match types.node(kt) {
+            TypeNode::ExpressionShape {
+                quantifiers,
+                bounds,
+                elements,
+                classes,
+                ret,
+            } => Some(Shape {
+                quantifiers,
+                bounds,
+                elements: elements.raw(),
+                classes,
+                ret,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The slot types, in slot order.
+    pub(super) fn slots(self) -> impl Iterator<Item = Handle> + use<'run> {
+        self.elements.iter().filter_map(|element| match element {
+            DispatchTokenElement::Slot(kt) => Some(*kt),
+            DispatchTokenElement::Keyword(_) => None,
+        })
+    }
+
+    /// How many classes the ranking has: one per slot in written order, and otherwise one past
+    /// the highest.
+    pub(super) fn class_count(self) -> usize {
+        match self.classes.iter().max() {
+            Some(highest) => usize::from(*highest) + 1,
+            None => self.slots().count(),
+        }
+    }
+
+    /// Every class index of the ranking, as the `u8` a class is named by.
+    pub(super) fn class_indices(self) -> impl Iterator<Item = u8> {
+        (0..self.class_count())
+            .map(|class| u8::try_from(class).expect("a shape has fewer than 256 classes"))
+    }
+
+    /// The bound of the `index`-th variable of the shape's own group.
+    pub(super) fn bound(self, index: usize) -> KType {
+        self.bounds.get(index).copied().unwrap_or(KType::ANY)
+    }
+}
+
+/// Whether two shapes key the same dispatch bucket — each one's element sequence with the slot
+/// types erased, compared position by position.
+///
+/// The bucket key is a *reading* of the member's type, never a second copy of it, and a reading
+/// only ever has to be compared, so no consumer materializes one and the pairwise readers
+/// allocate nothing at all.
+pub(super) fn keys_equal(left: Handle, right: Handle, types: &TypeRegistry<'_>) -> bool {
+    elements_key_equal(
+        shape_elements(&types.node(left)),
+        shape_elements(&types.node(right)),
+    )
+}
+
+/// [`keys_equal`] over two element runs already in hand.
+pub(super) fn elements_key_equal(
+    left: &[DispatchTokenElement],
+    right: &[DispatchTokenElement],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(a, b)| match (a, b) {
+            (DispatchTokenElement::Keyword(x), DispatchTokenElement::Keyword(y)) => x == y,
+            (DispatchTokenElement::Slot(_), DispatchTokenElement::Slot(_)) => true,
+            _ => false,
+        })
+}
+
+/// A shape node's element sequence; empty for a node that is not a shape, which no schema member
+/// ever is. The one place the "not a shape reads as the empty key" convention lives.
+pub(super) fn shape_elements<'run, H>(node: &TypeNode<'run, H>) -> &'run [DispatchTokenElement] {
+    match node {
+        TypeNode::ExpressionShape { elements, .. } => elements.raw(),
+        _ => &[],
+    }
+}
+
+/// A shape's ranking — each slot's dense priority class, empty for written order — or empty for
+/// anything that is not a shape.
+pub(super) fn shape_classes<'run>(kt: Handle, types: &TypeRegistry<'run>) -> &'run [u8] {
+    match types.node(kt) {
+        TypeNode::ExpressionShape { classes, .. } => classes,
+        _ => &[],
+    }
+}
+
+/// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
+/// compare or render one position at a time. Read straight off the node's element run, so the
+/// read builds nothing.
+pub fn shape_slots<'run, H: TypeHandle>(
+    kt: H,
+    types: &TypeRegistry<'run>,
+) -> impl Iterator<Item = H::Child> + use<'run, H> {
+    slots_of(shape_elements(&types.node(kt.raw())))
+}
+
+/// A scheme's argument-position types, in order, each of which may read the scheme's own group.
+pub fn scheme_slots<'run>(
+    scheme: Scheme,
+    types: &TypeRegistry<'run>,
+) -> impl Iterator<Item = Parametric> + use<'run> {
+    slots_of(shape_elements(&types.node(scheme.raw())))
+}
+
+/// The slot types of an element run, read as `C`.
+fn slots_of<C: TypeHandle>(
+    elements: &[DispatchTokenElement],
+) -> impl Iterator<Item = C> + use<'_, C> {
+    elements.iter().filter_map(|element| match element {
+        DispatchTokenElement::Slot(kt) => Some(super::handle::wrap(*kt)),
+        DispatchTokenElement::Keyword(_) => None,
+    })
+}
+
+/// A shape's return type, or `None` for anything that is not a shape.
+pub fn shape_return<H: TypeHandle>(kt: H, types: &TypeRegistry<'_>) -> Option<H::Child> {
+    match types.node(kt) {
+        TypeNode::ExpressionShape { ret, .. } => Some(ret),
+        _ => None,
+    }
+}
+
+/// A scheme's return type, which may read the scheme's own group; `None` for a function scheme.
+pub fn scheme_return(scheme: Scheme, types: &TypeRegistry<'_>) -> Option<Parametric> {
+    match types.scheme_node(scheme) {
+        TypeNode::ExpressionShape { ret, .. } => Some(ret),
+        _ => None,
     }
 }
 

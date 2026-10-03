@@ -30,7 +30,6 @@ use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 use super::handle::{KType, TypeHandle};
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
-use super::operators::{FoldDirection, ReductionMode};
 use super::schema::{SigOrigin, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
@@ -509,33 +508,12 @@ pub(super) fn schema_content_digest(schema: SigSchema<'_>) -> TypeDigest {
         for member in group.members {
             h.symbol(member.symbol());
         }
-        match group.mode {
-            ReductionMode::Unary => h.byte(0),
-            ReductionMode::FoldLeft => h.byte(1),
-            ReductionMode::FoldRight => h.byte(2),
-            ReductionMode::Pairwise {
-                combiner,
-                direction,
-            } => h.byte(3).symbol(combiner.symbol()).byte(match direction {
-                FoldDirection::Left => 0,
-                FoldDirection::Right => 1,
-            }),
-        };
+        let (tag, combiner, direction) = group.mode.canonical_key();
+        h.byte(tag);
+        if let Some(combiner) = combiner {
+            h.symbol(combiner.symbol()).byte(direction);
+        }
     }
-    h.finish()
-}
-
-/// The digest of the member-free schema — the module-lattice top (`:Module`), the type a
-/// module-accepting slot lowers to. Byte-for-byte what [`schema_content_digest`] produces for
-/// [`SigSchema::EMPTY`], and computable without one because an empty schema names no member.
-pub(super) fn empty_schema_digest() -> TypeDigest {
-    let mut h = DigestHasher::new(TAG_SIG_CONTENT);
-    h.byte(origin_byte(SigOrigin::Module));
-    h.count(0); // parameters
-    h.count(0); // manifest_members
-    h.count(0); // value_slots
-    h.count(0); // keyworded members
-    h.count(0); // operator records
     h.finish()
 }
 

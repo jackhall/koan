@@ -28,76 +28,22 @@
 //! solution, so dispatch hands the solve an argument's static contribution at a solving slot alone.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::symbols::TypeSymbol;
 
 use super::handle::{Handle, KType, Parametric, TypeHandle};
 use super::lattice::meet_through_variables;
-use super::node::TypeNode;
+use super::node::{TypeNode, Variable};
 use super::order::fits;
-use super::registry::{Relation, TypeRegistry};
-use super::shape::{DispatchTokenElement, class_of};
-use super::substitute::{Side, Variable, bound_above, read_through};
+use super::registry::TypeRegistry;
+use super::shape::{Shape, class_of};
+use super::substitute::{Side, bound_above, read_through};
 use super::unify::{Collector, Interval, admits, intervals};
+use super::verdicts::Relation;
 use super::walk::Variance;
-
-/// An expression shape's parts, read once off its node for a class-by-class walk.
-#[derive(Clone, Copy)]
-pub(super) struct Ranked<'run> {
-    pub(super) quantifiers: &'run [TypeSymbol],
-    pub(super) bounds: &'run [KType],
-    pub(super) elements: &'run [DispatchTokenElement],
-    pub(super) classes: &'run [u8],
-    pub(super) ret: Handle,
-}
-
-impl<'run> Ranked<'run> {
-    /// `kt`'s shape parts, or `None` for anything that is not a shape.
-    pub(super) fn of(types: &TypeRegistry<'run>, kt: Handle) -> Option<Self> {
-        match types.node(kt) {
-            TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
-                elements,
-                classes,
-                ret,
-            } => Some(Ranked {
-                quantifiers,
-                bounds,
-                elements: elements.raw(),
-                classes,
-                ret,
-            }),
-            _ => None,
-        }
-    }
-
-    /// The slot types, in slot order.
-    pub(super) fn slots(self) -> impl Iterator<Item = Handle> + use<'run> {
-        self.elements.iter().filter_map(|element| match element {
-            DispatchTokenElement::Slot(kt) => Some(*kt),
-            DispatchTokenElement::Keyword(_) => None,
-        })
-    }
-
-    /// How many classes the ranking has: one per slot in written order, and otherwise one past
-    /// the highest.
-    pub(super) fn class_count(self) -> usize {
-        match self.classes.iter().max() {
-            Some(highest) => usize::from(*highest) + 1,
-            None => self.slots().count(),
-        }
-    }
-
-    /// The bound of the `index`-th variable of the shape's own group.
-    fn bound(self, index: usize) -> KType {
-        self.bounds.get(index).copied().unwrap_or(KType::ANY)
-    }
-}
 
 /// The class-by-class walk's state over one declared shape: which class first mentions each
 /// variable, and what each variable an earlier class fixed reads as.
 struct ClassWalk<'s, 'run> {
-    declared: Ranked<'run>,
+    declared: Shape<'run>,
     slots: BumpVec<'s, Handle>,
     /// Per variable, the lowest class whose slots mention it; `None` for one only the return does.
     first: BumpVec<'s, Option<u8>>,
@@ -105,7 +51,7 @@ struct ClassWalk<'s, 'run> {
 }
 
 impl<'s, 'run> ClassWalk<'s, 'run> {
-    fn new(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, declared: Ranked<'run>) -> Self {
+    fn new(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, declared: Shape<'run>) -> Self {
         let mut slots = BumpVec::new_in(scratch);
         slots.extend(declared.slots());
         let arity = declared.quantifiers.len();
@@ -222,8 +168,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         scratch: BumpAllocator<'s>,
         arguments: &[Handle],
     ) -> Option<()> {
-        for class in 0..self.declared.class_count() {
-            let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
+        for class in self.declared.class_indices() {
             let solution = self
                 .admit_class(types, scratch, arguments, class, |_| true)
                 .solution?;
@@ -243,7 +188,7 @@ pub(super) fn admit_by_class<'s>(
     declared: Handle,
     arguments: &[Handle],
 ) -> Option<&'s [Handle]> {
-    let declared = Ranked::of(types, declared)?;
+    let declared = Shape::of(types, declared)?;
     let mut walk = ClassWalk::new(types, scratch, declared);
     if walk.slots.len() != arguments.len() {
         return None;
@@ -261,7 +206,7 @@ pub(super) fn solving_slots<'s>(
     scratch: BumpAllocator<'s>,
     declared: Handle,
 ) -> &'s [bool] {
-    let Some(ranked) = Ranked::of(types, declared) else {
+    let Some(ranked) = Shape::of(types, declared) else {
         return &[];
     };
     let walk = ClassWalk::new(types, scratch, ranked);
@@ -324,7 +269,7 @@ pub(super) fn judge_by_class<'s>(
         verdict: Verdict::Maybe,
         intervals: None,
     };
-    let Some(ranked) = Ranked::of(types, declared) else {
+    let Some(ranked) = Shape::of(types, declared) else {
         return unjudged;
     };
     let mut walk = ClassWalk::new(types, scratch, ranked);
@@ -338,8 +283,7 @@ pub(super) fn judge_by_class<'s>(
     let mut uppers = BumpVec::with_capacity_in(arguments.len(), scratch);
     uppers.extend(arguments.iter().map(|argument| argument.upper));
     let (mut always, mut solved) = (true, true);
-    for class in 0..ranked.class_count() {
-        let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
+    for class in ranked.class_indices() {
         let own = |variable: usize| walk.first[variable] == Some(class);
         let in_class = |slot: usize| class_of(ranked.classes, slot) == class;
         let names = |slot: usize, variable: usize| {
@@ -497,14 +441,13 @@ pub(super) fn judge_by_class<'s>(
 pub(super) fn admits_by_class<'run>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    declared: Ranked<'run>,
-    candidate: Ranked<'run>,
+    declared: Shape<'run>,
+    candidate: Shape<'run>,
 ) -> bool {
     let mut walk = ClassWalk::new(types, scratch, declared);
     let mut arguments = BumpVec::new_in(scratch);
     arguments.extend(candidate.slots());
-    for class in 0..declared.class_count() {
-        let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
+    for class in declared.class_indices() {
         let Some(solution) = walk
             .admit_class(types, scratch, &arguments, class, |_| true)
             .solution
@@ -544,15 +487,14 @@ pub(super) fn class_at_least(
     if let Some(known) = types.verdict(a.digest(), b.digest(), relation) {
         return known;
     }
-    let (Some(ranked_a), Some(ranked_b)) = (Ranked::of(types, a), Ranked::of(types, b)) else {
+    let (Some(ranked_a), Some(ranked_b)) = (Shape::of(types, a), Shape::of(types, b)) else {
         return false;
     };
     let mut walk = ClassWalk::new(types, scratch, ranked_b);
     let mut arguments = BumpVec::new_in(scratch);
     arguments.extend(ranked_a.slots());
     let mut answer = false;
-    for each in 0..ranked_b.class_count() {
-        let each = u8::try_from(each).expect("a shape has fewer than 256 classes");
+    for each in ranked_b.class_indices() {
         let solution = walk
             .admit_class(types, scratch, &arguments, each, |_| true)
             .solution;
@@ -583,7 +525,7 @@ pub(super) const STAND_IN_LEVEL: usize = usize::MAX;
 fn read_later(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    shape: Ranked<'_>,
+    shape: Shape<'_>,
     variable: usize,
     reach: Interval<Handle>,
     solution: Handle,
@@ -614,15 +556,11 @@ pub(super) fn select_by_class<'s>(
 ) -> BumpVec<'s, usize> {
     let mut survivors = BumpVec::with_capacity_in(shapes.len(), scratch);
     survivors.extend(0..shapes.len());
-    let classes = shapes
-        .first()
-        .and_then(|shape| Ranked::of(types, *shape))
-        .map_or(0, Ranked::class_count);
-    for class in 0..classes {
+    let first = shapes.first().and_then(|shape| Shape::of(types, *shape));
+    for class in first.into_iter().flat_map(Shape::class_indices) {
         if survivors.len() <= 1 {
             break;
         }
-        let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
         let beats = |x: usize, y: usize| {
             class_at_least(types, scratch, shapes[x], shapes[y], class)
                 && !class_at_least(types, scratch, shapes[y], shapes[x], class)

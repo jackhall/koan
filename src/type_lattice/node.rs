@@ -11,6 +11,7 @@
 //! a [`KType`], a node's children are concrete, and through a [`Parametric`], parametric —
 //! while every bound, a lexical variable's lower end, a code kind and an application's signature
 //! are always a [`KType`]. [`TypeNode::view`] is the one rewrapping, one exhaustive match.
+//! [`Variable`] views the three variable variants as one, and owns the rule for their two ends.
 //!
 //! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
 //! recipe per variant lives in [`digest`](super::digest).
@@ -260,46 +261,154 @@ pub enum TypeNode<'run, H = Handle> {
     },
 }
 
-impl<H> TypeNode<'_, H> {
+impl<'run, H> TypeNode<'run, H> {
+    /// The quantifier group a binder variant carries — a shape's or a function type's names and
+    /// bounds, empty where it binds none — or `None` for every other node.
+    pub fn group(&self) -> Option<(&'run [TypeSymbol], &'run [KType])> {
+        match self {
+            TypeNode::ExpressionShape {
+                quantifiers,
+                bounds,
+                ..
+            }
+            | TypeNode::KFunction {
+                quantifiers,
+                bounds,
+                ..
+            } => Some((quantifiers, bounds)),
+            // No wildcard: a new binder variant must say so here, or every walk reads its own
+            // variables as free.
+            TypeNode::Number
+            | TypeNode::Str
+            | TypeNode::Bool
+            | TypeNode::Null
+            | TypeNode::Identifier
+            | TypeNode::Symbol
+            | TypeNode::TypeNameToken
+            | TypeNode::Expression
+            | TypeNode::SigiledTypeExpr
+            | TypeNode::RecordType
+            | TypeNode::Literal
+            | TypeNode::Block
+            | TypeNode::Declaration
+            | TypeNode::Binder
+            | TypeNode::Name
+            | TypeNode::Keyword
+            | TypeNode::Any
+            | TypeNode::AnyValue
+            | TypeNode::AnyCode
+            | TypeNode::Never
+            | TypeNode::OfKind(_)
+            | TypeNode::CodeNeeding { .. }
+            | TypeNode::Parameter { .. }
+            | TypeNode::SetMember { .. }
+            | TypeNode::Signature { .. }
+            | TypeNode::List { .. }
+            | TypeNode::Dict { .. }
+            | TypeNode::Record { .. }
+            | TypeNode::Quantified { .. }
+            | TypeNode::Lexical { .. }
+            | TypeNode::DeferredReturn(_)
+            | TypeNode::Union { .. }
+            | TypeNode::ConstructorApply { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. }
+            | TypeNode::Sibling(_) => None,
+        }
+    }
+
     /// Whether this node binds a quantifier group of its own: a shape or a function only when it
     /// carries one. An empty group binds nothing, so a `Quantified` under it reads the enclosing
     /// group. This is what every walk asks before stepping into a child, so a `Quantified` under it
     /// reads against the right group.
     pub fn binds_quantifiers(&self) -> bool {
-        match self {
-            TypeNode::ExpressionShape { quantifiers, .. }
-            | TypeNode::KFunction { quantifiers, .. } => !quantifiers.is_empty(),
-            _ => false,
-        }
+        self.group().is_some_and(|(names, _)| !names.is_empty())
     }
 
     /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or a
     /// [`Self::Parameter`]'s — or `None` for any other node.
     pub fn rigid_bound(&self) -> Option<KType> {
-        match self {
-            TypeNode::Quantified { bound, .. }
-            | TypeNode::Lexical { bound, .. }
-            | TypeNode::Parameter { bound, .. } => Some(*bound),
-            _ => None,
-        }
+        Variable::of(self).map(Variable::bound)
     }
 
     /// A rigid variable's lower end: a [`Self::Lexical`]'s own, `Never` for the other two, `None`
     /// for any other node.
     pub fn rigid_lower(&self) -> Option<KType> {
-        match self {
-            TypeNode::Lexical { lower, .. } => Some(*lower),
-            TypeNode::Quantified { .. } | TypeNode::Parameter { .. } => Some(KType::NEVER),
-            _ => None,
-        }
+        Variable::of(self).map(Variable::lower)
     }
 
     /// A rigid variable's two ends as an interval, or `None` for any other node.
     pub fn rigid_interval(&self) -> Option<Interval<KType>> {
-        Some(Interval {
-            lower: self.rigid_lower()?,
-            upper: self.rigid_bound()?,
+        Variable::of(self).map(Variable::interval)
+    }
+}
+
+/// A free variable a read through intervals meets, as its node spells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variable {
+    /// A binder's own variable, read where no binder captures it.
+    Quantified { index: usize, bound: KType },
+    /// A lexical variable at `level` along the chain of bodies that declares it.
+    Lexical {
+        level: usize,
+        name: TypeSymbol,
+        lower: KType,
+        bound: KType,
+    },
+    /// A signature's head parameter, or with a `nonce` an opaque view's carrier.
+    Parameter {
+        name: TypeSymbol,
+        bound: KType,
+        nonce: Option<ScopeId>,
+    },
+}
+
+impl Variable {
+    /// The variable `node` is, or `None` for any other node.
+    pub(super) fn of<H>(node: &TypeNode<'_, H>) -> Option<Self> {
+        Some(match *node {
+            TypeNode::Quantified { index, bound } => Variable::Quantified { index, bound },
+            TypeNode::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            } => Variable::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            },
+            TypeNode::Parameter { name, bound, nonce } => {
+                Variable::Parameter { name, bound, nonce }
+            }
+            _ => return None,
         })
+    }
+
+    /// The variable's bound.
+    pub fn bound(self) -> KType {
+        match self {
+            Variable::Quantified { bound, .. }
+            | Variable::Lexical { bound, .. }
+            | Variable::Parameter { bound, .. } => bound,
+        }
+    }
+
+    /// The variable's lower end: a lexical variable's own, `Never` for the other two.
+    pub fn lower(self) -> KType {
+        match self {
+            Variable::Lexical { lower, .. } => lower,
+            Variable::Quantified { .. } | Variable::Parameter { .. } => KType::NEVER,
+        }
+    }
+
+    /// The variable's two ends.
+    pub fn interval(self) -> Interval<KType> {
+        Interval {
+            lower: self.lower(),
+            upper: self.bound(),
+        }
     }
 }
 

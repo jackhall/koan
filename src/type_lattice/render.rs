@@ -13,20 +13,13 @@ use crate::symbols::{
     BinderSymbol, KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeSymbol,
 };
 
-use super::digest::empty_schema_digest;
-use super::handle::{
-    ANY_NAME, BINDER_NAME, BLOCK_NAME, BOOL_NAME, CODE_NAME, DECLARATION_NAME, DeclaredType,
-    EXPRESSION_NAME, Handle, IDENTIFIER_NAME, KEYWORD_NAME, KType, LITERAL_NAME, MODULE_NAME,
-    NAME_NAME, NEVER_NAME, NULL_NAME, NUMBER_NAME, Parametric, RECORD_TYPE_NAME,
-    SIGILED_TYPE_EXPR_NAME, STR_NAME, SYMBOL_NAME, TYPE_NAME_TOKEN_NAME, TypeHandle, VALUE_NAME,
-};
+use super::handle::{DeclaredType, Handle, KType, MODULE_NAME, Parametric, TypeHandle, leaf_name};
 use super::node::TypeNode;
 use super::operators::{FoldDirection, ReductionMode};
-use super::ranking::Ranked;
 use super::record::Record;
 use super::registry::TypeRegistry;
-use super::schema::{DeclaredGroup, SigSchema, shape_elements, shape_return, shape_slots};
-use super::shape::DispatchTokenElement;
+use super::schema::{DeclaredGroup, SigSchema, parameter_bound};
+use super::shape::{DispatchTokenElement, Shape};
 use super::sig_relations::FitsFailure;
 
 /// A symbol's text, resolved through the run's interner. Rendering stays total: a miss prints a
@@ -85,27 +78,32 @@ fn write_name_in(
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
-    match &types.node(kt) {
-        TypeNode::Number => f.write_str(NUMBER_NAME.text()),
-        TypeNode::Str => f.write_str(STR_NAME.text()),
-        TypeNode::Bool => f.write_str(BOOL_NAME.text()),
-        TypeNode::Null => f.write_str(NULL_NAME.text()),
-        TypeNode::Identifier => f.write_str(IDENTIFIER_NAME.text()),
-        TypeNode::Symbol => f.write_str(SYMBOL_NAME.text()),
-        TypeNode::TypeNameToken => f.write_str(TYPE_NAME_TOKEN_NAME.text()),
-        TypeNode::Expression => f.write_str(EXPRESSION_NAME.text()),
-        TypeNode::SigiledTypeExpr => f.write_str(SIGILED_TYPE_EXPR_NAME.text()),
-        TypeNode::RecordType => f.write_str(RECORD_TYPE_NAME.text()),
-        TypeNode::Literal => f.write_str(LITERAL_NAME.text()),
-        TypeNode::Block => f.write_str(BLOCK_NAME.text()),
-        TypeNode::Declaration => f.write_str(DECLARATION_NAME.text()),
-        TypeNode::Binder => f.write_str(BINDER_NAME.text()),
-        TypeNode::Name => f.write_str(NAME_NAME.text()),
-        TypeNode::Keyword => f.write_str(KEYWORD_NAME.text()),
-        TypeNode::Any => f.write_str(ANY_NAME.text()),
-        TypeNode::AnyValue => f.write_str(VALUE_NAME.text()),
-        TypeNode::AnyCode => f.write_str(CODE_NAME.text()),
-        TypeNode::Never => f.write_str(NEVER_NAME.text()),
+    let node = types.node(kt);
+    match &node {
+        TypeNode::Number
+        | TypeNode::Str
+        | TypeNode::Bool
+        | TypeNode::Null
+        | TypeNode::Identifier
+        | TypeNode::Symbol
+        | TypeNode::TypeNameToken
+        | TypeNode::Expression
+        | TypeNode::SigiledTypeExpr
+        | TypeNode::RecordType
+        | TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword
+        | TypeNode::Any
+        | TypeNode::AnyValue
+        | TypeNode::AnyCode
+        | TypeNode::Never => f.write_str(
+            leaf_name(&node)
+                .expect("a leaf has a fixed spelling")
+                .text(),
+        ),
         TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
         TypeNode::CodeNeeding { kind, names } => {
             f.write_str(":(")?;
@@ -164,21 +162,9 @@ fn write_name_in(
             write_name_in(*ret, f, types, symbols, inner)?;
             f.write_str(")")
         }
-        TypeNode::ExpressionShape {
-            quantifiers,
-            bounds,
-            elements,
-            classes,
-            ret,
-        } => {
+        TypeNode::ExpressionShape { .. } => {
             f.write_str(":(EXPR ")?;
-            let shape = Ranked {
-                quantifiers,
-                bounds,
-                elements: elements.raw(),
-                classes,
-                ret: *ret,
-            };
+            let shape = Shape::of(types, kt).expect("the ExpressionShape arm");
             write_shape_surface(f, shape, types, symbols, binder)?;
             f.write_str(")")
         }
@@ -236,11 +222,8 @@ fn write_name_in(
         // and any other interface renders its members structurally. There is no declaration label
         // to print — two textually identical `SIG` declarations are one type, so naming either one
         // would be a lie about the other.
-        TypeNode::Signature {
-            schema,
-            schema_digest,
-        } => {
-            if *schema_digest == empty_schema_digest() {
+        TypeNode::Signature { schema, .. } => {
+            if kt == Handle::EMPTY_SIGNATURE {
                 f.write_str(MODULE_NAME.text())
             } else {
                 write_sig_schema(f, *schema, types, symbols)
@@ -289,20 +272,11 @@ pub struct TypeNameDisplay<'r, 'run> {
     ktype: Handle,
     types: &'r TypeRegistry<'run>,
     symbols: &'r SymbolInterner,
-    binder: &'r [TypeSymbol],
-}
-
-impl<'r> TypeNameDisplay<'r, '_> {
-    /// The same render under a quantifier binder, so a diagnostic about a quantified position
-    /// prints the name its group gave it.
-    pub fn under(self, binder: &'r [TypeSymbol]) -> Self {
-        Self { binder, ..self }
-    }
 }
 
 impl std::fmt::Display for TypeNameDisplay<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write_name_in(self.ktype, f, self.types, self.symbols, self.binder)
+        write_name_in(self.ktype, f, self.types, self.symbols, &[])
     }
 }
 
@@ -327,7 +301,6 @@ pub(super) fn display_handle<'r, 'run>(
         ktype: kt,
         types,
         symbols,
-        binder: &[],
     }
 }
 
@@ -381,7 +354,7 @@ fn write_param_record(
 /// it has none, as a function type's do.
 fn write_shape_surface(
     f: &mut std::fmt::Formatter<'_>,
-    shape: Ranked<'_>,
+    shape: Shape<'_>,
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
@@ -493,7 +466,7 @@ fn write_sig_schema(
             if index > 0 {
                 f.write_str(", ")?;
             }
-            let bound = types.node(*parameter).rigid_bound().unwrap_or(KType::ANY);
+            let bound = parameter_bound(types, parameter.raw());
             write!(
                 f,
                 "{}: {}",
@@ -575,7 +548,7 @@ fn keyworded_head(
     if let Some(head) = render_operator_head(shape, operators, types, symbols) {
         return head;
     }
-    match Ranked::of(types, shape) {
+    match Shape::of(types, shape) {
         Some(shape) => ShapeSurface {
             shape,
             types,
@@ -588,7 +561,7 @@ fn keyworded_head(
 
 /// [`write_shape_surface`] as a `Display` view, for the diagnostics that keep the text.
 struct ShapeSurface<'r, 'run> {
-    shape: Ranked<'run>,
+    shape: Shape<'run>,
     types: &'r TypeRegistry<'run>,
     symbols: &'r SymbolInterner,
 }
@@ -611,7 +584,8 @@ fn render_operator_head(
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
 ) -> Option<String> {
-    let (symbol, is_list_form) = match shape_elements(&types.node(shape)) {
+    let shape = Shape::of(types, shape)?;
+    let (symbol, is_list_form) = match shape.elements {
         [
             DispatchTokenElement::Slot(_),
             DispatchTokenElement::Keyword(symbol),
@@ -627,8 +601,8 @@ fn render_operator_head(
         .iter()
         .find(|record| record.members.contains(&symbol))?
         .mode;
-    let ret = shape_return(shape, types)?;
-    let first_slot = shape_slots(shape, types).next()?;
+    let ret = shape.ret;
+    let first_slot = shape.slots().next()?;
     // The list form's sole parameter is the whole run, so the declared operand is its element.
     let operand = if is_list_form {
         match types.node(first_slot) {

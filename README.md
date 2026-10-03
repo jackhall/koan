@@ -257,19 +257,20 @@ src/
 │   └── eval.rs               # surface form `$(expr)`
 ├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols, `ScopeId` and the region bump seam and nothing else
 ├── type_lattice/
-│   ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle
+│   ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle; Variable, the view of the three variable nodes and their two ends
 │   ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType; the pinned builtin constants, and the name/kind readings off one
 │   ├── run.rs            Run / Elements — typed views over a node's raw child runs
 │   ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
 │   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the fixed two-way verdict cache laid in the same region, the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the binder doors `shape_scheme` and `function_scheme` keeping every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
+│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags), the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the binder doors `shape_scheme` and `function_scheme` keeping every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
+│   ├── verdicts.rs       VerdictTable — the fixed two-way cache of relation verdicts the registry lays in its region
 │   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
 │   ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
-│   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity — the non-type payloads a node carries
+│   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity, the readers of a shape's parts (`Shape`), and the element and record rebuild helpers
 │   ├── operators.rs      ReductionMode / FoldDirection — how a run of a signature's operators reduces, which is part of the signature's identity
-│   ├── schema.rs         SigSchema over symbol-sorted Members tables, the SchemaDraft the signature door canonicalizes, the channels' canonical orders, and the shape readers
+│   ├── schema.rs         SigSchema over symbol-sorted Members tables, the SchemaDraft the signature door canonicalizes, and the channels' canonical orders
 │   ├── walk.rs           Variance and the two drivers every structural recursion goes through
-│   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the union door and the position context
+│   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the union door, the position context, and `visit_free_quantified`
 │   ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
 │   ├── order.rs          is_subtype_of — the order, which never solves — and fits, the relation a question reads, as one Lockstep instance differing at its leaf; satisfied_by
 │   ├── lattice.rs        join (subsumption-or-union, not a walk) and the meet (the rebuilding Lockstep instance, relating a variable by the rigid rule for the solver)

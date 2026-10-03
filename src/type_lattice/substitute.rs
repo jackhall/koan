@@ -8,14 +8,15 @@
 //! Every walk here is over raw handles; [`typed`](super::typed) types each one the rest of koan
 //! calls.
 
-use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 
 use super::handle::{Handle, KType, TypeHandle};
-use super::node::TypeNode;
+use super::node::{TypeNode, Variable};
+use super::record::map_fields;
 use super::registry::TypeRegistry;
 use super::schema::{Members, member};
-use super::shape::DispatchTokenElement;
+use super::shape::map_slots;
 use super::unify::Interval;
 use super::walk::Variance;
 use super::walk::unary::{Rebuild, UnionDoor, Visit, rebuild, visit};
@@ -93,29 +94,25 @@ pub(super) fn instantiate_quantified<B: TypeHandle>(
     kt: Handle,
     bindings: &[B],
 ) -> Handle {
-    if own_group(types, kt).is_empty() {
+    if quantifier_bounds(types, kt).is_empty() {
         return substitute_quantified(types, scratch, kt, bindings);
     }
-    let open = |position| substitute_quantified(types, scratch, position, bindings);
+    let open = |position: Handle| substitute_quantified(types, scratch, position, bindings);
     match types.node(kt) {
         TypeNode::KFunction { params, ret, .. } => {
-            let mut opened = BumpVec::with_capacity_in(params.len(), scratch);
-            opened.extend(params.iter().map(|(name, position)| (name, open(position))));
-            types.function_type(scratch, &opened, open(ret))
+            types.function_type(scratch, &map_fields(scratch, params.raw(), open), open(ret))
         }
         TypeNode::ExpressionShape {
             elements,
             classes,
             ret,
             ..
-        } => {
-            let mut opened = BumpVec::with_capacity_in(elements.len(), scratch);
-            opened.extend(elements.iter().map(|element| match element {
-                DispatchTokenElement::Slot(position) => DispatchTokenElement::Slot(open(*position)),
-                keyword => *keyword,
-            }));
-            types.shape_type(scratch, &opened, classes, open(ret))
-        }
+        } => types.shape_type(
+            scratch,
+            &map_slots(scratch, elements.raw(), open),
+            classes,
+            open(ret),
+        ),
         _ => unreachable!("only a binder carries a group"),
     }
 }
@@ -151,63 +148,6 @@ pub(super) fn bound_above(
     read_through(types, scratch, kt, Side::Above, &mut |variable| {
         Some(variable.interval().raw())
     })
-}
-
-/// A free variable a read through intervals meets, as its node spells it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Variable {
-    /// A binder's own variable, read where no binder captures it.
-    Quantified { index: usize, bound: KType },
-    /// A lexical variable at `level` along the chain of bodies that declares it.
-    Lexical {
-        level: usize,
-        name: TypeSymbol,
-        lower: KType,
-        bound: KType,
-    },
-    /// A signature's head parameter, or with a `nonce` an opaque view's carrier.
-    Parameter {
-        name: TypeSymbol,
-        bound: KType,
-        nonce: Option<ScopeId>,
-    },
-}
-
-impl Variable {
-    /// The variable `node` is, or `None` for any other node.
-    pub(super) fn of<H>(node: &TypeNode<'_, H>) -> Option<Self> {
-        Some(match *node {
-            TypeNode::Quantified { index, bound } => Variable::Quantified { index, bound },
-            TypeNode::Lexical {
-                level,
-                name,
-                lower,
-                bound,
-            } => Variable::Lexical {
-                level,
-                name,
-                lower,
-                bound,
-            },
-            TypeNode::Parameter { name, bound, nonce } => {
-                Variable::Parameter { name, bound, nonce }
-            }
-            _ => return None,
-        })
-    }
-
-    /// The variable's two ends: a lexical variable's own, and `[Never, bound]` for the others.
-    pub fn interval(self) -> Interval<KType> {
-        match self {
-            Variable::Lexical { lower, bound, .. } => Interval {
-                lower,
-                upper: bound,
-            },
-            Variable::Quantified { bound, .. } | Variable::Parameter { bound, .. } => {
-                Interval::within(bound)
-            }
-        }
-    }
 }
 
 /// Which extreme a read through intervals takes.
@@ -254,15 +194,7 @@ pub(super) fn read_through(
 /// The bound of each variable of `kt`'s own quantifier group, in group order,
 /// as the binder node stores it. Empty for anything that binds no group.
 pub(super) fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: Handle) -> &'run [KType] {
-    own_group(types, kt)
-}
-
-/// The `bounds` run either binder variant stores, and `&[]` for every other node.
-fn own_group<'run>(types: &TypeRegistry<'run>, kt: Handle) -> &'run [KType] {
-    match types.node(kt) {
-        TypeNode::ExpressionShape { bounds, .. } | TypeNode::KFunction { bounds, .. } => bounds,
-        _ => &[],
-    }
+    types.node(kt).group().map_or(&[], |(_, bounds)| bounds)
 }
 
 /// `kt` with each head parameter `bindings` names replaced by its binding — how a signature's

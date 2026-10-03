@@ -13,13 +13,14 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use super::lattice;
+use super::node::Variable;
 use super::order;
 use super::ranking::{self, Judged};
 use super::registry::TypeRegistry;
 use super::schema::Members;
 use super::shape::Specificity;
 use super::sig_relations::{self, FitsFailure, InstanceFailure};
-use super::substitute::{self, Side, Variable};
+use super::substitute::{self, Side};
 use super::unify::Interval;
 
 /// Whether `a` is below `b` in the one order: reflexive, transitive and antisymmetric over concrete

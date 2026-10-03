@@ -27,7 +27,9 @@ answer every free variable of a `Parametric` by its ends, so they yield a
 `KType`.
 
 A type is **read through intervals** ([`read_through`](substitute.rs)). Each
-variable stands for some type between a lower and an upper end. Read from
+variable stands for some type between a lower and an upper end, which
+[`Variable`](node.rs) — the view of the three variable nodes — reads off it: a
+lexical variable's own, `[Never, bound]` for the others. Read from
 above, a variable takes its upper end at a covariant position and its lower end
 at a contravariant one, which gives the type above every instance; read from
 below, the reverse, which gives the type below every instance. A signature is

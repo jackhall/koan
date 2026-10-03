@@ -1,5 +1,5 @@
-//! The run's type registry: the single owner of every type's content, plus a flat map of relation
-//! verdicts.
+//! The run's type registry: the single owner of every type's content, plus the table of relation
+//! verdicts ([`verdicts`](super::verdicts)).
 //!
 //! Content lives in `nodes`, a hash map built over the run region the registry is constructed
 //! over ([`TypeRegistry::in_region`]): its bucket array and every node's slices are bumped into that
@@ -16,13 +16,8 @@
 //! whether any variable or quantified binder outside sealed content is reachable — so each probe is
 //! one table read.
 //!
-//! Verdicts are a separate table keyed by `(subject digest, candidate digest, relation)`: a fixed
-//! run of two-slot buckets laid in the region the first time a verdict is recorded, and never
-//! resized, so it strands nothing in a bump that releases nothing before the run ends. A full
-//! bucket evicts the slot not touched last. A verdict over a digest pair is a pure function — once
-//! computed it never changes — so verdicts are never load-bearing: a forgotten one costs a re-walk
-//! of the relation, never a wrong answer. The registry therefore owns nothing on the global heap,
-//! and can itself rest in a bump.
+//! Verdicts are a fixed cache laid in the same region, described in [`verdicts`](super::verdicts).
+//! The registry therefore owns nothing on the global heap, and can itself rest in a bump.
 //!
 //! Every door that sorts, flattens or canonicalizes takes a scratch [`BumpAllocator`] for its
 //! transient buffers, and every door computes its digest off the caller's own slices first, so
@@ -30,7 +25,7 @@
 //!
 //! See [README.md](README.md) § Storage: one region.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, ScopeId, bump_table};
 use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
@@ -40,17 +35,18 @@ use super::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle,
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
 use super::order::{Dropped, is_subtype_of, unsubsumed};
-use super::record::Record;
+use super::record::{Record, map_fields};
 use super::run::{Elements, Run};
 use super::schema::{
     DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, canonical_groups,
     canonical_overloads, member,
 };
-use super::shape::{DeferredReturnSurface, DispatchTokenElement, written_order};
+use super::shape::{DeferredReturnSurface, DispatchTokenElement, map_slots, written_order};
 use super::signatures::canonical_applications;
 use super::substitute::substitute_quantified;
+use super::verdicts::{Relation, VERDICT_SLOTS, VerdictTable};
 use super::walk::Variance;
-use super::walk::unary::{Visit, children, visit, visit_in};
+use super::walk::unary::{Visit, children, visit_free_quantified};
 
 /// One interned node, and the three probe answers computed off its children when it was interned.
 #[derive(Clone, Copy)]
@@ -123,64 +119,6 @@ impl<'run> Entry<'run> {
 /// The node table: keyed by digest under the identity hasher, bucket array in the run region.
 type NodeTable<'run> = BumpBackedMap<'run, TypeDigest, Entry<'run>, IdentityBuildHasher>;
 
-/// Which question a recorded verdict answers. They never alias — each digest domain is disjoint by
-/// construction, and a class verdict names its class — but the enum still keys the table
-/// explicitly.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Relation {
-    /// [`is_subtype_of`](super::order::is_subtype_of), the one order.
-    Subtype,
-    /// [`fits`](super::order::fits), the relation a question reads.
-    Fits,
-    /// [`class_at_least`](super::ranking::class_at_least) at the class it names.
-    ClassAtLeast(u8),
-}
-
-impl Relation {
-    /// The bits a bucket fold mixes in: distinct per relation and per class.
-    fn bits(self) -> u64 {
-        match self {
-            Relation::Subtype => 0,
-            Relation::Fits => 1,
-            Relation::ClassAtLeast(class) => 2 + u64::from(class),
-        }
-    }
-}
-
-/// Slots in the verdict table. A power of two, two slots to a bucket.
-const VERDICT_SLOTS: usize = 1024;
-const _: () = assert!(VERDICT_SLOTS.is_power_of_two() && VERDICT_SLOTS >= 2);
-
-/// One slot of the verdict table: a whole key, its verdict, and the bucket's recency bit.
-#[derive(Clone, Copy)]
-struct VerdictSlot {
-    subject: TypeDigest,
-    candidate: TypeDigest,
-    relation: Relation,
-    verdict: bool,
-    occupied: bool,
-    /// Set on the slot of its bucket touched last; the other slot is the one an insert evicts.
-    recent: bool,
-}
-
-impl VerdictSlot {
-    const EMPTY: Self = Self {
-        subject: TypeDigest(0),
-        candidate: TypeDigest(0),
-        relation: Relation::Subtype,
-        verdict: false,
-        occupied: false,
-        recent: false,
-    };
-
-    fn holds(self, subject: TypeDigest, candidate: TypeDigest, relation: Relation) -> bool {
-        self.occupied
-            && self.subject == subject
-            && self.candidate == candidate
-            && self.relation == relation
-    }
-}
-
 /// What interning a binder produced — a shape or a function type: its declared type, a scheme for
 /// a non-empty group, and how the caller's declaration-order quantifier indices map onto the
 /// interned group's order.
@@ -199,14 +137,7 @@ pub struct TypeRegistry<'run> {
     /// The run region's bump: every node slice an intern miss keeps is copied in here.
     bump: BumpAllocator<'run>,
     nodes: RefCell<NodeTable<'run>>,
-    /// The verdict table: empty until the first verdict is recorded, then `verdict_slots` long for
-    /// good.
-    verdicts: Cell<&'run [Cell<VerdictSlot>]>,
-    verdict_slots: usize,
-    #[cfg(test)]
-    verdict_evictions: Cell<u64>,
-    #[cfg(test)]
-    verdict_inserts: Cell<u64>,
+    verdicts: VerdictTable<'run>,
 }
 
 impl<'run> TypeRegistry<'run> {
@@ -228,7 +159,6 @@ impl<'run> TypeRegistry<'run> {
     /// bucket.
     #[cfg(test)]
     pub(super) fn in_region_with_verdict_slots(bump: BumpAllocator<'run>, slots: usize) -> Self {
-        assert!(slots.is_power_of_two() && slots >= 2);
         Self::with_verdict_slots(bump, slots)
     }
 
@@ -236,12 +166,7 @@ impl<'run> TypeRegistry<'run> {
         let registry = Self {
             bump,
             nodes: RefCell::new(bump_table(bump)),
-            verdicts: Cell::new(&[]),
-            verdict_slots,
-            #[cfg(test)]
-            verdict_evictions: Cell::new(0),
-            #[cfg(test)]
-            verdict_inserts: Cell::new(0),
+            verdicts: VerdictTable::with_slots(verdict_slots),
         };
         registry.seed_constants();
         registry
@@ -309,7 +234,7 @@ impl<'run> TypeRegistry<'run> {
     /// `test`-only: how many verdicts were recorded, and how many of those evicted another.
     #[cfg(test)]
     pub(super) fn verdict_tally(&self) -> (u64, u64) {
-        (self.verdict_inserts.get(), self.verdict_evictions.get())
+        self.verdicts.tally()
     }
 
     // --- Content: interning and node reads ---
@@ -531,7 +456,7 @@ impl<'run> TypeRegistry<'run> {
     /// A function type over a group in declaration order, put in group order.
     ///
     /// The order is [`shape_group`](Self::shape_group)'s, over the params record and the return
-    /// instead of over an element run: see [`group_order`](Self::group_order). The census walks the
+    /// instead of over an element run: see [`intern_binder`](Self::intern_binder). The census walks the
     /// params in **symbol-sorted key order**, because a record's identity is order-blind and the
     /// numbering must be too; the stored record keeps declaration order for rendering. An empty
     /// group interns straight away and binds nothing.
@@ -550,7 +475,7 @@ impl<'run> TypeRegistry<'run> {
         let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
         sorted.extend(params.iter().map(|(name, kt)| (*name, kt.raw())));
         sorted.sort_by_key(|(name, _)| name.symbol());
-        let group = self.group_order(
+        self.intern_binder(
             scratch,
             quantifiers,
             bounds,
@@ -558,23 +483,12 @@ impl<'run> TypeRegistry<'run> {
                 .iter()
                 .map(|(_, kt)| (*kt, Variance::Contra))
                 .chain(std::iter::once((ret, Variance::Co))),
-        );
-        let mut canonical_params = BumpVec::with_capacity_in(params.len(), scratch);
-        canonical_params.extend(params.iter().map(|(name, kt)| {
-            (
-                *name,
-                substitute_quantified(self, scratch, kt.raw(), &group.bindings),
-            )
-        }));
-        let ret = substitute_quantified(self, scratch, ret, &group.bindings);
-        debug_assert!(
-            group.names.is_empty()
-                || self.quantifier_indices_in_range(scratch, ret, group.names.len()),
-            "every quantified position names an index of the function's own group",
-        );
-        let handle =
-            self.intern_function(scratch, &group.names, &group.bounds, &canonical_params, ret);
-        (handle, group.quantifier_map)
+            ret,
+            |names, bounds, open, ret| {
+                let params = map_fields(scratch, params, |kt| open(kt.raw()));
+                self.intern_function(scratch, names, bounds, &params, ret)
+            },
+        )
     }
 
     /// Intern a function type whose group is already in group order. Probe-first, as
@@ -936,7 +850,7 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// An expression shape over a group in declaration order, put in group order — see
-    /// [`group_order`](Self::group_order), which is run here over each argument slot in element
+    /// [`intern_binder`](Self::intern_binder), which is run here over each argument slot in element
     /// order and then the return.
     ///
     /// Argument names never reach here — they are binder-side — and the quantifier names are
@@ -966,7 +880,7 @@ impl<'run> TypeRegistry<'run> {
         if quantifiers.is_empty() {
             return (self.intern_shape(&[], &[], elements, classes, ret), &[]);
         }
-        let group = self.group_order(
+        self.intern_binder(
             scratch,
             quantifiers,
             bounds,
@@ -977,31 +891,40 @@ impl<'run> TypeRegistry<'run> {
                     DispatchTokenElement::Keyword(_) => None,
                 })
                 .chain(std::iter::once((ret, Variance::Co))),
-        );
-        let mut canonical_elements = BumpVec::with_capacity_in(elements.len(), scratch);
-        canonical_elements.extend(elements.iter().map(|element| match element {
-            DispatchTokenElement::Slot(kt) => DispatchTokenElement::Slot(substitute_quantified(
-                self,
-                scratch,
-                kt.raw(),
-                &group.bindings,
-            )),
-            DispatchTokenElement::Keyword(keyword) => DispatchTokenElement::Keyword(*keyword),
-        }));
-        let ret = substitute_quantified(self, scratch, ret, &group.bindings);
-        debug_assert!(
-            group.names.is_empty()
-                || self.quantifier_indices_in_range(scratch, ret, group.names.len()),
-            "every quantified position names an index of the shape's own group",
-        );
-        let handle = self.intern_shape(
-            &group.names,
-            &group.bounds,
-            &canonical_elements,
-            classes,
             ret,
+            |names, bounds, open, ret| {
+                let elements = map_slots(scratch, elements, |kt| open(kt.raw()));
+                self.intern_shape(names, bounds, &elements, classes, ret)
+            },
+        )
+    }
+
+    /// Intern a binder — a function type or a shape — over `quantifiers` and `bounds` in
+    /// declaration order, put in group order ([`group_order`](Self::group_order)). `positions` are
+    /// the type positions the binder binds, each with its polarity, walked for the census; `intern`
+    /// builds the node from the group in group order, reading each of its own positions through the
+    /// substitution it is handed, with the return already substituted.
+    fn intern_binder<'s>(
+        &self,
+        scratch: BumpAllocator<'s>,
+        quantifiers: &[TypeSymbol],
+        bounds: &[KType],
+        positions: impl Iterator<Item = (Handle, Variance)>,
+        ret: Handle,
+        intern: impl FnOnce(&[TypeSymbol], &[KType], &dyn Fn(Handle) -> Handle, Handle) -> Handle,
+    ) -> (Handle, &'s [usize]) {
+        debug_assert_eq!(quantifiers.len(), bounds.len(), "one bound per quantifier");
+        let group = self.group_order(scratch, quantifiers, bounds, positions);
+        let open = |kt: Handle| substitute_quantified(self, scratch, kt, &group.bindings);
+        let ret = open(ret);
+        debug_assert!(
+            self.quantifier_indices_in_range(scratch, ret, group.names.len()),
+            "every quantified position names an index of the binder's own group",
         );
-        (handle, group.quantifier_map)
+        (
+            intern(&group.names, &group.bounds, &open, ret),
+            group.quantifier_map,
+        )
     }
 
     /// Number a binder's variables over the `(type, variance)` positions it binds, walked in the
@@ -1010,7 +933,8 @@ impl<'run> TypeRegistry<'run> {
     /// The variables some position names come first, by first occurrence in the walked order; then
     /// every variable no position names, in declaration order. No variable is dropped, so a call
     /// solves each one, and two alpha-variants intern to one handle. The caller substitutes its own
-    /// positions through [`bindings`](GroupOrder::bindings) and interns the result.
+    /// positions through [`bindings`](GroupOrder::bindings) and interns the result —
+    /// [`intern_binder`](Self::intern_binder) is that caller.
     fn group_order<'s>(
         &self,
         scratch: BumpAllocator<'s>,
@@ -1088,25 +1012,17 @@ impl<'run> TypeRegistry<'run> {
         census.resize(arity, Occurrences::default());
         let mut seen = 0usize;
         for (kt, position) in positions {
-            visit_in(self, scratch, kt, position, &mut |_, node, context| {
-                if node.binds_quantifiers() {
-                    return Visit::Skip;
-                }
-                match *node {
-                    TypeNode::Quantified { index, .. } => {
-                        if let Some(record) = census.get_mut(index) {
-                            if record.first == usize::MAX {
-                                record.first = seen;
-                            }
-                            if context.variance() == Variance::Contra {
-                                record.contravariant += 1;
-                            }
-                            seen += 1;
-                        }
-                        Visit::Skip
+            visit_free_quantified(self, scratch, kt, position, &mut |index, context| {
+                if let Some(record) = census.get_mut(index) {
+                    if record.first == usize::MAX {
+                        record.first = seen;
                     }
-                    _ => Visit::Descend,
+                    if context.variance() == Variance::Contra {
+                        record.contravariant += 1;
+                    }
+                    seen += 1;
                 }
+                Visit::Skip
             });
         }
         census
@@ -1303,14 +1219,11 @@ impl<'run> TypeRegistry<'run> {
     ) -> bool {
         let kt = kt.raw();
         self.contains_quantified(kt)
-            && visit(self, scratch, kt, &mut |_, node, _| {
-                if node.binds_quantifiers() {
-                    return Visit::Skip;
-                }
-                match *node {
-                    TypeNode::Quantified { index: found, .. } if found == index => Visit::Stop,
-                    TypeNode::Quantified { .. } => Visit::Skip,
-                    _ => Visit::Descend,
+            && visit_free_quantified(self, scratch, kt, Variance::Co, &mut |found, _| {
+                if found == index {
+                    Visit::Stop
+                } else {
+                    Visit::Skip
                 }
             })
     }
@@ -1339,28 +1252,16 @@ impl<'run> TypeRegistry<'run> {
         kt: Handle,
         arity: usize,
     ) -> bool {
-        !visit(self, scratch, kt, &mut |_, node, _| {
-            if node.binds_quantifiers() {
-                return Visit::Skip;
-            }
-            match *node {
-                TypeNode::Quantified { index, .. } if index >= arity => Visit::Stop,
-                TypeNode::Quantified { .. } => Visit::Skip,
-                _ => Visit::Descend,
+        !visit_free_quantified(self, scratch, kt, Variance::Co, &mut |index, _| {
+            if index >= arity {
+                Visit::Stop
+            } else {
+                Visit::Skip
             }
         })
     }
 
     // --- Verdicts ---
-
-    /// The first slot of the bucket a key lands in. A digest is already a uniformly distributed
-    /// hash, so the two digests' low words fold together — rotated apart, so `(a, b)` and `(b, a)`
-    /// land in different buckets — with the relation mixed in. A slot compares the whole key, so a
-    /// fold collision costs a slot and never a wrong verdict.
-    fn bucket(&self, subject: TypeDigest, candidate: TypeDigest, relation: Relation) -> usize {
-        let fold = (subject.0 as u64).rotate_left(32) ^ (candidate.0 as u64) ^ relation.bits();
-        2 * ((fold as usize) & (self.verdict_slots / 2 - 1))
-    }
 
     /// Consult the registry for a recorded verdict. A hit marks its slot the one touched last.
     pub(super) fn verdict(
@@ -1369,21 +1270,10 @@ impl<'run> TypeRegistry<'run> {
         candidate: TypeDigest,
         relation: Relation,
     ) -> Option<bool> {
-        let table = self.verdicts.get();
-        if table.is_empty() {
-            return None;
-        }
-        let first = self.bucket(subject, candidate, relation);
-        let pair = &table[first..first + 2];
-        let hit = pair
-            .iter()
-            .position(|slot| slot.get().holds(subject, candidate, relation))?;
-        let verdict = touch(pair, hit);
-        Some(verdict)
+        self.verdicts.get(subject, candidate, relation)
     }
 
-    /// Record `verdict` for the key. Negative verdicts are recorded exactly as positive ones. The
-    /// table is laid on the first record; after that a full bucket evicts the slot not touched last.
+    /// Record `verdict` for the key, laying the table in the run region on the first record.
     pub(super) fn record_verdict(
         &self,
         subject: TypeDigest,
@@ -1391,46 +1281,9 @@ impl<'run> TypeRegistry<'run> {
         relation: Relation,
         verdict: bool,
     ) {
-        let mut table = self.verdicts.get();
-        if table.is_empty() {
-            table = self
-                .bump
-                .alloc_slice_fill_with(self.verdict_slots, |_| Cell::new(VerdictSlot::EMPTY));
-            self.verdicts.set(table);
-        }
-        let first = self.bucket(subject, candidate, relation);
-        let pair = &table[first..first + 2];
-        let held = pair
-            .iter()
-            .position(|slot| slot.get().holds(subject, candidate, relation));
-        let free = || pair.iter().position(|slot| !slot.get().occupied);
-        let slot = held.or_else(free).unwrap_or_else(|| {
-            #[cfg(test)]
-            self.verdict_evictions.set(self.verdict_evictions.get() + 1);
-            usize::from(pair[0].get().recent)
-        });
-        #[cfg(test)]
-        self.verdict_inserts.set(self.verdict_inserts.get() + 1);
-        pair[slot].set(VerdictSlot {
-            subject,
-            candidate,
-            relation,
-            verdict,
-            occupied: true,
-            recent: false,
-        });
-        touch(pair, slot);
+        self.verdicts
+            .record(self.bump, subject, candidate, relation, verdict);
     }
-}
-
-/// Mark slot `hit` of a bucket the one touched last, and return its verdict.
-fn touch(pair: &[Cell<VerdictSlot>], hit: usize) -> bool {
-    let (mut this, mut other) = (pair[hit].get(), pair[1 - hit].get());
-    this.recent = true;
-    other.recent = false;
-    pair[hit].set(this);
-    pair[1 - hit].set(other);
-    this.verdict
 }
 
 /// A quantifier group put in group order over the positions it binds — what both interning doors
