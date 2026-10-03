@@ -1625,9 +1625,11 @@ pub fn arb_chain(world: World, depth: u32) -> BoxedStrategy<(KType, KType, KType
         .boxed()
 }
 
-/// A *fits* chain: an order chain, or one whose bottom is a lexical variable bounded by the chain's
-/// bottom, which fits what that bottom lies under. A bottom holding an opaque carrier bounds no
-/// variable, so its chain is drawn as the order's.
+/// A *fits* chain over an order chain `a ≤ b ≤ c`: the order chain itself; one whose bottom is a
+/// lexical variable bounded by `a`, which fits `b` through its bound; or one whose middle is a
+/// lexical variable between `a` and `b`, which `a` fits through its lower end and which fits `c`
+/// through its bound. A type holding an opaque carrier bounds no variable, and a pair converged or
+/// resting on `Never` encloses none with a lower end, so such a chain is drawn as the order's.
 pub fn arb_fits_chain(
     world: World,
     depth: u32,
@@ -1636,17 +1638,22 @@ pub fn arb_fits_chain(
     DeclaredType<Parametric>,
     DeclaredType<Parametric>,
 )> {
-    (arb_chain(world.clone(), depth), any::<bool>())
-        .prop_map(move |((a, b, c), lexical)| {
+    (arb_chain(world.clone(), depth), 0..3u8)
+        .prop_map(move |((a, b, c), route)| {
             let types = &world.types;
-            let a = if lexical && !types.contains_rigid(a.raw()) {
-                types.lexical(0, world.type_names[0], a).raw()
-            } else {
-                a.raw()
+            let name = world.type_names[0];
+            let bounds = |kt: KType| !types.contains_rigid(kt.raw());
+            let (a, b) = match route {
+                1 if bounds(a) => (types.lexical(0, name, a).raw(), b.raw()),
+                2 if a != KType::NEVER && a != b && bounds(a) && bounds(b) => (
+                    a.raw(),
+                    with_scratch(|scratch| types.lexical_between(scratch, 0, name, a, b)).raw(),
+                ),
+                _ => (a.raw(), b.raw()),
             };
             (
                 world.declared(a),
-                world.declared(b.raw()),
+                world.declared(b),
                 world.declared(c.raw()),
             )
         })

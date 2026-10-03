@@ -330,9 +330,12 @@ as its positions hold two of, each planted at two — bare, in a list or as a
 function's parameter — so a solve relates positions, caps a join from above, and
 solves variables side by side. An instance's bindings are pool types — grounds,
 composites and `Never` — or lexical variables over them, slot by slot, so a
-solve lands on a rigid variable as often as on a type, and on both at once. What
-still misses is a counted rejection, capped per law, so a generator that drifts
-off a precondition fails the suite.
+solve lands on a rigid variable as often as on a type, and on both at once.
+A *fits* chain sets a lexical variable at its bottom, bounded by the order
+chain's, or in its middle, between that chain's bottom and middle, so a step
+through a bound composes with one through a lower end. What still misses is a
+counted rejection, capped per law, so a generator that drifts off a precondition
+fails the suite.
 
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in
