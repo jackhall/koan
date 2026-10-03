@@ -23,6 +23,11 @@
 //! against concrete bounds, so its solution — joins and meets of those — is concrete; a
 //! `Collector<Parametric>` may take a variable, which a join keeps beside the rest and the solver's
 //! meet relates by the rigid rule. Inside the lattice a collector holds raw handles.
+//!
+//! Over static types naming lexical variables, [`Collector::reproducible`] reports whether a run,
+//! binding each variable, reproduces the solve: not where an admission read a variable through its
+//! ends, a variable's answer is a meet over one, or the solve fails at a verdict over one. A closed
+//! solve always is.
 
 use crate::memory::{BumpAllocator, BumpVec};
 
@@ -227,6 +232,10 @@ pub struct Collector<'s, T = Parametric> {
     /// Every contribution in arrival order — the cell it landed in and the bound that cell held
     /// before — so a [`rollback`](Self::rollback) pops exactly what a rejected attempt added.
     trail: BumpVec<'s, (usize, Variance, KType)>,
+    /// Whether some admission read a rigid variable through its ends: `Admits::leaf`, the bound
+    /// split in `Admits::set_wise`, or a false verdict over one. Never rolled back — a rejected
+    /// union member that read one is a choice some binding makes otherwise.
+    bound_read: bool,
     takes: PhantomData<T>,
 }
 
@@ -268,6 +277,7 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
             upper: cells(),
             bounds: held,
             trail: BumpVec::new_in(scratch),
+            bound_read: false,
             takes: PhantomData,
         }
     }
@@ -281,7 +291,8 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
     }
 
     /// Forget every contribution since `mark`. Contributions only ever append, so the trail names
-    /// exactly what to pop, and a cell the walk grew since then goes with it.
+    /// exactly what to pop, and a cell the walk grew since then goes with it. A bound read since
+    /// then stays recorded.
     pub(super) fn rollback(&mut self, mark: Mark) {
         while self.trail.len() > mark.trail {
             let (index, variance, previous) = self.trail.pop().expect("the trail reaches the mark");
@@ -356,33 +367,67 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
     /// and its bound. The join must lie under each upper contribution and the bound, or the set the
     /// pair denotes is empty. Built in the collector's own scratch.
     pub fn solve(&self, types: &TypeRegistry<'_>) -> Result<BumpVec<'s, T>, UnifyFailure<T>> {
-        let scratch = self.scratch;
-        let mut solution = BumpVec::with_capacity_in(self.bounds.len(), scratch);
+        let mut solution = BumpVec::with_capacity_in(self.bounds.len(), self.scratch);
         for index in 0..self.bounds.len() {
-            let bound = self.bounds[index].raw();
-            let (lower, upper) = (&self.lower[index], &self.upper[index]);
-            let solved = if lower.is_empty() {
-                upper.iter().fold(bound, |met, each| {
-                    meet_through_variables(types, scratch, met, *each)
-                })
-            } else {
-                let joined = join_iter(types, scratch, lower.iter().copied());
-                // Each ceiling on its own: a meet may land below the greatest lower bound.
-                for ceiling in upper.iter().copied().chain([bound]) {
-                    if !fits(types, scratch, joined, ceiling) {
-                        return Err(UnifyFailure::Disagree {
-                            index,
-                            lower: joined,
-                            upper: ceiling,
-                        }
-                        .typed());
+            match self.answer(types, index) {
+                Ok(solved) => solution.push(wrap(solved)),
+                Err((lower, upper)) => {
+                    return Err(UnifyFailure::Disagree {
+                        index,
+                        lower,
+                        upper,
                     }
+                    .typed());
                 }
-                joined
-            };
-            solution.push(wrap(solved));
+            }
         }
         Ok(solution)
+    }
+
+    /// Whether a run reproduces this solve: binding each lexical variable the contributions name as
+    /// the run does and then solving gives the solution so bound, and fails where this fails. A
+    /// contribution handed whole to a cell binds member by member, a join of such keeps each beside
+    /// the rest, and a verdict that holds over a variable holds at every binding. What may not: a
+    /// read through a variable's ends (`bound_read`), a meet over one, and a verdict that fails
+    /// over one.
+    pub fn reproducible(&self, types: &TypeRegistry<'_>) -> bool {
+        !self.bound_read
+            && (0..self.bounds.len()).all(|index| match self.answer(types, index) {
+                Ok(_) => {
+                    !self.lower[index].is_empty()
+                        || self.upper[index]
+                            .iter()
+                            .all(|upper| !types.contains_rigid(*upper))
+                }
+                Err((joined, ceiling)) => {
+                    !types.contains_rigid(joined) && !types.contains_rigid(ceiling)
+                }
+            })
+    }
+
+    /// The `index`-th variable's answer: the join of its lower contributions where any reached it,
+    /// else the meet of its upper ones and its bound; or, where the join does not lie under some
+    /// ceiling — an upper contribution or the bound — the join beside the first such ceiling.
+    fn answer(&self, types: &TypeRegistry<'_>, index: usize) -> Result<Handle, (Handle, Handle)> {
+        let scratch = self.scratch;
+        let bound = self.bounds[index].raw();
+        let (lower, upper) = (&self.lower[index], &self.upper[index]);
+        if lower.is_empty() {
+            return Ok(upper.iter().fold(bound, |met, each| {
+                meet_through_variables(types, scratch, met, *each)
+            }));
+        }
+        let joined = join_iter(types, scratch, lower.iter().copied());
+        // Each ceiling on its own: a meet may land below the greatest lower bound.
+        match upper
+            .iter()
+            .copied()
+            .chain([bound])
+            .find(|ceiling| !fits(types, scratch, joined, *ceiling))
+        {
+            Some(ceiling) => Err((joined, ceiling)),
+            None => Ok(joined),
+        }
     }
 }
 
@@ -508,6 +553,10 @@ impl<T: TypeHandle> Lockstep for Admits<'_, '_, T> {
                 Variance::Co => fits(types, scratch, carried, declared),
                 Variance::Contra => fits(types, scratch, declared, carried),
             };
+            // A verdict that holds over a variable holds at every binding; one that fails may not.
+            if !admits && (types.contains_rigid(carried) || types.contains_rigid(declared)) {
+                self.collector.bound_read = true;
+            }
             return Some(admits.then_some(()).ok_or(UnifyFailure::Mismatch));
         }
         match types.node(declared) {
@@ -533,6 +582,7 @@ impl<T: TypeHandle> Lockstep for Admits<'_, '_, T> {
         let Some(ends) = types.node(carried).rigid_interval() else {
             return Err(UnifyFailure::Mismatch);
         };
+        self.collector.bound_read = true;
         match v {
             Variance::Co => lockstep(types, scratch, declared, ends.upper.raw(), v, self),
             Variance::Contra if ends.lower != KType::NEVER => {
@@ -562,6 +612,7 @@ impl<T: TypeHandle> Lockstep for Admits<'_, '_, T> {
             // A carried variable whose bound spans several declared members is admitted through
             // the bound's members, each by some declared member.
             let bound = types.node(*one).rigid_bound();
+            self.collector.bound_read |= bound.is_some();
             let Some(bound) = bound.filter(|_| v == Variance::Co) else {
                 return Err(UnifyFailure::Mismatch);
             };

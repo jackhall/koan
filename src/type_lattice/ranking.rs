@@ -140,7 +140,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     }
 
     /// Whether every slot in `class` that `reads` picks admits its argument, jointly, against what
-    /// the earlier classes fixed: the class's solution, or `None`.
+    /// the earlier classes fixed: the class's solution, or `None`, beside the collector it ran in.
     fn admit_class(
         &self,
         types: &TypeRegistry<'_>,
@@ -148,7 +148,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         arguments: &[Handle],
         class: u8,
         reads: impl Fn(usize) -> bool,
-    ) -> Option<BumpVec<'s, Handle>> {
+    ) -> ClassSolve<'s> {
         let mut collector = self.collector(scratch);
         for (index, slot) in self.slots.iter().enumerate() {
             if class_of(self.declared.classes, index) == class
@@ -163,10 +163,16 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
                 )
                 .is_err()
             {
-                return None;
+                return ClassSolve {
+                    solution: None,
+                    collector,
+                };
             }
         }
-        collector.solve(types).ok()
+        ClassSolve {
+            solution: collector.solve(types).ok(),
+            collector,
+        }
     }
 
     /// Fix each variable `class` first mentions to `read(variable)`.
@@ -218,7 +224,9 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     ) -> Option<()> {
         for class in 0..self.declared.class_count() {
             let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
-            let solution = self.admit_class(types, scratch, arguments, class, |_| true)?;
+            let solution = self
+                .admit_class(types, scratch, arguments, class, |_| true)
+                .solution?;
             self.fix(class, |variable| solution[variable]);
         }
         Some(())
@@ -266,6 +274,13 @@ pub(super) fn solving_slots<'s>(
     }))
 }
 
+/// One class's static solve beside the collector it ran in, which answers whether a run
+/// reproduces it ([`Collector::reproducible`]).
+struct ClassSolve<'s> {
+    solution: Option<BumpVec<'s, Handle>>,
+    collector: Collector<'s, Handle>,
+}
+
 /// What the load knows of a candidate against arguments of known static types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -292,9 +307,9 @@ pub struct Judged<'s> {
 /// A class is *never* where some slot, read at its greatest instance, meets its argument's upper
 /// end at `Never` or does not lie above its lower end, read below its rigid variables: the carried
 /// type lies above that lower end, so the slot admits no call. It admits every call when each slot
-/// does: a slot naming its own class's variables where the class is exact — those arguments exact
-/// and free of rigid variables, the earlier variables they name pinned — so the static solve is
-/// the call's; a slot whose least instance, earlier variables read at theirs, lies above its
+/// does: a slot naming its own class's variables where the class is exact — those arguments exact,
+/// the earlier variables they name pinned, and the solve over them reproducible
+/// ([`Collector::reproducible`]) — so the static solve is the call's; a slot whose least instance, earlier variables read at theirs, lies above its
 /// argument's upper end; or a bare variable of the class that no other slot of the class names,
 /// whose one contribution lies under its bound. An exact class whose static solve fails over the
 /// slots naming its own variables is *never* too: that solve is the call's.
@@ -333,15 +348,21 @@ pub(super) fn judge_by_class<'s>(
         let earlier =
             |variable: usize, bound: KType| known[variable].unwrap_or(Interval::within(bound));
         for slot in (0..walk.slots.len()).filter(|slot| in_class(*slot)) {
-            let greatest = read_through(
+            // An earlier interval's end may name a lexical variable; the end above every instance
+            // reads it at its ends.
+            let greatest = bound_above(
                 types,
                 scratch,
-                walk.slots[slot],
-                Side::Above,
-                &mut |variable| match variable {
-                    Variable::Quantified { index, bound } => Some(earlier(index, bound)),
-                    _ => Some(variable.interval().raw()),
-                },
+                read_through(
+                    types,
+                    scratch,
+                    walk.slots[slot],
+                    Side::Above,
+                    &mut |variable| match variable {
+                        Variable::Quantified { index, bound } => Some(earlier(index, bound)),
+                        _ => Some(variable.interval().raw()),
+                    },
+                ),
             );
             let upper = bound_above(types, scratch, arguments[slot].upper);
             let lower = read_through(
@@ -360,15 +381,26 @@ pub(super) fn judge_by_class<'s>(
                 };
             }
         }
-        let exact_class = (0..walk.slots.len())
-            .filter(|slot| in_class(*slot) && (0..arity).any(|v| own(v) && names(*slot, v)))
+        let solves = |slot: usize| in_class(slot) && (0..arity).any(|v| own(v) && names(slot, v));
+        let exact_arguments = (0..walk.slots.len())
+            .filter(|slot| solves(*slot))
             .all(|slot| {
-                // A rigid variable the static type holds is read through its bound, where the
-                // call reads the type the run binds it to: that solve is not the call's.
                 arguments[slot].is_exact()
-                    && !types.contains_rigid(arguments[slot].upper)
                     && (0..arity).all(|v| own(v) || !names(slot, v) || pointed(v))
             });
+        // Over exact arguments, the static solve is the call's own where a run binding each
+        // lexical variable they name reproduces it.
+        let own_solve =
+            exact_arguments.then(|| walk.admit_class(types, scratch, &uppers, class, solves));
+        let exact_class = own_solve
+            .as_ref()
+            .is_some_and(|own| own.collector.reproducible(types));
+        if exact_class && own_solve.is_some_and(|own| own.solution.is_none()) {
+            return Judged {
+                verdict: Verdict::Never,
+                intervals: None,
+            };
+        }
         for slot in (0..walk.slots.len()).filter(|slot| in_class(*slot)) {
             if !always {
                 break;
@@ -400,7 +432,10 @@ pub(super) fn judge_by_class<'s>(
                 false
             };
         }
-        match walk.admit_class(types, scratch, &uppers, class, |_| true) {
+        match walk
+            .admit_class(types, scratch, &uppers, class, |_| true)
+            .solution
+        {
             Some(solution) => {
                 let mut positions = BumpVec::new_in(scratch);
                 positions.extend(
@@ -422,19 +457,6 @@ pub(super) fn judge_by_class<'s>(
                 walk.fix(class, |variable| solution[variable]);
             }
             None => {
-                // An exact class's static solve is the call's own: where it fails over the slots
-                // that solve, no call admits.
-                let solves = |slot: usize| (0..arity).any(|v| own(v) && names(slot, v));
-                if exact_class
-                    && walk
-                        .admit_class(types, scratch, &uppers, class, solves)
-                        .is_none()
-                {
-                    return Judged {
-                        verdict: Verdict::Never,
-                        intervals: None,
-                    };
-                }
                 always = false;
                 solved = false;
                 walk.fix(class, |variable| ranked.bound(variable).raw());
@@ -474,7 +496,10 @@ pub(super) fn admits_by_class<'run>(
     arguments.extend(candidate.slots());
     for class in 0..declared.class_count() {
         let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
-        let Some(solution) = walk.admit_class(types, scratch, &arguments, class, |_| true) else {
+        let Some(solution) = walk
+            .admit_class(types, scratch, &arguments, class, |_| true)
+            .solution
+        else {
             return false;
         };
         walk.fix_to_intervals(types, scratch, class, &solution);
@@ -519,7 +544,9 @@ pub(super) fn class_at_least(
     let mut answer = false;
     for each in 0..ranked_b.class_count() {
         let each = u8::try_from(each).expect("a shape has fewer than 256 classes");
-        let solution = walk.admit_class(types, scratch, &arguments, each, |_| true);
+        let solution = walk
+            .admit_class(types, scratch, &arguments, each, |_| true)
+            .solution;
         types.record_verdict(
             a.digest(),
             b.digest(),

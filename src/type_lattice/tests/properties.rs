@@ -1065,9 +1065,19 @@ fn solve_jointly<'s>(
     shape: Handle,
     arguments: &[Handle],
 ) -> Option<BumpVec<'s, Handle>> {
+    collect_jointly(types, scratch, shape, arguments).0
+}
+
+/// [`solve_jointly`]'s solution beside the collector it ran in.
+fn collect_jointly<'s>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    shape: Handle,
+    arguments: &[Handle],
+) -> (Option<BumpVec<'s, Handle>>, Collector<'s, Handle>) {
     let mut collector = Collector::<Handle>::new(scratch, quantifier_bounds(types, shape));
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
-        admits(
+        if admits(
             types,
             scratch,
             slot,
@@ -1075,9 +1085,12 @@ fn solve_jointly<'s>(
             Variance::Co,
             &mut collector,
         )
-        .ok()?;
+        .is_err()
+        {
+            return (None, collector);
+        }
     }
-    collector.solve(types).ok()
+    (collector.solve(types).ok(), collector)
 }
 
 proptest! {
@@ -1100,18 +1113,17 @@ proptest! {
         };
         let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
         let uppers: Vec<Handle> = arguments.iter().map(|argument| argument.upper).collect();
+        let (statics, collector) = collect_jointly(&types, scratch, a, &uppers);
         let (Some(statics), Some(solution)) = (
-            solve_jointly(&types, scratch, a, &uppers),
+            statics,
             solve_jointly(&types, scratch, instance(&types, scratch, a, &draw), &carried),
         ) else {
             return Ok(());
         };
         let slots: Vec<Handle> = shape_slots(a, &types).collect();
-        // A static type holding a lexical variable is solved through its bound, where the call
-        // solves through the type the run binds it to.
-        let all_exact = arguments
-            .iter()
-            .all(|argument| argument.is_exact() && !types.contains_rigid(argument.upper));
+        // Over exact arguments the static solve is the call's own where a run reproduces it.
+        let all_exact = arguments.iter().all(|argument| argument.is_exact())
+            && collector.reproducible(&types);
         let reported = intervals(
             &types,
             scratch,
@@ -1125,6 +1137,48 @@ proptest! {
                 within(&types, scratch, *solved, run_interval(*interval)),
                 "a carried solution left its static interval",
             );
+        }
+    }
+
+    /// A reproducible solve commutes with binding: where the collector reports a static solve the
+    /// same at every binding of the lexical variables it names, binding each as a run does and then
+    /// solving gives the static solution so bound, and fails exactly where the static solve fails.
+    #[test]
+    fn a_reproducible_solve_commutes_with_binding(
+        a in shape(),
+        b in shape(),
+        draw in draw(),
+    ) {
+        let (a, b) = (a.raw(), b.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some((arguments, _)) = static_and_carried(&types, scratch, a, b, &draw) else {
+            return Ok(());
+        };
+        let uppers: Vec<Handle> = arguments.iter().map(|argument| argument.upper).collect();
+        // A closed solve is the closed laws' to state.
+        if !types.contains_rigid(a) && !uppers.iter().any(|upper| types.contains_rigid(*upper)) {
+            return Ok(());
+        }
+        let (statics, collector) = collect_jointly(&types, scratch, a, &uppers);
+        if !collector.reproducible(&types) {
+            return Ok(());
+        }
+        let bound: Vec<Handle> = uppers
+            .iter()
+            .map(|upper| instance(&types, scratch, *upper, &draw))
+            .collect();
+        let run = solve_jointly(&types, scratch, instance(&types, scratch, a, &draw), &bound);
+        prop_assert_eq!(run.is_some(), statics.is_some(), "a run failed where the load did not, or the other way");
+        if let (Some(statics), Some(run)) = (statics, run) {
+            for (solved, ran) in statics.iter().zip(run.iter()) {
+                prop_assert_eq!(
+                    instance(&types, scratch, *solved, &draw),
+                    *ran,
+                    "a run's solution is not the static one bound",
+                );
+            }
         }
     }
 

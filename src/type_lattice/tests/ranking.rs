@@ -724,3 +724,102 @@ fn an_exact_class_is_judged_by_its_static_solve() {
         Verdict::Maybe
     );
 }
+
+/// The lexical variable `Outer` at level 0 under `bound`.
+fn outer(world: &World<'_>, bound: Handle) -> Handle {
+    let bound = world
+        .types
+        .concrete(crate::type_lattice::handle::wrap(bound))
+        .expect("a closed bound");
+    world.types.lexical(0, world.name("Outer"), bound).raw()
+}
+
+/// Written-order `FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt)` with `x` exactly `Outer`: `y` is read
+/// at `Elt`'s greatest instance, `Outer` read at its ends, so `PAIR a WITH "s"` admits where a run
+/// binds `Outer` to `Str`.
+#[test]
+fn a_later_slot_reads_an_earlier_lexical_end_at_its_ends() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let pair = world.head(
+        &["Elt"],
+        &[
+            Kw("PAIR"),
+            Slot(world.var(0)),
+            Kw("WITH"),
+            Slot(world.var(0)),
+        ],
+        &[],
+    );
+    let outer = outer(&world, Handle::ANY);
+    assert_eq!(
+        world
+            .judge(
+                pair,
+                &[Interval::point(outer), Interval::point(KType::STR.raw())]
+            )
+            .0,
+        Verdict::Maybe
+    );
+    let list_of_outer = Interval::point(world.types.list(outer));
+    assert_eq!(
+        world.judge(pair, &[list_of_outer, list_of_outer]),
+        (Verdict::Always, Some(vec![list_of_outer])),
+        "the solve over `LIST OF Outer` is reproducible, so `Elt` is exactly that"
+    );
+}
+
+/// One class `FOR ALL #[Elt Key] #(PUT x :Elt WITH f :(FN :{v :Elt} -> Null) AT k :(LIST OF Key))`:
+/// `Elt` fails at a concrete verdict, which every binding of `Outer` reproduces, so no call admits;
+/// a solve reading `Outer` through its bound is not the call's own.
+#[test]
+fn an_exact_class_over_a_lexical_variable_is_judged_by_a_reproducible_solve() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let put = world.head(
+        &["Elt", "Key"],
+        &[
+            Kw("PUT"),
+            Slot(world.var(0)),
+            Kw("WITH"),
+            Slot(world.handler(world.var(0))),
+            Kw("AT"),
+            Slot(world.types.list(world.var(1))),
+        ],
+        &[0, 0, 0],
+    );
+    let list_of_outer = Interval::point(world.types.list(outer(&world, Handle::ANY)));
+    assert_eq!(
+        world
+            .judge(
+                put,
+                &[
+                    Interval::point(KType::NUMBER.raw()),
+                    Interval::point(world.handler(KType::STR.raw())),
+                    list_of_outer,
+                ]
+            )
+            .0,
+        Verdict::Never
+    );
+
+    let lists = world.types.list(world.var(0));
+    let pair = world.head(
+        &["Elt"],
+        &[Kw("PAIR"), Slot(lists), Kw("WITH"), Slot(lists)],
+        &[0, 0],
+    );
+    let bounded = outer(&world, world.types.list(KType::NUMBER.raw()));
+    assert_eq!(
+        world
+            .judge(
+                pair,
+                &[
+                    Interval::point(bounded),
+                    Interval::point(world.types.list(KType::STR.raw()))
+                ]
+            )
+            .0,
+        Verdict::Maybe
+    );
+}
