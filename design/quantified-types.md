@@ -88,8 +88,9 @@ instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A solution
 may name a type a run binds, such as an enclosing `EXPR FOR ALL #[Outer]`'s
 `Outer`, and the instance is then made at the type each run binds it to. A
 quantified callee's other arguments solve its group first, a variable a class
-ranked before the slot's solves taken as the call solves it, and the slot is
-read through that solve. The candidates a keyworded use keeps must agree on each
+ranked before the slot's solves taken as the call solves it — from contributions
+closed or naming a type a run binds, where each run reproduces that solve — and
+the slot is read through that solve. The candidates a keyworded use keeps must agree on each
 instance.
 [Dispatch](../src/dispatch/README.md#static-types) owns the rule and its
 refusals.
@@ -221,6 +222,3 @@ lattice, not an unknown type, so nothing here is checked by consistency.
   carrier as a bound, higher-kinded head parameters, `m.f` outside the head of
   a call, calling through an opaque view's quantified member, and whether a
   keyworded form's name counts as a module member's binding.
-- [Solves over a lexical variable](../roadmap/gradual-typing/rigid-solves.md)
-  — a class solve over a static type naming a type a run binds, taken as the
-  call's own, and an instance argument whose variables it solves.

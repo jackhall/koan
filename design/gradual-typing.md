@@ -138,6 +138,9 @@ and never guesses.
   [`bound_above`](../src/type_lattice/solving.md#substitute-then-ask).
 - Where a relation holds at some bindings and not others, the answer is
   *maybe* or *unknown*, and the call decides.
+- A static solve naming a lexical variable is the call's own only where a run,
+  binding each variable, [reproduces it](../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind):
+  a solve that reads a variable through its bound is not.
 
 Under `EXPR #(WHICH x :Number) -> Str`, `WHICH a` over a parameter
 `a :(Number | Str)` is *maybe*: `a` may carry a `Number`. The load reads an
@@ -192,8 +195,5 @@ changes what a reader sees and which overload runs.
 
 - [Gradual typing](../roadmap/gradual-typing/README.md) — the project's open
   items.
-- [Solves over a lexical variable](../roadmap/gradual-typing/rigid-solves.md)
-  — a load-time solve that each run reproduces where an argument's static type
-  names a type the run binds.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)

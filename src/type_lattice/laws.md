@@ -230,10 +230,17 @@ changes which call is admitted. Collected, the call binds `Elt` to
 variable for the next, it says so with a
 [priority class](solving.md#priority-classes).
 
+A static solve over lexical variables is taken as the call's own only where the
+collector reports it
+[reproducible](solving.md#the-unifier-collects-it-does-not-bind): binding each
+variable as a run does and then solving gives the static solution so bound, and
+fails exactly where it fails.
+
 **What enforces it.** `a_solution_is_the_least_instance_of_its_contributions`,
 `admission_without_quantifiers_is_the_order`,
-`a_carried_variable_is_admitted_where_its_bound_is` and
-`a_solution_reads_only_its_solving_slots`.
+`a_carried_variable_is_admitted_where_its_bound_is`,
+`a_solution_reads_only_its_solving_slots` and
+`a_reproducible_solve_commutes_with_binding`.
 
 ## A load-time verdict holds at every run
 
@@ -270,7 +277,8 @@ ascription retypes without checking. Each is sound only if the verdict was.
   [the load leaves it unknown](../elaborate/README.md#the-type-channel-at-load).
 
 **What enforces it.** `a_carried_solution_lies_in_its_static_interval`,
-`a_verdict_holds_of_every_call_within_its_static_types` and
+`a_verdict_holds_of_every_call_within_its_static_types`,
+`a_reproducible_solve_commutes_with_binding` and
 `bounding_above_lies_over_every_instance`, which draw carried types within the
 static ones and bind each lexical variable as a run does. Debug builds check
 it on every run: a finished value's carried type lies within its node's static

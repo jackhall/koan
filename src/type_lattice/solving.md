@@ -84,6 +84,22 @@ every bound a `KType`, so its solution is a `T`. A call's collector takes the
 concrete types its arguments carry, so a run-time solution is concrete by its
 type; one over static types, which may hold lexical variables, is parametric.
 
+A parametric solve is **reproducible** where a run, binding each lexical
+variable its contributions name, solves to the static solution so bound, and
+fails exactly where the static solve fails ([`Collector::reproducible`](unify.rs)).
+A contribution handed whole to a variable's cell binds member by member, a join
+keeps a variable beside the rest, and a verdict that holds over a variable holds
+at every binding, so the collector disqualifies only three things: an admission
+that read a variable through its ends (a carried rigid variable filling a
+position through its bound, or a bound split across a declared union's members,
+or a verdict over one that fails), a variable answered by a meet over a
+contribution holding one, and a solve failing at a verdict over one. So
+`LIST OF Elt` over `LIST OF Outer` solves `Elt` to `LIST OF Outer`
+reproducibly, while `LIST OF Elt` over an `Outer` bounded by `LIST OF Number`
+solves it to `Number`, which a run binding `Outer` below its bound does not
+reproduce. The report is one flag for the whole collector, exact where it says
+reproducible and conservative elsewhere; a closed solve always is.
+
 **A binding does not grow with its arguments; an interval does.** Beside the
 pair, the unifier reports an **interval** per variable
 ([`intervals`](unify.rs)), holding every least instance a call can bind over
@@ -98,12 +114,13 @@ own, as [dispatch](../dispatch/README.md#static-types) types an argument:
   the declared types name the variable at no covariant position, and `Never`
   elsewhere;
 - where every argument whose position names a variable is **exact** — its lower
-  end is its upper — and holds no rigid variable, the arguments a solve can
-  meet are those very types, so each variable's interval is its least
-  instance: solved to a point, which the caller asserts by passing `exact`. An argument
-  over a rigid variable is no such argument: a solve reads a carried rigid
-  variable through its bound, where a run binds it to one type under that
-  bound.
+  end is its upper — and the solve over them is reproducible, the arguments a
+  solve can meet are those very types, so each variable's interval is its least
+  instance: solved to a point, which the caller asserts by passing `exact`. The
+  point may name a lexical variable, as an exact `LIST OF Outer` argument does;
+  the run reads it at its binding. A solve that reads a carried rigid variable
+  through its bound is no such solve, since a run binds it to one type under
+  that bound.
 
 An end bounds what a call can bind; it is not itself a binding.
 
@@ -161,13 +178,14 @@ candidate shape a verdict against arguments of known static types, each an
 interval, class by class, beside each variable's interval:
 
 - *never* — some slot, each variable an earlier class solved read at its
-  greatest instance, meets its argument's upper end at `Never`, or does not lie
-  above its argument's lower end read below its rigid variables: every type a
-  call carries lies above that end, so the slot admits none; or an **exact
-  class** — one every slot of which that names a variable of its own has an
-  exact argument holding no rigid variable, and names only earlier variables
-  solved to a point — whose static solve over those slots fails, since that
-  solve is the call's own;
+  greatest instance and every lexical variable left read at its ends from
+  above, meets its argument's upper end at `Never`, or does not lie above its
+  argument's lower end read below its rigid variables: every type a call
+  carries lies above that end, so the slot admits none; or an **exact class** —
+  one every slot of which that names a variable of its own has an exact
+  argument, and names only earlier variables solved to a point, and whose
+  static solve over those slots is reproducible — where that solve fails,
+  since it is the call's own;
 - *always* — every class admits whatever a call carries within the arguments'
   intervals: a slot naming no variable of its own class admits its argument's
   upper end with each earlier variable at its least instance; a slot that is a

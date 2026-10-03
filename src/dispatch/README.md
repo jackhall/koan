@@ -328,14 +328,23 @@ nothing, and `NoInstance` where the scheme does not fit the wanted type. A
 quantified callee's slot is read through its group solved from its **other**
 arguments first. A variable that a class before the slot's
 [solves](../type_lattice/solving.md#priority-classes) is taken as the call
-solves it, from those classes' solving slots, each at its argument's closed
+solves it, from those classes' solving slots, each at its argument's
 contribution: under `EXPR #(APPLY 2 TO 1)` and
 `EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :Elt) -> Elt`,
 `APPLY pick TO b` over a parameter `b :(Number | Str)` instantiates `pick` at
-`Elt = Number | Str`. A solving argument there that is itself an instance site,
-or whose contribution is unknown or holds a lexical variable, fixes nothing. Any
-other variable the slot shares with the other arguments must come out one closed
-point, and one only the slot names is read through `[Never, bound]`, so under
+`Elt = Number | Str`. A contribution holding a lexical variable fixes the
+variable where a run
+[reproduces the solve](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind):
+in the body of `EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any`,
+`APPLY pick TO xs` instantiates `pick` at `Elt = LIST OF Outer`, a solution
+naming a lexical variable as above, while under
+`#{Outer: :(LIST OF Number)}` with `xs :Outer` and `y :(LIST OF Elt)` the solve
+reads `Outer` through its bound, which a run binding it lower does not
+reproduce. A solving argument there that is itself an instance site, whose
+contribution is unknown, or whose solve a run may not reproduce, fixes nothing.
+Any other variable the slot shares with the other arguments must come out one
+point the call reproduces — a closed one, or one of a reproducible solve — and
+one only the slot names is read through `[Never, bound]`, so under
 `EXPR FOR ALL #[Elt Out] #(MAP f :(FN :{x :Elt} -> Out) AT y :Elt) -> Out`,
 `MAP pick AT 1` instantiates `pick` at `Elt = Number` and is `Number`, while
 `MAP pick AT y` over a parameter `y :(Number | Str)` refuses — and loads under
@@ -356,15 +365,20 @@ variable, which holds every solution a call can reach, and its return is
 variable's upper end at a covariant position, its lower end at a contravariant
 one. So under `EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)`, `ONLY 1` is
 `Number`. Where every argument at a slot that solves is exact or contributes
-its static type (below), and holds no lexical variable, the solve over the
-static types is the call's own, and each variable is solved to a point. A parameter exact at a container type is
-such an argument: under
+its static type (below), and a run
+[reproduces](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
+the solve over them, that solve is the call's own, and each variable is solved
+to a point. A parameter exact at a container type is such an argument: under
 `EXPR FOR ALL #[Elt] #(FLAT rows :(LIST OF (LIST OF Elt))) -> :(LIST OF Elt)`,
 `FLAT rows` over a parameter `rows :(LIST OF (LIST OF (Number | Str)))` is
 selected at load, and solves `Elt` to `Number | Str` whatever the argument's
-contents. An exact argument over a lexical variable
-is no such solve: the load solves through the variable's bound, where the call
-solves through the type the run binds it to. A call binds each variable to one
+contents. An exact argument over a lexical variable is one too where the
+solve hands it whole to a variable, so a point may name it: `BOTH m WITH m`
+over `m :(LIST OF Outer)`, under
+`EXPR FOR ALL #[Elt] #(BOTH x :(LIST OF Elt) WITH y :(LIST OF Elt))`, solves
+`Elt` to `Outer` and is selected. A solve that reads the variable through its
+bound is not, since the call solves through the type the run binds it to. A
+call binds each variable to one
 type, the
 [least instance](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
 of the pair its arguments solve it to.
@@ -425,8 +439,9 @@ own, so a static type crossing into it, a `$` name's, or leaving it, an
 - *always* — every class admits whatever the call carries within its
   arguments' static types: a slot that is a variable of its own class alone
   admits under the variable's bound, and a class whose arguments naming its own
-  variables are exact and hold no lexical variable admits when its static
-  solve does — where that solve fails, the candidate is *never*. A contributing
+  variables are exact, and whose static solve over them a run reproduces,
+  admits when that solve does — where it fails, the candidate is *never*. A
+  contributing
   argument is read as exactly its upper end, since the call solves from that
   type. Each admission reads
   [*fits*](../type_lattice/relations.md#the-relations), so a module argument at
@@ -539,10 +554,15 @@ record names every parameter, the cell records the contributions by the
 argument's site for the frame, whatever the static solve finds: a field whose
 static type the load cannot admit still contributes, and the frame solves from
 it as a keyworded call would. The call refuses the load
-where a closed contribution does not fit its parameter, or where every solving
-parameter's contribution is closed and the group has no solution: under
-`FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt`, `only {x = a}` over
-`a :(Number | Str)` refuses the load.
+where a contribution the load knows — closed, or holding a lexical variable —
+does not fit its parameter, or where every solving parameter's contribution is
+known and the group has no solution, each where a run reproduces the solve:
+under `FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt`, `only {x = a}` over
+`a :(Number | Str)` refuses the load, and so does `first {y = m}` under
+`FN FOR ALL #[Elt] :{y :(LIST OF Elt)} -> Type` over
+`m :((LIST OF Outer) | Null)`, whose member `Null` fails at every binding. The
+call is exact at its return where the solve is reproducible over exact
+contributions, as a keyworded one is.
 
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
@@ -720,8 +740,10 @@ arguments first, candidates disagreeing, a call by name's record, a closed
 solution, a solution over a type each run binds — at each kind of site, through
 nested callables and a block, and its equality under one binding and two — a
 keyworded slot's variables an earlier class solves, ranked, in written order
-and pooled over two earlier classes, and refused over an unknown or rigid
-earlier argument, an instance's body reading
+and pooled over two earlier classes, fixed at each binding over a lexical
+earlier argument, a rigid candidate and a shared variable a reproducible solve
+fixes, and refused over an unknown earlier argument or one read through a
+lexical bound, an instance's body reading
 its solution and calling its siblings, its equality, and one made in a frame and called where it lands, which is on the
 [Miri slate](../../observe/miri_slate.md);
 [contributions](tests/contributions.rs) — a call solved from its arguments'
@@ -732,7 +754,10 @@ through nested callables and through a block, a closure capturing a type only
 where a call in it contributes it, which is on the
 [Miri slate](../../observe/miri_slate.md), and a call by name solved from its
 record's static type, exact at its return, refused at load, reading a rigid
-contribution, and solving from a rigid field the load cannot admit;
+contribution, solving from a rigid field the load cannot admit, and judged by a
+reproducible solve over a lexical variable — refused, exact at its return — as
+a keyworded call over one is: refused where it fails, selected where it admits,
+and a later slot reading an earlier lexical solution at its ends;
 [rules](tests/rules.rs) — the law every native's type rule obeys over drawn
 argument intervals and names, and what `FROM`'s and `ATTR`'s rules make
 the load type and refuse and the run carry;

@@ -309,10 +309,11 @@ pub struct Judged<'s> {
 /// type lies above that lower end, so the slot admits no call. It admits every call when each slot
 /// does: a slot naming its own class's variables where the class is exact — those arguments exact,
 /// the earlier variables they name pinned, and the solve over them reproducible
-/// ([`Collector::reproducible`]) — so the static solve is the call's; a slot whose least instance, earlier variables read at theirs, lies above its
-/// argument's upper end; or a bare variable of the class that no other slot of the class names,
-/// whose one contribution lies under its bound. An exact class whose static solve fails over the
-/// slots naming its own variables is *never* too: that solve is the call's.
+/// ([`Collector::reproducible`]) — so the static solve is the call's; a slot whose least instance,
+/// earlier variables read at theirs, lies above its argument's upper end; or a bare variable of
+/// the class that no other slot of the class names, whose one contribution lies under its bound.
+/// An exact class whose static solve fails over the slots naming its own variables is *never*
+/// too: that solve is the call's.
 pub(super) fn judge_by_class<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
@@ -388,13 +389,24 @@ pub(super) fn judge_by_class<'s>(
                 arguments[slot].is_exact()
                     && (0..arity).all(|v| own(v) || !names(slot, v) || pointed(v))
             });
+        let full = walk
+            .admit_class(types, scratch, &uppers, class, |_| true)
+            .solution;
         // Over exact arguments, the static solve is the call's own where a run binding each
-        // lexical variable they name reproduces it.
-        let own_solve =
-            exact_arguments.then(|| walk.admit_class(types, scratch, &uppers, class, solves));
-        let exact_class = own_solve
-            .as_ref()
-            .is_some_and(|own| own.collector.reproducible(types));
+        // lexical variable reproduces it, as a closed one always does. It is taken where a slot
+        // or argument names one, or where the full solve failed and it decides *never*.
+        let rigid = (0..walk.slots.len())
+            .filter(|slot| solves(*slot))
+            .any(|slot| {
+                types.contains_rigid(walk.slots[slot])
+                    || types.contains_rigid(arguments[slot].upper)
+            });
+        let own_solve = (exact_arguments && (rigid || full.is_none()))
+            .then(|| walk.admit_class(types, scratch, &uppers, class, solves));
+        let exact_class = exact_arguments
+            && own_solve
+                .as_ref()
+                .is_none_or(|own| own.collector.reproducible(types));
         if exact_class && own_solve.is_some_and(|own| own.solution.is_none()) {
             return Judged {
                 verdict: Verdict::Never,
@@ -432,10 +444,7 @@ pub(super) fn judge_by_class<'s>(
                 false
             };
         }
-        match walk
-            .admit_class(types, scratch, &uppers, class, |_| true)
-            .solution
-        {
+        match full {
             Some(solution) => {
                 let mut positions = BumpVec::new_in(scratch);
                 positions.extend(

@@ -41,8 +41,9 @@
 //! parameters. A call by name of a quantified function solves its group from its argument record's
 //! fields, each contributing as a keyworded argument does, and records the contributions by its
 //! argument's site for the frame; it refuses the load where a contribution misses its parameter or
-//! the contributions leave the group unsolved, where a run reproduces that solve. What the pass fixes rests in each shape's
-//! write-once [`Statics`] cell, which [`evaluate`](super::evaluate) reads.
+//! the contributions leave the group unsolved, where a run reproduces that solve. What the pass
+//! fixes rests in each shape's write-once [`Statics`] cell, which [`evaluate`](super::evaluate)
+//! reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
 //! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its cell,
@@ -988,9 +989,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// candidate the load knows as `known`: wanted at its slot's type, read through the candidate's
     /// group solved from its other arguments where it has one — a variable a class before the
     /// slot's solves taken from that class's solving slots at their contributions, as the call
-    /// solves it. Refused where the load does not know the
-    /// candidate's shape or makes no instance; `None` where the other arguments do not fit their
-    /// slots, which the judge refuses.
+    /// solves it. Refused where the load does not know the candidate's shape or makes no instance;
+    /// `None` where the other arguments do not fit their slots, which the judge refuses.
     fn instances(
         &self,
         known: Known,
