@@ -1,0 +1,591 @@
+//! The type channel's load pass over shaped programs: each cell it fills read back and compared
+//! with what elaborating through an activation gives, each lexical variable at the level its chain
+//! numbers it, each spelling it leaves for the run, and each refusal.
+
+use crate::memory::BumpAllocator;
+use crate::scope::{
+    BodyShape, CaptureSlot, Coordinate, Elaboration, FunctionGroupMap, ShapeError, ShapeKind, Slot,
+    Static, StaticType, Target, TypeExpression, Variable,
+};
+use crate::symbols::{BinderSymbol, SymbolInterner};
+use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, TypeRegistry};
+
+use super::super::type_channel;
+use super::{Held, Program, with_program};
+
+/// The scalars and `Type`, which a `:Type` parameter names.
+fn with_type(
+    _: &TypeRegistry<'_>,
+    _: BumpAllocator<'_>,
+    _: &SymbolInterner,
+) -> Vec<(&'static str, KType)> {
+    vec![("Type", KType::ANY_TYPE)]
+}
+
+/// Shape `source` with every slot empty, run the load pass over it, and hand its result to `check`.
+fn loaded<R>(
+    source: &str,
+    check: impl for<'p, 'graph, 'cell> FnOnce(
+        &Program<'p, 'graph, 'cell>,
+        Result<(), ShapeError<'graph>>,
+    ) -> R,
+) -> R {
+    with_program(
+        source,
+        with_type,
+        |_, _, _| Held::Empty,
+        |program| {
+            let typed = type_channel(
+                program.activation.shape(),
+                program.activation.builtins(),
+                program.types,
+                program.storage,
+                program.scratch,
+            );
+            check(&program, typed)
+        },
+    )
+}
+
+/// `source` loads, or the test fails with the refusal.
+fn typed<R>(
+    source: &str,
+    check: impl for<'p, 'graph, 'cell> FnOnce(&Program<'p, 'graph, 'cell>) -> R,
+) -> R {
+    loaded(source, |program, typed| {
+        if let Err(error) = typed {
+            panic!(
+                "`{source}` loads: {}",
+                error.display(program.symbols, program.types)
+            );
+        }
+        check(program)
+    })
+}
+
+/// `shape`'s type expressions written in `statement`, in site order.
+fn written_in<'graph>(
+    shape: &'graph BodyShape<'graph>,
+    statement: u32,
+) -> Vec<&'graph TypeExpression<'graph>> {
+    shape
+        .type_expressions()
+        .iter()
+        .filter(|expression| expression.statement == statement)
+        .collect()
+}
+
+/// The one type expression `shape` records.
+fn only<'graph>(shape: &'graph BodyShape<'graph>) -> StaticType<'graph> {
+    let [expression] = shape.type_expressions() else {
+        panic!(
+            "one type expression, not {}",
+            shape.type_expressions().len()
+        )
+    };
+    expression.typed()
+}
+
+/// The one nested shape of `kind` in `shape`.
+fn nested<'graph>(shape: &'graph BodyShape<'graph>, kind: ShapeKind) -> &'graph BodyShape<'graph> {
+    let mut found = shape
+        .nested_shapes()
+        .iter()
+        .filter(|(_, nested)| nested.kind() == kind);
+    let (_, nested) = found.next().expect("a nested shape of the kind");
+    assert!(found.next().is_none(), "one nested shape of the kind");
+    nested
+}
+
+/// The rigid value `typed` holds, beside its variables' levels.
+fn rigid(typed: StaticType<'_>) -> (Parametric, Vec<usize>) {
+    match typed {
+        Static::Rigid { value, variables } => (
+            value,
+            variables.iter().map(|variable| variable.level).collect(),
+        ),
+        _ => panic!("a rigid type, not {typed:?}"),
+    }
+}
+
+fn closed(typed: StaticType<'_>) -> KType {
+    match typed {
+        Static::Closed(value) => value,
+        _ => panic!("a closed type, not {typed:?}"),
+    }
+}
+
+fn unknown(typed: StaticType<'_>) -> bool {
+    matches!(typed, Static::Unknown)
+}
+
+/// The lexical variable `name` at `level`, bounded by `Any`.
+fn lexical(program: &Program<'_, '_, '_>, level: usize, name: &str) -> Parametric {
+    program
+        .types
+        .lexical(level, program.type_name(name), KType::ANY)
+}
+
+/// Each callable shape nested in `shape`, in order.
+fn callables<'graph>(shape: &'graph BodyShape<'graph>) -> Vec<&'graph BodyShape<'graph>> {
+    shape
+        .nested_shapes()
+        .iter()
+        .filter(|(_, nested)| nested.kind() == ShapeKind::Callable)
+        .map(|(_, nested)| *nested)
+        .collect()
+}
+
+/// The slot of the type binder `name` in `shape`.
+fn type_slot(program: &Program<'_, '_, '_>, shape: &BodyShape<'_>, name: &str) -> Slot {
+    shape
+        .slot(BinderSymbol::Type(program.type_name(name)))
+        .expect("a declared type binder")
+        .0
+}
+
+#[test]
+fn a_closed_binder_is_typed_at_load() {
+    let source = "NEWTYPE Dist = Number\nNEWTYPE Ay = :{b :Be}\nNEWTYPE Be = :{a :Ay}";
+    typed(source, |program| {
+        let shape = program.activation.shape();
+        let names = ["Dist", "Ay", "Be"];
+        let loaded = names.map(|name| closed(shape.declared_type(type_slot(program, shape, name))));
+        program
+            .declare()
+            .expect("the binders declare through the activation");
+        assert_eq!(loaded, names.map(|name| program.bound(name)));
+    });
+}
+
+#[test]
+fn a_value_position_type_is_closed() {
+    typed("LET t = :(LIST OF Number)", |program| {
+        let shape = program.activation.shape();
+        assert_eq!(closed(only(shape)), program.types.list(KType::NUMBER));
+    });
+}
+
+#[test]
+fn a_for_all_name_is_its_lexical_variable() {
+    let source = "LET f = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Held = \
+                  #(:(LIST OF Held)))";
+    typed(source, |program| {
+        let body = program.birth("f");
+        let types = program.types;
+        let held = lexical(program, 0, "Held");
+        let (value, levels) = rigid(only(body));
+        assert_eq!(value, types.list(held));
+        assert_eq!(levels, [0]);
+        assert_eq!(
+            body.group_levels(),
+            [held, lexical(program, 1, "Unused")],
+            "a name no position reads is still a variable of the group"
+        );
+        let Static::Closed(callable) = body.callable_type() else {
+            panic!("the callable's type is closed")
+        };
+        let held = program.type_name("Held");
+        let unused = program.type_name("Unused");
+        assert_eq!(
+            callable.quantifier_map,
+            FunctionGroupMap(&[(held, 0), (unused, 1)])
+        );
+        let [Static::Rigid { variables, .. }] = [only(body)] else {
+            unreachable!()
+        };
+        let slot = type_slot(program, body, "Held");
+        assert_eq!(
+            variables,
+            [Variable {
+                level: 0,
+                at: super::local(slot)
+            }]
+        );
+    });
+}
+
+#[test]
+fn a_callable_records_where_its_for_all_names_live() {
+    typed(
+        "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)",
+        |program| {
+            let shape = program.activation.shape();
+            let body = shape
+                .births(shape.registrations()[0].slot)
+                .expect("the registration births its body");
+            assert_eq!(body.group_levels(), [lexical(program, 0, "Elt")]);
+            let slot = type_slot(program, body, "Elt");
+            assert_eq!(body.declared_variables(), [(0, Target::Local(slot))]);
+        },
+    );
+}
+
+#[test]
+fn a_for_all_name_one_slot_reads_is_rigid_in_the_body() {
+    typed(
+        "EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(:(LIST OF Elt))",
+        |program| {
+            let shape = program.activation.shape();
+            let body = shape
+                .births(shape.registrations()[0].slot)
+                .expect("the registration births its body");
+            let elt = lexical(program, 0, "Elt");
+            assert_eq!(body.group_levels(), [elt]);
+            let (value, levels) = rigid(only(body));
+            assert_eq!(value, program.types.list(elt));
+            assert_eq!(levels, [0]);
+        },
+    );
+}
+
+#[test]
+fn a_type_parameter_is_a_rigid_variable() {
+    typed(
+        "EXPR #(MAKESET Elt :Type) -> Any = #(:(LIST OF Elt))",
+        |program| {
+            let shape = program.activation.shape();
+            let body = shape
+                .births(shape.registrations()[0].slot)
+                .expect("the registration births its body");
+            let types = program.types;
+            let (value, levels) = rigid(only(body));
+            assert_eq!(value, types.list(lexical(program, 0, "Elt")));
+            assert_eq!(levels, [0]);
+        },
+    );
+}
+
+#[test]
+fn an_outer_for_all_name_keeps_its_level_in_an_inner_body() {
+    let source = "LET f = (FN FOR ALL #[Ay] :{x :Ay} -> Ay = \
+                  #(\n  LET g = (FN FOR ALL #[Be] :{y :Be} -> Be = #(:(MAP Ay -> Be)))\n  x\n))";
+    typed(source, |program| {
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        let types = program.types;
+        let (value, levels) = rigid(only(inner));
+        let (ay, be) = (lexical(program, 0, "Ay"), lexical(program, 1, "Be"));
+        assert_eq!(value, types.dict(ay, be));
+        assert_eq!(levels, [0, 1]);
+    });
+}
+
+#[test]
+fn sibling_quantified_bodies_number_their_own_names_alike() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+                  LET g = (FN FOR ALL #[Ay] :{a :Ay} -> Ay = #(a))\n  \
+                  LET h = (FN FOR ALL #[Be] :{b :Be} -> Be = #(b))\n  \
+                  x\n))";
+    typed(source, |program| {
+        // Nested shapes sit in site order, which is address order, so the two may come either way.
+        let levels: Vec<_> = callables(program.birth("f"))
+            .iter()
+            .map(|body| body.group_levels().to_vec())
+            .collect();
+        let (ay, be) = (lexical(program, 1, "Ay"), lexical(program, 1, "Be"));
+        assert_eq!(levels.len(), 2);
+        assert!(levels.contains(&vec![ay]) && levels.contains(&vec![be]));
+    });
+}
+
+#[test]
+fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+                  #(\n  LET g = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t))\n  x\n))";
+    typed(source, |program| {
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        let (value, levels) = match inner.callable_type() {
+            Static::Rigid { value, variables } => (
+                value,
+                variables
+                    .iter()
+                    .map(|variable| variable.level)
+                    .collect::<Vec<_>>(),
+            ),
+            typed => panic!("a rigid callable, not {typed:?}"),
+        };
+        assert_eq!(levels, [0]);
+        let scheme = value.ktype.as_scheme().expect("`g` is quantified");
+        let TypeNode::KFunction { params, .. } = program.types.scheme_node(scheme) else {
+            panic!("a function type")
+        };
+        assert!(
+            params
+                .iter()
+                .any(|(_, param)| param == lexical(program, 0, "Elt"))
+        );
+        assert_eq!(inner.group_levels(), [lexical(program, 1, "Tee")]);
+    });
+}
+
+#[test]
+fn a_bound_naming_a_run_bound_name_is_left_for_the_run() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+                  #(\n  LET g = (FN FOR ALL #{Tee: Elt} :{t :Tee} -> Tee = #(t))\n  x\n))";
+    typed(source, |program| {
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        assert!(matches!(inner.callable_type(), Static::Unknown));
+        assert!(inner.group_levels().is_empty());
+    });
+}
+
+#[test]
+fn a_dollar_name_crossing_into_code_is_a_name_of_the_code_s_own() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+                  LET q = #(PRINT :(LIST OF $Elt))\n  \
+                  x\n))";
+    typed(source, |program| {
+        let code = nested(program.birth("f"), ShapeKind::Code);
+        let Static::Rigid { value, variables } = only(code) else {
+            panic!("a rigid type")
+        };
+        assert_eq!(value, program.types.list(lexical(program, 0, "Elt")));
+        let elt = BinderSymbol::Type(program.type_name("Elt"));
+        let capture = code
+            .captures()
+            .iter()
+            .position(|capture| capture.name == elt)
+            .expect("the code captures `$Elt`");
+        assert_eq!(
+            variables,
+            [Variable {
+                level: 0,
+                at: Coordinate::Activation {
+                    hops: 0,
+                    target: Target::Capture(CaptureSlot(capture as u32)),
+                },
+            }]
+        );
+    });
+}
+
+#[test]
+fn a_non_commuting_spelling_is_left_for_the_run() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\
+                  (:(Elt & Number)) \
+                  (:(Elt.x)) \
+                  (:(FN :{y :Number, z :Elt} -> Number)) \
+                  (:(Number AS Elt)) \
+                  (:(Elt NEEDING #[y])) \
+                  (:(Number & Str))))";
+    typed(source, |program| {
+        let body = program.birth("f");
+        let types = program.types;
+        for statement in [0, 1, 3, 4] {
+            let [expression] = written_in(body, statement)[..] else {
+                panic!("one expression in statement {statement}")
+            };
+            assert!(unknown(expression.typed()), "statement {statement}");
+        }
+        let [function] = written_in(body, 2)[..] else {
+            panic!("one expression in statement 2")
+        };
+        let (value, levels) = rigid(function.typed());
+        let field = |name| {
+            BinderSymbol::Value(
+                crate::symbols::ValueSymbol::declared(name, program.symbols).expect("a name"),
+            )
+        };
+        let expected = types.function_type(
+            program.scratch,
+            &[
+                (field("y"), KType::NUMBER.into()),
+                (field("z"), lexical(program, 0, "Elt")),
+            ],
+            KType::NUMBER.into(),
+        );
+        assert_eq!(value, expected);
+        assert_eq!(levels, [0]);
+        let [met] = written_in(body, 5)[..] else {
+            panic!("one expression in the last statement")
+        };
+        closed(met.typed());
+    });
+}
+
+#[test]
+fn a_nominal_over_a_run_bound_type_is_declared_where_it_runs() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\
+                  (NEWTYPE Boxed = :{v :Elt}) \
+                  (:(LIST OF Boxed))))";
+    typed(source, |program| {
+        let body = program.birth("f");
+        let types = program.types;
+        assert!(unknown(
+            body.declared_type(type_slot(program, body, "Boxed"))
+        ));
+        let (value, levels) = rigid(only(body));
+        assert_eq!(value, types.list(lexical(program, 1, "Boxed")));
+        assert_eq!(levels, [1]);
+    });
+}
+
+#[test]
+fn a_callable_and_its_registration_are_typed_at_load() {
+    let source = "LET near = FN EXPR #(NEAR x :Number) -> Number = #(x)\n\
+                  LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(FN :{y :Elt} -> Elt = #(y)))";
+    typed(source, |program| {
+        let shape = program.activation.shape();
+        let body = program.birth("near");
+        let elaborated = program
+            .callable("near", true)
+            .expect("the callable elaborates through the activation");
+        let Static::Closed(callable) = body.callable_type() else {
+            panic!("the callable's type is closed")
+        };
+        assert_eq!(DeclaredType::from(callable.ktype), elaborated.ktype);
+        let registration = program.registration(body);
+        let Static::Closed(registered) = shape.registered_type(registration.slot) else {
+            panic!("the registration's shape is closed")
+        };
+        let elaborated = elaborated.registered.expect("born for its registration");
+        assert_eq!(DeclaredType::from(registered.shape), elaborated.shape);
+        assert_eq!(registered.quantifier_map, elaborated.quantifier_map);
+        assert_eq!(registered.parameters, elaborated.parameters);
+
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        let Static::Rigid { value, variables } = inner.callable_type() else {
+            panic!("a callable over a run-bound name is rigid")
+        };
+        let types = program.types;
+        let elt = lexical(program, 0, "Elt");
+        let name = BinderSymbol::Value(
+            crate::symbols::ValueSymbol::declared("y", program.symbols).expect("a name"),
+        );
+        assert_eq!(
+            value.ktype,
+            types
+                .function_type(program.scratch, &[(name, elt)], elt)
+                .into()
+        );
+        assert_eq!(variables.len(), 1);
+    });
+}
+
+#[test]
+fn a_quote_s_holes_are_rigid_variables() {
+    let source = "LET Alias = Number\n\
+                  LET q = #(PRINT :(LIST OF Tee))\n\
+                  LET r = #(PRINT :(LIST OF $Alias))";
+    typed(source, |program| {
+        let shape = program.activation.shape();
+        let types = program.types;
+        let codes: Vec<_> = shape
+            .nested_shapes()
+            .iter()
+            .filter(|(_, nested)| nested.kind() == ShapeKind::Code)
+            .map(|(_, nested)| *nested)
+            .collect();
+        let [first, second] = codes[..] else {
+            panic!("two quotes")
+        };
+        let (hole, alias) = if first.captures()[0].mark.is_none() {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let (value, levels) = rigid(only(hole));
+        assert_eq!(value, types.list(lexical(program, 0, "Tee")));
+        assert_eq!(levels, [0]);
+        assert_eq!(closed(only(alias)), types.list(KType::NUMBER));
+    });
+}
+
+/// The source text `error` is located at.
+fn located(error: &ShapeError<'_>) -> String {
+    error.at().text()
+}
+
+#[test]
+fn a_closed_type_that_does_not_elaborate_refuses_the_load() {
+    for (source, at) in [
+        ("NEWTYPE Bad = :(Number.z)", ":(Number.z)"),
+        ("LET t = :(LIST OF Number.z)", "Number.z"),
+        ("LET f = (FN :{} -> Any = #(:(Number.z)))", ":(Number.z)"),
+    ] {
+        loaded(source, |_, typed| {
+            let error = typed.expect_err(source);
+            assert!(
+                matches!(
+                    error,
+                    ShapeError::Type {
+                        error: Elaboration::NoSuchMember { .. },
+                        ..
+                    }
+                ),
+                "`{source}`: {error:?}"
+            );
+            assert_eq!(located(&error), at, "`{source}`");
+        });
+    }
+}
+
+#[test]
+fn a_refusal_in_a_quote_s_code_is_kept_for_its_eval() {
+    loaded("LET q = #(PRINT :(Number.z))", |program, typed| {
+        typed.expect("the program loads");
+        let code = nested(program.activation.shape(), ShapeKind::Code);
+        assert!(matches!(code.refusal(), Some(ShapeError::Type { .. })));
+    });
+}
+
+#[test]
+fn a_guard_written_twice_refuses_the_arm_set() {
+    for source in [
+        "MATCH 1 -> :Number WITH #{Number: (1), :(Number): (2)}",
+        "LET Num = Number\nMATCH 1 -> :Number WITH #{Num: (1), Number: (2)}",
+        "MATCH 1 -> :Number WITH #{:(Number | Str): (1), :(Str | Number): (2)}",
+        "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+         #(MATCH x -> :Number WITH #{Elt: (1), :(Elt): (2)}))",
+    ] {
+        loaded(source, |_, typed| {
+            let error = typed.expect_err(source);
+            assert!(
+                matches!(error, ShapeError::RepeatedGuard { .. }),
+                "`{source}`: {error:?}"
+            );
+        });
+    }
+    typed(
+        "MATCH 1 -> :Number WITH #{Number: (1), Str: (2)}",
+        |program| {
+            let guards = program
+                .activation
+                .shape()
+                .type_expressions()
+                .iter()
+                .filter(|expression| expression.guard.is_some())
+                .count();
+            assert_eq!(guards, 2);
+        },
+    );
+}
+
+#[test]
+fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+                  #(FN :{y :Elt} -> Elt = #(:(LIST OF Elt))))";
+    typed(source, |program| {
+        let inner = nested(program.birth("f"), ShapeKind::Callable);
+        let types = program.types;
+        let elt = lexical(program, 0, "Elt");
+        let (value, levels) = rigid(only(inner));
+        assert_eq!(
+            value,
+            types.list(elt),
+            "read through the inner body's capture"
+        );
+        assert_eq!(levels, [0]);
+        let Static::Rigid { value, .. } = inner.callable_type() else {
+            panic!("the inner callable's type is rigid")
+        };
+        let ktype = value
+            .ktype
+            .as_type()
+            .expect("the inner callable is unquantified");
+        let TypeNode::KFunction { ret, .. } = types.node(ktype) else {
+            panic!("a function type")
+        };
+        assert_eq!(ret, elt, "its declared return is the same variable");
+    });
+}

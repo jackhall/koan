@@ -177,8 +177,7 @@ impl std::fmt::Display for SymbolDisplay<'_> {
 /// The lexical Type-token classifier: first char ASCII-uppercase plus at least one
 /// ASCII-lowercase elsewhere (`IntOrd`, `Ordered`, `Carrier`). The single canonical
 /// predicate for "this name classifies as a Type token" — the parser uses it to tag a
-/// `Type` part, the type-language partition (abstract-type members vs value slots in a SIG
-/// type table) reuses it, and [`TypeSymbol`] mints against it. See [README.md](symbols/README.md).
+/// `Type` part, the type-language partition (type members vs value slots in a SIG) reuses it, and [`TypeSymbol`] mints against it. See [README.md](symbols/README.md).
 pub fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
     let Some(first) = chars.next() else {

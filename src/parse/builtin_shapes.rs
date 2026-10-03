@@ -62,7 +62,7 @@ pub(crate) struct SurfaceKeywords {
     /// The two tokens of a quantifier group's head, `EXPR FOR ALL #[<names>] …`.
     pub(crate) for_: StaticName<KeywordSymbol>,
     pub(crate) all: StaticName<KeywordSymbol>,
-    /// A bound, `<Name> UNDER <bound>`: in a `FOR ALL` group and a `TYPE` declarator.
+    /// A bound, `<Name> UNDER <bound>`: in a `FOR ALL` group.
     pub(crate) under: StaticName<KeywordSymbol>,
     pub(crate) arrow: StaticName<KeywordSymbol>,
     pub(crate) op: StaticName<KeywordSymbol>,
@@ -209,7 +209,7 @@ impl BuiltinShape {
     }
 
     /// True for a bucket whose every slot is an operand dispatch evaluates or a label it reads —
-    /// `ATTR`, `FROM`, `EVAL` and `USING` over code. A use of one selects among the builtin
+    /// `ATTR`, `FROM` and `USING` over code. A use of one selects among the builtin
     /// overloads at its key, which the bucket being closed keeps the only ones.
     pub fn dispatched(&self) -> bool {
         self.roles()
@@ -329,6 +329,7 @@ const _: () = assert!(roles_agree_with_code_types(BUILTIN_SHAPE_SPEC));
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuiltinShapeId {
     LetValue,
+    LetAnnotated,
     TypeDeclaration,
     Module,
     GroupFoldLeft,
@@ -336,6 +337,7 @@ pub enum BuiltinShapeId {
     GroupPairwiseFoldLeft,
     GroupPairwiseFoldRight,
     Sig,
+    QuantifiedSig,
     Union,
     NewTypeDefinition,
     NewTypeDeclaration,
@@ -386,8 +388,9 @@ pub enum BuiltinShapeId {
 
 impl BuiltinShapeId {
     /// True for a shape that declares a signature member without installing it where it is
-    /// written: a `VAL`, a `TYPE` declarator, and every bodyless head. A statement of one of these
-    /// shapes is a `Declaration`, and so, beside the binders, is every member a `SIG` body holds.
+    /// written: a `VAL` and every bodyless head, and the reserved `TYPE` declarator, which reaches
+    /// the shape builder's refusal as a member. A statement of one of these shapes is a
+    /// `Declaration`, and so, beside the binders, is every member a `SIG` body holds.
     pub const fn declares_member(self) -> bool {
         matches!(
             self,
@@ -487,19 +490,38 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
+    // LET <name> <type> = <value> — a value binder bound at a stated type: the value is held to
+    // the type as `:!` holds its operand.
     BuiltinShape {
-        id: BuiltinShapeId::TypeDeclaration,
-        elements: &[Kw(&KEYWORDS.type_), slot(Name, &[TYPE_NAME, EXPRESSION])],
-        returns: &[ANY, ANY],
+        id: BuiltinShapeId::LetAnnotated,
+        elements: &[
+            Kw(&KEYWORDS.let_),
+            slot(Name, &[IDENTIFIER]),
+            slot(Te, &[PROPER_TYPE]),
+            Kw(&KEYWORDS.equals),
+            slot(Rhs, &[ANY]),
+        ],
+        returns: &[ANY],
         binder: Some(BinderFacts {
-            names: &[type_decl_binder_name],
+            names: &[identifier_part_binder_name],
             bucket: None,
             surface: BinderSurface::Other,
             name_slot: Some(1),
             type_slots: &[],
         }),
         reserved: false,
+    },
+    // TYPE <name> — reserved: a signature hides a type through a head parameter
+    // (`SIG <name> FOR ALL <names> = …`), so the shape builder refuses this where it is written.
+    BuiltinShape {
+        id: BuiltinShapeId::TypeDeclaration,
+        elements: &[
+            Kw(&KEYWORDS.type_),
+            slot(Unsupported, &[TYPE_NAME, EXPRESSION]),
+        ],
+        returns: &[NEVER, NEVER],
+        binder: None,
+        reserved: true,
     },
     // MODULE <name> = <body> (a module is a value, so the name slot is an `Identifier`; a
     // Type-token name registers nothing and takes the miss table's respelling diagnostic).
@@ -615,6 +637,28 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         elements: &[
             Kw(&KEYWORDS.sig),
             slot(Name, &[TYPE_NAME]),
+            Kw(&KEYWORDS.equals),
+            slot(Definition(DefinitionKind::Members), &[LIST_OF_DECLARATION]),
+        ],
+        returns: &[SIGNATURE_KIND],
+        binder: Some(BinderFacts {
+            names: &[type_part_binder_name],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: Some(1),
+            type_slots: &[],
+        }),
+        reserved: false,
+    },
+    // SIG <name> FOR ALL <names> = <body> — a signature over head parameters its members read.
+    BuiltinShape {
+        id: BuiltinShapeId::QuantifiedSig,
+        elements: &[
+            Kw(&KEYWORDS.sig),
+            slot(Name, &[TYPE_NAME]),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
             Kw(&KEYWORDS.equals),
             slot(Definition(DefinitionKind::Members), &[LIST_OF_DECLARATION]),
         ],
@@ -1378,7 +1422,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // <module> :| <Sig> — the opaque ascription: a view whose abstract members are minted afresh.
+    // <module> :| <Sig> — the opaque ascription: a view whose unpinned parameters are minted afresh.
     BuiltinShape {
         id: BuiltinShapeId::AscribeOpaque,
         elements: &[
@@ -1390,15 +1434,16 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // <module> :! <Sig> — the transparent ascription: a view at the source's own bindings.
+    // <value> :! <Type> — ascription: the value checked against the type and viewed at it; a
+    // module's view is modules'.
     BuiltinShape {
         id: BuiltinShapeId::AscribeTransparent,
         elements: &[
-            slot(Argument, &[MODULE]),
+            slot(Argument, &[ANY]),
             Kw(&KEYWORDS.transparent),
-            slot(Te, &[SIGNATURE_KIND]),
+            slot(Te, &[ANY_TYPE]),
         ],
-        returns: &[MODULE],
+        returns: &[ANY],
         binder: None,
         reserved: false,
     },
@@ -1448,12 +1493,25 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // EVAL <code> — runs code.
+    // EVAL <code> -> <return type> — runs code, its value held to the declared return as a
+    // frame's is. Its binder facts are here for the type slot alone, as `FN`'s are, so a bare
+    // `(…)` return spelling rewrites to a sigiled type expression.
     BuiltinShape {
         id: BuiltinShapeId::Eval,
-        elements: &[Kw(&KEYWORDS.eval), slot(Argument, &[ANY_CODE])],
+        elements: &[
+            Kw(&KEYWORDS.eval),
+            slot(Argument, &[ANY_CODE]),
+            Kw(&KEYWORDS.arrow),
+            slot(Te, &[ANY_TYPE]),
+        ],
         returns: &[ANY],
-        binder: None,
+        binder: Some(BinderFacts {
+            names: &[],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: None,
+            type_slots: &[3],
+        }),
         reserved: false,
     },
     // <code> USING <source> — fills the code's holes from a record's fields or a module's members.

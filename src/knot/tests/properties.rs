@@ -28,7 +28,7 @@ use super::{Fixture, Step, copy, with_fixture};
 use crate::scope::tests::plan;
 
 /// Whether two words are the same binding: bit-identical scalars, one type, one knot node.
-fn same(left: KValue<'_, '_>, right: KValue<'_, '_>) -> bool {
+fn same<'graph>(left: KValue<'graph, '_>, right: KValue<'graph, '_>) -> bool {
     match (left, right) {
         (Value::Number(left), Value::Number(right)) => left.to_bits() == right.to_bits(),
         (Value::Null, Value::Null) => true,
@@ -44,7 +44,7 @@ fn same(left: KValue<'_, '_>, right: KValue<'_, '_>) -> bool {
 
 /// Whether `copied` is `original` rebuilt: the same scalars and types, and a knot member that is
 /// the same node of a knot of the same size — a function of the same body.
-fn rebuilt(original: KValue<'_, '_>, copied: KValue<'_, '_>) -> bool {
+fn rebuilt<'graph>(original: KValue<'graph, '_>, copied: KValue<'graph, '_>) -> bool {
     match (original, copied) {
         (Value::Knotted(original), Value::Knotted(copied)) => {
             let bodies = match (original.function(), copied.function()) {
@@ -389,7 +389,7 @@ proptest! {
 
                     for original in tied {
                         let carrier = context.lift::<KValueFamily>(Value::Knotted(original));
-                        let crossed = cross(context, dest, &carrier).unwrap();
+                        let crossed = cross(context, dest, &carrier, fixture.types).unwrap();
                         let Value::Knotted(copied) = context.read(&crossed).value() else {
                             panic!("a knot member crosses as a knot member");
                         };

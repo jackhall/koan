@@ -26,7 +26,7 @@ impl Builder<'_, '_, '_> {
 
 /// The source of the part at `site` within `node`: its own span in `node`'s file, else the nearest
 /// spanned part's or node's around it. `None` when `node` does not hold the part.
-fn source_within(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
+pub(in crate::scope) fn source_within(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
     node.parts.iter().find_map(|part| {
         let here = part.span.map_or(node.source, |span| SourceRef {
             span,

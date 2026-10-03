@@ -34,7 +34,8 @@ fn key_elements(form: &BuiltinShape) -> Vec<KeyElement> {
 /// program must write there.
 const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::LetValue, &[(1, B)]),
-    (BuiltinShapeId::TypeDeclaration, &[(1, B)]),
+    (BuiltinShapeId::LetAnnotated, &[(1, B), (2, B)]),
+    (BuiltinShapeId::TypeDeclaration, &[]),
     (BuiltinShapeId::Module, &[(1, B), (3, B)]),
     (BuiltinShapeId::GroupFoldLeft, &[(1, B), (5, B)]),
     (BuiltinShapeId::GroupFoldRight, &[(1, B), (5, B)]),
@@ -47,6 +48,7 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
         &[(1, B), (4, Q), (7, B)],
     ),
     (BuiltinShapeId::Sig, &[(1, B), (3, C)]),
+    (BuiltinShapeId::QuantifiedSig, &[(1, B), (4, C), (6, C)]),
     (BuiltinShapeId::Union, &[(1, B), (3, C)]),
     (BuiltinShapeId::NewTypeDefinition, &[(1, B), (3, B)]),
     (BuiltinShapeId::NewTypeDeclaration, &[(1, B)]),
@@ -133,7 +135,7 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::Close, &[]),
     (BuiltinShapeId::Projection, &[]),
     (BuiltinShapeId::Attribute, &[(2, L)]),
-    (BuiltinShapeId::Eval, &[]),
+    (BuiltinShapeId::Eval, &[(3, B)]),
     (BuiltinShapeId::UsingCode, &[]),
 ];
 

@@ -7,15 +7,29 @@ statement that made the call. An uncaught error stops the program and prints its
 message to standard error:
 
 ```koan
-EXPR #(BOOM x :Number) -> Str = #(x + "one")
+EXPR #(BOOM p :Any) -> Number = #(p.z + 1)
 PRINT "before"
-PRINT (BOOM 1)
+PRINT (BOOM {x = 1})
 PRINT "after"
 ```
 
 ```text
 before
-error: no overload of _ + _ admits (Number, Str)
+error: :{x :Number} has no field z
+```
+
+Some mistakes need no run to be found. A call that no overload can ever accept,
+a field read the record's type rules out, or a function body that can never
+produce its declared return type, is refused when the program loads, located at
+its line and column, before anything runs — so `before` is never printed:
+
+```koan
+PRINT "before"
+PRINT (1 + "one")
+```
+
+```text
+error: <input>:2:7: no overload of `_ + _` admits (Number, Str)
 ```
 
 ## Catching errors with `TRY`

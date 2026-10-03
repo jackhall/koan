@@ -27,10 +27,11 @@ use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected
 use crate::parse::{ExpressionPart, KExpression, KLiteral, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, Site, Target};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
 use crate::values::{
-    Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue, Value,
-    construction, dict_type, kept_entries, list_type, part_ktype, record_type, solves_identity,
+    CALL_ONLY, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue,
+    Value, construction, dict_type, kept_entries, list_type, part_ktype, record_type,
+    solves_identity,
 };
 
 use super::{Eager, KActivationView, KValue, Knotted, Supplied, Untieable};
@@ -307,7 +308,7 @@ impl<'stage, 'graph, 'cell, 'run> Stager<'stage, 'graph, 'cell, 'run> {
                         return Err(Untieable::Construction {
                             name: self.name(),
                             site: Site::of(part),
-                            refused: ConstructionRefused::NotConstructible(other.ktype()),
+                            refused: ConstructionRefused::NotConstructible(other.concrete_ktype()),
                         });
                     }
                     _ => unreachable!(
@@ -459,7 +460,7 @@ fn is_derived(staged: &Staged<'_, '_, '_>, types: &TypeRegistry<'_>) -> bool {
 /// construction the rule refuses while its memo is derived refuses as it would at the check.
 pub(super) fn memos<'x>(
     nodes: &Nodes<'_, '_, '_>,
-    memos: &mut [Option<KType>],
+    memos: &mut [Option<DeclaredType<KType>>],
     names: &dyn Fn(u32) -> BinderSymbol,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
@@ -475,7 +476,7 @@ pub(super) fn memos<'x>(
         }) = node
             && !derived(node)
         {
-            memos[index] = Some(head.handle());
+            memos[index] = Some(head.handle().into());
         }
     }
     let mut rows: BumpVec<'x, BumpVec<'x, usize>> = BumpVec::with_capacity_in(nodes.len(), scratch);
@@ -524,7 +525,7 @@ pub(super) fn memos<'x>(
                         refused,
                     }
                 })?;
-            memos[first] = Some(memo);
+            memos[first] = Some(memo.into());
         }
     }
     Ok(())
@@ -536,17 +537,19 @@ pub(super) fn memos<'x>(
 /// solves, and one the rule refuses comes back with its site.
 fn staged_type(
     staged: &Staged<'_, '_, '_>,
-    memos: &[Option<KType>],
+    memos: &[Option<DeclaredType<KType>>],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, (Site, ConstructionRefused)> {
     let of = |staged| staged_type(staged, memos, types, scratch);
     Ok(match staged {
         Staged::Literal(part) => part_ktype(part, types, scratch).expect("a literal has a type"),
-        Staged::Value(value) => value.ktype(),
-        Staged::Edge(target) => {
-            memos[*target as usize].expect("a referent's memo is derived first")
-        }
+        Staged::Value(value) => value.concrete_ktype(),
+        // A data node names no quantified sibling: reading one is a call's head alone.
+        Staged::Edge(target) => memos[*target as usize]
+            .expect("a referent's memo is derived first")
+            .as_type()
+            .expect(CALL_ONLY),
         Staged::List(items) => {
             let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
             for item in items.iter() {
@@ -587,14 +590,14 @@ fn staged_type(
 /// ordinary construction below — in node order, depth first.
 pub(super) fn check(
     nodes: &Nodes<'_, '_, '_>,
-    memos: &[Option<KType>],
+    memos: &[Option<DeclaredType<KType>>],
     names: &dyn Fn(u32) -> BinderSymbol,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Untieable<'static>> {
     fn walk(
         staged: &Staged<'_, '_, '_>,
-        memos: &[Option<KType>],
+        memos: &[Option<DeclaredType<KType>>],
         name: BinderSymbol,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,

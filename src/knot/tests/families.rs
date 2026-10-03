@@ -50,7 +50,9 @@ fn a_family_node_derives_its_type_from_its_payload() {
             let (_, Circular::Tagged(tagged)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a tagged node");
             };
-            let listed = fixture.types.list(f.ktype());
+            let listed = fixture
+                .types
+                .list(f.ktype().as_type().expect("`f` is unquantified"));
             assert_eq!(tagged.ktype(), boxed_at(fixture, boxed, listed));
         });
     });

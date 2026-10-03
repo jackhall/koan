@@ -2,10 +2,11 @@
 //! layers and chained.
 
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::KType;
+use crate::type_lattice::{KType, Parametric};
 
-use super::super::{Elaboration, callable_type};
+use super::super::callable_type;
 use super::{brought, declared};
+use crate::scope::Elaboration;
 
 #[test]
 fn a_record_field_names_its_declared_type() {
@@ -61,10 +62,11 @@ fn a_field_the_type_does_not_declare_is_refused() {
     ];
     for (source, owner) in cases {
         declared(source, |program, brought| {
-            let expected = owner.map_or(KType::NUMBER, |owner| program.bound(owner));
+            let expected =
+                Parametric::from(owner.map_or(KType::NUMBER, |owner| program.bound(owner)));
             let z = BinderSymbol::classify("z").unwrap().symbol();
             assert!(
-                matches!(brought, Err(Elaboration::NoSuchMember { owner, name }) if owner == expected && name == z),
+                matches!(brought, Err(Elaboration::NoSuchMember { owner, name, .. }) if owner == expected && name == z),
                 "`{source}` refuses the field: {brought:?}"
             );
         });
@@ -87,8 +89,8 @@ fn a_slot_typed_by_a_field_reads_its_declared_type() {
             assert_eq!(
                 callable.ktype,
                 types
-                    .function_type(scratch, &[], &[(v, KType::STR)], KType::STR)
-                    .handle
+                    .function_type(scratch, &[(v, KType::STR)], KType::STR)
+                    .into()
             );
         },
     );

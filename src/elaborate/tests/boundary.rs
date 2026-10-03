@@ -1,6 +1,6 @@
 //! The import boundary and the storage discipline, as a test over this module's own source.
 //!
-//! `elaborate` may name `memory`, `parse`, `scope`, `symbols`, `type_lattice` and `values` and
+//! `elaborate` may name `memory`, `parse`, `scope`, `source`, `symbols`, `type_lattice` and `values` and
 //! nothing else in the crate — no function layer and no scheduler; outside its tests it holds no owning heap type.
 
 /// The path prefixes `elaborate` may name, beside the macro that mints a static name and the
@@ -10,6 +10,7 @@ const PREFIXES: &[&str] = &[
     "crate::memory",
     "crate::parse",
     "crate::scope",
+    "crate::source",
     "crate::static_name",
     "crate::symbols",
     "crate::tests::boundary",

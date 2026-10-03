@@ -1,5 +1,6 @@
-//! A list: one run of cells in the region, typed by the join of its elements. Its cells are value
-//! words, or [`Link`]s when the list is a knot's data node.
+//! A list: one run of cells in the region, typed by the join of its elements — or `List<Any>` for a
+//! key's candidates, which dispatch alone reads. Its cells are value words, or [`Link`]s when the
+//! list is a knot's data node.
 
 use std::marker::PhantomData;
 
@@ -28,15 +29,42 @@ impl<'cell, X: Knotted> List<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell List<'cell, X> {
         let mut items = items;
-        let mut weight = Weight::flat::<Self>();
         let cells = writer.fill(items.len(), |_| {
-            let cell = items
+            items
                 .next()
-                .expect("an exact-size iterator yields its reported length");
-            weight = weight.plus(cell.weight());
-            cell
+                .expect("an exact-size iterator yields its reported length")
         });
-        let ktype = list_type(types, scratch, cells.iter().map(Value::ktype));
+        let ktype = list_type(types, scratch, cells.iter().map(Value::concrete_ktype));
+        Self::weighed(writer, cells, ktype)
+    }
+
+    /// Lay down a key's candidates — the functions a `USING` hole or an `EVAL` offer gathers at
+    /// one key — typed `List<Any>` without reading any function's type. Dispatch alone reads such
+    /// a list, each function by its own type; a quantified registration's type is a scheme, which
+    /// no list type joins.
+    pub fn of_candidates(
+        writer: Writer<'cell>,
+        functions: impl ExactSizeIterator<Item = Value<'cell, X>>,
+    ) -> &'cell List<'cell, X> {
+        let mut functions = functions;
+        let cells = writer.fill(functions.len(), |_| {
+            functions
+                .next()
+                .expect("an exact-size iterator yields its reported length")
+        });
+        Self::weighed(writer, cells, KType::LIST_OF_ANY)
+    }
+
+    /// A list over value cells already resident in `writer`'s region under `ktype`, weighed as
+    /// [`new`](Self::new) weighs them — a retyped data node's arm.
+    pub(crate) fn weighed(
+        writer: Writer<'cell>,
+        cells: &'cell [Value<'cell, X>],
+        ktype: KType,
+    ) -> &'cell Self {
+        let weight = cells.iter().fold(Weight::flat::<Self>(), |weight, cell| {
+            weight.plus(cell.weight())
+        });
         Self::from_run(writer, cells, ktype, weight)
     }
 }
@@ -82,14 +110,6 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
         Self::from_run(writer, self.cells, ktype, self.weight)
     }
 
-    pub fn cells(&self) -> &'cell [C] {
-        self.cells
-    }
-
-    pub fn get(&self, index: usize) -> Option<&'cell C> {
-        self.cells.get(index)
-    }
-
     pub fn len(&self) -> usize {
         self.cells.len()
     }
@@ -104,5 +124,19 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
 
     pub fn weight(&self) -> Weight {
         self.weight
+    }
+}
+
+/// The runs a read outside `values` reaches only through [the door](super::surface).
+impl<'cell, X: Copy> List<'cell, X> {
+    pub(super) fn cells(&self) -> &'cell [Value<'cell, X>] {
+        self.cells
+    }
+}
+
+/// A knot's data node's runs, which the knot layer ties and reads.
+impl<'cell, X: Copy> List<'cell, X, Link<'cell, X>> {
+    pub fn cells(&self) -> &'cell [Link<'cell, X>] {
+        self.cells
     }
 }

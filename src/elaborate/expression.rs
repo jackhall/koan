@@ -1,17 +1,25 @@
 //! One type expression, part by part: a name read through the activation, a composite built from
 //! the handles its parts elaborate to.
+//!
+//! A part elaborates to a [`Parametric`] type: a `FOR ALL` name reads as its quantified variable, a
+//! signature's head parameter as itself, and a run-bound name at load as its lexical variable. A
+//! quantified callable's type is a [`Scheme`](crate::type_lattice::Scheme), written only as the
+//! whole type of a signature member ([`Elaborator::part_declared`]). An operand whose value over a
+//! variable can differ from substituting first — a meet, a projection's owner, an application's
+//! head, a `NEEDING` kind — is read concrete.
 
-use super::Elaboration;
-use super::reads::Reads;
+use std::cell::Cell;
+
+use super::reads::{Reads, TypeAt};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Coordinate, Site, Slot, Target, pair_label};
+use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
-    DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
-    constructor_param_names, dense_classes, meet, shape_keys_equal,
+    DeclaredType, DispatchTokenElement, GroupIntern, KType, NodeSchema, Parametric, SigOrigin,
+    TypeNode, TypeRegistry, constructor_param_names, dense_classes, meet, member,
 };
 
 /// The connector keywords of the formless composites.
@@ -43,7 +51,7 @@ pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
     reader: &R,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> Result<KType, Elaboration> {
+) -> Result<Parametric, Elaboration> {
     let groups = Groups {
         names: &[],
         bounds: &[],
@@ -55,6 +63,7 @@ pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
         scratch,
         fellows: &[],
         locals: &[],
+        binder: Cell::new(false),
     }
     .part(part, &groups)
 }
@@ -130,33 +139,57 @@ pub(super) struct Elaborator<'e, 'run, 'x, R: ?Sized> {
     /// siblings. Empty for an ordinary type expression.
     pub(super) fellows: &'e [Fellow<'e>],
     /// Names declared inside the definition being elaborated and holding no slot of the enclosing
-    /// shape — a `SIG` body's abstract and manifest members, and a higher-kinded declarator's
+    /// shape — a `SIG`'s head parameters and manifest members, and a higher-kinded declarator's
     /// parameters. Empty outside a definition.
-    pub(super) locals: &'e [(TypeSymbol, KType)],
+    pub(super) locals: &'e [(TypeSymbol, Parametric)],
+    /// Whether the next composite node may be a quantified function type or expression shape: set
+    /// for one signature member's type, and cleared by the first composite the elaborator reaches,
+    /// so a quantified type nested inside one is refused.
+    pub(super) binder: Cell<bool>,
 }
 
 impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
+    /// `part` as a type. A quantified callable's type is refused here: it is written only as the
+    /// whole type of a signature member, which [`part_declared`](Self::part_declared) reads.
     pub(super) fn part(
         &self,
         part: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
-    ) -> Result<KType, Elaboration> {
+    ) -> Result<Parametric, Elaboration> {
+        match self.part_declared(part, groups)? {
+            DeclaredType::Type(kt) => Ok(kt),
+            DeclaredType::Scheme(_) => Err(Elaboration::Quantified {
+                site: Site::of(part),
+            }),
+        }
+    }
+
+    /// `part` as a declared type: a type, or — where [`binder`](Self::binder) allows one, as the
+    /// whole type of a signature member — a quantified callable's scheme.
+    pub(super) fn part_declared(
+        &self,
+        part: &ExpressionPart<'graph>,
+        groups: &Groups<'_>,
+    ) -> Result<DeclaredType<Parametric>, Elaboration> {
         let site = Site::of(part);
         match part {
-            ExpressionPart::Type(name) => self.name(site, *name, groups),
+            ExpressionPart::Type(name) => self.name(site, *name, groups).map(DeclaredType::Type),
             // A marked name resolves past the definition's own quantifiers and names, through the
             // mention the shape recorded.
-            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => self.mention(site, *name),
+            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => {
+                self.mention(site, *name).map(DeclaredType::Type)
+            }
             ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
-                self.node(site, node.reference(), groups)
+                self.node_declared(site, node.reference(), groups)
             }
             ExpressionPart::RecordType(node) => {
+                self.binder.set(false);
                 let mut fields = BumpVec::new_in(self.scratch);
                 self.pairs(site, node.reference(), groups, |name, ktype| {
                     fields.push((name, ktype));
                     Ok(())
                 })?;
-                Ok(self.types.record(self.scratch, &fields))
+                Ok(DeclaredType::Type(self.types.record(self.scratch, &fields)))
             }
             _ => Err(Elaboration::Unsupported { site }),
         }
@@ -168,7 +201,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         site: Site,
         name: TypeSymbol,
         groups: &Groups<'_>,
-    ) -> Result<KType, Elaboration> {
+    ) -> Result<Parametric, Elaboration> {
         match groups.find(name) {
             Quantifier::Innermost(index) => {
                 let bound = groups.bounds.get(index).copied().unwrap_or(KType::ANY);
@@ -185,8 +218,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         self.mention(site, name)
     }
 
-    /// A type name read through the mention the shape recorded at `site`.
-    fn mention(&self, site: Site, name: TypeSymbol) -> Result<KType, Elaboration> {
+    /// A type name read through the mention the shape recorded at `site`. A run-bound name reads
+    /// as its lexical variable, which no group's binder captures.
+    fn mention(&self, site: Site, name: TypeSymbol) -> Result<Parametric, Elaboration> {
         // A definition declares its own names, so the shape records no mention for one. Every
         // other name a type expression reads has one; a definition-local name reaching here has
         // not been declared yet — a forward reference the local table cannot answer.
@@ -202,37 +236,89 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         } = mention.coordinate
             && let Some(fellow) = self.fellows.iter().find(|fellow| fellow.slot == slot)
         {
-            return Ok(fellow.handle);
+            return Ok(fellow.handle.into());
         }
-        self.reader
-            .type_at(mention.coordinate)
-            .ok_or(Elaboration::NotAType { name, site })
+        match self.reader.type_at(mention.coordinate) {
+            TypeAt::Type(handle) => Ok(handle.into()),
+            TypeAt::Rigid(handle) => Ok(handle),
+            TypeAt::NotAType => Err(Elaboration::NotAType { name, site }),
+            TypeAt::Unknown => Err(Elaboration::Unknown { site }),
+        }
     }
 
-    /// A parenthesized or sigiled type expression.
+    /// `operands` elaborated, and refused `Unknown` at `site` when one read a lexical variable: the
+    /// operands of a spelling whose value over a variable can differ from substituting first and
+    /// elaborating after — a meet, a projection's owner, an application's head, a `NEEDING` kind —
+    /// and a bound, which holds no variable.
+    fn closed_operands<T>(
+        &self,
+        site: Site,
+        operands: impl FnOnce() -> Result<T, Elaboration>,
+    ) -> Result<T, Elaboration> {
+        let before = self.reader.rigid_reads();
+        let elaborated = operands()?;
+        if self.reader.rigid_reads() > before {
+            return Err(Elaboration::Unknown { site });
+        }
+        Ok(elaborated)
+    }
+
+    /// The operand `operands` elaborates to, read concrete: refused `Unknown` where it read a
+    /// lexical variable, and `Unsupported` where it names a `FOR ALL` variable or a head parameter,
+    /// which no spelling that reads its operand concrete takes.
+    fn closed_concrete(
+        &self,
+        site: Site,
+        operands: impl FnOnce() -> Result<Parametric, Elaboration>,
+    ) -> Result<KType, Elaboration> {
+        let operand = self.closed_operands(site, operands)?;
+        self.types
+            .concrete(operand)
+            .ok_or(Elaboration::Unsupported { site })
+    }
+
+    /// A parenthesized or sigiled type expression, refusing a scheme as [`part`](Self::part) does.
     pub(super) fn node(
         &self,
         site: Site,
         node: &KExpression<'graph>,
         groups: &Groups<'_>,
-    ) -> Result<KType, Elaboration> {
+    ) -> Result<Parametric, Elaboration> {
+        match self.node_declared(site, node, groups)? {
+            DeclaredType::Type(kt) => Ok(kt),
+            DeclaredType::Scheme(_) => Err(Elaboration::Quantified { site }),
+        }
+    }
+
+    /// A parenthesized or sigiled type expression as a declared type: a quantified function type
+    /// or expression shape is a scheme, where [`binder`](Self::binder) allows one.
+    pub(super) fn node_declared(
+        &self,
+        site: Site,
+        node: &KExpression<'graph>,
+        groups: &Groups<'_>,
+    ) -> Result<DeclaredType<Parametric>, Elaboration> {
         let unsupported = Elaboration::Unsupported { site };
         let parts = node.parts;
         if let [only] = parts {
-            return self.part(&only.value, groups);
+            return self.part_declared(&only.value, groups);
         }
+        let binder = self.binder.take();
+        let quantified = Elaboration::Quantified { site };
         // `Ctor {Param = Type, …}` — a declared type constructor applied to its arguments by
         // member name. It resolves no builtin shape: the head is a type name and the payload a
         // record literal, so the arm is keyed structurally, ahead of the table lookup.
         if let [head, payload] = parts
             && let ExpressionPart::RecordLiteral(arguments) = &payload.value
         {
-            let constructor = self.part(&head.value, groups)?;
+            let constructor = self.closed_concrete(site, || self.part(&head.value, groups))?;
             let mut applied = BumpVec::with_capacity_in(arguments.len(), self.scratch);
             for (name, argument) in arguments.iter() {
                 applied.push((*name, self.part(argument, groups)?));
             }
-            return self.apply(site, constructor, &applied);
+            return self
+                .apply(site, constructor, &applied)
+                .map(DeclaredType::Type);
         }
         if let Some(form) = node.cache().builtin_shape() {
             let part = |index: usize| &parts[index].value;
@@ -241,6 +327,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                     let group = QuantifierGroup::empty(self.scratch);
                     Ok(self.function(&group, part(1), part(3), groups)?.handle)
                 }
+                BuiltinShapeId::QuantifiedLambdaType if !binder => Err(quantified),
+                BuiltinShapeId::QuantifiedExpressionHead if !binder => Err(quantified),
                 BuiltinShapeId::QuantifiedLambdaType => {
                     let group = self.group(part(3), groups)?;
                     Ok(self.function(&group, part(4), part(6), groups)?.handle)
@@ -254,20 +342,39 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                     self.shape(&group, part(4), part(6), groups)
                 }
                 BuiltinShapeId::Attribute => {
-                    let owner = self.part(part(1), groups)?;
+                    let owner = self.closed_operands(site, || self.part(part(1), groups))?;
                     let name = match part(2) {
                         ExpressionPart::Type(name) => name.symbol(),
                         ExpressionPart::Identifier(name) => name.symbol(),
                         _ => return Err(unsupported),
                     };
+                    // An owner naming a variable declares no member.
                     self.types
-                        .union_member_named(owner, name)
-                        .or_else(|| declared_field(self.types, self.scratch, owner, name))
-                        .ok_or(Elaboration::NoSuchMember { owner, name })
+                        .concrete(owner)
+                        .and_then(|owner| {
+                            self.types
+                                .union_member_named(owner, name)
+                                .or_else(|| declared_field(self.types, self.scratch, owner, name))
+                        })
+                        .map(|member| DeclaredType::Type(member.into()))
+                        .ok_or(Elaboration::NoSuchMember { owner, name, site })
                 }
                 _ => Err(unsupported),
             };
         }
+        self.composite(site, node, groups).map(DeclaredType::Type)
+    }
+
+    /// A composite of the formless connectors: a list, a dict, a union, a meet, an application, a
+    /// code kind needing names, or a pinned signature.
+    fn composite(
+        &self,
+        site: Site,
+        node: &KExpression<'graph>,
+        groups: &Groups<'_>,
+    ) -> Result<Parametric, Elaboration> {
+        let unsupported = Elaboration::Unsupported { site };
+        let parts = node.parts;
         let keyword = |index: usize, expected: &StaticName<KeywordSymbol>| matches!(parts[index].value, ExpressionPart::Keyword(symbol) if symbol == expected.symbol());
         match parts.len() {
             3 if keyword(0, &CONNECTORS.list) && keyword(1, &CONNECTORS.of) => {
@@ -275,7 +382,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             }
             // `Type AS Ctor` — the arity-one sugar for the application above.
             3 if keyword(1, &CONNECTORS.as_) => {
-                let constructor = self.part(&parts[2].value, groups)?;
+                let constructor =
+                    self.closed_concrete(site, || self.part(&parts[2].value, groups))?;
                 let [param] = self.param_names(constructor).ok_or(unsupported)? else {
                     return Err(unsupported);
                 };
@@ -285,7 +393,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             // `Kind NEEDING #[y …]` — a code kind below `Code`, and a list of quotes each of one
             // name or of a bucket key.
             3 if let Some((kind, quotes)) = needing(node) => {
-                let kind = self.part(kind, groups)?;
+                let kind = self.closed_concrete(site, || self.part(kind, groups))?;
                 if kind.code_parent().is_none() {
                     return Err(unsupported);
                 }
@@ -293,7 +401,15 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 for quote in quotes.iter() {
                     names.push(needed_entry(quote).ok_or(unsupported)?);
                 }
-                Ok(self.types.code_needing(self.scratch, kind, &names))
+                Ok(self.types.code_needing(self.scratch, kind, &names).into())
+            }
+            // `Sig WITH {Param = Type, …}` — a declared signature with some head parameters pinned.
+            3 if keyword(1, &KEYWORDS.with)
+                && let ExpressionPart::RecordLiteral(pins) = &parts[2].value =>
+            {
+                let signature =
+                    self.closed_concrete(site, || self.part(&parts[0].value, groups))?;
+                self.pin(site, signature, pins, groups)
             }
             4 if keyword(0, &CONNECTORS.map) && keyword(2, &KEYWORDS.arrow) => {
                 let key = self.part(&parts[1].value, groups)?;
@@ -321,48 +437,47 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 Ok(self.types.union_of(self.scratch, &members))
             }
             // `A & B`, and `& [A B C]`, its chained form — the meet, as a union is the join. A meet
-            // that comes out `Never` is a type like any other; only a bound refuses it.
+            // that comes out `Never` is a type like any other; only a bound refuses it. An operand
+            // naming a `FOR ALL` variable or a head parameter is refused: each call solves the
+            // variable, so the meet cannot be taken here.
             3 if keyword(1, &CONNECTORS.meet) => {
-                let left = self.part(&parts[0].value, groups)?;
-                let right = self.part(&parts[2].value, groups)?;
-                self.meet(site, left, right)
+                let operands = self.closed_operands(site, || {
+                    Ok([
+                        self.part(&parts[0].value, groups)?,
+                        self.part(&parts[2].value, groups)?,
+                    ])
+                })?;
+                self.meet(Site::of(&parts[1].value), &operands)
             }
             2 if keyword(0, &CONNECTORS.meet) => {
-                let ExpressionPart::ListLiteral(operands) = parts[1].value else {
+                let ExpressionPart::ListLiteral(written) = parts[1].value else {
                     return Err(unsupported);
                 };
-                let mut met = KType::ANY;
-                for operand in operands.iter() {
-                    met = self.meet(site, met, self.part(operand, groups)?)?;
-                }
-                Ok(met)
+                let operands = self.closed_operands(site, || {
+                    let mut operands = BumpVec::with_capacity_in(written.len(), self.scratch);
+                    for operand in written.iter() {
+                        operands.push(self.part(operand, groups)?);
+                    }
+                    Ok(operands)
+                })?;
+                self.meet(Site::of(&parts[0].value), &operands)
             }
             _ => Err(unsupported),
         }
     }
 
-    /// The meet of `left` and `right`, written at `site`. Two signatures that rank one keyword
-    /// pattern two ways have none, and are refused rather than met at `Never`: every declaration
-    /// and definition at a key carries one ranking.
-    fn meet(&self, site: Site, left: KType, right: KType) -> Result<KType, Elaboration> {
-        let keyworded = |handle| match self.types.node(handle) {
-            TypeNode::Signature { schema, .. } => Some(schema.keyworded),
-            _ => None,
-        };
-        let classes = |shape| match self.types.node(shape) {
-            TypeNode::ExpressionShape { classes, .. } => classes,
-            _ => unreachable!("a keyworded member is an expression shape"),
-        };
-        if let (Some(ours), Some(theirs)) = (keyworded(left), keyworded(right))
-            && ours.iter().any(|mine| {
-                theirs.iter().any(|other| {
-                    shape_keys_equal(*mine, *other, self.types) && classes(*mine) != classes(*other)
-                })
-            })
-        {
-            return Err(Elaboration::RankingDisagrees { site });
+    /// The meet of `operands`, refused at `site` — the `&` — when one names a `FOR ALL` variable or
+    /// a head parameter: the meet relates concrete types only.
+    fn meet(&self, site: Site, operands: &[Parametric]) -> Result<Parametric, Elaboration> {
+        let mut met = KType::ANY;
+        for operand in operands {
+            let operand = self
+                .types
+                .concrete(*operand)
+                .ok_or(Elaboration::MeetOverVariable { site })?;
+            met = meet(self.types, self.scratch, met, operand);
         }
-        Ok(meet(self.types, self.scratch, left, right))
+        Ok(met.into())
     }
 
     /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
@@ -397,24 +512,27 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         Ok(group)
     }
 
-    /// A bound: a closed, inhabited type. One naming a type variable — a `FOR ALL` name or a
-    /// signature's abstract member — or that is `Never` is refused at its site.
+    /// A bound: a closed, inhabited type. One naming a run-bound name is left for the run; one
+    /// naming any other type variable — a `FOR ALL` name or a signature's head parameter — or
+    /// that is `Never` is refused at its site.
     pub(super) fn bound(
         &self,
         part: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
     ) -> Result<KType, Elaboration> {
-        let bound = self.part(part, groups)?;
-        if bound == KType::NEVER || self.types.contains_rigid(bound) {
-            return Err(Elaboration::Bound {
-                site: Site::of(part),
-            });
+        let refused = Elaboration::Bound {
+            site: Site::of(part),
+        };
+        let bound = self.closed_operands(Site::of(part), || self.part(part, groups))?;
+        // An opaque carrier is concrete, but one as a bound waits on modules.
+        match self.types.concrete(bound) {
+            Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => Ok(bound),
+            _ => Err(refused),
         }
-        Ok(bound)
     }
 
     /// The parameter names a constructor head takes: a fellow family's while its group is open, a
-    /// declared family's or a higher-kinded abstract member's, or — for a union every member of
+    /// declared family's, or — for a union every member of
     /// which takes one parameter set — that set, since applying the union applies each member.
     fn param_names(&self, constructor: KType) -> Option<&[TypeSymbol]> {
         if let Some(fellow) = self
@@ -425,11 +543,10 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             return Some(fellow.params);
         }
         if let TypeNode::Union { members } = self.types.node(constructor) {
-            let (first, rest) = members.split_first()?;
-            let names = constructor_param_names(*first, self.types)?;
-            return rest
-                .iter()
-                .all(|member| constructor_param_names(*member, self.types) == Some(names))
+            let mut members = members.iter();
+            let names = constructor_param_names(members.next()?, self.types)?;
+            return members
+                .all(|member| constructor_param_names(member, self.types) == Some(names))
                 .then_some(names);
         }
         constructor_param_names(constructor, self.types)
@@ -442,8 +559,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         &self,
         site: Site,
         constructor: KType,
-        arguments: &[(BinderSymbol, KType)],
-    ) -> Result<KType, Elaboration> {
+        arguments: &[(BinderSymbol, Parametric)],
+    ) -> Result<Parametric, Elaboration> {
         let unsupported = Elaboration::Unsupported { site };
         let declared = self.param_names(constructor).ok_or(unsupported)?;
         if arguments.len() != declared.len()
@@ -461,7 +578,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             let mut applied = BumpVec::with_capacity_in(members.len(), self.scratch);
             applied.extend(members.iter().map(|member| {
                 self.types
-                    .constructor_apply(self.scratch, *member, arguments)
+                    .constructor_apply(self.scratch, member, arguments)
             }));
             return Ok(self.types.union_of(self.scratch, &applied));
         }
@@ -470,7 +587,36 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             .constructor_apply(self.scratch, constructor, arguments))
     }
 
-    /// `FN [FOR ALL <names>] <schema> -> <return>`.
+    /// `signature` with `pins` fixing head parameters by name: `signature` a declared signature,
+    /// and each key one of its parameters. The parser has refused a repeated key.
+    fn pin(
+        &self,
+        site: Site,
+        signature: KType,
+        pins: &[(BinderSymbol, ExpressionPart<'graph>)],
+        groups: &Groups<'_>,
+    ) -> Result<Parametric, Elaboration> {
+        let unsupported = Elaboration::Unsupported { site };
+        let TypeNode::Signature { schema, .. } = self.types.node(signature) else {
+            return Err(unsupported);
+        };
+        if schema.origin != SigOrigin::Declared {
+            return Err(unsupported);
+        }
+        let mut pinned = BumpVec::with_capacity_in(pins.len(), self.scratch);
+        for (name, pin) in pins {
+            let BinderSymbol::Type(parameter) = name else {
+                return Err(unsupported);
+            };
+            if member(schema.parameters, *parameter).is_none() {
+                return Err(unsupported);
+            }
+            pinned.push((*name, self.part(pin, groups)?));
+        }
+        Ok(self.types.signature_apply(self.scratch, signature, &pinned))
+    }
+
+    /// `FN [FOR ALL <names>] <schema> -> <return>`: a scheme over a non-empty group.
     ///
     /// A non-empty `group` opens a group of its own, which the fields and the return read under;
     /// an empty one reads them under `groups` unchanged, because an unquantified `FN` type written
@@ -506,7 +652,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         let ret = self.part(ret, groups)?;
         Ok(self
             .types
-            .function_type(self.scratch, &group.names, &params, ret))
+            .function_scheme(self.scratch, &group.names, &group.bounds, &params, ret))
     }
 
     /// The **function** type an `EXPR` definition's head declares, bare or combined: the head's
@@ -546,19 +692,21 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         let ret = self.part(ret, groups)?;
         Ok(self
             .types
-            .function_type(self.scratch, &group.names, &params, ret))
+            .function_scheme(self.scratch, &group.names, &group.bounds, &params, ret))
     }
 
     /// `EXPR [FOR ALL <names>] <head> -> <return>`: the head's keywords and typed slots, under a
-    /// group of its own, ranked by the integers a signature member writes in its slots' places.
+    /// group of its own, ranked by the integers a signature member writes in its slots' places: a
+    /// scheme over a non-empty group. An empty group still shadows every enclosing one, so a name
+    /// one declares is refused here, and the shape binds nothing.
     pub(super) fn shape(
         &self,
         group: &QuantifierGroup<'_>,
         head: &ExpressionPart<'graph>,
         ret: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
-    ) -> Result<KType, Elaboration> {
-        let own = Groups {
+    ) -> Result<DeclaredType<Parametric>, Elaboration> {
+        let own = &Groups {
             names: &group.names,
             bounds: &group.bounds,
             outer: Some(groups),
@@ -577,16 +725,23 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 HeadElement::Keyword(symbol) => DispatchTokenElement::Keyword(symbol),
                 HeadElement::Slot(label, slot) => {
                     ranks.push(label.rank());
-                    DispatchTokenElement::Slot(self.part(slot, &own)?)
+                    DispatchTokenElement::Slot(self.part(slot, own)?)
                 }
             });
             Ok(())
         })?;
         let classes = dense_classes(self.scratch, &ranks);
-        let ret = self.part(ret, &own)?;
+        let ret = self.part(ret, own)?;
         Ok(self
             .types
-            .shape_type(self.scratch, &group.names, &elements, classes, ret)
+            .shape_scheme(
+                self.scratch,
+                &group.names,
+                &group.bounds,
+                &elements,
+                classes,
+                ret,
+            )
             .handle)
     }
 
@@ -597,7 +752,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         site: Site,
         run: &KExpression<'graph>,
         groups: &Groups<'_>,
-        mut field: impl FnMut(crate::symbols::BinderSymbol, KType) -> Result<(), Elaboration>,
+        mut field: impl FnMut(crate::symbols::BinderSymbol, Parametric) -> Result<(), Elaboration>,
     ) -> Result<(), Elaboration> {
         let mut index = 0;
         while index < run.parts.len() {

@@ -26,6 +26,17 @@
 //! from alone, carries its type and, when its code is malformed, the error an `EVAL` of it reports.
 //! See [README.md § Quotes](README.md#quotes).
 //!
+//! A shape also carries a write-once cell for each type fact the elaborator's load pass fixes
+//! before the program runs — each [`TypeExpression`] it records, each type binder, each
+//! registration, a callable body's own type, and a code shape's typing refusal — laid down empty by
+//! the builder, since `scope` sits below `elaborate`. One more cell holds the value channel's
+//! [`Statics`] — a static type per value expression and binder, and each keyworded use's
+//! [`Narrowing`] — which the language's load pass fixes. Two more record where a run reads a
+//! lexical variable: each one the body declares, beside its slot or capture, and each **type
+//! capture** the static pass adds past the builder's captures, so a callable can read a type name
+//! its body never writes but a call in it solves from. See [README.md § Load-time
+//! types](README.md#load-time-types).
+//!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
 //! `i + 1`, and the body's end is one past its last statement. An eager mention reads at its
@@ -33,6 +44,7 @@
 //!
 //! See [README.md § Resolution](README.md#resolution).
 
+use std::cell::Cell;
 use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
@@ -40,13 +52,19 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry, display_name};
+use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
+use crate::type_lattice::{
+    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
+};
 use crate::values::Knotted;
 
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
+use super::typed::{
+    Elaboration, Narrowing, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
+    Statics,
+};
 
 mod build;
 
@@ -104,6 +122,11 @@ impl Position {
     /// Where statement `index` writes and where its eager mentions read.
     pub fn statement(index: usize) -> Position {
         Position(index as u32 + 1)
+    }
+
+    /// The statement that writes here, or `None` for a parameter.
+    pub fn statement_index(self) -> Option<usize> {
+        (self.0 as usize).checked_sub(1)
     }
 
     /// Whether a binding declared at `declared` is visible to a reader at this position — the one
@@ -198,7 +221,8 @@ pub enum Which {
 }
 
 /// One registration a body declares: a keyworded definition's function, bound at `slot`, under one
-/// of its bucket keys.
+/// of its bucket keys — or, in a `USING … SCOPE` block, a bodyless head its operand's signature
+/// declares.
 #[derive(Clone, Copy, Debug)]
 pub struct Registration<'graph> {
     pub slot: Slot,
@@ -206,9 +230,26 @@ pub struct Registration<'graph> {
     /// The key as its keywords and slots.
     pub elements: &'graph [KeyElement],
     /// Each slot's dense priority class, in element order: the ranking of the declaration visible
-    /// where the definition is written, an operator's chaining, or written order.
+    /// where the definition is written, an operator's chaining, a surfaced head's own ranking, or
+    /// written order.
     pub classes: &'graph [u8],
     pub which: Which,
+    /// Where a surfaced head is written; `None` for a definition's registration.
+    pub surfaced: Option<&'graph SurfacedHead<'graph>>,
+}
+
+/// A bodyless keyworded head a `USING … SCOPE` operand's signature declares, which the block holds
+/// as a registration of its own: a parameter of the registration channel, typed where the program
+/// loads and bound by nothing at run. Each place is named by how many shapes out from the block it
+/// lies, so the load pass reads it off the chain of shapes it keeps.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfacedHead<'graph> {
+    /// The head's statement in the signature's body.
+    pub head: &'graph KExpression<'graph>,
+    /// The `SIG` declaration's type binder: its shape's hops out, and its slot there.
+    pub signature: (u32, Slot),
+    /// The ascription naming the signature: its shape's hops out, and its type part's site there.
+    pub ascription: (u32, Site),
 }
 
 /// A bucket declaration a body holds, `EXPR #(MOVE 2 TO 1)`: the ranking it gives its key, from
@@ -320,6 +361,35 @@ pub struct Unit {
     pub last: bool,
 }
 
+/// A type expression the shape records, which the load pass types on its own: a `:(…)` or `:{…}`
+/// in value position, a type part of an expression shape that births no callable, or a
+/// `MATCH … WITH` guard. A type nested in a recorded one is part of it, and a callable's signature
+/// or a declaration's definition is typed with its callable or binder instead.
+pub struct TypeExpression<'graph> {
+    pub site: Site,
+    /// The part as written; for a guard, its quote.
+    pub part: &'graph ExpressionPart<'graph>,
+    /// The statement it is written in, by index into [`BodyShape::body`] — where a refusal about it
+    /// is located.
+    pub statement: u32,
+    /// For a guard: the site of its arm set, and its place among the arms in written order.
+    pub guard: Option<(Site, u32)>,
+    typed: Cell<StaticType<'graph>>,
+}
+
+impl<'graph> TypeExpression<'graph> {
+    /// What the load pass fixed for this expression; `Unknown` before it runs.
+    pub fn typed(&self) -> StaticType<'graph> {
+        self.typed.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix(&self, typed: StaticType<'graph>) {
+        debug_assert!(matches!(self.typed.get(), Static::Unknown));
+        self.typed.set(typed);
+    }
+}
+
 /// One body's resolved lexical structure. See the module documentation.
 #[derive(Clone, Copy)]
 pub struct BodyShape<'graph> {
@@ -371,6 +441,30 @@ pub struct BodyShape<'graph> {
     candidates: &'graph [(Site, CandidateList<'graph>)],
     /// A code shape's keyworded holes some use selects from alone, sorted.
     required: &'graph [KeySymbol],
+    /// Each type expression this body records, by site.
+    type_expressions: &'graph [TypeExpression<'graph>],
+    /// Each type binder's load-time type, parallel to `declarations`.
+    declared: &'graph [Cell<StaticType<'graph>>],
+    /// Each registration's load-time bucket entry, parallel to `registrations`.
+    registered: &'graph [Cell<StaticRegistered<'graph>>],
+    /// A callable body's load-time type; `Unknown` for every other kind.
+    callable: &'graph Cell<StaticCallable<'graph>>,
+    /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
+    group_levels: &'graph Cell<&'graph [Parametric]>,
+    /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born;
+    /// `Unknown` where it is born quantified, and for every other kind.
+    born_instance: &'graph Cell<StaticSolution<'graph>>,
+    /// Each lexical variable this body declares, by level, beside where its activation holds the
+    /// type a run binds it to. Written once, by the type channel.
+    declared_variables: &'graph Cell<&'graph [(usize, Target)]>,
+    /// Each type capture the static pass added past `captures`, as the coordinate of the enclosing
+    /// activation its birth reads: closure slot `captures.len() + i`. Empty for every kind but a
+    /// callable and a module.
+    type_captures: &'graph Cell<&'graph [Coordinate]>,
+    /// Why a code shape's code does not type, where the load pass found a refusal in it.
+    typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
+    /// The value channel's static types and narrowings, fixed by the language's load pass.
+    statics: &'graph Cell<Option<Statics<'graph>>>,
 }
 
 /// What an `EVAL` of a code parameter offers the code it runs for one name its `NEEDING` list
@@ -562,8 +656,23 @@ impl<'graph> BodyShape<'graph> {
         Some(self.rhs[index].1)
     }
 
-    /// The declaration node of the type binder at `slot` — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or
-    /// a `LET` of a type name, whole, so the door reads which declaration it is and where its
+    /// The type the value binder at `slot` is annotated with — the type part of the
+    /// `LET <name> <type> = <value>` declaring it — or `None` for any other binder.
+    pub fn annotation(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {
+        let statement = self.names.get(slot.index()).statement_index()?;
+        let node = self.body.get(statement)?.statement_spine();
+        let form = node.cache().builtin_shape()?;
+        if form.id != BuiltinShapeId::LetAnnotated {
+            return None;
+        }
+        form.roles()
+            .zip(node.parts)
+            .find(|(role, _)| *role == Role::TypeExpression)
+            .map(|(_, part)| &part.value)
+    }
+
+    /// The declaration node of the type binder at `slot` — a `NEWTYPE`, `UNION`, `SIG` or a `LET`
+    /// of a type name, whole, so the door reads which declaration it is and where its
     /// declared part sits off the node's builtin shape, as [`form`](Self::form) is where a
     /// callable's signature is read. `None` for a value binder and for a parameter.
     pub fn declarations(&self, slot: Slot) -> Option<&'graph KExpression<'graph>> {
@@ -580,9 +689,226 @@ impl<'graph> BodyShape<'graph> {
         self.code_type
     }
 
-    /// Why this code shape's code cannot be built, reported when an `EVAL` runs it.
+    /// Why this code shape's code cannot be built, or — once it is built — does not type, reported
+    /// when an `EVAL` runs it.
     pub fn refusal(&self) -> Option<&'graph ShapeError<'graph>> {
-        self.refusal
+        self.refusal.or(self.typing_refusal.get())
+    }
+
+    /// Every type expression this body records, sorted by site.
+    pub fn type_expressions(&self) -> &'graph [TypeExpression<'graph>] {
+        self.type_expressions
+    }
+
+    /// What the load pass fixed for the type expression at `site`: `Unknown` where this body
+    /// records none there.
+    pub fn typed_expression(&self, site: Site) -> StaticType<'graph> {
+        self.type_expressions
+            .binary_search_by_key(&site, |recorded| recorded.site)
+            .map_or(Static::Unknown, |index| {
+                self.type_expressions[index].typed()
+            })
+    }
+
+    /// What the load pass fixed for the type binder at `slot`.
+    pub fn declared_type(&self, slot: Slot) -> StaticType<'graph> {
+        self.declarations
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .map_or(Static::Unknown, |index| self.declared[index].get())
+    }
+
+    /// What the load pass fixed for the registration at `slot`.
+    pub fn registered_type(&self, slot: Slot) -> StaticRegistered<'graph> {
+        self.registrations
+            .binary_search_by_key(&slot, |registration| registration.slot)
+            .map_or(Static::Unknown, |index| self.registered[index].get())
+    }
+
+    /// What the load pass fixed for this callable body's type.
+    pub fn callable_type(&self) -> StaticCallable<'graph> {
+        self.callable.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_declared(&self, slot: Slot, typed: StaticType<'graph>) {
+        let index = self
+            .declarations
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .expect("a type binder records its declaration node");
+        debug_assert!(matches!(self.declared[index].get(), Static::Unknown));
+        self.declared[index].set(typed);
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_registered(&self, slot: Slot, typed: StaticRegistered<'graph>) {
+        let index = self
+            .registrations
+            .binary_search_by_key(&slot, |registration| registration.slot)
+            .expect("a registration's slot is one this body declares");
+        debug_assert!(matches!(self.registered[index].get(), Static::Unknown));
+        self.registered[index].set(typed);
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_callable(&self, typed: StaticCallable<'graph>) {
+        debug_assert_eq!(self.kind, ShapeKind::Callable);
+        debug_assert!(matches!(self.callable.get(), Static::Unknown));
+        self.callable.set(typed);
+    }
+
+    /// A callable body's own `FOR ALL` group as its body reads it: the lexical variable each
+    /// variable of the group is, in group order. Empty for every other shape, and where the load
+    /// did not type the callable.
+    pub fn group_levels(&self) -> &'graph [Parametric] {
+        self.group_levels.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_group_levels(&self, levels: &'graph [Parametric]) {
+        debug_assert_eq!(self.kind, ShapeKind::Callable);
+        debug_assert!(self.group_levels.get().is_empty());
+        self.group_levels.set(levels);
+    }
+
+    /// The solution this callable body's `FOR ALL` is born instantiated at, where the load solved
+    /// its group at the type its value is wanted at: a literal written where a type fixes it, or
+    /// the right-hand side of a binder whose declared type does.
+    pub fn born_instance(&self) -> Option<StaticSolution<'graph>> {
+        match self.born_instance.get() {
+            Static::Unknown => None,
+            solution => Some(solution),
+        }
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_born_instance(&self, solution: StaticSolution<'graph>) {
+        debug_assert_eq!(self.kind, ShapeKind::Callable);
+        debug_assert!(matches!(self.born_instance.get(), Static::Unknown));
+        debug_assert!(!matches!(solution, Static::Unknown));
+        self.born_instance.set(solution);
+    }
+
+    /// Each lexical variable this body declares, by level, beside where its activation holds the
+    /// type a run binds it to: a `FOR ALL` name's slot, a type binder's slot, or the capture a
+    /// surfaced type name is read through.
+    pub fn declared_variables(&self) -> &'graph [(usize, Target)] {
+        self.declared_variables.get()
+    }
+
+    /// Written once, by the type channel.
+    pub fn fix_declared_variables(&self, variables: &'graph [(usize, Target)]) {
+        debug_assert!(self.declared_variables.get().is_empty());
+        self.declared_variables.set(variables);
+    }
+
+    /// Each type capture the static pass added past [`captures`](Self::captures): a type name the
+    /// body never writes but a call in it contributes, read at birth from this coordinate of the
+    /// enclosing activation into closure slot `captures().len() + i`.
+    pub fn type_captures(&self) -> &'graph [Coordinate] {
+        self.type_captures.get()
+    }
+
+    /// Written once, by the load pass.
+    pub fn fix_type_captures(&self, captures: &'graph [Coordinate]) {
+        debug_assert!(matches!(self.kind, ShapeKind::Callable | ShapeKind::Module));
+        debug_assert!(self.type_captures.get().is_empty());
+        self.type_captures.set(captures);
+    }
+
+    /// How many closure slots a birth fills: the builder's captures, then the type captures.
+    pub fn capture_count(&self) -> usize {
+        self.captures.len() + self.type_captures.get().len()
+    }
+
+    /// Written once, by the load pass, on a code shape whose code does not type.
+    pub fn refuse_typing(&self, refusal: &'graph ShapeError<'graph>) {
+        debug_assert_eq!(self.kind, ShapeKind::Code);
+        debug_assert!(self.typing_refusal.get().is_none());
+        self.typing_refusal.set(Some(refusal));
+    }
+
+    /// The value channel's load-time facts, once the language's load pass has fixed them.
+    pub fn statics(&self) -> Option<Statics<'graph>> {
+        self.statics.get()
+    }
+
+    /// The static type of the part at `site`, where the load pass typed one.
+    pub fn value_type(&self, site: Site) -> Option<Interval> {
+        let parts = self.statics.get()?.parts;
+        let index = parts.binary_search_by_key(&site, |(at, _)| *at).ok()?;
+        Some(parts[index].1)
+    }
+
+    /// The static type of statement `index` of [`body`](Self::body).
+    pub fn statement_type(&self, index: usize) -> Option<Interval> {
+        self.statics.get()?.statements.get(index).copied()
+    }
+
+    /// The static type of the binder at `slot` — a quantified callable's binder its scheme.
+    pub fn binder_type(&self, slot: Slot) -> Option<DeclaredType<Interval>> {
+        self.statics.get()?.binders.get(slot.index()).copied()
+    }
+
+    /// What the load fixed about the candidates of the keyworded use at `site`: `Full` where it
+    /// fixed nothing.
+    pub fn narrowing(&self, site: Site) -> Narrowing<'graph> {
+        let Some(statics) = self.statics.get() else {
+            return Narrowing::Full;
+        };
+        self.candidates
+            .binary_search_by_key(&site, |(use_site, _)| *use_site)
+            .ok()
+            .and_then(|index| statics.narrowings.get(index).copied())
+            .unwrap_or(Narrowing::Full)
+    }
+
+    /// Whether the load settled the ascription at `site`: its operand's static upper end lies under
+    /// its type, so the run checks nothing. `false` where the load fixed nothing.
+    pub fn settled(&self, site: Site) -> bool {
+        self.statics
+            .get()
+            .is_some_and(|statics| statics.settled.binary_search(&site).is_ok())
+    }
+
+    /// The solution the load instantiated the quantified function read at `site` at, where it read
+    /// one there.
+    pub fn instance_at(&self, site: Site) -> Option<StaticSolution<'graph>> {
+        let instances = self.statics.get()?.instances;
+        let index = instances.binary_search_by_key(&site, |(at, _)| *at).ok()?;
+        Some(instances[index].1)
+    }
+
+    /// What each argument of the keyworded use at `site` contributes to its candidates' solves:
+    /// empty where every argument contributes its carried type, or the load fixed nothing.
+    pub fn contributions(&self, site: Site) -> &'graph [StaticType<'graph>] {
+        let Some(statics) = self.statics.get() else {
+            return &[];
+        };
+        self.candidates
+            .binary_search_by_key(&site, |(use_site, _)| *use_site)
+            .ok()
+            .and_then(|index| statics.contributions.get(index).copied())
+            .unwrap_or(&[])
+    }
+
+    /// What each parameter of the call by name whose argument part sits at `site` is solved from,
+    /// by name: empty where every parameter reads its carried type.
+    pub fn named_contributions(&self, site: Site) -> &'graph [(Symbol, StaticType<'graph>)] {
+        let Some(statics) = self.statics.get() else {
+            return &[];
+        };
+        statics
+            .named
+            .binary_search_by_key(&site, |(at, _)| *at)
+            .map_or(&[], |index| statics.named[index].1)
+    }
+
+    /// Written once, by the language's load pass.
+    pub fn fix_statics(&self, statics: Statics<'graph>) {
+        debug_assert!(self.statics.get().is_none());
+        debug_assert_eq!(statics.narrowings.len(), self.candidates.len());
+        debug_assert_eq!(statics.contributions.len(), self.candidates.len());
+        self.statics.set(Some(statics));
     }
 
     /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each
@@ -637,6 +963,11 @@ impl<'graph> BodyShape<'graph> {
             .all(|(_, body)| body.kind == ShapeKind::Code || body.ranks_alike(key, classes))
     }
 
+    /// Every keyworded use's candidates, by the use's node site, sorted.
+    pub fn candidate_lists(&self) -> &'graph [(Site, CandidateList<'graph>)] {
+        self.candidates
+    }
+
     /// The candidates of the keyworded use whose node sits at `site` ([`Site::of_node`]).
     pub fn candidates(&self, site: Site) -> Option<&'graph CandidateList<'graph>> {
         let index = self
@@ -645,6 +976,12 @@ impl<'graph> BodyShape<'graph> {
             .ok()?;
         Some(&self.candidates[index].1)
     }
+}
+
+/// Where the part at `site` within `node` is written: its own span, else the nearest spanned part's
+/// or node's around it. `None` when `node` does not hold the part.
+pub fn source_of(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
+    build::source_within(node, site)
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible
@@ -684,6 +1021,43 @@ pub enum ShapeError<'graph> {
     ShadowsBuiltin { name: BinderSymbol, at: SourceRef },
     /// A name read at `at`, where no binding of it is visible.
     Unbound {
+        name: BinderSymbol,
+        site: Site,
+        at: SourceRef,
+    },
+    /// The last statement of a body whose value is read — a callable's, an arm's, a quote's —
+    /// binding a quantified function by a keyworded form at `at`: the statement's value is the
+    /// body's, and a keyworded form's function is read only at the head of a call.
+    QuantifiedValue { at: SourceRef },
+    /// A quantified function read or bound where nothing fixes `variables`, in group order: no type
+    /// is wanted there, the `wanted` type is no function type, or it reaches none of them.
+    Unfixed {
+        variables: &'graph [TypeSymbol],
+        wanted: Option<KType>,
+        at: SourceRef,
+    },
+    /// A quantified function wanted at a type no instance of it lies under.
+    NoInstance {
+        scheme: Scheme,
+        wanted: KType,
+        at: SourceRef,
+    },
+    /// A keyworded use whose kept candidates want a quantified function argument at different
+    /// instances.
+    AmbiguousInstance {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A keyworded use of several candidates, each dropped where none takes a quantified function
+    /// argument at a type that fixes its group.
+    NoInstanceAtCandidates {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A name a keyworded form binds or a `USING … SCOPE` surfaces, bound to a quantified function
+    /// and read at `at` anywhere but the head of a call; or a module's quantified member read
+    /// through `$` or offered by an `EVAL`.
+    QuantifiedRead {
         name: BinderSymbol,
         site: Site,
         at: SourceRef,
@@ -775,11 +1149,75 @@ pub enum ShapeError<'graph> {
         key: &'graph [KeyElement],
         at: SourceRef,
     },
-    /// A registration whose operand types, spelled from builtin names alone, meet those of the
-    /// builtin overload `builtin` at its key, whose operands are not all `Any`.
+    /// A registration whose closed operand types meet those of the builtin overload `builtin` at
+    /// its key, whose operands are not all `Any`.
     Overlaps {
         key: &'graph [KeyElement],
         builtin: KType,
+        at: SourceRef,
+    },
+    /// A keyworded use none of whose candidates can admit its arguments' static types.
+    NoAdmittingCandidate {
+        key: &'graph [KeyElement],
+        arguments: &'graph [Parametric],
+        at: SourceRef,
+    },
+    /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
+    /// type `of` naming no field `field` the rule needs.
+    NoField {
+        of: KType,
+        field: BinderSymbol,
+        at: SourceRef,
+    },
+    /// A keyworded use every candidate of which always admits its arguments' static types, none of
+    /// which ranks first, and no builtin among them.
+    Ambiguous {
+        key: &'graph [KeyElement],
+        arguments: &'graph [Parametric],
+        count: usize,
+        at: SourceRef,
+    },
+    /// A callable body whose static type can never satisfy its declared return.
+    ReturnNeverSatisfied {
+        body: KType,
+        returns: KType,
+        at: SourceRef,
+    },
+    /// An ascription whose operand's static type can never satisfy its type.
+    AscriptionNeverSatisfied {
+        value: KType,
+        ascribed: KType,
+        at: SourceRef,
+    },
+    /// An annotated binder whose value's static type can never satisfy its annotation.
+    AnnotationNeverSatisfied {
+        value: KType,
+        annotated: KType,
+        at: SourceRef,
+    },
+    /// A call by name whose callee is exactly an unquantified function its argument's static type
+    /// can never satisfy the parameters of, or a quantified one whose group the argument's static
+    /// type can never solve.
+    CallNeverSatisfied {
+        callee: DeclaredType<KType>,
+        arguments: KType,
+        at: SourceRef,
+    },
+    /// An `EVAL` whose operand's static type can never be code.
+    NotCode { value: KType, at: SourceRef },
+    /// An `EVAL` of traced code whose static type can never satisfy the type the `EVAL` declares.
+    EvalNeverSatisfied {
+        code: KType,
+        returns: KType,
+        at: SourceRef,
+    },
+    /// A closed type that does not elaborate.
+    Type { error: Elaboration, at: SourceRef },
+    /// Two guards of one `MATCH … WITH` arm set that type to one handle, `guard`; `at` is the
+    /// second's.
+    RepeatedGuard {
+        guard: Parametric,
+        first: SourceRef,
         at: SourceRef,
     },
 }
@@ -833,6 +1271,12 @@ impl ShapeError<'_> {
             ShapeError::Rebind { second, .. } => *second,
             ShapeError::ShadowsBuiltin { at, .. }
             | ShapeError::Unbound { at, .. }
+            | ShapeError::QuantifiedValue { at }
+            | ShapeError::Unfixed { at, .. }
+            | ShapeError::NoInstance { at, .. }
+            | ShapeError::AmbiguousInstance { at, .. }
+            | ShapeError::NoInstanceAtCandidates { at, .. }
+            | ShapeError::QuantifiedRead { at, .. }
             | ShapeError::EagerCycle { at, .. }
             | ShapeError::MarkOutsideQuote { at }
             | ShapeError::Unsupported { at, .. }
@@ -853,7 +1297,18 @@ impl ShapeError<'_> {
             | ShapeError::NestedBinder { at }
             | ShapeError::RankingDisagrees { at, .. }
             | ShapeError::NoCandidate { at, .. }
-            | ShapeError::Overlaps { at, .. } => *at,
+            | ShapeError::Overlaps { at, .. }
+            | ShapeError::NoAdmittingCandidate { at, .. }
+            | ShapeError::NoField { at, .. }
+            | ShapeError::Ambiguous { at, .. }
+            | ShapeError::ReturnNeverSatisfied { at, .. }
+            | ShapeError::AscriptionNeverSatisfied { at, .. }
+            | ShapeError::AnnotationNeverSatisfied { at, .. }
+            | ShapeError::CallNeverSatisfied { at, .. }
+            | ShapeError::NotCode { at, .. }
+            | ShapeError::EvalNeverSatisfied { at, .. }
+            | ShapeError::Type { at, .. }
+            | ShapeError::RepeatedGuard { at, .. } => *at,
         }
     }
 
@@ -897,6 +1352,52 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             ShapeError::Unbound { name: read, .. } => {
                 write!(f, "`{}` names no binding visible here", name(read))
             }
+            ShapeError::QuantifiedValue { .. } => f.write_str(
+                "this keyworded form binds a quantified function as the body's value, which is \
+                 read only at the head of a call; end the body with another statement",
+            ),
+            ShapeError::Unfixed {
+                variables, wanted, ..
+            } => {
+                let types = |f: &mut fmt::Formatter<'_>| {
+                    for (index, variable) in variables.iter().enumerate() {
+                        let gap = if index == 0 { "" } else { " " };
+                        write!(f, "{gap}`{}`", self.symbols.display(variable.symbol()))?;
+                    }
+                    Ok(())
+                };
+                match wanted {
+                    None => {
+                        f.write_str("nothing fixes ")?;
+                        types(f)?;
+                        f.write_str(
+                            " here: a quantified function is read only at the head of a call, as \
+                             the binding of a `MODULE` member, or where the type it is wanted at solves \
+                             its group",
+                        )
+                    }
+                    Some(wanted) => {
+                        write!(
+                            f,
+                            "{} does not fix ",
+                            display_name(*wanted, self.types, self.symbols)
+                        )?;
+                        types(f)
+                    }
+                }
+            }
+            ShapeError::NoInstance { scheme, wanted, .. } => write!(
+                f,
+                "{} has no instance under {}",
+                display_name(*scheme, self.types, self.symbols),
+                display_name(*wanted, self.types, self.symbols)
+            ),
+            ShapeError::QuantifiedRead { name: read, .. } => write!(
+                f,
+                "`{}` is quantified, so it is read only at the head of a call; wrap it in an \
+                 unquantified `FN` to pass it",
+                name(read)
+            ),
             ShapeError::EagerCycle {
                 members,
                 definitions,
@@ -996,6 +1497,90 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 self.key(key),
                 display_name(*builtin, self.types, self.symbols)
             ),
+            ShapeError::AmbiguousInstance { key, .. } => write!(
+                f,
+                "the overloads of `{}` this call keeps want this function at different types; \
+                 ascribe it",
+                self.key(key)
+            ),
+            ShapeError::NoInstanceAtCandidates { key, .. } => write!(
+                f,
+                "no overload of `{}` takes this function at a type that fixes its group",
+                self.key(key)
+            ),
+            ShapeError::NoAdmittingCandidate { key, arguments, .. } => {
+                write!(f, "no overload of `{}` admits ", self.key(key))?;
+                self.arguments(f, arguments)
+            }
+            ShapeError::NoField { of, field, .. } => write!(
+                f,
+                "{} has no field {}",
+                display_name(*of, self.types, self.symbols),
+                name(field)
+            ),
+            ShapeError::Ambiguous {
+                key,
+                arguments,
+                count,
+                ..
+            } => {
+                write!(
+                    f,
+                    "ambiguous call of {}: {count} overloads admit ",
+                    self.key(key)
+                )?;
+                self.arguments(f, arguments)?;
+                f.write_str(" and none ranks first")
+            }
+            ShapeError::ReturnNeverSatisfied { body, returns, .. } => write!(
+                f,
+                "this body returns {}, which can never satisfy its declared return {}",
+                display_name(*body, self.types, self.symbols),
+                display_name(*returns, self.types, self.symbols)
+            ),
+            ShapeError::AscriptionNeverSatisfied {
+                value, ascribed, ..
+            } => write!(
+                f,
+                "this value is {}, which can never satisfy its ascription {}",
+                display_name(*value, self.types, self.symbols),
+                display_name(*ascribed, self.types, self.symbols)
+            ),
+            ShapeError::AnnotationNeverSatisfied {
+                value, annotated, ..
+            } => write!(
+                f,
+                "this value is {}, which can never satisfy its annotation {}",
+                display_name(*value, self.types, self.symbols),
+                display_name(*annotated, self.types, self.symbols)
+            ),
+            ShapeError::CallNeverSatisfied {
+                callee, arguments, ..
+            } => write!(
+                f,
+                "{} can never be called with {}",
+                display_name(*callee, self.types, self.symbols),
+                display_name(*arguments, self.types, self.symbols)
+            ),
+            ShapeError::NotCode { value, .. } => write!(
+                f,
+                "this value is {}, which can never be code for `EVAL` to run",
+                display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::EvalNeverSatisfied { code, returns, .. } => write!(
+                f,
+                "this `EVAL`'s code returns {}, which can never satisfy its declared return {}",
+                display_name(*code, self.types, self.symbols),
+                display_name(*returns, self.types, self.symbols)
+            ),
+            ShapeError::Type { error, .. } => {
+                write!(f, "{}", error.display(self.symbols, self.types))
+            }
+            ShapeError::RepeatedGuard { guard, first, .. } => write!(
+                f,
+                "`{}` guards two arms; first at {first}",
+                display_name(*guard, self.types, self.symbols)
+            ),
         }
     }
 }
@@ -1003,6 +1588,18 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
 impl ShapeErrorDisplay<'_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
+    }
+
+    /// `arguments` as a parenthesized, comma-separated list of types.
+    fn arguments(&self, f: &mut fmt::Formatter<'_>, arguments: &[Parametric]) -> fmt::Result {
+        f.write_str("(")?;
+        for (index, argument) in arguments.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", display_name(*argument, self.types, self.symbols))?;
+        }
+        f.write_str(")")
     }
 }
 

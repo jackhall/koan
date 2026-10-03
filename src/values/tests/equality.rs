@@ -56,11 +56,11 @@ fn containers_compare_contents_only_under_related_types() {
             // does not.
             assert!(equal(
                 one_two,
-                one_two.retyped(writer, KType::LIST_OF_ANY, types)
+                one_two.retyped(writer, KType::LIST_OF_ANY, types, scratch)
             ));
             let empty = Value::List(List::new(writer, [].into_iter(), types, scratch));
-            let empty_strings = empty.retyped(writer, types.list(KType::STR), types);
-            let empty_numbers = empty.retyped(writer, types.list(KType::NUMBER), types);
+            let empty_strings = empty.retyped(writer, types.list(KType::STR), types, scratch);
+            let empty_numbers = empty.retyped(writer, types.list(KType::NUMBER), types, scratch);
             assert!(!equal(empty_strings, empty_numbers));
 
             let dict = |entries: &[_]| Value::Dict(Dict::new(writer, entries, types, scratch));
@@ -174,10 +174,18 @@ fn a_function_compares_by_identity_and_a_barrier_is_incomparable() {
                 Err(Incomparable),
                 "an unequal pair before the barrier does not decide"
             );
-            let numbers =
-                list(&[Holding::Number(1.0)]).retyped(writer, types.list(KType::NUMBER), types);
-            let bools =
-                list(&[Holding::Bool(true)]).retyped(writer, types.list(KType::BOOL), types);
+            let numbers = list(&[Holding::Number(1.0)]).retyped(
+                writer,
+                types.list(KType::NUMBER),
+                types,
+                scratch,
+            );
+            let bools = list(&[Holding::Bool(true)]).retyped(
+                writer,
+                types.list(KType::BOOL),
+                types,
+                scratch,
+            );
             assert_eq!(
                 numbers.equals(&bools, types, scratch),
                 Ok(false),
@@ -265,7 +273,7 @@ fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
         // Each opaque ascription mints its own nonce, so two mints of one bound are two identities.
         let mint = |bound| {
             let nonce = ScopeId::next();
-            types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), bound)
+            types.carrier(carrier, bound, nonce)
         };
         let number_or_str = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
         let (by_number, by_number_again) = (mint(KType::NUMBER), mint(KType::NUMBER));
@@ -318,7 +326,7 @@ fn a_seal_bounded_by_a_code_kind_reveals_every_quote() {
         let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
         let mint = |bound| {
             let nonce = ScopeId::next();
-            types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), bound)
+            types.carrier(carrier, bound, nonce)
         };
         let name = quote(fixture, "#(y)");
         let call = quote(fixture, "#(f x)");
@@ -334,7 +342,7 @@ fn a_seal_bounded_by_a_code_kind_reveals_every_quote() {
                         writer,
                         quote,
                         mint(bound),
-                        quote.ktype(),
+                        quote.concrete_ktype(),
                         types,
                         scratch,
                     );

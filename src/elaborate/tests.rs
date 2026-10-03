@@ -3,6 +3,7 @@
 
 mod boundary;
 mod builtin;
+mod channel;
 mod declarations;
 mod examples;
 mod families;
@@ -21,7 +22,8 @@ use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
-use super::{Callable, Elaboration, callable_type, type_declarations};
+use super::{callable_type, type_declarations};
+use crate::scope::{Callable, Elaboration};
 
 /// This activation's own `slot`.
 fn local(slot: Slot) -> Coordinate {
@@ -50,6 +52,8 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
     pub writer: Writer<'cell>,
+    /// Program storage's writer, which the load pass lays its records down through.
+    pub storage: Writer<'graph>,
 }
 
 impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
@@ -243,6 +247,7 @@ pub(super) fn with_program<R>(
                 lines: shape.body(),
                 activation,
                 writer,
+                storage: program.writer(),
             })
         })
         .expect("a fresh cell is enterable");

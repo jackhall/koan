@@ -16,8 +16,10 @@
 //! [`resident`](crate::memory::resident) and [`collect`](crate::memory::collect) shapes. What a
 //! knot member holds of program storage sits inside the member. [`cross`] moves a value between
 //! regions over the substrate's placement doors, rebuilding it under a copy, and [`verdict`] is the
-//! copy-or-pin policy a graph is built with. [`working`] is the scheduler's per-dispatch expression form, built in the executing cell's
-//! region.
+//! copy-or-pin policy a graph is built with. Every read of a container or tagged value — equality,
+//! rendering, the deep copy, a field read — goes through one door, [`Seen`] and [`Surface`], which
+//! shows only what the value's type names. [`working`] is the scheduler's per-dispatch copy of an
+//! expression, built in the executing cell's region.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::parse`, `crate::source` and `crate::type_lattice`, and nothing else in the crate;
@@ -35,17 +37,18 @@ mod list;
 mod lower;
 mod record;
 mod render;
+mod surface;
 mod tagged;
 mod type_value;
 mod weight;
 pub mod working;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use admission::{
     ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,
-    part_ktype, record_type, satisfies, sealing, solves_identity, unsealed,
+    part_ktype, record_type, representation, satisfies, sealing, solves_identity, unsealed,
 };
 pub use circular::{Circular, CodeView, Resolved};
 pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
@@ -54,6 +57,7 @@ pub use equality::Incomparable;
 pub use link::Link;
 pub use list::List;
 pub use record::Record;
+pub use surface::{Seen, Surface};
 pub use tagged::Tagged;
 pub use type_value::TypeValue;
 pub use weight::Weight;
@@ -63,14 +67,16 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 use crate::memory::{DropFree, Edge, Ready, Writer, covariant, reattachable};
-use crate::type_lattice::{KType, TypeNode, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType};
 
 /// What `values` asks of a knot member at one region lifetime — a function or a data node of a
 /// knot: its memoized type, what rebuilding its knot at a destination writes, the fellow member an
 /// edge of its own names, and what the node holds. A member is `Copy`, so it carries no drop glue
 /// and may rest in a region, and its equality and hash are node identity.
 pub trait Knotted: Copy + Eq + Hash {
-    fn ktype(&self) -> KType;
+    /// The member's type: a function's own type — a scheme where a `FOR ALL` group quantifies
+    /// it — and every other member's concrete type.
+    fn ktype(&self) -> DeclaredType<KType>;
 
     /// The bytes a rebuild of this member's knot at a destination writes, past the value word
     /// holding it.
@@ -134,7 +140,7 @@ pub type DeepCopy<'copy, 'from, 'to, X, Y> = dyn FnMut(&Value<'from, X>) -> Valu
 pub enum Nothing {}
 
 impl Knotted for Nothing {
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> DeclaredType<KType> {
         match *self {}
     }
 
@@ -227,22 +233,36 @@ pub enum Value<'cell, X = Nothing> {
 
 const _: () = assert!(size_of::<Value<'static>>() == 24);
 
+/// Why a value's type is concrete where [`Value::concrete_ktype`] reads it: a quantified callable
+/// is read only at the head of a call, or as a module member's binding, and an instance site reads
+/// its instance, so no other read reaches one
+/// ([scope/README.md § Resolution](scope/README.md#resolution)).
+pub const CALL_ONLY: &str = "a quantified callable is read only at the head of a call, or as the \
+                             binding of a module member; an instance site reads its instance";
+
 impl<'cell, X: Knotted> Value<'cell, X> {
-    /// The value's type: a constant for a leaf and the stored handle for everything else. Reads no
+    /// The value's type: a constant for a leaf and the stored handle for everything else — a
+    /// concrete type for every value but a quantified callable, which answers its scheme. Reads no
     /// registry and walks nothing.
-    pub fn ktype(&self) -> KType {
+    pub fn ktype(&self) -> DeclaredType<KType> {
         match self {
-            Value::Number(_) => KType::NUMBER,
-            Value::Bool(_) => KType::BOOL,
-            Value::Null => KType::NULL,
-            Value::Str(_) => KType::STR,
-            Value::Type(value) => value.ktype(),
-            Value::List(list) => list.ktype(),
-            Value::Dict(dict) => dict.ktype(),
-            Value::Record(record) => record.ktype(),
-            Value::Tagged(tagged) => tagged.ktype(),
+            Value::Number(_) => KType::NUMBER.into(),
+            Value::Bool(_) => KType::BOOL.into(),
+            Value::Null => KType::NULL.into(),
+            Value::Str(_) => KType::STR.into(),
+            Value::Type(value) => value.ktype().into(),
+            Value::List(list) => list.ktype().into(),
+            Value::Dict(dict) => dict.ktype().into(),
+            Value::Record(record) => record.ktype().into(),
+            Value::Tagged(tagged) => tagged.ktype().into(),
             Value::Knotted(member) => member.ktype(),
         }
+    }
+
+    /// The value's concrete type, where the load keeps a quantified callable out — every read but
+    /// a call's head, which an instance site reads instantiated ([`CALL_ONLY`]).
+    pub fn concrete_ktype(&self) -> KType {
+        self.ktype().as_type().expect(CALL_ONLY)
     }
 
     /// What rebuilding this value at a destination writes: the word itself and what it points at.
@@ -262,50 +282,6 @@ impl<'cell, X: Knotted> Value<'cell, X> {
             Value::Record(record) => record.weight(),
             Value::Tagged(tagged) => tagged.weight(),
             Value::Knotted(member) => member.weight(),
-        }
-    }
-
-    /// Ascription stamping at an annotated boundary, after the caller has checked the value
-    /// satisfies `declared`. A container against a declared node of its own kind takes `declared`
-    /// as its handle over the same cells, so downstream dispatch sees the contract rather than the
-    /// contents' incidental precision. A tagged value against a union takes the member it inhabits —
-    /// the member naming the same constructor — and keeps its own handle when the union declares
-    /// none. Everything else, and a value already of the declared type, passes through unwritten —
-    /// a knot member among them: a knot never grows a node, so a data node is never restamped.
-    pub fn retyped(
-        self,
-        writer: Writer<'cell>,
-        declared: KType,
-        types: &TypeRegistry<'_>,
-    ) -> Value<'cell, X> {
-        if declared == self.ktype() {
-            return self;
-        }
-        match (self, types.node(declared)) {
-            (Value::List(list), TypeNode::List { .. }) => {
-                Value::List(list.with_type(writer, declared))
-            }
-            (Value::Dict(dict), TypeNode::Dict { .. }) => {
-                Value::Dict(dict.with_type(writer, declared))
-            }
-            (Value::Record(record), TypeNode::Record { .. }) => {
-                Value::Record(record.with_type(writer, declared))
-            }
-            (Value::Tagged(tagged), TypeNode::Union { members }) => {
-                let constructor = |handle: KType| match types.node(handle) {
-                    TypeNode::ConstructorApply { constructor, .. } => constructor,
-                    _ => handle,
-                };
-                let inhabited = constructor(tagged.ktype());
-                match members
-                    .iter()
-                    .find(|member| constructor(**member) == inhabited)
-                {
-                    Some(member) => Value::Tagged(tagged.with_type(writer, *member)),
-                    None => self,
-                }
-            }
-            (other, _) => other,
         }
     }
 }

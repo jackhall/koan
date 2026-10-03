@@ -42,6 +42,17 @@ pub(super) enum Raised<'a> {
     },
     /// `ATTR` over a module, whose member read arrives with modules.
     ModuleMember,
+    /// `:!` over a module, whose view arrives with modules.
+    ModuleAscription,
+    /// A value `:!` checks against a type it does not satisfy.
+    Unascribable {
+        value: KType,
+        ascribed: KType,
+    },
+    /// An `EVAL` whose operand is no code.
+    NotCode {
+        value: KType,
+    },
     /// A `USING` whose module ranks `key` other than the code's own candidates do.
     RankedTwice {
         key: KeySymbol,
@@ -127,6 +138,16 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_> {
                 write!(f, "{} and {} cannot be compared", ktype(left), ktype(right))
             }
             Raised::ModuleMember => f.write_str("reading a module's member arrives with modules"),
+            Raised::ModuleAscription => f.write_str("ascribing a module arrives with modules"),
+            Raised::Unascribable { value, ascribed } => write!(
+                f,
+                "{} does not satisfy its ascription {}",
+                ktype(value),
+                ktype(ascribed)
+            ),
+            Raised::NotCode { value } => {
+                write!(f, "{} is not code for `EVAL` to run", ktype(value))
+            }
             Raised::RankedTwice { key } => {
                 write!(
                     f,

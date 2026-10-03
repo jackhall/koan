@@ -139,22 +139,22 @@ fn every_part_shape_admits_the_type_it_reports() {
             let reported =
                 part_ktype(&part, types, scratch).expect("a non-keyword part fills a slot");
             assert!(
-                admits_part(reported, &part, types),
+                admits_part(reported.into(), &part, types),
                 "{part:?} refuses its own type"
             );
         }
         assert!(admits_part(
-            KType::of_kind(KKind::AnyType),
+            KType::of_kind(KKind::AnyType).into(),
             &fixture.part("Number"),
             types
         ));
         assert!(!admits_part(
-            KType::of_kind(KKind::Signature),
+            KType::of_kind(KKind::Signature).into(),
             &fixture.part("Number"),
             types
         ));
         assert!(!admits_part(
-            types.list(KType::STR),
+            types.list(KType::STR).into(),
             &fixture.part("1"),
             types
         ));
@@ -173,12 +173,12 @@ fn each_family_top_admits_the_parts_a_type_below_it_admits() {
         for (index, part) in every_shape.parts.iter().enumerate() {
             let part = &part.value;
             assert_eq!(
-                admits_part(KType::ANY_VALUE, part, types),
+                admits_part(KType::ANY_VALUE.into(), part, types),
                 (5..=11).contains(&index),
                 "`Value` on {part:?}"
             );
             assert_eq!(
-                admits_part(KType::ANY_CODE, part, types),
+                admits_part(KType::ANY_CODE.into(), part, types),
                 (0..=4).contains(&index) || index == 12,
                 "`Code` on {part:?}"
             );
@@ -206,7 +206,8 @@ fn a_quantified_slot_takes_a_raw_part_its_bound_takes() {
 fn admission_reads_the_code_order_and_a_containers_elements() {
     with_fixture(|fixture| {
         let types = fixture.types;
-        let admits = |slot: KType, source: &str| admits_part(slot, &fixture.part(source), types);
+        let admits =
+            |slot: KType, source: &str| admits_part(slot.into(), &fixture.part(source), types);
         assert!(admits(KType::LIST_OF_NAME, "#[x y]"));
         assert!(!admits(KType::LIST_OF_NAME, "#[x (f y)]"));
         assert!(admits(KType::DICT_NAME_BLOCK, "#{Some: (a), _: (b)}"));

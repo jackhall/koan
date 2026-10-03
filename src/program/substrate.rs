@@ -4,6 +4,7 @@ use std::cell::Cell;
 
 use self_cell::self_cell;
 
+use crate::elaborate::type_channel;
 use crate::memory::{Bump, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident};
 use crate::parse::parse_with_path;
 use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
@@ -160,7 +161,8 @@ impl CellSubstrate {
             let shape =
                 BodyShape::of_program(brand, &parsed, builtins, types, &owner.symbols, &scratch)
                     .map_err(refused)?;
-            L::check(shape, builtins, types, &scratch).map_err(refused)?;
+            type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
+            L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
             let writer = brand.writer();
             let program = resident(
                 writer,

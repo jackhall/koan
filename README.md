@@ -31,7 +31,7 @@ not catch, writes `error: <message>` to standard error and exits non-zero.
 
 The builtins wired into the default scope include `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](old_design/expressions-and-parsing.md)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators (see [operators](old_design/operators.md)); `CLOSE OVER (<captures>) (<block>)`, which runs a block over a region of its own so the value it yields copies its captures instead of pinning the frames it was built in (see [lazy closures](old_design/lazy-closures.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [seed_builtins](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
-User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form, and a `FOR ALL #[<names>]` group before the parameters makes it quantified), `:(EXPR #(<head>) -> Out)` (an expression shape — the keyword/slot run a keyworded definition registers for dispatch, optionally under a `FOR ALL #[<names>]` quantifier group), `Value`, `Type`, `Code` and the kinds of code under it (`Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`), `Module`, `Signature`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form, and a `FOR ALL #[<names>]` group before the parameters makes it quantified, which only a signature's `VAL` member may be), `:(EXPR #(<head>) -> Out)` (an expression shape — the keyword/slot run a keyworded definition registers for dispatch, optionally under a `FOR ALL #[<names>]` quantifier group inside a signature), `Value`, `Type`, `Code` and the kinds of code under it (`Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`), `Module`, `Signature`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
 Example:
 
@@ -126,7 +126,8 @@ storage, the interner, the type registry and the cell graph over them — and th
 body runner that performs it — see
 [src/program/README.md](src/program/README.md)),
 [dispatch/](src/dispatch.rs) (the language koan's programs run under: the
-builtin table, the evaluator and keyword selection, and the overlap check — see
+builtin table and each builtin's type rule, the evaluator and keyword selection,
+the overlap check, and static selection — see
 [src/dispatch/README.md](src/dispatch/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
@@ -256,34 +257,38 @@ src/
 │   └── eval.rs               # surface form `$(expr)`
 ├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols, `ScopeId` and the region bump seam and nothing else
 ├── type_lattice/
-│   ├── node.rs           TypeNode — one interned type's content; every child position is a KType handle, so a node is shallow
-│   ├── handle.rs         KType — the Copy content-digest handle, the pinned builtin constants, and the name/kind readings off one
+│   ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle
+│   ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType; the pinned builtin constants, and the name/kind readings off one
+│   ├── run.rs            Run / Elements — typed views over a node's raw child runs
+│   ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
 │   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the fixed two-way verdict cache laid in the same region, the composite doors, canonical `union_of`, the canonicalizing `shape_type` and `signature`
+│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the fixed two-way verdict cache laid in the same region, the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the binder doors `shape_scheme` and `function_scheme` keeping every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
 │   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
 │   ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
 │   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity — the non-type payloads a node carries
 │   ├── operators.rs      ReductionMode / FoldDirection — how a run of a signature's operators reduces, which is part of the signature's identity
 │   ├── schema.rs         SigSchema over symbol-sorted Members tables, the SchemaDraft the signature door canonicalizes, the channels' canonical orders, and the shape readers
 │   ├── walk.rs           Variance and the two drivers every structural recursion goes through
-│   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the descent knobs and the position context
+│   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the union door and the position context
 │   ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
-│   ├── order.rs          is_subtype_of — the one order, as a single Lockstep instance — plus is_more_specific_than and satisfied_by
-│   ├── lattice.rs        join (subsumption-or-union, not a walk) and meet (the rebuilding Lockstep instance)
-│   ├── unify.rs          admits_with and the Collector: contributions solved by maximum, minimum, or the declared bound
-│   ├── substitute.rs     the quantifier and member substitutions, and the three slot_* relations that are each one of them composed with an ordinary relation
-│   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, meet_schemas, and shape_specificity
-│   ├── ranking.rs        priority classes — admit_by_class, the per-class verdict class_at_least the registry records, and select_by_class
+│   ├── order.rs          is_subtype_of — the order, which never solves — and fits, the relation a question reads, as one Lockstep instance differing at its leaf; satisfied_by
+│   ├── lattice.rs        join (subsumption-or-union, not a walk) and the meet (the rebuilding Lockstep instance, relating a variable by the rigid rule for the solver)
+│   ├── unify.rs          admits_with and the Collector: contributions solved to a pair of ends and bound at its least instance; the Interval a solve reports per variable
+│   ├── substitute.rs     the quantifier, level and head-parameter substitutions, instantiation and erasure, and a type read through intervals (bound_above among them)
+│   ├── signatures.rs     a signature type as a set of applications: the order between two sets and the meet the signature_meet door interns
+│   ├── sig_relations.rs  sig_fits and fits_application — *fits* over signature types, solving each unpinned head parameter — with their failure record, the binder relations admits_shape and admits_function, and shape_specificity
+│   ├── ranking.rs        priority classes — admit_by_class, the per-class verdict class_at_least the registry records, select_by_class, and judge_by_class's never/always/maybe over static types
 │   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
 │   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
-│   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, its registrations, bucket declarations and each keyworded use's candidate list, and for a quote's code shape its carried type, its refusal, its required keyworded holes and the names and keys each EVAL offers, in program storage; Position / Coordinate / Site and ShapeError
+│   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the expression shape a callable body sits in, the body each binder births and each LET binder's right-hand side, its registrations, bucket declarations and each keyworded use's candidate list, and for a quote's code shape its carried type, its refusal, its required keyworded holes and the names and keys each EVAL offers, in program storage; the write-once load-time type cells — each recorded TypeExpression, type binder, registration and callable body, a callable body's group levels, the lexical variables a body declares and the type captures a callable reads them through, and a code shape's typing refusal — the load pass fills; Position / Coordinate / Site and ShapeError
 │   ├── shape/build.rs    the one shape builder: the claims pre-scan and group frames, the rewrite pre-pass, the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies, arms and quote values' code shapes, the components pass, and the units pass that orders a body's units
 │   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor and spanned at the source it was built from
 │   ├── shape/build/locate.rs   where an error found in a statement points — the part it is about, else the nearest spanned part or node — searched for on the error path only
 │   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
+│   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Registered / ParameterBinding and Elaboration, and the value channel's Statics and Narrowing
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types, then the overloads grouped by bucket key
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each; the run's copy and weight
 │   └── activation.rs     ActivationView — one call's or block's Copy, Drop-free read half, covariant in its brand: its header, the knot member it runs and a view of its slots, read by coordinate (an edge capture as its sibling member); Activation — the view beside the slot array that binds, invariant, with one constructor per body kind
@@ -291,23 +296,25 @@ src/
 ├── values/
 │   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite
 │   ├── type_value.rs     TypeValue — a type in value position beside its memoized OfKind type
-│   ├── list.rs           List — one run of cells typed by the join of its elements
+│   ├── list.rs           List — one run of cells typed by the join of its elements, or a key's candidates typed `List<Any>`
 │   ├── dict.rs           Dict / Key — sorted keys and aligned cells, a binary-search lookup, entry order key order
 │   ├── record.rs         Record — symbol-sorted names and aligned cells, typed by the record of its fields
 │   ├── tagged.rs         Tagged — the one nominal wrap: a payload under a type identity, constructed through the checked door, held or peeled
 │   ├── link.rs           Link — a value word or an edge into the holder's own knot: a data node's cell, a closure binding
-│   ├── circular.rs       Circular / Resolved / CodeView — a knot's data node over link cells, what a member holds as `values` reads it, and the Composite view equality and rendering share over plain and linked composites
-│   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule
+│   ├── circular.rs       Circular / Resolved / CodeView — a knot's data node over link cells, what a member holds as `values` reads it, and a data node's run listing and rebuild for its knot's copy
+│   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule, and representation, the type a tagged payload is read at
+│   ├── surface.rs        Seen / Surface — the one door every read of a container or tagged value goes through: a value beside the type a read sees it at, opened to show only what that type names; Value::retyped
 │   ├── crossing.rs       cross / cross_here over the placement doors, cross_view and copy_severed — the doors a copy comes through, the second for a value inside a copied operand of another family — the deep copy, and the crossing verdict
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
-│   ├── equality.rs       Value::equals — structural equality, containers gated on related memoized types, a bisimulation over knot members — a function by its identity and captures, a quote by its syntax and bindings — Incomparable when a module or a barrier is reached
+│   ├── equality.rs       Value::equals — structural equality, each side at the type it is seen at, containers gated on related seen types, a bisimulation over knot members — a function by its identity and captures, a quote by its syntax and bindings — Incomparable when a module or a barrier is reached
 │   ├── render.rs         Value::render — the surface PRINT writes, a mark pass then a write pass labelling where a cycle closes
 │   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value
-├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles through the activation they are read in; Elaboration, why one did not
+├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles where the program loads and, for what the load leaves unknown, through the activation they are read in
 ├── elaborate/
-│   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups, a code kind NEEDING names, Union.Tag
-│   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the form node its body sits in, with a registration's ranked shape and parameter binding; static_callable_type over builtins alone
-│   └── reads.rs          Reads — what elaboration reads names through: an activation, its view, or the builtin table alone
+│   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names, Union.Tag
+│   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the expression shape its body sits in, with a registration's ranked shape and parameter binding
+│   ├── channel.rs        type_channel — the load pass: every type binder, type expression, callable and registration — a USING block's surfaced head included — typed where the program loads, closed, rigid or unknown, into the shape's write-once cells
+│   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the load pass's reader
 ├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable, and the field a USING source names
 ├── knot/
 │   ├── function.rs       Function — a function node: its memoized type, body shape, closure bindings and knot weight; the staging a tie does for a function member
@@ -338,9 +345,10 @@ src/
 ├── dispatch.rs       pub mod dispatch — Koan, the Language programs run under, and the vocabulary its submodules share
 ├── dispatch/
 │   ├── builtins.rs       the builtin table — the lattice's types, Error and every overload as a builtin node — and the natives the overloads run
-│   ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, a keyworded call, an application, and finishing under a contract
+│   ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
 │   ├── select.rs         admission and selection over a candidate list, a keyworded call's argument record, and whether a call keeps a contract
 │   ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
+│   ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription and EVAL checks
 │   └── errors.rs         the messages of the error values dispatch raises
 ├── machine.rs           pub mod core / model / execute
 └── machine/
@@ -444,9 +452,9 @@ from that module's top-of-file comment. The kept modules carry theirs:
   and rankings, write-once slots, and the operator groups a body's statements
   are chained under.
 - [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
-  digest identity, the node vocabulary, the interning registry, the one order
-  and the lattice operations over it, and the unifier that solves a quantified
-  position.
+  its invariants, and an index of its parts — identity, the node vocabulary,
+  the relations, solving, and [the laws](src/type_lattice/laws.md) with what
+  breaks without each.
 - [src/elaborate/README.md](src/elaborate/README.md) — type expressions
   elaborated into lattice handles through the activation they are read in, and
   why one did not.
@@ -473,6 +481,12 @@ from that module's top-of-file comment. The kept modules carry theirs:
   verbs, with [cellgraph/src/graph/README.md](cellgraph/src/graph/README.md) for
   matrix liveness, the sealed tier and pricing, and
   [cellgraph/src/tree/README.md](cellgraph/src/tree/README.md) for tree cells.
+
+A design no single module owns sits in [design/](design/gradual-typing.md):
+[gradual typing](design/gradual-typing.md) follows a type from its declaration,
+through the load, to a call, and [quantified types](design/quantified-types.md)
+says where a `FOR ALL` may be written and what stands in for a higher-ranked
+type.
 
 Each rewrite item writes its own module's README the same way, fresh against the
 code it lands. The topical tree the old runtime was documented under is frozen at

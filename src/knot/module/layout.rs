@@ -1,7 +1,7 @@
 //! Layout order: where a member sits in a module, and the one place that rule is spelled.
 //!
-//! > Value members, sorted by name; then type members, sorted by name, abstract and manifest
-//! > merged into one run; then a body-born module's registrations, in slot order.
+//! > Value members, sorted by name; then type members, sorted by name, a signature's parameters and
+//! > manifest members merged into one run; then a body-born module's registrations, in slot order.
 //!
 //! Three things agree on it, and none of them consults the others. A body shape lays its value
 //! slots out first, its type slots after and its registration slots last, each channel sorted
@@ -32,13 +32,20 @@ pub fn member_count(schema: &SigSchema<'_>, scratch: BumpAllocator<'_>) -> usize
     value_count(schema) + type_members(schema, scratch).len()
 }
 
-/// The type members in layout order: abstract and manifest merged into one run by name, manifest
-/// winning where a name is both — the reading every relation over two schemas takes.
+/// The type members in layout order: a declared signature's parameters and its manifest members
+/// merged into one run by name. A module's schema has no parameters.
 pub fn type_members<'x>(
     schema: &SigSchema<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Members<'x, TypeSymbol> {
-    schema.member_bindings(scratch)
+    Members::from_pairs(
+        scratch,
+        schema
+            .parameters
+            .iter()
+            .chain(schema.manifest_members)
+            .copied(),
+    )
 }
 
 /// Where `name` sits in a module of signature `schema`, or `None` if the signature does not name
@@ -79,7 +86,7 @@ pub fn registrations<'graph, 'cell>(
 
 /// Where `name` sits in a symbol-sorted member table — a binary search, since a table is built
 /// only sorted.
-fn rank<N: Ord + Copy>(table: &[(N, KType)], name: N) -> Option<usize> {
+fn rank<N: Ord + Copy, T>(table: &[(N, T)], name: N) -> Option<usize> {
     table.binary_search_by(|(held, _)| held.cmp(&name)).ok()
 }
 

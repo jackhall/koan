@@ -40,13 +40,20 @@ fn a_class_that_orders_neither_candidate_passes_both_to_the_next() {
 fn a_keyworded_call_solves_a_group_class_by_class_and_a_call_by_name_jointly() {
     let pair = "EXPR FOR ALL #[Elt] #(PAIR x :(LIST OF Elt) WITH y :(LIST OF Elt)) -> Str = \
                 #(\"paired\")\n";
+    let mixed = "EXPR #(MIXED) -> Any = #([1, \"x\"])\n";
     assert_eq!(
         run(&format!(
-            "{pair}PRINT (PAIR [1, \"x\"] WITH [1])\nPRINT (PAIR [1] WITH [1, \"x\"])"
+            "{pair}{mixed}PRINT (PAIR [1, \"x\"] WITH [1])\nPRINT (PAIR [1] WITH (MIXED))"
         )),
         "paired\nerror: no overload of PAIR _ WITH _ admits \
          (:(LIST OF Number), :(LIST OF :(Number | Str)))",
         "the first class fixes `Elt`, and the second must lie under it"
+    );
+    assert_eq!(
+        run(&format!("{pair}PRINT (PAIR [1] WITH [1, \"x\"])")),
+        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits \
+         (:(LIST OF Number), :(LIST OF :(Number | Str)))",
+        "an exact second argument above `Elt`'s solution refuses the load"
     );
     assert_eq!(
         run(&format!(
@@ -75,6 +82,16 @@ fn one_variable_over_both_slots_ranks_before_two_independent_ones() {
 }
 
 #[test]
+fn one_variable_in_two_classes_takes_its_type_from_the_first() {
+    let source = "EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str = #(\"p\")\n\
+                  PRINT (PAIR 1 WITH \"x\")";
+    assert_eq!(
+        run(source),
+        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits (Number, Str)"
+    );
+}
+
+#[test]
 fn a_variable_a_class_did_not_admit_reads_as_its_bound_later() {
     let source = "EXPR #(TAKE x :(Str | (LIST OF Number)) WITH y :Number) -> Str = #(\"mono\")\n\
                   EXPR FOR ALL #[Elt] #(TAKE x :(Number | (LIST OF Elt)) WITH y :Elt) -> Str = \
@@ -90,8 +107,32 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
     assert_eq!(
         run("EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
              EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
-             PRINT (PICK 1)"),
+             LET r = ({v = 1} :! :{v :Any})\n\
+             PRINT (PICK r.v)"),
         expected,
+        "one scope"
+    );
+    assert_eq!(
+        run("EXPR #(PICK x :Number) -> Str = #(\"outer\")\n\
+             LET r = ({v = 1} :! :{v :Any})\n\
+             EXPR #(INNER) -> Str = #(\n  \
+             EXPR #(PICK x :Number) -> Str = #(\"inner\")\n  \
+             PICK r.v\n\
+             )\n\
+             PRINT (INNER)"),
+        expected,
+        "no scope shadows another's overload"
+    );
+}
+
+#[test]
+fn a_certain_ambiguity_refuses_the_load() {
+    assert_eq!(
+        run("EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
+             EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
+             PRINT (PICK 1)"),
+        "load: <test>:3:7: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks \
+         first",
         "one scope"
     );
     assert_eq!(
@@ -101,7 +142,8 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
              PICK 1\n\
              )\n\
              PRINT (INNER)"),
-        expected,
+        "load: <test>:4:3: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks \
+         first",
         "no scope shadows another's overload"
     );
 }
@@ -109,12 +151,17 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
 #[test]
 fn no_admitting_candidate_is_a_miss_naming_the_argument_types() {
     assert_eq!(
-        run("PRINT (\"a\" + 1)"),
+        run("LET r = ({v = \"a\"} :! :{v :Any})\nPRINT (r.v + 1)"),
         "error: no overload of _ + _ admits (Str, Number)"
     );
     assert_eq!(
+        run("PRINT (\"a\" + 1)"),
+        "load: <test>:1:7: no overload of `_ + _` admits (Str, Number)",
+        "a use no candidate can admit refuses the load"
+    );
+    assert_eq!(
         run("EXPR #(PICK x :Str) -> Str = #(\"a\")\nPRINT (PICK {n = 1})"),
-        "error: no overload of PICK _ admits (:{n :Number})"
+        "load: <test>:2:7: no overload of `PICK _` admits (:{n :Number})"
     );
 }
 
@@ -172,10 +219,21 @@ fn a_user_operator_is_admitted_beside_a_builtin_it_does_not_overlap() {
 fn code_an_eval_runs_is_checked_for_overlaps_where_it_runs() {
     let source = "LET q = #((OP #(+) OVER Number = #(0)) (1 + 2))\n\
                   PRINT \"loaded\"\n\
-                  EVAL q";
+                  EVAL q -> Any";
     assert_eq!(
         run(source),
         "loaded\nerror: <test>:1:11: this overload of `_ + _` takes operands the builtin \
          :(EXPR #(_ :Number + _ :Number) -> Number) already takes"
+    );
+}
+
+#[test]
+fn a_candidate_that_may_admit_still_solves_its_group_from_the_carried_types() {
+    let source = "EXPR #(EITHER) -> Any = #(1)\n\
+                  EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(\"both\")\n\
+                  PRINT (BOTH (EITHER) AND \"s\")";
+    assert_eq!(
+        run(source),
+        "error: no overload of BOTH _ AND _ admits (Number, Str)"
     );
 }

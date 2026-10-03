@@ -149,21 +149,23 @@ Point {x = "oops", y = 4}
 error: Point cannot wrap :{x :Str y :Number}: its representation is :{x :Number y :Number}
 ```
 
-The required fields are a *minimum*, though — a record may carry **more** fields
-than its type names, and the extras are kept and readable:
+The required fields are a *minimum*, though — a record with **more** fields
+than the representation names still constructs a `Point`. This is *width
+subtyping*: a wider record (more fields) stands in wherever a narrower one is
+expected. The `Point` shows only the fields its representation names, so the
+extra one is out of reach, both when printed and when read:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
 LET p = (Point {x = 3, y = 4, z = 5})
+PRINT p
 PRINT p.z
 ```
 
 ```text
-5
+Point({x = 3, y = 4})
+error: Point has no field z
 ```
-
-This is *width subtyping*: a wider record (more fields) stands in wherever a
-narrower one is expected.
 
 ## Records and dispatch
 
@@ -194,8 +196,8 @@ ada
 36
 ```
 
-Naming a field the record doesn't carry is an error that names the field and the
-record's type:
+Naming a field the record's type doesn't carry refuses the program when it
+loads, naming the field and the record's type:
 
 ```koan
 LET person = {name = "ada", age = 36}
@@ -203,12 +205,13 @@ PRINT person.email
 ```
 
 ```text
-error: :{name :Str age :Number} has no field email
+error: <input>:2:7: :{name :Str age :Number} has no field email
 ```
 
 Width subtyping has a cost in dispatch: a wide record can satisfy two different
 field-subset schemas at once, with neither more specific, so a call is
-ambiguous:
+ambiguous. Here the ambiguity is certain from the types alone, so the program
+refuses to load, naming where the call is written:
 
 ```koan
 EXPR #(PICK r :{x :Number, y :Str}) -> Str = #("got xy")
@@ -218,7 +221,7 @@ PICK both
 ```
 
 ```text
-error: ambiguous call of PICK _: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
+error: <input>:4:1: ambiguous call of PICK _: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
 ```
 
 `#[<fields>] FROM <record>` resolves this by *projecting* a record to exactly the
@@ -238,19 +241,31 @@ got xy
 
 The projection narrows the *type*, not the stored value — the other fields are
 still physically there, just invisible through the projected view. The narrowed
-type is the whole surface of the view, so a dropped field is out of reach of a
-field read as well as of dispatch:
+type is the whole surface of the view, so a dropped field is out of reach of
+printing and field reads as well as of dispatch:
 
 ```koan
 LET both = {x = 1, y = "a", z = "b"}
 LET view = (#[x y] FROM both)
+PRINT view
 PRINT view.y
+```
+
+```text
+{x = 1, y = a}
+a
+```
+
+Reading `view.z` refuses the program when it loads, just as `person.email` did:
+
+```koan
+LET both = {x = 1, y = "a", z = "b"}
+LET view = (#[x y] FROM both)
 PRINT view.z
 ```
 
 ```text
-a
-error: :{x :Number y :Str} has no field z
+error: <input>:3:7: :{x :Number y :Str} has no field z
 ```
 
 When you bind a projection, wrap the whole right-hand side:

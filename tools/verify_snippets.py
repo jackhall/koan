@@ -23,7 +23,7 @@ mds = sorted(target.glob("*.md")) if target.is_dir() else [target]
 # Expression shapes the interpreter does not run yet, each as the pattern that spots it.
 PENDING = [
     r"\bMATCH\b", r"\bTRY\b", r"\bCATCH\b", r"\bResult\b", r"\bMODULE\b",
-    r"\bSIG\b", r"\bVAL\b", r"\bTYPE\b", r"\bSCOPE\b", r":\|", r":!", r"\bCLOSE\b",
+    r"\bSIG\b", r"\bVAL\b", r"\bTYPE\b", r"\bSCOPE\b", r":\|", r"\bCLOSE\b",
 ]
 pending = re.compile("|".join(PENDING))
 

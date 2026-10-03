@@ -279,7 +279,7 @@ impl<'a> DictFrame<'a> {
                 let name = match key {
                     ExpressionPart::Identifier(v) => BinderSymbol::Value(v),
                     // A capitalized Type token is a valid literal field name (kept verbatim,
-                    // never name-resolved) — e.g. abstract type-slot names in `WITH {Elt = T}`.
+                    // never name-resolved) — e.g. a head parameter's name in `WITH {Elt = Number}`.
                     ExpressionPart::Type(t) => BinderSymbol::Type(t),
                     other => {
                         return Err(ParseError::new(

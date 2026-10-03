@@ -8,9 +8,11 @@
 //! [README.md § The bundle](README.md#the-bundle).
 
 use crate::knot::{KActivationView, KValue, KnottedFamily};
-use crate::memory::{CrossedOperand, DropFree, Writer, covariant, reattachable};
+use crate::memory::{CrossedOperand, DropFree, Writer, collect, covariant, reattachable};
 use crate::scheduler::StepBundle;
 use crate::scope::{BodyShape, Site};
+use crate::symbols::Symbol;
+use crate::type_lattice::KType;
 use crate::values::copy_severed;
 
 use super::body::Runner;
@@ -25,19 +27,26 @@ pub enum KBirth<'graph, 'cell> {
     /// The top level's root work.
     Program { program: &'graph Program<'graph> },
     /// A call: the frame's first step lays its activation down and binds the parameters from
-    /// `arguments`, a record of them by name, checked as `kind` says.
+    /// `arguments`, a record of them by name, checked as `kind` says. A call by name solves each
+    /// parameter `contributed` names from the type beside it, and every other from its argument's
+    /// carried type. `owed` is the contract of the evaluation that tailed into this frame: `None`
+    /// when the frame was spawned.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
         arguments: KValue<'graph, 'cell>,
         kind: CallKind,
+        contributed: &'cell [(Symbol, KType)],
+        owed: Option<Contract>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
-    /// carries and the names `offered`, a record of them by name, supplies.
+    /// carries and the names `offered`, a record of them by name, supplies — and `contract`, the
+    /// `EVAL`'s declared return, which the frame owes.
     Eval {
         program: &'graph Program<'graph>,
         code: KValue<'graph, 'cell>,
         offered: KValue<'graph, 'cell>,
+        contract: Contract,
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     /// A frame's tail hands its last statement over with the frame's `contract`, which the
@@ -111,8 +120,11 @@ impl<'graph> StepBundle<'graph> for KBundle {
         match birth {
             KBirth::Program { .. } => size_of::<usize>(),
             KBirth::Call {
-                callee, arguments, ..
-            } => callee.weight().plus(arguments.weight()).bytes(),
+                callee,
+                arguments,
+                contributed,
+                ..
+            } => callee.weight().plus(arguments.weight()).bytes() + size_of_val(*contributed),
             KBirth::Eval { code, offered, .. } => code.weight().plus(offered.weight()).bytes(),
             KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => usize::MAX,
         }
@@ -135,27 +147,41 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     callee,
                     arguments,
                     kind,
+                    contributed,
+                    owed,
                 } => {
-                    let [callee, arguments] =
-                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&callee, &arguments]);
+                    let [callee, arguments] = copy_severed::<_, KnottedFamily, 2>(
+                        writer,
+                        view,
+                        [&callee, &arguments],
+                        program.types(),
+                    );
                     KBirth::Call {
                         program,
                         callee,
                         arguments,
                         kind,
+                        contributed: collect(writer, contributed.iter().copied()),
+                        owed,
                     }
                 }
                 KBirth::Eval {
                     program,
                     code,
                     offered,
+                    contract,
                 } => {
-                    let [code, offered] =
-                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&code, &offered]);
+                    let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
+                        writer,
+                        view,
+                        [&code, &offered],
+                        program.types(),
+                    );
                     KBirth::Eval {
                         program,
                         code,
                         offered,
+                        contract,
                     }
                 }
                 // Only a forced copy reaches here with a view: a `Fresh` hop's successor, a sibling

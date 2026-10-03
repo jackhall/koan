@@ -108,6 +108,8 @@ cargo test: <N passed, M failed>
 clippy: <clean/issues>
 ```
 
+**Address every code-quality issue the shepherd raises before the gate.** Return to step 2 and fix each one, then re-spawn the shepherd on the new diff. Only the user may waive an issue; you may not dismiss or defer one on your own judgment.
+
 Then apply the **approval-gate** skill — this is the work item's disposition gate, so **Accept commits and Abort holds**:
 
 - `agent_output` = the shepherd's report. It already wrote the report to `scratch/<slug>-result.md` — **point the user at that file rather than re-writing it** (this satisfies the approval-gate "write to scratch and point the user there" step without a redundant write).

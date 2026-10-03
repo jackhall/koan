@@ -1,6 +1,7 @@
 //! Shared scaffolding for `values`' suites: program storage with a registry built in it, a scratch
 //! and an interner, a graph over that storage to run steps in, and a test-only knot member whose
-//! every node is a data node, with a sealed singleton newtype to tag its rings.
+//! every node is a data node, with a sealed singleton newtype to tag its rings. [`parts`] is shared
+//! crate-wide: a suite outside `values` reads a value's parts through the door as a program does.
 
 mod boundary;
 mod construction;
@@ -9,6 +10,7 @@ mod depth;
 mod equality;
 mod render;
 mod satisfaction;
+mod surface;
 mod working;
 
 use crate::memory::{
@@ -17,7 +19,9 @@ use crate::memory::{
 };
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
-use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
+use crate::type_lattice::{
+    DeclaredType, KType, Parametric, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
+};
 use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Weight};
 
 /// A value holding no callable — what every suite here builds, spelled once so a literal arm
@@ -33,6 +37,40 @@ pub(super) type WorkingPart<'graph, 'cell> = crate::values::WorkingPart<'graph, 
 /// [`crate::values::text`] at [`Value`].
 pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell>, text: &str) -> Value<'cell> {
     crate::values::text(writer, text)
+}
+
+/// The parts `value` shows through [the door](crate::values::Surface), each at its own memo: a
+/// list's elements, a dict's values in key order, a record's fields in symbol order, a tagged
+/// value's payload. Empty for a value that does not open.
+pub(crate) fn parts<'cell, X: Knotted + 'cell>(
+    value: crate::values::Value<'cell, X>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Vec<crate::values::Value<'cell, X>> {
+    let Some(surface) = value.surface(types, scratch) else {
+        return Vec::new();
+    };
+    (0..surface.len())
+        .map(|at| surface.child(at, types, scratch).value())
+        .collect()
+}
+
+/// A dict's cell under `key`, read off its runs as the door never shows a reader outside `values`.
+pub(super) fn entry<'cell, X: Copy>(
+    dict: &crate::values::Dict<'cell, X>,
+    key: &crate::values::Key<'_>,
+) -> Option<&'cell crate::values::Value<'cell, X>> {
+    let at = dict.keys().binary_search_by(|probe| probe.cmp(key)).ok()?;
+    dict.cells().get(at)
+}
+
+/// A record's cell under `name`, read off its runs whatever its type shows.
+pub(super) fn held<'cell, X: Copy>(
+    record: &crate::values::Record<'cell, X>,
+    name: crate::symbols::Symbol,
+) -> Option<&'cell crate::values::Value<'cell, X>> {
+    let at = record.names().binary_search(&name).ok()?;
+    record.cells().get(at)
 }
 
 /// A continuation family for a graph whose cells only store.
@@ -153,10 +191,10 @@ impl std::hash::Hash for Stand<'_> {
 }
 
 impl Knotted for Stand<'_> {
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> DeclaredType<KType> {
         match self {
-            Stand::Code(node) => node.code_kind(),
-            Stand::Function(_) | Stand::Barrier => KType::ANY,
+            Stand::Code(node) => node.code_kind().into(),
+            Stand::Function(_) | Stand::Barrier => KType::ANY.into(),
         }
     }
 
@@ -184,6 +222,7 @@ impl Knotted for Stand<'_> {
         match *self {
             Stand::Function(identity) => Resolved::Function {
                 identity,
+                instance: &[],
                 closure: &[],
             },
             Stand::Barrier => Resolved::Barrier,
@@ -209,8 +248,8 @@ pub(super) fn quote<'graph>(fixture: &Fixture<'_, 'graph>, source: &str) -> Prog
 pub(super) struct Node<'cell>(Member<'cell, Circular<'cell, Node<'cell>>>);
 
 impl Knotted for Node<'_> {
-    fn ktype(&self) -> KType {
-        self.0.payload().ktype()
+    fn ktype(&self) -> DeclaredType<KType> {
+        self.0.payload().ktype().into()
     }
 
     fn weight(&self) -> Weight {
@@ -322,7 +361,7 @@ impl<'graph> Fixture<'_, 'graph> {
         &self,
         name: &str,
         params: &[&str],
-        representation: impl FnOnce(&[TypeSymbol]) -> Option<KType>,
+        representation: impl FnOnce(&[TypeSymbol]) -> Option<Parametric>,
     ) -> KType {
         let mut names: Vec<TypeSymbol> = params
             .iter()
@@ -384,7 +423,7 @@ pub(super) fn ring<'graph, 'cell>(
         let (fields, memo): (Vec<_>, _) = match values[member] {
             Some(cell) => (
                 vec![(next, successor), (value, Link::Value(cell))],
-                types.record(scratch, &[(next, identity), (value, cell.ktype())]),
+                types.record(scratch, &[(next, identity), (value, cell.concrete_ktype())]),
             ),
             None => (
                 vec![(next, successor)],

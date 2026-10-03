@@ -4,17 +4,18 @@
 //! computes, and that no two node kinds share a domain tag. The first catches a recipe change that
 //! would silently re-identify a builtin leaf; the second catches a new variant added without one.
 
-use crate::memory::{Bump, ScopeId};
+use crate::memory::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::digest::node_digest;
-use crate::type_lattice::handle::{KType, builtin_types};
+use crate::type_lattice::handle::{Handle, KType, TypeHandle, builtin_types};
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::render::display_name;
-use crate::type_lattice::schema::{SchemaDraft, SigSchema};
+use crate::type_lattice::run::{Elements, Run};
+use crate::type_lattice::schema::SigSchema;
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 
 #[test]
@@ -80,15 +81,15 @@ fn constants_match_freshly_interned_nodes() {
             "LIST_OF_ANY",
             KType::LIST_OF_ANY,
             TypeNode::List {
-                element: KType::ANY,
+                element: Handle::ANY,
             },
         ),
         (
             "DICT_ANY_ANY",
             KType::DICT_ANY_ANY,
             TypeNode::Dict {
-                key: KType::ANY,
-                value: KType::ANY,
+                key: Handle::ANY,
+                value: Handle::ANY,
             },
         ),
     ];
@@ -150,11 +151,12 @@ fn constants_match_freshly_interned_nodes() {
         );
     }
     // The empty signature carries a schema digest computed at intern time, so it is checked through
-    // the door that mints one rather than against a hand-built node.
+    // the intern that mints one rather than against a hand-built node; the signature door answers
+    // the constant for an empty draft without interning.
     assert_eq!(
-        types.signature(region, SchemaDraft::new(region)),
-        KType::EMPTY_SIGNATURE,
-        "the pinned `KType::EMPTY_SIGNATURE` is not what the signature door interns for an empty \
+        types.intern_schema(SigSchema::EMPTY),
+        Handle::EMPTY_SIGNATURE,
+        "the pinned `KType::EMPTY_SIGNATURE` is not what its intern mints for an empty \
          schema",
     );
 }
@@ -167,10 +169,10 @@ fn every_node_kind_has_its_own_tag() {
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     // The representatives' runs, declared ahead of the registry so they outlive every node that is
     // interned over them.
-    let fields = [(field, KType::NUMBER)];
-    let arguments = [(field, KType::STR)];
+    let fields = [(field, KType::NUMBER.raw())];
+    let arguments = [(field, KType::STR.raw())];
     let elements = [DispatchTokenElement::Keyword(keyword)];
-    let members = [KType::NUMBER, KType::STR];
+    let members = [KType::NUMBER.raw(), KType::STR.raw()];
     let needed = [field];
     let bump = Bump::new();
     let region = &bump;
@@ -199,19 +201,17 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::AnyCode,
         TypeNode::Never,
         TypeNode::OfKind(KKind::ProperType),
-        TypeNode::AbstractType {
-            source: ScopeId::SENTINEL,
+        TypeNode::Parameter {
             name,
-            param_names: &[],
-            nonce: None,
             bound: KType::ANY,
+            nonce: None,
         },
         TypeNode::List {
-            element: KType::NUMBER,
+            element: KType::NUMBER.raw(),
         },
         TypeNode::Dict {
-            key: KType::NUMBER,
-            value: KType::NUMBER,
+            key: KType::NUMBER.raw(),
+            value: KType::NUMBER.raw(),
         },
         TypeNode::Record {
             fields: Record::over(&fields),
@@ -220,27 +220,42 @@ fn every_node_kind_has_its_own_tag() {
             quantifiers: &[],
             bounds: &[],
             params: Record::over(&fields),
-            ret: KType::NUMBER,
+            ret: KType::NUMBER.raw(),
         },
         TypeNode::ExpressionShape {
             quantifiers: &[],
             bounds: &[],
-            elements: &elements,
+            elements: Elements::over(&elements),
             classes: &[],
-            ret: KType::NUMBER,
+            ret: KType::NUMBER.raw(),
         },
         TypeNode::Quantified {
             index: 0,
             bound: KType::ANY,
         },
-        TypeNode::Union { members: &members },
+        TypeNode::Lexical {
+            level: 0,
+            name,
+            lower: KType::NEVER,
+            bound: KType::ANY,
+        },
+        TypeNode::Union {
+            members: Run::over(&members),
+        },
         TypeNode::ConstructorApply {
-            constructor: KType::NUMBER,
+            constructor: KType::NUMBER.raw(),
             arguments: Record::over(&arguments),
         },
         TypeNode::Signature {
             schema: SigSchema::EMPTY,
             schema_digest: node_digest(region, &TypeNode::Number),
+        },
+        TypeNode::SignatureApply {
+            signature: KType::NUMBER,
+            pins: Record::over(&arguments),
+        },
+        TypeNode::SignatureMeet {
+            members: Run::over(&members),
         },
         TypeNode::DeferredReturn(DeferredReturnSurface::Type(name)),
         TypeNode::Sibling(0),
@@ -282,16 +297,19 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::AnyCode => "AnyCode",
             TypeNode::Never => "Never",
             TypeNode::OfKind(_) => "OfKind",
-            TypeNode::AbstractType { .. } => "AbstractType",
+            TypeNode::Parameter { .. } => "Parameter",
             TypeNode::List { .. } => "List",
             TypeNode::Dict { .. } => "Dict",
             TypeNode::Record { .. } => "Record",
             TypeNode::KFunction { .. } => "KFunction",
             TypeNode::ExpressionShape { .. } => "ExpressionShape",
             TypeNode::Quantified { .. } => "Quantified",
+            TypeNode::Lexical { .. } => "Lexical",
             TypeNode::Union { .. } => "Union",
             TypeNode::ConstructorApply { .. } => "ConstructorApply",
             TypeNode::Signature { .. } => "Signature",
+            TypeNode::SignatureApply { .. } => "SignatureApply",
+            TypeNode::SignatureMeet { .. } => "SignatureMeet",
             TypeNode::DeferredReturn(_) => "DeferredReturn",
             TypeNode::Sibling(_) => "Sibling",
             TypeNode::SetMember { .. } => "SetMember",
@@ -313,7 +331,7 @@ fn every_node_kind_has_its_own_tag() {
     // Every representative is interned content, so the table can name each one back.
     for node in representatives {
         let handle = types.intern(region, node);
-        types.with_node(handle, |_| ());
+        types.node(handle);
     }
 }
 

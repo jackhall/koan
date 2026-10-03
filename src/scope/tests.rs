@@ -12,6 +12,7 @@ mod properties;
 mod quoted_uses;
 mod quotes;
 mod rewrite;
+mod typed;
 mod units;
 
 use crate::memory::{
@@ -21,7 +22,7 @@ use crate::memory::{
 use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
@@ -38,8 +39,8 @@ reattachable!(Step => ());
 pub(super) struct Probe(pub u32);
 
 impl Knotted for Probe {
-    fn ktype(&self) -> KType {
-        KType::ANY
+    fn ktype(&self) -> DeclaredType<KType> {
+        KType::ANY.into()
     }
 
     fn weight(&self) -> Weight {
@@ -64,6 +65,7 @@ impl Knotted for Probe {
     fn resolve<'a>(&self) -> Resolved<'a, Self> {
         Resolved::Function {
             identity: self.0 as usize,
+            instance: &[],
             closure: &[],
         }
     }
@@ -226,6 +228,18 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         },
         E::ShadowsBuiltin { name, .. } => E::ShadowsBuiltin { name, at },
         E::Unbound { name, site, .. } => E::Unbound { name, site, at },
+        E::Unfixed {
+            variables, wanted, ..
+        } => E::Unfixed {
+            variables,
+            wanted,
+            at,
+        },
+        E::NoInstance { scheme, wanted, .. } => E::NoInstance { scheme, wanted, at },
+        E::AmbiguousInstance { key, .. } => E::AmbiguousInstance { key, at },
+        E::NoInstanceAtCandidates { key, .. } => E::NoInstanceAtCandidates { key, at },
+        E::QuantifiedValue { .. } => E::QuantifiedValue { at },
+        E::QuantifiedRead { name, site, .. } => E::QuantifiedRead { name, site, at },
         E::EagerCycle {
             members,
             definitions,
@@ -262,6 +276,53 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::RankingDisagrees { key, .. } => E::RankingDisagrees { key, at },
         E::NoCandidate { key, .. } => E::NoCandidate { key, at },
         E::Overlaps { key, builtin, .. } => E::Overlaps { key, builtin, at },
+        E::NoAdmittingCandidate { key, arguments, .. } => {
+            E::NoAdmittingCandidate { key, arguments, at }
+        }
+        E::NoField { of, field, .. } => E::NoField { of, field, at },
+        E::Ambiguous {
+            key,
+            arguments,
+            count,
+            ..
+        } => E::Ambiguous {
+            key,
+            arguments,
+            count,
+            at,
+        },
+        E::ReturnNeverSatisfied { body, returns, .. } => {
+            E::ReturnNeverSatisfied { body, returns, at }
+        }
+        E::AscriptionNeverSatisfied {
+            value, ascribed, ..
+        } => E::AscriptionNeverSatisfied {
+            value,
+            ascribed,
+            at,
+        },
+        E::AnnotationNeverSatisfied {
+            value, annotated, ..
+        } => E::AnnotationNeverSatisfied {
+            value,
+            annotated,
+            at,
+        },
+        E::CallNeverSatisfied {
+            callee, arguments, ..
+        } => E::CallNeverSatisfied {
+            callee,
+            arguments,
+            at,
+        },
+        E::NotCode { value, .. } => E::NotCode { value, at },
+        E::EvalNeverSatisfied { code, returns, .. } => E::EvalNeverSatisfied { code, returns, at },
+        E::Type { error, .. } => E::Type { error, at },
+        E::RepeatedGuard { guard, .. } => E::RepeatedGuard {
+            guard,
+            first: at,
+            at,
+        },
     }
 }
 

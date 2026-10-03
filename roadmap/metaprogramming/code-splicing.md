@@ -12,8 +12,8 @@ without bound.
 
 **Acceptance criteria.**
 
-- With `stmts` bound to `[#(LET x = 4) #(PRINT x)]`, `EVAL #($..stmts)` prints
-  `4`, and a `$` name in a spliced part keeps the binding its own quote gave it.
+- With `stmts` bound to `[#(LET x = 4) #(PRINT x)]`, `EVAL #($..stmts) -> Any`
+  prints `4`, and a `$` name in a spliced part keeps the binding its own quote gave it.
 - `$..xs` makes the elements of `xs` the quote's syntax where the quote is
   written, and `..$xs` binds `xs` there and spreads its value when the code
   runs.
@@ -31,6 +31,9 @@ without bound.
 - Code composed at run time has its shape built once per code value and laid
   down where the value lives rather than in program storage, so an `EVAL` of
   composed code evaluated in a loop does not grow program storage.
+- Code composed at run time has its shape typed by
+  [the load pass](../../src/elaborate/README.md#the-type-channel-at-load) before
+  an `EVAL` runs it, so the overlap check reads every closed registration in it.
 - Composing code whose syntax would nest deeper than the parser's
   [depth limit](../../src/parse/README.md#the-syntax-depth-limit) yields an
   error value naming the limit, never a crash.
@@ -79,7 +82,7 @@ without bound.
   `EVAL` supplies. A written quote's is built where the program loads
   ([building code](../../src/scope/README.md#building-code)); composed code's is built once and kept where
   the code value lives, as invisible as a view, and code keeps its syntactic kind
-  ([the code family](../../src/type_lattice/README.md#the-code-family)). Code
+  ([the code family](../../src/type_lattice/vocabulary.md#the-code-family)). Code
   becomes a callable as the body of an `FN` ([quotes and functions](../../src/scope/README.md#quotes-and-functions)).
 
 ## Dependencies

@@ -9,16 +9,32 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
 
-use super::handle::KType;
+use super::handle::{Handle, TypeHandle, wrap};
 
 /// One position of an expression shape: a fixed token as its [`KeywordSymbol`], or an argument
-/// slot carrying its declared type. Both arms are `Copy` handles — a symbol is `u128` bits, a
-/// [`KType`] is interned in the run registry — so an element compares meaningfully wherever it is
-/// stored and a re-homed run copies nothing but the elements themselves.
+/// slot carrying its declared type as `H`. Both arms are `Copy` handles — a symbol is `u128` bits,
+/// a type handle is interned in the run registry — so an element compares meaningfully wherever it
+/// is stored and a re-homed run copies nothing but the elements themselves. A node stores its run
+/// raw; a typed read hands each slot back as the reading handle's child.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum DispatchTokenElement {
+pub enum DispatchTokenElement<H = Handle> {
     Keyword(KeywordSymbol),
-    Slot(KType),
+    Slot(H),
+}
+
+impl<H: TypeHandle> DispatchTokenElement<H> {
+    /// The element with its slot read as `C`.
+    pub(super) fn view<C: TypeHandle>(self) -> DispatchTokenElement<C> {
+        match self {
+            DispatchTokenElement::Keyword(keyword) => DispatchTokenElement::Keyword(keyword),
+            DispatchTokenElement::Slot(slot) => DispatchTokenElement::Slot(wrap(slot.raw())),
+        }
+    }
+
+    /// The element with its slot raw.
+    pub(super) fn raw(self) -> DispatchTokenElement {
+        self.view()
+    }
 }
 
 /// A confined FN `ret` slot whose source return is deferred to per-call elaboration — `-> er` or
@@ -96,7 +112,7 @@ pub(super) fn written_order(classes: &[u8]) -> bool {
 }
 
 /// The class of slot `index` under `classes` — its own index where the shape is written-order.
-pub(super) fn class_of(classes: &[u8], index: usize) -> u8 {
+pub fn class_of(classes: &[u8], index: usize) -> u8 {
     classes
         .get(index)
         .copied()

@@ -23,19 +23,36 @@ The `PRINT "hi"` never executed; `action` just holds it as data.
 
 ## Running code with `EVAL`
 
-`EVAL <code>` runs a quote's code. Pairing the two, the captured action runs
-only when evaluated:
+`EVAL <code> -> <Type>` runs a quote's code. Pairing the two, the captured
+action runs only when evaluated:
 
 ```koan
 LET action = #(PRINT "hi")
 PRINT "about to run it"
-EVAL action
+EVAL action -> Str
 ```
 
 ```text
 about to run it
 hi
 ```
+
+The type after `->` is what the code returns, written as a function's return
+is — `Str` here, since `PRINT` returns the string it printed. It works like a
+function's return too: the value the code returns is checked against it and
+carries it, so the rest of the program knows what the `EVAL` produces, and code
+whose type can never match it is refused before the program runs:
+
+```koan
+LET sum = #(1 + 2)
+PRINT (EVAL sum -> Str)
+```
+
+```text
+error: <input>:2:7: this `EVAL`'s code returns Number, which can never satisfy its declared return Str
+```
+
+Write `-> Any` to declare nothing. The `->` is required, as a function's is.
 
 Together, `#` and `EVAL` let you move a piece of unevaluated code through
 positions that would otherwise run it eagerly, and run it where you choose.
@@ -52,7 +69,7 @@ right beside it:
 
 ```koan
 LET x = 7
-EVAL #(PRINT x)
+EVAL #(PRINT x) -> Str
 ```
 
 To take a name from where the quote is written, mark it with `$`. `$x` binds
@@ -61,7 +78,7 @@ To take a name from where the quote is written, mark it with `$`. `$x` binds
 ```koan
 LET x = 7
 LET show = #(PRINT $x)
-EVAL show
+EVAL show -> Str
 ```
 
 ```text
@@ -81,7 +98,7 @@ field that names no hole is ignored, so one record can serve several quotes:
 
 ```koan
 LET greet = #(PRINT name)
-EVAL (greet USING {name = "bob"})
+EVAL (greet USING {name = "bob"}) -> Str
 ```
 
 ```text
@@ -104,8 +121,8 @@ statement — and is called with a quote:
 
 ```koan
 EXPR #(TWICE body :Expression) -> Any = #(
-  EVAL body
-  EVAL body
+  EVAL body -> Any
+  EVAL body -> Any
 )
 TWICE #(PRINT "hi")
 ```
@@ -115,39 +132,49 @@ hi
 hi
 ```
 
-`body` receives the quoted expression as a value; each `EVAL body` runs it. Any
+`body` receives the quoted expression as a value; each `EVAL body -> Any` runs
+it. Any
 expression that produces a quoted-expression value fills the slot just as well
 — a name bound to a quote, or a call that returns one — because the slot takes
 a value, not a spelling.
 
-Forget the `#` and the argument is an ordinary group, so it runs before
-`TWICE` is ever chosen. Writing
+Forget the `#` and the argument is an ordinary group, which would run before
+`TWICE` is ever chosen — and what it produces is the `Str` the print returns,
+not code. Koan sees that when the program loads, and refuses the call before
+anything runs, so `hi` is never printed:
 
 ```koan
+EXPR #(TWICE body :Expression) -> Any = #(
+  EVAL body -> Any
+  EVAL body -> Any
+)
 TWICE (PRINT "hi")
 ```
 
-prints `hi` once — that is the argument evaluating — and *then* fails to
-dispatch, because what reached the slot was the `Str` the print returned, not
-code. Nothing is undone by the failure; the side effect had already happened.
+```text
+error: <input>:5:1: no overload of `TWICE _` admits (Str)
+```
+
 The same happens to a name — its value, not its code, reaches the slot:
 
 ```koan
 EXPR #(TWICE body :Expression) -> Any = #(
-  EVAL body
-  EVAL body
+  EVAL body -> Any
+  EVAL body -> Any
 )
 LET greeting = "hi"
 TWICE greeting
 ```
 
 ```text
-error: no overload of TWICE _ admits (Str)
+error: <input>:6:1: no overload of `TWICE _` admits (Str)
 ```
 
-The message names each argument by the *type* dispatch matched it on, not by
-its spelling — `greeting` had already evaluated to a `Str`, and a `Str` is what
-failed to match an `:Expression` slot. Write `#(…)` to pass the code itself.
+The message names each argument by its *type*, not by its spelling —
+`greeting` holds a `Str`, and a `Str` can never match an `:Expression` slot.
+Where the argument's type is only known once it runs, the argument runs first,
+side effects and all, and the call fails when it is chosen. Write `#(…)` to pass
+the code itself.
 
 Hence the rule for calling a form that takes code: **quote what must not run.**
 
@@ -165,7 +192,7 @@ that parameter supplies each of them as it stands where the `EVAL` is written:
 ```koan
 EXPR #(WITH_FIVE body :(Expression NEEDING #[it])) -> Any = #(
   LET it = 5
-  EVAL body
+  EVAL body -> Any
 )
 WITH_FIVE #(PRINT \it)
 ```
@@ -227,7 +254,7 @@ kind standing in for the one above it:
 Code
 └─ Block               two or more statements
    └─ Expression       one statement
-      ├─ Declaration   #(VAL x :Str), #(TYPE Carrier), a bodyless head
+      ├─ Declaration   #(VAL x :Str), a bodyless head
       │  └─ Binder     #(LET x = 1): a declaration that also binds where it is written
       ├─ Literal       #(42), #("y"), #(#(x))
       ├─ Symbol        one token

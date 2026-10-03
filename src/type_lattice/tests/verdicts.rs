@@ -9,7 +9,7 @@ use crate::memory::{Bump, BumpVec};
 use crate::tests::allocation_count;
 
 use crate::type_lattice::digest::TypeDigest;
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{KType, TypeHandle};
 use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::registry::{Relation, TypeRegistry};
 
@@ -23,13 +23,10 @@ fn a_recorded_verdict_reads_back() {
     let types = TypeRegistry::in_region(&bump);
     assert_eq!(types.verdict(key(1), key(2), Relation::Subtype), None);
     types.record_verdict(key(1), key(2), Relation::Subtype, true);
-    types.record_verdict(key(1), key(2), Relation::SigSatisfies, false);
+    types.record_verdict(key(1), key(2), Relation::Fits, false);
     types.record_verdict(key(2), key(1), Relation::Subtype, false);
     assert_eq!(types.verdict(key(1), key(2), Relation::Subtype), Some(true));
-    assert_eq!(
-        types.verdict(key(1), key(2), Relation::SigSatisfies),
-        Some(false)
-    );
+    assert_eq!(types.verdict(key(1), key(2), Relation::Fits), Some(false));
     assert_eq!(
         types.verdict(key(2), key(1), Relation::Subtype),
         Some(false)
@@ -49,7 +46,7 @@ fn a_colliding_key_never_answers_for_another() {
         let read = types.verdict(key(subject), key(candidate), Relation::Subtype);
         assert!(read.is_none() || read == Some(verdict));
     }
-    assert_eq!(types.verdict(key(1), key(2), Relation::SigSatisfies), None);
+    assert_eq!(types.verdict(key(1), key(2), Relation::Fits), None);
 }
 
 #[test]
@@ -86,7 +83,12 @@ fn the_table_is_laid_once_and_never_grows() {
 fn conflict_evictions_stay_rare_at_the_default_size() {
     let (region, scratch) = (Bump::new(), Bump::new());
     let types = TypeRegistry::in_region(&region);
-    let leaves = [KType::NUMBER, KType::STR, KType::BOOL, KType::NULL];
+    let leaves = [
+        KType::NUMBER.raw(),
+        KType::STR.raw(),
+        KType::BOOL.raw(),
+        KType::NULL.raw(),
+    ];
     let mut pool = leaves.to_vec();
     for leaf in leaves {
         pool.push(types.list(leaf));

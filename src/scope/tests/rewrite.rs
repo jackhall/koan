@@ -89,14 +89,6 @@ fn expression<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'gra
     node.reference()
 }
 
-/// The node a part holds, which must be a quote.
-fn quote<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
-    let ExpressionPart::QuotedExpression(node) = part else {
-        panic!("the part is a quote");
-    };
-    node.reference()
-}
-
 /// The shape nested at part `index` of `node`.
 fn nested<'graph>(
     shape: &BodyShape<'graph>,
@@ -647,16 +639,12 @@ fn an_operator_run_in_a_bound_is_chained() {
         },
     );
     shaped(
-        "SIG Shown = #[(TYPE (Carrier UNDER :(Number & Str & Bool))) (VAL zero :Carrier)]",
+        "SIG Shown FOR ALL #{Carrier: :(Number & Str & Bool)} = #[(VAL zero :Carrier)]",
         |fixture, shape| {
             let shape = shape.expect("the program shapes");
-            let ExpressionPart::ListLiteral(members) = &shape.body()[0].parts[3].value else {
-                panic!("a SIG body is a container of quotes");
-            };
-            let declaration = quote(&members[0]);
             assert_eq!(
-                part_tree(&declaration.parts[1].value, fixture.symbols),
-                "(Carrier UNDER :(& [Number Str Bool]))"
+                part_tree(&shape.body()[0].parts[4].value, fixture.symbols),
+                "{#(Carrier): #(:(& [Number Str Bool]))}"
             );
         },
     );

@@ -2,7 +2,7 @@
 
 The [`Language`](../program/README.md#the-program-record) koan's programs run
 under: the builtin table a program loads over, the step every evaluation runs,
-and the check a loaded shape must pass. [`Koan`](../dispatch.rs) is the one
+and the checks a loaded shape must pass, which type it statically as they go. [`Koan`](../dispatch.rs) is the one
 implementation; the [program](../program/README.md) layer below it knows
 nothing of what a node means, and the [binary](../main.rs) loads every program
 under it.
@@ -10,18 +10,20 @@ under it.
 What a keyworded use may select is fixed where its shape is built
 ([keyworded uses](../scope/README.md#keyworded-uses)); how two candidates rank
 is a relation of the type lattice
-([priority classes](../type_lattice/README.md#priority-classes)). Dispatch is
+([priority classes](../type_lattice/solving.md#priority-classes)). Dispatch is
 what runs between the two: it evaluates a call's slots, admits and ranks the
-candidates by the arguments' carried types, and runs the one that wins.
+candidates by the arguments' types, and runs the one that wins.
 
 ## What dispatch runs
 
 Literals, names, containers, record access, construction, functions, keyword
-dispatch, the builtin library, quotes, `EVAL` and `USING` over code, and
-uncaught errors. [Control expression shapes and errors](../../roadmap/rewrite/control-and-errors.md)
-owns `MATCH`, `TRY`, `CATCH` and `Result`, and [module programs](../../roadmap/rewrite/modules.md)
-own the module expression shapes; a node dispatch has no reading for is an
-error value.
+dispatch, the builtin library, quotes, `EVAL` and `USING` over code, `:!` over
+any value but a module, and uncaught faults.
+[Matching](../../roadmap/conditionals/matching.md) owns `MATCH`,
+[catching errors](#catching) `TRY`, `CATCH` and `Result`, and
+[module programs](../../roadmap/rewrite/modules.md) own the module expression
+shapes, `:|`, and `:!` over a module; a node dispatch has no reading for is a
+fault.
 
 ## What a node is
 
@@ -30,8 +32,13 @@ statements the shape owns, [rewritten](../scope/README.md#the-four-rewrites),
 never the parse — as one of:
 
 - a **leaf**: a literal, lowered; a name, read through its mention's
-  coordinate; a quote, born through the [quote door](../knot/README.md#a-quote);
-  a type expression, elaborated to a type value; a list, dict or record
+  coordinate — at an [instance site](#static-types) the load recorded, made
+  into the instance through the knot's
+  [instance door](../knot/README.md#an-instance); a quote, born through the [quote door](../knot/README.md#a-quote);
+  a type expression, the type value of its
+  [load-time type](../scope/README.md#load-time-types) — as it is when closed,
+  its variables substituted with what their coordinates read when rigid — or,
+  where the load left it unknown, elaborated through the view; a list, dict or record
   literal, lowered whole when every part is a literal and otherwise built from
   its parts' values;
 - a **block** a pairwise operator run hoisted an operand into, run through the
@@ -39,7 +46,19 @@ never the parse — as one of:
   shared operand evaluates once;
 - a `FN`, born through the [lambda door](../knot/README.md#a-lambda), so a
   callable no binder names is born where it is evaluated, with the captures it
-  reads there;
+  reads there — a `FN FOR ALL` the load instantiated born as its instance;
+- an **ascription** `<value> :! <Type>`: the operand, evaluated, checked against
+  the type its type part denotes — read as a type expression leaf's is — unless
+  the load [settled](#static-types) it, and
+  [retyped](../values/README.md#the-type-memo-and-satisfies) to it, so what
+  follows dispatches on the ascribed type: after
+  `LET Loose = :((LIST OF Any) | Null)`, `[1] :! Loose` carries `LIST OF Any`.
+  A value that does not satisfy the type is a fault; a module operand is a fault
+  until [module programs](../../roadmap/rewrite/modules.md) run its view door;
+- an **`EVAL`** `<code> -> <Type>`: the operand, evaluated, run as code
+  ([below](#running-code)) in a frame owing the type its type part denotes —
+  read as an ascription's is — as a called frame owes its return. An operand
+  that is no code is a fault;
 - a **bucket declaration**, whose value is `null`;
 - a **keyworded call**: a node the shape holds a candidate list for;
 - an **application** `(head argument)`: a construction when the head is a type —
@@ -49,9 +68,8 @@ never the parse — as one of:
 
 A part a node needs is read in place when it is a literal, a name or a quote,
 and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
-all at one park. **An error value is passed through**: an evaluation that
-receives one from a part finishes with it, unchanged, before doing anything
-else.
+all at one park. **A fault is passed through**: an evaluation that receives
+one from a part finishes with it, unchanged, before doing anything else.
 
 ## The builtin table
 
@@ -74,13 +92,35 @@ overload ranks its slots in written order.
   of them is rewritten to, each returning a type value.
 - The overloads of the [builtin expression shapes](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
   whose slots dispatch evaluates, typed as their entries type them: `ATTR` over a
-  record or a tagged value over one, reading through every tagged layer to the
-  field; over a type, giving the type its record declares the field with, so
+  record or a tagged value over one, reading through every tagged layer at the
+  representation its identity names to the field, which it hands back at the
+  type the record's type names it at; over a type, giving the type its record declares the field with, so
   `Point.y` is `Str` and `v :Point.y` is a slot; over a union type labelled by a
-  type name, giving the variant; and over a module, an error value until
-  [module programs](../../roadmap/rewrite/modules.md). `FROM` projects a record
-  to the fields it names. `EVAL` runs code (below), and `USING` fills a code's
-  holes through the [`USING` door](../knot/README.md#a-quote).
+  type name, giving the variant; and over a module, a fault until
+  [module programs](../../roadmap/rewrite/modules.md). `FROM` restamps a record
+  at the projection of its carried type onto the fields it names, each once,
+  sharing the record's runs; a name that type does not name is an error value,
+  as it is to `ATTR`. `USING` fills a code's holes through the
+  [`USING` door](../knot/README.md#a-quote).
+
+**Each native has a [type rule](rules.rs).** From its arguments' static types,
+read at both ends, and each name operand as written, the rule gives the type
+each argument needs and the call's return interval. The load types every call
+of a builtin through its rule and judges the candidate against the needed
+types. The run reads no rule and retypes no native's value: a native reads its
+operands through [the door](../values/README.md#the-type-memo-and-satisfies),
+so what `ATTR` and `FROM` return already carries the type their rules give over
+the carried types, and the evaluator checks the carried type against the static
+one in debug builds. A native
+with no rule of its own takes its declared slots and a return at most its
+declared one. `FROM`'s rule is the [projection](#static-types) of its record's
+static type, and `ATTR`'s over a record the named field's type there. A
+property law pins every rule: over argument intervals within others, its return
+lies within theirs; handed no names, its return lies around its return over
+any; and over its declared slots, its
+return lies under its declared return. A return whose upper end is `Never` lies
+within every interval, and a rule over an argument whose lower end lies outside
+its need returns `Never`.
 
 **A shadowable builtin is derived, not listed.** A builtin whose operands are
 all `Any` — `==` and `PRINT` — admits every argument, so any user overload
@@ -96,7 +136,9 @@ label's the code kind of its name. [`select`](select.rs) then:
 
 1. **admits** each candidate whose registered shape — a builtin's own type, or
    the shape a registration's function carries — admits the carried types
-   class by class, solving a quantified candidate's group as it goes; a spread
+   class by class, solving a quantified candidate's group as it goes, each
+   slot that solves reading its argument's [contribution](#static-types)
+   where the load recorded one; a spread
    candidate, a list a `USING` or an `EVAL` supplied, contributes each function
    in it;
 2. **ranks** the admitting candidates by the lattice's per-class verdicts, which
@@ -108,21 +150,428 @@ label's the code kind of its name. [`select`](select.rs) then:
    admitting candidate is a **no-overload** error naming the arguments' types.
 
 A typed argument a candidate does not admit is a non-match that falls through to
-the others, never a bind-time error. The candidate list is fixed per site, but
-nothing about a selection is cached per call site: each call admits its
-candidates afresh and reads the recorded verdicts.
+the others, never a bind-time error. The candidate list is fixed per site, and
+each call admits the candidates on it and reads the recorded verdicts.
+
+**Static selection** gives each candidate a verdict where the shape is built, by
+the arguments' [static types](#static-types): *never*, *always* or *maybe*. A
+*never* candidate can never admit what the call passes, and is dropped; a use
+left with none refuses the load, as a statically typed language refuses it. A
+*maybe* candidate an *always* one strictly outranks at the first class, both
+closed, is dropped too: whenever it admits, elimination drops it at that class.
+A use left with no *maybe* candidate is ranked there when it holds one
+candidate or every one is closed. Its winner is selected, and the call runs it
+without admitting or ranking ([`chosen`](select.rs)), a quantified candidate
+still solving its group, as step 1 solves it; a use none of whose candidates
+ranks first refuses the load as an ambiguity. Any other call admits its *maybe*
+candidates, takes each *always* one as admitted, ranks as above, and chooses
+what selection over the full list would. Several rigid candidates are ranked at
+the call: a relation between shapes over a lexical variable holds at every run,
+but its absence need not — `INNER y :Elt` strictly outranks `INNER y :Number`
+over a rigid `Elt` bounded by `Number`, and ties with it where `Elt` is
+`Number`.
 
 **A keyworded call binds by the registration.** The argument record binds each
 slot to the parameter the registration names for it — or packs every slot into
 `operands` for a unary operator — and carries each type parameter the call
 solved, by name, as a type value, which the frame binds rather than solving
-again. A builtin's native runs in the evaluation's own step, save `EVAL`'s,
-which asks for a frame. A call by name hands its record over as written, and the
-[frame](../program/README.md#the-body-runner) admits each argument against its
-parameter's declared type and solves the callee's group against them jointly,
-so naming the callee may admit what a keyworded call of the same function
-refuses. The call says which it is (`CallKind`), so only a keyworded call's
+again. A builtin's native runs in the evaluation's own step. A call by name
+hands its record over as written, beside each contribution the load recorded
+for it, and the [frame](../program/README.md#the-body-runner) admits each
+argument — at its contribution where it has one — against its parameter's
+declared type and solves the callee's group against them jointly, so naming the
+callee may admit what a keyworded call of the same function refuses. The call says which it is (`CallKind`), so only a keyworded call's
 record is trusted to carry type parameters.
+
+## Static types
+
+[`statics`](statics.rs) runs as `Language::check`, after the overlap check,
+over the program's shape and every shape nested in it, a quote's code included.
+It gives every value expression and value binder a **static type**: an
+[interval](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
+within which every type the run carries there lies — its upper end `Any` where
+the load cannot bound it from above, its lower end `Never` where it cannot bound
+it from below. A static type is **exact** where its ends meet: the run carries
+that very type, each lexical variable in it bound as the run binds it. The pass reads each node through the evaluator's own reading of
+it, so the load types a node as it evaluates, and it builds on what
+[the type channel's load pass](../elaborate/README.md#the-type-channel-at-load)
+fixed:
+
+- a literal, a quote, a `FN` and a type expression the load knows are exact, at
+  their own type, their code type, their function type, and the type of the type
+  value they denote; a list, dict or record literal has the ends its parts' ends
+  build, and a construction the ends its payload's build;
+- a name has its binder's static type: a parameter is exactly its declared type
+  where the retype makes it so — a list, dict or record type, a family or its
+  application, a newtype or a union's variant — since its frame
+  [retypes](../program/README.md#the-body-runner) the argument to it, and at
+  most its declared type otherwise, a union keeping each variant's own type; a
+  local has its right-hand side's, an annotated local, `LET n :T = v`, what
+  the ascription `v :! T` would have, a
+  registration is exactly its function type, and a type name its type value's; a block's `it`, an arm's `it`, a name a
+  `USING` surfaces and a quote's hole are at most `Any`;
+- a block has its last statement's type, and a bucket declaration is `Null`;
+- an ascription `e :! T` is, like a parameter, exactly `T` where the retype
+  makes it so and at most `T` otherwise — save an exact function operand
+  settled at a function type `T`, which keeps its own exact type, since a
+  function's retype is the identity. An operand whose static type is `Never`
+  never arrives, and the ascription is `Never`; a type the load leaves unknown
+  makes it at most `Any`;
+- a keyworded call is its selected candidate's return — a builtin's as its
+  [rule](#the-builtin-table) gives it, and a registration's exactly its return
+  where the retype makes it so and the group is unquantified or solved to
+  points, since the frame retypes its value to it, and at most it otherwise —
+  or at most the join of every kept candidate's return: `Any` where one of them
+  is a candidate the load cannot read, a spread, a hole or a registration of
+  unknown shape. A `USING … SCOPE` block's
+  [surfaced head](../scope/README.md#names-that-arrive-at-run-time) is a
+  registration whose return is at most the head's whatever the solve, since the
+  module's own definition answers the call: under
+  `SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]`, in
+  `USING (m :! Boxes) SCOPE (…)`, `BOX 1` is at most `LIST OF Number` and
+  `BOX "s"` at most `LIST OF Str`, each use solving the head's `Elt` afresh;
+- an application is the identity its construction builds when its head is a
+  type the load knows, and its callee's return when the head is a function —
+  exact by the same rule where the callee's static type is exact, and at most
+  that return otherwise, since a parameter of function type may bind a function
+  declaring a smaller return, and no function is retyped; a union variant
+  construction is at most `Any`;
+- `ATTR` over a record is the named field's type in the record's static type,
+  read at each end: exactly that type where both ends name the field at one type
+  the retype makes exact, since the run reads the field's value at it, and at
+  most the upper end's otherwise — `Any` where the upper end names no such field.
+  A field's value keeps its own variant of a union, so an `ATTR` over an exact
+  record is exact only where its field's type is. A lower end lacking the field
+  makes the candidate *never*, since every record the run can carry lacks it
+  too;
+- a call in tail position is typed as any other call: its node never finishes,
+  since the frame it tails into returns at the enclosing contract, so no
+  carried type is read against it;
+- `FROM` over a written field list is the projection of its record's static
+  type, read at each end: the record of the listed fields at the upper end's
+  types, `Any` where it names none, above, and the same over the lower end's
+  below, so a call over an exact record is exactly its projection. A lower end
+  lacking a listed field makes the candidate *never*, so
+  `EXPR #(GET r :{a :Number}) -> Any = #(#[b] FROM r)` refuses the load. Over a
+  list the load cannot read, `FROM` is at most `:{}`, and the run restamps its
+  record at the projection of the record's carried type;
+- an `EVAL <code> -> <Type>` is its declared return as a registration's call
+  is: exactly `<Type>` where the retype makes it so, since the run retypes its
+  value to it, and at most `<Type>` otherwise. An operand whose static type is
+  `Never` never arrives, and the `EVAL` is `Never`; a type the load leaves
+  unknown makes it at most `Any`. Where the load traces the code
+  to a written quote — its operand, or a name `LET` binds to one — it types the
+  code's last statement as the code runs there, read through
+  [`bound_above`](../type_lattice/solving.md#substitute-then-ask) since the code
+  roots a chain of its own, and checks that type against the declared return as
+  the return check below checks a body's. An `EVAL` fills only the code's
+  `\` keys, so an unmarked keyworded use's hole holds nothing as the traced code
+  runs, and the load types the code a second time that way: after
+  `LET q = #(1 + 2)`, the code `EVAL q -> Number` runs is `Number`, while the
+  code's own cell, which a `USING` may fill, keeps the hole as a candidate the
+  load cannot read and types `1 + 2` at most `Any`.
+
+"At most" leaves the lower end at `Never`. A static type whose upper end is
+`Number`, `Str`, `Bool` or `Null` is exact, since no value carries a type
+strictly under one.
+
+A static type's ends are
+[parametric](../type_lattice/identity.md#typed-handles), since they may hold
+lexical variables, and are compared by *fits*; what a call reads at run time
+is concrete. A binder of a quantified callable — a `MODULE` or `GROUP` body's member, or a
+name a keyworded form binds — is typed by its scheme, which a call's head reads
+and solves, and the statement binding it is at most `Any`. A part's or a
+statement's static type is never a scheme.
+
+**Instance sites.** A quantified function anywhere else — a name bound to one,
+read where the [resolution rule](../scope/README.md#resolution) lets it be, or
+a `FN FOR ALL` literal — is an **instance site**, typed with the type it is
+**wanted** at:
+
+- an annotated binder's right-hand side, at its annotation;
+- an ascription's operand, at its type;
+- a callable body's last statement, at the declared return — a `LET` there
+  hands it to its right-hand side;
+- a call by name's argument, at the callee's parameter record, which a record
+  literal hands each field;
+- a list, dict or record literal's parts, at its element, value or field type,
+  only where the wanted type is that container's own;
+- a keyworded argument that is itself an instance site, at the slot of each
+  candidate, typed per candidate.
+
+A wanted type is never split: a union or `Any` fixes nothing. The site is
+instantiated at the least instance of its scheme under the wanted type
+([`instance_under`](../type_lattice/relations.md#quantified-binders)), its
+static type exactly that instance. A `LET` of a quantified `FN` outside a
+`MODULE` or `GROUP` body is an instance site whether or not its name is read, wanted at
+its annotation or, as a callable body's last statement, at the declared return;
+so a bare `LET pick = (FN FOR ALL …)` at the top level refuses the load. A
+name's solution is recorded by its site in the shape's cell, and a literal's in
+its body's write-once born-instance cell. A solution may name a lexical
+variable: in the body of
+`EXPR FOR ALL #[Outer] #(WRAP a :Outer) -> :(FN :{x :Outer} -> Outer)`, `pick`
+as the last statement solves `Elt` to `Outer`, its static type exactly the
+instance over `Outer`. The cell then records where the site reads each variable
+it names, as a contribution's does (below), and the run substitutes the type it
+binds there where the name is read or the literal is born, so `WRAP 1` returns
+a `FN :{x :Number} -> Number` and nothing is solved at run time. Each refusal
+names the group's variables in group order:
+
+```text
+nothing fixes `Elt` here: a quantified function is read only at the head of a call, as the binding of a `MODULE` member, or where the type it is wanted at solves its group
+:(FN :{x :Number} -> Number) does not fix `Elt`
+:(FN FOR ALL #[Elt] :{x :Elt} -> Elt) has no instance under :(FN :{x :Number} -> Str)
+```
+
+— `ShapeError::Unfixed` with no wanted type or one that reaches a variable with
+nothing, and `NoInstance` where the scheme does not fit the wanted type. A
+quantified callee's slot is read through its group solved from its **other**
+arguments first. A variable that a class before the slot's
+[solves](../type_lattice/solving.md#priority-classes) is taken as the call
+solves it, from those classes' solving slots, each at its argument's
+contribution: under `EXPR #(APPLY 2 TO 1)` and
+`EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :Elt) -> Elt`,
+`APPLY pick TO b` over a parameter `b :(Number | Str)` instantiates `pick` at
+`Elt = Number | Str`. A contribution holding a lexical variable fixes the
+variable where a run
+[reproduces the solve](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind):
+in the body of `EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any`,
+`APPLY pick TO xs` instantiates `pick` at `Elt = LIST OF Outer`, a solution
+naming a lexical variable as above, while under
+`#{Outer: :(LIST OF Number)}` with `xs :Outer` and `y :(LIST OF Elt)` the solve
+reads `Outer` through its bound, which a run binding it lower does not
+reproduce. A solving argument there that is itself an instance site, whose
+contribution is unknown, or whose solve a run may not reproduce, fixes nothing.
+Any other variable the slot shares with the other arguments must come out one
+point the call reproduces — a closed one, or one of a reproducible solve — and
+one only the slot names is read through `[Never, bound]`, so under
+`EXPR FOR ALL #[Elt Out] #(MAP f :(FN :{x :Elt} -> Out) AT y :Elt) -> Out`,
+`MAP pick AT 1` instantiates `pick` at `Elt = Number` and is `Number`, while
+`MAP pick AT y` over a parameter `y :(Number | Str)` refuses — and loads under
+`EXPR #(MAP 2 AT 1)`, `Elt` taken from `y`. An other argument
+that does not admit its slot fixes nothing either, so it refuses the load as
+`Unfixed` too — save, at a keyworded use, one that can never fit its slot, its
+upper end meeting the slot at `Never`, both read through their bounds: that
+candidate is dropped and left to the judge's own refusal. A candidate whose
+slot gives no instance is *never*. The rest are judged with the instance as an
+exact argument, and must agree on it (`AmbiguousInstance`). A lone candidate
+dropped this way reports its own refusal, and several `NoInstanceAtCandidates`.
+
+**Generic calls.** A quantified callee's group is solved from the arguments'
+static types to an
+[interval](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind) per
+variable, which holds every solution a call can reach, and its return is
+[read through the intervals](../type_lattice/solving.md#substitute-then-ask): a
+variable's upper end at a covariant position, its lower end at a contravariant
+one. So under `EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)`, `ONLY 1` is
+`Number`. Where every argument at a slot that solves is exact or contributes
+its static type (below), and a run
+[reproduces](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
+the solve over them, that solve is the call's own, and each variable is solved
+to a point. A parameter exact at a container type is such an argument: under
+`EXPR FOR ALL #[Elt] #(FLAT rows :(LIST OF (LIST OF Elt))) -> :(LIST OF Elt)`,
+`FLAT rows` over a parameter `rows :(LIST OF (LIST OF (Number | Str)))` is
+selected at load, and solves `Elt` to `Number | Str` whatever the argument's
+contents. An exact argument over a lexical variable is one too where the
+solve hands it whole to a variable, so a point may name it: `BOTH m WITH m`
+over `m :(LIST OF Outer)`, under
+`EXPR FOR ALL #[Elt] #(BOTH x :(LIST OF Elt) WITH y :(LIST OF Elt))`, solves
+`Elt` to `Outer` and is selected. A solve that reads the variable through its
+bound is not, since the call solves through the type the run binds it to. A
+call binds each variable to one
+type, the
+[least instance](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
+of the pair its arguments solve it to.
+
+**Contributions.** A call solves a quantified candidate's group from what the
+load knows of each argument, and from what the run carries only where the load
+knows nothing. At a slot that
+[solves](../type_lattice/solving.md#priority-classes) — one naming a variable
+its own class is the first to name — an argument **contributes** the upper end
+of its static type, or its carried type where that upper end is `Any`, since
+`Any` constrains nothing; every other slot admits its argument's carried type,
+as an unquantified slot does. So under
+`EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`, `PAIR a WITH b` over
+parameters `a :(Number | Str)` and `b :(Number | Str)` binds `Elt` to
+`Number | Str` whatever they hold, while `PAIR e WITH a`, `e` an `EVAL`
+declared `-> Any`, solves `Elt` from what `e` carries and admits `a` against
+it. A programmer moves an argument to the load's side with `:!`. A static type
+that cannot fit its slot contributes all the same, so the solve fails at every
+run and the load refuses the use: under
+`EXPR FOR ALL #[Elt] #(FIRST xs :(LIST OF Elt)) -> Elt`, `FIRST m` over a
+parameter `m :((LIST OF Number) | Null)` refuses the load, where an
+unquantified slot of that type would be *maybe*. An instance argument and an
+`ATTR` label written bare contribute their carried types. A static solve may
+bind what the carried one would not, and the call runs what it binds; a
+no-overload fault still names the carried types.
+
+A contribution holding a lexical variable is read where the call runs, at the
+type the run binds the variable to. The use records where it reads each
+variable — a hop per block, and a
+[type capture](../scope/README.md#load-time-types) in each callable or module
+between the use and the body declaring the variable — so a callable nested in a
+generic body solves as that body itself would, and a closure holds a type
+capture only where one of its calls or instance sites reads it. The pass computes a
+contribution only at a position some candidate's slot solves, whether or not
+the load keeps that candidate, since a call runs what selection over the full
+list would and a candidate the load judged *never* from a contribution must stay
+*never* there. The cell
+records each use's contributions, which the call resolves and hands selection
+beside the carried types.
+
+**Lexical variables.** A static type may hold the
+[lexical variables](../elaborate/README.md#the-type-channel-at-load) of the
+names a run binds. A body runs under one call of each body enclosing it, so a
+variable is one type wherever that body reads it, a capture included: `Elt` lies
+under `Elt`, and a parameter `x :Elt` fills a slot `:Elt` with nothing to solve.
+Against any other type a variable lies under what its bound lies under, and a
+meet reads both sides through `bound_above`. A quote's code roots a chain of its
+own, so a static type crossing into it, a `$` name's, or leaving it, an
+`EVAL`'s, is read through `bound_above` too.
+
+**Verdicts.** Each keyworded use gives each candidate one of three, as
+[`judge_by_class`](../type_lattice/solving.md#priority-classes) judges it:
+
+- *never* — some slot meets its argument's upper end at `Never`, or its
+  argument's lower end does not fit it, since the carried type lies above that
+  end: beside `EXPR #(WHICH x :(LIST OF Number))`, `WHICH x` over a parameter
+  `x :(LIST OF Any)` is *never*;
+- *always* — every class admits whatever the call carries within its
+  arguments' static types: a slot that is a variable of its own class alone
+  admits under the variable's bound, and a class whose arguments naming its own
+  variables are exact, and whose static solve over them a run reproduces,
+  admits when that solve does — where it fails, the candidate is *never*. A
+  contributing
+  argument is read as exactly its upper end, since the call solves from that
+  type. Each admission reads
+  [*fits*](../type_lattice/relations.md#the-relations), so a module argument at
+  most a signature declaring all of `Boxes`'s members and more is *always* at a
+  slot `:Boxes`;
+- *maybe* — any other, and every candidate the load cannot read.
+
+A slot naming a variable an earlier
+[class](../type_lattice/solving.md#priority-classes) solved is read through that
+variable's interval: at its least instance for *always*, at its greatest for
+*never*. So under `EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`,
+`PAIR 1 WITH 2` is *always*, and so is `PAIR a WITH b` over parameters
+`a :(Number | Str)` and `b :(Number | Str)`, since `a` contributes
+`Number | Str` and `b` lies under it, while `PAIR a WITH e`, `e` an `EVAL`
+declared `-> Any`, is *maybe*: `e` may carry a type `Elt` does not admit. An argument whose static type is `Never` never arrives,
+so its use drops and ranks nothing and its own static type is `Never`. A use
+left with no candidate refuses the load (`ShapeError::NoAdmittingCandidate`):
+
+```text
+no overload of `_ + _` admits (Str, Number)
+```
+
+A use whose last candidate a builtin's need dropped refuses it in the native's
+own words (`ShapeError::NoField`):
+
+```text
+:{a :Number} has no field b
+```
+
+A use left with no *maybe* candidate, holding one candidate or only closed
+ones, is ranked as a call ranks. A lone survivor, or a builtin among several, is
+selected; several survivors with no builtin among them refuse the load
+(`ShapeError::Ambiguous`):
+
+```text
+ambiguous call of PICK _: 2 overloads admit (Number) and none ranks first
+```
+
+The cell records the candidate selected, or each candidate kept beside its
+verdict.
+
+**The return check.** A callable body whose static type — its last statement's
+— meets its declared return at `Never` refuses the load
+(`ShapeError::ReturnNeverSatisfied`), since every call of it would fault on its
+contract:
+
+```text
+this body returns Number, which can never satisfy its declared return Str
+```
+
+A body whose static type is `Never` never arrives, and is not checked. A
+callable declared to return `Never` is checked like any other, so its body must
+itself be `Never`-typed — every other body meets `Never` at `Never`, and refuses
+the load. The check is a meet of upper ends, not an order: a body whose static
+type is at most `Any` loads, and the run holds what it returns to the contract.
+An `EVAL`'s traced code is checked against its declared return the same way,
+both read through `bound_above`, and refuses the load at the `EVAL`
+(`ShapeError::EvalNeverSatisfied`): after `LET q = #("a")`, `EVAL q -> Number`
+is refused with
+
+```text
+this `EVAL`'s code returns Str, which can never satisfy its declared return Number
+```
+
+An `EVAL` whose operand's upper end meets `Code` at `Never` refuses the load
+too (`ShapeError::NotCode`):
+
+```text
+this value is Number, which can never be code for `EVAL` to run
+```
+
+**The ascription check.** An ascription is checked the same way: one whose
+operand's upper end meets its type at `Never` refuses the load
+(`ShapeError::AscriptionNeverSatisfied`), located at the ascription node, both
+read through `bound_above`:
+
+```text
+this value is Str, which can never satisfy its ascription Number
+```
+
+One whose operand's upper end [fits](../type_lattice/relations.md#the-relations)
+its type is **settled**: every value the run carries there satisfies it, so the
+run retypes without checking. *Fits* is rigid-aware, so an operand typed by a lexical variable settles an
+ascription to that variable. The cell records each settled ascription by site.
+
+An annotated binder, `LET <name> <type> = <value>`, is held to its type the same
+way, refused `ShapeError::AnnotationNeverSatisfied` at its statement and settled
+by its type part's site:
+
+```text
+this value is Str, which can never satisfy its annotation Number
+```
+
+**The call-by-name check.** A call by name whose callee's static type is exactly
+an unquantified function refuses the load (`ShapeError::CallNeverSatisfied`)
+where its argument's upper end lacks a parameter or meets one at `Never`, or,
+the argument exact, names a field no parameter declares:
+
+```text
+:(FN :{x :Number} -> Str) can never be called with :{x :Str}
+```
+
+A callee the load knows only at most, such as a parameter of function type, is
+the call's to admit. A call by name whose callee the load reads as a quantified
+function solves its group from its argument record's static type, each field
+contributing as a keyworded argument does, so `pair {x = a, y = b}` under
+`FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(LIST OF Elt)` is exactly
+`LIST OF (Number | Str)` over the parameters above. Wherever the argument's
+record names every parameter, the cell records the contributions by the
+argument's site for the frame, whatever the static solve finds: a field whose
+static type the load cannot admit still contributes, and the frame solves from
+it as a keyworded call would. The call refuses the load
+where a contribution the load knows — closed, or holding a lexical variable —
+does not fit its parameter, or where every solving parameter's contribution is
+known and the group has no solution, each where a run reproduces the solve:
+under `FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt`, `only {x = a}` over
+`a :(Number | Str)` refuses the load, and so does `first {y = m}` under
+`FN FOR ALL #[Elt] :{y :(LIST OF Elt)} -> Type` over
+`m :((LIST OF Outer) | Null)`, whose member `Null` fails at every binding. The
+call is exact at its return where the solve is reproducible over exact
+contributions, as a keyworded one is.
+
+What the pass fixes rests in each shape's write-once
+[value-channel cell](../scope/README.md#load-time-types), which the call reads.
+Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running
+it reports it, as it reports the type channel's. Debug builds check both halves
+on every run: a finished value's carried type lies within its node's static
+type, a call that dropped, selected or took a candidate as admitted runs
+what selection over the full list would, and each argument a call binds
+carries a type under its slot or parameter at the solution.
 
 ## Tails under a contract
 
@@ -131,25 +580,36 @@ owes the frame's [`Contract`](../program/record.rs). When it selects a
 registration whose declared return, substituted by the call's solution,
 satisfies the contract — or calls an unquantified function by name whose return
 does — it hands its cell to the callee's frame by a tail rather than spawning
-it, so a keyworded self-call in tail position holds a constant number of cells
-however deep it recurses. Any other value it finishes with is held to the
-contract: retyped to the declared return, or an error value naming the callee.
+it, handing the frame the contract it owes, so a keyworded self-call in tail
+position holds a constant number of cells however deep it recurses, and a chain
+of tail hops returns at the outermost declared return. Any other value it
+finishes with is held to the contract: checked against the callee's own return,
+a miss naming it, and retyped to the contract's outermost return.
 
 ## Running code
 
-`EVAL code` checks the code's shape for overlaps, as a loaded program's is, and
+`EVAL <code> -> <Type>` checks the code's shape for overlaps, as a loaded program's is —
+its types were fixed where the program loaded, the quote's code included — and
 asks the program's `EVAL` door for a frame running it over what the `EVAL`
 offers: each name its operand's `NEEDING` list names, read where the `EVAL` is
 written, and each bucket key as the list of functions a use at the key written
 there would list, builtins included. A refusal — an overlap, the code shape's
-own error, an unbound name or a required keyworded hole — is an error value.
-`EVAL` over anything but code is a no-overload miss like any other.
+own error or its typing refusal, an unbound name or a required keyworded hole —
+is a fault.
+The frame owes `<Type>` — the type the type part denotes, read as an
+ascription's is — as a called frame owes its return: its value is checked
+against it and retyped to it, and a tail in the code hands the contract on
+([tails](#tails-under-a-contract)). A miss is a fault naming the code,
+`` `EVAL`'s code returned Str, which does not satisfy Number ``. An operand
+that is no code is a fault, `` Number is not code for `EVAL` to run ``.
 
 ## Errors
 
-A koan error is an [error value](../program/README.md#errors-and-output)
-carrying a message, and an uncaught one ends the program with
-`error: <message>`. [`errors`](errors.rs) words what only dispatch decides:
+A refusal while a program runs is a [fault](../program/README.md#faults-and-output):
+one of a closed set of kinds, each carrying the fields its message renders from
+when it is printed or caught, and an uncaught one ends the program with
+`error: <message>` and its trace. [`errors`](errors.rs) words what only
+dispatch decides:
 
 | Situation | Message |
 |---|---|
@@ -159,6 +619,9 @@ carrying a message, and an uncaught one ends the program with
 | a missing union member | `:(Some \| None) has no member Many` |
 | an incomparable `==` | `<T> and <U> cannot be compared` |
 | `ATTR` over a module | `reading a module's member arrives with modules` |
+| `:!` over a value that misses its type | `:(LIST OF :(Number \| Str)) does not satisfy its ascription :(LIST OF Number)` |
+| `:!` over a module | `ascribing a module arrives with modules` |
+| `EVAL` over a value that is no code | `` Number is not code for `EVAL` to run `` |
 | a `USING` ranking | `MOVE _ TO _ is ranked two ways` |
 | a dict key that is no scalar | `:(LIST OF Number) cannot be a dict key` |
 | a node with no reading | `nothing evaluates <node>` |
@@ -168,7 +631,30 @@ A refusal a layer below renders keeps its own wording: a construction misfit
 arguments, an argument a call by name does not fit
 (`:(FN :{x :Number} -> Str) cannot be called with :{x :Str}`), an unsolvable
 group, a callee that is no function, a type expression that does not
-elaborate, and an `EVAL`'s refusal. An error carries no call trace.
+elaborate, and an `EVAL`'s refusal.
+
+A no-overload miss, an ambiguity, a return miss, an ascription miss, an `EVAL`
+of what is never code or an `EVAL` whose code can never meet its return the load
+can already see is no fault: it refuses the load, located at `path:line:col`
+([static types](#static-types)).
+The run meets only those whose static types are too wide to tell — an argument
+read out of a record field, say, whose static type is `Any`.
+
+## Catching
+
+`TRY` and `CATCH` are where a fault becomes a koan value. Each runs its
+operand as a block, whose shape records that its fault goes to them rather
+than to the enclosing frame, so a `TRY` body is never in tail position. The
+value is the builtin union `Error`: one variant per fault kind, over a record of
+that kind's fields and `frames`, the trace an uncaught fault prints. Its
+variants are not parameterized, so a field whose type varies with the refusal,
+such as a missing key, is `Any`. A field may hold a value: the fault kept the
+frame it lies in, and the catcher copies it out as a return is copied. Once the
+`Error` is built, the catcher releases the frames the fault kept.
+
+`TRY` selects an arm by the variant as `MATCH … UNDER Error` does, binding `it`
+to its record, and a body that yields no fault yields its value. `CATCH` yields
+`Result.Ok` of its body's value or `Result.Error` of the `Error`.
 
 ## The overlap check
 
@@ -177,13 +663,16 @@ takes, since the builtin would win every such call and the overload would be
 dead there. [`check::overlaps`](check.rs) runs where a shape is built and its
 types can be read: over a loaded program's shape and every body nested in it,
 short of a quote's code, as `Language::check`, and over a quote's code where an
-`EVAL` runs it. It reads only what the builtin table spells: a registration at a
-key with builtin overloads whose signature names builtins alone is typed
-statically, and overlaps a builtin overload whose
-operands are not all `Any` when every slot pair meets above `Never`, which
-refuses the shape (`ShapeError::Overlaps`). A registration whose types are
-known only when its function is born is never checked, and one a builtin beats
-at some operand type is simply never selected there — nothing reports it, since
+`EVAL` runs it. It reads each registration's
+[load-time](../elaborate/README.md#the-type-channel-at-load) expression shape: a
+closed, unquantified one at a key with builtin overloads — whatever declared
+types its signature names, so an alias of `Number` is checked as `Number` is —
+overlaps a builtin overload whose operands are not all `Any` when every slot pair
+meets above `Never`, which refuses the shape (`ShapeError::Overlaps`). A
+registration whose shape is rigid or unknown is never checked, nor is a
+`USING … SCOPE` block's surfaced head, which births no callable: the definition
+answering it is the module's own, checked where the module is built. A
+registration a builtin beats at some operand type is simply never selected there — nothing reports it, since
 koan has no warning channel ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
 
 ## The import rule
@@ -198,32 +687,99 @@ Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
 The suites load whole programs under `Koan` and read back what they wrote to
 either sink, one line per write ([tests.rs](tests.rs)):
 [selection](tests/selection.rs) — every ranking example, ambiguity within and
-across scopes, the no-overload miss, fall-through, builtin tie-wins, shadowed
-`==` and `PRINT`, and the overlap refusal at load and at `EVAL`;
+across scopes at load and at run, the no-overload miss at load and at run, fall-through, builtin
+tie-wins, shadowed `==` and `PRINT`, the overlap refusal at load and at `EVAL`,
+and a quantified candidate that may admit whose carried solve fails;
+[statics](tests/statics.rs) — the static type of each kind of node and binder,
+a capture along a chain, a generic call by keyword, verdicts leaving one,
+several and no candidate, the load refusals in a program, an uncalled body and
+a quote's code, an `EVAL` whose traced code can never meet its declared return,
+an argument that never arrives, each call of a quantified function typed by its
+own arguments, a `USING … SCOPE` block's surfaced heads typed through the
+ascription's pins, and a wider signature *always* at a narrower one's slot and
+outranking it;
+[generic](tests/generic.rs) — generic code at load: a nested callable
+substituted by level and agreeing with its load-time type where it is born, a
+quote's code typed twice interning nothing, a nested group's parameters and
+return check, exact static types, crossings into and out of code, an `EVAL`'s
+declared type, a quantified candidate selected where its static solve is the
+call's, a
+*maybe* an *always* outranks dropped, a use ranked at load and one ranked at the
+call, and returns read through a group's intervals, by keyword and by name;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
-builtin library, combined definitions, lambdas, type parameters, contracts,
+builtin library, combined definitions, lambdas, type parameters, a module's
+quantified function run through a call, a call by name refused at load,
+modules fitting a signature's quantified head
+and each application their overloads answer, contracts,
 record access, construction, error values, and a program nested to the
 [syntax depth limit](../parse/README.md#the-syntax-depth-limit) in each nesting
 shape run on a [`STACK_BYTES`](../program/README.md#the-stack) thread, one
 level more refused at load; [quotes](tests/quotes.rs) —
-unmarked uses, `USING` fills, both marks and `NEEDING` keys; and
-[tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
+an `EVAL` run to its declared return, a bare return spelling and an `EVAL`
+declaring none, unmarked uses, `USING` fills, both marks and `NEEDING` keys;
+[ascription](tests/ascription.rs) — `:!` retyping member by member, a tagged
+value, a cyclic value, a miss and a module operand at run, a declared parameter
+retyping by keyword and by name with the solution substituted, a tail chain
+returning at the outermost contract, an `EVAL`'s value held to its declared
+return — retyped, a miss, a tail out of its code, a non-code operand and a
+`FOR ALL` name's return — and at load an ascription's and a
+container or nominal parameter's exact type, a union's kept at most, a settled
+ascription, a refused one, a generic use over an exact parameter selected, a
+candidate *never* over an argument's lower end, a call exact at its callee's
+return — by keyword, by name, in tail position — and one the load cannot solve
+exactly, and `FROM`'s projection over an exact record;
+[annotation](tests/annotation.rs) — an annotated binder retyped to its type,
+refused, settled at load and missed at run, a function recursing through its
+annotated name, and a `USING` over an annotated binder;
+[instances](tests/instances.rs) — each instance site and its refusals: a
+quantified binding outside a module, an annotation, an ascription, a declared
+return, a container's element type, a keyworded slot solved from the other
+arguments first, candidates disagreeing, a call by name's record, a closed
+solution, a solution over a type each run binds — at each kind of site, through
+nested callables and a block, and its equality under one binding and two — a
+keyworded slot's variables an earlier class solves, ranked, in written order
+and pooled over two earlier classes, fixed at each binding over a lexical
+earlier argument, a rigid candidate and a shared variable a reproducible solve
+fixes, and refused over an unknown earlier argument or one read through a
+lexical bound, an instance's body reading
+its solution and calling its siblings, its equality, and one made in a frame and called where it lands, which is on the
+[Miri slate](../../observe/miri_slate.md);
+[contributions](tests/contributions.rs) — a call solved from its arguments'
+contributions: a declared argument's static type, an `EVAL`'s carried one at a
+slot that solves and at one that does not, a static type that cannot fit its
+slot refused at load, a contribution over a lexical variable read in its body,
+through nested callables and through a block, a closure capturing a type only
+where a call in it contributes it, which is on the
+[Miri slate](../../observe/miri_slate.md), and a call by name solved from its
+record's static type, exact at its return, refused at load, reading a rigid
+contribution, solving from a rigid field the load cannot admit, and judged by a
+reproducible solve over a lexical variable — refused, exact at its return — as
+a keyworded call over one is: refused where it fails, selected where it admits,
+and a later slot reading an earlier lexical solution at its ends;
+[rules](tests/rules.rs) — the law every native's type rule obeys over drawn
+argument intervals and names, and what `FROM`'s and `ATTR`'s rules make
+the load type and refuse and the run carry;
+[surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
+through a newtype or a family seeing only what the carried type names, one node
+seen at two types, a widened literal's element, and `FROM` sharing its record's
+runs; and [tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
 which is on the [Miri slate](../../observe/miri_slate.md). Every runnable
 tutorial snippet is checked against its shown output by
 `tools/verify_snippets.py` through the binary.
 
 ## Open work
 
-- [Control expression shapes and errors](../../roadmap/rewrite/control-and-errors.md)
-  — `MATCH`, `TRY`, `CATCH` and `Result`, and the payload catching needs.
+- [Matching](../../roadmap/conditionals/matching.md) — `MATCH`, its arm selection,
+  and matching on values.
+- [Faults and call traces](../../roadmap/conditionals/faults.md) — faults apart from
+  values, and the trace an uncaught one prints.
+- [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
+  and `Result`.
 - [Module programs](../../roadmap/rewrite/modules.md) — the module expression
-  shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
-- [Call traces](../../roadmap/rewrite/call-traces.md) — the frames an error
-  passed through, printed under an uncaught one and read off a caught one.
-- [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
-  — a type parameter canonical form drops, which a call binds to its bound.
+  shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations bound
+  where the body runs.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
-  overlap check skipping a quantified registration, a selection cache per call
-  site, and a warning for an overload never selected.
+  overlap check skipping a quantified registration, and a warning for an
+  overload never selected.

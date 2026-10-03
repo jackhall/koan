@@ -3,114 +3,287 @@
 //!
 //! Instead of binding a variable to the first argument it meets, the walk records **every**
 //! argument type that reaches the variable as a lower contribution (covariant position) or an
-//! upper one (contravariant). [`Collector::solve`] then takes, per variable, the maximum of the
-//! lower contributions, else the minimum of the upper ones, else the declared bound. A contribution
-//! set with no maximum is a failure, not a join: the solver never mints a union nobody wrote, and
+//! upper one (contravariant). [`Collector::solve`] bounds each variable by a pair — below by the
+//! join of its lower contributions, above by the meet of its upper ones and its bound — and binds
+//! the pair's least instance. A solve fails only where the set the pair denotes is empty, and
 //! admission cannot depend on the order the slots are read.
 //!
-//! So `(f _ :Elt _ :Elt)` admits `(1, 2)` with `Elt = Number` and `(1, (1 | "x"))` with
-//! `Elt = (Number | Str)`, and rejects `(1, "x")`. A caller who wants mixed arguments writes the
-//! union in the slot type or in the bound.
+//! So `(f _ :Elt _ :Elt)` admits `(1, 2)` with `Elt = Number` and `(1, "x")` with
+//! `Elt = (Number | Str)`. A head that wants one type across slots puts them in separate
+//! [priority classes](super::ranking).
 //!
-//! A construction collects through [`Collector::least`], whose unreached variables solve to `Never`
-//! rather than their bound: a family is covariant in its parameters, so its least instance is the
-//! one the payload asks for.
+//! A construction collects through [`Collector::least`], whose unreached variables are bounded by
+//! `Never` rather than their declared bound: a family is covariant in its parameters, so its least
+//! instance is the one the payload asks for.
+//!
+//! [`intervals`] reads a solve over static types as an [`Interval`] per variable: where every
+//! solution a solve over arguments within those static types can reach lies.
+//!
+//! A collector is typed by what it collects. A `Collector<KType>` takes concrete contributions
+//! against concrete bounds, so its solution — joins and meets of those — is concrete; a
+//! `Collector<Parametric>` may take a variable, which a join keeps beside the rest and the solver's
+//! meet relates by the rigid rule. Inside the lattice a collector holds raw handles.
+//!
+//! Over static types naming lexical variables, [`Collector::reproducible`] reports whether a run,
+//! binding each variable, reproduces the solve: not where an admission read a variable through its
+//! ends, a variable's answer is a meet over one, or the solve fails at a verdict over one. A closed
+//! solve always is.
 
 use crate::memory::{BumpAllocator, BumpVec};
 
-use super::handle::KType;
+use std::marker::PhantomData;
+
+use super::handle::{Handle, KType, Parametric, TypeHandle, wrap};
+use super::lattice::{join_iter, meet_through_variables};
 use super::node::TypeNode;
-use super::order::{dominant, is_subtype_of};
+use super::order::fits;
 use super::registry::TypeRegistry;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
+use super::walk::unary::{Visit, visit_in};
 
-/// Why a carried type does not fill a declared position. A contribution set rides as a slice of
-/// the collector that held it.
+/// Why a carried type does not fill a declared position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnifyFailure<'c> {
+pub enum UnifyFailure<T = Parametric> {
     /// The two types disagree structurally, or a leaf position is not satisfied — the ordinary type
     /// mismatch.
     Mismatch,
-    /// The lower contributions to a variable have no maximum among them. Since [`join`] is
-    /// subsumption-or-union, "no maximum" and "the join is a union none of them wrote" are the same
-    /// condition.
-    ///
-    /// [`join`]: super::lattice::join
-    NoMaximum {
+    /// A variable's lower end — the join of its lower contributions — lies above `upper`, one of its
+    /// upper contributions or its bound: the set its pair denotes is empty.
+    Disagree { index: usize, lower: T, upper: T },
+}
+
+impl UnifyFailure<Handle> {
+    fn typed<T: TypeHandle>(self) -> UnifyFailure<T> {
+        match self {
+            UnifyFailure::Mismatch => UnifyFailure::Mismatch,
+            UnifyFailure::Disagree {
+                index,
+                lower,
+                upper,
+            } => UnifyFailure::Disagree {
+                index,
+                lower: wrap(lower),
+                upper: wrap(upper),
+            },
+        }
+    }
+}
+
+/// A range of types: every solution a solve can reach over arguments within the static types it
+/// collected, or every type a run carries where a static type is read. An end is a bound, not a
+/// solution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Interval<T = Parametric> {
+    pub lower: T,
+    pub upper: T,
+}
+
+impl<T: TypeHandle> Interval<T> {
+    /// Anything under `bound`.
+    pub fn within(bound: KType) -> Self {
+        Interval {
+            lower: wrap(Handle::NEVER),
+            upper: wrap(bound.raw()),
+        }
+    }
+
+    /// Exactly `kt`.
+    pub fn point(kt: T) -> Self {
+        Interval {
+            lower: kt,
+            upper: kt,
+        }
+    }
+
+    pub fn is_exact(self) -> bool {
+        self.lower == self.upper
+    }
+
+    /// Both ends raw.
+    pub(super) fn raw(self) -> Interval<Handle> {
+        Interval {
+            lower: self.lower.raw(),
+            upper: self.upper.raw(),
+        }
+    }
+}
+
+impl Interval<Handle> {
+    /// Both ends as `T`; the caller answers for `T`'s promise.
+    pub(super) fn typed<T: TypeHandle>(self) -> Interval<T> {
+        Interval {
+            lower: wrap(self.lower),
+            upper: wrap(self.upper),
+        }
+    }
+}
+
+/// A concrete interval stands where a parametric one may.
+impl From<Interval<KType>> for Interval<Parametric> {
+    fn from(interval: Interval<KType>) -> Self {
+        Interval {
+            lower: interval.lower.into(),
+            upper: interval.upper.into(),
+        }
+    }
+}
+
+/// Each variable's interval, from the `solution` a solve over the positions `declared` gave, the
+/// group bounded by `bounds`. Where every argument naming a variable was `exact`, each interval is
+/// its solution. Otherwise the upper end is the solution where some covariant position under no
+/// union names the variable — every admitted argument reaches one — and the bound elsewhere; and
+/// the lower end is `Never` where some covariant position names it, and the solution elsewhere.
+///
+/// Each end is a solution or a bound, so an interval over a `T` solution is a `T` interval.
+pub fn intervals<'s, D: TypeHandle, T: TypeHandle>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    declared: &[D],
+    bounds: &[KType],
+    solution: &[T],
+    exact: bool,
+) -> BumpVec<'s, Interval<T>> {
+    let mut out = BumpVec::with_capacity_in(solution.len(), scratch);
+    out.extend(solution.iter().enumerate().map(|(index, solved)| {
+        if exact {
+            return Interval::point(*solved);
+        }
+        let mut names = Names::default();
+        for position in declared {
+            names.over(types, scratch, position.raw(), index, Variance::Co, false);
+        }
+        Interval {
+            lower: if names.named {
+                wrap(Handle::NEVER)
+            } else {
+                *solved
+            },
+            upper: if names.reached {
+                *solved
+            } else {
+                wrap(bounds.get(index).copied().unwrap_or(KType::ANY).raw())
+            },
+        }
+    }));
+    out
+}
+
+/// Where one variable of a declared group stands at covariant positions: whether one names it, and
+/// whether one under no union does.
+#[derive(Default)]
+struct Names {
+    named: bool,
+    reached: bool,
+}
+
+impl Names {
+    /// Read `kt`, at `variance` and under a union or not, for the `index`-th variable. A nested
+    /// binder's group shadows the declared one.
+    fn over(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        kt: Handle,
         index: usize,
-        contributions: &'c [KType],
-    },
-    /// The upper contributions to a variable have no minimum among them — the dual, which is what
-    /// forbids an anonymous record or function.
-    NoMinimum {
-        index: usize,
-        contributions: &'c [KType],
-    },
-    /// A variable's lower solution does not lie under its upper one.
-    Disagree {
-        index: usize,
-        lower: KType,
-        upper: KType,
-    },
+        variance: Variance,
+        under_union: bool,
+    ) {
+        visit_in(types, scratch, kt, variance, &mut |_, node, context| {
+            if node.binds_quantifiers() {
+                return Visit::Skip;
+            }
+            match *node {
+                TypeNode::Quantified { index: found, .. } => {
+                    if found == index && context.variance() == Variance::Co {
+                        self.named = true;
+                        self.reached |= !under_union;
+                    }
+                    Visit::Skip
+                }
+                TypeNode::Union { members } => {
+                    for member in members.iter() {
+                        self.over(types, scratch, *member, index, context.variance(), true);
+                    }
+                    Visit::Skip
+                }
+                _ => Visit::Descend,
+            }
+        });
+    }
 }
 
 /// What a quantified position's arguments contributed, per variable. Every cell lives in the
 /// scratch allocator the collector was built over.
 ///
 /// Cells grow on demand, so a walk that does not know the enclosing group's arity up front can
-/// still collect; [`new`](Collector::new) takes the arity a call knows, so a variable no argument
-/// reached is visible as bound-only.
-pub struct Collector<'s> {
+/// still collect; [`new`](Collector::new) takes the bounds of the group a call knows, so a variable
+/// no argument reached solves to its bound.
+///
+/// `T` is what the collector takes and solves to: every contribution and pin is a `T`, and every
+/// bound a [`KType`], so every join and meet the solve takes is a `T`.
+pub struct Collector<'s, T = Parametric> {
     scratch: BumpAllocator<'s>,
-    lower: BumpVec<'s, BumpVec<'s, KType>>,
-    upper: BumpVec<'s, BumpVec<'s, KType>>,
+    lower: BumpVec<'s, BumpVec<'s, Handle>>,
+    upper: BumpVec<'s, BumpVec<'s, Handle>>,
     /// Each variable's declared bound, recorded off the `Quantified` node when a contribution
     /// reached it.
     bounds: BumpVec<'s, KType>,
     /// Every contribution in arrival order — the cell it landed in and the bound that cell held
     /// before — so a [`rollback`](Self::rollback) pops exactly what a rejected attempt added.
     trail: BumpVec<'s, (usize, Variance, KType)>,
+    /// Whether some admission read a rigid variable through its ends: `Admits::leaf`, the bound
+    /// split in `Admits::set_wise`, or a false verdict over one. Never rolled back — a rejected
+    /// union member that read one is a choice some binding makes otherwise.
+    bound_read: bool,
+    takes: PhantomData<T>,
 }
 
 /// A point in a [`Collector`]'s history, for [`Collector::rollback`].
 #[derive(Clone, Copy)]
-struct Mark {
+pub(super) struct Mark {
     cells: usize,
     trail: usize,
 }
 
-impl<'s> Collector<'s> {
-    /// One empty cell per quantifier — what a call collects its arguments into.
-    pub fn new(scratch: BumpAllocator<'s>, arity: usize) -> Self {
-        let cells = || {
-            let mut cells = BumpVec::with_capacity_in(arity, scratch);
-            cells.resize_with(arity, || BumpVec::new_in(scratch));
-            cells
-        };
-        let mut bounds = BumpVec::with_capacity_in(arity, scratch);
-        bounds.resize(arity, KType::ANY);
-        Collector {
-            scratch,
-            lower: cells(),
-            upper: cells(),
-            bounds,
-            trail: BumpVec::new_in(scratch),
-        }
+impl<'s, T: TypeHandle> Collector<'s, T> {
+    /// One empty cell per variable of a group bounded by `bounds` — what a call collects its
+    /// arguments into. A variable no contribution reaches solves to its bound.
+    pub fn new(scratch: BumpAllocator<'s>, bounds: &[KType]) -> Self {
+        Self::over(scratch, bounds.iter().copied())
     }
 
     /// One empty cell per quantifier, each bounded by [`KType::NEVER`] until a contribution reaches
     /// it — what a construction collects a payload into. A family is covariant in its parameters,
     /// so its least instance is the one the payload asks for, and a parameter the payload never
-    /// reaches solves to `Never`.
+    /// reaches is bounded by `Never`.
     pub fn least(scratch: BumpAllocator<'s>, arity: usize) -> Self {
-        let mut collector = Self::new(scratch, arity);
-        collector.bounds.fill(KType::NEVER);
-        collector
+        Self::over(scratch, std::iter::repeat_n(KType::NEVER, arity))
+    }
+
+    /// One empty cell per bound, each cell holding its bound.
+    fn over(scratch: BumpAllocator<'s>, bounds: impl ExactSizeIterator<Item = KType>) -> Self {
+        let arity = bounds.len();
+        let cells = || {
+            let mut cells = BumpVec::with_capacity_in(arity, scratch);
+            cells.resize_with(arity, || BumpVec::new_in(scratch));
+            cells
+        };
+        let mut held = BumpVec::with_capacity_in(arity, scratch);
+        held.extend(bounds);
+        Collector {
+            scratch,
+            lower: cells(),
+            upper: cells(),
+            bounds: held,
+            trail: BumpVec::new_in(scratch),
+            bound_read: false,
+            takes: PhantomData,
+        }
     }
 
     /// Where the history stands now.
-    fn mark(&self) -> Mark {
+    pub(super) fn mark(&self) -> Mark {
         Mark {
             cells: self.bounds.len(),
             trail: self.trail.len(),
@@ -118,8 +291,9 @@ impl<'s> Collector<'s> {
     }
 
     /// Forget every contribution since `mark`. Contributions only ever append, so the trail names
-    /// exactly what to pop, and a cell the walk grew since then goes with it.
-    fn rollback(&mut self, mark: Mark) {
+    /// exactly what to pop, and a cell the walk grew since then goes with it. A bound read since
+    /// then stays recorded.
+    pub(super) fn rollback(&mut self, mark: Mark) {
         while self.trail.len() > mark.trail {
             let (index, variance, previous) = self.trail.pop().expect("the trail reaches the mark");
             match variance {
@@ -136,13 +310,13 @@ impl<'s> Collector<'s> {
     /// Pin the `index`-th variable to `to`, as though `to` had reached it at both polarities: every
     /// later contribution must then lie on the right side of `to` for the variable to solve, and it
     /// solves to `to`. How a class-by-class admission holds a variable an earlier class solved.
-    pub(super) fn pin(&mut self, index: usize, bound: KType, to: KType) {
-        self.contribute(index, bound, to, Variance::Co);
-        self.contribute(index, bound, to, Variance::Contra);
+    pub fn pin(&mut self, index: usize, bound: KType, to: T) {
+        self.contribute(index, bound, to.raw(), Variance::Co);
+        self.contribute(index, bound, to.raw(), Variance::Contra);
     }
 
     /// Record that `carried` reached the `index`-th variable at `variance`.
-    fn contribute(&mut self, index: usize, bound: KType, carried: KType, variance: Variance) {
+    fn contribute(&mut self, index: usize, bound: KType, carried: Handle, variance: Variance) {
         if self.lower.len() <= index {
             let scratch = self.scratch;
             self.lower
@@ -163,12 +337,19 @@ impl<'s> Collector<'s> {
         self.trail.push((index, variance, previous));
     }
 
+    /// Whether any contribution, lower or upper, reached the `index`-th variable.
+    pub(super) fn reached(&self, index: usize) -> bool {
+        let reached =
+            |cells: &[BumpVec<'_, Handle>]| cells.get(index).is_some_and(|cell| !cell.is_empty());
+        reached(&self.lower) || reached(&self.upper)
+    }
+
     /// The lower and upper contributions to the `index`-th variable, in arrival order — what
     /// reached it at a covariant position and what reached it at a contravariant one. Empty slices
     /// for an index no argument reached.
     #[cfg(test)]
-    pub(super) fn contributions(&self, index: usize) -> (&[KType], &[KType]) {
-        fn cell<'c>(cells: &'c [BumpVec<'_, KType>], index: usize) -> &'c [KType] {
+    pub(super) fn contributions(&self, index: usize) -> (&[Handle], &[Handle]) {
+        fn cell<'c>(cells: &'c [BumpVec<'_, Handle>], index: usize) -> &'c [Handle] {
             cells.get(index).map_or(&[], |cell| cell.as_slice())
         }
         (cell(&self.lower, index), cell(&self.upper, index))
@@ -181,95 +362,110 @@ impl<'s> Collector<'s> {
         self.bounds.get(index).copied().unwrap_or(KType::ANY)
     }
 
-    /// The solution, in canonical quantifier order: per variable the maximum of its lower
-    /// contributions, else the minimum of its upper ones, else its declared bound — checked to lie
-    /// under both the upper side and the bound. Built in the collector's own scratch.
-    ///
-    /// Every solution is a contribution or a bound. Nothing here builds a type.
-    pub fn solve(&self, types: &TypeRegistry<'_>) -> Result<BumpVec<'s, KType>, UnifyFailure<'_>> {
-        let scratch = self.scratch;
-        let mut solution = BumpVec::with_capacity_in(self.bounds.len(), scratch);
+    /// The solution, in canonical quantifier order: per variable the least instance of its pair —
+    /// the join of its lower contributions where any reached it, else the meet of its upper ones
+    /// and its bound. The join must lie under each upper contribution and the bound, or the set the
+    /// pair denotes is empty. Built in the collector's own scratch.
+    pub fn solve(&self, types: &TypeRegistry<'_>) -> Result<BumpVec<'s, T>, UnifyFailure<T>> {
+        let mut solution = BumpVec::with_capacity_in(self.bounds.len(), self.scratch);
         for index in 0..self.bounds.len() {
-            let bound = self.bounds[index];
-            let lower = extremum(types, scratch, &self.lower[index], Bound::Maximum).ok_or(
-                UnifyFailure::NoMaximum {
-                    index,
-                    contributions: &self.lower[index],
-                },
-            )?;
-            let upper = extremum(types, scratch, &self.upper[index], Bound::Minimum).ok_or(
-                UnifyFailure::NoMinimum {
-                    index,
-                    contributions: &self.upper[index],
-                },
-            )?;
-            if let (Some(lower), Some(upper)) = (lower, upper)
-                && !is_subtype_of(types, scratch, lower, upper)
-            {
-                return Err(UnifyFailure::Disagree {
-                    index,
-                    lower,
-                    upper,
-                });
+            match self.answer(types, index) {
+                Ok(solved) => solution.push(wrap(solved)),
+                Err((lower, upper)) => {
+                    return Err(UnifyFailure::Disagree {
+                        index,
+                        lower,
+                        upper,
+                    }
+                    .typed());
+                }
             }
-            let solved = lower.or(upper).unwrap_or(bound);
-            if !is_subtype_of(types, scratch, solved, bound) {
-                return Err(UnifyFailure::Mismatch);
-            }
-            solution.push(solved);
         }
         Ok(solution)
     }
-}
 
-/// Which end of a contribution set is being taken.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Bound {
-    Maximum,
-    Minimum,
-}
-
-/// The one member of `contributions` every other member lies under (or over). `Ok(None)` for an
-/// empty set, `Err`-worthy `None` when the set has no such member.
-fn extremum(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    contributions: &[KType],
-    end: Bound,
-) -> Option<Option<KType>> {
-    if contributions.is_empty() {
-        return Some(None);
+    /// Whether a run reproduces this solve: binding each lexical variable the contributions name as
+    /// the run does and then solving gives the solution so bound, and fails where this fails. A
+    /// contribution handed whole to a cell binds member by member, a join of such keeps each beside
+    /// the rest, and a verdict that holds over a variable holds at every binding. What may not: a
+    /// read through a variable's ends (`bound_read`), a meet over one, and a verdict that fails
+    /// over one.
+    pub fn reproducible(&self, types: &TypeRegistry<'_>) -> bool {
+        !self.bound_read
+            && (0..self.bounds.len()).all(|index| match self.answer(types, index) {
+                Ok(_) => {
+                    !self.lower[index].is_empty()
+                        || self.upper[index]
+                            .iter()
+                            .all(|upper| !types.contains_rigid(*upper))
+                }
+                Err((joined, ceiling)) => {
+                    !types.contains_rigid(joined) && !types.contains_rigid(ceiling)
+                }
+            })
     }
-    dominant(contributions.len(), |candidate, other| match end {
-        Bound::Maximum => is_subtype_of(
-            types,
-            scratch,
-            contributions[other],
-            contributions[candidate],
-        ),
-        Bound::Minimum => is_subtype_of(
-            types,
-            scratch,
-            contributions[candidate],
-            contributions[other],
-        ),
-    })
-    .map(|found| Some(contributions[found]))
+
+    /// The `index`-th variable's answer: the join of its lower contributions where any reached it,
+    /// else the meet of its upper ones and its bound; or, where the join does not lie under some
+    /// ceiling — an upper contribution or the bound — the join beside the first such ceiling.
+    fn answer(&self, types: &TypeRegistry<'_>, index: usize) -> Result<Handle, (Handle, Handle)> {
+        let scratch = self.scratch;
+        let bound = self.bounds[index].raw();
+        let (lower, upper) = (&self.lower[index], &self.upper[index]);
+        if lower.is_empty() {
+            return Ok(upper.iter().fold(bound, |met, each| {
+                meet_through_variables(types, scratch, met, *each)
+            }));
+        }
+        let joined = join_iter(types, scratch, lower.iter().copied());
+        // Each ceiling on its own: a meet may land below the greatest lower bound.
+        match upper
+            .iter()
+            .copied()
+            .chain([bound])
+            .find(|ceiling| !fits(types, scratch, joined, *ceiling))
+        {
+            Some(ceiling) => Err((joined, ceiling)),
+            None => Ok(joined),
+        }
+    }
 }
 
 /// Does `carried` fill the position `declared`, and what does it contribute to the variables there?
 ///
-/// A declared type holding no free quantifier answers in one step through the ordinary order, which
-/// is what keeps every unquantified slot off this walk entirely. Admission itself only ever fails
-/// with [`UnifyFailure::Mismatch`]; the contribution-set failures are [`Collector::solve`]'s.
-pub fn admits_with(
+/// A declared type holding no free quantifier answers in one step through *fits*, which is what
+/// keeps every unquantified slot off this walk entirely. Admission itself only ever fails with
+/// [`UnifyFailure::Mismatch`]; [`UnifyFailure::Disagree`] is [`Collector::solve`]'s.
+///
+/// What reaches a variable is `carried` or a part of it, so a collector of `T`s takes a `T`.
+pub fn admits_with<T: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    declared: KType,
-    carried: KType,
+    declared: Parametric,
+    carried: T,
     variance: Variance,
-    collector: &mut Collector<'_>,
-) -> Result<(), UnifyFailure<'static>> {
+    collector: &mut Collector<'_, T>,
+) -> Result<(), UnifyFailure<T>> {
+    admits(
+        types,
+        scratch,
+        declared.raw(),
+        carried.raw(),
+        variance,
+        collector,
+    )
+    .map_err(UnifyFailure::typed)
+}
+
+/// [`admits_with`] over raw handles, for the lattice's own walks.
+pub(super) fn admits<T: TypeHandle>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    declared: Handle,
+    carried: Handle,
+    variance: Variance,
+    collector: &mut Collector<'_, T>,
+) -> Result<(), UnifyFailure<Handle>> {
     lockstep(
         types,
         scratch,
@@ -283,16 +479,15 @@ pub fn admits_with(
 /// The declared members of a union in the order they are tried against one carried member: an exact
 /// match first, then the members with nothing to solve, then the rest.
 ///
-/// Binding is the last resort. A member that admits without touching a variable makes the stronger
-/// claim, and trying a free variable first would let it swallow a member that matches exactly —
-/// which is what would make `(Elt | Number)` fail to admit itself, since `Elt` would take the
-/// `Number` contribution and leave the variable with two contributions and no maximum.
+/// Binding is the last resort. A member that admits without touching a variable gives a smaller
+/// least instance: trying a free variable first would let it swallow a member that matches exactly,
+/// so `(Elt | Number)` admitting `Number` would bind `Elt` larger than it needs to be.
 fn most_determined_first<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
-    declared: &[KType],
-    carried: KType,
-) -> BumpVec<'s, KType> {
+    declared: &[Handle],
+    carried: Handle,
+) -> BumpVec<'s, Handle> {
     let mut order = BumpVec::with_capacity_in(declared.len(), scratch);
     if declared.contains(&carried) {
         order.push(carried);
@@ -310,26 +505,27 @@ fn most_determined_first<'s>(
     order
 }
 
-/// The collecting [`Lockstep`] instance. It holds the caller's collector so a declared-side union
-/// can try each member in turn, rolling back what a rejected one contributed and keeping the first
-/// that admits.
-struct Admits<'c, 's> {
-    collector: &'c mut Collector<'s>,
+/// The collecting [`Lockstep`] instance. It holds the caller's collector so a union's members can
+/// be tried in turn — the declared side's at a covariant position, the carried side's at a
+/// contravariant one — rolling back what a rejected one contributed and keeping the first that
+/// admits.
+struct Admits<'c, 's, T> {
+    collector: &'c mut Collector<'s, T>,
 }
 
-type Admission = Result<(), UnifyFailure<'static>>;
+type Admission = Result<(), UnifyFailure<Handle>>;
 
-impl Admits<'_, '_> {
+impl<T: TypeHandle> Admits<'_, '_, T> {
     /// Whether some member of `declared` admits the one carried type `one`, tried most determined
     /// first. A rejected member's contributions are rolled back; the admitting member's stay.
     fn admit_one(
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        declared: &[KType],
-        one: KType,
+        declared: &[Handle],
+        one: Handle,
         v: Variance,
-        recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> Admission,
+        recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Admission,
     ) -> bool {
         for option in most_determined_first(types, scratch, declared, one).iter() {
             let mark = self.collector.mark();
@@ -340,24 +536,68 @@ impl Admits<'_, '_> {
         }
         false
     }
+
+    /// Contravariant, the declared side lies under the carried one: every declared member must lie
+    /// under some carried member, an exact match tried first and a rejected choice rolled back —
+    /// except a declared variable, which lies under the carried side whole. Its one upper end is
+    /// the union; a member chosen for it would narrow it to that member alone.
+    fn under_carried(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        declared: &[Handle],
+        carried: &[Handle],
+        recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Admission,
+    ) -> Admission {
+        for one in declared {
+            if matches!(types.node(*one), TypeNode::Quantified { .. }) {
+                let whole = match carried {
+                    [single] => *single,
+                    _ => types.union_of(scratch, carried),
+                };
+                recurse(self, *one, whole, Variance::Contra)?;
+                continue;
+            }
+            let exact = carried.iter().filter(|option| *option == one);
+            let rest = carried.iter().filter(|option| *option != one);
+            let admitted = exact.chain(rest).any(|option| {
+                let mark = self.collector.mark();
+                match recurse(self, *one, *option, Variance::Contra) {
+                    Ok(()) => true,
+                    Err(_) => {
+                        self.collector.rollback(mark);
+                        false
+                    }
+                }
+            });
+            if !admitted {
+                return Err(UnifyFailure::Mismatch);
+            }
+        }
+        Ok(())
+    }
 }
 
-impl Lockstep for Admits<'_, '_> {
+impl<T: TypeHandle> Lockstep for Admits<'_, '_, T> {
     type Out = Admission;
 
     fn enter(
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        declared: KType,
-        carried: KType,
+        declared: Handle,
+        carried: Handle,
         v: Variance,
     ) -> Option<Admission> {
         if !types.contains_quantified(declared) {
             let admits = match v {
-                Variance::Co => is_subtype_of(types, scratch, carried, declared),
-                Variance::Contra => is_subtype_of(types, scratch, declared, carried),
+                Variance::Co => fits(types, scratch, carried, declared),
+                Variance::Contra => fits(types, scratch, declared, carried),
             };
+            // A verdict that holds over a variable holds at every binding; one that fails may not.
+            if !admits && (types.contains_rigid(carried) || types.contains_rigid(declared)) {
+                self.collector.bound_read = true;
+            }
             return Some(admits.then_some(()).ok_or(UnifyFailure::Mismatch));
         }
         match types.node(declared) {
@@ -373,40 +613,43 @@ impl Lockstep for Admits<'_, '_> {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        declared: KType,
-        carried: KType,
+        declared: Handle,
+        carried: Handle,
         v: Variance,
     ) -> Admission {
-        let carried_node = types.node(carried);
-        // A deferred FN return is a per-call-elaborated placeholder: it admits nothing on its own,
-        // and a return position carrying one has nothing yet to disagree with.
-        let deferred = matches!(carried_node, TypeNode::DeferredReturn(_));
-        if deferred && v == Variance::Co {
-            return Ok(());
+        // A carried rigid variable fills, at a covariant position, what its bound fills, and at a
+        // contravariant one what its lower end fills: below one lie itself and what lies under its
+        // lower end.
+        let Some(ends) = types.node(carried).rigid_interval() else {
+            return Err(UnifyFailure::Mismatch);
+        };
+        self.collector.bound_read = true;
+        match v {
+            Variance::Co => lockstep(types, scratch, declared, ends.upper.raw(), v, self),
+            Variance::Contra if ends.lower != KType::NEVER => {
+                lockstep(types, scratch, declared, ends.lower.raw(), v, self)
+            }
+            Variance::Contra => Err(UnifyFailure::Mismatch),
         }
-        // A carried rigid variable fills what its bound fills. Below one is only itself, so a
-        // contravariant position has nothing more to try.
-        if let Some(bound) = carried_node.rigid_bound()
-            && v == Variance::Co
-        {
-            return lockstep(types, scratch, declared, bound, v, self);
-        }
-        Err(UnifyFailure::Mismatch)
     }
 
     fn set_wise(
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        declared: &[KType],
-        carried: &[KType],
+        declared: &[Handle],
+        carried: &[Handle],
         v: Variance,
-        recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> Admission,
+        recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Admission,
     ) -> Admission {
-        // Every carried member must be admitted by some declared member. A non-union side arrives
-        // as a one-element slice, so this covers a union on either side and on both. The
-        // declared-side choice rolls back on rejection, so a rejected member leaves no contribution
-        // behind; contributions from every carried member accumulate in the one collector.
+        // A non-union side arrives as a one-element slice, so this covers a union on either side
+        // and on both. A rejected choice rolls back, so it leaves no contribution behind; the
+        // contributions of every member admitted accumulate in the one collector.
+        if v == Variance::Contra {
+            return self.under_carried(types, scratch, declared, carried, recurse);
+        }
+        // Covariant, the carried side lies under the declared one: every carried member must be
+        // admitted by some declared member.
         for one in carried {
             if self.admit_one(types, scratch, declared, *one, v, recurse) {
                 continue;
@@ -414,14 +657,15 @@ impl Lockstep for Admits<'_, '_> {
             // A carried variable whose bound spans several declared members is admitted through
             // the bound's members, each by some declared member.
             let bound = types.node(*one).rigid_bound();
+            self.collector.bound_read |= bound.is_some();
             let Some(bound) = bound.filter(|_| v == Variance::Co) else {
                 return Err(UnifyFailure::Mismatch);
             };
-            let TypeNode::Union { members } = types.node(bound) else {
+            let TypeNode::Union { members } = types.node(bound.raw()) else {
                 return Err(UnifyFailure::Mismatch);
             };
             let mark = self.collector.mark();
-            for member in members {
+            for member in members.iter() {
                 if !self.admit_one(types, scratch, declared, *member, v, recurse) {
                     self.collector.rollback(mark);
                     return Err(UnifyFailure::Mismatch);

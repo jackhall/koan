@@ -33,21 +33,30 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
         let order = symbol_order(fields, scratch);
-        let mut weight = Weight::flat::<Self>();
-        let names = writer.fill(order.len(), |at| {
-            weight = weight.plus(Weight::flat::<Symbol>());
-            fields[order[at]].0.symbol()
-        });
-        let cells = writer.fill(order.len(), |at| {
-            let cell = fields[order[at]].1;
-            weight = weight.plus(cell.weight());
-            cell
-        });
+        let names = writer.fill(order.len(), |at| fields[order[at]].0.symbol());
+        let cells = writer.fill(order.len(), |at| fields[order[at]].1);
         let ktype = record_type(
             types,
             scratch,
-            fields.iter().map(|(name, cell)| (*name, cell.ktype())),
+            fields
+                .iter()
+                .map(|(name, cell)| (*name, cell.concrete_ktype())),
         );
+        Self::weighed(writer, names, cells, ktype)
+    }
+
+    /// A record over sorted names and aligned value cells already resident in `writer`'s region
+    /// under `ktype`, weighed as [`new`](Self::new) weighs them — a retyped data node's arm.
+    pub(crate) fn weighed(
+        writer: Writer<'cell>,
+        names: &'cell [Symbol],
+        cells: &'cell [Value<'cell, X>],
+        ktype: KType,
+    ) -> &'cell Self {
+        let weight = Weight::flat::<Self>().plus(Weight::run::<Symbol>(names.len()));
+        let weight = cells
+            .iter()
+            .fold(weight, |weight, cell| weight.plus(cell.weight()));
         Self::from_runs(writer, names, cells, ktype, weight)
     }
 }
@@ -120,38 +129,39 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
         Self::from_runs(writer, self.names, self.cells, ktype, self.weight)
     }
 
-    /// The cell under `name`, found by binary search.
-    pub fn field(&self, name: Symbol) -> Option<&'cell C> {
-        let cells = self.cells;
-        self.names.binary_search(&name).ok().map(|at| &cells[at])
-    }
-
-    /// The fields in symbol order.
-    pub fn fields(&self) -> impl ExactSizeIterator<Item = (Symbol, &'cell C)> + use<'cell, X, C> {
-        self.names.iter().copied().zip(self.cells.iter())
-    }
-
-    pub fn names(&self) -> &'cell [Symbol] {
-        self.names
-    }
-
-    pub fn cells(&self) -> &'cell [C] {
-        self.cells
-    }
-
-    pub fn len(&self) -> usize {
-        self.names.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
-    }
-
     pub fn ktype(&self) -> KType {
         self.ktype
     }
 
     pub fn weight(&self) -> Weight {
         self.weight
+    }
+}
+
+/// The runs a read outside `values` reaches only through [the door](super::surface).
+impl<'cell, X: Copy> Record<'cell, X> {
+    pub(super) fn names(&self) -> &'cell [Symbol] {
+        self.names
+    }
+
+    pub(super) fn cells(&self) -> &'cell [Value<'cell, X>] {
+        self.cells
+    }
+}
+
+/// A knot's data node's runs, which the knot layer ties and reads.
+impl<'cell, X: Copy> Record<'cell, X, Link<'cell, X>> {
+    /// The cell under `name`, found by binary search.
+    pub fn field(&self, name: Symbol) -> Option<&'cell Link<'cell, X>> {
+        let cells = self.cells;
+        self.names.binary_search(&name).ok().map(|at| &cells[at])
+    }
+
+    pub fn names(&self) -> &'cell [Symbol] {
+        self.names
+    }
+
+    pub fn cells(&self) -> &'cell [Link<'cell, X>] {
+        self.cells
     }
 }

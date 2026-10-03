@@ -67,7 +67,9 @@ PRINT b.x
 1
 ```
 
-The fall-through is transparent, except that a missing-field error names the
+The fall-through reads each layer at its representation, so the wrapper shows
+the fields `Point` names and nothing more, even when the record underneath
+carries others. It is transparent, except that a missing-field error names the
 wrapper you accessed, not the type underneath:
 
 ```koan

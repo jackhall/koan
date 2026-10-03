@@ -241,15 +241,25 @@ in a tenant's storage and crossed into the callee's birth.
   a keyworded call as a frame's last statement selects its own overload by the carried type of a
   link read through a newtype, and the evaluation owing the frame's contract tails into the next
   frame with the argument record it built — five hops under Miri, against two.
+- `an_instance_made_in_a_frame_is_called_where_it_lands`
+  a quantified member of a two-member knot whose closure holds an edge to its sibling and a
+  captured string, instantiated at a frame's last statement: its knot re-tied through the frame's
+  writer with the edge rehomed to the sibling's value, handed back across the frame's crossing, and
+  called after, every captured byte read back.
+- `a_closure_captures_a_type_only_where_a_call_in_it_contributes_it`
+  a closure born as a frame's last statement holding a type capture past its builder's captures —
+  the enclosing call's binding of a type name its body never writes, read from the frame's
+  activation into the closure run — handed back across the frame's crossing and compared where it
+  lands with one born under another binding.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-02: 264s — 27 tests, 0 leaks, 0 UB
+- 2026-09-30: 307s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 293s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 231s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 531s — 26 tests, 0 leaks, 0 UB
-- 2026-09-28: 199s — 25 tests, 0 leaks, 0 UB
-- 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

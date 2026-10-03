@@ -408,7 +408,7 @@ LET s = (NOT 1)";
 #[test]
 fn an_eval_offers_each_needed_key_as_a_use_written_there_lists_it() {
     let source = "EXPR #(GREET x :Any) -> Any = #(x)
-LET twice = (FN :{body :(Expression NEEDING #[(GREET _) (PRINT _)])} -> Any = #(EVAL body))";
+LET twice = (FN :{body :(Expression NEEDING #[(GREET _) (PRINT _)])} -> Any = #(EVAL body -> Any))";
     built(source, |fixture, shape| {
         let lambda = node(&shape.body()[1].parts[3].value);
         let body = shape
@@ -426,8 +426,8 @@ LET twice = (FN :{body :(Expression NEEDING #[(GREET _) (PRINT _)])} -> Any = #(
         assert!(builtin_only(print));
     });
     let (at, message) = refusal(
-        "LET twice = (FN :{body :(Expression NEEDING #[(GREET _)])} -> Any = #(EVAL body))",
+        "LET twice = (FN :{body :(Expression NEEDING #[(GREET _)])} -> Any = #(EVAL body -> Any))",
     );
     assert_eq!(message, "`GREET _` has no overload visible here");
-    assert_eq!(at, "(EVAL body)");
+    assert_eq!(at, "(EVAL body -> Any)");
 }

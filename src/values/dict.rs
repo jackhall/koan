@@ -43,7 +43,7 @@ impl<'cell> Key<'cell> {
             Value::Str(text) => Ok(Key::str(text)),
             Value::Number(number) => Key::number(number),
             Value::Bool(flag) => Ok(Key::bool(flag)),
-            _ => Err(KeyRejected::NotAScalar(value.ktype())),
+            _ => Err(KeyRejected::NotAScalar(value.concrete_ktype())),
         }
     }
 
@@ -167,24 +167,32 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let kept = kept_entries(entries, scratch);
-        let mut weight = Weight::flat::<Self>();
-        let keys = writer.fill(kept.len(), |at| {
-            let key = entries[kept[at]].0;
-            weight = weight.plus(key.weight());
-            key.rehomed(writer)
-        });
-        let cells = writer.fill(kept.len(), |at| {
-            let cell = entries[kept[at]].1;
-            weight = weight.plus(cell.weight());
-            cell
-        });
+        let keys = writer.fill(kept.len(), |at| entries[kept[at]].0.rehomed(writer));
+        let cells = writer.fill(kept.len(), |at| entries[kept[at]].1);
         let ktype = dict_type(
             types,
             scratch,
             keys.iter()
                 .zip(cells)
-                .map(|(key, cell)| (key.ktype(), cell.ktype())),
+                .map(|(key, cell)| (key.ktype(), cell.concrete_ktype())),
         );
+        Self::weighed(writer, keys, cells, ktype)
+    }
+
+    /// A dict over sorted keys and aligned value cells already resident in `writer`'s region under
+    /// `ktype`, weighed as [`new`](Self::new) weighs them — a retyped data node's arm.
+    pub(crate) fn weighed(
+        writer: Writer<'cell>,
+        keys: &'cell [Key<'cell>],
+        cells: &'cell [Value<'cell, X>],
+        ktype: KType,
+    ) -> &'cell Self {
+        let weight = keys.iter().fold(Weight::flat::<Self>(), |weight, key| {
+            weight.plus(key.weight())
+        });
+        let weight = cells
+            .iter()
+            .fold(weight, |weight, cell| weight.plus(cell.weight()));
         Self::from_runs(writer, keys, cells, ktype, weight)
     }
 }
@@ -267,30 +275,6 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
         Self::from_runs(writer, self.keys, self.cells, ktype, self.weight)
     }
 
-    /// The cell under `key`, found by binary search; `key` may borrow anywhere.
-    pub fn get(&self, key: &Key<'_>) -> Option<&'cell C> {
-        let cells = self.cells;
-        self.keys
-            .binary_search_by(|probe| probe.cmp(key))
-            .ok()
-            .map(|at| &cells[at])
-    }
-
-    /// The entries in key order.
-    pub fn entries(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell C)> + use<'cell, X, C> {
-        self.keys.iter().zip(self.cells.iter())
-    }
-
-    pub fn keys(&self) -> &'cell [Key<'cell>] {
-        self.keys
-    }
-
-    pub fn cells(&self) -> &'cell [C] {
-        self.cells
-    }
-
     pub fn len(&self) -> usize {
         self.keys.len()
     }
@@ -305,5 +289,36 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
 
     pub fn weight(&self) -> Weight {
         self.weight
+    }
+}
+
+/// The runs a read outside `values` reaches only through [the door](super::surface).
+impl<'cell, X: Copy> Dict<'cell, X> {
+    pub(super) fn keys(&self) -> &'cell [Key<'cell>] {
+        self.keys
+    }
+
+    pub(super) fn cells(&self) -> &'cell [Value<'cell, X>] {
+        self.cells
+    }
+}
+
+/// A knot's data node's runs, which the knot layer ties and reads.
+impl<'cell, X: Copy> Dict<'cell, X, Link<'cell, X>> {
+    /// The cell under `key`, found by binary search; `key` may borrow anywhere.
+    pub fn get(&self, key: &Key<'_>) -> Option<&'cell Link<'cell, X>> {
+        let cells = self.cells;
+        self.keys
+            .binary_search_by(|probe| probe.cmp(key))
+            .ok()
+            .map(|at| &cells[at])
+    }
+
+    pub fn keys(&self) -> &'cell [Key<'cell>] {
+        self.keys
+    }
+
+    pub fn cells(&self) -> &'cell [Link<'cell, X>] {
+        self.cells
     }
 }

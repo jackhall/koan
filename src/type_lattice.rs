@@ -13,16 +13,18 @@
 //!
 //! # The relations
 //!
-//! [`is_subtype_of`] is one reflexive partial order, memoized through the registry's verdict edges;
-//! [`is_more_specific_than`] is its strict version and [`satisfied_by`] the same question read from
-//! a slot's side. [`join`] is the least upper bound — the larger operand when the two are ordered,
+//! [`is_subtype_of`] is one reflexive partial order over concrete types ([`KType`]), memoized
+//! through the registry's verdict edges, which never solves; every construction reads it. [`fits`] contains it and solves — a quantified
+//! binder fits another through an instance, a module's signature fits a declared one through its
+//! members — and every question reads it, [`satisfied_by`] from a slot's side. [`join`] is the least upper bound — the larger operand when the two are ordered,
 //! their canonical union otherwise — and [`meet`] the greatest lower bound. [`admits_with`] walks a
 //! declared type against a carried one and collects what would solve the quantified positions;
-//! [`Collector::solve`] takes a maximum, a minimum, or the bound, and never mints a union nobody
-//! wrote. [`sig_subtype`] and [`meet_schemas`] are the order and the meet over two signature schemas —
-//! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates under one bucket key,
-//! class by class through a shape's priority classes: [`admit_by_class`] is what a keyworded call
-//! admits by, and [`select_by_class`] the elimination a candidate list runs.
+//! [`Collector::solve`] bounds each variable by a pair of ends and binds its least instance.
+//! [`sig_fits`] is *fits* over two signature types: each a set of applications of declared
+//! signatures, which meet at the union of their sets — two unordered signature types join to their
+//! union — and [`shape_specificity`] ranks two candidates
+//! under one bucket key, class by class through a shape's priority classes: [`admit_by_class`] is
+//! what a keyworded call admits by, and [`select_by_class`] the elimination a candidate list runs.
 //!
 //! # Storage
 //!
@@ -38,7 +40,8 @@
 //! Every structural recursion here goes through one of the two drivers in [`walk`], with rendering
 //! the single hand-written exhaustive match. [`walk`]'s own module documentation says which driver
 //! a new walk wants and what it must supply; adding a compound node variant is a compile error at
-//! the drivers' arm tables, at the descent-knob sites, and in [`render`], and nowhere else.
+//! the drivers' arm tables, at the descent-knob sites, in [`render`], and at `TypeNode::view`'s
+//! table, and nowhere else.
 //!
 //! # Laws, not shapes
 //!
@@ -59,10 +62,13 @@ mod ranking;
 mod record;
 mod registry;
 mod render;
+mod run;
 mod schema;
 mod shape;
 mod sig_relations;
+mod signatures;
 mod substitute;
+mod typed;
 mod unify;
 mod walk;
 mod window;
@@ -71,34 +77,34 @@ mod window;
 mod tests;
 
 pub use digest::TypeDigest;
-pub use handle::{KType, builtin_types};
+pub use handle::{DeclaredType, KType, Parametric, Scheme, TypeHandle, builtin_types};
 pub use kind::KKind;
-pub use lattice::{join, join_iter, meet};
 pub use node::{NodeSchema, TypeNode};
 pub use operators::{FoldDirection, ReductionMode};
-pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
-pub use ranking::{admit_by_class, class_at_least, select_by_class};
+pub use ranking::{Judged, Verdict};
 pub use record::Record;
 pub use registry::{GroupIntern, TypeRegistry};
 pub use render::{
-    TypeNameDisplay, display_name, display_symbol, render_keyworded_head, render_sig_failure,
+    TypeNameDisplay, display_name, display_symbol, render_fits_failure, render_keyworded_head,
     render_symbol,
 };
+pub use run::{Elements, Run};
 pub use schema::{
-    DeclaredGroup, Members, SchemaDraft, SigSchema, constructor_param_names,
-    is_abstract_sig_member, is_shape, member, shape_keys_equal, shape_return, shape_slots,
-    specialize_schema,
+    DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, constructor_param_names, is_shape,
+    member, scheme_return, scheme_slots, shape_keys_equal, shape_return, shape_slots,
 };
-pub use shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, dense_classes};
-pub use sig_relations::{
-    SigSubtypeFailure, most_specific_ktype, select_keyworded_satisfier, shape_specificity,
-    sig_subtype,
+pub use shape::{
+    DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, class_of, dense_classes,
 };
-pub use substitute::{
-    canonicalize_binder, erase_quantified, erase_rigid, instantiate_quantified, quantifier_bounds,
-    slot_more_specific_or_equal, slot_satisfied_by, slot_types_equal, substitute_quantified,
-    substitute_sig_members,
+pub use sig_relations::{FitsFailure, InstanceFailure};
+pub use substitute::{Side, Variable};
+pub use typed::{
+    Substitutable, admit_by_class, bound_above, class_at_least, erase_rigid, fits,
+    fits_application, instance_under, instantiate_quantified, is_subtype_of, join, join_iter,
+    judge_by_class, meet, quantifier_bounds, read_through, satisfied_by, scheme_bound_above,
+    select_by_class, shape_specificity, sig_fits, solving_slots, substitute_levels,
+    substitute_parameters, substitute_quantified,
 };
-pub use unify::{Collector, UnifyFailure, admits_with};
+pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;
 pub use window::{RecursiveGroupWindow, RelativeSchema, SealedGroup};

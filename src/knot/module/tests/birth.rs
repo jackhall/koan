@@ -80,13 +80,16 @@ LET outside = 1";
             };
 
             // The signature is the memo, and reports each member at the type its value carries.
-            let TypeNode::Signature { schema, .. } = fixture.types.node(m.ktype()) else {
+            let TypeNode::Signature { schema, .. } = fixture
+                .types
+                .node(m.ktype().as_type().expect("a module's type is concrete"))
+            else {
                 panic!("a module's type is a Signature node");
             };
-            assert!(schema.abstract_members.is_empty());
+            assert!(schema.parameters.is_empty());
             assert_eq!(schema.value_slots.len(), 2);
             assert_eq!(schema.manifest_members.len(), 1);
-            assert_eq!(schema.manifest_members[0].1, dist.handle());
+            assert_eq!(schema.manifest_members[0].1, dist.handle().into());
             assert_eq!(
                 crate::type_lattice::member(
                     schema.value_slots,
@@ -95,7 +98,7 @@ LET outside = 1";
                         _ => unreachable!("`zero` is a value name"),
                     }
                 ),
-                Some(KType::NUMBER),
+                Some(KType::NUMBER.into()),
             );
         })
     });
@@ -130,10 +133,20 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greetin
             // A module bound in another module's body is a value slot at a Signature handle.
             let inner = member("inner").as_module().expect("a nested module");
             assert!(matches!(
-                fixture.types.node(inner.ktype()),
+                fixture.types.node(
+                    inner
+                        .ktype()
+                        .as_type()
+                        .expect("a module's type is concrete")
+                ),
                 TypeNode::Signature { .. }
             ));
-            let TypeNode::Signature { schema, .. } = fixture.types.node(outer.ktype()) else {
+            let TypeNode::Signature { schema, .. } = fixture.types.node(
+                outer
+                    .ktype()
+                    .as_type()
+                    .expect("a module's type is concrete"),
+            ) else {
                 panic!("a module's type is a Signature node");
             };
             assert_eq!(
@@ -144,7 +157,7 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greetin
                         _ => unreachable!("`inner` is a value name"),
                     }
                 ),
-                Some(inner.ktype()),
+                Some(inner.ktype().into()),
             );
         })
     });
@@ -292,12 +305,14 @@ fn a_bare_definition_is_the_run_tail_and_a_keyworded_member_of_the_signature() {
                 .and_then(Knotted::function)
                 .and_then(|function| function.registered_shape())
                 .expect("the function born for the registration");
-            let TypeNode::Signature { schema, .. } = types.node(m.ktype()) else {
+            let TypeNode::Signature { schema, .. } =
+                types.node(m.ktype().as_type().expect("a module's type is concrete"))
+            else {
                 panic!("a module's type is its self-signature");
             };
             assert_eq!(
                 schema.keyworded,
-                [shape],
+                [shape.into()],
                 "its keyworded channel holds the shape"
             );
             assert_eq!(

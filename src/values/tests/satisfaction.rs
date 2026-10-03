@@ -104,38 +104,6 @@ fn a_kind_slot_takes_a_type_value_of_that_kind() {
 }
 
 #[test]
-fn a_quantified_slot_admits_by_unification() {
-    with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let variable = types.quantified(0, KType::ANY);
-        let list_of_variable = types.list(variable);
-        fixture.in_cell(pin, |context| {
-            let numbers = [Value::Number(1.0)];
-            let list = Value::List(List::new(
-                context.writer(),
-                numbers.into_iter(),
-                types,
-                scratch,
-            ));
-            assert!(satisfies(variable, &Value::Number(1.0), types, scratch));
-            assert!(satisfies(list_of_variable, &list, types, scratch));
-            assert!(!satisfies(
-                list_of_variable,
-                &Value::Number(1.0),
-                types,
-                scratch
-            ));
-            assert!(!satisfies(
-                list_of_variable,
-                &text(context.writer(), "s"),
-                types,
-                scratch
-            ));
-        })
-    });
-}
-
-#[test]
 fn a_circular_value_satisfies_by_its_node_memo() {
     use super::{Holding, ring};
     with_fixture(|fixture| {

@@ -5,7 +5,7 @@ use crate::memory::Writer;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BodyShape, CaptureSlot, Site};
 use crate::symbols::TypeSymbol;
-use crate::type_lattice::KType;
+use crate::type_lattice::{DeclaredType, KType};
 use crate::values::{Circular, Knotted as _, Link, Value};
 
 use super::super::{KActivation, Knotted, Untieable, lambda};
@@ -78,8 +78,8 @@ fn a_lambda_is_born_as_a_one_node_knot() {
                 member.ktype(),
                 fixture
                     .types
-                    .function_type(fixture.scratch(), &[], &[], KType::STR)
-                    .handle
+                    .function_type(fixture.scratch(), &[], KType::STR)
+                    .into()
             );
             let Link::Value(Value::Str(captured)) = function.closure().get(CaptureSlot(0)) else {
                 panic!("`k` is captured as its value word");
@@ -128,15 +128,19 @@ fn a_lambda_weighs_what_the_tie_gives_the_same_function() {
 #[test]
 fn a_quantified_lambda_carries_its_quantifier_map() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))");
+        let lines = fixture.parse("LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))");
         fixture.in_cell(pin, |context| {
-            let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
-            let member = born(fixture, writer, activation, 0);
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let member = callable(fixture, activation, "pick");
             let function = member.function().expect("a function");
-            assert_eq!(function.quantifier_map().len(), 1);
+            assert_eq!(function.quantifier_map().iter().len(), 1);
             let elt = TypeSymbol::declared("Elt", fixture.symbols).expect("a Type token");
-            assert!(function.canonical_quantifier(elt).is_some());
+            assert_eq!(function.quantifier_index(elt), Some(0));
+            // Its value is typed by its scheme, which no type stands for.
+            assert!(
+                matches!(Value::Knotted(member).ktype(), DeclaredType::Scheme(_)),
+                "a quantified `FN` value answers its scheme"
+            );
         });
     });
 }
@@ -160,9 +164,9 @@ fn a_lambda_capturing_its_binder_is_a_node_of_its_knot() {
             ));
             let any = fixture
                 .types
-                .function_type(fixture.scratch(), &[], &[], KType::ANY);
-            assert_eq!(lambda.ktype(), any.handle);
-            assert_eq!(list.ktype(), fixture.types.list(any.handle));
+                .function_type(fixture.scratch(), &[], KType::ANY);
+            assert_eq!(lambda.ktype(), any.into());
+            assert_eq!(list.ktype(), fixture.types.list(any));
             assert!(follow(lambda, function.closure().get(CaptureSlot(0))) == a);
         });
     });

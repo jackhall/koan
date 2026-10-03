@@ -17,7 +17,7 @@ use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
 use crate::scope::{BodyShape, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry, display_name};
 use crate::values::{Record, Tagged, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle};
@@ -42,15 +42,16 @@ pub trait Language {
     /// value delivered where the drain says.
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle>;
 
-    /// What the language refuses of a shape once it is built, before anything runs — the checks
-    /// that need types. None by default.
+    /// What the language refuses of a shape once it is built, and what it records on it through
+    /// `writer`, before anything runs — the checks that need types. None by default.
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         types: &'graph TypeRegistry<'graph>,
+        writer: Writer<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
-        let _ = (shape, builtins, types, scratch);
+        let _ = (shape, builtins, types, writer, scratch);
         Ok(())
     }
 }
@@ -72,12 +73,15 @@ pub enum Outcome {
 }
 
 /// What the evaluation finishing a frame owes it: a value satisfying `returns`, the frame's
-/// declared return with its own type-parameter solution substituted, retyped to it. `callee` is
-/// the frame's function type, which a miss names.
+/// declared return with its own type-parameter solution substituted, retyped to `retype`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contract {
-    pub callee: KType,
+    /// The frame's function type, which a miss names; `None` for the frame an `EVAL` runs.
+    pub callee: Option<DeclaredType<KType>>,
     pub returns: KType,
+    /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
+    /// that frame's caller asked for it.
+    pub retype: KType,
 }
 
 /// How a call reached its callee. A keyworded call's arguments were admitted by the selection that
@@ -210,11 +214,16 @@ impl<'graph> Program<'graph> {
             return None;
         }
         let field = BinderSymbol::declared("message", self.symbols)?.symbol();
-        tagged.payload().as_record()?.field(field)?.as_str()
+        let scratch = Bump::new();
+        let payload = value
+            .surface(self.types, &scratch)?
+            .child(0, self.types, &scratch);
+        payload.field(field, self.types, &scratch)?.value().as_str()
     }
 
     /// `value` held to `contract`: an error value passes unchanged, a value satisfying the
-    /// contract's return is retyped to it, and anything else is the error naming the miss.
+    /// contract's return is retyped to its `retype`, and anything else is the error naming the
+    /// miss.
     pub fn fulfilled<'cell>(
         &self,
         writer: Writer<'cell>,
@@ -226,16 +235,53 @@ impl<'graph> Program<'graph> {
         }
         let scratch = Bump::new();
         if satisfies(contract.returns, &value, self.types, &scratch) {
-            return value.retyped(writer, contract.returns, self.types);
+            return value.retyped(writer, contract.retype, self.types, &scratch);
         }
-        let name = |handle| display_name(handle, self.types, self.symbols);
+        let name = |handle: DeclaredType<KType>| display_name(handle, self.types, self.symbols);
+        let (value, returns) = (name(value.ktype()), name(contract.returns.into()));
+        match contract.callee {
+            Some(callee) => self.error(
+                writer,
+                format_args!(
+                    "{} returned {value}, which does not satisfy {returns}",
+                    name(callee)
+                ),
+            ),
+            None => self.error(
+                writer,
+                format_args!("`EVAL`'s code returned {value}, which does not satisfy {returns}"),
+            ),
+        }
+    }
+
+    /// `value`, bound by `LET <name> <type> = …`, held to `annotation`: an error value passes
+    /// unchanged, a value satisfying it — `settled` where the load showed it always does — is
+    /// retyped to it, and anything else is the error naming the miss.
+    pub fn annotated<'cell>(
+        &self,
+        writer: Writer<'cell>,
+        value: KValue<'graph, 'cell>,
+        annotation: KType,
+        settled: bool,
+    ) -> KValue<'graph, 'cell> {
+        if self.message(&value).is_some() {
+            return value;
+        }
+        let scratch = Bump::new();
+        debug_assert!(
+            !settled || satisfies(annotation, &value, self.types, &scratch),
+            "a settled annotation always holds"
+        );
+        if settled || satisfies(annotation, &value, self.types, &scratch) {
+            return value.retyped(writer, annotation, self.types, &scratch);
+        }
+        let name = |handle: DeclaredType<KType>| display_name(handle, self.types, self.symbols);
         self.error(
             writer,
             format_args!(
-                "{} returned {}, which does not satisfy {}",
-                name(contract.callee),
+                "{} does not satisfy its annotation {}",
                 name(value.ktype()),
-                name(contract.returns)
+                name(annotation.into())
             ),
         )
     }

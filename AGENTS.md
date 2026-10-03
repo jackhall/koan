@@ -20,6 +20,7 @@
 ## Design Discussions
 - When the user asks a conceptual or 'should we?' question, answer it first — do NOT immediately start implementing.
 - For pattern-dispatch / signature work, confirm the user's syntax intent before proposing new KType variants.
+- For work or design questions touching types — `src/type_lattice`, the elaborator's type channel, dispatch's static types or selection, a value's carried type — invoke the **type-system skill** first. It holds the lattice's invariants and the checklist a change must answer.
 
 ## Documentation
 - Keep documentation updated and as concise as possible. Do not sacrifice grammar for brevity.

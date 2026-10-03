@@ -2,17 +2,18 @@
 //! takes.
 //!
 //! It runs where a shape is built and its types can be read — over a loaded program's shape and
-//! every body nested in it, and over a quote's code where an `EVAL` runs it — and reads only what
-//! the builtin table spells: a registration whose signature names anything else is typed when its
-//! function is born, so it is never checked. A builtin overload whose operands are all `Any` is
-//! shadowable and overlaps nothing; any other overlaps a registration when every slot pair meets
-//! above `Never`.
+//! every body nested in it, and over a quote's code where an `EVAL` runs it — and reads each
+//! registration's expression shape off the cell [the load pass](crate::elaborate::type_channel)
+//! filled: every closed, unquantified one is checked, whatever declared types its signature names.
+//! A `USING … SCOPE` block's surfaced head births no callable and is not checked here: the
+//! definition answering it is the module's own, checked where the module is built.
+//! A builtin overload whose operands are all `Any` is shadowable and overlaps nothing; any other
+//! overlaps a registration when every slot pair meets above `Never`.
 
-use crate::elaborate::static_callable_type;
 use crate::knot::KBuiltins;
 use crate::memory::BumpAllocator;
-use crate::scope::{BodyShape, ShapeError, ShapeKind};
-use crate::type_lattice::{KType, TypeRegistry, meet, shape_slots};
+use crate::scope::{BodyShape, ShapeError, ShapeKind, Static};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry, meet, shape_slots};
 
 /// Refuse the first registration in `shape`, or in a body nested in it short of a quote's code,
 /// that overlaps a builtin overload at its key.
@@ -29,11 +30,11 @@ pub(super) fn overlaps<'graph>(
         let Some(form) = shape.births(registration.slot).and_then(BodyShape::form) else {
             continue;
         };
-        let registered =
-            static_callable_type(form, shape, builtins, types, scratch, Some(registration))
-                .and_then(|callable| callable.registered)
-                .filter(|registered| registered.quantifier_map.is_empty());
-        let Some(registered) = registered else {
+        let Static::Closed(registered) = shape.registered_type(registration.slot) else {
+            continue;
+        };
+        // A quantified registration's slots read its own group, which the meet does not relate.
+        let DeclaredType::Type(registered) = registered.shape else {
             continue;
         };
         for index in builtins.overloads(registration.key) {
@@ -48,7 +49,7 @@ pub(super) fn overlaps<'graph>(
             if shape_slots(builtin, types).all(|slot| slot == KType::ANY) {
                 continue;
             }
-            let met = shape_slots(registered.shape, types)
+            let met = shape_slots(registered, types)
                 .zip(shape_slots(builtin, types))
                 .all(|(own, theirs)| meet(types, scratch, own, theirs) != KType::NEVER);
             if met {

@@ -5,8 +5,8 @@ use proptest::prelude::*;
 
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::builtin_shapes::binder::{
-    BinderFacts, SlotLabel, needed_key, needing, quantifier_entries, slot_label,
-    type_decl_binder_name,
+    BinderFacts, SlotLabel, identifier_part_binder_name, needed_key, needing, quantifier_entries,
+    slot_label, type_decl_binder_name,
 };
 use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for, render_key,
@@ -28,8 +28,9 @@ fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> 
 ///
 /// The silent entries are the SIG **declaration** forms — `VAL` and the three bodyless operator
 /// heads, each recording into the decl scope's own collectors rather than into a binding map — plus
-/// the two lambdas, which have neither a name nor a head to key a bucket on and are listed only for
-/// their type slot. Anything else appearing here means a binder builtin lost its extractor.
+/// the two lambdas and `EVAL`, which have neither a name nor a head to key a bucket on and are
+/// listed only for their type slot. Anything else appearing here means a binder builtin lost its
+/// extractor.
 #[test]
 fn binder_channels_cover_every_installing_form() {
     let silent: Vec<Vec<String>> = binder_forms()
@@ -45,6 +46,7 @@ fn binder_channels_cover_every_installing_form() {
             vec!["OP", "_", "OVER", "_"],
             vec!["OP", "_", "OVER", "_", "->", "_"],
             vec!["UNARY", "OP", "_", "OVER", "_", "->", "_"],
+            vec!["EVAL", "_", "->", "_"],
         ],
     );
 }
@@ -357,6 +359,21 @@ fn a_bucket_declaration_is_its_own_shape() {
         assert_eq!(shape.id, BuiltinShapeId::BucketDeclaration, "{source}");
         assert!(statement.binder_plan().is_none(), "{source}");
     }
+}
+
+/// A name followed by a type before `=` is the annotated binder, which binds only a value name.
+#[test]
+fn an_annotated_let_is_its_own_shape() {
+    let program = program_storage();
+    let annotated = |source: &str| {
+        let statement = parse_one(program.brand(), source);
+        let shape = statement.cache().builtin_shape().expect("a builtin shape");
+        assert_eq!(shape.id, BuiltinShapeId::LetAnnotated, "{source}");
+        identifier_part_binder_name(&statement)
+    };
+    assert!(annotated("LET inc :(FN :{x :Number} -> Number) = f").is_some());
+    assert!(annotated("LET n :Number = 1").is_some());
+    assert!(annotated("LET Tee :Type = Number").is_none());
 }
 
 /// A rank in a slot's name position labels a slot, so a definition head writing one keys the

@@ -8,7 +8,8 @@
 //!
 //! A block declares locals of its own beside its parameters, and a local sorts in among them
 //! rather than after, so the parameters are picked out by declared position — `Position::PARAMETER`
-//! — and not by taking the first `n` slots.
+//! — and not by taking the first `n` slots. Only the value and type channels are surfaced: a
+//! signature's bodyless head is a registration parameter the load types, which nothing binds here.
 
 use crate::knot::{KActivation, Knotted};
 use crate::memory::{BumpAllocator, BumpVec};
@@ -54,8 +55,9 @@ pub fn surface<'graph, 'cell>(
         let name = shape.slot_name(slot);
         let (_, position) = shape.slot(name).expect("a slot's own name resolves to it");
         // A block declares locals of its own, and a local sorts in among the parameters rather
-        // than after them, so a parameter is picked out by its declared position.
-        if position != Position::PARAMETER {
+        // than after them, so a parameter is picked out by its declared position. A surfaced
+        // head's registration is a parameter too, and binds nothing here.
+        if position != Position::PARAMETER || matches!(name, BinderSymbol::Registration(_)) {
             continue;
         }
         // The `k`-th parameter of a channel is member `k` of that channel — the layout law, which

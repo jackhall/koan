@@ -1,11 +1,19 @@
 //! Dispatch's suites, over programs run end to end: each is loaded under [`Koan`], run, and read
 //! back as what it wrote to either sink.
 
+mod annotation;
+mod ascription;
 mod boundary;
+mod contributions;
+mod generic;
+mod instances;
 mod programs;
 mod quotes;
 mod rankings;
+mod rules;
 mod selection;
+mod statics;
+mod surface;
 mod tail;
 
 use std::cell::RefCell;

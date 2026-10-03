@@ -96,8 +96,16 @@ fn a_frame_s_value_carries_its_declared_return() {
 #[test]
 fn a_return_that_misses_its_declared_type_is_an_error_value() {
     assert_eq!(
-        run("EXPR #(BAD) -> Number = #(\"s\")\nPRINT (BAD)\nPRINT \"after\""),
+        run(
+            "LET r = ({v = \"s\"} :! :{v :Any})\nEXPR #(BAD) -> Number = #(r.v)\nPRINT (BAD)\nPRINT \"after\""
+        ),
         "error: :(FN :{} -> Number) returned Str, which does not satisfy Number"
+    );
+    assert_eq!(
+        run("EXPR #(BAD) -> Number = #(\"s\")\nPRINT (BAD)"),
+        "load: <test>:1:26: this body returns Str, which can never satisfy its declared return \
+         Number",
+        "a body that can never return its declared type refuses the load"
     );
 }
 
@@ -116,15 +124,23 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
                   PRINT (ATTR p y)\n\
                   PRINT p.y\n\
                   LET which = #(y)\n\
-                  PRINT (ATTR p (which))\n\
-                  PRINT (ATTR p z)";
+                  PRINT (ATTR p (which))";
+    assert_eq!(run(source), "a\na\na");
     assert_eq!(
-        run(source),
-        "a\na\na\nerror: :{x :Number y :Str} has no field z"
+        run("LET p = {x = 1, y = \"a\"}\nPRINT (ATTR p z)"),
+        "load: <test>:2:7: :{x :Number y :Str} has no field z",
+        "every record `p` can carry lacks `z`"
+    );
+    assert_eq!(
+        run("EXPR #(HIDE x :Any) -> Any = #(x)\n\
+             LET p = {x = 1, y = \"a\"}\n\
+             PRINT (ATTR (HIDE p) z)"),
+        "error: :{x :Number y :Str} has no field z",
+        "a record the load cannot read faults at run"
     );
     assert_eq!(
         run("LET p = {y = 1}\nPRINT (ATTR p \"y\")"),
-        "error: no overload of ATTR _ _ admits (:{y :Number}, Str)"
+        "load: <test>:2:7: no overload of `ATTR _ _` admits (:{y :Number}, Str)"
     );
     assert_eq!(
         run("NEWTYPE Point = :{x :Number, y :Number}\n\
@@ -134,8 +150,13 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
         "through the newtype over the record"
     );
     assert_eq!(
-        run("UNION Maybe = #{Some: Number, None: Null}\nPRINT Maybe.Some\nPRINT Maybe.Many"),
-        "Some\nerror: :(Some | None) has no member Many"
+        run("UNION Maybe = #{Some: Number, None: Null}\nPRINT Maybe.Some"),
+        "Some"
+    );
+    assert_eq!(
+        run("UNION Maybe = #{Some: Number, None: Null}\nPRINT Maybe.Many"),
+        "load: <test>:2:7: :(Some | None) has no member Many",
+        "a closed projection naming no member refuses the load"
     );
     assert_eq!(
         run("MODULE m = (LET x = 1)\nPRINT m.x"),
@@ -147,15 +168,26 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
 fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
     assert_eq!(
         run("LET f = (FN :{x :Number} -> Str = #(\"ran\"))\nPRINT (f {x = \"s\"})"),
-        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}"
-    );
-    let pair = "LET f = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Str = #((PRINT Elt) (\"ran\")))\n";
-    assert_eq!(
-        run(&format!("{pair}PRINT (f {{x = 1, y = 2}})")),
-        "Number\nran"
+        "load: <test>:2:7: :(FN :{x :Number} -> Str) can never be called with :{x :Str}",
+        "an exact callee its argument can never satisfy refuses the load"
     );
     assert_eq!(
-        run(&format!("{pair}PRINT (f {{x = 1, y = 2, Elt = Str}})")),
+        run(
+            "LET call = (FN :{f :(FN :{x :Number} -> Str), y :Any} -> Str = #(f {x = y}))\n\
+             PRINT (call {f = (FN :{x :Number} -> Str = #(\"ran\")), y = \"s\"})"
+        ),
+        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}",
+        "a callee the load knows at most is the call's to admit"
+    );
+    let pair = |call: &str| {
+        run(&format!(
+            "MODULE lib = ((LET f = (FN FOR ALL #[Elt] :{{x :Elt, y :Elt}} -> Str = \
+             #((PRINT Elt) (\"ran\")))) (PRINT {call}))"
+        ))
+    };
+    assert_eq!(pair("(f {x = 1, y = 2})"), "Number\nran");
+    assert_eq!(
+        pair("(f {x = 1, y = 2, Elt = Str})"),
         "error: arguments :{x :Number y :Number Elt :ProperType} do not name the parameters of \
          :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str)",
         "a type parameter is solved, never written"
@@ -185,11 +217,19 @@ fn from_projects_a_record_to_the_fields_it_names() {
                   EXPR #(PICK r :{x :Number, z :Str}) -> Str = #(\"got xz\")\n\
                   LET both = {x = 1, y = \"a\", z = \"b\"}\n\
                   PRINT (#[x y] FROM both)\n\
-                  PRINT (PICK (#[x y] FROM both))\n\
-                  PRINT (#[x q] FROM both)";
+                  PRINT (PICK (#[x y] FROM both))";
+    assert_eq!(run(source), "{x = 1, y = a}\ngot xy");
     assert_eq!(
-        run(source),
-        "{x = 1, y = a}\ngot xy\nerror: :{x :Number y :Str z :Str} has no field q"
+        run("LET both = {x = 1, y = \"a\", z = \"b\"}\nPRINT (#[x q] FROM both)"),
+        "load: <test>:2:7: :{x :Number y :Str z :Str} has no field q",
+        "every record `both` can carry lacks `q`"
+    );
+    assert_eq!(
+        run("EXPR #(HIDE x :Any) -> Any = #(x)\n\
+             LET both = {x = 1, y = \"a\", z = \"b\"}\n\
+             PRINT (#[x q] FROM (HIDE both))"),
+        "error: :{x :Number y :Str z :Str} has no field q",
+        "a record the load cannot read faults at run"
     );
 }
 
@@ -207,17 +247,19 @@ fn a_type_headed_application_is_a_construction() {
 }
 
 #[test]
-fn eval_over_a_number_is_a_no_overload_miss() {
+fn eval_over_a_number_refuses_the_load() {
     assert_eq!(
-        run("LET n = 1\nPRINT (EVAL n)"),
-        "error: no overload of EVAL _ admits (Number)"
+        run("LET n = 1\nPRINT (EVAL n -> Any)"),
+        "load: <test>:2:7: this value is Number, which can never be code for `EVAL` to run"
     );
 }
 
 #[test]
 fn an_uncaught_error_ends_the_program_with_its_message() {
     assert_eq!(
-        run("PRINT \"before\"\nPRINT (1 + \"a\")\nPRINT \"after\""),
+        run(
+            "LET r = ({v = \"a\"} :! :{v :Any})\nPRINT \"before\"\nPRINT (1 + r.v)\nPRINT \"after\""
+        ),
         "before\nerror: no overload of _ + _ admits (Number, Str)"
     );
 }
@@ -225,11 +267,15 @@ fn an_uncaught_error_ends_the_program_with_its_message() {
 #[test]
 fn every_evaluation_passes_an_error_it_receives_through_unchanged() {
     assert_eq!(
-        run("EXPR #(ONE x :Number) -> Number = #(x)\nPRINT [1, (ONE (ONE \"s\"))]"),
+        run("LET r = ({v = \"s\"} :! :{v :Any})\n\
+             EXPR #(ONE x :Number) -> Number = #(x)\n\
+             PRINT [1, (ONE (ONE r.v))]"),
         "error: no overload of ONE _ admits (Str)"
     );
     assert_eq!(
-        run("EXPR #(DEEP) -> Number = #(1 + \"a\")\nPRINT {n = (DEEP)}"),
+        run(
+            "LET r = ({v = \"a\"} :! :{v :Any})\nEXPR #(DEEP) -> Number = #(1 + r.v)\nPRINT {n = (DEEP)}"
+        ),
         "error: no overload of _ + _ admits (Number, Str)",
         "through a frame's contract"
     );
@@ -330,4 +376,264 @@ fn a_program_nested_to_the_limit_runs_and_one_level_more_is_refused() {
         .expect("spawn")
         .join()
         .expect("runs within the stack");
+}
+
+#[test]
+fn a_type_expression_runs_as_its_load_time_type() {
+    assert_eq!(run("PRINT :(LIST OF Number)"), ":(LIST OF Number)");
+    let source = "EXPR FOR ALL #[Elt] #(TWIN x :Elt AND y :Elt) -> Any = #(:(LIST OF Elt))\n\
+                  PRINT (TWIN 1 AND 2)\n\
+                  PRINT (TWIN \"a\" AND \"b\")";
+    assert_eq!(
+        run(source),
+        ":(LIST OF Number)\n:(LIST OF Str)",
+        "a rigid type takes each call's solution"
+    );
+}
+
+#[test]
+fn a_type_parameter_binds_the_argument_its_call_passes() {
+    let body = "-> Any = #((PRINT Elt) (:(LIST OF Elt)))";
+    assert_eq!(
+        run(&format!(
+            "EXPR #(MAKESET Elt :Type) {body}\nPRINT (MAKESET Number)"
+        )),
+        "Number\n:(LIST OF Number)",
+        "by keyword"
+    );
+    assert_eq!(
+        run(&format!(
+            "LET make = FN EXPR #(MAKESET Elt :Type) {body}\nPRINT (make {{Elt = Str}})"
+        )),
+        "Str\n:(LIST OF Str)",
+        "by name"
+    );
+}
+
+#[test]
+fn a_closed_type_that_does_not_elaborate_refuses_the_load() {
+    assert_eq!(
+        run("NEWTYPE Bad = :(Number.z)"),
+        "load: <test>:1:15: Number has no member z"
+    );
+    assert_eq!(
+        run("LET f = (FN :{} -> Any = #(:(Number.z)))"),
+        "load: <test>:1:28: Number has no member z",
+        "in the body of a callable no one calls"
+    );
+    assert_eq!(
+        run("LET q = #(PRINT :(Number.z))\nPRINT \"loaded\"\nEVAL q -> Any"),
+        "loaded\nerror: <test>:1:17: Number has no member z",
+        "in a quote's code, reported by the `EVAL` that runs it"
+    );
+}
+
+#[test]
+fn the_overlap_check_reads_declared_types() {
+    assert_eq!(
+        run("LET Num = Number\nOP #(+) OVER Num = #(0)"),
+        "load: <test>:2:1: this overload of `_ + _` takes operands the builtin \
+         :(EXPR #(_ :Number + _ :Number) -> Number) already takes"
+    );
+}
+
+#[test]
+fn a_callable_over_a_run_bound_type_is_born_with_the_solution() {
+    let source = "MODULE lib = (\
+                  (LET mk = (FN FOR ALL #[Elt] :{x :Elt} -> :(FN :{y :Elt} -> Elt) = \
+                  #(FN :{y :Elt} -> Elt = #(y)))) \
+                  (LET g = (mk {x = 1})) \
+                  (PRINT g) \
+                  (PRINT (g {y = 2})) \
+                  (PRINT (g {y = \"s\"})))";
+    assert_eq!(
+        run(source),
+        ":(FN :{y :Number} -> Number)\n2\n\
+         error: :(FN :{y :Number} -> Number) cannot be called with :{y :Str}"
+    );
+}
+
+#[test]
+fn a_captured_type_parameter_reads_the_enclosing_call_s_solution() {
+    let source = "MODULE lib = (\
+                  (LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(FN :{} -> Any) = \
+                  #(FN :{} -> Any = #(:(LIST OF Elt))))) \
+                  (PRINT ((mk {x = 1, y = 2}) {})) \
+                  (PRINT ((mk {x = \"s\", y = \"t\"}) {})))";
+    assert_eq!(run(source), ":(LIST OF Number)\n:(LIST OF Str)");
+}
+
+#[test]
+fn a_nominal_over_a_run_bound_type_is_declared_per_call() {
+    let source = "MODULE lib = (\
+                  (LET mk = (FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> Any = \
+                  #((NEWTYPE Boxed = :{v :Elt}) (Boxed {v = x})))) \
+                  (PRINT (mk {x = 1, y = 2})) \
+                  (PRINT (mk {x = \"a\", y = \"b\"})))";
+    assert_eq!(run(source), "Boxed({v = 1})\nBoxed({v = a})");
+}
+
+/// A variable one argument reaches is solved from it by each call, by keyword and by name.
+#[test]
+fn a_variable_used_once_is_solved_by_each_call() {
+    let source = "EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)\n\
+                  MODULE lib = (\
+                  (LET kind = (FN FOR ALL #[Elt] :{x :Elt} -> Type = #(Elt))) \
+                  (PRINT (KIND 1)) (PRINT (kind {x = \"s\"})))";
+    assert_eq!(run(source), "Number\nStr");
+}
+
+/// A module's quantified member runs through a call: by name, written at a call's head, or wrapped
+/// in an unquantified `FN` that calls it. A body binding one where nothing fixes its group is
+/// refused where it is written, not when its value is read.
+#[test]
+fn a_quantified_function_runs_through_a_call() {
+    let pick = "(LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
+    let module = |rest: &str| format!("MODULE lib = ({pick} {rest})");
+    assert_eq!(run(&module("(PRINT (pick {x = 1}))")), "1");
+    assert_eq!(
+        run(
+            "LET f = (FN :{} -> Any = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))))\n\
+             PRINT (f {})"
+        ),
+        "load: <test>:1:27: Any does not fix `Elt`"
+    );
+    assert_eq!(
+        run(
+            "LET q = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\nPRINT (EVAL q -> Any)"
+        ),
+        "error: <test>:1:10: nothing fixes `Elt` here: a quantified function is read only at the \
+         head of a call, as the binding of a `MODULE` member, or where the type it is wanted at \
+         solves its group"
+    );
+    assert_eq!(
+        run(&module(
+            "(LET wrap = (FN :{x :Number} -> Number = #(pick {x = x}))) \
+             (LET keep = [wrap]) \
+             (PRINT (wrap {x = 2}))"
+        )),
+        "2"
+    );
+    assert_eq!(
+        run("PRINT ((FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)) {x = 3})"),
+        "3"
+    );
+    assert_eq!(
+        run(
+            "MODULE lib = ((LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))) \
+             (PRINT \"loaded\"))"
+        ),
+        "loaded"
+    );
+    assert_eq!(
+        run(&module("(LET q = #($pick)) (LET keep = [(EVAL q -> Any)])")),
+        "load: <test>:1:83: `pick` is quantified, so it is read only at the head of a call; wrap it \
+         in an unquantified `FN` to pass it"
+    );
+    assert_eq!(
+        run(&module(
+            "(LET q = #($pick {x = 4})) (PRINT (EVAL q -> Any))"
+        )),
+        "4"
+    );
+}
+
+/// A quantified function type is spelled only as a signature's member: a parameter's type, a
+/// return type and an ascription refuse the load.
+#[test]
+fn a_spelled_quantified_type_refuses_the_load() {
+    let quantified = ":(FN FOR ALL #[Elt] :{x :Elt} -> Elt)";
+    for source in [
+        "LET f = (FN :{g :(FN FOR ALL #[Elt] :{x :Elt} -> Elt)} -> Null = #(null))".to_string(),
+        format!("LET f = (FN :{{}} -> {quantified} = #(null))"),
+        format!("LET v = (1 :! {quantified})"),
+    ] {
+        let printed = run(&source);
+        assert!(
+            printed
+                .contains("a quantified type is written only as a signature's `VAL` member type"),
+            "`{source}`: {printed}"
+        );
+    }
+}
+
+/// A meet over a `FOR ALL` variable or a head parameter refuses the load where it is written: each
+/// call solves the variable, so the meet cannot be taken there. A meet of concrete types still
+/// elaborates.
+#[test]
+fn a_meet_over_a_variable_refuses_the_load() {
+    assert_eq!(
+        run("EXPR FOR ALL #[Elt] #(PICK x :(Elt & Number)) -> Elt = #(x)"),
+        "load: <test>:1:36: a meet's operands name no `FOR ALL` variable or head parameter"
+    );
+    assert_eq!(
+        run("SIG Sg FOR ALL #[Elt] = #[(VAL x :(Elt & Number))]"),
+        "load: <test>:1:40: a meet's operands name no `FOR ALL` variable or head parameter"
+    );
+    assert_eq!(
+        run("EXPR FOR ALL #[Elt] #(PICK x :(Number & Elt & Str)) -> Elt = #(x)"),
+        "load: <test>:1:39: a meet's operands name no `FOR ALL` variable or head parameter"
+    );
+    assert_eq!(run("PRINT :(Number & (Number | Str))"), "Number");
+}
+
+/// `SIG Boxes`, a `MODULE` its `BOX` fits and one it does not, and a function taking a `Boxes`.
+const BOXES: &str = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n\
+                     MODULE poly = (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x]))\n\
+                     MODULE mono = (EXPR #(BOX x :Number) -> :(LIST OF Number) = #([x]))\n\
+                     EXPR #(TAKE m :Boxes) -> Str = #(\"fits\")\n";
+
+#[test]
+fn a_module_whose_member_is_as_general_fits_a_quantified_head() {
+    assert_eq!(run(&format!("{BOXES}PRINT (TAKE poly)")), "fits");
+    // A `MODULE` binder is `[Never, Any]` at load, so the miss is the call's, at run.
+    assert_eq!(
+        run(&format!("{BOXES}PRINT (TAKE mono)")),
+        "error: no overload of TAKE _ admits (SIG (#(BOX _ :Number) -> :(LIST OF Number)))"
+    );
+}
+
+#[test]
+fn a_module_fits_each_application_its_overloads_answer() {
+    let source = "SIG Stack FOR ALL #{Elt: Any} = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]\n\
+                  LET Numbers = :(Stack WITH {Elt = Number})\n\
+                  LET Strings = :(Stack WITH {Elt = Str})\n\
+                  MODULE one = (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x]))\n\
+                  MODULE two = (\
+                  (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x])) \
+                  (EXPR #(PUSH x :Str) -> :(LIST OF Str) = #([x])))\n\
+                  EXPR #(ANY m :Stack) -> Str = #(\"stack\")\n\
+                  EXPR #(NUMBERS m :Numbers) -> Str = #(\"numbers\")\n\
+                  EXPR #(STRINGS m :Strings) -> Str = #(\"strings\")\n\
+                  EXPR #(BOTH m :(Numbers & Strings)) -> Str = #(\"both\")\n";
+    // A `MODULE` binder is `[Never, Any]` at load, so each miss is the call's, at run.
+    let fits = |call: &str| run(&format!("{source}PRINT ({call})"));
+    assert_eq!(fits("ANY one"), "stack");
+    assert_eq!(fits("NUMBERS one"), "numbers");
+    assert_eq!(
+        fits("STRINGS one"),
+        "error: no overload of STRINGS _ admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+    );
+    assert_eq!(fits("ANY two"), "stack");
+    assert_eq!(fits("NUMBERS two"), "numbers");
+    assert_eq!(fits("STRINGS two"), "strings");
+    assert_eq!(fits("BOTH two"), "both");
+    assert_eq!(
+        fits("BOTH one"),
+        "error: no overload of BOTH _ admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+    );
+}
+
+#[test]
+fn a_signature_prints_its_head_parameters_and_a_meet_its_applications() {
+    let source = "SIG Stack FOR ALL #{Elt: Any} = #[(VAL top :Elt)]\n\
+                  SIG Short FOR ALL #{Size: Number} = #[(VAL size :Size)]\n\
+                  PRINT Short\n\
+                  PRINT :((Stack WITH {Elt = Number}) & (Stack WITH {Elt = Str}))";
+    assert_eq!(
+        run(source),
+        "SIG FOR ALL #{Size: Number} (size: Size)\n\
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Number}) & \
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Str})"
+    );
 }

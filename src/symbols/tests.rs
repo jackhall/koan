@@ -37,6 +37,21 @@ fn distinct(texts: &[String]) -> Vec<&String> {
     texts.iter().filter(|text| seen.insert(*text)).collect()
 }
 
+/// Two to nine distinct spellings in a drawn order, split into a non-empty head and a non-empty
+/// rest: what a law that records some spellings and probes others draws, so no probe was recorded.
+fn split_texts() -> impl Strategy<Value = (Vec<String>, Vec<String>)> {
+    prop::collection::btree_set(token_text(), 2..10)
+        .prop_flat_map(|set| {
+            let texts: Vec<String> = set.into_iter().collect();
+            let len = texts.len();
+            (Just(texts).prop_shuffle(), 1..len)
+        })
+        .prop_map(|(mut texts, at)| {
+            let rest = texts.split_off(at);
+            (texts, rest)
+        })
+}
+
 proptest! {
     /// A symbol is a pure function of its text, injective on distinct spellings, and totally
     /// ordered — the three facts every digest-keyed table in the tree rests on.
@@ -63,24 +78,21 @@ proptest! {
     /// often it is offered, and leaves a symbol nothing recorded a miss. `declared` and `record`
     /// are the same write door: each hands back the symbol its text was keyed under.
     #[test]
-    fn interning_round_trips_and_records_each_spelling_once(
-        texts in prop::collection::vec(token_text(), 1..8),
-        absent in token_text(),
-    ) {
+    fn interning_round_trips_and_records_each_spelling_once((texts, rest) in split_texts()) {
+        let absent = rest[0].clone();
         let interner = SymbolInterner::new();
         for text in &texts {
             prop_assert_eq!(interner.intern(text), Symbol::of(text));
         }
+        // Each spelling offered a second time.
         for text in &texts {
             interner.intern(text);
         }
-        let distinct_texts = distinct(&texts);
-        prop_assert_eq!(interner.len(), distinct_texts.len());
+        prop_assert_eq!(interner.len(), texts.len());
         for text in &texts {
             let resolved = interner.resolve(Symbol::of(text));
             prop_assert_eq!(resolved.as_deref(), Some(text.as_str()));
         }
-        prop_assume!(!texts.contains(&absent));
         prop_assert_eq!(interner.resolve(Symbol::of(&absent)), None);
 
         // `declared` records under the symbol it returns, for whichever class the text lands in.
@@ -99,7 +111,7 @@ proptest! {
             prop_assert_eq!(resolved.as_deref(), Some(spelling));
             interner.record(name);
         }
-        prop_assert_eq!(interner.len(), before + 3 - distinct_texts.iter()
+        prop_assert_eq!(interner.len(), before + 3 - texts.iter()
             .filter(|text| ["slot", "width", "height"].contains(&text.as_str()))
             .count());
     }
@@ -108,10 +120,7 @@ proptest! {
     /// `compare_texts` is the order of those very renderings — so a sorted diagnostic reads in the
     /// order a reader sees rather than in digest order.
     #[test]
-    fn display_is_render_and_compare_texts_is_render_order(
-        recorded in prop::collection::vec(token_text(), 1..5),
-        missing in prop::collection::vec(token_text(), 1..3),
-    ) {
+    fn display_is_render_and_compare_texts_is_render_order((recorded, missing) in split_texts()) {
         let interner = SymbolInterner::new();
         for text in &recorded {
             interner.intern(text);
@@ -123,7 +132,6 @@ proptest! {
             prop_assert_eq!(interner.display(*symbol).to_string(), interner.render(*symbol));
         }
         for text in &missing {
-            prop_assume!(!recorded.contains(text));
             prop_assert_eq!(interner.render(Symbol::of(text)), MISSING);
         }
         for left in &symbols {

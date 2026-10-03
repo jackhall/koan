@@ -1,6 +1,6 @@
 //! `KKind` — the shallow dispatch *kind* of a type. A type-accepting argument slot carries a kind
 //! expectation as [`TypeNode::OfKind`](super::node::TypeNode::OfKind); a type value flowing into
-//! such a slot is classified by [`KType::kind_of`](super::handle::KType::kind_of) and matched
+//! such a slot is classified by [`Handle::kind_of`](super::handle::Handle::kind_of) and matched
 //! against it. `OfKind` is **type-channel only** — it admits a type value, never a runtime
 //! instance (a value is matched by a type, never by a kind).
 //!
@@ -16,7 +16,7 @@ use crate::symbols::{StaticName, SymbolInterner, TypeSymbol};
 /// ```
 ///
 /// [`AnyType`](KKind::AnyType) is a *slot* expectation only ("accepts any proper type value"),
-/// never a value classification produced by [`kind_of`](super::handle::KType::kind_of). As an
+/// never a value classification produced by [`kind_of`](super::handle::Handle::kind_of). As an
 /// `OfKind` it is also the type family's top, beside `Value` and `Code`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum KKind {

@@ -1,11 +1,13 @@
 # Elaborate
 
 Type expressions and type declarations turned into
-[type lattice](../type_lattice/README.md) handles, read where they are written.
+[type lattice](../type_lattice/README.md) handles, where the program loads.
 `elaborate` sits above [`scope`](../scope/README.md) and below
-[`knot`](../knot/README.md): a function's type is elaborated from its
-signature where the function is born, a component of type binders is declared
-through [one door](#declarations), and nothing below `scope` can read a name.
+[`knot`](../knot/README.md): [the type channel's load pass](#the-type-channel-at-load)
+types every type expression, callable signature and component of type binders in
+a loaded program, a component through [one door](#declarations), and leaves to
+the run only what names a type a run binds. Nothing below `scope` can read a
+name.
 
 ## What a type expression is
 
@@ -14,13 +16,32 @@ parenthesized or sigiled group of parts. Its type names are not searched for:
 the shape builder already resolved each one to a coordinate and recorded it as
 a mention ([Resolution](../scope/README.md#resolution)), so
 [`type_expression`](expression.rs) looks the mention up by the name part's site
-through `BodyShape::mention` and reads it through the view of the activation the
-expression is read in — `scope`'s `ActivationView`, the one read type at every
-level, which names no habitat. The body runner reads a name only once its
-binder's unit has run, so every read finds its slot bound. A name bound to a type value elaborates to that value's handle. A
-parameter and return type of a callable are eager mentions of the enclosing
-shape, so the activation a signature is read through is the one the callable
-is born in.
+through `BodyShape::mention` and reads its coordinate through a **reader**
+([`Reads`](reads.rs)). Two readers exist:
+
+- **the load-time reader**, which reads no activation and answers from the
+  builtin table and the load-time types of the shapes enclosing the expression
+  ([below](#the-type-channel-at-load)) — a type, a rigid variable standing for a
+  type a run binds, or *unknown*;
+- **an activation's view** — `scope`'s `ActivationView`, the one read type at
+  every level, which names no habitat — for what the load left unknown. The body
+  runner reads a name only once its binder's unit has run, so every read finds
+  its slot bound, and a name bound to a type value elaborates to that value's
+  handle.
+
+A parameter and return type of a callable are eager mentions of the enclosing
+shape, so a signature is read through the enclosing shape's reader: at load, the
+shape the callable is written in; at a birth, the activation it is born in.
+
+A type expression elaborates to a
+[parametric type](../type_lattice/identity.md#typed-handles): a `FOR ALL` name
+reads as its quantified variable, a head parameter as itself, and a run-bound
+name at load as its lexical variable. A quantified callable's type is a
+`Scheme`, and only a signature member's whole type may be one. Where a spelling
+reads an operand concrete — an application's head, a `NEEDING` kind, a
+`WITH`'s signature — an operand naming a `FOR ALL` variable or a head parameter
+is unsupported, and a projection's owner naming one declares no member. A
+run-bound name there is left to the run ([below](#the-type-channel-at-load)).
 
 Every composite is built from the handles its parts elaborate to, through the
 registry's own doors:
@@ -34,16 +55,26 @@ registry's own doors:
   union arrives as `| [Left Right …]` — the
   [chained form](../scope/README.md#operator-groups) the shape builder
   already rewrote it into, so nothing here walks a union part by part;
-- `Left & Right` is the [meet](../type_lattice/README.md#the-relations) of its
+- `Left & Right` is the [meet](../type_lattice/relations.md#the-relations) of its
   two members, and `& [Left Right …]` its chained form — a meet that comes out
-  `Never` is a type like any other;
+  `Never` is a type like any other. The meet relates concrete types, so an
+  operand naming a `FOR ALL` variable or a signature's head parameter is
+  refused as `MeetOverVariable`, located at the `&`: under
+  `EXPR FOR ALL #[Elt] #(PICK x :(Elt & Number)) -> Elt`, each call solves
+  `Elt`, so no meet can be taken where the program loads;
 - `:{x :Elem, …}` is the record type of its fields in written order;
-- `FN :{x :Elem, …} -> Ret`, with or without a `FOR ALL` group, is the function
-  type over the schema's fields and the return;
-- `EXPR #(head) -> Ret`, with or without a `FOR ALL` group, is the expression
-  shape over the keywords and typed slots of the head its quote holds, and the
-  return;
-- `Kind NEEDING #[y …]` is the [code kind](../type_lattice/README.md#the-code-family)
+- `FN :{x :Elem, …} -> Ret` is the function type over the schema's fields and
+  the return, and `EXPR #(head) -> Ret` the expression shape over the keywords
+  and typed slots of the head its quote holds, and the return. Either may write a
+  `FOR ALL` group only as the whole type of a signature's `VAL` member or as a
+  signature's keyworded head ([below](#what-a-signature-declares)): anywhere
+  else a quantified type is refused as `Quantified`, one nested inside an
+  admitted one included, since a quantified function is passed or stored only
+  as a concrete [instance](../../design/quantified-types.md#where-a-quantified-function-is-instantiated);
+- `Sig WITH {Param = Type, …}` is an **application** of a declared signature,
+  pinning the head parameters it names, each a type expression; a key naming no
+  parameter, or a head that is no declared signature, is `Unsupported`;
+- `Kind NEEDING #[y …]` is the [code kind](../type_lattice/vocabulary.md#the-code-family)
   `Kind` needing the names its one-name quotes spell; a kind that is no code
   kind, or an element that is no one-name quote, is unsupported;
 - `Union.Tag` is the member of the union whose tag it names;
@@ -68,16 +99,14 @@ quantifiers intern to one shape. A group is a list of name quotes,
 `FOR ALL #[Elt Key]`, or a dict of name quotes to bound quotes,
 `FOR ALL #{Elt: Value, Key: Any}`. A bound is the one type part its quote holds —
 a type name such as `Value`, or a sigiled `:(Number | Str)` — and a name in a
-list is bounded by `Any`. Groups nest: an `EXPR` type inside a signature
-opens its own group, as does a `FN FOR ALL` type, and a name the innermost group
-declares shadows the rest. A name only an *outer* group declares, read under a
-nested group, is refused. A **bare** `FN` type opens no group at all, so a
-parameter or return it spells inside a quantified head keeps reading that head's
-variables.
+list is bounded by `Any`. An `EXPR` type nested in a quantified head opens a
+group of its own, empty, and a name only the *outer* group declares, read under
+it, is refused. A **bare** `FN` type opens no group at all, so a parameter or
+return it spells inside a quantified head keeps reading that head's variables.
 
 **A bound is closed and inhabited.** Every bound in a group is read under the
 group with no bounds of its own, so a bound naming one of the group's names — or
-a signature's abstract member, or anything else holding a rigid variable — is
+a signature's head parameter, or anything else holding a rigid variable — is
 refused as `Bound`, and so is a bound that elaborates to `Never`. The lattice's
 order assumes nothing above a bound is itself a variable, and a variable bounded
 by `Never` would lie both above and below it.
@@ -120,13 +149,14 @@ operator, or every slot packed into `operands` for a unary one. A `FN`
 registers nothing, and neither does a combined statement's name, which is born
 over the same body without the registration.
 
-A function type binds its group in canonical form, which may renumber or drop a
-variable, so `callable_type` hands back a **quantifier map** beside the handle:
-each `FOR ALL` name the declaration wrote, paired with its index in the canonical
-group, or with its bound where canonical form dropped it — a call has nothing to
-solve a dropped name from, so its body reads the bound. The knot stores the map
-and the registered shape with the function, and a call reads each type
-parameter's solution through the map.
+A function type numbers its group by
+[first occurrence](../type_lattice/relations.md#quantified-binders), which may
+differ from the order the group was written in, so `callable_type` hands back a
+**quantifier map** beside the handle: each `FOR ALL` name the declaration wrote,
+paired with its index in the group. The group keeps every name, so the map is a
+permutation and a call solves each name. The knot stores the map and the
+registered shape with the function, and a call reads each type parameter's
+solution through the map.
 
 **The name is the key, not the position.** A callee's type-parameter slots reach
 its frame in the [type channel's](../scope/README.md#three-channels) own symbol order, not
@@ -135,11 +165,13 @@ interned type's `quantifiers` cannot stand in for the declaration's names,
 because alpha-variants intern to one node and it carries whichever spelling
 interned first.
 
-The reader is a trait, [`Reads`](reads.rs): an activation, its view, or
-`BuiltinsOnly`, which answers only builtin coordinates. Over the last,
-`static_callable_type` types a registration before anything is born, where its
-signature names builtins alone — which is all
-[dispatch's overlap check](../dispatch/README.md#the-overlap-check) reads.
+The load pass types every callable where the program loads and rests the result
+on its body's shape, and each registration's expression shape beside the
+registration ([below](#the-type-channel-at-load)). A birth reads that type rather
+than elaborating its signature: as it is when it is closed, with its variables
+substituted when it is rigid, and through the activation it is born in only where
+the load left it unknown. [Dispatch's overlap check](../dispatch/README.md#the-overlap-check)
+reads the registrations' shapes.
 
 A module body has no callable type here, and neither has a `USING` body: its
 type is its signature, below.
@@ -153,7 +185,7 @@ value — a slot's type is the memo the value already carries, which the tie
 derived — and nothing reads the source, so a module's type is a fact about what
 its body bound.
 
-A module's signature therefore declares no abstract member: a body binds every
+A module's signature therefore declares no head parameter: a body binds every
 name it declares. Its **operator channel** carries the
 [groups its body's shape holds](../scope/README.md#operator-groups) — a `GROUP`
 body's own group, and nothing for a `MODULE` — so how a module's operators chain
@@ -207,7 +239,7 @@ above's, exactly as they are for the tie.
 Every member is read, and the whole member and binder list fixed, before any
 schema elaborates — a schema naming a fellow must already have an index to name
 it by. The component then opens one
-[`RecursiveGroupWindow`](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration):
+[`RecursiveGroupWindow`](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration):
 one member per standalone declaration and one per union variant, each variant
 owned by its `UNION` binder. A mention of a fellow elaborates to the relative
 handle the still-open window minted — a member's own sibling, or a binder's
@@ -237,9 +269,9 @@ argument from.
 A parameterized `UNION` declares one family per variant, each over **all** of
 the union's parameters, so `Result.Ok` takes `Error` too. Each payload is read
 with the parameters as the innermost quantifier group, bounded by `Any`, so a
-nested `FN FOR ALL` or `EXPR` group shadows them like any other outer group.
+nested `EXPR` type's group shadows them like any other outer group.
 Parameters take no bound. An application is covariant in its arguments
-([the order](../type_lattice/README.md#the-relations)), so a payload placing a
+([the order](../type_lattice/relations.md#the-relations)), so a payload placing a
 parameter at a contravariant position — inside a function type's parameter
 list — is refused rather than given an unsound order.
 
@@ -248,8 +280,7 @@ applies itself or a fellow family inside its own component while the window is
 still open: `UNION (Elem AS Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)}}`
 and a `Tree`/`Forest` ring both declare. Applying a union binder per member is
 the elaborator's alone: the lattice's own `constructor_param_names` answers
-nothing for a union, so a parameterized union is no witness for a signature's
-higher-kinded `TYPE (… AS …)` member.
+nothing for a union.
 
 [`builtin_result`](builtin.rs) seals the builtin `Result` through the window
 `UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}` seals through, so the
@@ -260,35 +291,41 @@ What a construction through a family carries is the construction rule's
 
 ### What a signature declares
 
-A `SIG` body is a list of member quotes, `#[(TYPE Carrier) (VAL x :Carrier)]`.
-Each quote's statement is a member, read in list order by its own builtin
+A `SIG` declares a signature over an optional **head group**,
+`SIG Stack FOR ALL #{Elt: Any} = #[…]`, and a body that is a list of member
+quotes. Each name of the head group is a head parameter — a named rigid variable
+([`Parameter`](../type_lattice/vocabulary.md#the-node-vocabulary)) under its written
+bound, which the closed-bound rule reads as it reads a `FOR ALL` name's — and a
+repeated name is `Unsupported`. A parameter is one type per module: an
+application `Stack WITH {Elt = Number}` pins it, or leaves it unpinned. Each
+member quote's statement is a member, read in list order by its own builtin
 shape's roles:
 
-- `TYPE Carrier`, `TYPE (Held AS Boxed)` — an abstract member, bare or
-  higher-kinded, and the only place a bare `TYPE` binds: outside a `SIG` it is
-  refused. `TYPE (Carrier UNDER Number)` bounds a first-order member, under the
-  same closed-bound rule as a `FOR ALL` name; a bound reads earlier members, so a
-  manifest one stands for its type and an abstract one is refused. A
-  higher-kinded member, and a `NEWTYPE` family, take no bound;
 - `LET Elem = Number` — a manifest member, fixed to its type;
-- `VAL x :Elem` — a value slot, named by its `Name` part;
+- `VAL x :Elem` — a value slot, named by its `Name` part, whose type may be a
+  quantified function type, `(VAL identity :(FN FOR ALL #[Item] :{x :Item} -> Item))`;
 - a bodyless `EXPR`, `OP` or `UNARY OP` head — a keyworded member, the shape
   the definition satisfying it registers. An operator head is built by the same
   door as that definition's registered shape; an `EXPR` head, which may write
   `_` for a slot's name, is read through its quote as the type expression
-  `:(EXPR #(…) -> …)`, which spells the same shape.
+  `:(EXPR #(…) -> …)`, which spells the same shape. A head may write a
+  `FOR ALL` of its own, `(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))`,
+  for a variable each use solves afresh, and reads the head parameters under it.
 
-Every shape `BuiltinShapeId::declares_member` names is one of these, and so is a
-`LET` of a type name; a `LET` of a value name is a declaration by its code kind
-but no member a signature can hold, and is refused.
+Every shape `BuiltinShapeId::declares_member` names is one of these, save the
+reserved `TYPE`, which [the shape builder refuses](../scope/README.md#errors)
+wherever it is written; a `LET` of a value name is a declaration by its code
+kind but no member a signature can hold, and is refused.
 
-A signature's scope id is the sentinel, stamped here rather than round-tripped
-through the declaring scope, which is what makes two textually identical `SIG`
-declarations one type. A body's own names — its abstract and manifest members,
-and a higher-kinded member's parameters — are declared by the definition and are
-no mention of the enclosing shape, so the door resolves them against the members
-it has already read. A member naming a *later* member of the same body is a
-forward reference nothing has filled yet, and is refused.
+A signature is closed content: two textually identical `SIG` declarations are
+one type, wherever they are written. A signature's own names — its head
+parameters and manifest members — are declared by the definition and are no
+mention of the enclosing shape, so the door resolves them against what it has
+already read. A member naming a *later* member of the same body is a forward
+reference nothing has filled yet, and is refused. Beside the signature, the door
+hands back each bodyless head's shape by the head's site and key
+(`signature_heads`), which is how the load types a
+[surfaced head](#the-type-channel-at-load).
 
 A bodyless **`GROUP` head** is the signature's **operator channel**: one
 [operator group](../scope/README.md#operator-groups) over the binary operator
@@ -313,7 +350,7 @@ A [`BUILTIN_SHAPES`](../parse/builtin_shapes.rs) entry states its bucket's
 overloads as `static` data — a slot type per slot per overload, one return apiece
 — because the parser probes that table before any registry exists.
 [`builtin_shape_types`](builtin.rs) is the one door that turns such an entry into
-[`ExpressionShape`](../type_lattice/README.md#the-node-vocabulary) handles: one
+[`ExpressionShape`](../type_lattice/vocabulary.md#the-node-vocabulary) handles: one
 per overload, in overload order. A reserved bucket interns nothing — its slot
 types exist to keep its parts raw so its miss stays a miss, not to name a callable
 anything can reach.
@@ -328,29 +365,139 @@ data.
 Every handle the door interns erases to the entry's own bucket key, so the typed
 shape and the untyped bucket a node probes with cannot drift apart.
 
+## The type channel at load
+
+`type_channel` (`channel.rs`) runs once, where the program loads, right after the
+[shape is built](../scope/README.md#load-time-types) and before anything runs. It
+walks the shape tree from the root, **a quote's code included**, and writes each
+result into the write-once cell the builder laid beside it. A load-time type is
+one of three:
+
+- **closed** — it names only builtins and closed type binders, so it is the same
+  at every run, and the run reads it as it is;
+- **rigid** — it names a type a run binds, and is a lattice handle over one
+  lexical variable per such name, each beside the coordinate its value is read
+  from. It serves comparisons where the shape is built, since a relation that
+  holds over a rigid variable holds for every type the run can put there; where
+  it runs it is the handle with each variable replaced by what its coordinate
+  reads, one [substitution](../type_lattice/solving.md#substitute-then-ask);
+- **unknown** — left to the run, which elaborates it where it is read, through
+  the activation.
+
+**What a run binds.** A type-channel slot whose value only a run supplies: a
+callable's `FOR ALL` parameter, a `:Type` parameter, a name
+[`USING … SCOPE`](../scope/README.md#names-that-arrive-at-run-time) surfaces, a
+quote's hole, `\` mark or `$` name whose source is not closed, and a type binder
+the load left unknown. The load-time reader answers each with a **lexical
+variable**, a [rigid node](../type_lattice/vocabulary.md#the-node-vocabulary) of its
+own: positional by its **level**, named as the name is, and lying between
+`Never` and its bound where it is a `FOR ALL` name and `Any` otherwise. A name takes its level where
+it is declared, along the lexical chain of bodies: the names of every enclosing
+body first, then the body's own — a callable's own `FOR ALL` group first, in its
+group order, then its other names in slot order. So a name has one level in
+every body that reads it — the body that declares it, a body nested in that one,
+under a group a nested signature opens — and no binder captures it. The body
+that declares a name records its level beside the slot or capture its
+activation holds the bound type at ([declared variables](../scope/README.md#load-time-types)),
+so a use nested deeper can find where a run reads the variable.
+
+A level is no identity beyond its chain. Two bodies neither of which encloses
+the other number their names alike, and equal content is one node, so typing a
+shape interns nothing that typing a shape like it has not.
+
+**One chain.** A rigid load-time type is compared only along the lexical chain
+it was typed in. A quote's code is built from the code alone, so it roots a
+chain of its own, and a type leaving it is read through
+[`bound_above`](../type_lattice/solving.md#substitute-then-ask). Anything else
+that reaches a reader from outside its chain reaches it unknown.
+
+A callable's function type binds its own group by position. Its body reads
+each of those names as its lexical variable, which the pass records in the
+body's [group-levels cell](../scope/README.md#load-time-types), so a
+parameter's type and the declared return are, in the body, the function type's
+instantiated at those variables, and a written result compares with the declared
+return like with like. Every `FOR ALL` name is such a variable, a name only the
+return reads included: under `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`
+the body reads `Elt` as rigid, and each call binds it.
+
+**A surfaced head.** A `USING … SCOPE` block's
+[surfaced head](../scope/README.md#names-that-arrive-at-run-time) is typed by the
+shape its `SIG` declares for it: the load reads the ascription's already-typed
+type, takes it only where it is a closed signature or application, re-reads the
+`SIG` where it is declared, and substitutes each head parameter by its pin or,
+unpinned, by the block's own type name for it — a lexical variable, so the
+registration is rigid. The shape is ranked as the registration is. Anything else
+— a rigid ascription, a meet — leaves the registration unknown.
+
+**What stays unknown.** A spelling whose value over a rigid variable can differ
+from substituting first and elaborating after: a meet (`Elt & Number` meets to
+`Never` over a rigid `Elt`, but is `Number` where `Elt` is `Number`), a
+projection's owner, an application's head and a `NEEDING` kind, each over a
+run-bound name; and a `FOR ALL` bound naming one, since a bound holds no
+variable. A type binder is closed or unknown,
+never rigid: its readers across a callable boundary could not reach the
+coordinates its variables are read at, and a sealed nominal is a leaf
+substitution never enters, so a `NEWTYPE` over a `FOR ALL` name is a different
+type each call ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
+The declaration door therefore reads through the load-time reader in a mode that
+answers every run-bound name *unknown*.
+
+**Order.** Per shape, the pass types:
+
+1. each component of type binders, in [unit](../scope/README.md#units) order,
+   through [the declaration door](#declarations), so a component reads the
+   binders before it;
+2. each type expression the shape records — a sigiled type in value position, a
+   type part of an expression shape that births no callable, a `MATCH … WITH`
+   guard;
+3. each registration's expression shape, through [`callable_type`](signature.rs),
+   or through its signature for a surfaced head;
+4. each nested shape: a callable's signature first, through the enclosing shape's
+   reader, then its body, with every binder of every enclosing shape already
+   typed.
+
+**Guards.** Two guards of one `MATCH … WITH` arm set that type to one handle —
+`Number` and `:(Number)`, an alias and what it names, `:(Number | Str)` and
+`:(Str | Number)`, a `FOR ALL` name spelled twice — refuse the shape as
+`RepeatedGuard`, naming both.
+
+**Refusals.** A closed type that does not elaborate refuses the load as
+`ShapeError::Type`, located at the part the refusal is about, else at the type
+expression or declaration holding it. Inside a quote's code the refusal is kept
+on the code shape instead, and the `EVAL` that runs the code reports it, since a
+quote is checked where its code runs ([quotes](../scope/README.md#building-code)).
+
 ## Refusals
 
-A type expression that does not elaborate is an [`Elaboration`](../elaborate.rs),
-never a panic and never a guess:
+A type expression that does not elaborate is an `Elaboration`,
+the vocabulary `scope` holds so a shape error can carry one, never a panic and
+never a guess:
 
 - `NotAType` — a type name bound to something other than a type value;
 - `NoSuchMember` — a projection naming a union tag or record field its owner
   does not declare, or off an owner with neither — `Number.z`, or a ring of
   newtypes with no record under it;
 - `Bound` — a bound that names a type variable or is `Never`;
-- `RankingDisagrees` — a meet of two signatures whose keyworded members at one
-  key rank their slots otherwise;
+- `Quantified` — a quantified function type or expression shape written
+  anywhere but as the whole type of a signature's `VAL` member or a signature's
+  keyworded head;
+- `MeetOverVariable` — a meet one of whose operands names a `FOR ALL` variable
+  or a signature's head parameter;
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
-  parameters its constructor declares, a bound on a higher-kinded `TYPE` member
-  or a `NEWTYPE` family or a parameterized union, and every declaration the
-  door refuses — a cyclic component through a non-nominal member, a bare `TYPE`
-  outside a `SIG`, a repeated union tag or family parameter, a union
+  parameters its constructor declares, a `WITH` over anything but a declared
+  signature or pinning a name it does not declare as a parameter, a bound on a
+  `NEWTYPE` family or a parameterized union, and every declaration the
+  door refuses — a cyclic component through a non-nominal member, a repeated
+  head parameter, union tag or family parameter, a union
   with no variant, a family parameter at a contravariant position, and a
   forward reference inside a `SIG` body. An operator
   declaration or head naming `!=`, and an `==` whose result is not `Bool`, are
   `Unsupported` for the same reason a group head that would chain a symbol twice
   is: [`!=` is rewritten, never declared](../scope/README.md#operator-groups).
+
+A reader's *unknown* comes back as `Unknown`, the load pass's cue to leave the
+type to the run; it is never reported.
 
 Elaboration writes nothing to a region: its transient runs live in the scratch
 arena it is handed, and every node it builds is interned in the registry. A
@@ -361,8 +508,8 @@ handle minted before the refusal is content no name reaches.
 ## The import rule
 
 **Outside doc comments and `#[cfg(test)]`, `elaborate` names `crate::memory`,
-`crate::parse`, `crate::scope`, `crate::type_lattice` and `crate::values`, and
-nothing else in the crate.** It reads each part's role off `parse`'s own
+`crate::parse`, `crate::scope`, `crate::source`, `crate::symbols`,
+`crate::type_lattice` and `crate::values`, and nothing else in the crate.** It reads each part's role off `parse`'s own
 builtin shape table and the pair reader `scope` exposes to the crate, so a type
 expression's parts are walked by the same facts the shape builder walked them
 by.
@@ -383,14 +530,17 @@ door over the same harness: each form it elaborates, each group it seals — a
 ring, a union and a newtype in one component, a ring written in either order
 interning equal — the chaining record a bodyless `GROUP` head declares and the
 two handles two directions make of one signature, each bodyless head spelling
-the shape its definition registers, and each refusal, asserting the refused
+the shape its definition registers, a signature's head parameters, its members
+reading them under a group of their own, a `WITH` application and the meet of
+two, a quantified type spelled only as a signature member's, and each refusal,
+asserting the refused
 component left its binders' slots empty. [`tests/module.rs`](tests/module.rs) runs the self-signature
 over a module body activated in a cell with its slots bound by hand: a slot per
 value binder and a manifest member per type binder, the empty body as the empty
 signature, two bodies binding the same members in either order interning equal,
 a member carrying the type its value carries rather than one walked from its
 contents, a `GROUP` body's self-signature carrying the group it declares and
-and satisfying the signature stating it.
+fitting the signature stating it.
 [`tests/families.rs`](tests/families.rs) declares parameterized unions: a
 family per variant, the builtin `Result` equal to the declared one, a union head
 applied per variant, constructions through a variant ordered against
@@ -400,13 +550,22 @@ each family refusal.
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
 interns as the union of its three members.
+[`tests/channel.rs`](tests/channel.rs) runs the load pass over shaped programs
+and reads the cells it filled: a closed binder, ring and callable equal to what
+elaborating through an activation gives; a `FOR ALL` name at one level, in its
+callable's body and in a callable nested in it; sibling bodies numbering their
+own names alike; a nested `FOR ALL` callable rigid over its enclosing names,
+and one whose bound names a run-bound name left unknown; a `:Type` parameter,
+an outer quantifier inside an inner group, a quote's hole and a `$` name
+crossing into code each as a lexical variable; each spelling left unknown; a
+nominal over a
+run-bound type left unknown and a reader of it rigid; each repeated guard; and a
+refusal refusing the load, or kept on its quote's code shape.
 
 ## Open work
 
-- [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
-  — a type parameter canonical form drops, which a call binds to its bound
-  rather than to what the arguments solve it to.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
-  a signature, which the lattice specializes but no type expression elaborates;
-  a family's variance, which no declaration states; and a parameterized union
-  as a higher-kinded witness.
+- [Module programs](../../roadmap/rewrite/modules.md) — higher-kinded head
+  parameters, and a constructor application leaving a parameter unpinned.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
+  variance, which no declaration states, and a nominal over a run-bound type
+  declared per call.

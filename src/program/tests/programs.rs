@@ -270,10 +270,10 @@ fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
 #[test]
 fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
     // A callee's type-parameter slots reach its frame **symbol-sorted**, which is BLAKE3 order and
-    // so unrelated to what was written. These two callees are the same type — canonical form drops
-    // the unused name from both — and differ only in the order their groups were written, so a
-    // frame that read the map positionally would hand one of them the other's answer. Both must
-    // read `Unused` as `Any` whichever way the two symbols happen to sort.
+    // so unrelated to what was written. These two callees are the same type — each group puts the
+    // unused name last — and differ only in the order their groups were written, so a frame that
+    // read the map positionally would hand one of them the other's answer. No argument reaches
+    // `Unused`, so both must read it as its bound `Any` whichever way the two symbols sort.
     let mut substrate = loaded(
         "LET ab = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET ba = (FN FOR ALL #[Unused Held] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
@@ -281,7 +281,7 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
         2,
     );
     let read = run_and_read(&mut substrate, &["one", "two"]);
-    assert_eq!(read[0], "Any", "`Unused` is dropped by canonical form");
+    assert_eq!(read[0], "Any", "`Unused` binds its bound");
     assert_eq!(
         read[1], read[0],
         "the written order does not change the answer"
@@ -382,6 +382,22 @@ fn a_quantified_return_shares_its_frame() {
 }
 
 #[test]
+fn an_annotated_binder_is_held_to_its_annotation() {
+    // Mini runs no static pass, so nothing is settled and every annotation is checked here.
+    let mut substrate = loaded("LET n :Number = 1\nLET xs :(LIST OF Any) = [1]", 2);
+    assert_eq!(run_and_read(&mut substrate, &["n"]), ["1"]);
+    let mut substrate = loaded("LET s :Number = \"a\"", 2);
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
+    );
+    assert_eq!(
+        written(),
+        ["error: Str does not satisfy its annotation Number"]
+    );
+}
+
+#[test]
 fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
     let mut substrate = loaded(
         "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num 7)",
@@ -403,7 +419,7 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
 }
 
 #[test]
-fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
+fn a_type_parameter_no_argument_reaches_binds_its_bound() {
     let mut substrate = loaded(
         "LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET t = (which [1 2])",
@@ -535,7 +551,7 @@ fn a_lambda_part_is_supplied_to_a_tie() {
     assert!(read[1].starts_with("fn in "), "{read:?}");
 }
 
-const TWICE: &str = "LET x = 7\nLET twice = (FN :{body :Expression} -> Any = #(EVAL body))";
+const TWICE: &str = "LET x = 7\nLET twice = (FN :{body :Expression} -> Any = #(EVAL body -> Any))";
 
 #[test]
 fn eval_runs_code_whose_dollar_name_binds_where_it_is_written() {
@@ -547,7 +563,7 @@ fn eval_runs_code_whose_dollar_name_binds_where_it_is_written() {
 fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
     for twice in [
         TWICE.to_string(),
-        TWICE.replace("#(EVAL body)", "#((LET x = 3) (EVAL body))"),
+        TWICE.replace("#(EVAL body -> Any)", "#((LET x = 3) (EVAL body -> Any))"),
     ] {
         let mut substrate = loaded(&format!("{twice}\nLET r = (twice #(x MINUS 1))"), 4);
         reset();
@@ -577,7 +593,7 @@ fn a_required_keyworded_hole_is_unbound_when_eval_runs() {
 fn a_parameter_needing_a_name_is_offered_it_where_eval_is_written() {
     let mut substrate = loaded(
         "LET twice = (FN :{body :(Expression NEEDING #[it])} -> Any = \
-         #((LET it = 5) (EVAL body)))\n\
+         #((LET it = 5) (EVAL body -> Any)))\n\
          LET r = (twice #(\\it MINUS 1))",
         4,
     );
@@ -587,7 +603,7 @@ fn a_parameter_needing_a_name_is_offered_it_where_eval_is_written() {
 #[test]
 fn a_function_built_from_code_carries_its_bindings_as_captures() {
     let mut substrate = loaded(
-        "LET make = (FN :{v :Number} -> Any = #(EVAL #(FN :{} -> Number = #($v))))\n\
+        "LET make = (FN :{v :Number} -> Any = #(EVAL #(FN :{} -> Number = #($v)) -> Any))\n\
          LET a = (make 1)\nLET b = (make 1)\nLET c = (make 2)",
         4,
     );
@@ -611,7 +627,7 @@ fn a_binder_capturing_an_eval_statement_declared_after_it_runs_after_it() {
     // `f` is born once `y` is bound, and `EVAL` waits on no binder declared before it.
     let mut substrate = loaded(
         "LET f = (FN :{n :Number} -> Number = #(y))\n\
-         LET y = (EVAL #(7 MINUS 2))\n\
+         LET y = (EVAL #(7 MINUS 2) -> Any)\n\
          LET r = (f 0)",
         4,
     );
@@ -620,7 +636,10 @@ fn a_binder_capturing_an_eval_statement_declared_after_it_runs_after_it() {
 
 #[test]
 fn a_malformed_quote_loads_and_its_error_is_reported_when_eval_runs_it() {
-    let mut substrate = loaded("LET r = (EVAL #((LET x = 1) (LET x = 2) (PRINT x)))", 4);
+    let mut substrate = loaded(
+        "LET r = (EVAL #((LET x = 1) (LET x = 2) (PRINT x)) -> Any)",
+        4,
+    );
     assert_eq!(
         substrate.with(|running| running.run()),
         Ok(Outcome::Uncaught)
@@ -635,7 +654,7 @@ fn a_malformed_quote_loads_and_its_error_is_reported_when_eval_runs_it() {
 fn a_marked_type_name_in_a_signature_the_code_writes_binds_where_the_quote_is_written() {
     let mut substrate = loaded(
         "LET Alias = Number\n\
-         LET g = (EVAL #(FN :{v :($Alias)} -> Number = #(v)))\n\
+         LET g = (EVAL #(FN :{v :($Alias)} -> Number = #(v)) -> Any)\n\
          LET r = (g 4)",
         4,
     );
@@ -677,6 +696,31 @@ fn a_frame_s_value_is_retyped_to_its_declared_return() {
         run_and_read(&mut substrate, &[]);
         assert_eq!(type_back(&mut substrate, "r"), ":(LIST OF Any)", "{body}");
     }
+}
+
+#[test]
+fn a_frame_retypes_each_argument_to_its_declared_type() {
+    // A declared return of `Any` keeps the value's own type, so what `r` carries is the argument's.
+    let mut substrate = loaded(
+        "LET f = (FN :{xs :(LIST OF Any)} -> Any = #(xs))\nLET r = (f [1 2])",
+        2,
+    );
+    run_and_read(&mut substrate, &[]);
+    assert_eq!(type_back(&mut substrate, "r"), ":(LIST OF Any)");
+}
+
+#[test]
+fn a_tail_chain_returns_at_the_outermost_contract() {
+    // `outer`'s last statement calls `inner`, whose return lies within `outer`'s, so `outer`'s
+    // frame tails into `inner`'s, which is checked against its own return and retyped to `outer`'s.
+    let mut substrate = loaded(
+        "LET inner = (FN :{n :Number} -> (LIST OF Number) = #([1 2]))\n\
+         LET outer = (FN :{n :Number} -> (LIST OF Any) = #(inner n))\n\
+         LET r = (outer 0)",
+        3,
+    );
+    run_and_read(&mut substrate, &[]);
+    assert_eq!(type_back(&mut substrate, "r"), ":(LIST OF Any)");
 }
 
 #[test]

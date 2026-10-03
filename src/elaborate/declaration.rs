@@ -9,21 +9,22 @@
 //!
 //! See [README.md § Declarations](README.md#declarations).
 
-use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use std::cell::Cell;
+
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::{
     bounded, declarator_parameters, quoted_body, quoted_part, symbol_from_quote_body,
 };
 use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BuiltinGroup, Component, Site, is_equality};
+use crate::scope::{BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredGroup, FoldDirection, KKind, KType, RecursiveGroupWindow, ReductionMode,
-    RelativeSchema, SchemaDraft, TypeRegistry,
+    DeclaredGroup, DeclaredType, FoldDirection, KKind, KType, Parametric, RecursiveGroupWindow,
+    ReductionMode, RelativeSchema, SchemaDraft, SigOrigin, TypeRegistry,
 };
 
-use super::Elaboration;
 use super::expression::{Elaborator, Fellow, Groups};
 use super::reads::Reads;
 use super::signature::operator_shape;
@@ -112,7 +113,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     params,
                 });
             }
-            Declared::Signature(_) | Declared::Alias(_) => {
+            Declared::Signature { .. } | Declared::Alias(_) => {
                 unreachable!("a non-nominal member is answered alone above")
             }
         }
@@ -128,10 +129,11 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
             scratch,
             fellows: &fellows,
             locals: &[],
+            binder: Cell::new(false),
         };
         match member.kind {
             Declared::NewType { repr } => {
-                let repr = elaborator.part(repr, &TOP)?;
+                let repr = closed(types, elaborator.part(repr, &TOP)?);
                 sealed = window.fill_member(index, RelativeSchema::NewType(repr), types, scratch);
                 index += 1;
             }
@@ -148,7 +150,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 params: [],
             } => {
                 for (_, payload) in variants {
-                    let payload = elaborator.part(payload, &TOP)?;
+                    let payload = closed(types, elaborator.part(payload, &TOP)?);
                     sealed =
                         window.fill_member(index, RelativeSchema::NewType(payload), types, scratch);
                     index += 1;
@@ -176,7 +178,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     index += 1;
                 }
             }
-            Declared::Signature(_) | Declared::Alias(_) => unreachable!("answered alone above"),
+            Declared::Signature { .. } | Declared::Alias(_) => unreachable!("answered alone above"),
         }
     }
     let sealed = sealed.expect("the last fill seals a window whose every member was filled");
@@ -196,7 +198,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     .binder_type(member.name)
                     .expect("a declaring binder seals its union")
             }
-            Declared::Signature(_) | Declared::Alias(_) => unreachable!("answered alone above"),
+            Declared::Signature { .. } | Declared::Alias(_) => unreachable!("answered alone above"),
         };
         handles.push(handle);
     }
@@ -209,6 +211,15 @@ const TOP: Groups<'static> = Groups {
     bounds: &[],
     outer: None,
 };
+
+/// Why a declared type is concrete: its part reads under no `FOR ALL` group and no head
+/// parameter, and a name a run binds is unknown where a declaration is typed at load.
+const DECLARED: &str = "a declared type reads no variable";
+
+/// A declared type, read under [`TOP`] with no head parameter in reach: concrete.
+fn closed(types: &TypeRegistry<'_>, declared: Parametric) -> KType {
+    types.concrete(declared).expect(DECLARED)
+}
 
 /// One member of a component, read off its declaration node before anything is elaborated.
 struct Declaration<'graph, 'x> {
@@ -237,9 +248,12 @@ enum Declared<'graph, 'x> {
     /// parameter names, symbol-sorted — the identity wrapper over its argument, which a
     /// construction builds only when there is one parameter.
     Family { params: &'x [TypeSymbol] },
-    /// `SIG <Name> = <body>`: a signature, which no `Sibling` can stand for and so takes part in
-    /// no cycle.
-    Signature(&'graph ExpressionPart<'graph>),
+    /// `SIG <Name> [FOR ALL <names>] = <body>`: a signature over its head group, if it writes one,
+    /// which no `Sibling` can stand for and so takes part in no cycle.
+    Signature {
+        group: Option<&'graph ExpressionPart<'graph>>,
+        body: &'graph ExpressionPart<'graph>,
+    },
     /// `LET <Type> = <rhs>`: a transparent alias of its right-hand side.
     Alias(&'graph ExpressionPart<'graph>),
 }
@@ -256,10 +270,12 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
         let form = node.cache().builtin_shape().ok_or(unsupported)?;
         let mut name_part = None;
         let mut declared = None;
+        let mut group = None;
         for (role, part) in form.roles().zip(node.parts) {
             match role {
                 Role::Name => name_part = Some(&part.value),
                 Role::Definition(_) | Role::Rhs => declared = Some(&part.value),
+                Role::Quantifiers => group = Some(&part.value),
                 _ => {}
             }
         }
@@ -288,9 +304,11 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
             BuiltinShapeId::NewTypeDeclaration => Declared::Family {
                 params: parameters(name_part, scratch).ok_or(unsupported)?,
             },
-            BuiltinShapeId::Sig => Declared::Signature(declared.ok_or(unsupported)?),
+            BuiltinShapeId::Sig | BuiltinShapeId::QuantifiedSig => Declared::Signature {
+                group,
+                body: declared.ok_or(unsupported)?,
+            },
             BuiltinShapeId::LetValue => Declared::Alias(declared.ok_or(unsupported)?),
-            // A bare `TYPE` names an abstract member only a signature can bind.
             _ => return Err(unsupported),
         };
         let name = match form.id {
@@ -329,13 +347,49 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
             scratch,
             fellows: &[],
             locals: &[],
+            binder: Cell::new(false),
         };
         match self.kind {
-            Declared::Alias(rhs) => elaborator.part(rhs, &TOP),
-            Declared::Signature(body) => signature_type(&elaborator, body, self.site),
+            Declared::Alias(rhs) => Ok(closed(types, elaborator.part(rhs, &TOP)?)),
+            Declared::Signature { group, body } => {
+                let mut heads = BumpVec::new_in(scratch);
+                signature_type(&elaborator, group, body, self.site, &mut heads)
+            }
             _ => unreachable!("a nominal member seals in a window"),
         }
     }
+}
+
+/// A bodyless keyworded head's shape under one of its keys, by the head's site: a shape over the
+/// signature's head parameters, or a quantified head's scheme.
+pub(super) type HeadShape = (Site, Which, DeclaredType<Parametric>);
+
+/// The shape of each bodyless keyworded head of the signature the `SIG` `node` declares, by the
+/// head's site and which of its keys the shape is under — the shapes the signature holds, over its
+/// head parameters — its names read through `reader`, which reads where the `SIG` is written.
+pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
+    node: &'graph KExpression<'graph>,
+    reader: &R,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'x>,
+) -> Result<(KType, BumpVec<'x, HeadShape>), Elaboration> {
+    let declaration = Declaration::of(node, scratch)?;
+    let Declared::Signature { group, body } = declaration.kind else {
+        return Err(Elaboration::Unsupported {
+            site: declaration.site,
+        });
+    };
+    let elaborator = Elaborator {
+        reader,
+        types,
+        scratch,
+        fellows: &[],
+        locals: &[],
+        binder: Cell::new(false),
+    };
+    let mut heads = BumpVec::new_in(scratch);
+    let signature = signature_type(&elaborator, group, body, declaration.site, &mut heads)?;
+    Ok((signature, heads))
 }
 
 /// A `UNION`'s `#{<Tag>: <payload>, …}` dict as tag/payload pairs, in written order: each key quotes
@@ -391,16 +445,20 @@ fn last_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
     }
 }
 
-/// A `SIG`'s signature over its body's declarators, in source order.
+/// A `SIG`'s signature over its head group and its body's declarators, in source order.
 ///
-/// Its abstract and manifest members are the body's own names, resolved through the elaborator's
-/// local table rather than through a mention, since the shape declared them in the definition. A
-/// bodyless `EXPR`, `OP` or `UNARY OP` head is a keyworded member; a bodyless `GROUP` is the
-/// operator channel's and is refused here.
-fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
+/// Each name of the head group is a [`Parameter`](crate::type_lattice::TypeNode::Parameter) under
+/// its written bound — a closed one, so a bound naming another parameter is refused. The parameters
+/// and the manifest members are the signature's own names, resolved through the elaborator's local
+/// table rather than through a mention, since the shape declared them in the definition. A bodyless `EXPR`,
+/// `OP` or `UNARY OP` head is a keyworded member, pushed onto `heads` by its site under each of
+/// its keys; a bodyless `GROUP` is the operator channel's.
+fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
     elaborator: &Elaborator<'_, '_, '_, R>,
+    group: Option<&'graph ExpressionPart<'graph>>,
     body: &'graph ExpressionPart<'graph>,
     site: Site,
+    heads: &mut BumpVec<'h, HeadShape>,
 ) -> Result<KType, Elaboration> {
     let unsupported = Elaboration::Unsupported { site };
     let ExpressionPart::ListLiteral(body) = body else {
@@ -409,10 +467,19 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
     let scratch = elaborator.scratch;
     let types = elaborator.types;
     let mut draft = SchemaDraft::new(scratch);
-    // A textually identical `SIG` in another program is one type: the sentinel is stamped here
-    // rather than round-tripped through the declaring scope's own id.
-    draft.sig_id = Some(ScopeId::SENTINEL);
-    let mut locals: BumpVec<'_, (TypeSymbol, KType)> = BumpVec::new_in(scratch);
+    draft.origin = SigOrigin::Declared;
+    let mut locals: BumpVec<'_, (TypeSymbol, Parametric)> = BumpVec::new_in(scratch);
+    if let Some(group) = group {
+        let group = elaborator.group(group, &TOP)?;
+        for (index, (name, bound)) in group.names.iter().zip(&group.bounds).enumerate() {
+            if group.names[..index].contains(name) {
+                return Err(unsupported);
+            }
+            let handle = types.head_parameter(*name, *bound);
+            draft.insert_parameter(*name, handle);
+            locals.push((*name, handle));
+        }
+    }
     // The groups this signature declares, and the symbols of the heads that state a result of
     // their own — admitted only where the symbol chains pairwise, which a later group may settle.
     let mut groups: BumpVec<'_, DeclaredGroup<'_>> = BumpVec::new_in(scratch);
@@ -426,6 +493,7 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
             scratch,
             fellows: elaborator.fellows,
             locals: &locals,
+            binder: Cell::new(false),
         };
         let site = Site::of(&node.parts[0].value);
         let unsupported = Elaboration::Unsupported { site };
@@ -450,32 +518,6 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
             }
         }
         match form.id {
-            BuiltinShapeId::TypeDeclaration => {
-                let name_part = name_part.ok_or(unsupported)?;
-                let (declarator, bound) = match bounded(name_part) {
-                    Some((declarator, bound)) => (declarator, Some(bound)),
-                    None => (name_part, None),
-                };
-                let (name, params) = match declarator {
-                    ExpressionPart::Type(name) => (*name, &[][..]),
-                    _ => (
-                        last_type_name(declarator).ok_or(unsupported)?,
-                        parameters(declarator, scratch).ok_or(unsupported)?,
-                    ),
-                };
-                // A bound reads earlier members through `locals`, so one naming an abstract member
-                // is refused and one naming a manifest member reads its type. A higher-kinded
-                // member takes no bound.
-                let bound = match bound {
-                    Some(_) if !params.is_empty() => return Err(unsupported),
-                    Some(part) => member.bound(part, &TOP)?,
-                    None => KType::ANY,
-                };
-                let handle =
-                    types.abstract_type(scratch, ScopeId::SENTINEL, name, params, None, bound);
-                draft.insert_abstract(name, handle);
-                locals.push((name, handle));
-            }
             BuiltinShapeId::LetValue => {
                 let ExpressionPart::Type(name) = name_part.ok_or(unsupported)? else {
                     return Err(unsupported);
@@ -488,17 +530,21 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
                 let ExpressionPart::Identifier(name) = name_part.ok_or(unsupported)? else {
                     return Err(unsupported);
                 };
-                let handle = member.part(type_parts[0].ok_or(unsupported)?, &TOP)?;
+                member.binder.set(true);
+                let handle = member.part_declared(type_parts[0].ok_or(unsupported)?, &TOP)?;
                 draft.insert_value_slot(*name, handle);
             }
             BuiltinShapeId::ExpressionHead | BuiltinShapeId::QuantifiedExpressionHead => {
-                draft.push_keyworded(member.node(site, node, &TOP)?);
+                member.binder.set(true);
+                let shape = member.node_declared(site, node, &TOP)?;
+                heads.push((site, Which::Only, shape));
+                draft.push_keyworded(shape);
             }
             BuiltinShapeId::OperatorHead
             | BuiltinShapeId::OperatorHeadReturning
             | BuiltinShapeId::UnaryOperatorHeadReturning => {
                 let data = data.ok_or(unsupported)?;
-                let shape = operator_shape(
+                let (shape, bridge) = operator_shape(
                     &member,
                     form.id == BuiltinShapeId::UnaryOperatorHeadReturning,
                     data,
@@ -508,6 +554,12 @@ fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
                 )?;
                 if form.id == BuiltinShapeId::OperatorHeadReturning {
                     returning.push((quoted_operator(data).ok_or(unsupported)?, site));
+                }
+                match bridge {
+                    Some(bridge) => {
+                        heads.extend([(site, Which::Unary, shape), (site, Which::Binary, bridge)])
+                    }
+                    None => heads.push((site, Which::Only, shape)),
                 }
                 draft.push_keyworded(shape);
             }
@@ -631,7 +683,7 @@ fn group_members<'graph, 'x, R: Reads<'graph> + ?Sized>(
             }
         }
         let data = data.ok_or(unsupported)?;
-        let shape = operator_shape(
+        let (shape, _) = operator_shape(
             elaborator,
             false,
             data,

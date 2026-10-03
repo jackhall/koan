@@ -3,7 +3,8 @@
 //! body's, the code an `EVAL` runs, or a block's, in the frame's own cell.
 //!
 //! The runner claims nothing ahead and no unit has a cell of its own. A unit of type binders is
-//! declared through the elaborator's door and bound in the same step; a module binder's body runs
+//! bound to the handles the load pass fixed for it when they are closed, and otherwise declared
+//! through the elaborator's door and bound in the same step; a module binder's body runs
 //! inline, its activation laid down in the running region and the enclosing body's place kept in a
 //! resident [`Outer`]; a component the knot ties is tied, and a refusal naming eager parts becomes
 //! one evaluation per part, all asked for at one park; a lone `LET` and a statement that binds
@@ -16,15 +17,22 @@
 //! the error sink, marks the run uncaught, and leaves its view at rest as it always does.
 //! [`StepError::Refused`] is left for invariant breaks alone.
 //!
+//! **A declared parameter is an ascription.** A frame binds each value parameter to its argument
+//! retyped to the parameter's declared type, with the call's solution substituted. So is an
+//! annotated binder, `LET <name> <type> = <value>`: its value is checked against the type, unless
+//! the load settled it, and retyped to it before it is bound.
+//!
 //! **Frames end under a contract.** A called frame owes its caller a value satisfying its declared
 //! return, with its own type-parameter solution substituted, retyped to it; a miss is an error
 //! value. When the frame's last unit is a statement that binds nothing, the runner **tails** into
-//! the evaluator with that [`Contract`], and the evaluation owes it instead. An `EVAL`'s frame tails
-//! with none; a block never tails.
+//! the evaluator with that [`Contract`], and the evaluation owes it instead. A frame a tail hop
+//! reached is checked against its own return and retyped to the one the hop owed, so a chain of
+//! hops returns at the outermost contract. An `EVAL`'s frame owes the `EVAL`'s declared return as a
+//! called frame owes its own; a block never tails.
 
 use std::fmt;
 
-use crate::elaborate::{Canonical, type_declarations};
+use crate::elaborate::{denoted, type_declarations};
 use crate::knot::module::body_activation;
 use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Untieable, tie};
 use crate::memory::{Bump, BumpVec, resident};
@@ -32,14 +40,15 @@ use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
+use crate::scope::Static;
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
-use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    Collector, KType, TypeNode, TypeRegistry, Variance, admits_with, display_name,
-    substitute_quantified,
+    Collector, DeclaredType, KType, Parametric, TypeNode, TypeRegistry, Variance, admits_with,
+    display_name, substitute_quantified,
 };
-use crate::values::{Link, List, TypeValue, Value};
+use crate::values::{CALL_ONLY, Link, List, TypeValue, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
@@ -57,7 +66,7 @@ pub struct Runner<'graph, 'cell> {
     /// The enclosing bodies of a module body being run inline, innermost first.
     outer: Option<&'cell Outer<'graph, 'cell>>,
     level: Level,
-    /// What a called frame owes its caller; `None` everywhere else.
+    /// What a called frame or an `EVAL`'s owes; `None` everywhere else.
     contract: Option<Contract>,
     stage: Stage,
 }
@@ -137,21 +146,24 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             callee,
             arguments,
             kind,
-        }) => match frame(&step, program, callee, arguments, kind) {
+            contributed,
+            owed,
+        }) => match frame(&step, program, callee, arguments, kind, contributed, owed) {
             Ok((activation, contract)) => {
                 Runner::at(program, activation, Level::Frame, Some(contract))
             }
             Err(message) => {
                 let error = program.error(step.writer(), message);
-                return step.finish(error);
+                return step.finish(error, program.types());
             }
         },
         KState::Born(KBirth::Eval {
             program,
             code,
             offered,
+            contract,
         }) => match code_frame(&step, program, code, offered) {
-            Some(activation) => Runner::at(program, activation, Level::Frame, None),
+            Some(activation) => Runner::at(program, activation, Level::Frame, Some(contract)),
             None => return step.failed(StepError::Refused),
         },
         KState::Born(KBirth::Block {
@@ -176,22 +188,26 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
 /// What an evaluator asks for to call `callee` over `arguments`, a record of its parameters by
 /// name — and, for a quantified callee a keyworded call selected, of its type parameters, each a
 /// type value: a frame running the callee's body, placed by the bit its return type derives.
-/// `kind` says whether the arguments were admitted before the call or are checked by the frame.
+/// `kind` says whether the arguments were admitted before the call or are checked by the frame,
+/// and `contributed` what a call by name solves each parameter it names from.
 pub fn call<'graph, 'here>(
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
+    contributed: &'here [(Symbol, KType)],
+    owed: Option<Contract>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
-    let returns =
-        callee
-            .as_callable()
-            .and_then(Knotted::function)
-            .and_then(|function| match program.types().node(function.ktype()) {
+    let returns = callee
+        .as_callable()
+        .and_then(Knotted::function)
+        .and_then(
+            |function| match function_node(program.types(), function.ktype()) {
                 TypeNode::KFunction { ret, .. } => Some(ret),
                 _ => None,
-            });
+            },
+        );
     Request {
         placement: returns.map_or(Placement::Shares, placement_of),
         use_,
@@ -202,6 +218,8 @@ pub fn call<'graph, 'here>(
                 callee,
                 arguments,
                 kind,
+                contributed,
+                owed,
             },
         },
     }
@@ -280,12 +298,14 @@ impl fmt::Display for CodeRefusedDisplay<'_, '_, '_> {
 /// the `EVAL` offers — a key's field a list of its functions: a frame running the code's shape,
 /// which shares its operands' storage. Refused before anything is spawned when the code's shape
 /// kept an error, or a name it reads — or a keyworded hole some use of it selects from alone — is
-/// bound neither by a `USING` nor by `offered`. Nothing builds a shape here: the code's was built
+/// bound neither by a `USING` nor by `offered`. The frame owes `returns`, the type the `EVAL`
+/// declares, as a called frame owes its own. Nothing builds a shape here: the code's was built
 /// where the program loaded.
 pub fn eval<'graph, 'here>(
     program: &'graph Program<'graph>,
     code: Knotted<'graph, 'here>,
     offered: KValue<'graph, 'here>,
+    returns: KType,
     use_: Use,
 ) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'graph>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
@@ -293,10 +313,11 @@ pub fn eval<'graph, 'here>(
     if let Some(error) = shape.refusal() {
         return Err(CodeRefused::Shape(error));
     }
+    let scratch = Bump::new();
     let offers = |name: BinderSymbol| {
         offered
-            .as_record()
-            .is_some_and(|record| record.field(name.symbol()).is_some())
+            .field(name.symbol(), program.types(), &scratch)
+            .is_some()
     };
     for capture in shape.captures() {
         let bound = match capture.source {
@@ -322,6 +343,11 @@ pub fn eval<'graph, 'here>(
                 program,
                 code: Value::Knotted(code),
                 offered,
+                contract: Contract {
+                    callee: None,
+                    returns,
+                    retype: returns,
+                },
             },
         },
     })
@@ -329,13 +355,33 @@ pub fn eval<'graph, 'here>(
 
 /// The derived placement bit: `Fresh` when the return type is `Number`, `Bool` or `Null` — the
 /// types no value of which shares bytes with an argument — and `Shares` otherwise.
-pub fn placement_of(returns: KType) -> Placement {
-    if [KType::NUMBER, KType::BOOL, KType::NULL].contains(&returns) {
+pub fn placement_of(returns: impl Into<Parametric>) -> Placement {
+    let returns = returns.into();
+    if [KType::NUMBER, KType::BOOL, KType::NULL]
+        .into_iter()
+        .any(|leaf| returns == leaf.into())
+    {
         Placement::Fresh
     } else {
         Placement::Shares
     }
 }
+
+/// A function's type's node, its positions read as the function's group may: a scheme's read its
+/// own variables.
+fn function_node<'run>(
+    types: &TypeRegistry<'run>,
+    ktype: DeclaredType<KType>,
+) -> TypeNode<'run, Parametric> {
+    match ktype {
+        DeclaredType::Type(ktype) => types.node(Parametric::from(ktype)),
+        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+    }
+}
+
+/// Why a callee's position read under its solution is concrete: a function is born with no
+/// variable outside its own group, and a run-time solution is concrete.
+const SOLVED: &str = "a run-time callee holds only its own group's variables";
 
 impl<'graph, 'cell> Runner<'graph, 'cell> {
     fn at(
@@ -419,18 +465,22 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     }
 }
 
-/// A frame's activation, laid down for `callee` with every value parameter bound from `arguments`
-/// and every type parameter bound to its solution — the one a keyworded call's selection carried in
-/// `arguments`, or, for a call by name, the one solved here while each argument is admitted against
-/// its parameter's declared type — beside the contract the frame ends under. The error value's
-/// message when the callee is no function, the arguments do not name its parameters exactly, an
-/// argument does not fit its parameter, or the group has no solution.
+/// A frame's activation, laid down for `callee` with every value parameter bound from `arguments`,
+/// retyped to its declared type with the call's solution substituted, and every type parameter
+/// bound to its solution — the one an instance carries, the one a keyworded call's selection
+/// carried in `arguments`, or, for a call by name, the one solved here while each argument is
+/// admitted against its parameter's declared type — at the type `contributed` names it beside, and
+/// its carried type elsewhere — beside the contract the frame ends under. The
+/// error value's message when the callee is no function, the arguments do not name its parameters
+/// exactly, an argument does not fit its parameter, or the group has no solution.
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
+    contributed: &[(Symbol, KType)],
+    owed: Option<Contract>,
 ) -> Result<(&'here KActivation<'graph, 'here>, Contract), &'here str> {
     let types = program.types();
     let writer = step.writer();
@@ -474,14 +524,15 @@ fn frame<'graph, 'here>(
             ),
         )
     };
-    let record = arguments.as_record().ok_or_else(misnamed)?;
+    arguments.as_record().ok_or_else(misnamed)?;
     let shape = function.shape();
+    let quantified = matches!(function.ktype(), DeclaredType::Scheme(_));
     let TypeNode::KFunction {
         quantifiers,
+        bounds,
         params,
         ret,
-        ..
-    } = types.node(function.ktype())
+    } = function_node(types, function.ktype())
     else {
         unreachable!("a function's type is a function type")
     };
@@ -489,44 +540,57 @@ fn frame<'graph, 'here>(
     // nothing for having one in reach.
     let bump = Bump::new();
     let scratch = &bump;
+    let argument = |name: Symbol| arguments.field(name, types, scratch).ok_or_else(misnamed);
     let carried = |name: TypeSymbol| {
-        record
-            .field(name.symbol())
-            .and_then(|value| value.as_type())
+        arguments
+            .field(name.symbol(), types, scratch)
+            .and_then(|seen| seen.value().as_type())
             .map(|value| value.handle())
     };
-    // The group's solution in canonical order. A keyworded call's selection carried it by name; a
+    // The group's solution in group order. A keyworded call's selection carried it by name; a
     // call by name's is solved here, every value parameter's declared type against its argument's
     // carried type under one collector — which, for an unquantified callee, is the arguments'
-    // admission alone.
-    let mut solution: Option<BumpVec<'_, KType>> = None;
+    // admission alone. An instance's group was solved where the load made it, and is never
+    // solved again.
+    let mut solution: Option<BumpVec<'_, KType>> = function.instance().map(|instance| {
+        let mut solved = BumpVec::with_capacity_in(instance.len(), scratch);
+        solved.extend_from_slice(instance);
+        solved
+    });
+    debug_assert!(
+        solution.is_none() || kind == CallKind::ByName,
+        "an instance has no registration, so only a call by name reaches it"
+    );
     match kind {
-        CallKind::Keyworded if !quantifiers.is_empty() => {
+        CallKind::Keyworded if quantified => {
             let mut solved = BumpVec::with_capacity_in(quantifiers.len(), scratch);
             solved.resize(quantifiers.len(), KType::NEVER);
-            for (name, canonical) in function.quantifier_map() {
-                if let Canonical::At(canonical) = canonical {
-                    solved[*canonical] = carried(*name).ok_or_else(misnamed)?;
-                }
+            for (name, index) in function.quantifier_map().iter() {
+                solved[index] = carried(name).ok_or_else(misnamed)?;
             }
             solution = Some(solved);
         }
         CallKind::Keyworded => {}
         CallKind::ByName => {
-            let mut collector = Collector::new(scratch, quantifiers.len());
+            let mut collector = Collector::<KType>::new(scratch, bounds);
             for (parameter, declared) in params.iter() {
-                let argument = record.field(parameter.symbol()).ok_or_else(misnamed)?;
+                let argument = argument(parameter.symbol())?;
+                let carried = argument.ktype().as_type().expect(CALL_ONLY);
+                let solved_from = contributed
+                    .iter()
+                    .find(|(name, _)| *name == parameter.symbol())
+                    .map_or(carried, |(_, contribution)| *contribution);
                 admits_with(
                     types,
                     scratch,
                     declared,
-                    argument.ktype(),
+                    solved_from,
                     Variance::Co,
                     &mut collector,
                 )
                 .map_err(|_| unfit())?;
             }
-            if !quantifiers.is_empty() {
+            if quantified {
                 solution = Some(collector.solve(types).map_err(|_| unsolved())?);
             }
         }
@@ -548,28 +612,47 @@ fn frame<'graph, 'here>(
             continue;
         }
         let value = match name {
+            // A declared parameter is an ascription: the argument is retyped to its declared
+            // type, with the call's solution substituted, so the body dispatches on what the
+            // parameter declares.
             BinderSymbol::Value(name) => {
                 parameters += 1;
-                *record.field(name.symbol()).ok_or_else(misnamed)?
+                let argument = argument(name.symbol())?;
+                let declared = params
+                    .get(name.symbol())
+                    .expect("every value parameter is declared");
+                let declared = match &solution {
+                    Some(solution) => substitute_quantified(types, scratch, declared, solution),
+                    None => declared,
+                };
+                let declared = types.concrete(declared).expect(SOLVED);
+                debug_assert!(
+                    argument.satisfies(declared, types, scratch),
+                    "a frame binds an argument its parameter admits"
+                );
+                argument.seen_at(declared, types, scratch).restamped(writer)
             }
-            // A type parameter is bound by **name**: the shape's type channel reaches here
-            // symbol-sorted, not in the order the `FOR ALL` group was written, so a positional
-            // read would hand one variable another's solution. A name the map dropped takes its
-            // bound, since there is nothing to solve for. Only a keyworded call's arguments carry
-            // type parameters, so a call by name's that names one does not name its parameters.
+            // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
+            // argument like any other, passed by keyword or by name.
+            BinderSymbol::Type(name) if function.quantifier_index(name).is_none() => {
+                parameters += 1;
+                argument(name.symbol())?.value()
+            }
+            // A `FOR ALL` name is bound by **name**: the shape's type channel reaches here
+            // symbol-sorted, not in the order the group was written, so a positional read would
+            // hand one variable another's solution. Only a keyworded call's arguments carry one, so
+            // a call by name's that names one does not name its parameters.
             BinderSymbol::Type(name) => {
                 if kind == CallKind::Keyworded && carried(name).is_some() {
                     parameters += 1;
                 }
-                let solved = match function.canonical_quantifier(name) {
-                    Some(Canonical::At(canonical)) => solution
-                        .as_ref()
-                        .and_then(|solution| solution.get(canonical).copied())
-                        .expect("a quantified callee's group is solved"),
-                    Some(Canonical::Dropped { bound }) => bound,
-                    // A type-class name the group does not declare has nothing to solve it from.
-                    None => KType::ANY,
-                };
+                let index = function
+                    .quantifier_index(name)
+                    .expect("a name no group declares is a `:Type` parameter");
+                let solved = solution
+                    .as_ref()
+                    .and_then(|solution| solution.get(index).copied())
+                    .expect("a quantified callee's group is solved");
                 Value::Type(TypeValue::new(writer, solved, types))
             }
             BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
@@ -580,16 +663,22 @@ fn frame<'graph, 'here>(
             .bind(slot, value)
             .expect("a fresh frame binds each parameter once");
     }
-    if parameters != record.len() {
+    if parameters
+        != arguments
+            .surface(types, scratch)
+            .map_or(0, |record| record.len())
+    {
         return Err(misnamed());
     }
     let returns = match &solution {
         Some(solution) => substitute_quantified(types, scratch, ret, solution),
         None => ret,
     };
+    let returns = types.concrete(returns).expect(SOLVED);
     let contract = Contract {
-        callee: function.ktype(),
+        callee: Some(function.ktype()),
         returns,
+        retype: owed.map_or(returns, |outer| outer.retype),
     };
     Ok((activation, contract))
 }
@@ -608,7 +697,7 @@ fn code_frame<'graph, 'here>(
     let member = code.as_code()?;
     let node = member.code()?;
     let shape = node.shape();
-    let record = offered.as_record()?;
+    offered.as_record()?;
     let find = |run: &[(BinderSymbol, Link<'here, Knotted<'graph, 'here>>)], name| {
         let at = run.binary_search_by_key(&name, |(held, _)| *held).ok()?;
         Some(run[at].1.resolve(member))
@@ -628,7 +717,9 @@ fn code_frame<'graph, 'here>(
                 }
                 None => return None,
             },
-            CaptureSource::Offered => *record.field(capture.name.symbol())?,
+            CaptureSource::Offered => offered
+                .field(capture.name.symbol(), program.types(), &bump)?
+                .value(),
         };
         links.push(Link::Value(value));
     }
@@ -650,7 +741,10 @@ fn woken<'graph, 'here, 'scratch>(
     match runner.stage {
         Stage::Next => unreachable!("a runner parks only with an evaluation in flight"),
         Stage::Evaluation => {
-            let received = step.results().next().ok_or(StepError::Unredeemable)??;
+            let received = step
+                .results(runner.program.types())
+                .next()
+                .ok_or(StepError::Unredeemable)??;
             match received {
                 Received::Here(value) => runner.check(&value)?,
                 Received::Scratch(value) => runner.check(&value)?,
@@ -663,6 +757,7 @@ fn woken<'graph, 'here, 'scratch>(
                         )
                     };
                     let slot = runner.shape().components()[component.index()].members[0];
+                    let value = held(step, runner, slot, value)?;
                     runner.bind(unit, slot, value);
                 }
                 UnitWork::Statement(_) => {
@@ -686,7 +781,7 @@ fn woken<'graph, 'here, 'scratch>(
             let local = Bump::new();
             let mut supplied: BumpVec<'_, (Site, KValue<'graph, 'here>)> =
                 BumpVec::with_capacity_in(sites.len(), &local);
-            for (site, received) in sites.iter().zip(step.results()) {
+            for (site, received) in sites.iter().zip(step.results(runner.program.types())) {
                 let Received::Here(value) = received? else {
                     unreachable!("an eager part is asked for with `Keeps`")
                 };
@@ -742,7 +837,13 @@ fn tied<'graph, 'here>(
     match tied {
         Ok(knot) => {
             for (index, slot) in component.members.iter().enumerate() {
-                runner.bind(unit, *slot, Value::Knotted(Knotted::of(knot, index)));
+                let value = held(
+                    step,
+                    runner,
+                    *slot,
+                    Value::Knotted(Knotted::of(knot, index)),
+                )?;
+                runner.bind(unit, *slot, value);
             }
             Ok(())
         }
@@ -751,6 +852,31 @@ fn tied<'graph, 'here>(
         }
         Err(error) => Err(untied(step, runner, &error)),
     }
+}
+
+/// `value`, about to be bound at `slot`, held to the type its `LET <name> <type> = …` states, if
+/// it states one ([`Program::annotated`]).
+fn held<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_>,
+    runner: &Runner<'graph, 'here>,
+    slot: Slot,
+    value: KValue<'graph, 'here>,
+) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
+    let shape = runner.shape();
+    let Some(annotation) = shape.annotation(slot) else {
+        return Ok(value);
+    };
+    let program = runner.program;
+    let (types, writer, scratch) = (program.types(), step.writer(), Bump::new());
+    let held = match denoted(annotation, &runner.activation.view(), types, &scratch) {
+        Ok(annotated) => {
+            let settled = shape.settled(Site::of(annotation));
+            program.annotated(writer, value, annotated, settled)
+        }
+        Err(refused) => program.error(writer, refused.display(program.symbols(), types)),
+    };
+    runner.check(&held)?;
+    Ok(held)
 }
 
 /// Perform units until one parks or the body ends.
@@ -879,7 +1005,13 @@ fn first_tie<'graph, 'here, 'scratch>(
     match tied {
         Ok(knot) => {
             for (index, slot) in component.members.iter().enumerate() {
-                runner.bind(unit, *slot, Value::Knotted(Knotted::of(knot, index)));
+                let value = held(
+                    step,
+                    runner,
+                    *slot,
+                    Value::Knotted(Knotted::of(knot, index)),
+                )?;
+                runner.bind(unit, *slot, value);
             }
             Ok(None)
         }
@@ -896,7 +1028,9 @@ fn first_tie<'graph, 'here, 'scratch>(
     }
 }
 
-/// Declare a component of type binders through the elaborator's door, and bind each member.
+/// Bind each member of a component of type binders to the handle the load fixed for it when every
+/// member's is closed, and otherwise declare the component through the elaborator's door, over the
+/// activation.
 fn declared<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     runner: &mut Runner<'graph, 'here>,
@@ -907,10 +1041,26 @@ fn declared<'graph, 'here>(
     let program = runner.program;
     let types = program.types();
     let writer = step.writer();
-    let handles =
+    let shape = runner.activation.shape();
+    let mut loaded = BumpVec::with_capacity_in(component.members.len(), &scratch);
+    for slot in component.members {
+        match shape.declared_type(*slot) {
+            Static::Closed(handle) => loaded.push(handle),
+            _ => break,
+        }
+    }
+    let handles: &[KType] = if loaded.len() == component.members.len() {
+        debug_assert_eq!(
+            type_declarations(component, runner.activation, types, &scratch).ok(),
+            Some(&loaded[..]),
+            "the load-time types agree with declaring where they run"
+        );
+        &loaded
+    } else {
         type_declarations(component, runner.activation, types, &scratch).map_err(|error| {
             Stopped::Raised(rendered(writer, error.display(program.symbols(), types)))
-        })?;
+        })?
+    };
     for (slot, handle) in component.members.iter().zip(handles) {
         runner.bind(
             unit,
@@ -985,8 +1135,8 @@ fn left<'graph, 'here>(
 }
 
 /// The body's end: the top level leaves its activation's view at rest for a later root work, a
-/// called frame finishes with its value held to its contract, and an `EVAL`'s frame or a block
-/// with its value.
+/// called frame or an `EVAL`'s finishes with its value held to its contract, and a block with its
+/// value.
 fn ended<'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_>,
     runner: Runner<'graph, 'here>,
@@ -997,10 +1147,10 @@ fn ended<'graph, 'here>(
             program: runner.program,
             view: runner.activation.view(),
         }),
-        (Level::Frame | Level::Block, None) => step.finish(value),
+        (Level::Frame | Level::Block, None) => step.finish(value, runner.program.types()),
         (Level::Frame | Level::Block, Some(contract)) => {
             let value = runner.program.fulfilled(step.writer(), value, contract);
-            step.finish(value)
+            step.finish(value, runner.program.types())
         }
     }
 }
@@ -1029,7 +1179,7 @@ fn stop<'graph, 'here>(
         }
         Level::Frame | Level::Block => {
             let error = program.error(step.writer(), message);
-            step.finish(error)
+            step.finish(error, program.types())
         }
     }
 }

@@ -1,48 +1,42 @@
-//! Substitution, and the relations that are a substitution composed with an ordinary one.
+//! Substitution: of a binder's own variables, of lexical levels, of a signature's head parameters,
+//! and of the reads that replace a variable by one of its ends.
 //!
-//! Every walk here is a [`unary`](super::walk::unary) instance: a leaf rule plus descent knobs.
-//! The compositions at the bottom are the whole of "substitute, then ask" — no second structural
-//! descent exists for any of them. Interning is insert-if-absent on a content-addressed table, a
-//! substitution that binds nothing returns its input handle, and every subtype verdict is
-//! memoized, so the composition costs one intern per changed composite.
+//! Every walk here is a [`unary`](super::walk::unary) instance: a leaf rule plus the union door.
+//! Interning is insert-if-absent on a content-addressed table and a substitution that binds nothing
+//! returns its input handle, so a walk costs one intern per changed composite.
+//!
+//! Every walk here is over raw handles; [`typed`](super::typed) types each one the rest of koan
+//! calls.
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::symbols::TypeSymbol;
 
-use super::handle::KType;
+use super::handle::{Handle, KType, TypeHandle};
 use super::node::TypeNode;
-use super::order::is_subtype_of;
 use super::registry::TypeRegistry;
 use super::schema::{Members, member};
-use super::walk::unary::{LEAF, Rebuild, Step, UnionDoor, Visit, rebuild, visit};
+use super::shape::DispatchTokenElement;
+use super::unify::Interval;
+use super::walk::Variance;
+use super::walk::unary::{Rebuild, UnionDoor, Visit, rebuild, visit};
 
-/// The knobs a quantifier walk takes: a nested signature is opaque content, and rebuilt unions
-/// canonicalize.
-const OVER_QUANTIFIERS: Rebuild = Rebuild {
-    signature: Step::Leaf,
-    union: UnionDoor::Canonical,
-};
-
-/// The knobs a member walk takes: a nested signature is descended, because a slot type inside one
-/// can reference the enclosing binder's members.
-const OVER_MEMBERS: Rebuild = Rebuild {
-    signature: Step::Through,
+/// The knobs every walk here but the seal's takes: rebuilt unions canonicalize.
+const CANONICAL: Rebuild = Rebuild {
     union: UnionDoor::Canonical,
 };
 
 /// Rewrite every **free** `Quantified(i)` inside `kt` to `bindings[i]` — the per-call substitution
-/// a solved call applies to a shape's return, and what erasure runs with each variable's bound in
-/// every cell.
+/// a solved call applies to a shape's return.
 ///
 /// A **nested** binder — a shape, or a function type carrying a group — rebinds the indices with
 /// its own group, exactly as it shadows them in the relations, so a variable under one is not free
 /// and is left alone.
-pub fn substitute_quantified(
+pub(super) fn substitute_quantified<B: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    kt: KType,
-    bindings: &[KType],
-) -> KType {
+    kt: Handle,
+    bindings: &[B],
+) -> Handle {
     if bindings.is_empty() {
         return kt;
     }
@@ -50,56 +44,80 @@ pub fn substitute_quantified(
         types,
         scratch,
         kt,
-        OVER_QUANTIFIERS,
+        CANONICAL,
         &mut |kt, node, context| match *node {
             TypeNode::Quantified { index, .. } if context.binder_depth() == 0 => {
-                Some(bindings.get(index).copied().unwrap_or(kt))
+                Some(bindings.get(index).map_or(kt, |binding| binding.raw()))
             }
+            _ => None,
+        },
+    )
+}
+
+/// `kt` with every lexical variable whose level `bindings` covers replaced by its binding, under
+/// any binder — no binder captures one. What a run reads a load-time type through, each level bound
+/// to the type its coordinate holds. A level past `bindings` is kept, and a signature is opaque.
+pub(super) fn substitute_levels<B: TypeHandle>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    kt: Handle,
+    bindings: &[B],
+) -> Handle {
+    if bindings.is_empty() || !types.contains_rigid(kt) {
+        return kt;
+    }
+    rebuild(
+        types,
+        scratch,
+        kt,
+        CANONICAL,
+        &mut |_, node, _| match *node {
+            TypeNode::Lexical { level, .. } => bindings.get(level).map(|binding| binding.raw()),
             _ => None,
         },
     )
 }
 
 /// `kt` at a solved call. A **binder** — a shape, or a function type carrying a group — owns the
-/// variables, so instantiating one substitutes through its positions and return and the canonical
-/// form drops the emptied group: the result is the callable this call has, as against the one the
-/// declaration wrote. Every other type carries no binder of its own and substitutes in place.
+/// variables, so instantiating one opens it: each position and the return, read on its own, has
+/// the binder's variables free, and substitutes through `bindings`; the result is interned with no
+/// group, the callable this call has as against the one the declaration wrote. Every other type
+/// carries no binder of its own and substitutes in place.
 ///
-/// `bindings` are in the binder's **canonical** quantifier order — a caller holding
-/// declaration-order bindings translates them through the map
-/// [`shape_type`](TypeRegistry::shape_type) or
+/// `bindings` are in the binder's **group** order — a caller holding declaration-order bindings
+/// translates them through the map [`shape_type`](TypeRegistry::shape_type) or
 /// [`function_type`](TypeRegistry::function_type) handed back.
-pub fn instantiate_quantified(
+pub(super) fn instantiate_quantified<B: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    kt: KType,
-    bindings: &[KType],
-) -> KType {
-    if !types.node(kt).binds_quantifiers() || own_group(types, kt).is_empty() {
+    kt: Handle,
+    bindings: &[B],
+) -> Handle {
+    if own_group(types, kt).is_empty() {
         return substitute_quantified(types, scratch, kt, bindings);
     }
-    rebuild(
-        types,
-        scratch,
-        kt,
-        OVER_QUANTIFIERS,
-        &mut |kt, node, context| match *node {
-            TypeNode::Quantified { index, .. } if context.binder_depth() == 1 => {
-                Some(bindings.get(index).copied().unwrap_or(kt))
-            }
-            _ => None,
-        },
-    )
-}
-
-/// `kt` with every variable of its own group replaced by that variable's bound — what a quantified
-/// callable reports where the reader has no binder to carry the parameter.
-pub fn erase_quantified(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
-    let bounds = quantifier_bounds(types, kt);
-    if bounds.is_empty() {
-        return kt;
+    let open = |position| substitute_quantified(types, scratch, position, bindings);
+    match types.node(kt) {
+        TypeNode::KFunction { params, ret, .. } => {
+            let mut opened = BumpVec::with_capacity_in(params.len(), scratch);
+            opened.extend(params.iter().map(|(name, position)| (name, open(position))));
+            types.function_type(scratch, &opened, open(ret))
+        }
+        TypeNode::ExpressionShape {
+            elements,
+            classes,
+            ret,
+            ..
+        } => {
+            let mut opened = BumpVec::with_capacity_in(elements.len(), scratch);
+            opened.extend(elements.iter().map(|element| match element {
+                DispatchTokenElement::Slot(position) => DispatchTokenElement::Slot(open(*position)),
+                keyword => *keyword,
+            }));
+            types.shape_type(scratch, &opened, classes, open(ret))
+        }
+        _ => unreachable!("only a binder carries a group"),
     }
-    instantiate_quantified(types, scratch, kt, bounds)
 }
 
 /// `kt` with every rigid variable reachable from it replaced by its bound — the
@@ -107,108 +125,170 @@ pub fn erase_quantified(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt
 ///
 /// A bound is itself variable-free, so one pass reaches a fixed point. What a caller minting a
 /// *bound* out of an arbitrary type runs it through, since the two doors that take one require it.
-pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
-    rebuild(
-        types,
-        scratch,
-        kt,
-        OVER_MEMBERS,
-        &mut |_, node, _| match *node {
-            TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => {
-                Some(bound)
-            }
-            _ => None,
-        },
-    )
+pub(super) fn erase_rigid(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    kt: Handle,
+) -> Handle {
+    rebuild(types, scratch, kt, CANONICAL, &mut |_, node, _| {
+        node.rigid_bound().map(KType::raw)
+    })
 }
 
-/// The bound of each variable of `kt`'s own quantifier group, in canonical index order,
+/// `kt` with each free variable — a `Quantified` under none of `kt`'s own binders, a `Lexical` or
+/// a `Parameter` — read as the extreme that puts the result above every instance within the
+/// variables' ends: its bound at a covariant position, its lower end at a contravariant one. The
+/// variable-free type a load-time type is compared through where the run may bind its variables to
+/// anything under their bounds. A signature is opaque, as [`TypeRegistry::contains_rigid`] reads it.
+///
+/// [`erase_rigid`] reads a variable as its bound everywhere, which at a contravariant position puts
+/// the result *below* an instance whose variable is bound lower.
+pub(super) fn bound_above(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    kt: Handle,
+) -> Handle {
+    read_through(types, scratch, kt, Side::Above, &mut |variable| {
+        Some(variable.interval().raw())
+    })
+}
+
+/// A free variable a read through intervals meets, as its node spells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variable {
+    /// A binder's own variable, read where no binder captures it.
+    Quantified { index: usize, bound: KType },
+    /// A lexical variable at `level` along the chain of bodies that declares it.
+    Lexical {
+        level: usize,
+        name: TypeSymbol,
+        lower: KType,
+        bound: KType,
+    },
+    /// A signature's head parameter, or with a `nonce` an opaque view's carrier.
+    Parameter {
+        name: TypeSymbol,
+        bound: KType,
+        nonce: Option<ScopeId>,
+    },
+}
+
+impl Variable {
+    /// The variable `node` is, or `None` for any other node.
+    pub(super) fn of<H>(node: &TypeNode<'_, H>) -> Option<Self> {
+        Some(match *node {
+            TypeNode::Quantified { index, bound } => Variable::Quantified { index, bound },
+            TypeNode::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            } => Variable::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            },
+            TypeNode::Parameter { name, bound, nonce } => {
+                Variable::Parameter { name, bound, nonce }
+            }
+            _ => return None,
+        })
+    }
+
+    /// The variable's two ends: a lexical variable's own, and `[Never, bound]` for the others.
+    pub fn interval(self) -> Interval<KType> {
+        match self {
+            Variable::Lexical { lower, bound, .. } => Interval {
+                lower,
+                upper: bound,
+            },
+            Variable::Quantified { bound, .. } | Variable::Parameter { bound, .. } => {
+                Interval::within(bound)
+            }
+        }
+    }
+}
+
+/// Which extreme a read through intervals takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// Above every instance: a variable's upper end at a covariant position, its lower end at a
+    /// contravariant one.
+    Above,
+    /// Below every instance: its lower end at a covariant position, its upper end at a
+    /// contravariant one.
+    Below,
+}
+
+/// `kt` read through intervals: each free variable — a `Quantified` under none of `kt`'s own
+/// binders, a lexical variable, a `Parameter` — that `interval` answers for replaced by the end
+/// `side` takes at its position; one it answers `None` for is kept. A signature is opaque.
+pub(super) fn read_through(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    kt: Handle,
+    side: Side,
+    interval: &mut impl FnMut(Variable) -> Option<Interval<Handle>>,
+) -> Handle {
+    if !types.contains_rigid(kt) {
+        return kt;
+    }
+    rebuild(types, scratch, kt, CANONICAL, &mut |_, node, context| {
+        let free = match *node {
+            TypeNode::Quantified { .. } => context.binder_depth() == 0,
+            TypeNode::Lexical { .. } | TypeNode::Parameter { .. } => true,
+            _ => false,
+        };
+        if !free {
+            return None;
+        }
+        let ends = interval(Variable::of(node)?)?;
+        Some(match (side, context.variance()) {
+            (Side::Above, Variance::Co) | (Side::Below, Variance::Contra) => ends.upper,
+            _ => ends.lower,
+        })
+    })
+}
+
+/// The bound of each variable of `kt`'s own quantifier group, in group order,
 /// as the binder node stores it. Empty for anything that binds no group.
-pub fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: KType) -> &'run [KType] {
+pub(super) fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: Handle) -> &'run [KType] {
     own_group(types, kt)
 }
 
 /// The `bounds` run either binder variant stores, and `&[]` for every other node.
-fn own_group<'run>(types: &TypeRegistry<'run>, kt: KType) -> &'run [KType] {
+fn own_group<'run>(types: &TypeRegistry<'run>, kt: Handle) -> &'run [KType] {
     match types.node(kt) {
         TypeNode::ExpressionShape { bounds, .. } | TypeNode::KFunction { bounds, .. } => bounds,
         _ => &[],
     }
 }
 
-/// Rewrite `kt`, replacing references to `sig_id`'s abstract members with the caller's bindings for
-/// them.
+/// `kt` with each head parameter `bindings` names replaced by its binding — how a signature's
+/// member types are read under a module's solution, a view's mints or an application's pins.
 ///
-/// One reference shape substitutes: a nonce-free `AbstractType { source: sig_id, name }` of either
-/// order — a first-order slot type, or a higher-kinded member in the constructor position of a
-/// `ConstructorApply`. A nonced `AbstractType` is an opaque ascription's generative mint, not a
-/// reference to a declaration, so it never substitutes even when it shares its binder's `source`
-/// and name.
-///
-/// A **nested `Signature`** is descended like any other compound: a signature standing in a slot
-/// type carries references to the enclosing signature's members. The nested schema's *own* abstract
-/// members shadow the enclosing binder **by name**, which the driver's context reports.
-pub fn substitute_sig_members(
+/// A parameter is matched by name, and only a nonce-free one: a nonced `Parameter` is an opaque
+/// view's mint, which no declaration names. A `Signature` node is opaque — its own parameters are
+/// its own, and a declared signature is closed — so the walk reaches only an application's pins.
+pub(super) fn substitute_parameters<B: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    kt: KType,
-    sig_id: ScopeId,
-    members: Members<'_, TypeSymbol>,
-) -> KType {
-    if members.is_empty() {
+    kt: Handle,
+    bindings: Members<'_, TypeSymbol, B>,
+) -> Handle {
+    if bindings.is_empty() || !types.contains_rigid(kt) {
         return kt;
     }
     rebuild(
         types,
         scratch,
         kt,
-        OVER_MEMBERS,
-        &mut |_, node, context| match *node {
-            TypeNode::AbstractType {
-                source,
-                name,
-                nonce: None,
-                ..
-            } if source == sig_id && !context.shadows(name) => member(members, name),
-            _ => None,
-        },
-    )
-}
-
-/// Rewrite every reference to `declared`'s own abstract members so it is sourced at
-/// [`ScopeId::SENTINEL`] instead — the canonical binder every projected SIG schema shares.
-///
-/// Structurally this is [`substitute_sig_members`] with the substitution being a re-source rather
-/// than a lookup, and with no shadow subtraction: a nested projected SIG's members were already
-/// re-sourced when that SIG was projected, so `source == declared` can only match a genuine outer
-/// reference. Running it at projection is what makes two textually identical declarations one
-/// interned type.
-pub fn canonicalize_binder(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    kt: KType,
-    declared: ScopeId,
-) -> KType {
-    rebuild(
-        types,
-        scratch,
-        kt,
-        OVER_MEMBERS,
+        CANONICAL,
         &mut |_, node, _| match *node {
-            TypeNode::AbstractType {
-                source,
-                name,
-                param_names,
-                nonce: None,
-                bound,
-            } if source == declared => Some(types.abstract_type(
-                scratch,
-                ScopeId::SENTINEL,
-                name,
-                param_names,
-                None,
-                canonicalize_binder(types, scratch, bound, declared),
-            )),
+            TypeNode::Parameter {
+                name, nonce: None, ..
+            } => member(bindings, name).map(TypeHandle::raw),
             _ => None,
         },
     )
@@ -225,19 +305,18 @@ pub fn canonicalize_binder(
 pub(super) fn rewrite_siblings(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    kt: KType,
+    kt: Handle,
     resolve: &impl Fn(usize) -> KType,
-) -> KType {
+) -> Handle {
     rebuild(
         types,
         scratch,
         kt,
         Rebuild {
-            signature: Step::Leaf,
             union: UnionDoor::Flat,
         },
         &mut |_, node, _| match *node {
-            TypeNode::Sibling(index) => Some(resolve(index)),
+            TypeNode::Sibling(index) => Some(resolve(index).raw()),
             _ => None,
         },
     )
@@ -247,59 +326,14 @@ pub(super) fn rewrite_siblings(
 pub(super) fn collect_siblings(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    kt: KType,
+    kt: Handle,
     out: &mut BumpVec<'_, usize>,
 ) {
-    visit(types, scratch, kt, LEAF, &mut |_, node, _| match *node {
+    visit(types, scratch, kt, &mut |_, node, _| match *node {
         TypeNode::Sibling(index) => {
             out.push(index);
             Visit::Skip
         }
         _ => Visit::Descend,
     });
-}
-
-// --- Substitute, then ask ---
-//
-// Each of the three is the member substitution composed with one ordinary relation. The guard set
-// of the order is stated once, in `order.rs`, and reached from here through `is_subtype_of`.
-
-/// Whether `carried` satisfies the declared slot type once `sig_id`'s members are read through
-/// `members`.
-pub fn slot_satisfied_by(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    declared: KType,
-    carried: KType,
-    sig_id: ScopeId,
-    members: Members<'_, TypeSymbol>,
-) -> bool {
-    let substituted = substitute_sig_members(types, scratch, declared, sig_id, members);
-    is_subtype_of(types, scratch, carried, substituted)
-}
-
-/// Whether the substituted declared type is at or below `other`.
-pub fn slot_more_specific_or_equal(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    declared: KType,
-    other: KType,
-    sig_id: ScopeId,
-    members: Members<'_, TypeSymbol>,
-) -> bool {
-    let substituted = substitute_sig_members(types, scratch, declared, sig_id, members);
-    is_subtype_of(types, scratch, substituted, other)
-}
-
-/// Whether the substituted declared type is `other` exactly. Handle equality: two interned types
-/// are equal iff their content is.
-pub fn slot_types_equal(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    declared: KType,
-    other: KType,
-    sig_id: ScopeId,
-    members: Members<'_, TypeSymbol>,
-) -> bool {
-    substitute_sig_members(types, scratch, declared, sig_id, members) == other
 }

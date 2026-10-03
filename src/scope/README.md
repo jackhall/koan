@@ -123,7 +123,8 @@ quote part, so `Site::of_body` finds it as it finds any body. An `EXPR` head's
 names are read through its quote. An arm set is a dict of guard quotes to arm
 quotes, and each arm is a block shape binding `it`. A `MATCH … WITH` guard is a
 type — a type name, a `:(…)` or a `:{…}`, typed `Dict(TypeCode, Block)`, whose
-names are mentions read where the match runs — and a `MATCH … OVER` or `TRY`
+names are mentions of the shape holding the `MATCH`, typed where the program
+loads ([load-time types](#load-time-types)) — and a `MATCH … OVER` or `TRY`
 guard a label, typed `Dict(Name, Block)`; a value guard is `Inadmissible`. A
 `SIG` body's members and a bodyless `GROUP`'s heads are the statements of a
 list's quotes, each walked by its own builtin shape's roles.
@@ -164,6 +165,19 @@ member's place in the component, which the birth turns into a knot edge the
 caller mints. That covers a callable a binder births and a `FN` a data binder's
 constructor slot holds alike.
 
+A callable or module also holds a **type capture** past the builder's captures
+for each lexical variable of an enclosing body that a call in it solves from or
+an instance site in it is made at: the static pass adds one where a
+[contribution](../dispatch/README.md#static-types) or an instance's solution
+names such a variable, with
+the coordinate of the enclosing activation its birth reads
+(`BodyShape::type_captures`), and a callable between the two passes it on
+through a type capture of its own. So a body reads a type name it never writes,
+and a closure holds one only where a call or an instance site in it reads it. Births read the
+builder's captures, then the type captures, so the closure is `capture_count()`
+slots long. A type capture is never merged with a builder capture of the same
+name.
+
 A code shape is where a [mark](#holes-and-marks) is spent, so its captures are
 keyed by name **and** mark: a hole `x`, a `$x` and a `\x` read in one body are
 three captures. A `$x` skips every binder in the code, the parameters of a
@@ -184,6 +198,37 @@ holds the member it runs, and a block inside it inherits that member, so a
 read of a capture that is an edge resolves through it to the sibling the edge
 names — a function or a data node — a bound value like any other. A capture read at birth through
 such a coordinate is therefore the sibling's value word.
+
+**Where a quantified function is read.** A name bound to a quantified
+function resolves by how it is bound, read off the syntax of its declaration:
+
+- a **call-only** name — one a `LET … = FN EXPR FOR ALL …` binds, or a
+  quantified `VAL` member a `USING … SCOPE` surfaces — resolves only as the
+  head of a call by name, `(pick {x = 1})`, and is refused `QuantifiedRead`
+  anywhere else;
+- a **member** — a `MODULE` or `GROUP` body's `LET pick = (FN FOR ALL …)` — resolves at
+  the head of a call, and unmarked anywhere else, where the
+  [static pass](../dispatch/README.md#static-types) instantiates it at the type
+  it is wanted at. Such a read is eager whatever its position, since making the
+  instance needs the member's value. A `$pick` in a quote's code is refused
+  `QuantifiedRead`, and a bare `$pick` refuses the program rather than the code;
+  an `EVAL` refuses to offer either kind of name, since an offer passes the
+  name's value in;
+- any other binding of a quantified `FN`, a `LET` outside a `MODULE` or `GROUP`
+  body included, resolves as an ordinary name: the static pass instantiates it where
+  it is bound, or refuses the load.
+
+A quantified `FN` literal is written anywhere; outside a call's head, the
+static pass instantiates it where it is written. A body whose value is read — a
+callable's, a block's, a quote's code — takes its last statement's, so that
+statement binds no call-only function: a `LET … = FN EXPR FOR ALL …` or a bare
+`EXPR FOR ALL …` definition there is refused `QuantifiedValue`. Inside a quote's
+code the refusal waits for the `EVAL` that runs it. A keyworded hole filled from a module and
+the candidates an `EVAL` offers are lists, not names, so either may hold a
+quantified registration; such a list is typed `List<Any>` without reading its
+functions' types ([values](../values/README.md#the-type-memo-and-satisfies)),
+and dispatch reads each function by its own. Every other value's type is
+concrete, which is what lets a reader outside a call's head take it as one.
 
 A search by symbol happens only where a shape is built.
 How the shape's runs are searched — linear below some length, binary above —
@@ -246,7 +291,7 @@ unbound-name error.
 
 **Components.** With every mention resolved, the shape's bindings form a
 reference graph, and the shape computes its strongly connected components, as
-the [type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+the [type lattice](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
 does for a group of recursive types. A component whose internal mentions are
 all deferred is a group of values that only store and capture one another. Its
 members can be born together as one [knot](../memory/README.md#the-knot) once
@@ -285,7 +330,7 @@ body by site names it by — `BodyShape::form`, the builtin
 shape node a callable body sits in, where its signature is read,
 `BodyShape::rhs`, each `LET` binder's right-hand side part, where a data member
 is read, and `BodyShape::declarations`, each type binder's whole declaration
-node — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or a `LET` of a type name — where the
+node — a `NEWTYPE`, `UNION`, `SIG` or a `LET` of a type name — where the
 declaration door reads which declaration it is and where its declared part sits,
 off the node's own builtin shape. A caller ties a component of value binders
 when it is cyclic or every member births a callable or a module; a non-cyclic
@@ -301,11 +346,10 @@ A declaration's definition part is walked under the constructor state, so every
 type name it reads is a deferred mention — but a definition's own statements are
 declarators with builtin shapes of their own, and a type expression written
 inside one is a node with a shape of its own too: each is walked by *their*
-roles rather than by structure. A `SIG` body's `TYPE (Key Val AS Pair)`
-therefore declares `Pair`, and `Key` and `Val` sit in its `Name` part, which no
-walk reads; `TYPE (Carrier UNDER Number)` declares `Carrier`, and its bound is a
-deferred mention like the rest of the definition; a `FOR ALL` group inside one of
-its heads declares its quantifiers, bounded or not;
+roles rather than by structure. A `SIG`'s own `FOR ALL` group declares its head
+parameters for every member, and is read where the declaration is, as a
+callable's group is, so a bound in it is an eager mention; a `FOR ALL` group
+inside one of its heads declares its quantifiers, bounded or not;
 a manifest `LET` member declares its name, so a later `VAL` naming it is no
 mention either; a union's tags name its variants and are no mentions, while
 each payload quote is read as a type expression; and a parameterized
@@ -361,7 +405,7 @@ its full bucket key, in table order, then each registration at that key visible
 to the use, the enclosing bodies innermost first. The key is the whole key, so a
 registration at `MOVE _ TO _` is no candidate for `MOVE _`, and a lone keyword
 `(NOW)` is a use of the key `NOW`. A builtin expression shape whose slots
-dispatch evaluates — `ATTR`, `FROM`, `EVAL`, `USING` — is closed and lists its
+dispatch evaluates — `ATTR`, `FROM`, `USING` — is closed and lists its
 own overloads alone, and so does the `NOT` a `!=` is rewritten to. A keyworded
 node inside a type expression is no use.
 
@@ -388,7 +432,7 @@ refused.
 
 **One ranking per key.** A bucket declaration, `EXPR #(MOVE 2 TO 1)`, binds
 nothing: it gives its key a ranking, each slot's
-[priority class](../type_lattice/README.md#priority-classes). A definition
+[priority class](../type_lattice/solving.md#priority-classes). A definition
 takes the ranking of the declaration visible where it is written — visible as a
 name read at its statement is — and with none, its slots' written order; an
 operator takes its chaining's, fold left and pairwise ranking `left` first and
@@ -427,6 +471,63 @@ its slots out through `ActivationView::slots`. A module body's binders are its
 exports in flight, and nothing outside the body reads them before its binder is
 tied.
 
+## Load-time types
+
+A shape carries a **write-once cell** for every type fact
+[the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
+fixes before the program runs. The builder lays each cell down empty — `scope`
+sits below `elaborate`, and a shape seals before anything in it can be
+elaborated — and the pass fills it, once, where the program loads:
+
+- each **type expression** the shape records (`BodyShape::type_expressions`, by
+  site): a `:(…)` or `:{…}` in value position, a type part of an expression
+  shape that births no callable — a `MATCH`'s result and union clause, a
+  `TRY`'s result, an ascription's type — and each `MATCH … WITH` guard,
+  with its arm set and written index. A callable's signature, a declaration's definition and a type
+  `LET`'s right-hand side are not recorded: they are typed with their callable or
+  binder, and a type nested in a recorded one is part of it;
+- each **type binder**, beside its declaration node;
+- each **registration**, its expression shape;
+- a callable body's own **callable type**, the lexical variable each name of
+  its own `FOR ALL` group is in the body (`BodyShape::group_levels`), and the
+  solution a `FN FOR ALL` the load instantiated is born at, closed or rigid
+  (`BodyShape::born_instance`), written by dispatch's static pass;
+- each lexical variable a body declares, by level, beside the slot or capture
+  its activation holds the bound type at (`BodyShape::declared_variables`),
+  which the static pass reads to find where a use reads a variable, and the
+  type captures that pass adds (`BodyShape::type_captures`);
+- a quote's code shape's **typing refusal**, which `BodyShape::refusal` reports
+  as it reports the code's own error.
+
+A cell holds `Unknown`, a closed value, or a rigid value beside the
+`Variable`s — a variable's level and the coordinate its value is
+read at — that the run substitutes. The vocabulary lives here, beside the shape
+that holds it: `Static`, `Variable`, and the callable-typing records the
+elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
+`Elaboration`, so a shape error can carry an elaboration's refusal. A reader
+holding the shape reads its cell by site or slot: the evaluator, the body runner,
+a callable's birth and the overlap check.
+
+One more cell per shape holds the **value channel**: the `Statics` dispatch's
+[load pass](../dispatch/README.md#static-types) fixes once the type channel has —
+a static type, an interval, for each part the evaluator reads as a value (by
+site), each statement (by index) and each slot (by index), and one `Narrowing` per keyworded
+use, parallel to its candidate list: the one candidate selected, or each
+candidate kept beside its verdict, *always* or *maybe*; the site of each
+**settled** `:!` or annotation, whose value's static type lies under its type,
+so the run checks nothing there; the solution each name read at an
+[instance site](../dispatch/README.md#static-types) is instantiated at, closed
+or rigid; each
+keyworded use's **contributions**, parallel to its candidate list, a static type
+per argument the call solves from, `Unknown` where it reads the carried type;
+and each call by name's contributions, by its argument's site, a static type
+per parameter by name. It lives here for the same reason the type channel's
+cells do, and the shape reads it by site (`value_type`, `narrowing`, `settled`,
+`instance_at`, `contributions`, `named_contributions`), statement
+index or slot; a shape the
+pass has not fixed — a quote's code it refused — has no static types, every
+candidate of every use in it is *maybe*, and no ascription in it is settled.
+
 ## Names that arrive at run time
 
 Two forms introduce names no shape can see.
@@ -446,11 +547,21 @@ Two forms introduce names no shape can see.
   the same way, and candidates for a keyworded use in the body. Only the binding is left to run time, which is
   [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s.
 
+  An operand ascribed to a signature surfaces each bodyless `EXPR` and `OP`
+  head the signature declares as such a registration — one per bucket key the
+  head's definition would register at, two for a `UNARY OP` — laid out among
+  the parameters at an index no statement takes and ranked by the head's own
+  written ranks, or an operator's chaining, so a ranking that disagrees with
+  another at its key is refused as a definition's is. Each records where its
+  head, its `SIG` and the ascription naming it are written
+  (`Registration::surfaced`), which is how
+  [the load](../elaborate/README.md#the-type-channel-at-load) types it.
+
   That works only if the names are readable where the shape is built, so the
   builder walks the operand's spine back to a declaration that states its
   members: a `MODULE` or `GROUP` binder's body, the `SIG` an ascription at the
-  site names, a `LET` rooted at either, a value or type alias, and a `WITH` pin,
-  which changes no name. The same walk reads the
+  site names — its head parameters and its members — a `LET` rooted at either,
+  a value or type alias, and a `WITH` pin, which changes no name. The same walk reads the
   [operator groups](#operator-groups) the operand surfaces — a `GROUP` binder's
   group, or a `SIG`'s bodyless `GROUP` heads — which the body then holds, so an
   operator run of their members may be written in it. The walk is fuel-bounded,
@@ -576,7 +687,7 @@ the quote of `f (a + b) c`. A quote of splices alone is at statement level, so
 
 ```koan
 LET stmts = [#(LET x = 4) #(PRINT x)]
-EVAL #($..stmts)
+EVAL #($..stmts) -> Any
 ```
 
 prints `4`. Lowering makes a layout line that is one splice atom the splice
@@ -604,7 +715,7 @@ A shape is built from code in two places, and each fills different names.
   and scope fill only its `\` marks. Code named as the body of a callable with
   parameters `w` and `h` is written `#(\w * \h)`, and a hole left in it is
   refused as [unbound](#errors) where the callable is built.
-- **`EVAL`.** `EVAL code` runs a shape built from the code alone. The shape
+- **`EVAL`.** `EVAL code -> <Type>` runs a shape built from the code alone. The shape
   depends on nothing else, since a `\` mark is filled by what the `EVAL`
   offers, so a written quote's is built once, where the program loads, and every
   `EVAL` of that quote runs it; code composed at run time builds its own once,
@@ -620,8 +731,8 @@ A shape is built from code in two places, and each fills different names.
 ```koan
 EXPR #(GREET who :Str) -> Str = #(PRINT who)
 EXPR #(TWICE body :Expression) -> Any = #(
-  EVAL body
-  EVAL body
+  EVAL body -> Any
+  EVAL body -> Any
 )
 TWICE #($(GREET "bob"))
 ```
@@ -778,8 +889,7 @@ Over operands `o0 … on` and operators `k1 … kn`, each operand already rewrit
   and only `A | B` is read as an infix pair. Koan has no precedence, so
   `A | B & C` is `MixedGroups`. An operator run inside a quote the builder
   reads — a head, a type guard, a union's payload, a `FOR ALL` bound, a
-  signature's member — or inside a `TYPE` declarator's `<Name> UNDER <bound>` is
-  rewritten too, and the quote rebuilt around it;
+  signature's member — is rewritten too, and the quote rebuilt around it;
 - **pairwise** — the adjacent pairs `o(i-1) ki oi`, folded through the group's
   combiner written infix, in the group's direction.
 
@@ -839,7 +949,14 @@ program only for a `$` name nothing binds where the quote is written:
 - an **unsurfaced** `USING` — an operand that does not say, where the shape is
   built, which names it surfaces;
 - an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
-  rewrite home yet, and the reserved forms that exist only to diagnose a miss;
+  rewrite home yet, and the reserved forms that exist only to diagnose a miss,
+  `TYPE` among them, since a signature hides a type through a head parameter;
+- a **quantified read** — a call-only name read anywhere but the head of a
+  call, or a module's quantified member read through `$` or offered by an
+  `EVAL` ([resolution](#resolution));
+- a **quantified value** — the last statement of a callable's, a block's or a
+  quote's body binding a quantified function by a keyworded form, which would
+  be the body's value ([resolution](#resolution));
 - an **unquoted** part — one its role reads as a quote or a container of
   quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
   body. The message says how the part is written;
@@ -867,9 +984,22 @@ where it has one:
 - **no candidate** — a keyworded use with no builtin overload and no visible
   registration;
 
-one [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
+four [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
 built and its types can be read — an **overlap**, a user overload taking
-operands a builtin overload at its key already takes;
+operands a builtin overload at its key already takes; **no admitting
+candidate**, a keyworded use every candidate of which
+[static selection](../dispatch/README.md#static-types) drops, naming the key and
+its arguments' static types; an **ambiguity**, a keyworded use every candidate
+of which always admits and none of which ranks first, naming the same; and a
+**return never satisfied**, a callable body whose static type meets its declared
+return at `Never` — beside the refusals of its
+[instance sites](../dispatch/README.md#static-types), an annotated binder or a
+call by name that can never be satisfied, and the static pass's other checks;
+
+two the [elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
+finds — a **type** that does not elaborate, carrying the elaborator's refusal,
+and a **repeated guard**, two guards of one `MATCH … WITH` arm set that type to
+one handle, naming both;
 
 and six more from [operator groups](#operator-groups), each naming the symbol it
 is about:
@@ -921,7 +1051,10 @@ closure bindings alone, a block's beside an enclosing activation whose builtin
 table and callable it shares — so no other combination can be built.
 
 A shape and everything it holds — declared-name runs, mentions, captures,
-components, nested shapes — rest in program storage and are `Copy`. A written
+components, nested shapes — rest in program storage and are `Copy`, save the
+[load-time type](#load-time-types) cells, which are written once, where the
+program loads, and never after. A cell holding a `'graph` record makes a shape
+invariant in `'graph`, which `'graph` already is everywhere it is named. A written
 quote's code shape is built into program storage once, where the program
 loads.
 
@@ -941,7 +1074,7 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
-- [Code splicing](../../roadmap/rewrite/code-splicing.md) — how several parts
+- [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

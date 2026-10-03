@@ -113,20 +113,20 @@ part, so there is no runtime quoting operation and the body never dispatches —
 quote behaves as a literal everywhere.
 
 **Code is taken as a quote.** A callee takes code through a slot typed by a
-[code kind](../type_lattice/README.md#the-code-family), and its caller quotes
+[code kind](../type_lattice/vocabulary.md#the-code-family), and its caller quotes
 it, as a builtin's caller quotes a part that runs later: hygienic fexprs, with
 no expansion system and no global execution phase. Rewriting stays the shape
 builder's own, as its [pairwise rewrite](../scope/README.md#operator-groups) is,
 since a user's rewrite rule would act at a distance.
 
 **A quote is typed by its body as written.** `KExpression::code_kind` reads the
-body's [code kind](../type_lattice/README.md#the-code-family): two or more
+body's [code kind](../type_lattice/vocabulary.md#the-code-family): two or more
 statements are a `Block`; a statement of a member-declaring builtin shape a
 `Declaration`, and one that installs a `Binder`; a lone scalar literal or nested
 quote a `Literal`; a lone name, keyword, `:(…)` or `:{…}` its own kind; and every
 other statement an `Expression`. The declaration test is a table fact,
-`BuiltinShapeId::declares_member`, asked before the binder plan, since a `TYPE`
-declarator carries a plan yet installs nothing. A written paren is a part of its
+`BuiltinShapeId::declares_member`, asked before the binder plan, since a `VAL`
+carries a plan yet installs nothing. A written paren is a part of its
 own, so `#((LET x = 1))` is an `Expression`. `ExpressionPart::code_kind` answers
 the same for a bare part: a bare group is code of its own kind, as a quote is.
 

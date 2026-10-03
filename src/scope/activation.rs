@@ -171,7 +171,7 @@ where
         debug_assert_eq!(shape.kind(), ShapeKind::Callable);
         debug_assert_eq!(
             closure.len(),
-            shape.captures().len(),
+            shape.capture_count(),
             "the closure bindings follow the shape's capture layout",
         );
         Self::laid_down(writer, shape, closure, builtins, None, Some(callable))
@@ -189,7 +189,7 @@ where
         debug_assert_eq!(shape.kind(), ShapeKind::Module);
         debug_assert_eq!(
             closure.len(),
-            shape.captures().len(),
+            shape.capture_count(),
             "the closure bindings follow the shape's capture layout",
         );
         Self::laid_down(writer, shape, closure, builtins, None, None)

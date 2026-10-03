@@ -23,7 +23,7 @@ use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
 use crate::values::Weight;
 
 use super::data::{self, Stager};
@@ -102,12 +102,13 @@ pub fn tie<'graph, 'cell, 'x>(
         }))
     }));
 
-    let mut memos: BumpVec<'x, Option<KType>> = BumpVec::with_capacity_in(nodes.len(), scratch);
+    let mut memos: BumpVec<'x, Option<DeclaredType<KType>>> =
+        BumpVec::with_capacity_in(nodes.len(), scratch);
     memos.extend(functions.iter().zip(&codes).map(|(function, code)| {
         function
             .as_ref()
             .map(|staged| staged.ktype)
-            .or_else(|| code.as_ref().map(|staged| staged.shape.code_type()))
+            .or_else(|| code.as_ref().map(|staged| staged.shape.code_type().into()))
     }));
     data::memos(&nodes, &mut memos, &names, types, scratch)?;
     data::check(&nodes, &memos, &names, types, scratch)?;
@@ -138,7 +139,10 @@ pub fn tie<'graph, 'cell, 'x>(
             .as_ref()
             .filter(|node| node.function().is_none() && node.code().is_none());
         circulars.push(data.map(|node| {
-            let memo = memos[index].expect("every node's memo is derived");
+            let memo = memos[index]
+                .expect("every node's memo is derived")
+                .as_type()
+                .expect("a data node's memo is concrete");
             let circular = data::lay_down(writer, node, memo, &plan, types, scratch);
             knot_weight = knot_weight.plus(circular.weight());
             circular

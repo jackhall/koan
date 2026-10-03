@@ -1,7 +1,9 @@
-//! `KType` — the handle naming one interned type, and the builtin vocabulary that lowers to a
-//! fixed one.
+//! The handles naming interned types: the raw [`Handle`], and the typed handles over it that say
+//! what a type may hold — [`KType`] a concrete type, [`Parametric`] one that may hold a variable,
+//! [`Scheme`] a quantified callable's type, [`DeclaredType`] either a type or a scheme — plus the
+//! builtin vocabulary that lowers to a fixed handle.
 //!
-//! A `KType` *is* its type's content digest ([`TypeDigest`]): a bare `u128`, `Copy`, carrying no
+//! A `Handle` *is* its type's content digest ([`TypeDigest`]): a bare `u128`, `Copy`, carrying no
 //! pointer, no index, and no reference to the registry that minted it. Equality, hashing and
 //! ordering derive on that one word, so comparing two types is comparing two integers and no
 //! structural descent exists to fall back to. Content lives in a
@@ -9,8 +11,18 @@
 //! that needs a type's shape — rendering, kind classification, the relations — takes the registry
 //! and reads the [`TypeNode`].
 //!
+//! A typed handle wraps a `Handle` and adds nothing at run time; what it adds is a promise the
+//! compiler keeps. Only the lattice wraps a `Handle` into one ([`sealed::Wrap`]), so a `KType` is
+//! concrete because every door that yields one builds it from concrete parts or checks it
+//! ([`TypeRegistry::concrete`](super::registry::TypeRegistry::concrete)). **Concrete** means that,
+//! outside a sealed `Signature` or `SetMember` node, the type holds no free `Quantified`, no
+//! `Lexical`, no head `Parameter` and no quantified binder. An opaque carrier is concrete.
+//!
 //! Container types are always parameterized: bare `List` / `Dict` lower to `List<Any>` /
 //! `Dict<Any, Any>` at [`KType::from_symbol`] time.
+
+use std::fmt;
+use std::hash::Hash;
 
 use crate::symbols::{StaticName, TypeSymbol};
 
@@ -20,12 +32,301 @@ use super::node::TypeNode;
 use super::registry::TypeRegistry;
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
+/// Identity only — every relation and door outside the lattice takes a typed handle.
 ///
 /// Identity is the digest, so two independently built types with the same content are one handle
 /// — that is the interning contract, not a coincidence of sharing. `Ord` is the numeric order of
 /// the digest: meaningless as a type order, useful only for canonical sorting.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct KType(TypeDigest);
+pub struct Handle(TypeDigest);
+
+/// A **concrete** type: outside sealed content it holds no variable and no quantified binder. The
+/// lattice's order, join and meet relate these and nothing else, and every value but a quantified
+/// callable carries one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KType(Handle);
+
+/// A type that may hold a variable — a free `Quantified`, a `Lexical` or a head `Parameter` —
+/// but no quantified binder outside sealed content. Related by *fits* and the solver, never by
+/// the order. Becomes a [`KType`] only by substitution, or through
+/// [`TypeRegistry::concrete`](super::registry::TypeRegistry::concrete).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Parametric(Handle);
+
+/// A quantified callable's type: a function type or an expression shape over a non-empty
+/// `FOR ALL` group. The only parametric type a value carries and a call instantiates; its
+/// positions read through [`TypeRegistry::scheme_node`](super::registry::TypeRegistry::scheme_node)
+/// as [`Parametric`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Scheme(Handle);
+
+/// What a callable, a registered shape, a signature member or a function value is typed by: a
+/// type, or a quantified callable's [`Scheme`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum DeclaredType<T> {
+    Type(T),
+    Scheme(Scheme),
+}
+
+pub(super) mod sealed {
+    /// Wrapping a raw handle into a typed one: the lattice's alone, so a typed handle's promise is
+    /// the lattice's to keep.
+    pub trait Wrap: Copy {
+        fn wrap(raw: super::Handle) -> Self;
+    }
+}
+
+/// A handle a node can be read through and a door can build from: its children come back as
+/// [`Child`](Self::Child) handles. Sealed — only the lattice wraps a raw handle.
+pub trait TypeHandle: sealed::Wrap + Eq + Hash + Ord + fmt::Debug {
+    /// What a node read through this handle hands its children back as.
+    type Child: TypeHandle;
+    fn raw(self) -> Handle;
+}
+
+impl TypeHandle for Handle {
+    type Child = Handle;
+    fn raw(self) -> Handle {
+        self
+    }
+}
+
+impl TypeHandle for KType {
+    type Child = KType;
+    fn raw(self) -> Handle {
+        self.0
+    }
+}
+
+impl TypeHandle for Parametric {
+    type Child = Parametric;
+    fn raw(self) -> Handle {
+        self.0
+    }
+}
+
+impl sealed::Wrap for Handle {
+    fn wrap(raw: Handle) -> Self {
+        raw
+    }
+}
+
+impl sealed::Wrap for KType {
+    fn wrap(raw: Handle) -> Self {
+        KType(raw)
+    }
+}
+
+impl sealed::Wrap for Parametric {
+    fn wrap(raw: Handle) -> Self {
+        Parametric(raw)
+    }
+}
+
+impl sealed::Wrap for Scheme {
+    fn wrap(raw: Handle) -> Self {
+        Scheme(raw)
+    }
+}
+
+/// `raw` as the typed handle `H` — the one wrapping door, for the lattice's own use. The caller
+/// answers for `H`'s promise.
+pub(super) fn wrap<H: sealed::Wrap>(raw: Handle) -> H {
+    <H as sealed::Wrap>::wrap(raw)
+}
+
+impl Handle {
+    /// Wrap a digest as the handle naming it. Named rather than a public tuple field, and
+    /// module-internal, so the wrapping is a deliberate act: `digest` must already be the digest
+    /// of interned content, or a member handle derived from its component's digest.
+    pub(super) const fn from_digest(digest: TypeDigest) -> Handle {
+        Handle(digest)
+    }
+
+    /// This type's content digest — its identity, and its key in the registry's node table.
+    pub const fn digest(self) -> TypeDigest {
+        self.0
+    }
+
+    /// Handle equality in `const` context.
+    pub(super) const fn same_as(self, other: Handle) -> bool {
+        self.0.0 == other.0.0
+    }
+
+    /// The code kind directly above this one in the code family's tree, or `None` for a handle that
+    /// is no code kind below `Code`. A smaller syntax lies under a larger one wherever it can stand
+    /// in its place; see [README.md](README.md) § The code family.
+    pub(super) const fn code_parent(self) -> Option<Handle> {
+        let parent = if self.same_as(Handle::BLOCK) {
+            Handle::ANY_CODE
+        } else if self.same_as(Handle::EXPRESSION) {
+            Handle::BLOCK
+        } else if self.same_as(Handle::DECLARATION)
+            || self.same_as(Handle::LITERAL)
+            || self.same_as(Handle::SYMBOL)
+            || self.same_as(Handle::SIGILED_TYPE_EXPR)
+            || self.same_as(Handle::RECORD_TYPE)
+        {
+            Handle::EXPRESSION
+        } else if self.same_as(Handle::BINDER) {
+            Handle::DECLARATION
+        } else if self.same_as(Handle::NAME) || self.same_as(Handle::KEYWORD) {
+            Handle::SYMBOL
+        } else if self.same_as(Handle::IDENTIFIER) || self.same_as(Handle::TYPE_NAME_TOKEN) {
+            Handle::NAME
+        } else {
+            return None;
+        };
+        Some(parent)
+    }
+
+    /// Whether this code kind lies at or under `kind` in the code family's tree — the walk up
+    /// [`Self::code_parent`]. A handle that is no code kind is within only itself.
+    pub(super) const fn within_code(self, kind: Handle) -> bool {
+        let mut at = self;
+        loop {
+            if at.same_as(kind) {
+                return true;
+            }
+            match at.code_parent() {
+                Some(parent) => at = parent,
+                None => return false,
+            }
+        }
+    }
+}
+
+impl KType {
+    /// This type's content digest — its identity.
+    pub const fn digest(self) -> TypeDigest {
+        self.0.0
+    }
+
+    /// Handle equality in `const` context — the one digest word compared. Derived `PartialEq` is
+    /// not `const`, and a `static` table of slot types is checked against the code types where it
+    /// is built.
+    pub const fn same_as(self, other: KType) -> bool {
+        self.0.same_as(other.0)
+    }
+
+    /// The code kind directly above this one in the code family's tree, or `None` for a type that
+    /// is no code kind below `Code`; see [README.md](README.md) § The code family.
+    pub const fn code_parent(self) -> Option<KType> {
+        match self.0.code_parent() {
+            Some(parent) => Some(KType(parent)),
+            None => None,
+        }
+    }
+
+    /// Whether this code kind lies at or under `kind` in the code family's tree. A type that is no
+    /// code kind is within only itself.
+    pub const fn within_code(self, kind: KType) -> bool {
+        self.0.within_code(kind.0)
+    }
+}
+
+impl Parametric {
+    /// This type's content digest — its identity.
+    pub const fn digest(self) -> TypeDigest {
+        self.0.0
+    }
+}
+
+impl Scheme {
+    /// This type's content digest — its identity.
+    pub const fn digest(self) -> TypeDigest {
+        self.0.0
+    }
+
+    /// The raw handle — the lattice's alone, so no scheme reaches a door or a binding as a type.
+    pub(super) fn raw(self) -> Handle {
+        self.0
+    }
+}
+
+/// Every concrete type may stand where a type may hold a variable.
+impl From<KType> for Parametric {
+    fn from(kt: KType) -> Self {
+        Parametric(kt.0)
+    }
+}
+
+impl From<KType> for DeclaredType<KType> {
+    fn from(kt: KType) -> Self {
+        DeclaredType::Type(kt)
+    }
+}
+
+impl From<KType> for DeclaredType<Parametric> {
+    fn from(kt: KType) -> Self {
+        DeclaredType::Type(kt.into())
+    }
+}
+
+impl From<Parametric> for DeclaredType<Parametric> {
+    fn from(kt: Parametric) -> Self {
+        DeclaredType::Type(kt)
+    }
+}
+
+impl From<Scheme> for DeclaredType<KType> {
+    fn from(scheme: Scheme) -> Self {
+        DeclaredType::Scheme(scheme)
+    }
+}
+
+impl From<Scheme> for DeclaredType<Parametric> {
+    fn from(scheme: Scheme) -> Self {
+        DeclaredType::Scheme(scheme)
+    }
+}
+
+impl From<DeclaredType<KType>> for DeclaredType<Parametric> {
+    fn from(declared: DeclaredType<KType>) -> Self {
+        declared.map(Parametric::from)
+    }
+}
+
+impl<T> DeclaredType<T> {
+    /// The type, or `None` for a scheme.
+    pub fn as_type(self) -> Option<T> {
+        match self {
+            DeclaredType::Type(kt) => Some(kt),
+            DeclaredType::Scheme(_) => None,
+        }
+    }
+
+    /// The scheme, or `None` for a type.
+    pub fn as_scheme(self) -> Option<Scheme> {
+        match self {
+            DeclaredType::Type(_) => None,
+            DeclaredType::Scheme(scheme) => Some(scheme),
+        }
+    }
+
+    /// The type mapped through `f`; a scheme stays a scheme.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> DeclaredType<U> {
+        match self {
+            DeclaredType::Type(kt) => DeclaredType::Type(f(kt)),
+            DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
+        }
+    }
+}
+
+impl<T: TypeHandle> DeclaredType<T> {
+    /// The raw handle either arm names — identity only, and the lattice's alone.
+    pub(super) fn raw(self) -> Handle {
+        match self {
+            DeclaredType::Type(kt) => kt.raw(),
+            DeclaredType::Scheme(scheme) => scheme.raw(),
+        }
+    }
+
+    /// This type's content digest — its identity.
+    pub fn digest(self) -> TypeDigest {
+        self.raw().digest()
+    }
+}
 
 /// The fixed spellings of the singly-named builtin leaves — the one authority both
 /// [`render`](super::render) and [`KType::name_symbol`] read, so the rendered text and the
@@ -62,86 +363,107 @@ static LIST_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "List
 static DICT_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Dict");
 static SIGNATURE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Signature");
 
-impl KType {
-    // --- Fixed handles ---
-    //
-    // The twenty leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>`, the code
-    // composites, the empty record and the empty signature name content every registry pre-seeds
-    // (`TypeRegistry::in_region`), so their digests are known at compile time and lowering a
-    // builtin type name needs no registry in hand. The literals below are the digest recipe's
-    // output; `constants_match_freshly_interned_nodes` in the golden module recomputes each one
-    // from its own node, so a recipe change fails loudly here rather than silently re-identifying a
-    // leaf.
+/// Declares each fixed handle as a `KType` constant the rest of koan names.
+macro_rules! fixed_handles {
+    ($($(#[$doc:meta])* $name:ident = $digest:literal;)*) => {
+        impl KType {
+            $($(#[$doc])* pub const $name: KType = KType(Handle(TypeDigest($digest)));)*
+        }
+    };
+}
 
-    pub const NUMBER: KType = KType(TypeDigest(0xe21d67f1_7aa25f92_e072c1bb_1f72fc48));
-    pub const STR: KType = KType(TypeDigest(0xda8a6add_c7627c0f_ae4be842_dfbe13ab));
-    pub const BOOL: KType = KType(TypeDigest(0x01210944_fd6fb8f8_0c9ba36e_1de8e0e1));
-    pub const NULL: KType = KType(TypeDigest(0xbc9d88bb_75d5fb35_a4fd343e_749a380c));
+/// The raw twin of each fixed handle the lattice's own code compares a raw handle against.
+macro_rules! raw_twins {
+    ($($name:ident),* $(,)?) => {
+        impl Handle {
+            $(pub(super) const $name: Handle = KType::$name.0;)*
+        }
+    };
+}
+
+// --- Fixed handles ---
+//
+// The twenty leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>`, the code
+// composites, the empty record and the empty signature name content every registry pre-seeds
+// (`TypeRegistry::in_region`), so their digests are known at compile time and lowering a
+// builtin type name needs no registry in hand. The literals below are the digest recipe's
+// output; `constants_match_freshly_interned_nodes` in the golden module recomputes each one
+// from its own node, so a recipe change fails loudly here rather than silently re-identifying a
+// leaf.
+fixed_handles! {
+    NUMBER = 0xe21d67f1_7aa25f92_e072c1bb_1f72fc48;
+    STR = 0xda8a6add_c7627c0f_ae4be842_dfbe13ab;
+    BOOL = 0x01210944_fd6fb8f8_0c9ba36e_1de8e0e1;
+    NULL = 0xbc9d88bb_75d5fb35_a4fd343e_749a380c;
     /// A lone value name of code, under [`Self::NAME`].
-    pub const IDENTIFIER: KType = KType(TypeDigest(0x41b73c3e_2391bbb4_6b850e4f_e740cb84));
+    IDENTIFIER = 0x41b73c3e_2391bbb4_6b850e4f_e740cb84;
     /// A lone token of code: a name or a keyword.
-    pub const SYMBOL: KType = KType(TypeDigest(0x7dec3e82_f44adbda_2f8cc4c2_47b790eb));
+    SYMBOL = 0x7dec3e82_f44adbda_2f8cc4c2_47b790eb;
     /// A lone type name of code, under [`Self::NAME`] — never resolved, never lowered.
-    pub const TYPE_NAME_TOKEN: KType = KType(TypeDigest(0xb9978361_a0bb1460_82127faa_0711eeca));
+    TYPE_NAME_TOKEN = 0xb9978361_a0bb1460_82127faa_0711eeca;
     /// One statement of code.
-    pub const EXPRESSION: KType = KType(TypeDigest(0x63c296ef_dbe5d41c_9969ddda_6b0b311c));
-    pub const SIGILED_TYPE_EXPR: KType = KType(TypeDigest(0xf6d652dc_848e0f69_4a152496_ddd88b44));
-    pub const RECORD_TYPE: KType = KType(TypeDigest(0x387dfced_dc0a5d96_da3b29a5_dde0f32e));
+    EXPRESSION = 0x63c296ef_dbe5d41c_9969ddda_6b0b311c;
+    SIGILED_TYPE_EXPR = 0xf6d652dc_848e0f69_4a152496_ddd88b44;
+    RECORD_TYPE = 0x387dfced_dc0a5d96_da3b29a5_dde0f32e;
     /// A lone scalar literal or nested quote of code.
-    pub const LITERAL: KType = KType(TypeDigest(0xe0ba0587_757a04b5_57551481_dc141482));
+    LITERAL = 0xe0ba0587_757a04b5_57551481_dc141482;
     /// Statements of code: what every body slot takes.
-    pub const BLOCK: KType = KType(TypeDigest(0x30bf1d87_d3e4dc58_e64d3a9d_f3cfc6bb));
+    BLOCK = 0x30bf1d87_d3e4dc58_e64d3a9d_f3cfc6bb;
     /// One statement that declares a name or a shape.
-    pub const DECLARATION: KType = KType(TypeDigest(0x45826e93_1678c023_0193898d_a4337e86));
+    DECLARATION = 0x45826e93_1678c023_0193898d_a4337e86;
     /// One statement that declares and installs where it is written.
-    pub const BINDER: KType = KType(TypeDigest(0x33085145_8c8174df_bcb3e348_b6f3c6e2));
+    BINDER = 0x33085145_8c8174df_bcb3e348_b6f3c6e2;
     /// A lone value or type name of code.
-    pub const NAME: KType = KType(TypeDigest(0x368aa850_9c281105_1746c919_0b150e96));
+    NAME = 0x368aa850_9c281105_1746c919_0b150e96;
     /// A lone keyword of code.
-    pub const KEYWORD: KType = KType(TypeDigest(0x3ad3317d_c24be1d3_f80ceb6a_f4087539));
-    pub const ANY: KType = KType(TypeDigest(0xd9f70f99_49f95b5c_44d7ce99_10aa1972));
+    KEYWORD = 0x3ad3317d_c24be1d3_f80ceb6a_f4087539;
+    ANY = 0xd9f70f99_49f95b5c_44d7ce99_10aa1972;
     /// The value family's top — what `Value` lowers to.
-    pub const ANY_VALUE: KType = KType(TypeDigest(0xf04a0d81_ff131a48_101bccdb_85dac271));
+    ANY_VALUE = 0xf04a0d81_ff131a48_101bccdb_85dac271;
     /// The code family's top — what `Code` lowers to.
-    pub const ANY_CODE: KType = KType(TypeDigest(0x0f08f916_c60a7048_8e16cfb3_f68069e7));
+    ANY_CODE = 0x0f08f916_c60a7048_8e16cfb3_f68069e7;
     /// The uninhabited bottom of the lattice — below every other type, admitted by no value, and
     /// the identity element of join and of union canonicalization.
-    pub const NEVER: KType = KType(TypeDigest(0x59dd8c1f_71e395f4_77717ff5_a93c2600));
-
-    pub const PROPER_TYPE: KType = KType(TypeDigest(0xe082d96a_231e2f4c_af1e256b_459a681f));
-    pub const SIGNATURE_KIND: KType = KType(TypeDigest(0xa74d105b_68705a5a_4c93c325_b2bb4032));
-    pub const ANY_TYPE: KType = KType(TypeDigest(0x6230fb6f_d4cb83ad_59072aad_08f93e54));
-    pub const NEW_TYPE: KType = KType(TypeDigest(0x3079a661_6197d2a5_46103cc5_f0cbfeaa));
-    pub const TYPE_CONSTRUCTOR: KType = KType(TypeDigest(0x1522ec89_d5fd3ca8_2db00c80_75beafb3));
-
+    NEVER = 0x59dd8c1f_71e395f4_77717ff5_a93c2600;
+    PROPER_TYPE = 0xe082d96a_231e2f4c_af1e256b_459a681f;
+    SIGNATURE_KIND = 0xa74d105b_68705a5a_4c93c325_b2bb4032;
+    ANY_TYPE = 0x6230fb6f_d4cb83ad_59072aad_08f93e54;
+    NEW_TYPE = 0x3079a661_6197d2a5_46103cc5_f0cbfeaa;
+    TYPE_CONSTRUCTOR = 0x1522ec89_d5fd3ca8_2db00c80_75beafb3;
     /// `List<Any>` — what the bare `List` name lowers to.
-    pub const LIST_OF_ANY: KType = KType(TypeDigest(0x9d40af7c_078f46c4_bd4a8f94_98f5fd63));
+    LIST_OF_ANY = 0x9d40af7c_078f46c4_bd4a8f94_98f5fd63;
     /// `Dict<Any, Any>` — what the bare `Dict` name lowers to.
-    pub const DICT_ANY_ANY: KType = KType(TypeDigest(0xf9b9d64d_aa69edda_e7a59f82_4e0f5015));
+    DICT_ANY_ANY = 0xf9b9d64d_aa69edda_e7a59f82_4e0f5015;
     /// The empty signature — top of the module lattice, the type `:Module` lowers to. It
     /// constrains nothing, so every module value satisfies it.
-    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0xb80aaa8d_7e3507bd_e06a1496_5250ca90));
-
+    EMPTY_SIGNATURE = 0x9d9c6ff8_d07721a9_90cd6da6_77262d30;
     /// `TypeNameToken | SigiledTypeExpr | RecordType` — the code a type is written as: a union's
     /// variant payload or a quantifier's bound. Not spellable.
-    pub const TYPE_CODE: KType = KType(TypeDigest(0xc41b235d_9ca37012_2069fcb7_39c1082e));
+    TYPE_CODE = 0xc41b235d_9ca37012_2069fcb7_39c1082e;
     /// `List<Name>` — a `FOR ALL` group or `FROM`'s field list.
-    pub const LIST_OF_NAME: KType = KType(TypeDigest(0xe4ef6471_b3309818_6e9fe04f_0c66f18a));
+    LIST_OF_NAME = 0xe4ef6471_b3309818_6e9fe04f_0c66f18a;
     /// `List<Declaration>` — a `SIG` body, or the heads a bodyless `GROUP` declares.
-    pub const LIST_OF_DECLARATION: KType = KType(TypeDigest(0xdaf2c481_09b90725_35f0053e_594b6591));
+    LIST_OF_DECLARATION = 0xdaf2c481_09b90725_35f0053e_594b6591;
     /// `Dict<Name, Block>` — a `MATCH … OVER` or `TRY` arm set, each guard a label.
-    pub const DICT_NAME_BLOCK: KType = KType(TypeDigest(0xd62f630b_16626d22_68df48ae_99aab59a));
+    DICT_NAME_BLOCK = 0xd62f630b_16626d22_68df48ae_99aab59a;
     /// `Dict<TypeCode, Block>` — a `MATCH … WITH` arm set, each guard a type.
-    pub const DICT_TYPE_CODE_BLOCK: KType =
-        KType(TypeDigest(0xf1066a0f_f0fe9f2f_9ba1351a_fb9f479f));
+    DICT_TYPE_CODE_BLOCK = 0xf1066a0f_f0fe9f2f_9ba1351a_fb9f479f;
     /// `Dict<Name, TypeCode>` — a union's variants.
-    pub const DICT_NAME_TYPE_CODE: KType = KType(TypeDigest(0x34fd5145_6f54557d_3aeab867_9093541d));
+    DICT_NAME_TYPE_CODE = 0x34fd5145_6f54557d_3aeab867_9093541d;
     /// `List<Name> | Dict<Name, TypeCode>` — the code a `FOR ALL` group is written as: a list of
     /// names, or a dict of names to the code of their bounds.
-    pub const QUANTIFIER_CODE: KType = KType(TypeDigest(0xf2388522_88d6156a_8a8a6e23_acdbbf30));
+    QUANTIFIER_CODE = 0xf2388522_88d6156a_8a8a6e23_acdbbf30;
     /// The empty record type — `FROM`'s argument and return.
-    pub const EMPTY_RECORD: KType = KType(TypeDigest(0xe7e914e1_0d893b27_988dbbdf_9ae2e427));
+    EMPTY_RECORD = 0xe7e914e1_0d893b27_988dbbdf_9ae2e427;
+}
 
+raw_twins! {
+    NEVER, ANY, ANY_VALUE, ANY_CODE, ANY_TYPE, EMPTY_SIGNATURE, IDENTIFIER, SYMBOL,
+    TYPE_NAME_TOKEN, EXPRESSION, SIGILED_TYPE_EXPR, RECORD_TYPE, LITERAL, BLOCK, DECLARATION,
+    BINDER, NAME, KEYWORD, LIST_OF_NAME, DICT_NAME_TYPE_CODE,
+}
+
+impl KType {
     /// The type-accepting slot admitting `kind` — one of the pre-seeded `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {
         match kind {
@@ -151,67 +473,6 @@ impl KType {
             KKind::NewType => KType::NEW_TYPE,
             KKind::TypeConstructor => KType::TYPE_CONSTRUCTOR,
         }
-    }
-
-    /// The code kind directly above this one in the code family's tree, or `None` for a handle that
-    /// is no code kind below `Code`. A smaller syntax lies under a larger one wherever it can stand
-    /// in its place; see [README.md](README.md) § The code family.
-    pub const fn code_parent(self) -> Option<KType> {
-        let parent = if self.same_as(KType::BLOCK) {
-            KType::ANY_CODE
-        } else if self.same_as(KType::EXPRESSION) {
-            KType::BLOCK
-        } else if self.same_as(KType::DECLARATION)
-            || self.same_as(KType::LITERAL)
-            || self.same_as(KType::SYMBOL)
-            || self.same_as(KType::SIGILED_TYPE_EXPR)
-            || self.same_as(KType::RECORD_TYPE)
-        {
-            KType::EXPRESSION
-        } else if self.same_as(KType::BINDER) {
-            KType::DECLARATION
-        } else if self.same_as(KType::NAME) || self.same_as(KType::KEYWORD) {
-            KType::SYMBOL
-        } else if self.same_as(KType::IDENTIFIER) || self.same_as(KType::TYPE_NAME_TOKEN) {
-            KType::NAME
-        } else {
-            return None;
-        };
-        Some(parent)
-    }
-
-    /// Whether this code kind lies at or under `kind` in the code family's tree — the walk up
-    /// [`Self::code_parent`]. A handle that is no code kind is within only itself.
-    pub const fn within_code(self, kind: KType) -> bool {
-        let mut at = self;
-        loop {
-            if at.same_as(kind) {
-                return true;
-            }
-            match at.code_parent() {
-                Some(parent) => at = parent,
-                None => return false,
-            }
-        }
-    }
-
-    /// Wrap a digest as the handle naming it. Named rather than a public tuple field, and
-    /// module-internal, so the wrapping is a deliberate act: `digest` must already be the digest
-    /// of interned content, or a member handle derived from its component's digest.
-    pub(super) const fn from_digest(digest: TypeDigest) -> KType {
-        KType(digest)
-    }
-
-    /// This type's content digest — its identity, and its key in the registry's node table.
-    pub const fn digest(self) -> TypeDigest {
-        self.0
-    }
-
-    /// Handle equality in `const` context — the one digest word compared. Derived `PartialEq` is
-    /// not `const`, and a `static` table of slot types is checked against the code types where it
-    /// is built.
-    pub const fn same_as(self, other: KType) -> bool {
-        self.0.0 == other.0.0
     }
 
     /// Look up a `KType` by the name a user can write in source (e.g. `Number`, `List`). Every
@@ -238,7 +499,7 @@ impl KType {
         symbols: &crate::symbols::SymbolInterner,
     ) -> Option<TypeSymbol> {
         let fixed = |name: &StaticName<TypeSymbol>| Some(symbols.record(name));
-        types.with_node(self, |node| match node {
+        match types.node(self) {
             TypeNode::Number => fixed(&NUMBER_NAME),
             TypeNode::Str => fixed(&STR_NAME),
             TypeNode::Bool => fixed(&BOOL_NAME),
@@ -260,9 +521,9 @@ impl KType {
             TypeNode::AnyCode => fixed(&CODE_NAME),
             TypeNode::Never => fixed(&NEVER_NAME),
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(symbols)),
-            TypeNode::AbstractType { name, .. } => Some(*name),
-            TypeNode::SetMember { name, .. } => Some(*name),
-            TypeNode::Signature { schema_digest, .. } => (*schema_digest
+            TypeNode::Parameter { name, .. } => Some(name),
+            TypeNode::SetMember { name, .. } => Some(name),
+            TypeNode::Signature { schema_digest, .. } => (schema_digest
                 == super::digest::empty_schema_digest())
             .then(|| symbols.record(&MODULE_NAME)),
             TypeNode::List { .. }
@@ -271,28 +532,29 @@ impl KType {
             | TypeNode::KFunction { .. }
             | TypeNode::ExpressionShape { .. }
             | TypeNode::Quantified { .. }
+            | TypeNode::Lexical { .. }
             | TypeNode::DeferredReturn(_)
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
             | TypeNode::CodeNeeding { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. }
             | TypeNode::Sibling(_) => None,
-        })
+        }
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
-    /// `OfKind`. A signature is `Signature`, a user-declared nominal is its family read off its
-    /// member node, an abstract member with declared parameters is a constructor, and every other
-    /// type is `ProperType`. Never returns [`KKind::AnyType`], which is a slot-only expectation.
+    /// `OfKind`. A signature type is `Signature`, a user-declared nominal is its family read off its
+    /// member node, and every other type is `ProperType`. Never returns [`KKind::AnyType`], which is a slot-only expectation.
     pub fn kind_of(self, types: &TypeRegistry<'_>) -> KKind {
-        types.with_node(self, |node| match node {
-            TypeNode::Signature { .. } => KKind::Signature,
-            TypeNode::SetMember { kind, .. } => *kind,
+        match types.node(self) {
+            TypeNode::Signature { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. } => KKind::Signature,
+            TypeNode::SetMember { kind, .. } => kind,
             TypeNode::ConstructorApply { constructor, .. } => constructor.kind_of(types),
-            TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
-                KKind::TypeConstructor
-            }
             _ => KKind::ProperType,
-        })
+        }
     }
 }
 
@@ -336,8 +598,14 @@ static ANY_TYPE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "
 
 /// A handle prints as its digest and nothing else: rendering content would need a registry, which
 /// a `Formatter`-only signature cannot reach, and the digest is the whole identity anyway.
-impl std::fmt::Debug for KType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "KType(0x{:032x})", self.0.0)
-    }
+macro_rules! digest_debug {
+    ($($handle:ident),*) => {$(
+        impl fmt::Debug for $handle {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, concat!(stringify!($handle), "(0x{:032x})"), self.digest().0)
+            }
+        }
+    )*};
 }
+
+digest_debug!(Handle, KType, Parametric, Scheme);

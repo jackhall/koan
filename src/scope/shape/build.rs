@@ -2,8 +2,9 @@
 //!
 //! A body is built in four passes over a draft kept in scratch. The binders pass lays out the
 //! declared names and refuses a repeated name or a builtin's, then lays out each definition's
-//! registrations and reads each bucket declaration's ranking, ranking each registration by its
-//! chaining or by the declaration it sees and refusing two rankings of one key that meet. The
+//! registrations — and a `USING … SCOPE` block's surfaced heads, as registration parameters — and
+//! reads each bucket declaration's ranking, ranking each registration by its chaining, its head or
+//! the declaration it sees and refusing two rankings of one key that meet. The
 //! mention pass walks each statement from its root, carrying the class a mention met there would
 //! take, resolving each mention and each keyworded use's candidates as it is met and building each
 //! nested body or arm as a draft of its own on top of the chain of enclosing drafts; a binder or
@@ -29,7 +30,8 @@
 //! A group mark covers the use it wraps and, when that use tops an operator run, every use the
 //! rewrite built for that operator run — never one in an operand. A code draft that cannot be built is not an
 //! error of the program; its error is kept for the `EVAL` that runs it, and only a `$` mark nothing
-//! binds where the quote is written refuses the program.
+//! binds where the quote is written, or one reading a quantified function anywhere but a call's
+//! head, refuses the program.
 //!
 //! See [README.md § Visibility](../README.md#visibility).
 
@@ -38,8 +40,8 @@ use crate::memory::{
     strongly_connected_components,
 };
 use crate::parse::builtin_shapes::binder::{
-    BinderSurface, DeclaredElement, SlotLabel, bounded, declared_element, head_run, needed_key,
-    needed_name, needing, slot_label,
+    BinderSurface, DeclaredElement, SlotLabel, declared_element, head_run, needed_key, needed_name,
+    needing, next_is_type_slot, slot_label,
 };
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
@@ -59,20 +61,24 @@ use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run,
 };
+use super::super::typed::Static;
 use super::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
-    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
-    Which, resolve_here,
+    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead, Target,
+    TypeExpression, Unit, UnitWork, Which, resolve_here,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
+use std::cell::Cell;
 
 mod locate;
 mod rewrite;
 mod surface;
 
+pub(in crate::scope) use locate::source_within;
+
 use rewrite::{Built, BuiltKind, chained};
-use surface::Surfaced;
+use surface::{Quantified, Surfaced, SurfacedKey, quantified_value};
 
 /// The names a body binds that no signature writes. The shape builder binds them, and the
 /// elaborator reads an operator's function type over them, so the two cannot disagree.
@@ -127,7 +133,7 @@ pub(super) fn program<'graph, X: Knotted>(
 /// says, and admits one of its slot's types by [`admits_part`], the one admission rule — a type
 /// expression's and an in-place operand's type is
 /// the value it denotes, so only their spelling is checked. A binder name is a bare name, or a bare
-/// declarator group for `TYPE`, `UNION` and `NEWTYPE`. Code written where a quote or a container of
+/// declarator group for `UNION` and `NEWTYPE`. Code written where a quote or a container of
 /// quotes is wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part
 /// whose syntax fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
 fn written_as_read<'e>(
@@ -137,9 +143,7 @@ fn written_as_read<'e>(
 ) -> Result<(), ShapeError<'e>> {
     let declarator = matches!(
         form.id,
-        BuiltinShapeId::TypeDeclaration
-            | BuiltinShapeId::Union
-            | BuiltinShapeId::NewTypeDeclaration
+        BuiltinShapeId::Union | BuiltinShapeId::NewTypeDeclaration
     );
     let quoted = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::QuotedExpression(_));
     for (index, (element, part)) in form.elements.iter().zip(node.parts).enumerate() {
@@ -201,7 +205,7 @@ fn written_as_read<'e>(
         if typed_by_code
             && !slot_types
                 .iter()
-                .any(|slot| admits_part(*slot, part, types))
+                .any(|slot| admits_part((*slot).into(), part, types))
         {
             return Err(inadmissible);
         }
@@ -296,6 +300,17 @@ fn part_marks<'graph>(
         | ExpressionPart::Keyword(_)
         | ExpressionPart::Literal(_) => {}
     }
+}
+
+/// What the next part the walk reaches may be beyond what any part may: set right before a call's
+/// head is walked, and taken by the first part there that is not a one-part wrapper. A name bound
+/// to a quantified function is read anywhere else only where [`Quantified`] allows it.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Admits {
+    #[default]
+    Nothing,
+    /// A call's head: a quantified `FN` written there, or a name bound to one.
+    Head,
 }
 
 /// The class a mention met in this context takes, before the context's own role applies.
@@ -432,6 +447,7 @@ struct Registered<'graph> {
     elements: &'graph [KeyElement],
     classes: &'graph [u8],
     which: Which,
+    surfaced: Option<&'graph SurfacedHead<'graph>>,
 }
 
 /// A ranking some statement gives a key, as a statement or a use at the same key sees it.
@@ -524,6 +540,8 @@ struct Draft<'graph, 'x> {
     rhs: BumpVec<'x, (Slot, Site)>,
     /// `(binder, node)`: a type binder's whole declaration node, in program storage.
     declarations: BumpVec<'x, (Slot, &'graph KExpression<'graph>)>,
+    /// Each type expression the load pass types on its own, as met.
+    type_expressions: BumpVec<'x, Recorded<'graph>>,
     component_of: BumpVec<'x, ComponentIndex>,
     /// Every component's members, one run after another, each run sorted.
     members: BumpVec<'x, Slot>,
@@ -545,11 +563,22 @@ struct Draft<'graph, 'x> {
     /// Whether this is a `USING … SCOPE` body, whose operand's registrations the builder does not
     /// read: a use under one may select one, so none is refused for want of a candidate.
     surfaced: bool,
+    /// The parameters of a `USING … SCOPE` body bound to quantified functions, each read only at
+    /// the head of a call.
+    quantified: BumpVec<'x, BinderSymbol>,
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
     /// The statement being walked when a nested draft was entered, and the class that path takes
     /// at this level.
     current: (u32, MentionClass),
+}
+
+/// A type expression a draft records: see [`TypeExpression`](super::TypeExpression).
+#[derive(Clone, Copy)]
+struct Recorded<'graph> {
+    part: &'graph ExpressionPart<'graph>,
+    statement: u32,
+    guard: Option<(Site, u32)>,
 }
 
 /// A component under construction: its run in [`Draft::members`].
@@ -634,6 +663,13 @@ struct Builder<'graph, 'x, 'e> {
     /// How many type expressions the walk is inside: a keyworded node there is a type the
     /// elaborator reads, not a use dispatch selects for.
     in_type: u32,
+    /// What the next part may be; see [`Admits`].
+    admits: Admits,
+    /// The quantified parameters of the `USING … SCOPE` body about to be drafted, taken by that
+    /// draft.
+    quantified: BumpVec<'x, BinderSymbol>,
+    /// The surfaced heads of the `USING … SCOPE` body about to be drafted, taken by that draft.
+    heads: BumpVec<'x, SurfacedKey<'graph>>,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -664,6 +700,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             skip_floor: 0,
             signature: None,
             in_type: 0,
+            admits: Admits::Nothing,
+            quantified: BumpVec::new_in(scratch),
+            heads: BumpVec::new_in(scratch),
         }
     }
 
@@ -717,12 +756,30 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 nodes[index] = resident(writer, rewritten);
             }
         }
+        // A body whose value is read takes its last statement's: one binding a quantified function
+        // would hand on a value no type solves.
+        if matches!(
+            kind,
+            ShapeKind::Callable | ShapeKind::Block | ShapeKind::Code
+        ) && let Some(last) = nodes.last()
+            && quantified_value(last)
+        {
+            return Err(ShapeError::QuantifiedValue { at: last.source });
+        }
         let parent_statement = self
             .chain
             .last()
             .map_or(u32::MAX, |parent| parent.current.0);
-        let mut draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
+        let heads = std::mem::replace(&mut self.heads, BumpVec::new_in(self.scratch));
+        let mut draft = self.binders(
+            kind,
+            entered_at,
+            parent_statement,
+            (parameters, &heads),
+            &nodes,
+        )?;
         draft.signature = self.signature.take();
+        draft.quantified = std::mem::replace(&mut self.quantified, BumpVec::new_in(self.scratch));
         draft.frame = self.frame;
         draft.held = held;
         draft.tail = entry.tail;
@@ -744,16 +801,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// The binders pass: every parameter at `0` and every statement's name at its position, a
-    /// repeated name and a builtin's name refused in that order; then each statement's registrations
-    /// and bucket declarations, each ranked and checked against every ranking of its key it sees.
-    /// Each parameter comes paired with where the node declaring it is written, which an error
-    /// about it points at.
+    /// repeated name and a builtin's name refused in that order; then each surfaced head's
+    /// registration and each statement's registrations and bucket declarations, each ranked and
+    /// checked against every ranking of its key it sees. Each parameter comes paired with where the
+    /// node declaring it is written, which an error about it points at.
     fn binders(
         &self,
         kind: ShapeKind,
         entered_at: Position,
         parent_statement: u32,
-        parameters: &[(BinderSymbol, SourceRef)],
+        (parameters, heads): (&[(BinderSymbol, SourceRef)], &[SurfacedKey<'graph>]),
         nodes: &[&KExpression<'graph>],
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
         let scratch = self.scratch;
@@ -789,7 +846,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         values.sort_unstable_by_key(|(name, _)| *name);
         types.sort_unstable_by_key(|(name, _)| *name);
-        let (registered, rankings) = self.keyed(kind, nodes)?;
+        let (registered, rankings) = self.keyed(kind, heads, nodes)?;
         let mut registrations = BumpVec::with_capacity_in(registered.len(), scratch);
         registrations.extend(registered.iter().map(|entry| (entry.symbol, entry.at)));
         registrations.sort_unstable_by_key(|(symbol, _)| *symbol);
@@ -827,6 +884,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             births: BumpVec::new_in(scratch),
             rhs: BumpVec::new_in(scratch),
             declarations: BumpVec::new_in(scratch),
+            type_expressions: BumpVec::new_in(scratch),
             nodes: BumpVec::new_in(scratch),
             frame: self.frame,
             held: &[],
@@ -840,19 +898,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             refusal: None,
             tail: false,
             surfaced: false,
+            quantified: BumpVec::new_in(scratch),
             arm: None,
             current: (0, MentionClass::Eager),
         })
     }
 
-    /// The keyed half of the binders pass, statement by statement: each definition's registration
-    /// under each of its keys, ranked by its chaining when it is an operator and otherwise by the
-    /// declaration it sees, and each bucket declaration's ranking. Each is refused when it sees
-    /// another ranking of its key, or a builtin overload there, that differs from its own.
+    /// The keyed half of the binders pass: each surfaced head's registration, a parameter ranked as
+    /// its head writes, then statement by statement each definition's registration under each of
+    /// its keys, ranked by its chaining when it is an operator and otherwise by the declaration it
+    /// sees, and each bucket declaration's ranking. Each is refused when it sees another ranking of
+    /// its key, or a builtin overload there, that differs from its own.
     #[allow(clippy::type_complexity)]
     fn keyed(
         &self,
         kind: ShapeKind,
+        heads: &[SurfacedKey<'graph>],
         nodes: &[&KExpression<'graph>],
     ) -> Result<
         (
@@ -864,6 +925,27 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let depth = self.chain.len() as u32;
         let mut registered: BumpVec<'x, Registered<'graph>> = BumpVec::new_in(self.scratch);
         let mut rankings: BumpVec<'x, Ranking<'graph>> = BumpVec::new_in(self.scratch);
+        // A surfaced head writes where a parameter does, under an index no statement takes.
+        for (index, entry) in heads.iter().enumerate() {
+            let (at, source) = (Position::PARAMETER, entry.head.head.source);
+            self.open_key(entry.elements, source)?;
+            let key = KeyElement::key(entry.elements.iter().copied());
+            let classes = match head_run(entry.head.head) {
+                Some(run) => self.head_classes(run),
+                None => self.operator_classes(entry.elements),
+            };
+            let own = (kind, &registered[..], &rankings[..], at);
+            self.agrees(own, key, entry.elements, classes, source)?;
+            registered.push(Registered {
+                symbol: RegistrationSymbol::of(key, depth, (nodes.len() + index) as u32, 0),
+                at,
+                key,
+                elements: entry.elements,
+                classes,
+                which: entry.which,
+                surfaced: Some(entry.head),
+            });
+        }
         for (index, node) in nodes.iter().enumerate() {
             let spine = node.statement_spine();
             let at = Position::statement(index);
@@ -907,6 +989,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         (true, 0) => Which::Unary,
                         (true, _) => Which::Binary,
                     },
+                    surfaced: None,
                 });
             }
         }
@@ -980,6 +1063,28 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             _ => &[0],
         };
         collect(self.brand.writer(), classes.iter().copied())
+    }
+
+    /// The ranking a signature member's head `run` writes: an integer per slot, or written order
+    /// where it writes none.
+    fn head_classes(&self, run: &KExpression<'graph>) -> &'graph [u8] {
+        let parts = run.parts;
+        let mut raw = BumpVec::with_capacity_in(parts.len() / 2, self.scratch);
+        let mut index = 0;
+        while index < parts.len() {
+            if let Some(label) = slot_label(&parts[index].value)
+                && next_is_type_slot(parts, index + 1)
+            {
+                raw.push(label.rank());
+                index += 2;
+                continue;
+            }
+            index += 1;
+        }
+        collect(
+            self.brand.writer(),
+            dense_classes(self.scratch, &raw).iter().copied(),
+        )
     }
 
     /// A definition's ranking: the classes of the nearest bucket declaration of `key` it sees, or
@@ -1105,6 +1210,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
+        let wrapper = node.cache().builtin_shape().is_none()
+            && matches!(node.parts, [only] if !matches!(only.value, ExpressionPart::Keyword(_)));
+        if !wrapper {
+            self.admits = Admits::Nothing;
+        }
         let declares = node.cache().binder_plan().is_some()
             || node
                 .cache()
@@ -1145,7 +1255,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .is_some_and(|built| built.kind == BuiltKind::Negation);
                 self.candidates(level, statement, node, negation)?;
             }
-            for part in node.parts {
+            // `(f {…})`: a call by name, whose head may be a quantified `FN` or a name bound to one.
+            let call = node.parts.len() == 2
+                && !node
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part.value, ExpressionPart::Keyword(_)));
+            for (index, part) in node.parts.iter().enumerate() {
+                if call && index == 0 {
+                    self.admits = Admits::Head;
+                }
                 self.walk_part(level, statement, &part.value, State::Eager)?;
             }
             return Ok(());
@@ -1264,18 +1383,29 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 Role::Rhs => {
                     let draft = &mut self.chain[level];
+                    let mut declares_type = false;
                     if state == State::Root
                         && let Some(binder) = draft.statement_binders[statement as usize].first()
                     {
                         draft.rhs.push((binder, Site::of(part)));
                         self.parts.insert(Site::of(part), part);
+                        declares_type = draft.is_type_slot(binder);
                     }
-                    self.walk_part(level, statement, part, state)?
+                    // A type `LET`'s right-hand side is its declaration's definition, typed with
+                    // the binder rather than as a type expression of its own.
+                    if declares_type {
+                        self.typed(|builder| builder.walk_part(level, statement, part, state))?
+                    } else {
+                        self.walk_part(level, statement, part, state)?
+                    }
                 }
                 Role::Argument | Role::InPlace => {
                     self.walk_part(level, statement, part, State::Eager)?
                 }
                 Role::TypeExpression => {
+                    if self.in_type == 0 && !types_with_its_binder(form) {
+                        self.record_type(level, statement, part, None);
+                    }
                     self.typed(|builder| builder.walk_part(level, statement, part, State::Eager))?
                 }
                 Role::Signature | Role::Head => {
@@ -1300,13 +1430,25 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
+        // A node passes the allowance on to its own visit; every other part takes it here.
+        let admits = if matches!(part, ExpressionPart::Expression(_)) {
+            self.admits
+        } else {
+            std::mem::take(&mut self.admits)
+        };
         match part {
-            ExpressionPart::Identifier(name) => {
-                self.mention(level, statement, part, BinderSymbol::Value(*name), state)
-            }
+            ExpressionPart::Identifier(name) => self.mention_through(
+                level,
+                statement,
+                part,
+                BinderSymbol::Value(*name),
+                None,
+                state,
+                admits == Admits::Head,
+            ),
             ExpressionPart::Type(name) if !self.skips(name) => {
                 self.mention(level, statement, part, BinderSymbol::Type(*name), state)
             }
@@ -1317,6 +1459,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .built_as(node.reference())
                     .is_some_and(|built| built.kind == BuiltKind::Block)
                 {
+                    self.admits = Admits::Nothing;
                     return self.enter_child(
                         level,
                         statement,
@@ -1331,12 +1474,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 self.walk_node(level, statement, node.reference(), state)
             }
-            ExpressionPart::SigiledTypeExpr(node) => self.typed(|builder| {
-                builder.walk_node(level, statement, node.reference(), State::Eager)
-            }),
-            ExpressionPart::RecordType(node) => self.typed(|builder| {
-                builder.walk_fields(level, statement, node.reference(), State::Eager)
-            }),
+            ExpressionPart::SigiledTypeExpr(node) => {
+                if self.in_type == 0 {
+                    self.record_type(level, statement, part, None);
+                }
+                self.typed(|builder| {
+                    builder.walk_node(level, statement, node.reference(), State::Eager)
+                })
+            }
+            ExpressionPart::RecordType(node) => {
+                if self.in_type == 0 {
+                    self.record_type(level, statement, part, None);
+                }
+                self.typed(|builder| {
+                    builder.walk_fields(level, statement, node.reference(), State::Eager)
+                })
+            }
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
                     self.walk_part(level, statement, item, state.constructor())?;
@@ -1367,9 +1520,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::QuotedExpression(node) => {
                 self.enter_code(level, statement, part, node.reference(), state)
             }
-            ExpressionPart::MarkedName(mark, name) => {
-                self.mention_through(level, statement, part, *name, Some(*mark), state)
-            }
+            ExpressionPart::MarkedName(mark, name) => self.mention_through(
+                level,
+                statement,
+                part,
+                *name,
+                Some(*mark),
+                state,
+                admits == Admits::Head,
+            ),
             ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
                 Err(ShapeError::MarkOutsideQuote {
                     at: self.part_source(level, statement, Site::of(part)),
@@ -1417,7 +1576,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
     ) -> Result<(), ShapeError<'graph>> {
         match signature_run(part) {
             Some(run) => self.walk_fields(level, statement, run, State::Eager),
@@ -1433,7 +1592,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
         kind: DefinitionKind,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
@@ -1450,9 +1609,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Ok(())
             }
             (DefinitionKind::Members, ExpressionPart::ListLiteral(members)) => {
-                // A signature declares its own names — its abstract `TYPE` members and its manifest
-                // `LET` members alike — so a later member naming one is no mention of the enclosing
-                // shape. The door resolves them against the definition it is elaborating.
+                // A signature declares its own names — its manifest `LET` members, beside the head
+                // parameters its group declares — so a later member naming one is no mention of the
+                // enclosing shape. The door resolves them against the definition it is elaborating.
                 let mut own = BumpVec::new_in(self.scratch);
                 own.extend(members.iter().filter_map(quoted_body).filter_map(|member| {
                     match member.statement_binder_plan()?.name? {
@@ -1535,14 +1694,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         self.walk_definition_part(level, statement, bound, state)?;
                     }
                 }
-                // A `TYPE` member's bound is read where the `SIG` runs; its name is the body's.
-                Role::Name => {
-                    if form.id == BuiltinShapeId::TypeDeclaration
-                        && let Some((_, bound)) = bounded(part)
-                    {
-                        self.walk_definition_part(level, statement, bound, state)?;
-                    }
-                }
+                Role::Name => {}
                 Role::Definition(inner) => {
                     self.walk_definition(level, statement, part, inner, state)?
                 }
@@ -1574,7 +1726,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        part: &ExpressionPart<'graph>,
+        part: &'graph ExpressionPart<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
         let run = match part {
@@ -1583,7 +1735,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
             // A marked name never binds to a name the definition declares, so it skips nothing.
             ExpressionPart::MarkedName(mark, name) => {
-                return self.mention_through(level, statement, part, *name, Some(*mark), state);
+                return self.mention_through(
+                    level,
+                    statement,
+                    part,
+                    *name,
+                    Some(*mark),
+                    state,
+                    false,
+                );
             }
             ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
                 return Err(ShapeError::MarkOutsideQuote {
@@ -1739,6 +1899,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BodyKind::Module => &[],
             BodyKind::Surfaced => &surfaced.names,
         };
+        if kind == BodyKind::Surfaced {
+            self.quantified = surfaced.quantified;
+            self.heads = surfaced.heads;
+        }
         self.enter_child(
             level,
             statement,
@@ -1774,8 +1938,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             && draft.tail
             && draft.statement_binders[statement as usize].is_empty()
             && statement + 1 == draft.statements;
-        for (guard, body_part) in arms.iter() {
+        for (index, (guard, body_part)) in arms.iter().enumerate() {
             let guard = (!guard.is_wildcard()).then_some(guard);
+            if heads == Heads::Types
+                && let Some(guard) = guard
+            {
+                self.record_type(
+                    level,
+                    statement,
+                    guard,
+                    Some((Site::of(part), index as u32)),
+                );
+            }
             if heads == Heads::Types
                 && let Some(written) = guard.and_then(quoted_body)
             {
@@ -1889,7 +2063,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
         let mut marks = BumpVec::new_in(self.scratch);
         code_marks(code, &mut marks);
-        let draft = self.binders(ShapeKind::Code, entered_at, statement, &[], &[])?;
+        // A `$` name reads where the quote is written, so a quantified function read through one
+        // anywhere but a call's head is the program's error.
+        if let ShapeError::QuantifiedRead { site, .. } = refusal
+            && marks.iter().any(|(mark, marked, at)| {
+                *mark == Mark::Written && matches!(marked, Marked::Name(_)) && *at == site
+            })
+        {
+            return Err(refusal);
+        }
+        let draft = self.binders(ShapeKind::Code, entered_at, statement, (&[], &[]), &[])?;
         self.chain.push(draft);
         let inner = self.chain.len() - 1;
         let reader = Reader {
@@ -1966,7 +2149,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// An `EVAL` of a callable's parameter whose type needs names offers each of them to the code
     /// it runs: a name resolves here as an eager read at the `EVAL`'s statement would, recorded as
-    /// one for the units pass, and is `Unbound` when nothing binds it here; a key is listed as a use
+    /// one for the units pass, and is `Unbound` when nothing binds it here and `QuantifiedRead`
+    /// when it is bound to a quantified function; a key is listed as a use
     /// at the key written at the `EVAL` would be, and is `NoCandidate` when that lists nothing.
     fn offer(
         &mut self,
@@ -1991,6 +2175,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut offered = BumpVec::with_capacity_in(needed.len(), self.scratch);
         for entry in needed.iter() {
             if let Some(name) = needed_name(entry) {
+                // An offer passes the name's value into the code, which a quantified function's
+                // name never is.
+                if self.quantified(level, name, at, None) != Quantified::No {
+                    return Err(ShapeError::QuantifiedRead {
+                        name,
+                        site: Site::of(operand),
+                        at: node.source,
+                    });
+                }
                 let coordinate = match self.builtins.lookup(name) {
                     Some(index) => Coordinate::Builtin(index),
                     None => {
@@ -2112,6 +2305,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// Whether `name` is a type parameter of a form enclosing the walk within the current draft.
     fn skips(&self, name: &TypeSymbol) -> bool {
         self.skip[self.skip_floor..].contains(name)
+    }
+
+    /// Record `part`, written in `statement` of the draft at `level`, as a type expression the load
+    /// pass types on its own — for a guard, beside its arm set's site and its place there.
+    fn record_type(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &'graph ExpressionPart<'graph>,
+        guard: Option<(Site, u32)>,
+    ) {
+        self.chain[level].type_expressions.push(Recorded {
+            part,
+            statement,
+            guard,
+        });
     }
 
     /// Run `walk` inside a type expression.
@@ -2301,11 +2510,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         name: BinderSymbol,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
-        self.mention_through(level, statement, part, name, None, state)
+        self.mention_through(level, statement, part, name, None, state, false)
     }
 
     /// [`mention`](Self::mention) of a name read through `mark`, which only a quote value's code
-    /// may hold.
+    /// may hold. A name bound to a quantified function is refused unless the read is a call's
+    /// `head`.
+    #[allow(clippy::too_many_arguments)]
     fn mention_through(
         &mut self,
         level: usize,
@@ -2314,23 +2525,41 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         name: BinderSymbol,
         mark: Option<Mark>,
         state: State,
+        head: bool,
     ) -> Result<(), ShapeError<'graph>> {
         if mark.is_some() && !self.in_quote(level) {
             return Err(ShapeError::MarkOutsideQuote {
                 at: self.part_source(level, statement, Site::of(part)),
             });
         }
-        let class = state.class();
-        let at = match class {
+        let mut class = state.class();
+        let mut at = match class {
             MentionClass::Eager => Position::statement(statement as usize),
             MentionClass::Deferred => self.chain[level].end(),
         };
+        let site = Site::of(part);
+        if !head {
+            match self.quantified(level, name, at, mark) {
+                Quantified::No => {}
+                // A module member read where it is instantiated needs its value then.
+                Quantified::Member if mark.is_none() => {
+                    class = MentionClass::Eager;
+                    at = Position::statement(statement as usize);
+                }
+                Quantified::Member | Quantified::CallOnly => {
+                    return Err(ShapeError::QuantifiedRead {
+                        name,
+                        site,
+                        at: self.part_source(level, statement, site),
+                    });
+                }
+            }
+        }
         let reader = Reader {
             level,
             statement,
             class,
         };
-        let site = Site::of(part);
         let coordinate = match self.builtins.lookup(name) {
             Some(index) => Coordinate::Builtin(index),
             None => {
@@ -2708,6 +2937,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 elements: entry.elements,
                 classes: entry.classes,
                 which: entry.which,
+                surfaced: entry.surfaced,
             }
         }));
         registrations.sort_unstable_by_key(|registration| registration.slot);
@@ -2715,6 +2945,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         candidates.sort_unstable_by_key(|(site, _)| *site);
         let mut required = draft.required;
         required.sort_unstable();
+        let mut recorded = draft.type_expressions;
+        recorded.sort_unstable_by_key(|recorded| Site::of(recorded.part));
+        let type_expressions = writer.fill(recorded.len(), |index| {
+            let recorded = recorded[index];
+            TypeExpression {
+                site: Site::of(recorded.part),
+                part: recorded.part,
+                statement: recorded.statement,
+                guard: recorded.guard,
+                typed: Cell::new(Static::Unknown),
+            }
+        });
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -2744,6 +2986,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 births: collect(writer, births.iter().copied()),
                 rhs: collect(writer, rhs.iter().copied()),
                 declarations: collect(writer, declarations.iter().copied()),
+                declared: writer.fill(declarations.len(), |_| Cell::new(Static::Unknown)),
                 units: collect(writer, draft.units.iter().copied()),
                 arm: draft.arm,
                 code_type: draft.code_type,
@@ -2753,7 +2996,41 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 rankings: collect(writer, draft.rankings.iter().copied()),
                 candidates: collect(writer, candidates.iter().copied()),
                 required: collect(writer, required.iter().copied()),
+                type_expressions,
+                registered: writer.fill(registrations.len(), |_| Cell::new(Static::Unknown)),
+                callable: resident_cell(writer, Static::Unknown),
+                group_levels: resident_cell(writer, &[][..]),
+                born_instance: resident_cell(writer, Static::Unknown),
+                declared_variables: resident_cell(writer, &[][..]),
+                type_captures: resident_cell(writer, &[][..]),
+                typing_refusal: resident_cell(writer, None),
+                statics: resident_cell(writer, None),
             },
         )
     }
+}
+
+/// Whether an expression shape's type parts are typed with the callable it births or the binder it
+/// declares, rather than each as a type expression of its own: a signature, a head, a `FOR ALL`
+/// group, a declared name or definition, or a callable body. An annotated `LET`'s type is the one
+/// its value is held to, a type expression of its own.
+fn types_with_its_binder(form: &BuiltinShape) -> bool {
+    form.id != BuiltinShapeId::LetAnnotated
+        && form.roles().any(|role| {
+            matches!(
+                role,
+                Role::Signature
+                    | Role::Head
+                    | Role::Quantifiers
+                    | Role::Name
+                    | Role::Definition(_)
+                    | Role::Body(BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator)
+            )
+        })
+}
+
+/// One write-once cell laid down in program storage.
+fn resident_cell<T>(writer: crate::memory::Writer<'_>, value: T) -> &Cell<T> {
+    let mut value = Some(value);
+    &writer.fill(1, |_| Cell::new(value.take().expect("filled once")))[0]
 }

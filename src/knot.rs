@@ -52,18 +52,18 @@ pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
 pub use code::{Code, UsingRefused, quote, using};
-pub use function::{Function, lambda};
+pub use function::{Function, instance, lambda};
 pub use module::{Coerced, Module};
 pub use tie::tie;
 
 use std::fmt;
 
-use crate::elaborate::Elaboration;
-use crate::memory::{BumpAllocator, DropFree, Edge, Member, covariant, reattachable};
+use crate::memory::{BumpAllocator, DropFree, Edge, Member, Writer, covariant, reattachable};
 use crate::parse::ExpressionPart;
+use crate::scope::Elaboration;
 use crate::scope::{Activation, ActivationView, Builtins, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry, display_name};
 use crate::values::{
     self, Circular, ConstructionRefused, KeyRejected, Resolved, Value, ValueCarrier, ValueFamily,
     Weight,
@@ -167,14 +167,14 @@ impl fmt::Debug for Knotted<'_, '_> {
 }
 
 impl values::Knotted for Knotted<'_, '_> {
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> DeclaredType<KType> {
         match self.node() {
             Node::Function(function) => function.ktype(),
-            Node::Builtin(builtin) => builtin.ktype(),
-            Node::Data { circular, .. } => circular.ktype(),
-            Node::Module(module) => module.ktype(),
+            Node::Builtin(builtin) => builtin.ktype().into(),
+            Node::Data { circular, .. } => circular.ktype().into(),
+            Node::Module(module) => module.ktype().into(),
             Node::Coerced(coerced) => coerced.ktype(),
-            Node::Code(code) => code.ktype(),
+            Node::Code(code) => code.ktype().into(),
         }
     }
 
@@ -209,11 +209,13 @@ impl values::Knotted for Knotted<'_, '_> {
             // One shape per function written, so its address is the function's identity.
             Node::Function(function) => Resolved::Function {
                 identity: std::ptr::from_ref(function.shape()).addr(),
+                instance: function.instance().unwrap_or(&[]),
                 closure: function.closure().links(),
             },
             // One record per overload, so its address is the builtin's identity.
             Node::Builtin(builtin) => Resolved::Function {
                 identity: std::ptr::from_ref(*builtin).addr(),
+                instance: &[],
                 closure: &[],
             },
             Node::Data { circular, .. } => Resolved::Circular(*circular),
@@ -224,16 +226,22 @@ impl values::Knotted for Knotted<'_, '_> {
     }
 }
 
-/// The value `source` holds under `name`: a record's field, or a module's member. `None` for any
-/// other value, or a name `source` does not hold.
+/// The value `source` holds under `name`: a record's field its type shows, restamped in `writer`'s
+/// region at the type it is seen at, or a module's member. `None` for any other value, or a name
+/// `source` does not show.
 fn field<'graph, 'cell>(
+    writer: Writer<'cell>,
     source: KValue<'graph, 'cell>,
     name: BinderSymbol,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'cell>> {
     match source {
-        Value::Record(record) => record.field(name.symbol()).copied(),
+        Value::Record(_) => Some(
+            source
+                .field(name.symbol(), types, scratch)?
+                .restamped(writer),
+        ),
         Value::Knotted(member) => module::layout::member(member, name, types, scratch),
         _ => None,
     }

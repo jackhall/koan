@@ -73,8 +73,9 @@ error: <input>:1:1: a definition's head must spell at least one keyword
 
 ## Return types are enforced
 
-The declared return type is checked against the body's value every time the
-function runs. A mismatch is an error:
+The declared return type is checked against the body. A body that can never
+produce the declared type is refused when the program loads, before anything
+runs:
 
 ```koan
 EXPR #(WRONG x :Number) -> Str = #(x)
@@ -82,7 +83,20 @@ WRONG 5
 ```
 
 ```text
-error: :(FN :{x :Number} -> Str) returned Number, which does not satisfy Str
+error: <input>:1:35: this body returns Number, which can never satisfy its declared return Str
+```
+
+Where the body's type is only known once it runs — here `x` may be anything —
+its value is checked every time the function returns, and a mismatch is an
+error:
+
+```koan
+EXPR #(LOOSE x :Any) -> Str = #(x)
+LOOSE 5
+```
+
+```text
+error: :(FN :{x :Any} -> Str) returned Number, which does not satisfy Str
 ```
 
 The message names the function by its type; [Errors](09-errors.md) covers what an
@@ -148,6 +162,30 @@ something else
 `:(LIST OF Number)` is more specific than `:Any`, so the list routes to the
 first definition and everything else falls through to the second.
 
+### Inside a body, a parameter has its declared type
+
+A parameter's declared type is a contract, like a return type: inside the body
+the argument is viewed at the type the parameter declares, as a
+[`:!` ascription](02-values-and-types.md#ascribing-a-type-with-) views it, so the
+body dispatches on what it declared rather than on what the caller happened to
+pass:
+
+```koan
+EXPR #(DESCRIBE xs :(LIST OF Number)) -> Str = #("numbers")
+EXPR #(DESCRIBE xs :(LIST OF Any)) -> Str = #("anything")
+EXPR #(SHOW xs :(LIST OF Any)) -> Str = #(DESCRIBE xs)
+PRINT (DESCRIBE [1, 2])
+PRINT (SHOW [1, 2])
+```
+
+```text
+numbers
+anything
+```
+
+A returned value is viewed at the declared return type the same way. A
+parameter or return declared `Any` keeps the value's own type.
+
 ## Two kinds of function
 
 Koan has two callables, and they are spelled apart because they are reached in
@@ -200,7 +238,7 @@ first
 first
 ```
 
-Leaving out a required name is an error:
+Leaving out a required name is an error, found before the program runs:
 
 ```koan
 LET pick = ,
@@ -209,7 +247,7 @@ pick {a = "only"}
 ```
 
 ```text
-error: arguments :{a :Str} do not name the parameters of :(FN :{a :Str b :Str} -> Str)
+error: <input>:3:1: :(FN :{a :Str b :Str} -> Str) can never be called with :{a :Str}
 ```
 
 ### Anonymous functions

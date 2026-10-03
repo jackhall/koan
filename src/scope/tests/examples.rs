@@ -573,15 +573,16 @@ fn a_type_binder_records_its_declaration_node() {
 
 #[test]
 fn a_signature_body_declares_its_own_members() {
-    // A `SIG` body's `TYPE` members, its higher-kinded parameters, its `FOR ALL` names and its
-    // manifest `LET` members are the definition's own: none is a mention of the enclosing shape.
+    // A `SIG`'s head parameters, its members' `FOR ALL` names and its manifest `LET` members are
+    // the definition's own: none is a mention of the enclosing shape.
     for (source, own) in [
         (
-            "SIG Pairish = #[(TYPE (Key Val AS Pair))]",
-            &["Key", "Val", "Pair"][..],
+            "SIG Headed FOR ALL #{Key: Any, Val: Any} = #[(VAL k :Key) (VAL v :Val)]",
+            &["Key", "Val"][..],
         ),
         (
-            "SIG Boxy = #[(TYPE Elem) (VAL unbox :(EXPR FOR ALL #[Held] #(TAKE it :Held) -> Elem))]",
+            "SIG Boxy FOR ALL #[Elem] = \
+             #[(VAL unbox :(EXPR FOR ALL #[Held] #(TAKE it :Held) -> Elem))]",
             &["Elem", "Held"],
         ),
         (
@@ -606,6 +607,23 @@ fn a_signature_body_declares_its_own_members() {
             }
         });
     }
+}
+
+#[test]
+fn a_type_member_is_refused_where_it_is_written() {
+    // A signature hides a type through a head parameter, so `TYPE` is a reserved shape.
+    shaped(
+        "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]",
+        |_, _, shape| {
+            assert!(matches!(
+                shape.err(),
+                Some(ShapeError::Unsupported {
+                    form: BuiltinShapeId::TypeDeclaration,
+                    ..
+                })
+            ));
+        },
+    );
 }
 
 #[test]
@@ -660,6 +678,28 @@ fn a_signature_body_reads_the_types_it_does_not_declare() {
             let distance = BinderSymbol::Type(type_name("Distance", fixture.symbols));
             let mention = mention_of(shape, distance);
             assert_eq!(mention.class, MentionClass::Deferred);
+        },
+    );
+}
+
+#[test]
+fn a_pin_reads_its_type_and_labels_its_parameter() {
+    shaped(
+        "NEWTYPE Distance = Number\n\
+         SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt)]\n\
+         LET Far = :(Stack WITH {Elt = Distance})",
+        |fixture, _, shape| {
+            let shape = shape.expect("the program shapes");
+            let name = |text| BinderSymbol::Type(type_name(text, fixture.symbols));
+            mention_of(shape, name("Stack"));
+            mention_of(shape, name("Distance"));
+            assert!(
+                !shape
+                    .mentions()
+                    .iter()
+                    .any(|mention| mention.name == name("Elt")),
+                "a pin's key names a parameter, not a type in scope"
+            );
         },
     );
 }
@@ -723,7 +763,7 @@ fn a_module_naming_itself_from_a_body_of_its_own_is_refused() {
 #[test]
 fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
     let module = "MODULE m = ((LET x = 1) (NEWTYPE Dist = Number))";
-    let shown = "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]";
+    let shown = "SIG Shown FOR ALL #[Carrier] = #[(VAL zero :Carrier)]";
     let cases: &[(String, &[&str])] = &[
         // A `MODULE` binder read directly, and the same read from a body that precedes it.
         (format!("{module}\nUSING m SCOPE (x)"), &["x", "Dist"]),
@@ -823,7 +863,7 @@ fn a_callable_in_a_using_body_captures_a_surfaced_name_by_reading_it() {
 #[test]
 fn an_operand_whose_names_cannot_be_read_is_refused() {
     let module = "MODULE m = (LET x = 1)";
-    let shown = "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]";
+    let shown = "SIG Shown FOR ALL #[Carrier] = #[(VAL zero :Carrier)]";
     let cases = [
         // A parameter typed by a signature may hold a wider module, so it is never readable.
         format!("{shown}\nLET f = (FN :{{m :Shown}} -> Number = #(USING m SCOPE (zero)))"),
@@ -852,13 +892,14 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
                 if name == type_name("Missing", fixture.symbols)
         ));
     };
-    // A bound naming nothing in scope is unbound, in a `FOR ALL` group and a `TYPE` declarator.
+    // A bound naming nothing in scope is unbound, in a callable's `FOR ALL` group and a
+    // signature's.
     shaped(
         "LET f = (FN FOR ALL #{Elt: Missing} :{x :Elt y :Elt} -> Elt = #(x))",
         |fixture, _, shape| missing(fixture, shape),
     );
     shaped(
-        "SIG Shown = #[(TYPE (Carrier UNDER Missing)) (VAL zero :Carrier)]",
+        "SIG Shown FOR ALL #{Carrier: Missing} = #[(VAL zero :Carrier)]",
         |fixture, _, shape| missing(fixture, shape),
     );
     // A bound naming a declared type is that type's mention; the bounded name is the body's.
@@ -879,9 +920,9 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
             assert!(body.slot(dist).is_none());
         },
     );
-    // A bounded `TYPE` member is the signature's own, and its bound a mention.
+    // A bounded head parameter is the signature's own, and its bound a mention.
     shaped(
-        "SIG Shown = #[(TYPE (Carrier UNDER Number)) (VAL zero :Carrier)]",
+        "SIG Shown FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
             let carrier = BinderSymbol::Type(type_name("Carrier", fixture.symbols));
@@ -891,8 +932,9 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
                     .iter()
                     .any(|mention| mention.name == carrier)
             );
+            // The head group is read where the declaration is, as a callable's group is.
             let number = BinderSymbol::Type(type_name("Number", fixture.symbols));
-            assert_eq!(mention_of(shape, number).class, MentionClass::Deferred);
+            assert_eq!(mention_of(shape, number).class, MentionClass::Eager);
         },
     );
 }
@@ -911,4 +953,113 @@ fn a_lambdas_body_is_found_by_its_forms_body_site() {
         assert!(std::ptr::eq(form.parts, node.parts));
         assert_eq!(Site::of_body(&shape.body()[0]), None);
     });
+}
+
+const PICK: &str = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
+
+/// A keyworded form's name and a surfaced quantified member are read only at the head of a call; a
+/// module body's quantified member is read unmarked anywhere, the static pass instantiating it, and
+/// any other quantified binding is the static pass's to instantiate or refuse.
+#[test]
+fn a_call_only_quantified_function_is_read_only_at_the_head_of_a_call() {
+    let module = "MODULE m = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
+    let identity = "SIG Ident = #[(VAL identity :(FN FOR ALL #[Item] :{x :Item} -> Item))]";
+    let member = |rest: &str| format!("MODULE lib = (({PICK}) ({rest}))");
+    for (source, name) in [
+        (
+            "LET pick = FN EXPR FOR ALL #[Elt] #(PICK x :Elt) -> Elt = #(x)\nLET keep = [pick]"
+                .to_string(),
+            "pick",
+        ),
+        (format!("{module}\nUSING m SCOPE (pick)"), "pick"),
+        (
+            format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity)"),
+            "identity",
+        ),
+        // A `$` name reads where the quote is written, and is never an instance site.
+        (member("LET q = #($pick)"), "pick"),
+        (
+            member("LET q = #(LET f = (FN :{} -> Any = #([$pick])))"),
+            "pick",
+        ),
+        // An `EVAL` offering the name passes its value into the code.
+        (
+            member(
+                "LET run = (FN :{body :(Expression NEEDING #[pick])} -> Any = \
+                 #(EVAL body -> Any))",
+            ),
+            "pick",
+        ),
+    ] {
+        shaped(&source, |_, _, shape| {
+            let name = BinderSymbol::classify(name).unwrap();
+            assert!(
+                matches!(
+                    shape.err(),
+                    Some(ShapeError::QuantifiedRead { name: read, .. }) if read == name
+                ),
+                "`{source}` refuses the read"
+            );
+        });
+    }
+    for source in [
+        format!("{PICK}\nLET keep = [(FN :{{x :Number}} -> Number = #(pick {{x = x}}))]"),
+        format!("{PICK}\nPRINT (pick {{x = 1}})"),
+        format!("{PICK}\nPRINT ((pick) {{x = 1}})"),
+        format!("{PICK}\nLET keep = [pick]"),
+        member("LET keep = [pick]"),
+        member("LET f = (FN :{} -> Any = #([pick]))"),
+        format!("{module}\nUSING m SCOPE (pick {{x = 1}})"),
+        format!("{module}\n{identity}\nUSING (m :! Ident) SCOPE (identity {{x = 1}})"),
+        // A quantified function calling itself by name.
+        "LET loop = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(loop {x = x}))".to_string(),
+        member("LET q = #($pick {x = 1})"),
+        "LET keep = [(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))]".to_string(),
+        "PRINT ((FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)) {x = 1})".to_string(),
+    ] {
+        shaped(&source, |fixture, _, shape| {
+            if let Err(error) = shape {
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                );
+            }
+        });
+    }
+}
+
+/// A body whose value is read takes its last statement's, so one binding a quantified function by a
+/// keyworded form there would hand on a value read only at a call's head; a plain `LET` there is
+/// the static pass's to instantiate at the body's return.
+#[test]
+fn a_body_s_value_binds_no_keyworded_quantified_function() {
+    let expression = "EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)";
+    let combined = "LET id = FN EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)";
+    for source in [
+        format!("LET f = (FN :{{}} -> Any = #({expression}))"),
+        format!("LET f = (FN :{{}} -> Any = #({combined}))"),
+        format!("LET f = (FN :{{}} -> Any = #(\n  LET y = 1\n  {expression}\n))"),
+    ] {
+        shaped(&source, |_, _, shape| {
+            assert!(
+                matches!(shape.err(), Some(ShapeError::QuantifiedValue { .. })),
+                "`{source}` refuses the body's value"
+            );
+        });
+    }
+    for source in [
+        PICK.to_string(),
+        format!("LET f = (FN :{{}} -> Number = #(\n  {PICK}\n  pick {{x = 1}}\n))"),
+        format!("LET f = (FN :{{}} -> Any = #({PICK}))"),
+        format!("MODULE m = ({PICK})"),
+    ] {
+        shaped(&source, |fixture, _, shape| {
+            if let Err(error) = shape {
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                );
+            }
+        });
+    }
 }

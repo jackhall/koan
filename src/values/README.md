@@ -39,8 +39,9 @@ working expression, and every door and relation over them carry the same
 parameter.
 
 **What a member holds** is the one total answer `Knotted::resolve` gives, a
-[`Resolved`](circular.rs): a **function**, as its identity and its closure
-bindings; a quote's **code**, as a `CodeView` of its body as written and the
+[`Resolved`](circular.rs): a **function**, as its identity, the solution it
+was instantiated at where it is an instance of a quantified function, and its
+closure bindings; a quote's **code**, as a `CodeView` of its body as written and the
 bindings its names carry; a **module** or a **barrier**, both opaque to
 `values` — a module carries no type this module names; or a **data node**, a
 [`Circular`](circular.rs). A function's identity is a `usize` the layer above
@@ -101,8 +102,8 @@ identity the tagged value takes, or a `ConstructionRefused`:
   parameter the payload does not reach is `Never`, and a construction of
   `Result.Ok` over a number carries `:(Result.Ok {Ok = Number, Error = Never})`,
   which lies under every `Result` whose `Ok` admits a number. A payload the
-  representation cannot be solved against — a structural misfit, or two
-  contributions to one parameter with no maximum — is `Unsolved`, naming the
+  representation cannot be solved against — a structural misfit, or
+  contributions to one parameter joining outside its bound — is `Unsolved`, naming the
   family and the payload's type;
 - any other head is `NotConstructible`: a scalar type, a family that constructs
   nothing, and an applied family, whose arguments a construction does not take
@@ -116,11 +117,11 @@ nothing to keep in agreement.
 
 **A seal is the second checked door.** [`sealing`](admission.rs) is what an
 opaque view's barrier goes through
-([members are born coerced](../knot/module/README.md#members-are-born-coerced)): an
-abstract type records no representation for `construction` to check a payload
+([members are born coerced](../knot/module/README.md#members-are-born-coerced)): a
+head parameter records no representation for `construction` to check a payload
 against, so what is checked instead is that the identity is a *per-application
-mint* — a nonced abstract type, or an application of one — and that the payload
-satisfies what the source binds that member to. It answers the mint as the
+mint* — a `Parameter` carrying a nonce — and that the payload satisfies what the
+source binds that parameter to. It answers the mint as the
 identity, or a `SealRefused`: `NotAMint` for an identity that is no mint,
 `Misfit` for a payload the source's binding does not admit. `Tagged::seal` is
 the checked door over it, and it `peel`s, so a sealed member takes the mint as
@@ -146,7 +147,7 @@ one layer, so there is one layer to read through.
 
 A value borrows at one lifetime, `Value<'cell>`: what a writer laid down in a
 cell's region, following
-[cellgraph's contract](../../cellgraph/README.md#the-contract-two-embedder-types).
+[cellgraph's contract](../../cellgraph/README.md#the-contract-three-embedder-types).
 No arm holds program storage. A quote's body lives there, but a quote is a knot
 member, and what a member holds of program storage — a function's body shape, a
 quote's body and code shape — sits inside the member, at the lifetime the layer
@@ -166,8 +167,19 @@ cells, a record the record type of its fields in written order, a type value
 knot member reports its own. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
 `Value::ktype` copies that handle or names a leaf constant, and reads no
-registry and walks nothing. A quote's type is its carried type, memoized on its
-node: its [code kind](../type_lattice/README.md#the-code-family), read off its
+registry and walks nothing. It answers a
+[`DeclaredType`](../type_lattice/identity.md#typed-handles): a concrete `KType`
+for every value but a quantified callable, which answers its `Scheme`. A
+quantified callable is read only at the head of a call or as a `MODULE` or
+`GROUP` member's binding, and the load makes every other read of one an instance with a concrete
+type ([resolution](../scope/README.md#resolution)), so every other reader —
+a container's join, a construction, a diagnostic — takes
+`Value::concrete_ktype`, which names that rule where it narrows. A key's
+candidates — the functions a `USING` hole or an `EVAL` offer gathers at one
+key — are laid down by `List::of_candidates`, typed `List<Any>` without reading
+any function's type: dispatch alone reads such a list, each function by its own
+type, and a quantified registration's scheme joins into no list type. A quote's type is its carried type, memoized on its
+node: its [code kind](../type_lattice/vocabulary.md#the-code-family), read off its
 body as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)),
 needing the `\` names no binder in its code fills
 ([code parameters](../scope/README.md#code-parameters)): `#(y)` is a `Name`,
@@ -187,17 +199,58 @@ alone, which no finite type describes
 is therefore the same one relation against that memo.
 
 A type check against a value — [`satisfies`](admission.rs) — is therefore one
-lattice relation between the slot and that handle. A slot that reads a
-quantifier admits by unification against the handle under a fresh collector,
-which checks shape alone: a variable's bound, and two slots of one call agreeing
-on a variable, are the caller's collector to solve. Nothing descends into a
+lattice relation between the slot and that handle: *fits*, read from the
+slot's side (`satisfied_by`). A slot whose variables a call solves is the
+caller's collector to admit through, never `satisfies`. Nothing descends into a
 value to type it, so a value's precision is whatever its type says, and **an
-ascription changes it**: `Value::retyped` stamps a container checked against a
-declared node of its own kind with the declared handle over the same shared
-runs, and a tagged value checked against a union with the member that names its
-constructor. A knot member is never restamped, since a knot never grows a
-node. Downstream dispatch then sees the contract rather than the
-contents' incidental precision.
+ascription changes it** — a `:!`, a parameter binding its argument, a frame
+returning under its contract. `Value::retyped` reads the declared type member
+by member (a union's members, or the type alone): the value takes the meet of
+the members of its own kind that it lies under — a list, dict or record node
+for a container, a node naming its constructor for a tagged value — and keeps
+its own type where there is none, so a list ascribed `Any` stays as precise as
+it was. The target depends on the value and the type alone, never on member
+order. A plain value takes the target as its handle over the same shared runs.
+A knot's data node, whose memo its knot cannot restamp, is laid down as a plain
+value of its kind over its cells, each edge resolved to the sibling it names
+and a dict's keys or a record's names shared: O(width) per retype, and the
+retyped value renders its cycle one level down. The retype restamps the top node
+alone, and its cells keep their own types; a read carries it down.
+
+**A value's type is its surface.** Every read of a record, list, dict or tagged
+value — a field read, `FROM`, `USING`, a frame binding its arguments, module
+coercion, rendering, equality, the deep copy — goes through one door,
+[surface.rs](surface.rs), which sees only the fields the carried type names and
+hands back each field, element or entry retyped to its type there, and a tagged
+value's payload retyped to its identity's [`representation`](admission.rs): a
+newtype's, or a family application's with its arguments substituted. After `{x = 1, y = "a"} :! :{x :Number}`, the value has no field `y`
+to any reader and prints `{x = 1}`, though its cells still hold `y`; a
+`LIST OF (LIST OF Any)` retype hands back each inner list as a `LIST OF Any`;
+and `(Point {x = 1, y = 2, z = 3})`, a `Point` over `{x :Number, y :Number}`,
+prints `Point({x = 1, y = 2})`. An identity with no representation, such as an
+opaque view's mint, hands its payload back at the payload's own type. A retype
+walks nothing, and a nested part obeys it all the same, so downstream dispatch
+sees the contract at every depth rather than the contents' incidental
+precision. An element is read at the type its container names, so a literal
+whose join widens a record hides that record's extra fields.
+
+A read carries a `Seen`: a value beside the type the read sees it at — its own
+memo at the top of a read, and below it what the holder's seen type names for
+the part there, narrowed as a retype narrows. A value walk can meet a
+quantified callable — a closure's capture, a candidate list's cell — so a
+`Seen` holds a `DeclaredType`, and a callable is seen at its own scheme; a value
+of a kind is always seen at a type. `Seen::surface` opens a container
+or tagged value at that type as a `Surface`, whose parts are each seen at their
+type there. A reader that only inspects a part — equality, rendering, a name, a
+function to consider — takes its value and writes nothing; a reader that hands a
+part on as a value of its own — `ATTR`, `USING`, a frame binding an argument,
+module coercion — restamps it at its seen type (`Seen::restamped`).
+`Value::retyped` is that pair at the top: the value seen at the declared type,
+then restamped. A resident's value-cell runs are private to `values`, so no
+reader outside it can step past the door; a data node's link runs stay public
+to the knot layer, which ties them. A construction holds its payload verbatim,
+at the payload's own type: the door hides what its representation does not
+name, and a copy drops it.
 
 The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
@@ -227,8 +280,11 @@ knot member weighs what its own rebuild writes, which its layer memoizes — the
 whole knot it sits in, since a member copies by re-tying its knot, and a data
 node's resident weighs only its own struct and links. Program storage a member
 holds weighs nothing past the pointer. A crossing reads the weight off the
-value rather than walking it; a retype shares the runs, so it shares the
-weight.
+value rather than walking it; a plain retype shares the runs, so it shares the
+weight, and a laid-down data node is weighed as the plain door of its kind
+weighs the same cells. So a value whose type hides some of its cells weighs
+them all, while its copy lays down and weighs only what the type shows: the
+[verdict](#crossing) may over-price such a copy, and never under-prices one.
 
 ## Crossing
 
@@ -240,9 +296,16 @@ value the step may embed or its continuation capture. Both price the operand at
 its weight, and both build through `cross_view`, which turns one crossed operand
 into a value at the destination's brand: a **pinned** operand arrives there and
 embeds as it is, and a **copied** one is rebuilt by the deep copy — region
-parts written again through the destination's writer, memoized types and
-weights carried over unchanged, and a knot member's whole knot re-tied by its
-family.
+parts written again through the destination's writer, and a knot member's whole
+knot re-tied by its family. The deep copy reads through
+[the door](#the-type-memo-and-satisfies) as every reader does: each part is laid
+down at the type it is seen at, holding only what that type names, and weighed
+by what it lays down, so a part a retype hid is dropped. A knot's data node seen
+at its own memo copies with its knot; one seen at another type is laid down as a
+plain value of its kind at that type, as a retype lays it down, its visible
+links resolved through it. The crossing doors therefore take the type registry
+the copy reads its types in, and the scheduler's step doors that cross a value
+take it from their callers.
 
 **The deep copy runs over an explicit stack**, in a bump of its own, since no
 step scratch reaches a birth's crossing; so a value of any depth copies without
@@ -254,7 +317,9 @@ asks for with its finished copy, in the order `held` listed them, so the knot is
 tied once, after everything it holds has a copy. A data node lists and rebuilds
 through `Circular::held` and `Circular::copied`: each value link through that
 copy, each edge verbatim — an edge names a node by index, so it means the same
-node in the copy — and its memo and weight carried over.
+node in the copy — and its memo and weight carried over. A re-tied knot keeps
+every cell its nodes hold, a field a tagged node's representation hides
+included, and the door still hides it there.
 
 **One copy per knot per placement.** A copy keys every knot it has re-tied by
 the knot's root member, so a second reference to that knot is the copy's member
@@ -349,17 +414,19 @@ two type values are equal when they name the same handle; two quotes' code
 compares as syntax, part by part with spans ignored and marks included, then
 the values its `$` names and its supplied holes bind, name by name, under the
 pair set circular values use below
-([quotes](../scope/README.md#equality-and-knots)). Containers compare their
-contents **only when their memoized types are related**, one satisfied by the
-other in either direction — an empty list of strings and an empty list of
+([quotes](../scope/README.md#equality-and-knots)). Each side compares at the
+type it is seen at, through [the door](#the-type-memo-and-satisfies): a record
+by the fields that type names, a tagged value's payload at its representation.
+Containers compare their contents **only when their seen types are related**,
+one satisfied by the other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
 
 **A module has no structural equality.** `equals` answers
 `Result<bool, Incomparable>`: a comparison with a module or a barrier on either
 side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
-A function compares by its identity, then its closure bindings under the same
-pair set ([knots](../knot/README.md#equality-and-rendering)).
+A function compares by its identity and its instance solution, then its
+closure bindings under the same pair set ([knots](../knot/README.md#equality-and-rendering)).
 Every aligned pair is compared, so an unequal pair before an opaque member does
 not hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.
@@ -367,16 +434,19 @@ descending, whatever it holds.
 **Circular values compare as a bisimulation.** A data node compares as the
 plain value of its kind would, its links resolved through it, so a node and a
 plain value of the same kind and contents are equal. Two nodes compare under a
-set of `(member, member)` pairs already entered: a pair is recorded before its
+set of pairs already entered, each member beside the type it is seen at, since
+one node reached at two seen types shows two surfaces: a pair is recorded before its
 cells are compared, and a pair met again while recorded counts as equal. That
 is the coinductive hypothesis — the greatest fixpoint, bisimilarity — and it is
 sound because every result is a conjunction: a hypothesis never turns an
 unequal pair equal, and every recorded pair is fully compared by the call that
 recorded it. So a one-node ring and a two-node ring with the same contents are
 equal. A node against a plain value records nothing, since the plain side is
-finite and bounds the descent. Plain and linked composites share one reading,
-the private `Composite` view in [circular.rs](circular.rs), so equality,
-rendering and the mark pass below are written once over both.
+finite and bounds the descent. A seen type always lies above the memo and is
+built from the types the program declares, so a cycle returns to a pair already
+entered. Plain values and data nodes share one reading, the door's `Surface`, so
+equality, rendering, the mark pass below and the deep copy are written once over
+both.
 
 **Every walk here runs over an explicit stack** in the scratch it is handed, so
 none grows the call stack with a value's depth. Equality pops pending pairs: a
@@ -389,7 +459,7 @@ compares recursively, since parsed syntax nests no deeper than the parser's
 
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
-`{x = 1}` in field-name order, a tagged value as its type's name around its
+`{x = 1}` in field-name order, a tagged value as its seen type's name around its
 payload, a type as its name, a quote as its body's surface with each mark as
 written and never what a name binds, a function, a module or a barrier as its
 type's name, which is a module's signature — its closure bindings or members
@@ -400,7 +470,9 @@ kind.
 data node the write meets that no earlier pass entered, entering each node
 once, and records every node reached again while it is still being entered;
 every cycle holds such a back edge, so every cycle holds a recorded target, and
-a plain value with no data node is walked once. The write labels a target at
+a plain value with no data node is walked once. A node is entered, marked and
+labelled beside the type it is seen at, so a narrow view of a node that holds no
+cycle never hides the cycle a wide view of it closes. The write labels a target at
 its first occurrence, `@0 = …`, and writes every later occurrence as `@0`, so
 it stops wherever a cycle closes: `LET a = (Ring {next = a})` prints
 `@0 = Ring({next = @0})`. Labels count from zero per render in order of first
@@ -466,12 +538,14 @@ over a fixture that owns program storage, a bump for the type registry, and a
 cell graph over that storage to run steps in. Circular values are exercised
 without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
-by hand, and the suites cover the `linked` doors, the construction rule and the
-seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
+by hand, and the suites cover the door over each kind, a payload seen at its
+representation and a retype as a seen type restamped
+([tests/surface.rs](tests/surface.rs)), the `linked` doors, the construction
+rule and the seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
 ([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
 ([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin,
-and two members of one ring crossing as one copy of it
-([tests/crossing.rs](tests/crossing.rs)), `satisfies` by a node's memo
+two members of one ring crossing as one copy of it, and a copy laying down only
+what each part's seen type shows ([tests/crossing.rs](tests/crossing.rs)), `satisfies` by a node's memo
 ([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
 hundred thousand deep rendered, compared and crossed on the default test
 thread ([tests/depth.rs](tests/depth.rs)). One test joins the koan
@@ -483,7 +557,10 @@ otherwise pair with are `cellgraph`'s own slate.
 
 ## Open work
 
-- [Slicing and splicing](../../roadmap/rewrite/slicing-and-splicing.md) — views
+- [A container literal's element type](../../roadmap/gradual-typing/container-literal-types.md)
+  — a literal's element type that keeps every field its elements were written
+  with.
+- [Slicing and splicing](../../roadmap/metaprogramming/slicing-and-splicing.md) — views
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,
   the lazy transformations that run koan code.

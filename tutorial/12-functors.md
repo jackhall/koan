@@ -127,22 +127,30 @@ EXPR #(ECHO elem :Ordered) -> elem = #(elem)
 error: shape error: a return-type slot names a type, but `elem` is a value. For the type of a value — a module-valued parameter, say — write `-> :(TYPE OF elem)`
 ```
 
-## Specializing signatures with `WITH`
+## Signatures over a type: `SIG … FOR ALL` and `WITH`
 
-A signature can declare an *abstract* type member alongside its value members,
-written `TYPE <TypeName>`, and have other members refer to it. `WITH` pins such
-a type member to a concrete type, producing a more specific signature:
+A signature can leave a type for each module to choose. Write a `FOR ALL` group
+after the signature's name, and its members can name each type the group lists —
+a **head parameter**:
 
 ```koan
-SIG Ordered = #[
-  (TYPE Carrier)
-  (VAL compare :Carrier)
-]
-LET IntOrdered = (Ordered WITH {Carrier = Number})
-MODULE ints = (
-  LET Carrier = Number
-  LET compare = 5
-)
+SIG Ordered FOR ALL #[Carrier] = #[(VAL compare :Carrier)]
+```
+
+A module fits `Ordered` when one type for `Carrier` makes every member fit, and
+koan works that type out from what the module defines, as a call works out a
+`FOR ALL` name from its arguments: a module whose `compare` is a number fits
+`Ordered` with `Carrier` standing for `Number`. A head parameter is one type per
+module. A type a member needs anew at each use is written on the member instead,
+as [below](#one-definition-at-every-type-for-all) shows.
+
+`WITH` pins a head parameter to a type, producing an **application** of the
+signature:
+
+```koan
+SIG Ordered FOR ALL #[Carrier] = #[(VAL compare :Carrier)]
+LET IntOrdered = :(Ordered WITH {Carrier = Number})
+MODULE ints = (LET compare = 5)
 LET view = (ints :! IntOrdered)
 PRINT view.compare
 ```
@@ -151,19 +159,37 @@ PRINT view.compare
 5
 ```
 
-`Ordered WITH {Carrier = Number}` is `Ordered` with its `Carrier` slot fixed to
-`Number`. Pinning a slot that the signature doesn't declare is an error
-(`<Sig> has no abstract type slot ...`). A related form, `TYPE (Type AS Wrap)`,
-declares a *higher-kinded* type member — a slot that takes a type and produces a
-type — for signatures that abstract over type constructors rather than plain
-types.
+An application may pin some of a signature's parameters and leave the rest to
+the module. A module fitting `Ordered WITH {Carrier = Number}` fits `Ordered`
+too, but two different pins of one parameter are unrelated types, even `Number`
+and `Number | Str`. Pinning a name that is not one of the signature's head
+parameters is an error.
+
+Two applications meet with `&`, and a module fits the meet when it fits both.
+A module defining `PUSH` once at `Number` and again at `Str` fits each pinned
+`Stack`, their meet, and the bare `Stack`:
+
+```koan
+SIG Stack FOR ALL #[Elt] = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]
+MODULE two = (
+  (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x]))
+  (EXPR #(PUSH x :Str) -> :(LIST OF Str) = #([x]))
+)
+EXPR #(BOTH m :((Stack WITH {Elt = Number}) & (Stack WITH {Elt = Str}))) -> Str = #("both")
+PRINT (BOTH two)
+```
+
+```text
+both
+```
+
+A module defining `PUSH` only at `Number` fits `Stack` and
+`Stack WITH {Elt = Number}`, but not `Stack WITH {Elt = Str}`.
 
 ## Declaring a type constructor: `NEWTYPE (Type AS Wrap)`
 
-`TYPE (Type AS Wrap)` above only *declares a slot* inside a signature. To make a
-real constructor a module can supply — or that you can wrap values with — use the
-`NEWTYPE` form: `NEWTYPE (Type AS Wrapper)` declares a **type constructor** named
-`Wrapper`. It reads like the application form `:(Number AS Wrapper)` with the
+A type that takes a type is a **type constructor**: `NEWTYPE (Type AS Wrapper)`
+declares one named `Wrapper`. It reads like the application `:(Number AS Wrapper)` with the
 concrete type replaced by the placeholder `Type`.
 
 Once declared, `Wrapper` wraps a value of any type, and the result carries the
@@ -185,12 +211,7 @@ a boxed string
 
 `Boxed (7)` builds a value whose type is `:(Number AS Boxed)`, and `Boxed ("hi")`
 one of type `:(Str AS Boxed)`, so the two `OPEN` overloads dispatch on the boxed
-type exactly as ordinary overloads dispatch on a plain argument type. Because the
-declaration is valid inside a `MODULE` body, a module can declare `Wrapper` as the
-concrete witness for a signature's `TYPE (Type AS Wrap)` slot — the missing piece
-that lets a module satisfy a higher-kinded signature. The parameter names have to
-match: a module supplying `NEWTYPE (Item AS Wrap)` does *not* satisfy a
-`TYPE (Type AS Wrap)` slot, because the slot names its parameter `Type`.
+type exactly as ordinary overloads dispatch on a plain argument type.
 
 ## More than one parameter: `:(Ctor {Name = Type, …})`
 
@@ -273,34 +294,108 @@ One definition answered both calls. Each call works out what `Elt` stands for fr
 the type of the argument you passed — `BOX 7` reads `Elt = Number` and returns a
 `:(Number AS Boxed)`, `BOX "hi"` reads `Elt = Str`. Nothing is written at the call
 site to say so, and the body can use `Elt` as an ordinary type name. A name your
-arguments never mention is refused when you define the function, because no call
-could ever work it out.
+arguments never mention has nothing to be worked out from, so it stands for its
+[bound](#bounding-a-type-parameter) — `Any`, unless you give it another.
+
+Two arguments at one type parameter need not share a type: `Elt` becomes the
+smallest type holding both. A head's slots are read in **priority classes**,
+though — one class per slot, in written order, unless a declaration such as
+`EXPR #(BOTH 1 AND 1)` ranks them — and the first class that mentions `Elt`
+fixes it for the later ones. So a head in written order asks for one type
+across its slots, and ranking the slots alike lets them differ:
+
+```koan
+EXPR #(BOTH 1 AND 1)
+EXPR FOR ALL #[Elt] #(BOTH x :Elt AND y :Elt) -> Str = #(PRINT Elt)
+BOTH 1 AND "x"
+BOTH 1 AND 2
+```
+
+```text
+:(Number | Str)
+Number
+```
+
+Without the first line, `BOTH 1 AND "x"` is refused: `1` fixes `Elt` to
+`Number`, and `"x"` does not lie under it.
+
+A quantified `FN` works the same way, called by name. Bound with a plain `LET`,
+it lives in a module, where each call works out `Elt` afresh:
+
+```koan
+MODULE lib = (
+  LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+  PRINT (pick {x = 1})
+  PRINT (pick {x = "s"})
+)
+```
+
+```text
+1
+s
+```
+
+Anywhere but the head of a call, a quantified function is used at **one** type,
+the type it is wanted at there: a `LET`'s stated type, a `:!`, a slot's type, a
+function's declared return, or the element type of a list that is itself
+wanted at a type. Koan works out `Elt` from that type when the program loads,
+and what you get is an ordinary function at that type, which you can store,
+pass and return like any other:
+
+```koan
+EXPR #(TWICE f :(FN :{x :Number} -> Number) AT y :Number) -> Number = #(f {x = (f {x = y})})
+MODULE lib = (
+  LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+  LET inc :(FN :{x :Number} -> Number) = pick
+  LET keep = ([pick] :! :(LIST OF (FN :{x :Str} -> Str)))
+  PRINT inc
+  PRINT keep
+  PRINT (TWICE pick AT 3)
+)
+```
+
+```text
+:(FN :{x :Number} -> Number)
+[:(FN :{x :Str} -> Str)]
+3
+```
+
+Where nothing says which type is wanted, as in `LET keep = [pick]`, the program
+is refused before it runs, naming the type parameter left open:
+
+```text
+error: <input>:3:14: nothing fixes `Elt` here: a quantified function is read only at the head of a call, as the binding of a `MODULE` member, or where the type it is wanted at solves its group
+```
+
+Outside a module, a quantified `FN` is bound only under a type that settles it,
+`LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))`;
+a plain `LET pick = (FN FOR ALL …)` there is refused the same way. A quantified
+type such as `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)` is written only as a
+signature member's type, below; a slot that wants a function usable at several
+types takes a module instead.
 
 A signature can declare a quantified member the same way, and a module satisfies it
 with a single implementation:
 
 ```koan
-SIG Boxes = #[
-  (TYPE (Type AS Wrap))
-  (EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(Elt AS Wrap))
-]
-MODULE boxing = (
-  (NEWTYPE (Type AS Wrap))
-  (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(Elt AS Wrap) = #(Wrap (x)))
-)
+SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]
+MODULE boxing = (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x]))
 LET boxes = (boxing :| Boxes)
 PRINT (USING boxes SCOPE (BOX 7))
 PRINT (USING boxes SCOPE (BOX "hi"))
 ```
 
 ```text
-:(Wrap {Type = Number})(7)
-:(Wrap {Type = Str})(hi)
+[7]
+[hi]
 ```
 
-The module ascribes **once**, not once per element type. A module offering only
-`(EXPR #(BOX x :Number) -> :(Number AS Wrap) = #(…))` is refused, and the error names the
-quantifier the overload pinned down: one implementation has to hold at every `Elt`.
+The module ascribes **once**, not once per element type, and each use inside the
+block works out `Elt` afresh. A module offering only
+`(EXPR #(BOX x :Number) -> :(LIST OF Number) = #([x]))` does not fit `Boxes`: one
+implementation has to hold at every `Elt`. A `VAL` member may be quantified too,
+`(VAL identity :(FN FOR ALL #[Item] :{x :Item} -> Item))`, and a block opening a
+module through that signature calls `identity` by name.
 
 Note that `_` in the signature's head. A declaration has no body, so it has no use
 for a parameter name — write `_` and give the slot its type. A definition names its
@@ -331,17 +426,13 @@ answer is. `Key` is bounded by `Any`, so it takes anything — every name in a
 dict has a bound, and `Any` is what a name in a list is bounded by.
 
 A bound is one type, written as a type name or sigiled, so a union is
-`#{Elt: :(Number | Str)}`. It may not name another type parameter or a
-signature's abstract type, and it may not be `Never`, which no value could ever
-satisfy.
+`#{Elt: :(Number | Str)}`. It may not name another type parameter, and it may
+not be `Never`, which no value could ever satisfy.
 
-A signature's type member takes a bound with `UNDER`:
+A signature's head parameter takes a bound the same way:
 
 ```koan
-SIG Counter = #[
-  (TYPE (Carrier UNDER Number))
-  (VAL zero :Carrier)
-]
+SIG Counter FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]
 MODULE ints = (
   (LET Carrier = Number)
   (LET zero = 0)
@@ -349,12 +440,12 @@ MODULE ints = (
 LET counter = (ints :| Counter)
 ```
 
-A module satisfies `Counter` only when it binds `Carrier` to a type under
-`Number`; one binding it to `Str` is refused. The opaque view still hides *which*
-type `Carrier` is, but not its bound: `counter.zero` is admitted by a `:Number`
-slot and compares equal to `0`. With a bare `TYPE Carrier`, the view would hide
-even that `zero` is an ordinary value. A higher-kinded member such as
-`TYPE (Type AS Wrap)` takes no bound, and neither does a `NEWTYPE` constructor.
+A module fits `Counter` only when its `Carrier` works out to a type under
+`Number`; one whose `zero` is a string is refused. The opaque view still hides
+*which* type `Carrier` is, but not its bound: `counter.zero` is admitted by a
+`:Number` slot and compares equal to `0`. With `FOR ALL #[Carrier]`, the view
+would hide even that `zero` is an ordinary value. A `NEWTYPE` constructor's
+parameters take no bound.
 
 ## Both at once: `&`
 
@@ -371,6 +462,12 @@ LET Named = :(:{x :Number} & :{y :Str})
 at `Never`. Koan has no operator precedence, so `|` and `&` mix only through
 parentheses: `Number | Str & Bool` is an error, and `:((Number | Str) & Bool)` says
 which one you mean.
+
+A meet must know both of its sides when the program loads, so neither may name a
+`FOR ALL` variable or a signature's head parameter: in
+`EXPR FOR ALL #[Elt] #(PICK x :(Elt & Number)) -> Elt`, each call picks its own
+`Elt`, and the program is refused at the `&`. Bound the variable instead, with
+`FOR ALL #{Elt: Number}`.
 
 ---
 

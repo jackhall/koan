@@ -43,25 +43,27 @@ activation. This module closes it:
   pair, sixteen bytes — so a value holding one stays a twenty-four-byte word.
   Its equality is node identity.
 - The knot's payload is a `Node`, of six arms. A `Function` node holds the
-  function's memoized type handle, the body shape it runs (in program storage),
+  function's memoized type — a concrete type, or a quantified function's
+  [scheme](../type_lattice/identity.md#typed-handles) — the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and its
-  **typing record**: its quantifier map and its registered shape. The
+  **typing record**: its quantifier map, its registered shape and, for an
+  [instance](#an-instance), the solution its group was instantiated at. The
   **registered shape** is the expression shape a function born for a
   definition's registration puts in its bucket — beside how a keyworded call
   binds that shape's slots to the function's parameters — which the
   [elaborator builds](../elaborate/README.md#a-callables-type) from the
   function's type over its head. The **quantifier map**, where the function's
   type binds a `FOR ALL` group, pairs each
-  `FOR ALL` name the declaration wrote with that name's index in the canonical
-  group, or with its bound where canonical form dropped it
-  ([the elaborator hands it back](../elaborate/README.md#a-callables-type)),
+  `FOR ALL` name the declaration wrote with that name's index in the group —
+  a permutation, since the group keeps every name
+  ([the elaborator hands it back](../elaborate/README.md#a-callables-type)) —
   and a call reads it to bind each type parameter to what the group solved to.
   It is keyed by the **name** because a frame walks its callee's slots in the
   type channel's symbol order, so nothing positional survives the trip. The
   record is homed out of line for the reason a barrier's fields are, below: the
   node holds one nullable pointer, eight bytes, where a second type handle inline
   would widen every node from 64 to 80 bytes. An unquantified `FN` — which is
-  almost every function — has neither, stores `None` and allocates nothing. A `Data`
+  almost every function — has none of them, stores `None` and allocates nothing. A `Data`
   node holds a [`Circular`](../values/circular.rs) — a list, dict, record or
   tagged resident whose cells are links — and the same knot weight. A `Module`
   node holds its self-signature, its members in
@@ -145,9 +147,12 @@ shares nothing with the staging below.
 scratch first.
 
 - A function member: the body shape it births (`Shape::births`), the
-  function's type, elaborated from the form node its body sits in
-  ([A callable's type](../elaborate/README.md#a-callables-type)), and its
-  captures, read from the enclosing activation
+  function's type — the [load-time type](../scope/README.md#load-time-types) its
+  body's shape carries, and its registration's shape beside the registration: as
+  it is when closed, with its variables substituted through the enclosing
+  activation when rigid, and elaborated from the expression shape its body sits
+  in ([A callable's type](../elaborate/README.md#a-callables-type)) only where
+  the load left it unknown — and its captures, read from the enclosing activation
   (`ClosureBindings::read_captures`).
 - A data member ([data.rs](data.rs)): its right-hand side walked part by part.
   A literal waits to be lowered; a mention of a fellow member is an edge; any
@@ -237,7 +242,7 @@ refusal writes nothing**. The refusal is an `Untieable`:
   be.
 - `Construction` — a construction the rule refuses, with its site.
 - `TypeCycle` — a cycle of derived nodes, with the members holding it.
-- `Type` — a member's signature did not elaborate.
+- `Type` — a member's signature the load left unknown did not elaborate.
 
 ## A lambda
 
@@ -258,8 +263,30 @@ after it is born once that name is bound. The door shares the tie's staging and
 lay-down for a function node, so a door-born function weighs exactly what the
 tie gives the same function in a one-node knot. No capture it reads is an edge:
 a callable that captures a fellow member is a node of its binder's knot, which
-the tie never asks the evaluator for. A signature that does not elaborate
-refuses `Type` and writes nothing.
+the tie never asks the evaluator for. Its type is read as the tie's is, and a
+signature the load left unknown that does not elaborate refuses `Type` and
+writes nothing.
+
+## An instance
+
+A quantified function the load instantiated at an
+[instance site](../dispatch/README.md#static-types) is a function node like any
+other, typed by the concrete instance of its scheme, with the solution in group
+order in its typing record. Where the load's solution names a lexical
+variable, each door reads the type the run binds it to where the site runs and
+substitutes it, so the record holds the solution so bound. A frame calling it
+binds its `FOR ALL` names from that solution and solves nothing. Two doors make
+one:
+
+- a `FN FOR ALL` the load instantiated where it is written, or as a binder's
+  right-hand side, is **born** as its instance: staging reads the solution off
+  its body shape's born-instance cell, so the tie and the lambda door both
+  birth it typed by the instance;
+- a name read at an instance site goes through [`instance`](function.rs), a
+  one-node knot in the reader's region over the member's body and captures,
+  typed by the instance. An edge in the member's closure is relative to the
+  member's own knot, so each is **rehomed** as the value of the sibling it
+  names.
 
 ## A builtin overload
 
@@ -287,7 +314,9 @@ member is a node of its binder's knot, which the tie never asks the evaluator
 for. A hole or a `\` mark names no binding, so neither is held.
 
 [`using`](code.rs) is `code USING src`: a new one-node knot whose holes a field
-of `src` names — a record's field or a module's member — are filled, and whose
+of `src` names — a record's field its type shows, read through
+[the door](../values/README.md#the-type-memo-and-satisfies) at the type the
+record's type names it at, or a module's member — are filled, and whose
 other holes stay holes. A keyworded hole takes the list of a module's
 registrations at its key, each key read off a function's registered shape, and
 stays open where the module has none; a module whose registrations at a hole's
@@ -303,7 +332,8 @@ back unchanged, since which names are its holes is unknown.
 A function's captured environment is the scope layer's
 [closure bindings](../scope/README.md#three-tiers): one run, in capture-slot
 order, of [links](../values/README.md#what-a-value-is) — value words and knot
-edges, the same cell type a data node holds. A value word is the enclosing
+edges, the same cell type a data node holds — the builder's captures first,
+then the type captures the static pass added. A value word is the enclosing
 binding's word, shallow, so capturing a string shares its bytes. An edge names
 a fellow node by index.
 
@@ -351,12 +381,19 @@ would be.
 
 ## Equality and rendering
 
-A function compares by its shape and its captures: two functions are equal
-when they hold the same shape handle — one per written `FN`, `EXPR` or `OP`, so
-a copy keeps it — and their closure bindings compare equal as a bisimulation,
+A function compares by its shape, its instance and its captures: two functions
+are equal when they hold the same shape handle — one per written `FN`, `EXPR` or
+`OP`, so a copy keeps it — the same instance solution, empty for anything no
+instance, and their closure bindings compare equal as a bisimulation,
 under the pair set circular data uses. Bindings are immutable and no shape
 retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
-shape and captures fix what it does. The same text written at another site is
+shape and captures fix what it does. A closure holds a
+[type capture](../scope/README.md#resolution) — an enclosing call's binding of
+a type name — only where a call in its body reads it for a solve, or an
+instance site in it is made at it: at a slot that solves in one of the call's
+candidates, including one the load judged *never* and dropped, since the call
+runs what selection over the full list would. So a function born under two
+bindings of a type name compares equal wherever nothing in it reads that name. The same text written at another site is
 unequal, and a builtin compares by its table identity. `values` compares by an
 identity rather than a shape, since it names none: `Knotted::resolve` hands it
 the shape's address. A quote's code compares as its syntax and the values its

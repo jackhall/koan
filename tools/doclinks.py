@@ -78,10 +78,11 @@ SRC_GLOBS = (
 # directory, koan's and every embedded crate's alike. These are orphan-gated
 # beside the doc trees — a module README nothing links is a doc a reader of the
 # module will never be sent to, and the module's top-of-file comment is what
-# links it.
+# links it. A README split into topic files beside it (`laws.md`) is gated the
+# same way, each file through the README's link to it.
 MODULE_README_GLOBS = (
-    "src/**/README.md",
-    *(f"{c}/src/**/README.md" for c in EMBEDDED_CRATES + LEAF_CRATES),
+    "src/**/*.md",
+    *(f"{c}/src/**/*.md" for c in EMBEDDED_CRATES + LEAF_CRATES),
 )
 
 # Roadmap items live in one tree per crate: koan's own `roadmap/`, and each

@@ -37,16 +37,17 @@ fn a_barrier_holds_its_view_and_the_function_behind_it() {
                 let activation = fixture.run(writer, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let dist = declared(fixture, activation, "Dist");
-                let knot = Coerced::tie(writer, f, f.ktype(), dist, dist, f.ktype());
+                let plain = f.ktype().as_type().expect("`f` is unquantified");
+                let knot = Coerced::tie(writer, f, f.ktype(), dist.into(), dist, plain);
                 let barrier = Knotted::of(knot, 0);
 
                 assert_eq!(knot.len(), 1, "a barrier is a one-node knot of its own");
                 let node = barrier.coerced().expect("a barrier node");
                 assert_eq!(node.underlying(), f);
                 assert_eq!(node.ktype(), f.ktype());
-                assert_eq!(node.declared(), dist);
+                assert_eq!(node.declared(), dist.into());
                 assert_eq!(node.from(), dist);
-                assert_eq!(node.to(), f.ktype());
+                assert_eq!(node.to(), plain);
                 assert_eq!(barrier.weight(), priced(f));
                 assert_eq!(node.knot_weight(), barrier.weight());
             })
@@ -66,8 +67,9 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 let writer = context.writer();
                 let activation = fixture.run(writer, &lines, &[]);
                 let f = callable(fixture, activation, "f");
+                let plain = f.ktype().as_type().expect("`f` is unquantified");
                 let barrier = Knotted::of(
-                    Coerced::tie(writer, f, f.ktype(), f.ktype(), f.ktype(), f.ktype()),
+                    Coerced::tie(writer, f, f.ktype(), f.ktype().into(), plain, plain),
                     0,
                 );
                 let value = Value::Knotted(barrier);
@@ -85,7 +87,7 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 // A view of a view stacks barriers rather than collapsing them: each one holds the
                 // substitution it was built at.
                 let outer = Knotted::of(
-                    Coerced::tie(writer, barrier, f.ktype(), f.ktype(), f.ktype(), f.ktype()),
+                    Coerced::tie(writer, barrier, f.ktype(), f.ktype().into(), plain, plain),
                     0,
                 );
                 assert_eq!(outer.coerced().expect("a barrier").underlying(), barrier);
