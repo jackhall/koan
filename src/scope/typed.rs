@@ -127,6 +127,12 @@ pub enum Elaboration {
     /// A meet at `site` with an operand naming a `FOR ALL` variable or a signature's head
     /// parameter: each call solves the variable, so the meet cannot be taken where it is written.
     MeetOverVariable { site: Site },
+    /// A binder at `site` whose parameter, slot or representation holds a union two of whose
+    /// members tie: an argument both admit solves the group either way.
+    TiedUnion {
+        members: (Parametric, Parametric),
+        site: Site,
+    },
     /// The load-time reader cannot know the type at `site` before the program runs: the load
     /// pass's cue to leave it for the run, never reported.
     Unknown { site: Site },
@@ -142,6 +148,7 @@ impl Elaboration {
             | Elaboration::Bound { site }
             | Elaboration::Quantified { site }
             | Elaboration::MeetOverVariable { site }
+            | Elaboration::TiedUnion { site, .. }
             | Elaboration::Unknown { site } => *site,
         }
     }
@@ -188,6 +195,15 @@ impl fmt::Display for ElaborationDisplay<'_, '_> {
             Elaboration::MeetOverVariable { .. } => {
                 f.write_str("a meet's operands name no `FOR ALL` variable or head parameter")
             }
+            Elaboration::TiedUnion {
+                members: (a, b), ..
+            } => write!(
+                f,
+                "{} and {} tie in one union: neither is more specific, and an argument both admit \
+                 solves the group either way",
+                display_name(*a, self.types, self.symbols),
+                display_name(*b, self.types, self.symbols)
+            ),
             Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
         }
     }
@@ -271,9 +287,10 @@ pub struct Statics<'graph> {
     /// the static type its solving slot is solved from — `Unknown` where the call reads the carried
     /// type. Empty for a use every argument of which does.
     pub contributions: &'graph [&'graph [StaticType<'graph>]],
-    /// Each call by name's contributions, by its argument part's site, sorted by site: each
-    /// parameter the load recorded a static type for, by name.
-    pub named: &'graph [(Site, &'graph [(Symbol, StaticType<'graph>)])],
+    /// Each call by name's contributions, by its argument part's site, sorted by site: per
+    /// parameter of its callee in symbol order, the static type that parameter is solved from —
+    /// `Unknown` where the frame reads the carried type.
+    pub named: &'graph [(Site, &'graph [StaticType<'graph>])],
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

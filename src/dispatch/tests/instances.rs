@@ -552,6 +552,45 @@ fn a_variable_the_instance_arguments_own_class_solves_keeps_the_closed_point_rul
     assert_eq!(run(&format!("{map}{}", over_b("MAP pick AT b"))), "1\ns");
 }
 
+/// `pick` shares `x`'s class, and `x` contributes `Number | Str`: the solve reads that type exactly,
+/// so `pick` is made at it.
+#[test]
+fn an_instance_argument_sharing_a_class_with_a_contribution_takes_it() {
+    let pair = "EXPR #(PAIR 1 WITH 1)\n\
+                EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH f :(FN :{x :Elt} -> Elt)) -> Elt = \
+                #(f {x = x})\n";
+    assert_eq!(
+        run(&format!("{pair}{}", over_b("PAIR b WITH pick"))),
+        "1\ns"
+    );
+}
+
+/// [`over_b`] with the quantified member `member` beside `pick`.
+fn beside_over_b(member: &str, call: &str) -> String {
+    over_b(call).replacen(" (LET g", &format!(" {member} (LET g"), 1)
+}
+
+/// By name, `pick` shares the one class with `x`, which contributes `Number | Str`: made at it, as
+/// `PAIR b WITH pick` is.
+#[test]
+fn an_instance_field_sharing_the_class_with_a_contribution_takes_it() {
+    let h =
+        "(LET h = (FN FOR ALL #[Elt] :{x :Elt, f :(FN :{x :Elt} -> Elt)} -> Elt = #(f {x = x})))";
+    assert_eq!(run(&beside_over_b(h, "h {x = b, f = pick}")), "1\ns");
+}
+
+/// `y = 1` can never fit `LIST OF Item`, so no call of `ap` admits.
+#[test]
+fn an_instance_field_whose_other_fields_never_fit_refuses_the_call() {
+    let ap = "(LET ap = (FN FOR ALL #[Item] :{f :(FN :{x :Item} -> Item), y :(LIST OF Item)} -> \
+              Any = #(f)))";
+    let refused = run(&beside_over_b(ap, "ap {f = pick, y = 1}"));
+    assert!(
+        refused.starts_with("load:") && refused.contains("can never be called with"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn an_earlier_argument_the_load_knows_nothing_of_fixes_nothing() {
     let source = format!(

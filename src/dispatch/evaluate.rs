@@ -649,19 +649,8 @@ fn apply<'graph, 'here>(
         };
         return finish(step, at, value);
     }
-    // What the frame solves each parameter the load recorded a contribution for from.
-    let contributed = {
-        let mut statics = BumpVec::with_capacity_in(recorded.len(), &scratch);
-        statics.extend(recorded.iter().map(|(_, each)| *each));
-        let solved = contributed(at, &statics, &scratch);
-        let pairs = recorded.iter().zip(solved.iter()).map(|((name, _), each)| {
-            (
-                *name,
-                each.expect("a call by name records only known contributions"),
-            )
-        });
-        collect(writer, pairs)
-    };
+    // What the frame solves each parameter from, in symbol order: `None` where its carried type.
+    let contributed = collect(writer, contributed(at, recorded, &scratch).iter().copied());
     let call = |owed| {
         crate::program::call(
             program,

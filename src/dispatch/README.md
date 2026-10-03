@@ -176,8 +176,9 @@ slot to the parameter the registration names for it — or packs every slot into
 `operands` for a unary operator — and carries each type parameter the call
 solved, by name, as a type value, which the frame binds rather than solving
 again. A builtin's native runs in the evaluation's own step. A call by name
-hands its record over as written, beside each contribution the load recorded
-for it, and the [frame](../program/README.md#the-body-runner) admits each
+hands its record over as written, beside the contributions the load recorded
+for it — one per parameter in symbol order, as a keyworded use records one per
+slot — and the [frame](../program/README.md#the-body-runner) admits each
 argument — at its contribution where it has one — against its parameter's
 declared type and solves the callee's group against them jointly, so naming the
 callee may admit what a keyworded call of the same function refuses. The call says which it is (`CallKind`), so only a keyworded call's
@@ -293,7 +294,8 @@ a `FN FOR ALL` literal — is an **instance site**, typed with the type it is
 - a callable body's last statement, at the declared return — a `LET` there
   hands it to its right-hand side;
 - a call by name's argument, at the callee's parameter record, which a record
-  literal hands each field;
+  literal hands each field — a quantified callee's field at its slot, as a
+  keyworded argument is wanted at its candidate's;
 - a list, dict or record literal's parts, at its element, value or field type,
   only where the wanted type is that container's own;
 - a keyworded argument that is itself an instance site, at the slot of each
@@ -326,7 +328,13 @@ nothing fixes `Elt` here: a quantified function is read only at the head of a ca
 — `ShapeError::Unfixed` with no wanted type or one that reaches a variable with
 nothing, and `NoInstance` where the scheme does not fit the wanted type. A
 quantified callee's slot is read through its group solved from its **other**
-arguments first. A variable that a class before the slot's
+arguments first, each read as the call's solve reads it: one at a slot that
+solves, whose argument contributes, exactly at its upper end. So under
+`EXPR #(PAIR 1 WITH 1)` and
+`EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH f :(FN :{x :Elt} -> Elt)) -> Elt`,
+`PAIR b WITH pick` over a parameter `b :(Number | Str)` instantiates `pick` at
+`Elt = Number | Str`, the type the call solves from `b`'s contribution, and so
+does `h {x = b, f = pick}` by name under the same `FN FOR ALL`. A variable that a class before the slot's
 [solves](../type_lattice/solving.md#priority-classes) is taken as the call
 solves it: class by class, from each class's solving slots at their arguments'
 contributions, each class pinned to what the classes before it solved. Under
@@ -351,9 +359,10 @@ one only the slot names is read through `[Never, bound]`, so under
 `MAP pick AT y` over a parameter `y :(Number | Str)` refuses — and loads under
 `EXPR #(MAP 2 AT 1)`, `Elt` taken from `y`. An other argument
 that does not admit its slot fixes nothing either, so it refuses the load as
-`Unfixed` too — save, at a keyworded use, one that can never fit its slot, its
-upper end meeting the slot at `Never`, both read through their bounds: that
-candidate is dropped and left to the judge's own refusal. A candidate whose
+`Unfixed` too — save one that can never fit its slot, its upper end meeting the
+slot at `Never`, both read through their bounds: at a keyworded use that
+candidate is dropped and left to the judge's own refusal, and a call by name is
+refused `CallNeverSatisfied`. A candidate whose
 slot gives no instance is *never*. The rest are judged with the instance as an
 exact argument, and must agree on it (`AmbiguousInstance`). A lone candidate
 dropped this way reports its own refusal, and several `NoInstanceAtCandidates`.
@@ -540,34 +549,53 @@ by its type part's site:
 this value is Str, which can never satisfy its annotation Number
 ```
 
-**The call-by-name check.** A call by name whose callee's static type is exactly
-an unquantified function refuses the load (`ShapeError::CallNeverSatisfied`)
-where its argument's upper end lacks a parameter or meets one at `Never`, or,
-the argument exact, names a field no parameter declares:
+**The call-by-name check.** A call by name of a callee the load knows exactly —
+an unquantified function at a point, or a quantified one by its scheme — is
+judged as a keyworded use of its lone candidate: an expression shape over the
+callee's parameters, one slot each in symbol order, every slot in one class,
+returning the callee's return, judged through the lattice's `judge_by_class`
+over the argument's static type laid onto the slots. The lay-out reads the
+argument at both ends: each slot takes the field of its name from the lower
+end, or `Never` where that end is no record, and from the upper end, or `Any`.
+Records are width-superset, so a lower end that is a record lacking a parameter,
+or an upper end that is a record naming a field no parameter declares, can never
+name the parameters exactly, and refuses the load
+(`ShapeError::CallNeverSatisfied`), as does a judgement of *never*:
 
 ```text
 :(FN :{x :Number} -> Str) can never be called with :{x :Str}
 ```
 
-A callee the load knows only at most, such as a parameter of function type, is
-the call's to admit. A call by name whose callee the load reads as a quantified
-function solves its group from its argument record's static type, each field
-contributing as a keyworded argument does, so `pair {x = a, y = b}` under
+So under `LET which = FN EXPR #(WHICH x :(LIST OF Number)) -> Str`, `which {x = x}`
+over a parameter `x :(LIST OF Any)` refuses the load as `WHICH x` does, while
+under `LET f = FN :{x :Number, y :Str} -> Str`, `f (g {})` over a parameter
+`g :(FN :{} -> :{y :Str})` loads: a record under `g`'s return may name `x`. A
+field whose static type is `Never` never arrives, so the call is `Never`. A
+callee the load knows only at most, such as a parameter of function type, may
+bind a function admitting more or naming other parameters: its call is the
+call's to admit, at most its return.
+
+A quantified callee's group is solved as a keyworded use's is, each field
+contributing as an argument does, so `pair {x = a, y = b}` under
 `FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(LIST OF Elt)` is exactly
-`LIST OF (Number | Str)` over the parameters above. Wherever the argument's
-record names every parameter, the cell records the contributions by the
-argument's site for the frame, whatever the static solve finds: a field whose
-static type the load cannot admit still contributes, and the frame solves from
-it as a keyworded call would. The call refuses the load
-where a contribution the load knows — closed, or holding a lexical variable —
-does not fit its parameter, or where every solving parameter's contribution is
-known and the group has no solution, each where a run reproduces the solve:
+`LIST OF (Number | Str)` over the parameters above. The cell records the
+contributions by the argument's site for the frame, one per parameter in symbol
+order, whatever the static solve finds: a field whose static type the load
+cannot admit still contributes, and the frame solves from it as a keyworded
+call would. The judge refuses the load where a contribution the load knows —
+closed, or holding a lexical variable — does not fit its parameter, or where
+the solve over them has no solution, each where a run reproduces the solve:
 under `FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt`, `only {x = a}` over
 `a :(Number | Str)` refuses the load, and so does `first {y = m}` under
 `FN FOR ALL #[Elt] :{y :(LIST OF Elt)} -> Type` over
-`m :((LIST OF Outer) | Null)`, whose member `Null` fails at every binding. The
-call is exact at its return where the solve is reproducible over exact
-contributions, as a keyworded one is.
+`m :((LIST OF Outer) | Null)`, whose member `Null` fails at every binding. A
+record literal's field that is an instance site is wanted at its slot, read
+through the group the other fields solve, as an [instance site](#static-types)
+is. The call is exact at its return where its callee is unquantified, or where
+the solve is reproducible over exact contributions, as a keyworded one is. A
+call by name and
+its keyworded twin over one class therefore load, fault or return alike, and a
+call by name is blind to the order its record's fields are written in.
 
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
@@ -710,7 +738,8 @@ return check, exact static types, crossings into and out of code, a candidate
 over a variable outside code unknown in it, an `EVAL`'s declared type, a
 quantified candidate selected where its static solve is the call's, a
 *maybe* an *always* outranks dropped, a use ranked at load and one ranked at the
-call, and returns read through a group's intervals, by keyword and by name;
+call, returns read through a group's intervals, by keyword and by name, and a
+union in a group's parameter tried most specific member first, a tie refused;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
@@ -743,7 +772,9 @@ annotated name, and a `USING` over an annotated binder;
 [instances](tests/instances.rs) — each instance site and its refusals: a
 quantified binding outside a module, an annotation, an ascription, a declared
 return, a container's element type, a keyworded slot solved from the other
-arguments first, candidates disagreeing, a call by name's record, a closed
+arguments first, candidates disagreeing, a call by name's record, an instance
+argument or field sharing its class with a contribution made at it, a call by
+name whose other fields never fit refused, a closed
 solution, a solution over a type each run binds — at each kind of site, through
 nested callables and a block, and its equality under one binding and two — a
 keyworded slot's variables an earlier class solves, ranked, in written order
@@ -762,7 +793,9 @@ through nested callables and through a block, a closure capturing a type only
 where a call in it contributes it, which is on the
 [Miri slate](../../observe/miri_slate.md), and a call by name solved from its
 record's static type, exact at its return, refused at load, reading a rigid
-contribution, solving from a rigid field the load cannot admit, and judged by a
+contribution, solving from a rigid field the load cannot admit, refused over
+its argument's lower end as its keyworded twin is, its argument read at both
+ends, `Never` where a field never arrives, and judged by a
 reproducible solve over a lexical variable — refused, exact at its return — as
 a keyworded call over one is: refused where it fails, selected where it admits,
 and a later slot reading an earlier lexical solution at its ends;
@@ -772,7 +805,9 @@ the load type and refuse and the run carry;
 [narrowing](tests/narrowing.rs) — the law that static narrowing is
 transparent: a drawn program the load accepts runs as it does loaded under the
 test-only `unnarrowed` switch, which leaves every use whole and refuses none,
-and a use the load refuses faults there; [lexical](tests/lexical.rs) — the law that a
+and a use the load refuses faults there; [spellings](tests/spellings.rs) — the
+laws that a call by name of a one-class registration runs as its keyworded call
+and is blind to its record's field order; [lexical](tests/lexical.rs) — the law that a
 lexical variable reads the same through any context, a site naming one by a
 type run inside drawn functions, closures, hoisting blocks, modules and a
 quote's code and without them; [generate](tests/generate.rs) holds the types,

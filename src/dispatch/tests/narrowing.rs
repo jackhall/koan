@@ -6,7 +6,7 @@
 use proptest::prelude::*;
 
 use super::super::statics::unnarrowed;
-use super::generate::dispatched;
+use super::generate::{TIED, dispatched};
 use super::run;
 
 proptest! {
@@ -22,6 +22,8 @@ proptest! {
     fn static_narrowing_is_transparent(program in dispatched()) {
         let rendered = program.render();
         let narrowed = run(&rendered.source);
+        // A registration whose union ties is refused where it is declared: no use to compare.
+        prop_assume!(!narrowed.contains(TIED), "{}", narrowed);
         let whole = unnarrowed(|| run(&rendered.source));
         if !narrowed.starts_with("load: ") {
             prop_assert_eq!(narrowed, whole, "in\n{}", rendered.source);

@@ -35,7 +35,9 @@ use crate::type_lattice::substitute::{
 use crate::type_lattice::typed::{
     fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
 };
-use crate::type_lattice::unify::{Collector, Interval, UnifyFailure, admits, intervals};
+use crate::type_lattice::unify::{
+    Collector, Interval, UnifyFailure, admits, intervals, most_determined_first, ties,
+};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::walk::unary::{Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
@@ -1336,6 +1338,82 @@ proptest! {
                     within(&types, scratch, *solved, run_interval(interval.raw())),
                     "a class-by-class solution left its judged interval",
                 );
+            }
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(strict())]
+
+    /// A union none of whose binding members tie admits a carried type through one member whatever
+    /// order its members are listed in: the order they are tried in turns on specificity, never on
+    /// storage. The members are subterms of a drawn binder that name its own group, and lists of
+    /// them, kept only where they tie with none kept before; each is tried against the drawn type
+    /// and against every member's greatest instance.
+    #[test]
+    fn an_untied_union_admits_through_one_member_in_any_order(
+        binder in prop_oneof![
+            arb_own_instance(world(), 3, BINDER, Vocabulary::CONCRETE)
+                .prop_map(|(scheme, _)| scheme.raw()),
+            arb_shape_pair(world(), 3, BINDER).prop_map(|(shape, _)| shape.raw()),
+        ],
+        drawn in concrete(),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        // Every distinct subterm naming the binder's own group, its positions and what lies in them,
+        // each beside a list of itself; up to three kept that tie with none kept before.
+        let mut subterms: Vec<Handle> = Vec::new();
+        visit(&types, scratch, binder, &mut |kt, node, context| {
+            if context.binder_depth() > 1 || (node.binds_quantifiers() && context.binder_depth() > 0) {
+                return Visit::Skip;
+            }
+            if context.binder_depth() == 1 && types.contains_quantified(kt) {
+                subterms.push(kt);
+            }
+            Visit::Descend
+        });
+        let mut members: Vec<Handle> = Vec::new();
+        for candidate in subterms.iter().flat_map(|kt| [*kt, types.list(*kt)]) {
+            if members.len() < 3
+                && !members.contains(&candidate)
+                && !members.iter().any(|kept| ties(&types, scratch, *kept, candidate))
+            {
+                members.push(candidate);
+            }
+        }
+        // Only a binder whose group no position names, or whose every pair ties, is left short.
+        prop_assume!(members.len() >= 2);
+        let orders: Vec<Vec<Handle>> = match members[..] {
+            [a, b] => vec![vec![a, b], vec![b, a]],
+            [a, b, c] => vec![
+                vec![a, b, c],
+                vec![a, c, b],
+                vec![b, a, c],
+                vec![b, c, a],
+                vec![c, a, b],
+                vec![c, b, a],
+            ],
+            _ => unreachable!("two or three members"),
+        };
+        // No value carries `Never`, which every member admits.
+        let mut carried = vec![drawn.raw()];
+        carried.extend(members.iter().map(|member| bound_above(&types, scratch, *member)));
+        for one in carried.into_iter().filter(|one| *one != KType::NEVER.raw()) {
+            let first = |order: &[Handle]| {
+                most_determined_first(&types, scratch, order, one)
+                    .iter()
+                    .copied()
+                    .find(|member| {
+                        let mut collector = Collector::<Handle>::new(scratch, &[]);
+                        admits(&types, scratch, *member, one, Variance::Co, &mut collector).is_ok()
+                    })
+            };
+            let admitted = first(&orders[0]);
+            for order in &orders[1..] {
+                prop_assert_eq!(first(order), admitted);
             }
         }
     }

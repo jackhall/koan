@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b4802b7c44fd620b452dfd17b65135053840e3d66eecc03efdb0b2cb2162c69e # shrinks to program = Spelled { registration: Registration { quantified: 2, slots: [Never, List(Union(Variable(1), Variable(0)))] }, parameters: [(List(Record([(1, Str), (1, Str)])), "[{y = \"s\"}, {y = \"t\"}]"), (Union(Record([(0, Null)]), Null), "{x = null}")], arguments: [None, Some("{x = {}}")] }
+cc 354ab97d68c52f870cab114dc6288a16b48d9d6aaf4fb864bfe6386b94457a5e # shrinks to program = Spelled { registration: Registration { quantified: 2, slots: [List(Never), Record([(0, Union(Variable(1), Variable(0)))])] }, parameters: [(Record([]), "{}"), (Union(List(Any), Null), "null")], arguments: [Some("{z = [], x = null}"), Some("{}")] }
+cc 1c196416a646d8370061b95149f82a10abb08bdd67d8a0e338301f74cabc685a # shrinks to program = Spelled { registration: Registration { quantified: 2, slots: [Union(Variable(1), Variable(0))] }, parameters: [(Record([(2, Null), (0, Number)]), "{z = null, x = 1}")], arguments: [Some("[\"s\", \"s\"]")] }

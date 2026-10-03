@@ -1,14 +1,21 @@
 //! The programs dispatch's property laws draw: types as plain [`Desc`]s, spelled as koan source
 //! and inhabited by drawn values, and whole programs built over them. Every program is valid by
 //! construction — a law that sees one refused or faulting outside what it states has found a
-//! generator bug, not a finding.
+//! generator bug, not a finding — save a registration a union in which ties, which the load refuses
+//! where it is declared ([`TIED`]). A registration draws no union of two bare variables, which
+//! always tie; whether any other two members tie is the lattice's to answer, and a law discards
+//! the rare draw that does.
 //!
 //! [`rules`](super::rules) interns [`Desc`]s and [`chain`]s for the type-rule law;
 //! [`narrowing`](super::narrowing) runs [`dispatched`] programs, a keyworded use over drawn
-//! registrations, narrowed and unnarrowed; [`lexical`](super::lexical) runs [`lexical`] programs, a
-//! site naming a quantified variable, with and without the contexts drawn around it.
+//! registrations, narrowed and unnarrowed; [`spellings`](super::spellings) runs [`spelled_calls`],
+//! one registration called by keyword and by name; [`lexical`](super::lexical) runs [`lexical`]
+//! programs, a site naming a quantified variable, with and without the contexts drawn around it.
 
 use proptest::prelude::*;
+
+/// What the load's refusal of a registration whose union ties says.
+pub(super) const TIED: &str = "tie in one union";
 
 /// The field names a drawn record or name list picks from.
 pub(super) const NAMES: [&str; 3] = ["x", "y", "z"];
@@ -298,19 +305,11 @@ pub(super) struct Rendered {
 
 pub(super) fn dispatched() -> impl Strategy<Value = Dispatched> {
     (1..3usize).prop_flat_map(|arity| {
-        let parameter = inhabited_type().prop_flat_map(|desc| {
-            let value = value_under(&desc);
-            (Just(desc), value)
-        });
-        let argument = prop_oneof![
-            Just(None),
-            inhabited_type().prop_flat_map(|desc| value_under(&desc).prop_map(Some)),
-        ];
         (
             any::<bool>(),
             prop::collection::vec(registration(arity), 1..5),
-            prop::collection::vec(parameter, arity),
-            prop::collection::vec(argument, arity),
+            parameters(arity),
+            arguments(arity),
         )
             .prop_map(
                 move |(ranked, registrations, parameters, arguments)| Dispatched {
@@ -321,6 +320,24 @@ pub(super) fn dispatched() -> impl Strategy<Value = Dispatched> {
                 },
             )
     })
+}
+
+/// `arity` parameters, each a closed, inhabited type beside a value under it.
+fn parameters(arity: usize) -> impl Strategy<Value = Vec<(Desc, String)>> {
+    let parameter = inhabited_type().prop_flat_map(|desc| {
+        let value = value_under(&desc);
+        (Just(desc), value)
+    });
+    prop::collection::vec(parameter, arity)
+}
+
+/// `arity` arguments, each its position's parameter where `None`, else a drawn literal.
+fn arguments(arity: usize) -> impl Strategy<Value = Vec<Option<String>>> {
+    let argument = prop_oneof![
+        Just(None),
+        inhabited_type().prop_flat_map(|desc| value_under(&desc).prop_map(Some)),
+    ];
+    prop::collection::vec(argument, arity)
 }
 
 /// A registration of `arity` slots, closed or quantifying one or two variables.
@@ -341,9 +358,30 @@ fn registration(arity: usize) -> BoxedStrategy<Registration> {
                     place(&mut slots[slot % count], variable, leaf);
                 }
             }
+            slots.iter_mut().for_each(untie);
             Registration { quantified, slots }
         })
         .boxed()
+}
+
+/// `desc` with every union of two distinct bare variables made a union of the first and a list of
+/// the second: every variable is bounded by `Any`, so such members always tie, and the load refuses
+/// the registration ([`TIED`]). Each variable is still named.
+fn untie(desc: &mut Desc) {
+    match desc {
+        Desc::Union(a, b) => {
+            if let (Desc::Variable(x), Desc::Variable(y)) = (&**a, &**b)
+                && x != y
+            {
+                **b = Desc::List(Box::new(Desc::Variable(*y)));
+            }
+            untie(a);
+            untie(b);
+        }
+        Desc::List(element) => untie(element),
+        Desc::Record(fields) => fields.iter_mut().for_each(|(_, field)| untie(field)),
+        _ => {}
+    }
 }
 
 /// Whether `desc`, as spelled, names the variable `variable`.
@@ -494,6 +532,143 @@ fn a_dispatched_program_renders_as_source_that_loads() {
         super::run(&refused.source).starts_with(&format!("load: {}: ", refused.use_at)),
         "a refusal names the use where it was rendered"
     );
+}
+
+/// The spelling laws' program: one registration of `KAA _` (or `KAA _ AND _`, ranked as one
+/// class), bound to `kaa`, returning its parameters and then the variables it quantifies, and
+/// called inside a function by keyword or by name, with values under its parameters' types.
+///
+/// ```koan
+/// EXPR #(KAA 1 AND 1)
+/// LET kaa = FN EXPR FOR ALL #[Elt] #(KAA u :<S0> AND v :<S1>) -> Any = #([u, v, Elt])
+/// LET g = (FN :{p :<D0>, q :<D1>} -> Any = #(kaa {u = <a0>, v = <a1>}))
+/// PRINT (g {p = <v0>, q = <v1>})
+/// ```
+#[derive(Clone, Debug)]
+pub(super) struct Spelled {
+    registration: Registration,
+    /// Each parameter's closed, inhabited type and the value it is called with.
+    parameters: Vec<(Desc, String)>,
+    /// Each argument: the parameter of its position where `None`, else a literal.
+    arguments: Vec<Option<String>>,
+}
+
+/// How a [`Spelled`] program calls its registration.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Spelling {
+    /// `KAA <a0> AND <a1>`.
+    Keyworded,
+    /// `kaa {u = <a0>, v = <a1>}`.
+    ByName,
+    /// `kaa {v = <a1>, u = <a0>}`.
+    Reversed,
+}
+
+pub(super) fn spelled_calls() -> impl Strategy<Value = Spelled> {
+    (1..3usize).prop_flat_map(spelled_calls_of)
+}
+
+/// A [`Spelled`] program whose registration has `arity` slots.
+pub(super) fn spelled_calls_of(arity: usize) -> impl Strategy<Value = Spelled> {
+    (registration(arity), parameters(arity), arguments(arity)).prop_map(
+        |(registration, parameters, arguments)| Spelled {
+            registration,
+            parameters,
+            arguments,
+        },
+    )
+}
+
+impl Spelled {
+    /// How many slots the registration has.
+    fn arity(&self) -> usize {
+        self.registration.slots.len()
+    }
+
+    pub(super) fn render(&self, spelling: Spelling) -> String {
+        let mut lines = Vec::new();
+        if self.arity() == 2 {
+            lines.push("EXPR #(KAA 1 AND 1)".to_string());
+        }
+        let variables = &VARIABLES[..self.registration.quantified as usize];
+        let quantified = match variables {
+            [] => String::new(),
+            _ => format!("FOR ALL #[{}] ", variables.join(" ")),
+        };
+        let slots = (self.registration.slots.iter().zip(["u", "v"]))
+            .map(|(slot, name)| format!("{name} {}", ascribed(slot, variables)));
+        let listed: Vec<&str> = (["u", "v"].into_iter().take(self.arity()))
+            .chain(variables.iter().copied())
+            .collect();
+        lines.push(format!(
+            "LET kaa = FN EXPR {quantified}#({}) -> Any = #([{}])",
+            keyed(slots),
+            listed.join(", ")
+        ));
+        let parameters: Vec<String> = (self.parameters.iter().zip(["p", "q"]))
+            .map(|((desc, _), name)| format!("{name} {}", ascribed(desc, &[])))
+            .collect();
+        let arguments: Vec<String> = (self.arguments.iter().zip(["p", "q"]))
+            .map(|(argument, name)| argument.clone().unwrap_or(name.to_string()))
+            .collect();
+        let mut fields: Vec<String> = (["u", "v"].into_iter().zip(&arguments))
+            .map(|(name, argument)| format!("{name} = {argument}"))
+            .collect();
+        let call = match spelling {
+            Spelling::Keyworded => keyed(arguments.into_iter()),
+            Spelling::ByName => format!("kaa {{{}}}", fields.join(", ")),
+            Spelling::Reversed => {
+                fields.reverse();
+                format!("kaa {{{}}}", fields.join(", "))
+            }
+        };
+        lines.push(format!(
+            "LET g = (FN :{{{}}} -> Any = #({call}))",
+            parameters.join(", ")
+        ));
+        let values: Vec<String> = (self.parameters.iter().zip(["p", "q"]))
+            .map(|((_, value), name)| format!("{name} = {value}"))
+            .collect();
+        lines.push(format!("PRINT (g {{{}}})", values.join(", ")));
+        lines.join("\n")
+    }
+}
+
+#[test]
+fn a_spelled_program_renders_as_source_that_loads() {
+    let program = Spelled {
+        registration: Registration {
+            quantified: 1,
+            slots: vec![
+                Desc::List(Box::new(Desc::Variable(0))),
+                Desc::Union(Box::new(Desc::Null), Box::new(Desc::Variable(0))),
+            ],
+        },
+        parameters: vec![
+            (Desc::List(Box::new(Desc::Number)), "[1, 2]".to_string()),
+            (Desc::Str, "\"s\"".to_string()),
+        ],
+        arguments: vec![None, Some("null".to_string())],
+    };
+    let head = "EXPR #(KAA 1 AND 1)\n\
+                LET kaa = FN EXPR FOR ALL #[Elt] #(KAA u :(LIST OF Elt) AND v :(Null | Elt)) -> \
+                Any = #([u, v, Elt])\n";
+    let tail = "PRINT (g {p = [1, 2], q = \"s\"})";
+    let rendered = [
+        (Spelling::Keyworded, "KAA p AND null"),
+        (Spelling::ByName, "kaa {u = p, v = null}"),
+        (Spelling::Reversed, "kaa {v = null, u = p}"),
+    ];
+    for (spelling, call) in rendered {
+        let source = program.render(spelling);
+        assert_eq!(
+            source,
+            format!(
+                "{head}LET g = (FN :{{p :(LIST OF Number), q :Str}} -> Any = #({call}))\n{tail}"
+            )
+        );
+        assert_eq!(super::run(&source), "[[1, 2], null, Number]", "{source}");
+    }
 }
 
 /// The lexical-variable law's program: a site naming `WRAP`'s variable `Outer` by a type, inside a

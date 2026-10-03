@@ -12,6 +12,12 @@
 //! `Elt = (Number | Str)`. A head that wants one type across slots puts them in separate
 //! [priority classes](super::ranking).
 //!
+//! A declared union is admitted through one member, tried most determined first
+//! ([`most_determined_first`]): among the members that bind, a strictly more specific one
+//! ([`member_at_least`]) first, so the choice never turns on how the union stores its members. Two
+//! members neither of which is more specific, that one argument can both admit, **tie**
+//! ([`tied_members`]); the elaborator refuses a binder holding such a pair.
+//!
 //! A construction collects through [`Collector::least`], whose unreached variables are bounded by
 //! `Never` rather than their declared bound: a family is covariant in its parameters, so its least
 //! instance is the one the payload asks for.
@@ -38,6 +44,8 @@ use super::lattice::{join_iter, meet_through_variables};
 use super::node::TypeNode;
 use super::order::fits;
 use super::registry::TypeRegistry;
+use super::substitute::bound_above;
+use super::verdicts::Relation;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 use super::walk::unary::{Visit, visit_in};
@@ -477,12 +485,18 @@ pub(super) fn admits<T: TypeHandle>(
 }
 
 /// The declared members of a union in the order they are tried against one carried member: an exact
-/// match first, then the members with nothing to solve, then the rest.
+/// match first, then the members with nothing to solve, then the rest, each strictly more specific
+/// one ([`member_at_least`]) before the members it is more specific than, and none whose greatest
+/// instance `carried` does not fit.
 ///
 /// Binding is the last resort. A member that admits without touching a variable gives a smaller
 /// least instance: trying a free variable first would let it swallow a member that matches exactly,
-/// so `(Elt | Number)` admitting `Number` would bind `Elt` larger than it needs to be.
-fn most_determined_first<'s>(
+/// so `(Elt | Number)` admitting `Number` would bind `Elt` larger than it needs to be. Among the
+/// members that bind, the more specific binds less, so `((LIST OF Elt) | Key)` admitting `[1]`
+/// binds `Elt` to `Number`, not `Key` to the list. Two members neither of which is more specific
+/// that one argument can both admit [tie](self::tied_members), and a binder holding such a pair is
+/// refused where it is declared; any order of the rest gives one answer.
+pub(super) fn most_determined_first<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
     declared: &[Handle],
@@ -497,12 +511,126 @@ fn most_determined_first<'s>(
             order.push(*member);
         }
     }
-    for member in declared {
-        if *member != carried && types.contains_quantified(*member) {
-            order.push(*member);
-        }
+    let mut binding = BumpVec::with_capacity_in(declared.len(), scratch);
+    binding.extend(
+        (declared.iter().copied())
+            .filter(|member| *member != carried && types.contains_quantified(*member)),
+    );
+    // A member whose greatest instance `carried` does not fit has no solve that admits it, though
+    // its walk may admit: the solve checks each variable's bound after the choice. Dropped here, so
+    // two members disjoint above are never both tried.
+    if binding.len() > 1 {
+        binding.retain(|member| {
+            fits(
+                types,
+                scratch,
+                carried,
+                bound_above(types, scratch, *member),
+            )
+        });
+    }
+    let beats = |a: Handle, b: Handle| {
+        member_at_least(types, scratch, a, b) && !member_at_least(types, scratch, b, a)
+    };
+    while !binding.is_empty() {
+        let next = match binding.len() {
+            1 => 0,
+            _ => (0..binding.len())
+                .find(|at| !binding.iter().any(|other| beats(*other, binding[*at])))
+                .unwrap_or(0),
+        };
+        order.push(binding.remove(next));
     }
     order
+}
+
+/// Whether the union member `a` is at least as specific as its fellow member `b`: `b` admits `a`
+/// with `a`'s variables rigid, as [`class_at_least`](super::ranking::class_at_least) compares two
+/// shapes' slots. Recorded in the verdict table.
+pub(super) fn member_at_least(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: Handle,
+    b: Handle,
+) -> bool {
+    if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::MemberAtLeast) {
+        return known;
+    }
+    let mut collector = Collector::<Handle>::new(scratch, &[]);
+    let answer = admits(types, scratch, b, a, Variance::Co, &mut collector).is_ok()
+        && collector.solve(types).is_ok();
+    types.record_verdict(a.digest(), b.digest(), Relation::MemberAtLeast, answer);
+    answer
+}
+
+/// The first two members of a union at a covariant position of `declared` — a binder's parameter,
+/// slot or representation, read under its own group — that **tie**: both name the group, and each
+/// is at least as specific as the other ([`member_at_least`]), or neither is and some type lies
+/// under both read from above. An argument both admit then has no member to prefer, so the solve
+/// would turn on which member is stored first. A contravariant position takes its union whole, and
+/// a nested binder's group is its own.
+pub(super) fn tied_members(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    declared: Handle,
+) -> Option<(Handle, Handle)> {
+    let mut tied = None;
+    visit_in(
+        types,
+        scratch,
+        declared,
+        Variance::Co,
+        &mut |_, node, context| {
+            if node.binds_quantifiers() {
+                return Visit::Skip;
+            }
+            let TypeNode::Union { members } = *node else {
+                return Visit::Descend;
+            };
+            if context.variance() == Variance::Contra {
+                return Visit::Descend;
+            }
+            let mut binding = BumpVec::new_in(scratch);
+            binding.extend(
+                (members.iter().copied()).filter(|member| types.contains_quantified(*member)),
+            );
+            for (at, a) in binding.iter().enumerate() {
+                if let Some(b) = binding[at + 1..]
+                    .iter()
+                    .find(|b| ties(types, scratch, *a, **b))
+                {
+                    tied = Some((*a, *b));
+                    return Visit::Stop;
+                }
+            }
+            Visit::Descend
+        },
+    );
+    tied
+}
+
+/// Whether two members of one declared union tie: see [`tied_members`].
+pub(super) fn ties(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: Handle,
+    b: Handle,
+) -> bool {
+    let (at_least, at_most) = (
+        member_at_least(types, scratch, a, b),
+        member_at_least(types, scratch, b, a),
+    );
+    match (at_least, at_most) {
+        (true, true) => true,
+        (false, false) => {
+            let (a, b) = (
+                bound_above(types, scratch, a),
+                bound_above(types, scratch, b),
+            );
+            meet_through_variables(types, scratch, a, b) != KType::NEVER.raw()
+        }
+        _ => false,
+    }
 }
 
 /// The collecting [`Lockstep`] instance. It holds the caller's collector so a union's members can

@@ -6,7 +6,9 @@
 //! quantified callable's type is a [`Scheme`](crate::type_lattice::Scheme), written only as the
 //! whole type of a signature member ([`Elaborator::part_declared`]). An operand whose value over a
 //! variable can differ from substituting first — a meet, a projection's owner, an application's
-//! head, a `NEEDING` kind — is read concrete.
+//! head, a `NEEDING` kind — is read concrete. A binder whose parameters, slots or representation
+//! hold a union two of whose members tie ([`tied_members`]) is refused where it is declared: an
+//! argument both admit would solve its group by whichever member is stored first.
 
 use std::cell::Cell;
 
@@ -19,7 +21,7 @@ use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, GroupIntern, KType, NodeSchema, Parametric, SigOrigin,
-    TypeNode, TypeRegistry, constructor_param_names, dense_classes, meet, member,
+    TypeNode, TypeRegistry, constructor_param_names, dense_classes, meet, member, tied_members,
 };
 
 /// The connector keywords of the formless composites.
@@ -649,6 +651,10 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 Ok(())
             },
         )?;
+        if !group.names.is_empty() {
+            let params = params.iter().map(|(_, param)| *param);
+            self.untied(Site::of(schema), (&group.names, &group.bounds), params)?;
+        }
         let ret = self.part(ret, groups)?;
         Ok(self
             .types
@@ -689,6 +695,10 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             }
             Ok(())
         })?;
+        if !group.names.is_empty() {
+            let params = params.iter().map(|(_, param)| *param);
+            self.untied(Site::of(head), (&group.names, &group.bounds), params)?;
+        }
         let ret = self.part(ret, groups)?;
         Ok(self
             .types
@@ -731,6 +741,13 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             Ok(())
         })?;
         let classes = dense_classes(self.scratch, &ranks);
+        if !group.names.is_empty() {
+            let slots = elements.iter().filter_map(|element| match element {
+                DispatchTokenElement::Slot(slot) => Some(*slot),
+                DispatchTokenElement::Keyword(_) => None,
+            });
+            self.untied(Site::of(head), (&group.names, &group.bounds), slots)?;
+        }
         let ret = self.part(ret, own)?;
         Ok(self
             .types
@@ -743,6 +760,22 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                 ret,
             )
             .handle)
+    }
+
+    /// Refuse a binder at `site` one of whose `positions`, read under its own group of `names`
+    /// bounded by `bounds`, holds a union two of whose members tie ([`tied_members`]).
+    pub(super) fn untied(
+        &self,
+        site: Site,
+        (names, bounds): (&[TypeSymbol], &[KType]),
+        positions: impl IntoIterator<Item = Parametric>,
+    ) -> Result<(), Elaboration> {
+        for position in positions {
+            if let Some(members) = tied_members(self.types, self.scratch, position, names, bounds) {
+                return Err(Elaboration::TiedUnion { members, site });
+            }
+        }
+        Ok(())
     }
 
     /// Each `<name> :<Type>` pair of a field list, its type elaborated; a `_` pair or anything

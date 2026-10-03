@@ -104,7 +104,7 @@ pub use typed::{
     fits_application, instance_under, instantiate_quantified, is_subtype_of, join, join_iter,
     judge_by_class, meet, quantifier_bounds, read_through, satisfied_by, scheme_bound_above,
     select_by_class, shape_specificity, sig_fits, solving_slots, substitute_levels,
-    substitute_parameters, substitute_quantified,
+    substitute_parameters, substitute_quantified, tied_members,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;

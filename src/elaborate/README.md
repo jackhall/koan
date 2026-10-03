@@ -483,6 +483,12 @@ never a guess:
   keyworded head;
 - `MeetOverVariable` — a meet one of whose operands names a `FOR ALL` variable
   or a signature's head parameter;
+- `TiedUnion` — a `FN`, an `EXPR` head, an expression shape or a parameterized
+  union's variant whose parameter, slot or representation holds, at a covariant
+  position, a union two of whose members naming its own group
+  [tie](../type_lattice/solving.md#the-unifier-collects-it-does-not-bind): an
+  argument both admit would solve the group by whichever member the union stores
+  first. It names the two members;
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
   parameters its constructor declares, a `WITH` over anything but a declared
@@ -545,7 +551,7 @@ fitting the signature stating it.
 family per variant, the builtin `Result` equal to the declared one, a union head
 applied per variant, constructions through a variant ordered against
 applications and the bare family, a recursive family and a ring of two, and
-each family refusal.
+each family refusal, a payload union whose members tie included.
 [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names

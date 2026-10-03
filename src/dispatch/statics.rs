@@ -38,14 +38,15 @@
 //! refuses the load too, as does an ascription whose operand's static type meets its type at
 //! `Never`; one whose operand's static upper end lies under its type is **settled**, and the run
 //! checks nothing. An annotated binder, `LET <name> <type> = <value>`, is held to its type as an
-//! ascription holds its operand, settled by its type part's site. A call by name whose callee is
-//! exactly an unquantified function refuses the load where its argument can never satisfy the
-//! parameters. A call by name of a quantified function solves its group from its argument record's
-//! fields, each contributing as a keyworded argument does, and records the contributions by its
-//! argument's site for the frame; it refuses the load where a contribution misses its parameter or
-//! the contributions leave the group unsolved, where a run reproduces that solve. What the pass
-//! fixes rests in each shape's write-once [`Statics`] cell, which [`evaluate`](super::evaluate)
-//! reads.
+//! ascription holds its operand, settled by its type part's site.
+//!
+//! A call by name of an exact callee is judged as a keyworded use of its lone candidate: the
+//! callee's parameters laid out as one class, in symbol order, and its argument's static type laid
+//! onto them end by end. It contributes, records its contributions by its argument's site for the
+//! frame — one per parameter, as a keyworded use records one per argument — and is refused where
+//! the judge finds it *never*, or where its argument can never name the parameters exactly. What
+//! the pass fixes rests in each shape's write-once [`Statics`] cell, which
+//! [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
 //! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its cell,
@@ -59,12 +60,12 @@
 //! quantified function is an **instance site**: a part is typed with the type it is **wanted** at —
 //! an annotation's, an ascription's, a callable body's declared return for its last statement, a
 //! container's element type where that is the container's own type, a call by name's parameter
-//! record, and a keyworded argument's slot at each candidate — and the site is instantiated at the
-//! least instance under it ([`instance_under`]). A quantified callee's other arguments solve its
-//! group first, and the slot is read through that solve: a variable a class before the slot's
-//! solves is taken from that class's solving slots at their contributions, as the call solves it —
-//! class by class, each pinned to what the classes before it solved — where a run reproduces the
-//! solve.
+//! record, and an argument's slot at each candidate — and the site is instantiated at the least
+//! instance under it ([`instance_under`]). A quantified callee's other arguments solve its group
+//! first, each read as the solve reads it — a contributing one exactly at its upper end — and the
+//! slot is read through that solve: a variable a class before the slot's solves is taken from that
+//! class's solving slots at their contributions, as the call solves it — class by class, each
+//! pinned to what the classes before it solved — where a run reproduces the solve.
 //! The candidates a use keeps must agree on each instance. A name's solution is recorded by its
 //! site and a literal's in its body's born-instance cell; a site the wanted type fixes nothing at
 //! refuses the load. A solution naming a lexical variable records where the site reads it, as a
@@ -87,13 +88,13 @@ use crate::scope::{
     Statics, Target, UnitWork, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, Symbol};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Collector, DeclaredType, InstanceFailure, Interval, KType, Parametric, Record, Scheme, Side,
-    TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above, class_at_least,
-    class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
-    quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
-    select_by_class, shape_return, shape_slots, solving_slots,
+    Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KType, Parametric,
+    Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above,
+    class_at_least, class_of, fits, instance_under, instantiate_quantified, intervals,
+    judge_by_class, meet, quantifier_bounds, read_through, scheme_bound_above, scheme_return,
+    scheme_slots, select_by_class, shape_return, shape_slots, solving_slots,
 };
 use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
 
@@ -228,8 +229,9 @@ struct Level<'p, 'graph> {
     instances: BumpVec<'p, (Site, StaticSolution<'graph>)>,
     /// Each keyworded use's contributions, parallel to the candidate lists.
     contributions: BumpVec<'p, &'graph [StaticType<'graph>]>,
-    /// Each call by name's contributions, by its argument part's site.
-    named: BumpVec<'p, (Site, &'graph [(Symbol, StaticType<'graph>)])>,
+    /// Each call by name's contributions, by its argument part's site: per parameter in symbol
+    /// order.
+    named: BumpVec<'p, (Site, &'graph [StaticType<'graph>])>,
     /// Each type capture a contribution read in a shape nested here added, by the variable's level,
     /// beside the coordinate it reads in the enclosing activation.
     type_captures: BumpVec<'p, (usize, Coordinate)>,
@@ -317,7 +319,30 @@ enum Unsolved<'p> {
     Open(BumpVec<'p, usize>),
 }
 
-impl<'p, 'graph> Pass<'p, '_, 'graph> {
+/// A call by name's argument laid onto its callee's slots: the argument's static upper end, each
+/// slot's static type, and each slot's contribution.
+type Laid<'p, 'graph> = (Parametric, &'p [Interval], &'p [StaticType<'graph>]);
+
+/// A call by name's callee, read as a keyworded use's lone candidate.
+#[derive(Clone, Copy)]
+struct Callee<'p> {
+    /// The callee's type as the load reads it — its function type or scheme — which a refusal
+    /// names.
+    function: DeclaredType<Parametric>,
+    /// An expression shape over the callee's parameters, one slot each in symbol order, every slot
+    /// in class 0, returning its return: a scheme over the callee's group where it has one.
+    shape: DeclaredType<Parametric>,
+    /// The parameters' names in symbol order: slot `i` is `names[i]`'s.
+    names: &'p [BinderSymbol],
+    /// The type the argument is wanted at: an unquantified callee's parameter record.
+    wanted: Option<Parametric>,
+    /// Whether the load knows the callee exactly — a scheme, or a point at an unquantified
+    /// function type. Only an exact callee is judged and records contributions: one known at most
+    /// may bind a function admitting more, or naming other parameters.
+    exact: bool,
+}
+
+impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn push(&mut self, shape: &'graph BodyShape<'graph>, roots_chain: bool) {
         let scratch = self.scratch;
         let mut statements = BumpVec::with_capacity_in(shape.body().len(), scratch);
@@ -839,7 +864,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
 
     /// The type a quantified function argument at the slot `slot` of a callee whose group is
     /// bounded by `bounds` is wanted at: the group solved from the `others` first — each other slot
-    /// beside its argument's static type — then `slot` read from above through it. A variable an
+    /// beside the type the solve reads there ([`solved_from`](Self::solved_from)) — then `slot`
+    /// read from above through it. A variable an
     /// earlier class than the slot's solves is taken as `fixed` gives it, which is empty where none
     /// is. Any other variable the slot shares with the others must come out one point the call
     /// reproduces — a closed one, or one of a reproducible solve ([`Collector::reproducible`]); one
@@ -1072,24 +1098,48 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         Ok(scratch.alloc_slice_fill_iter(fixed.iter().copied()))
     }
 
-    /// The instance each of `sites`, the instance arguments of a keyworded use whose arguments'
-    /// static types are `arguments` and whose contributions are `contributions`, takes at a
-    /// candidate the load knows as `known`: wanted at its slot's type, read through the candidate's
-    /// group solved from its other arguments where it has one — a variable a class before the
-    /// slot's solves taken from that class's solving slots at their contributions, as the call
-    /// solves it, class by class. Refused where the load does not know the candidate's shape or
-    /// makes no instance; `None` where the other arguments do not fit their slots, which the judge
-    /// refuses.
+    /// What `shape`'s solve reads at each slot: a slot that solves, whose argument contributes,
+    /// exactly that argument's upper end — the call solves from that type — and every other slot
+    /// its argument's static type. `contributions` past its end are `Unknown`.
+    fn solved_from(
+        &self,
+        shape: DeclaredType<Parametric>,
+        arguments: &[Interval],
+        contributions: &[StaticType<'graph>],
+    ) -> &'p [Interval] {
+        let solving = solving_slots(self.types, self.scratch, shape);
+        let mut read = BumpVec::with_capacity_in(arguments.len(), self.scratch);
+        read.extend(arguments.iter().enumerate().map(|(position, argument)| {
+            let contributed = solving.get(position) == Some(&true)
+                && contributions
+                    .get(position)
+                    .is_some_and(|each| !matches!(each, Static::Unknown));
+            match contributed {
+                true => Interval::point(argument.upper),
+                false => *argument,
+            }
+        }));
+        read.leak()
+    }
+
+    /// The instance each of `sites`, the instance arguments of a use whose arguments' static types
+    /// are `arguments` and whose contributions are `contributions`, takes at a candidate whose
+    /// registered shape is `shape`: wanted at its slot's type, read through the candidate's group
+    /// solved from its other arguments where it has one, each as the solve reads it
+    /// ([`solved_from`](Self::solved_from)) — a variable a class before the slot's solves taken
+    /// from that class's solving slots at their contributions, as the call solves it, class by
+    /// class. Refused where the load does not know the shape or makes no instance; `None` where the
+    /// other arguments do not fit their slots, which the judge refuses.
     fn instances(
         &self,
-        known: Known,
+        shape: Option<DeclaredType<Parametric>>,
         sites: &[InstanceArgument<'graph>],
         arguments: &[Interval],
         contributions: &[StaticType<'graph>],
     ) -> Result<&'p [Made<'p>], Option<ShapeError<'graph>>> {
         let (types, scratch) = (self.types, self.scratch);
         let mut slots = BumpVec::new_in(scratch);
-        let Some(shape) = known.shape() else {
+        let Some(shape) = shape else {
             return Err(Some(self.unfixed(sites[0].scheme, None, sites[0].at)));
         };
         let (bounds, quantifiers) = match shape {
@@ -1106,10 +1156,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 (quantifier_bounds(types, scheme), quantifiers)
             }
         };
+        let read = self.solved_from(shape, arguments, contributions);
         let mut others = BumpVec::with_capacity_in(slots.len(), scratch);
         for (position, slot) in slots.iter().enumerate() {
             if !sites.iter().any(|site| site.position == position) {
-                others.push((*slot, arguments[position]));
+                others.push((*slot, read[position]));
             }
         }
         let mut made = BumpVec::with_capacity_in(sites.len(), scratch);
@@ -1617,10 +1668,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// `(head argument)`: a construction's identity when the head is a type the load knows, the
-    /// callee's declared return read through the group the argument solves when the head is a
-    /// function, else `[Never, Any]`. The call is exactly a return the retype makes exact where the
-    /// callee is exact and its solve is the load's.
+    /// `(head argument)`: a construction's identity when the head is a type the load knows, a
+    /// call by name's [judged](Self::called) return when the head is a function, else
+    /// `[Never, Any]`.
     fn apply(
         &mut self,
         level: usize,
@@ -1631,9 +1681,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         };
         let (head, argument) = (&head.value, &argument.value);
         let callee = self.head(level, head)?;
-        let payload = self.payload(level, callee, argument)?;
         let (types, scratch) = (self.types, self.scratch);
         if let Some(identity) = self.head_handle(level, head) {
+            let payload = self.part(level, argument)?;
             let upper = match construction(types, scratch, identity, payload.upper) {
                 Ok(constructed) => constructed,
                 Err(ConstructionRefused::NotConstructible(_)) => KType::ANY.into(),
@@ -1644,125 +1694,268 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 .unwrap_or_else(|_| KType::NEVER.into());
             return Ok(Interval { lower, upper });
         }
-        if let DeclaredType::Type(callee) = callee {
-            self.admissible(callee, payload, node)?;
-        }
-        // A scheme is one callee, so it is exact.
-        let (function, exact) = match callee {
-            DeclaredType::Type(callee) => (types.node(callee.upper), callee.is_exact()),
-            DeclaredType::Scheme(scheme) => (types.scheme_node(scheme), true),
-        };
-        Ok(match function {
-            TypeNode::KFunction {
-                bounds,
-                params,
-                ret,
-                ..
-            } => {
-                let scheme = match callee {
-                    DeclaredType::Scheme(scheme) => Some(scheme),
-                    DeclaredType::Type(_) => None,
-                };
-                let (returned, solved) = self.called(
-                    level,
-                    scheme,
-                    argument,
-                    node,
-                    (bounds, params, ret),
-                    payload,
-                )?;
-                // Only an exact callee: a function is never retyped, so one at most its type may
-                // return less.
-                if exact && solved {
-                    retyped_to(types, returned)
-                } else {
-                    under(returned)
-                }
+        match self.callee(callee) {
+            Some(callee) => self.called(level, callee, argument, node),
+            None => {
+                self.part(level, argument)?;
+                Ok(unknown())
             }
-            _ => unknown(),
-        })
+        }
     }
 
-    /// The static type of a call by name's `argument`, its callee's static type `callee`. An
-    /// unquantified function's argument is wanted at its parameter record. A quantified callee's
-    /// record literal types its other fields first, and each field that is an instance site at its
-    /// parameter read through the group they solve.
-    fn payload(
-        &mut self,
-        level: usize,
-        callee: Bound,
-        argument: &'graph ExpressionPart<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    /// The function a call by name's head of the static type `head` calls, read as a keyworded
+    /// use's lone candidate: its parameters laid out as one class, in symbol order. `None` where
+    /// the load knows of no function there.
+    fn callee(&self, head: Bound) -> Option<Callee<'p>> {
         let (types, scratch) = (self.types, self.scratch);
-        let scheme = match callee {
-            DeclaredType::Type(callee) => {
-                let wanted = match types.node(callee.upper) {
-                    TypeNode::KFunction { params, .. } => {
-                        Some(record_type(types, scratch, params.iter()))
-                    }
-                    _ => None,
-                };
-                return self.part_at(level, argument, wanted);
-            }
-            DeclaredType::Scheme(scheme) => scheme,
-        };
-        let ExpressionPart::RecordLiteral(fields) = argument else {
-            return self.part(level, argument);
+        let (node, function, exact) = match head {
+            DeclaredType::Type(interval) => (
+                types.node(interval.upper),
+                DeclaredType::Type(interval.upper),
+                interval.is_exact(),
+            ),
+            DeclaredType::Scheme(scheme) => (
+                types.scheme_node(scheme),
+                DeclaredType::Scheme(scheme),
+                true,
+            ),
         };
         let TypeNode::KFunction {
             quantifiers,
             bounds,
             params,
-            ..
-        } = types.scheme_node(scheme)
+            ret,
+        } = node
         else {
-            unreachable!("a call by name's scheme is a function type")
+            return None;
         };
-        let mut typed = BumpVec::with_capacity_in(fields.len(), scratch);
-        for (_, value) in fields.iter() {
-            typed.push(match self.instance_site(level, value) {
-                Some(_) => None,
-                None => Some(self.part(level, value)?),
+        let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
+        sorted.extend(params.iter());
+        sorted.sort_unstable_by_key(|(name, _)| name.symbol());
+        let mut elements = BumpVec::with_capacity_in(sorted.len(), scratch);
+        elements.extend(
+            sorted
+                .iter()
+                .map(|(_, param)| DispatchTokenElement::Slot(*param)),
+        );
+        let classes = scratch.alloc_slice_fill_copy(sorted.len(), 0u8);
+        // The shape's group may be numbered otherwise than the callee's, and nothing reads one
+        // through the other: the shape is judged and returns through its own group, and the frame
+        // solves the callee's.
+        let shape = types.shape_scheme(scratch, quantifiers, bounds, &elements, classes, ret);
+        let wanted = match function {
+            DeclaredType::Type(_) => Some(record_type(types, scratch, params.iter())),
+            DeclaredType::Scheme(_) => None,
+        };
+        Some(Callee {
+            function,
+            shape: shape.handle,
+            names: scratch.alloc_slice_fill_iter(sorted.iter().map(|(name, _)| *name)),
+            wanted,
+            exact: exact && (function.as_type().is_none() || bounds.is_empty()),
+        })
+    }
+
+    /// The static type `payload` of a call by name's argument laid onto `callee`'s slots: each
+    /// slot the field of its name at each end, `Never` below and `Any` above where that end is no
+    /// record. Records are width-superset, so every carried record lies above the lower end and
+    /// names no field it lacks, and lies under the upper end and names every field it names:
+    /// `None` where the lower end is a record lacking a parameter, or the upper end a record naming
+    /// a field no parameter declares — the call can never name the parameters exactly.
+    fn laid_out(&self, callee: Callee<'_>, payload: Interval) -> Option<&'p [Interval]> {
+        let types = self.types;
+        let fields = |end: Parametric| match types.node(end) {
+            TypeNode::Record { fields } => Some(fields),
+            _ => None,
+        };
+        let (lower, upper) = (fields(payload.lower), fields(payload.upper));
+        let declares =
+            |field: BinderSymbol| (callee.names.iter()).any(|name| name.symbol() == field.symbol());
+        if lower.is_some_and(|lower| {
+            (callee.names.iter()).any(|name| lower.get(name.symbol()).is_none())
+        }) || upper.is_some_and(|upper| upper.keys().any(|field| !declares(field)))
+        {
+            return None;
+        }
+        let mut laid = BumpVec::with_capacity_in(callee.names.len(), self.scratch);
+        laid.extend(callee.names.iter().map(|name| {
+            Interval {
+                lower: (lower.and_then(|lower| lower.get(name.symbol())))
+                    .unwrap_or_else(|| KType::NEVER.into()),
+                upper: (upper.and_then(|upper| upper.get(name.symbol())))
+                    .unwrap_or_else(|| KType::ANY.into()),
+            }
+        }));
+        Some(laid.leak())
+    }
+
+    /// A call by name `node` of `callee` over `argument`, judged as a keyworded use of its lone
+    /// candidate: the argument [laid out](Self::laid_out) onto the slots, each solving slot's
+    /// contribution recorded by the argument's site for the frame, and the shape judged class by
+    /// class ([`judge_by_class`]). Refused where the argument can never name the parameters or
+    /// fit them; `Never` where a field never arrives. Only an exact callee is judged: one known at
+    /// most may bind a function admitting more, or naming other parameters, so its call is at most
+    /// its return. A quantified callee's record literal types each field that is an instance site
+    /// at its slot read through the group the other fields solve.
+    fn called(
+        &mut self,
+        level: usize,
+        callee: Callee<'p>,
+        argument: &'graph ExpressionPart<'graph>,
+        node: &'graph KExpression<'graph>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let never = Interval::point(KType::NEVER.into());
+        let at_most = |pass: &Self| Ok(under(pass.returned(callee.shape, None)));
+        let (payload, arguments, contributions) = match (callee.function, argument) {
+            (DeclaredType::Scheme(_), ExpressionPart::RecordLiteral(fields)) => {
+                match self.literal(level, callee, argument, fields, node)? {
+                    Some(laid) => laid,
+                    None => return Ok(never),
+                }
+            }
+            _ => {
+                let payload = self.part_at(level, argument, callee.wanted)?;
+                if payload.upper == KType::NEVER.into() {
+                    return Ok(never);
+                }
+                let Some(arguments) = self.laid_out(callee, payload) else {
+                    return match callee.exact {
+                        true => Err(self.never(callee, payload.upper, node)),
+                        false => at_most(self),
+                    };
+                };
+                if arguments
+                    .iter()
+                    .any(|each| each.upper == KType::NEVER.into())
+                {
+                    return Ok(never);
+                }
+                if !callee.exact {
+                    return at_most(self);
+                }
+                let contributions = self.contributions(level, callee, arguments, |_| true);
+                (payload.upper, arguments, contributions)
+            }
+        };
+        if !self.unfilled && (contributions.iter()).any(|each| !matches!(each, Static::Unknown)) {
+            let recorded = collect(self.writer, contributions.iter().copied());
+            self.chain[level].named.push((Site::of(argument), recorded));
+        }
+        let (types, scratch) = (self.types, self.scratch);
+        let read = self.solved_from(callee.shape, arguments, contributions);
+        let judged = judge_by_class(types, scratch, callee.shape, read);
+        if judged.verdict == Verdict::Never {
+            return Err(self.never(callee, payload, node));
+        }
+        Ok(self.registered_return(callee.shape, judged.intervals, false))
+    }
+
+    /// What each of `callee`'s slots contributes to its solve, the argument there of the static
+    /// type in `arguments`: a solving slot `typed` holds its argument's upper end, read as
+    /// [`contribution`](Self::contribution) reads it, and every other `Unknown`.
+    fn contributions(
+        &mut self,
+        level: usize,
+        callee: Callee<'_>,
+        arguments: &[Interval],
+        typed: impl Fn(usize) -> bool,
+    ) -> &'p [StaticType<'graph>] {
+        let solving = solving_slots(self.types, self.scratch, callee.shape);
+        let mut contributions = BumpVec::with_capacity_in(arguments.len(), self.scratch);
+        for (slot, argument) in arguments.iter().enumerate() {
+            contributions.push(match solving.get(slot) == Some(&true) && typed(slot) {
+                true => self.contribution(level, argument.upper),
+                false => Static::Unknown,
             });
         }
-        let mut others = BumpVec::with_capacity_in(fields.len(), scratch);
-        for ((name, _), each) in fields.iter().zip(typed.iter()) {
-            if let (Some(each), Some(param)) = (each, params.get(name.symbol())) {
-                others.push((param, *each));
+        contributions.leak()
+    }
+
+    /// A quantified callee's record literal `fields`, the argument of the call by name `node`:
+    /// each field that is no instance site typed, then each that is at its slot, wanted at the
+    /// slot read through the group the others solve ([`instances`](Self::instances)), and the
+    /// record recorded by the argument's site. `None` where a field never arrives. Refused where
+    /// the fields do not name the parameters exactly, or where the other fields can never fit their
+    /// slots.
+    fn literal(
+        &mut self,
+        level: usize,
+        callee: Callee<'p>,
+        argument: &'graph ExpressionPart<'graph>,
+        fields: &'graph [(BinderSymbol, ExpressionPart<'graph>)],
+        node: &'graph KExpression<'graph>,
+    ) -> Result<Option<Laid<'p, 'graph>>, ShapeError<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let slot_of = |name: BinderSymbol| {
+            (callee.names.iter()).position(|each| each.symbol() == name.symbol())
+        };
+        let mut typed = BumpVec::with_capacity_in(fields.len(), scratch);
+        let mut sites = BumpVec::new_in(scratch);
+        for (name, value) in fields.iter() {
+            let Some((instanced, scheme, at)) = self.instance_site(level, value) else {
+                typed.push(Some(self.part(level, value)?));
+                continue;
+            };
+            // A field naming no parameter refuses the call below, before it is made.
+            if let Some(position) = slot_of(*name) {
+                sites.push(InstanceArgument {
+                    position,
+                    part: value,
+                    instanced,
+                    scheme,
+                    at,
+                });
+            }
+            typed.push(None);
+        }
+        // Each field's upper end, an untyped instance field's at `Any`: what a refusal names.
+        let uppers = |typed: &[Option<Interval>]| {
+            let each = fields.iter().zip(typed.iter());
+            record_type(
+                types,
+                scratch,
+                each.map(|((name, _), typed)| {
+                    (*name, typed.map_or(KType::ANY.into(), |typed| typed.upper))
+                }),
+            )
+        };
+        let names_exactly = fields.len() == callee.names.len()
+            && fields.iter().all(|(name, _)| slot_of(*name).is_some());
+        if !names_exactly {
+            return Err(self.never(callee, uppers(&typed), node));
+        }
+        if typed
+            .iter()
+            .flatten()
+            .any(|typed| typed.upper == KType::NEVER.into())
+        {
+            let never = Interval::point(KType::NEVER.into());
+            self.chain[level].parts.push((Site::of(argument), never));
+            return Ok(None);
+        }
+        let mut arguments = BumpVec::with_capacity_in(callee.names.len(), scratch);
+        arguments.resize(callee.names.len(), unknown());
+        for ((name, _), typed) in fields.iter().zip(typed.iter()) {
+            if let (Some(typed), Some(slot)) = (typed, slot_of(*name)) {
+                arguments[slot] = *typed;
             }
         }
-        for (index, (name, value)) in fields.iter().enumerate() {
-            if typed[index].is_some() {
-                continue;
-            }
-            let wanted = match params.get(name.symbol()) {
-                Some(slot) => match self.slot_wanted(bounds, slot, &others, &[]) {
-                    Ok(wanted) => Some(wanted),
-                    // A call by name is one callee: nothing else could take the argument.
-                    Err(unsolved) => {
-                        let open = match unsolved {
-                            Unsolved::Open(open) => open,
-                            Unsolved::Misfit => {
-                                let mut named = BumpVec::new_in(scratch);
-                                named.extend((0..bounds.len()).filter(|variable| {
-                                    types.references_quantifier(scratch, slot, *variable)
-                                }));
-                                named
-                            }
-                        };
-                        return Err(ShapeError::Unfixed {
-                            variables: collect(
-                                self.writer,
-                                open.iter().map(|index| quantifiers[*index]),
-                            ),
-                            wanted: None,
-                            at: self.source(level, Site::of(value)),
-                        });
-                    }
-                },
-                None => None,
+        let instanced = |slot: usize| sites.iter().any(|site| site.position == slot);
+        let contributions = self.contributions(level, callee, &arguments, |slot| !instanced(slot));
+        if !sites.is_empty() {
+            let made = match self.instances(Some(callee.shape), &sites, &arguments, contributions) {
+                Ok(made) => made,
+                Err(None) => return Err(self.never(callee, uppers(&typed), node)),
+                Err(Some(error)) => return Err(error),
             };
-            typed[index] = Some(self.part_at(level, value, wanted)?);
+            for (site, made) in sites.iter().zip(made.iter()) {
+                self.record_instance(level, site, *made);
+                arguments[site.position] = made.0;
+                let field = fields
+                    .iter()
+                    .position(|(_, value)| std::ptr::eq(value, site.part));
+                typed[field.expect("an instance site is a field's value")] = Some(made.0);
+            }
         }
         let field = |index: usize| typed[index].expect("every field is typed");
         let ends = |end: fn(Interval) -> Parametric| {
@@ -1773,163 +1966,34 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 each.map(|(index, (name, _))| (*name, end(field(index)))),
             )
         };
-        let interval = Interval {
+        let payload = Interval {
             lower: ends(|each| each.lower),
             upper: ends(|each| each.upper),
         };
-        self.chain[level].parts.push((Site::of(argument), interval));
-        Ok(interval)
+        self.chain[level].parts.push((Site::of(argument), payload));
+        Ok(Some((payload.upper, arguments.leak(), contributions)))
     }
 
-    /// Refuse a call by name, `node`, whose callee is exactly an unquantified function the argument
-    /// of the static type `payload` can never satisfy the parameters of: a parameter the payload
-    /// lacks, a field meeting its parameter at `Never`, or a field no parameter declares where the
-    /// payload is exact. Any other callee is the call's to admit.
-    fn admissible(
+    /// `CallNeverSatisfied` for the call by name `node` of `callee` over an argument whose static
+    /// upper end is `payload`, both read through their bounds.
+    fn never(
         &self,
-        callee: Interval,
-        payload: Interval,
-        node: &'graph KExpression<'graph>,
-    ) -> Result<(), ShapeError<'graph>> {
+        callee: Callee<'_>,
+        payload: Parametric,
+        node: &KExpression<'_>,
+    ) -> ShapeError<'graph> {
         let (types, scratch) = (self.types, self.scratch);
-        let TypeNode::KFunction { bounds, params, .. } = types.node(callee.upper) else {
-            return Ok(());
-        };
-        let TypeNode::Record { fields } = types.node(payload.upper) else {
-            return Ok(());
-        };
-        if !callee.is_exact() || !bounds.is_empty() {
-            return Ok(());
-        }
-        let met = |param: Parametric, field: Parametric| {
-            let (param, field) = (
-                bound_above(types, scratch, param),
-                bound_above(types, scratch, field),
-            );
-            meet(types, scratch, param, field) != KType::NEVER
-        };
-        let missed = params.iter().any(|(name, param)| {
-            fields
-                .get(name.symbol())
-                .is_none_or(|field| !met(param, field))
-        });
-        let extra = payload.is_exact()
-            && fields
-                .keys()
-                .any(|name| params.get(name.symbol()).is_none());
-        if missed || extra {
-            return Err(ShapeError::CallNeverSatisfied {
-                callee: DeclaredType::Type(bound_above(types, scratch, callee.upper)),
-                arguments: bound_above(types, scratch, payload.upper),
-                at: node.source,
-            });
-        }
-        Ok(())
-    }
-
-    /// What a call by name of a function over `params` returning `ret`, its group bounded by
-    /// `bounds`, returns for an argument of the static type `payload`: `ret` read through the
-    /// intervals the argument's fields solve the group to, or its bounds where they do not; beside
-    /// whether that solve is the call's — the group empty, or every interval a point.
-    ///
-    /// Where the callee is the quantified function typed by `scheme`, each parameter naming its
-    /// group solves from its field's contribution, which the call records by `argument`'s site
-    /// whenever its record names every parameter, as a keyworded use records its arguments'; the
-    /// load refuses the call where a contribution the load knows does not fit its parameter, or
-    /// where every solving parameter's contribution is known and the group has no solution — each
-    /// where a run reproduces the solve ([`Collector::reproducible`]).
-    fn called(
-        &mut self,
-        level: usize,
-        scheme: Option<Scheme>,
-        argument: &'graph ExpressionPart<'graph>,
-        node: &'graph KExpression<'graph>,
-        (bounds, params, ret): (&[KType], Record<'_, Parametric>, Parametric),
-        payload: Interval,
-    ) -> Result<(Parametric, bool), ShapeError<'graph>> {
-        let (types, scratch) = (self.types, self.scratch);
-        if bounds.is_empty() {
-            return Ok((ret, true));
-        }
-        let fields = |typed| match types.node(typed) {
-            TypeNode::Record { fields } => Some(fields),
-            _ => None,
-        };
-        let Some(upper) = fields(payload.upper) else {
-            return Ok((self.through(ret, None), false));
-        };
-        let lower = fields(payload.lower);
-        let never = || ShapeError::CallNeverSatisfied {
-            callee: DeclaredType::Scheme(scheme_bound_above(
-                types,
-                scratch,
-                scheme.expect("only a scheme refuses"),
-            )),
-            arguments: bound_above(types, scratch, payload.upper),
-            at: node.source,
-        };
-        // Each parameter beside its field and whether it names the group: one read of each.
-        let mut read = BumpVec::with_capacity_in(params.len(), scratch);
-        for (name, param) in params.iter() {
-            let Some(field) = upper.get(name.symbol()) else {
-                return Ok((self.through(ret, None), false));
-            };
-            let solving = (0..bounds.len())
-                .any(|variable| types.references_quantifier(scratch, param, variable));
-            read.push((name.symbol(), param, field, solving));
-        }
-        // Each solving parameter's contribution, recorded whatever the static solve finds: the
-        // frame solves from it at every call the load does not refuse.
-        let mut contributions = BumpVec::with_capacity_in(read.len(), scratch);
-        for (_, _, field, solving) in read.iter().copied() {
-            contributions.push(match scheme {
-                Some(_) if solving => self.contribution(level, field),
-                _ => Static::Unknown,
-            });
-        }
-        let mut known = BumpVec::with_capacity_in(read.len(), scratch);
-        known.extend(
-            read.iter()
-                .zip(contributions.iter())
-                .filter(|(_, contribution)| !matches!(contribution, Static::Unknown))
-                .map(|((name, ..), contribution)| (*name, *contribution)),
-        );
-        if !self.unfilled && !known.is_empty() {
-            let recorded = collect(self.writer, known.iter().copied());
-            self.chain[level].named.push((Site::of(argument), recorded));
-        }
-        let mut collector = Collector::<Parametric>::new(scratch, bounds);
-        let mut declared = BumpVec::with_capacity_in(read.len(), scratch);
-        let (mut exact, mut contributed) = (true, true);
-        for ((name, param, field, solving), contribution) in
-            read.iter().copied().zip(contributions.iter())
-        {
-            let contributes = matches!(contribution, Static::Closed(_) | Static::Rigid { .. });
-            if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
-                if contributes && collector.reproducible(types) {
-                    return Err(never());
+        ShapeError::CallNeverSatisfied {
+            callee: match callee.function {
+                DeclaredType::Type(function) => {
+                    DeclaredType::Type(bound_above(types, scratch, function))
                 }
-                return Ok((self.through(ret, None), false));
-            }
-            if solving {
-                // As a keyworded use judges it: a variable makes no solve the call's, save where
-                // the call solves from this type itself.
-                contributed &= contributes;
-                exact &= contributes
-                    || lower.and_then(|lower| lower.get(name)) == Some(field)
-                        && types.concrete(field).is_some();
-            }
-            declared.push(param);
-        }
-        let reproducible = collector.reproducible(types);
-        match collector.solve(types) {
-            Ok(solution) => {
-                let exact = exact && reproducible;
-                let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
-                Ok((self.through(ret, Some(&solved)), exact))
-            }
-            Err(_) if scheme.is_some() && contributed && reproducible => Err(never()),
-            Err(_) => Ok((self.through(ret, None), false)),
+                DeclaredType::Scheme(scheme) => {
+                    DeclaredType::Scheme(scheme_bound_above(types, scratch, scheme))
+                }
+            },
+            arguments: bound_above(types, scratch, payload),
+            at: node.source,
         }
     }
 
@@ -2106,7 +2170,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             let (mut here, mut given_here) = (&arguments[..], &given[..]);
             let mut instances: &[Made<'_>] = &[];
             if !sites.is_empty() {
-                match self.instances(known, &sites, &arguments, &contributions) {
+                match self.instances(known.shape(), &sites, &arguments, &contributions) {
                     Ok(made) => instances = made,
                     Err(error) => {
                         refused = error.or(refused);
@@ -2125,20 +2189,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             }
             let (mut verdict, intervals) = match known.shape() {
                 Some(registered) => {
-                    // A solving slot whose argument contributes its static type is solved from
-                    // exactly that type's upper end.
                     if contributes {
-                        let solving = solving_slots(types, scratch, registered);
-                        let mut read = BumpVec::with_capacity_in(here.len(), scratch);
-                        read.extend(here.iter().enumerate().map(|(position, argument)| {
-                            let contributed = solving.get(position) == Some(&true)
-                                && !matches!(contributions[position], Static::Unknown);
-                            match contributed {
-                                true => Interval::point(argument.upper),
-                                false => *argument,
-                            }
-                        }));
-                        here = read.leak();
+                        here = self.solved_from(registered, here, &contributions);
                     }
                     let judged = judge_by_class(types, scratch, registered, here);
                     (judged.verdict, judged.intervals)
@@ -2309,37 +2361,38 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         kept: &[Judgement<'_>],
     ) -> Result<(), ShapeError<'graph>> {
         for (index, site) in sites.iter().enumerate() {
-            let (typed, solution) = kept[0].instances[index];
+            let made = kept[0].instances[index];
             if kept
                 .iter()
-                .any(|judgement| judgement.instances[index].1 != solution)
+                .any(|judgement| judgement.instances[index].1 != made.1)
             {
                 return Err(ShapeError::AmbiguousInstance {
                     key: list.elements,
                     at: node.source,
                 });
             }
-            self.chain[level].parts.push((Site::of(site.part), typed));
-            if self.unfilled {
-                continue;
-            }
-            let solution = self.solution(level, solution);
-            match site.instanced {
-                Instanced::Name(leaf) => {
-                    self.chain[level].instances.push((Site::of(leaf), solution))
-                }
-                Instanced::Literal(body) => body.fix_born_instance(solution),
-            }
+            self.record_instance(level, site, made);
         }
         Ok(())
     }
 
-    /// What a judged candidate returns: a builtin's return as its [rule](super::rules) gives it; a
-    /// registration's shape's return read through its group's intervals — exactly that return where
-    /// the retype makes it so and the solve is the call's, the group empty or every interval a
-    /// point, since its frame retypes its value to it, and at most it otherwise. A surfaced head's
-    /// return is at most whatever the solve: the module's own definition answers the call, and the
-    /// signature states only a bound on what it returns.
+    /// Record the instance `made` the instance argument `site` of the shape at `level` takes: its
+    /// part's static type, and its solution by its site or in its body's born-instance cell.
+    fn record_instance(&mut self, level: usize, site: &InstanceArgument<'graph>, made: Made<'_>) {
+        let (typed, solution) = made;
+        self.chain[level].parts.push((Site::of(site.part), typed));
+        if self.unfilled {
+            return;
+        }
+        let solution = self.solution(level, solution);
+        match site.instanced {
+            Instanced::Name(leaf) => self.chain[level].instances.push((Site::of(leaf), solution)),
+            Instanced::Literal(body) => body.fix_born_instance(solution),
+        }
+    }
+
+    /// What a judged candidate returns: a builtin's return as its [rule](super::rules) gives it,
+    /// and a registration's its [registered return](Self::registered_return).
     fn candidate_return(&self, judgement: Judgement<'_>) -> Interval {
         if let Some(ruled) = judgement.ruled {
             return ruled;
@@ -2347,9 +2400,29 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let Some(registered) = judgement.known.shape() else {
             return unknown();
         };
-        let returned = self.returned(registered, judgement.intervals);
-        let solved = !judgement.surfaced
-            && (judgement.intervals).is_some_and(|all| all.iter().all(|each| each.is_exact()));
+        self.registered_return(registered, judgement.intervals, judgement.surfaced)
+    }
+
+    /// What a call of the registered shape `registered` returns, its group solved to `intervals`:
+    /// its return read through them — exactly that return where the retype makes it so and the
+    /// solve is the call's, the shape unquantified or every interval a point, since its frame
+    /// retypes its value to it, and at most it otherwise. A `surfaced` head's return is at most
+    /// whatever the solve: the module's own definition answers the call, and the signature states
+    /// only a bound on what it returns.
+    fn registered_return(
+        &self,
+        registered: DeclaredType<Parametric>,
+        intervals: Option<&[Interval]>,
+        surfaced: bool,
+    ) -> Interval {
+        let returned = self.returned(registered, intervals);
+        let solved = !surfaced
+            && match registered {
+                DeclaredType::Type(_) => true,
+                DeclaredType::Scheme(_) => {
+                    intervals.is_some_and(|all| all.iter().all(|each| each.is_exact()))
+                }
+            };
         if solved {
             retyped_to(self.types, returned)
         } else {

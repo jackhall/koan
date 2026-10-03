@@ -52,7 +52,7 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
 };
@@ -892,8 +892,8 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// What each parameter of the call by name whose argument part sits at `site` is solved from,
-    /// by name: empty where every parameter reads its carried type.
-    pub fn named_contributions(&self, site: Site) -> &'graph [(Symbol, StaticType<'graph>)] {
+    /// per parameter in symbol order: empty where every parameter reads its carried type.
+    pub fn named_contributions(&self, site: Site) -> &'graph [StaticType<'graph>] {
         let Some(statics) = self.statics.get() else {
             return &[];
         };

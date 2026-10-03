@@ -127,6 +127,28 @@ pub fn judge_by_class<'s>(
     ranking::judge_by_class(types, scratch, declared.raw(), &raw)
 }
 
+/// The first two members of a union at a covariant position of `declared` — a binder's parameter,
+/// slot or representation, read under its own group of `names` bounded by `bounds` — that tie: both
+/// name the group, and neither is strictly more specific while some argument admits both. A binder
+/// holding one is refused. Each member comes back with the group's variables as stand-ins named as
+/// `names` names them, for the refusal to render: no relation reads it.
+pub fn tied_members(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    declared: Parametric,
+    names: &[TypeSymbol],
+    bounds: &[KType],
+) -> Option<(Parametric, Parametric)> {
+    let (a, b) = super::unify::tied_members(types, scratch, declared.raw())?;
+    let mut stand_ins = BumpVec::with_capacity_in(names.len(), scratch);
+    stand_ins.extend(
+        (names.iter().zip(bounds))
+            .map(|(name, bound)| types.lexical(ranking::STAND_IN_LEVEL, *name, *bound)),
+    );
+    let named = |member| substitute_quantified(types, scratch, wrap(member), &stand_ins);
+    Some((named(a), named(b)))
+}
+
 /// Whether `a` is at least as specific as `b` at `class`.
 pub fn class_at_least(
     types: &TypeRegistry<'_>,

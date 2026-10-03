@@ -208,6 +208,80 @@ fn a_call_by_name_solves_from_a_rigid_field_the_load_cannot_admit() {
     assert_eq!(run(source), ":(Number | Str)");
 }
 
+/// `which`'s one slot never lies above `x`'s lower end, `LIST OF Any`: called by keyword or by
+/// name, no call admits.
+#[test]
+fn a_call_by_name_whose_argument_never_fits_below_refuses_the_load_as_its_keyword_does() {
+    let which = |call: &str| {
+        run(&format!(
+            "LET which = FN EXPR #(WHICH x :(LIST OF Number)) -> Str = #(\"w\")\n\
+             EXPR #(USE x :(LIST OF Any)) -> Any = #({call})"
+        ))
+    };
+    let by_name = which("which {x = x}");
+    assert!(
+        by_name.starts_with("load:") && by_name.contains("can never be called with"),
+        "{by_name}"
+    );
+    assert!(which("WHICH x").starts_with("load:"));
+}
+
+/// `f`'s parameter record is laid onto its slots end by end: a record under `g`'s upper end may
+/// name `x`.
+#[test]
+fn a_call_by_name_reads_its_argument_at_both_ends() {
+    let f = "LET f = (FN :{x :Number, y :Str} -> Str = #(y))\n";
+    assert_eq!(
+        run(&format!(
+            "{f}LET call = (FN :{{g :(FN :{{}} -> :{{y :Str}})}} -> Str = #(f (g {{}})))\n\
+             PRINT (call {{g = (FN :{{}} -> :{{x :Number, y :Str}} = #({{x = 1, y = \"s\"}}))}})"
+        )),
+        "s"
+    );
+    let refused = |source: &str| {
+        let refused = run(source);
+        assert!(
+            refused.starts_with("load:") && refused.contains("can never be called with"),
+            "{refused}"
+        );
+    };
+    refused(
+        "LET f = (FN :{x :Number} -> Number = #(x))\n\
+         EXPR #(USE e :Any) -> Any = #(f {x = 1, z = e})",
+    );
+    refused(&format!("{f}EXPR #(USE r :{{y :Str}}) -> Any = #(f r)"));
+}
+
+#[test]
+fn a_call_by_name_one_of_whose_fields_never_arrives_never_returns() {
+    let source = "EXPR #(DIE) -> Never = #(DIE)\n\
+                  LET f = (FN :{x :Str} -> Str = #(x))\n\
+                  LET use = FN EXPR #(USE) -> Any = #(\n  \
+                  LET called = (f {x = (DIE)})\n  \
+                  called\n\
+                  )\n";
+    loaded(source, |program| {
+        let used = body(program, program.shape(), "use");
+        let never = "Never".to_string();
+        assert_eq!(ends(program, used, "called"), (never.clone(), never));
+    });
+    assert_eq!(run(&format!("{source}PRINT \"loaded\"")), "loaded");
+}
+
+#[test]
+fn a_call_by_name_of_an_exact_callee_is_exactly_its_return() {
+    let source = "LET f = (FN :{x :Number} -> :{r :Number} = #({r = x}))\n\
+                  LET use = FN EXPR #(USE a :(Number | Str)) -> Any = #(\n  \
+                  LET called = (f {x = a})\n  \
+                  called\n\
+                  )\n";
+    loaded(source, |program| {
+        let used = body(program, program.shape(), "use");
+        let record = ":{r :Number}".to_string();
+        assert_eq!(ends(program, used, "called"), (record.clone(), record));
+    });
+}
+
 /// `WRAP`, binding `Outer` at each call, over a parameter `m` of `declared`, returning `ret` from
 /// `body`; then `calls`.
 fn wrap(declared: &str, ret: &str, body: &str, calls: &str) -> String {

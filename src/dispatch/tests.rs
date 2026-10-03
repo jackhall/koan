@@ -15,6 +15,7 @@ mod quotes;
 mod rankings;
 mod rules;
 mod selection;
+mod spellings;
 mod statics;
 mod surface;
 mod tail;

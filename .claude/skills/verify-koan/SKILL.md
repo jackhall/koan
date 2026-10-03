@@ -19,8 +19,13 @@ Read [`tools/verify.sh`](../../../tools/verify.sh) for what runs and in what ord
 closes with a summary line; a green full slate is about fifteen lines. Do not
 re-run it under `tail`, `grep`, or `head` to find something — a passing step has
 already reduced its output to the count, score, or delta worth keeping, and a
-failing step has already replayed its output in full. `KOAN_VERBOSE=1` replays
-every step's output when a passing step's own numbers genuinely aren't enough.
+failing step has already replayed its output in full.
+
+**Every step's whole output is in `scratch/verify.log`**, passing or not, which
+each run starts afresh and names under the summary line. When you need more
+than the summary — a failure's detail you trimmed away, a passing step's own
+numbers — read the log; never run the slate again to see it. This holds for the
+pre-commit hook too, however its output was piped.
 
 ## Two tiers, and three scopes within the routine one
 

@@ -1,5 +1,6 @@
 //! Static types of generic code: lexical variables in a body's static types, intervals, verdicts,
-//! ranking at load, an `EVAL`'s declared type, and returns read through a group's intervals.
+//! ranking at load, an `EVAL`'s declared type, returns read through a group's intervals, and a
+//! union in a group's parameter: its members tried most specific first, and a tie refused.
 
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
@@ -490,5 +491,68 @@ fn two_arguments_reaching_one_parameter_from_above_bind_the_meet_of_their_types(
     assert_eq!(
         run(&format!("{overlapping}PRINT (FIRST [f, g])")),
         ":(FN :{x :Number} -> Null)"
+    );
+}
+
+/// `kaa`, over `group`, taking `u` of `slot` and returning its group's solution, called by keyword
+/// and by name over `value`: both outputs, which must agree.
+fn solved(group: &str, slot: &str, value: &str) -> String {
+    let kaa =
+        format!("LET kaa = FN EXPR FOR ALL {group} #(KAA u :{slot}) -> Any = #([Elt, Key])\n");
+    let keyworded = run(&format!("{kaa}PRINT (KAA {value})"));
+    let by_name = run(&format!("{kaa}PRINT (kaa {{u = {value}}})"));
+    assert_eq!(
+        keyworded, by_name,
+        "a call is one call however it is spelled"
+    );
+    keyworded
+}
+
+#[test]
+fn a_union_whose_members_tie_refuses_its_declaration() {
+    for slot in ["(Key | Elt)", "(:{a :Elt} | :{b :Key})"] {
+        let refused = solved("#[Elt Key]", slot, "1");
+        assert!(
+            refused.starts_with("load: <test>:1:38: ") && refused.contains("tie in one union"),
+            "{refused}"
+        );
+    }
+    let function =
+        run("MODULE m = (LET f = (FN FOR ALL #[Elt Key] :{u :(Elt | Key)} -> Any = #(u)))");
+    assert!(function.contains("tie in one union"), "{function}");
+}
+
+#[test]
+fn a_union_member_more_specific_than_another_is_tried_first() {
+    assert_eq!(
+        solved("#{Elt: Number, Key: Any}", "(Elt | Key)", "1"),
+        "[Number, Any]",
+        "the narrower bound is the more specific"
+    );
+    assert_eq!(
+        solved("#{Key: Any, Elt: Number}", "(Elt | Key)", "1"),
+        "[Number, Any]"
+    );
+    assert_eq!(
+        solved("#[Elt Key]", "(Elt | (LIST OF Key))", "[1]"),
+        "[Any, Number]",
+        "a list of a variable is more specific than a bare one"
+    );
+}
+
+#[test]
+fn members_no_argument_admits_both_of_or_taken_whole_do_not_tie() {
+    assert_eq!(
+        solved("#{Elt: Number, Key: Str}", "(Elt | Key)", "\"s\""),
+        "[Number, Str]"
+    );
+    assert_eq!(
+        solved(
+            "#[Elt Key]",
+            "(FN :{x :(Elt | Key)} -> Null)",
+            "(FN :{x :Any} -> Null = #(null))"
+        ),
+        "[Any, Any]",
+        "a parameter's own parameter takes its union whole"
     );
 }

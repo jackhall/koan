@@ -282,4 +282,15 @@ fn a_family_declaration_is_refused() {
     ] {
         brought(source, |_| ());
     }
+    // A construction solves the parameters from its payload, which either member admits alike.
+    declared(
+        "UNION (Left Right AS Either) = #{One: :(Left | Right)}",
+        |program, brought| {
+            assert!(
+                matches!(brought, Err(Elaboration::TiedUnion { .. })),
+                "a payload union whose members tie refuses: {brought:?}"
+            );
+            assert!(program.unbound("Either"));
+        },
+    );
 }

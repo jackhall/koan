@@ -29,6 +29,11 @@
 # transcript. A step that fails is the only one to get its output back, replayed in full under its
 # own banner. Pass `KOAN_VERBOSE=1` to replay every step's output, passing or not.
 #
+# Every step's whole output, passing or not, also lands in a log the run starts afresh —
+# `scratch/verify.log` (`KOAN_VERIFY_LOG`), named under the summary line — so a failure's detail
+# survives however the caller trimmed what it printed, and a question about a passing step is
+# answered by reading the log, not by running the slate again.
+#
 # Outputs, total tier only (override paths via env vars):
 #   - DOT graph from cargo-modules → observe/modules.dot   (`KOAN_DOT`)
 #   - llvm-cov lcov report          → observe/coverage.lcov (`KOAN_LCOV`)
@@ -84,9 +89,20 @@ SCOPE=""
 CLAUSES=()
 OUT=""
 
+LOG="${KOAN_VERIFY_LOG:-scratch/verify.log}"
+mkdir -p "$(dirname "$LOG")"
+printf 'Verify, %s tier, at %s, %s property cases.\n' "$TIER" "$(git rev-parse --short HEAD)" \
+    "$PROPTEST_CASES" >"$LOG"
+
+# A step's whole output, under its own banner, into the log.
+logged() {
+    printf '\n--- %s ---\n%s\n' "$1" "$2" >>"$LOG"
+}
+
 # The step line: a fixed-width label, then the one thing the step has to say.
 ok() {
     printf '  %-16s %s\n' "$1" "$2"
+    logged "$1" "$OUT"
     CLAUSES+=("$3")
     [ -z "$VERBOSE" ] || detail "$OUT"
 }
@@ -104,6 +120,7 @@ detail() {
 # replaying every line it printed. This is the one place the slate is loud.
 fail() {
     printf '  %-16s FAILED\n' "$1"
+    logged "$1" "$3"
     CLAUSES+=("$2")
     printf '\n--- %s ---\n%s\n' "$1" "$3"
     summary
@@ -114,7 +131,8 @@ fail() {
 summary() {
     local line="Verify${SCOPE:+ ($SCOPE)}:" clause
     for clause in "${CLAUSES[@]}"; do line+=" $clause,"; done
-    printf '\n%s\n' "${line%,}."
+    printf '\n%s\n' "${line%,}." | tee -a "$LOG"
+    printf 'Full output: %s\n' "$LOG"
 }
 
 # Run a step, capturing its output into OUT. On failure, hand the label, the

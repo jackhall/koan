@@ -172,6 +172,11 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                             site: Site::of(payload),
                         });
                     }
+                    elaborator.untied(
+                        Site::of(payload),
+                        (family.names, family.bounds),
+                        [representation],
+                    )?;
                     let schema =
                         RelativeSchema::constructor(scratch, scratch, Some(representation), params);
                     sealed = window.fill_member(index, schema, types, scratch);

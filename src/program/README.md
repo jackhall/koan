@@ -117,8 +117,9 @@ a program's steps run over, with its three families:
 - **`KBirth`**, what a cell is born holding, which crosses and is covariant:
   `Program`, the top level's root work; `Call`, a callee, a record of its
   arguments by name, how the call reached it — by keyword or by name — and,
-  for a call by name, the type each parameter the load contributed a static
-  type for is solved from;
+  for a call by name the load recorded contributions for, the type each
+  parameter is solved from, one per parameter in symbol order, none where it
+  reads its argument's carried type;
   `Eval`, a quote's code, a record of the names its `EVAL` offers and the
   contract its declared return makes; `Evaluate`, a node, the view it is read
   through and the [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
@@ -203,11 +204,18 @@ by name, so the frame trusts both. A call by name's arguments were written by
 the caller, so the frame **admits** every argument against its parameter's
 declared type under one collector — `:(FN :{x :Number} -> Str) cannot be called
 with :{x :Str}` when one does not fit — and, for a **quantified** callee, solves
-the group from that collector itself. A parameter the load recorded a
-[contribution](../dispatch/README.md#static-types) for is admitted at that
-type, resolved where the call runs, and every other at its argument's carried
-type, so the solve follows the declarations as a keyworded call's does; a type parameter the caller writes into
-the record names no parameter, and misnames the call. An
+the group from that collector itself. The load records a call by name's
+[contributions](../dispatch/README.md#static-types) one per parameter
+in symbol order, so the frame finds a parameter's entry by how many parameters
+sort before it. The load records them only where its argument names no field
+but the parameters of the callee it saw, so a call whose contributions or
+record are not exactly as long as the running callee's parameters is no call
+the load admitted: it misnames before any entry is read. A parameter with a
+contribution is admitted at that type,
+resolved where the call runs, and every other at its argument's carried type,
+so the solve follows the declarations as a keyworded call's does; a type
+parameter the caller writes into the record names no parameter, and misnames
+the call. An
 [instance](../knot/README.md#an-instance) carries the solution the load made it
 at, so its frame takes that solution and solves nothing. A **`:Type` parameter** —
 a type-channel parameter that is no `FOR ALL` name — is an argument like any

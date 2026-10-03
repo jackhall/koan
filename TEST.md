@@ -183,10 +183,14 @@ quote ties.
 
 The [dispatch](src/dispatch/README.md#testing) laws draw types, values and whole programs from
 [`src/dispatch/tests/generate.rs`](src/dispatch/tests/generate.rs), every program valid by
-construction. The narrowing law runs each program as loaded and again under the test-only
-`unnarrowed` switch in [`statics.rs`](src/dispatch/statics.rs), which leaves every keyworded use
-whole and refuses none: a program the load accepts runs as it does unnarrowed, and a use the load
-refuses faults when run unnarrowed.
+construction save a registration holding a union whose members tie, which the load refuses where
+it is declared and the narrowing law discards. The narrowing law runs each program as loaded and
+again under the test-only `unnarrowed` switch in [`statics.rs`](src/dispatch/statics.rs), which
+leaves every keyworded use whole and refuses none: a program the load accepts runs as it does
+unnarrowed, and a use the load refuses faults when run unnarrowed.
+The spelling laws ([`spellings.rs`](src/dispatch/tests/spellings.rs)) call one registration over
+one class by keyword, by name, and by name with its record's fields reversed: each spelling loads,
+faults or prints alike.
 The lexical-variable law runs a site naming a quantified variable by a type with and without the
 contexts drawn around it, the bare program its oracle.
 

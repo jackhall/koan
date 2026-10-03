@@ -67,6 +67,24 @@ and a `FN :{x :(Number | Bool)} -> Null` binds `LIST OF (FN :{x :Elt} -> Null)`'
 it to `Never`: a function no argument may be passed to. A same-type check across
 slots is what [priority classes](#priority-classes) are for.
 
+A **declared union** at a covariant position admits a carried member through
+one of its own members ([`most_determined_first`](unify.rs)): one equal to it
+first, then the members that bind nothing, then those that bind, the more
+specific before the less. A member is at least as specific as another where the
+other admits it with its own variables rigid ([`member_at_least`](unify.rs)), as
+[`class_at_least`](#priority-classes) compares two shapes' slots, so
+`(Elt | (LIST OF Key))` admitting `[1]` binds `Key` to `Number`, and under
+`#{Elt: Number, Key: Any}`, `(Elt | Key)` admitting `1` binds `Elt`. Where two or
+more members bind, one whose read from above the carried member does not fit is
+never tried: no binding of it admits. Two binding members **tie**
+([`tied_members`](unify.rs)) where each is at least as specific as the other, or
+neither is and their reads from above meet above `Never`: an argument both admit
+would then bind the group by whichever member the union stores first. The
+elaborator refuses a binder holding a tie at a covariant position of a
+parameter, slot or representation
+([`TiedUnion`](../elaborate/README.md#refusals)), so the member admitted never
+turns on storage order. A contravariant position takes its union whole.
+
 A **carried** rigid variable fills, at a covariant position, whatever its bound
 fills: a `Held` bounded by `LIST OF Number` fills `LIST OF Elt`, solving `Elt` to
 `Number`, just as the monomorphic instance between the two would. Below a rigid

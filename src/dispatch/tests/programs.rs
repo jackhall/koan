@@ -188,8 +188,8 @@ fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
     assert_eq!(pair("(f {x = 1, y = 2})"), "Number\nran");
     assert_eq!(
         pair("(f {x = 1, y = 2, Elt = Str})"),
-        "error: arguments :{x :Number y :Number Elt :ProperType} do not name the parameters of \
-         :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str)",
+        "load: <test>:1:102: :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str) can never be called \
+         with :{x :Number y :Number Elt :ProperType}",
         "a type parameter is solved, never written"
     );
 }

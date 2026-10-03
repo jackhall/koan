@@ -230,6 +230,13 @@ changes which call is admitted. Collected, the call binds `Elt` to
 variable for the next, it says so with a
 [priority class](solving.md#priority-classes).
 
+A declared union's members are another order the solve must not read. Its
+members are tried most specific first, and a binder whose union holds two
+members neither of which is more specific, that one argument may both admit, is
+refused where it is declared
+([ties](solving.md#the-unifier-collects-it-does-not-bind)): tried by storage
+order, `(Elt | Key)` over `1` binds `Elt` or `Key` by which handle sorts first.
+
 A static solve over lexical variables is taken as the call's own only where the
 collector reports it
 [reproducible](solving.md#the-unifier-collects-it-does-not-bind): binding each
@@ -239,8 +246,9 @@ fails exactly where it fails.
 **What enforces it.** `a_solution_is_the_least_instance_of_its_contributions`,
 `admission_without_quantifiers_is_the_order`,
 `a_carried_variable_is_admitted_where_its_bound_is`,
-`a_solution_reads_only_its_solving_slots` and
-`a_reproducible_solve_commutes_with_binding`.
+`a_solution_reads_only_its_solving_slots`,
+`a_reproducible_solve_commutes_with_binding` and
+`an_untied_union_admits_through_one_member_in_any_order`.
 
 ## A load-time verdict holds at every run
 

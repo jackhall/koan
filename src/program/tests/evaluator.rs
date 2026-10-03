@@ -19,7 +19,7 @@
 use std::cell::RefCell;
 
 use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda, quote};
-use crate::memory::{Active, Bump, BumpAllocator, Writer};
+use crate::memory::{Active, Bump, BumpAllocator, Writer, collect};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
 use crate::program::{
@@ -35,11 +35,21 @@ use crate::values::{Circular, Knotted as _, Link, List, Record, TypeValue, Value
 
 thread_local! {
     static SEEN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// What every call `(f x)` hands its frame as the load's contributions: none, unless a test
+    /// stands in for a load that recorded some.
+    static CONTRIBUTED: RefCell<Vec<Option<KType>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Forget everything recorded so far.
+/// Forget everything recorded so far, and every contribution a test set.
 pub(super) fn reset() {
     SEEN.with(|seen| seen.borrow_mut().clear());
+    CONTRIBUTED.with(|contributed| contributed.borrow_mut().clear());
+}
+
+/// Make every call `(f x)` hand its frame `contributed`, per parameter in symbol order, as a call
+/// by name the load recorded contributions for does.
+pub(super) fn contribute(contributed: Vec<Option<KType>>) {
+    CONTRIBUTED.with(|cell| *cell.borrow_mut() = contributed);
 }
 
 /// Record one observation, in the order the drain produced it.
@@ -410,13 +420,15 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             };
             let writer = step.writer();
             let arguments = Record::new(writer, &[(parameter, argument)], types, &scratch);
+            let contributed =
+                CONTRIBUTED.with(|cell| collect(writer, cell.borrow().iter().copied()));
             let request = |owed| {
                 call(
                     program,
                     callee,
                     Value::Record(arguments),
                     CallKind::ByName,
-                    &[],
+                    contributed,
                     owed,
                     Use::Forwards,
                 )

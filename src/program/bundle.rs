@@ -11,7 +11,6 @@ use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Writer, collect, covariant, reattachable};
 use crate::scheduler::StepBundle;
 use crate::scope::{BodyShape, Site};
-use crate::symbols::Symbol;
 use crate::type_lattice::KType;
 use crate::values::copy_severed;
 
@@ -28,15 +27,16 @@ pub enum KBirth<'graph, 'cell> {
     Program { program: &'graph Program<'graph> },
     /// A call: the frame's first step lays its activation down and binds the parameters from
     /// `arguments`, a record of them by name, checked as `kind` says. A call by name solves each
-    /// parameter `contributed` names from the type beside it, and every other from its argument's
-    /// carried type. `owed` is the contract of the evaluation that tailed into this frame: `None`
-    /// when the frame was spawned.
+    /// parameter from its entry in `contributed`, one per parameter in symbol order where the load
+    /// recorded any, and from its argument's carried type where that entry is `None` or there are
+    /// none. `owed` is the contract of the evaluation that tailed into this frame: `None` when the
+    /// frame was spawned.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
         arguments: KValue<'graph, 'cell>,
         kind: CallKind,
-        contributed: &'cell [(Symbol, KType)],
+        contributed: &'cell [Option<KType>],
         owed: Option<Contract>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it

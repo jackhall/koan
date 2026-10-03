@@ -59,7 +59,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
-- [Calls by name judged as keyworded calls](gradual-typing/calls-by-name-judged.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [Dict defaults](rewrite/dict-defaults.md)

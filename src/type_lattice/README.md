@@ -31,7 +31,8 @@ breaks without it.
 4. ***Fits* is a preorder containing the order, and nothing is built from it.**
    Every question reads it; no union, overload set or cache key does.
 5. **A solve collects, then solves.** Its answer does not depend on the order
-   the slots are read in. It yields a pair of ends per variable and takes a
+   the slots are read in, nor on the order a declared union stores its members.
+   It yields a pair of ends per variable and takes a
    point, the least instance, only where a call needs one.
 6. **A load-time verdict holds at every run.** A static type is an interval,
    every rule maps both of its ends, and *always* and *never* survive whatever

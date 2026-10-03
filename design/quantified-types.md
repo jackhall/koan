@@ -174,6 +174,13 @@ module's exact content.
   variable is bounded by another, and an opaque carrier bounds none.
 - **No meet over a variable.** Each call solves the variable, so the meet
   cannot be taken at load, and no intersection type keeps it symbolic.
+- **No union whose members tie.** A union in a declaration's parameter, slot
+  or variant is admitted through its most specific member, so
+  `(Elt | (LIST OF Key))` over `[1]` binds `Key`. Two members neither of which
+  is more specific, that one argument may both admit — `(Elt | Key)` with equal
+  bounds, `(:{a :Elt} | :{b :Key})` — would solve the group by how the union
+  stores them, and the declaration is refused (`TiedUnion`,
+  [elaborator](../src/elaborate/README.md#refusals)).
 - **A nominal type is never generic over a run-bound name.** A `NEWTYPE` over
   a `FOR ALL` name is a different type each call, since substitution never
   enters a sealed nominal.

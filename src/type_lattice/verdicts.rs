@@ -8,8 +8,8 @@
 //! of the relation, never a wrong answer.
 //!
 //! [`TypeRegistry`](super::registry::TypeRegistry) holds one table and delegates its verdict doors
-//! here; the relations that read and record verdicts live in [`order`](super::order) and
-//! [`ranking`](super::ranking).
+//! here; the relations that read and record verdicts live in [`order`](super::order),
+//! [`ranking`](super::ranking) and [`unify`](super::unify).
 
 use std::cell::Cell;
 
@@ -26,6 +26,8 @@ pub(super) enum Relation {
     Subtype,
     /// [`fits`](super::order::fits), the relation a question reads.
     Fits,
+    /// [`member_at_least`](super::unify::member_at_least).
+    MemberAtLeast,
     /// [`class_at_least`](super::ranking::class_at_least) at the class it names.
     ClassAtLeast(u8),
 }
@@ -36,7 +38,8 @@ impl Relation {
         match self {
             Relation::Subtype => 0,
             Relation::Fits => 1,
-            Relation::ClassAtLeast(class) => 2 + u64::from(class),
+            Relation::MemberAtLeast => 2,
+            Relation::ClassAtLeast(class) => 3 + u64::from(class),
         }
     }
 }

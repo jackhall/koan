@@ -521,7 +521,8 @@ or rigid; each
 keyworded use's **contributions**, parallel to its candidate list, a static type
 per argument the call solves from, `Unknown` where it reads the carried type;
 and each call by name's contributions, by its argument's site, a static type
-per parameter by name. It lives here for the same reason the type channel's
+per parameter of its callee in symbol order, `Unknown` where the frame reads the
+carried type. It lives here for the same reason the type channel's
 cells do, and the shape reads it by site (`value_type`, `narrowing`, `settled`,
 `instance_at`, `contributions`, `named_contributions`), statement
 index or slot; a shape the

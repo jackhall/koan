@@ -189,13 +189,14 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
 /// name — and, for a quantified callee a keyworded call selected, of its type parameters, each a
 /// type value: a frame running the callee's body, placed by the bit its return type derives.
 /// `kind` says whether the arguments were admitted before the call or are checked by the frame,
-/// and `contributed` what a call by name solves each parameter it names from.
+/// and `contributed` what a call by name solves each parameter from, per parameter in symbol
+/// order — empty, or `None` at a parameter, where the frame reads the carried type.
 pub fn call<'graph, 'here>(
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
-    contributed: &'here [(Symbol, KType)],
+    contributed: &'here [Option<KType>],
     owed: Option<Contract>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
@@ -469,17 +470,17 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 /// retyped to its declared type with the call's solution substituted, and every type parameter
 /// bound to its solution — the one an instance carries, the one a keyworded call's selection
 /// carried in `arguments`, or, for a call by name, the one solved here while each argument is
-/// admitted against its parameter's declared type — at the type `contributed` names it beside, and
-/// its carried type elsewhere — beside the contract the frame ends under. The
-/// error value's message when the callee is no function, the arguments do not name its parameters
-/// exactly, an argument does not fit its parameter, or the group has no solution.
+/// admitted against its parameter's declared type — at its entry in `contributed`, per parameter
+/// in symbol order, and its carried type where there is none — beside the contract the frame ends
+/// under. The error value's message when the callee is no function, the arguments do not name its
+/// parameters exactly, an argument does not fit its parameter, or the group has no solution.
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
-    contributed: &[(Symbol, KType)],
+    contributed: &[Option<KType>],
     owed: Option<Contract>,
 ) -> Result<(&'here KActivation<'graph, 'here>, Contract), &'here str> {
     let types = program.types();
@@ -573,13 +574,29 @@ fn frame<'graph, 'here>(
         CallKind::Keyworded => {}
         CallKind::ByName => {
             let mut collector = Collector::<KType>::new(scratch, bounds);
+            // The load laid the parameters of the callee it saw out in symbol order, and records
+            // contributions only where its argument names no field but those: a record as long as
+            // both that list and this callee's parameters, naming each (read below), names the
+            // same ones. Any other call is misnamed.
+            let named = (arguments.surface(types, scratch)).map_or(0, |record| record.len());
+            if !contributed.is_empty()
+                && (contributed.len() != params.len() || named != params.len())
+            {
+                return Err(misnamed());
+            }
             for (parameter, declared) in params.iter() {
                 let argument = argument(parameter.symbol())?;
                 let carried = argument.ktype().as_type().expect(CALL_ONLY);
-                let solved_from = contributed
-                    .iter()
-                    .find(|(name, _)| *name == parameter.symbol())
-                    .map_or(carried, |(_, contribution)| *contribution);
+                let solved_from = match contributed {
+                    [] => carried,
+                    // The load laid the parameters out in symbol order: this one's place is how
+                    // many sort before it.
+                    _ => contributed[params
+                        .keys()
+                        .filter(|other| other.symbol() < parameter.symbol())
+                        .count()]
+                    .unwrap_or(carried),
+                };
                 admits_with(
                     types,
                     scratch,

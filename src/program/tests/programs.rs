@@ -5,8 +5,9 @@
 
 use crate::program::body::SUPPLIED_WAKES;
 use crate::program::{CellSubstrate, Outcome};
+use crate::type_lattice::KType;
 
-use super::evaluator::{Mini, recorded, reset};
+use super::evaluator::{Mini, contribute, recorded, reset};
 use super::{compare_back, loaded, output, read_back, run_and_read, type_back, written};
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
@@ -263,6 +264,28 @@ fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
         2,
     );
     assert_eq!(read_types(&mut substrate), ["read Number", "read Str"]);
+}
+
+/// The frame lays the load's contributions over its own callee's parameters by symbol order, so a
+/// list of another length is no call the load admitted: misnamed, before any entry is read.
+#[test]
+fn contributions_for_other_parameters_misname_the_call() {
+    let mut substrate = loaded(
+        "LET which = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET r = (which 7)",
+        2,
+    );
+    reset();
+    contribute(vec![None, Some(KType::NUMBER)]);
+    let outcome = substrate.with(|running| running.run());
+    reset();
+    assert_eq!(outcome, Ok(Outcome::Uncaught));
+    let [error] = &written()[..] else {
+        panic!("one error written");
+    };
+    assert!(
+        error.starts_with("error: arguments :{x :Number} do not name the parameters"),
+        "{error}"
+    );
 }
 
 /// A quantified return is no scalar, so a call through one shares its frame rather than placing
