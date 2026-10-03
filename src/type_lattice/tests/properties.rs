@@ -987,7 +987,8 @@ struct Draw {
 }
 
 /// A candidate shape over anything, and a shape over its key binding no group, mostly its own
-/// instance at ground or lexical bindings, whose slots a call's static types may be drawn from.
+/// instance at pool types or lexical variables over them, whose slots a call's static types may be
+/// drawn from.
 fn candidate_pair() -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
     arb_argument_pair(world(), 3, Vocabulary::ANY)
 }

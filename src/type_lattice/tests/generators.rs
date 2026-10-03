@@ -120,18 +120,37 @@ impl World {
         ]
     }
 
-    /// The `pick`th ground within `bound`, counting round: `bound` is a ground itself, so one is.
-    fn ground_within(&self, scratch: BumpAllocator<'_>, bound: KType, pick: usize) -> KType {
+    /// What a quantifier is bound to: the argument pool, plus a list and a function alone — a
+    /// ground, a composite or `Never`, and a lexical variable over a union among them has a member
+    /// for its lower end.
+    fn binding_pool(&self) -> Vec<KType> {
+        let mut pool = self.argument_pool();
+        pool.push(self.types.list(KType::NUMBER));
+        pool.push(self.concrete(function_of(self, KType::NUMBER.raw())));
+        pool
+    }
+
+    /// The `pick`th binding-pool type within `bound`, counting round, `Never` left out where
+    /// `inhabited`: `Never` lies within every bound and a ground bound within itself, so one does
+    /// either way.
+    fn binding_within(
+        &self,
+        scratch: BumpAllocator<'_>,
+        bound: KType,
+        pick: usize,
+        inhabited: bool,
+    ) -> KType {
         let within: Vec<KType> = self
-            .grounds()
+            .binding_pool()
             .into_iter()
-            .filter(|ground| is_subtype_of(&self.types, scratch, *ground, bound))
+            .filter(|kt| !(inhabited && *kt == KType::NEVER))
+            .filter(|kt| is_subtype_of(&self.types, scratch, *kt, bound))
             .collect();
         within[pick % within.len()]
     }
 
-    /// `binding` within `bound`: its ground, or where `lexical` the lexical variable over that
-    /// ground.
+    /// `binding` within `bound`: its type, or where `lexical` the lexical variable over that type —
+    /// an inhabited one, since a variable over `Never` would be its point.
     fn bind_within(
         &self,
         scratch: BumpAllocator<'_>,
@@ -139,12 +158,12 @@ impl World {
         binding: &Binding,
         lexical: bool,
     ) -> Handle {
-        let ground = self.ground_within(scratch, bound, binding.ground);
+        let within = self.binding_within(scratch, bound, binding.within, lexical);
         if !lexical {
-            return ground.raw();
+            return within.raw();
         }
         let name = self.type_names[binding.name];
-        lexical_over(self, scratch, binding.level, name, ground, binding.lower).raw()
+        lexical_over(self, scratch, binding.level, name, within, binding.lower).raw()
     }
 
     /// The index of the ground spanning two members among [`grounds`](World::grounds).
@@ -514,7 +533,7 @@ pub fn arb_lexical(world: World) -> BoxedStrategy<Parametric> {
 }
 
 /// The lexical variable at `level` named `name` over `bound`, above a lower end of one member —
-/// `Number` for `lower` 1, `Str` for 2 — where `bound` spans two.
+/// the first for `lower` 1, the second for 2 — where `bound` is a union.
 fn lexical_over(
     world: &World,
     scratch: BumpAllocator<'_>,
@@ -524,20 +543,23 @@ fn lexical_over(
     lower: u8,
 ) -> Parametric {
     let types = &world.types;
-    let spans = matches!(types.node(bound), TypeNode::Union { .. });
-    match lower {
-        1 if spans => types.lexical_between(scratch, level, name, KType::NUMBER, bound),
-        2 if spans => types.lexical_between(scratch, level, name, KType::STR, bound),
+    match (types.node(bound), lower) {
+        (TypeNode::Union { members }, 1 | 2) => {
+            let member = members
+                .get(usize::from(lower) - 1)
+                .expect("a union has two members");
+            types.lexical_between(scratch, level, name, member, bound)
+        }
         _ => types.lexical(level, name, bound),
     }
 }
 
-/// One quantifier's binding, drawn before its bound is known: a ground within the bound, or the
-/// lexical variable over that ground at a level and name, with a lower end where the ground spans
-/// two members. Which of the two is the drawing strategy's to say.
+/// One quantifier's binding, drawn before its bound is known: a binding-pool type within the
+/// bound, or the lexical variable over that type at a level and name, with a lower end where the
+/// type is a union. Which of the two is the drawing strategy's to say.
 #[derive(Clone, Debug)]
 pub struct Binding {
-    ground: usize,
+    within: usize,
     level: usize,
     name: usize,
     lower: u8,
@@ -546,13 +568,13 @@ pub struct Binding {
 /// A [`Binding`] over the world's alphabets.
 fn arb_binding(world: &World) -> impl Strategy<Value = Binding> + use<> {
     (
-        0..world.grounds().len(),
+        0..world.binding_pool().len(),
         0..2usize,
         0..world.type_names.len(),
         0..3u8,
     )
-        .prop_map(|(ground, level, name, lower)| Binding {
-            ground,
+        .prop_map(|(within, level, name, lower)| Binding {
+            within,
             level,
             name,
             lower,
@@ -1042,9 +1064,9 @@ pub fn arb_shape_pair(
 
 /// A candidate shape drawn under `candidate` and a shape over its key and ranking, binding no
 /// group, whose slots are arguments for it: three times in four the candidate's own slots at
-/// bindings within its group's bounds — each slot at a ground type or, where `candidate` has
-/// variables and the slot's coin says so, at the lexical variable over that ground, so one slot
-/// sits at the ground another holds the variable over — each kept or met with a pool type;
+/// bindings within its group's bounds — each slot at a binding-pool type or, where `candidate` has
+/// variables and the slot's coin says so, at the lexical variable over that type, so one slot
+/// sits at the type another holds the variable over — each kept or met with a pool type;
 /// otherwise an unrelated draw. A slot whose instance holds a binder takes the unrelated draw's
 /// slot, and one whose meet is `Never` stays unmet. Two independent draws admit one another only
 /// by accident.
@@ -1089,7 +1111,7 @@ pub fn arb_argument_pair(
                         .map(|(bound, pick)| world.bind_within(scratch, *bound, pick, lexical))
                         .collect()
                 };
-                let (grounds, variables) = (bind(false), bind(candidate.variables));
+                let (plain, variables) = (bind(false), bind(candidate.variables));
                 let mut own = shape_slots(a, types).zip(&narrowings).zip(&lexicals);
                 let run: Vec<DispatchTokenElement> = elements
                     .iter()
@@ -1097,7 +1119,7 @@ pub fn arb_argument_pair(
                         DispatchTokenElement::Slot(unrelated) => {
                             let ((slot, narrowing), lexical) =
                                 own.next().expect("one key, one arity");
-                            let bindings = if *lexical { &variables } else { &grounds };
+                            let bindings = if *lexical { &variables } else { &plain };
                             let instance =
                                 substitute::substitute_quantified(types, scratch, slot, bindings);
                             DispatchTokenElement::Slot(if holds_binder(types, scratch, instance) {
