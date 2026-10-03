@@ -9,9 +9,16 @@
 //! which can close no cycle — where it likes. So a plan's components, classes and resolutions are
 //! what the builder must find, and nothing about them is re-derived from the rendered source.
 //!
+//! A plan also writes quote values. A quote's code is a scope its quote's reads are routed into as
+//! a lambda's are, each read there through `$`; inside it, a plan adds holes, `\` names offered or
+//! landing at a binder of the code, registrations, and keyworded uses at the four planned keys or
+//! `ZZ`, each with the candidates its mark says it lists. The program scope registers too, so a
+//! `$(…)` lists a program registration that sees its quote.
+//!
 //! A refused plan is generated with exactly one refusal injected into one of its scopes, where the
-//! refused read may be routed into a nested scope like any other; the shadowing perturbation
-//! re-declares an enclosing name inside a nested scope.
+//! refused read may be routed into a nested scope like any other but never into a quote's code; the
+//! shadowing perturbation re-declares an enclosing name inside a nested scope, a quote's code
+//! included, where a `$` read in that code still lands outside it.
 
 use std::collections::BTreeSet;
 
@@ -101,6 +108,18 @@ pub(super) enum Kind {
     Program,
     Callable,
     Arm,
+    /// A quote value's code.
+    Code,
+}
+
+/// How a name or keyworded use in a quote's code is marked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Marking {
+    Unmarked,
+    /// `$`: resolved where the quote is written.
+    Written,
+    /// `\`: resolved where the code is built.
+    Built,
 }
 
 /// Where a read resolves.
@@ -113,13 +132,18 @@ pub(super) enum Lands {
     },
     /// Nowhere: the one read a refusal injects.
     Nowhere,
+    /// A hole of the quote's code holding the read.
+    Hole,
+    /// A name the quote's code holding the read is offered where it is built.
+    Offered,
 }
 
-/// One mention: its name, its class in the scope it sits in, and where it lands.
+/// One mention: its name, its class in the scope it sits in, how it is marked, and where it lands.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Read {
     pub name: Name,
     pub class: Class,
+    pub mark: Marking,
     pub lands: Lands,
 }
 
@@ -128,6 +152,7 @@ impl Read {
         Read {
             name,
             class,
+            mark: Marking::Unmarked,
             lands: Lands::Builtin,
         }
     }
@@ -136,9 +161,40 @@ impl Read {
         Read {
             name,
             class,
+            mark: Marking::Unmarked,
             lands: Lands::Binder { up: 0 },
         }
     }
+}
+
+/// One of the four keys a plan registers at, spelled `KAA _` … `KAD _`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct Key(u8);
+
+impl Key {
+    fn text(self) -> String {
+        format!("KA{}", char::from(b'A' + self.0))
+    }
+}
+
+/// The key a keyworded use is written at: a planned one, or the suites' builtin `ZZ _`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Use {
+    Key(Key),
+    Builtin,
+}
+
+/// One candidate a keyworded use must list.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(super) enum Listed {
+    Builtin,
+    /// The registration at `statement` of the scope `up` scopes out from the use's.
+    Registration {
+        up: usize,
+        statement: u32,
+    },
+    Hole,
+    Offered,
 }
 
 #[derive(Clone, Debug)]
@@ -161,12 +217,15 @@ impl Statement {
     fn children(&self) -> Vec<&Scope> {
         let mut out = Vec::new();
         match &self.form {
-            BuiltinShape::Function(callable) => out.push(&callable.body),
+            BuiltinShape::Function(callable) | BuiltinShape::Expr { body: callable, .. } => {
+                out.push(&callable.body)
+            }
             BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
                 for carrier in carriers {
                     match carrier {
-                        Carrier::Read(_) => {}
+                        Carrier::Read(_) | Carrier::Use { .. } => {}
                         Carrier::Lambda(_, callable) => out.push(&callable.body),
+                        Carrier::Quote(_, code) => out.push(code),
                         Carrier::Arm { arms, .. } => out.extend(arms.iter().map(|(_, body)| body)),
                     }
                 }
@@ -179,12 +238,15 @@ impl Statement {
     fn children_mut(&mut self) -> Vec<&mut Scope> {
         let mut out = Vec::new();
         match &mut self.form {
-            BuiltinShape::Function(callable) => out.push(&mut callable.body),
+            BuiltinShape::Function(callable) | BuiltinShape::Expr { body: callable, .. } => {
+                out.push(&mut callable.body)
+            }
             BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
                 for carrier in carriers {
                     match carrier {
-                        Carrier::Read(_) => {}
+                        Carrier::Read(_) | Carrier::Use { .. } => {}
                         Carrier::Lambda(_, callable) => out.push(&mut callable.body),
+                        Carrier::Quote(_, code) => out.push(code),
                         Carrier::Arm { arms, .. } => {
                             out.extend(arms.iter_mut().map(|(_, body)| body))
                         }
@@ -207,6 +269,8 @@ pub(super) enum BuiltinShape {
     Union(Vec<Read>),
     /// `(<carriers>)`.
     Bare(Vec<Carrier>),
+    /// `EXPR #(<key> p :Number) -> Number = #(p)`: a registration, binding no name.
+    Expr { key: Key, body: Callable },
 }
 
 /// A callable: its signature's parameter types and return type, read eagerly where it sits, and its
@@ -230,6 +294,16 @@ pub(super) enum Carrier {
         scrutinee: Option<Read>,
         ty: Read,
         arms: Vec<(Read, Scope)>,
+    },
+    /// A quote value of the code scope: in a list when deferred, a call argument when eager. Its
+    /// `$` reads take its class here.
+    Quote(Class, Scope),
+    /// A keyworded use of one argument, `(KAA 1)`, `$(KAA 1)` or `\(KAA 1)`, and the candidates it
+    /// must list.
+    Use {
+        key: Use,
+        mark: Marking,
+        expected: Vec<Listed>,
     },
 }
 
@@ -264,7 +338,7 @@ impl Scope {
         let mut out = Vec::new();
         for statement in &mut self.statements {
             match &mut statement.form {
-                BuiltinShape::Function(callable) => {
+                BuiltinShape::Function(callable) | BuiltinShape::Expr { body: callable, .. } => {
                     out.extend(callable.types.iter_mut());
                     out.push(&mut callable.returns);
                 }
@@ -273,6 +347,7 @@ impl Scope {
                     for carrier in carriers {
                         match carrier {
                             Carrier::Read(read) => out.push(read),
+                            Carrier::Quote(..) | Carrier::Use { .. } => {}
                             Carrier::Lambda(_, callable) => {
                                 out.extend(callable.types.iter_mut());
                                 out.push(&mut callable.returns);
@@ -329,13 +404,15 @@ impl Scope {
         }
     }
 
-    /// Whether this scope or a scope nested in it reads `name`.
-    fn reads_name(&mut self, name: Name) -> bool {
-        self.reads_mut().iter().any(|read| read.name == name)
+    /// Whether this scope or a scope nested in it reads `name`. Where this scope is in a quote's
+    /// code, `in_code`, a `$` read does not count, as it skips every binder of the code.
+    fn reads_name(&mut self, name: Name, in_code: bool) -> bool {
+        let counts = |read: &Read| read.name == name && !(in_code && read.mark == Marking::Written);
+        self.reads_mut().into_iter().any(|read| counts(read))
             || self
                 .children_mut()
                 .into_iter()
-                .any(|child| child.reads_name(name))
+                .any(|child| child.reads_name(name, in_code))
     }
 
     /// Rename the binder or parameter `from` wherever this scope declares it.
@@ -367,6 +444,7 @@ enum Draft {
     Function(Vec<Name>),
     Union,
     Bare,
+    Expr(Key),
 }
 
 pub(super) struct Generator<'c> {
@@ -380,6 +458,16 @@ pub(super) struct Generator<'c> {
     /// The refusal to inject, and the ordinal of the scope it goes in.
     injection: Option<(Injection, usize)>,
     refusal: Option<Refusal>,
+    /// The depth of the quote's code being generated, if any.
+    code: Option<usize>,
+    /// The program's registrations, by key and statement.
+    registered: Vec<(Key, usize)>,
+    /// The program statement being generated.
+    statement: usize,
+    /// The program registrations a `$(…)` in the code being generated lists, by key and statement.
+    written: Vec<(Key, usize)>,
+    /// Whether the plan writes quote values.
+    quotes: bool,
 }
 
 impl<'c> Generator<'c> {
@@ -393,6 +481,11 @@ impl<'c> Generator<'c> {
             entered: 0,
             injection: None,
             refusal: None,
+            code: None,
+            registered: Vec::new(),
+            statement: 0,
+            written: Vec::new(),
+            quotes: true,
         }
     }
 
@@ -439,7 +532,7 @@ impl<'c> Generator<'c> {
         depth: usize,
         mut parameters: Vec<Name>,
         visible: &[(Name, usize)],
-        obligations: Vec<(Name, Owed)>,
+        obligations: Vec<(Name, Owed, Marking)>,
     ) -> Scope {
         let injection = self.claim();
         let mut count = 1 + self.pick(if kind == Kind::Program { 6 } else { 3 });
@@ -447,8 +540,9 @@ impl<'c> Generator<'c> {
             count = count.max(2);
         }
         let mut drafts = Vec::with_capacity(count);
+        let registers = matches!(kind, Kind::Program | Kind::Code);
         for _ in 0..count {
-            drafts.push(match self.pick(8) {
+            drafts.push(match self.pick(9) {
                 3 | 4 => Draft::Bare,
                 5 if self.nestable(depth) => {
                     self.scopes += 1;
@@ -457,11 +551,26 @@ impl<'c> Generator<'c> {
                 }
                 6 => Draft::Union,
                 7 if kind == Kind::Program => Draft::Union,
+                8 if registers && self.nestable(depth) => {
+                    self.scopes += 1;
+                    Draft::Expr(Key(self.pick(4) as u8))
+                }
                 _ => Draft::Let,
             });
         }
-        let needs_value = obligations.iter().any(|(name, _)| !name.is_type());
-        if needs_value && drafts.iter().all(|draft| *draft == Draft::Union) {
+        // A registration ahead of the statements, so a keyworded use often sees one.
+        if registers && self.nestable(depth) && self.chance(2) {
+            self.scopes += 1;
+            drafts.insert(0, Draft::Expr(Key(self.pick(4) as u8)));
+            count += 1;
+        }
+        let needs_value = obligations.iter().any(|(name, ..)| !name.is_type());
+        let hosts = |drafts: &[Draft], value: bool| {
+            drafts
+                .iter()
+                .any(|draft| !matches!(draft, Draft::Expr(_)) && (!value || *draft != Draft::Union))
+        };
+        if !obligations.is_empty() && !hosts(&drafts, needs_value) {
             drafts[count - 1] = Draft::Let;
         }
         if let Some(injection) = injection {
@@ -599,6 +708,9 @@ impl<'c> Generator<'c> {
         }
         // Parameters, enclosing parameters and builtins, which close no cycle.
         for reader in 0..count {
+            if matches!(drafts[reader], Draft::Expr(_)) {
+                continue;
+            }
             if !parameters.is_empty() && self.chance(4) {
                 let name = parameters[self.pick(parameters.len())];
                 if may_read(&drafts[reader], name) {
@@ -610,9 +722,16 @@ impl<'c> Generator<'c> {
                 let (name, declared) = visible[self.pick(visible.len())];
                 if may_read(&drafts[reader], name) {
                     let class = self.class(&drafts[reader], name, true);
+                    // A name declared outside the quote's code reaches it only through `$`.
+                    let outside = self.code.is_some_and(|code| declared < code);
                     reads[reader].push(Read {
                         name,
                         class,
+                        mark: if outside {
+                            Marking::Written
+                        } else {
+                            Marking::Unmarked
+                        },
                         lands: Lands::Binder {
                             up: depth - declared,
                         },
@@ -629,8 +748,33 @@ impl<'c> Generator<'c> {
                 reads[reader].push(Read::builtin(name, class));
             }
         }
+        // Inside a quote's code: a hole, and a name the build is offered.
+        if let Some(code) = self.code {
+            let outside: Vec<Name> = (visible.iter())
+                .filter(|(_, declared)| *declared < code)
+                .map(|(name, _)| *name)
+                .chain([Name::Fixed("zz"), Name::Fixed("Tzz")])
+                .collect();
+            for reader in 0..count {
+                for (mark, lands) in [
+                    (Marking::Unmarked, Lands::Hole),
+                    (Marking::Built, Lands::Offered),
+                ] {
+                    let name = outside[self.pick(outside.len())];
+                    if self.chance(5) && may_read(&drafts[reader], name) {
+                        let class = self.class(&drafts[reader], name, true);
+                        reads[reader].push(Read {
+                            name,
+                            class,
+                            mark,
+                            lands,
+                        });
+                    }
+                }
+            }
+        }
         // The names this scope was handed.
-        for (name, owed) in obligations {
+        for (name, owed, mark) in obligations {
             let hosts: Vec<usize> = (0..count)
                 .filter(|reader| may_read(&drafts[*reader], name))
                 .collect();
@@ -642,8 +786,15 @@ impl<'c> Generator<'c> {
                     up: depth - declared,
                 },
                 Owed::Nowhere => Lands::Nowhere,
+                Owed::Hole => Lands::Hole,
+                Owed::Offered => Lands::Offered,
             };
-            reads[reader].push(Read { name, class, lands });
+            reads[reader].push(Read {
+                name,
+                class,
+                mark,
+                lands,
+            });
         }
         // The injected unbound read: eager at or before its binder's statement, or of a name
         // nothing declares.
@@ -660,7 +811,10 @@ impl<'c> Generator<'c> {
                 Some(pairs[self.pick(pairs.len())])
             }
             Some(Injection::Undeclared) => {
-                let reader = self.pick(count);
+                let readers: Vec<usize> = (0..count)
+                    .filter(|reader| !matches!(drafts[*reader], Draft::Expr(_)))
+                    .collect();
+                let reader = readers[self.pick(readers.len())];
                 let name = if drafts[reader] == Draft::Union || self.chance(2) {
                     Name::Fixed("Tzz")
                 } else {
@@ -677,6 +831,7 @@ impl<'c> Generator<'c> {
             let read = Read {
                 name,
                 class,
+                mark: Marking::Unmarked,
                 lands: Lands::Nowhere,
             };
             reads[reader].insert(at, read);
@@ -689,8 +844,31 @@ impl<'c> Generator<'c> {
             .copied()
             .chain(parameters.iter().map(|name| (*name, depth)))
             .collect();
+        // Inside a quote's code, a `\` name lands at the binder of the code an unmarked one would.
+        if let Some(code) = self.code {
+            for read in reads.iter_mut().flatten() {
+                let inside = matches!(read.lands, Lands::Binder { up } if depth - up >= code);
+                if inside && read.mark == Marking::Unmarked && self.chance(4) {
+                    read.mark = Marking::Built;
+                }
+            }
+        }
+        let registrations: Vec<(Key, usize)> = (drafts.iter().enumerate())
+            .filter_map(|(index, draft)| match draft {
+                Draft::Expr(key) => Some((*key, index)),
+                _ => None,
+            })
+            .collect();
+        if kind == Kind::Program {
+            self.registered = registrations.clone();
+        }
+        // Only the quote's code holds no injection, so a refused read is never routed into it.
+        let quotable = self.quotes && self.code.is_none() && injection.is_none();
         let mut statements = Vec::with_capacity(count);
         for (index, draft) in drafts.into_iter().enumerate() {
+            if kind == Kind::Program {
+                self.statement = index;
+            }
             let own = std::mem::take(&mut reads[index]);
             let form = match draft {
                 Draft::Union => BuiltinShape::Union(own),
@@ -701,8 +879,25 @@ impl<'c> Generator<'c> {
                         self.callable(depth, parameters, signature, routed, &enclosing),
                     )
                 }
-                Draft::Let => BuiltinShape::Let(self.carriers(depth, own, &enclosing)),
-                Draft::Bare => BuiltinShape::Bare(self.carriers(depth, own, &enclosing)),
+                Draft::Expr(key) => {
+                    assert!(own.is_empty(), "a registration reads nothing");
+                    BuiltinShape::Expr {
+                        key,
+                        body: self.registration(),
+                    }
+                }
+                Draft::Let | Draft::Bare => {
+                    let mut carriers = self.carriers(depth, own, &enclosing, quotable);
+                    if kind == Kind::Code {
+                        for _ in 0..self.pick(3) {
+                            carriers.push(self.keyworded(index, &registrations));
+                        }
+                    }
+                    match draft {
+                        Draft::Let => BuiltinShape::Let(carriers),
+                        _ => BuiltinShape::Bare(carriers),
+                    }
+                }
             };
             statements.push(Statement {
                 binder: binders[index],
@@ -771,12 +966,14 @@ impl<'c> Generator<'c> {
     }
 
     /// A `LET` or bare statement's carriers: each read made here, or routed into a nested scope
-    /// whose boundary gives it the same class here.
+    /// whose boundary gives it the same class here — a lambda, an arm, or where `quotable` a quote's
+    /// code, read there through `$`.
     fn carriers(
         &mut self,
         depth: usize,
         own: Vec<Read>,
         enclosing: &[(Name, usize)],
+        quotable: bool,
     ) -> Vec<Carrier> {
         let mut direct = Vec::new();
         let mut deferred = Vec::new();
@@ -792,11 +989,20 @@ impl<'c> Generator<'c> {
             }
         }
         let mut nested = Vec::new();
+        let quoted = |generator: &mut Self, routed: &[Read]| {
+            let refused = routed.iter().any(|read| read.lands == Lands::Nowhere);
+            quotable && !refused && generator.chance(3)
+        };
         if !deferred.is_empty() || (self.nestable(depth) && self.chance(6)) {
             self.scopes += 1;
-            let signature = self.take_types(&mut direct);
-            let callable = self.callable(depth, Vec::new(), signature, deferred, enclosing);
-            nested.push(Carrier::Lambda(Class::Deferred, callable));
+            if quoted(self, &deferred) {
+                let code = self.code_scope(depth, Class::Deferred, &deferred, enclosing);
+                nested.push(Carrier::Quote(Class::Deferred, code));
+            } else {
+                let signature = self.take_types(&mut direct);
+                let callable = self.callable(depth, Vec::new(), signature, deferred, enclosing);
+                nested.push(Carrier::Lambda(Class::Deferred, callable));
+            }
         }
         // A nested arm declares its own `it`, so a read of an enclosing `it` routes through a lambda.
         let (called, matched) = if self.chance(2) {
@@ -806,9 +1012,14 @@ impl<'c> Generator<'c> {
         };
         if !called.is_empty() || (self.nestable(depth) && self.chance(6)) {
             self.scopes += 1;
-            let signature = self.take_types(&mut direct);
-            let callable = self.callable(depth, Vec::new(), signature, called, enclosing);
-            nested.push(Carrier::Lambda(Class::Eager, callable));
+            if quoted(self, &called) {
+                let code = self.code_scope(depth, Class::Eager, &called, enclosing);
+                nested.push(Carrier::Quote(Class::Eager, code));
+            } else {
+                let signature = self.take_types(&mut direct);
+                let callable = self.callable(depth, Vec::new(), signature, called, enclosing);
+                nested.push(Carrier::Lambda(Class::Eager, callable));
+            }
         }
         if !matched.is_empty() || (self.nestable(depth) && self.chance(6)) {
             self.scopes += 1;
@@ -819,6 +1030,112 @@ impl<'c> Generator<'c> {
             .map(Carrier::Read)
             .chain(nested)
             .collect()
+    }
+
+    /// A quote's code holding `routed`, the reads a quote of class `class` written at `depth` makes
+    /// there: each through `$` where it lands at a binder, unmarked where at a builtin.
+    fn code_scope(
+        &mut self,
+        depth: usize,
+        class: Class,
+        routed: &[Read],
+        enclosing: &[(Name, usize)],
+    ) -> Scope {
+        let written = match depth {
+            0 => (self.registered.iter().copied())
+                .filter(|(_, statement)| class == Class::Deferred || *statement < self.statement)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let obligations = obligations(depth, routed)
+            .into_iter()
+            .map(|(name, owed, _)| match owed {
+                Owed::Declared(_) => (name, owed, Marking::Written),
+                _ => (name, owed, Marking::Unmarked),
+            })
+            .collect();
+        let outer = (
+            self.code.replace(depth + 1),
+            std::mem::replace(&mut self.written, written),
+        );
+        let code = self.scope(Kind::Code, depth + 1, Vec::new(), enclosing, obligations);
+        (self.code, self.written) = outer;
+        code
+    }
+
+    /// The callable a registration registers: one parameter, read by its one statement.
+    fn registration(&mut self) -> Callable {
+        let parameter = self.fresh(false);
+        let number = Read::builtin(NUMBER, Class::Eager);
+        let body = Scope {
+            kind: Kind::Callable,
+            parameters: vec![parameter],
+            statements: vec![Statement {
+                binder: None,
+                form: BuiltinShape::Bare(vec![Carrier::Read(Read::local(parameter, Class::Eager))]),
+            }],
+            components: vec![BTreeSet::from([parameter])],
+        };
+        Callable {
+            types: vec![number],
+            returns: number,
+            body,
+        }
+    }
+
+    /// A keyworded use in statement `statement` of a quote's code, whose own registrations are
+    /// `registrations`, and the candidates it must list.
+    fn keyworded(&mut self, statement: usize, registrations: &[(Key, usize)]) -> Carrier {
+        let mark = match self.pick(4) {
+            3 if !self.written.is_empty() => Marking::Written,
+            choice => [Marking::Unmarked, Marking::Written, Marking::Built][choice % 3],
+        };
+        // Mostly a key a registration the use sees holds.
+        let seen: Vec<Key> = match mark {
+            Marking::Written => self.written.iter().map(|(key, _)| *key).collect(),
+            _ => (registrations.iter())
+                .filter(|(_, at)| *at < statement)
+                .map(|(key, _)| *key)
+                .collect(),
+        };
+        let key = match self.pick(5) {
+            _ if !seen.is_empty() && self.pick(3) > 0 => Use::Key(seen[self.pick(seen.len())]),
+            4 => Use::Builtin,
+            index => Use::Key(Key(index as u8)),
+        };
+        // A `$(…)` of a planned key needs a registration of the program to see the quote.
+        let key = match key {
+            Use::Key(key) if mark == Marking::Written && !seen.contains(&key) => Use::Builtin,
+            key => key,
+        };
+        let own = |key: Key| {
+            (registrations.iter())
+                .filter(move |(registered, at)| *registered == key && *at < statement)
+                .map(|(_, at)| Listed::Registration {
+                    up: 0,
+                    statement: *at as u32,
+                })
+        };
+        let mut expected: Vec<Listed> = match (mark, key) {
+            (Marking::Unmarked, Use::Builtin) => vec![Listed::Builtin, Listed::Hole],
+            (Marking::Unmarked, Use::Key(key)) => own(key).chain([Listed::Hole]).collect(),
+            (Marking::Written, Use::Builtin) => vec![Listed::Builtin],
+            (Marking::Written, Use::Key(key)) => (self.written.iter())
+                .filter(|(registered, _)| *registered == key)
+                .map(|(_, at)| Listed::Registration {
+                    up: 1,
+                    statement: *at as u32,
+                })
+                .collect(),
+            (Marking::Built, Use::Builtin) => vec![Listed::Offered],
+            (Marking::Built, Use::Key(key)) => own(key).chain([Listed::Offered]).collect(),
+        };
+        expected.sort();
+        Carrier::Use {
+            key,
+            mark,
+            expected,
+        }
     }
 
     /// Up to two of `direct`'s eager type reads, for a signature.
@@ -889,13 +1206,17 @@ impl<'c> Generator<'c> {
 
 /// Whether a statement drafted as `draft` can read `name` at all.
 fn may_read(draft: &Draft, name: Name) -> bool {
-    *draft != Draft::Union || name.is_type()
+    match draft {
+        Draft::Union => name.is_type(),
+        Draft::Expr(_) => false,
+        _ => true,
+    }
 }
 
 /// Whether a statement drafted as `draft` can read a name of the channel `is_type` eagerly.
 fn reads_eagerly(draft: &Draft, is_type: bool) -> bool {
     match draft {
-        Draft::Union => false,
+        Draft::Union | Draft::Expr(_) => false,
         Draft::Function(_) => is_type,
         Draft::Let | Draft::Bare => true,
     }
@@ -906,7 +1227,7 @@ fn declares(draft: &Draft) -> Option<bool> {
     match draft {
         Draft::Let | Draft::Function(_) => Some(false),
         Draft::Union => Some(true),
-        Draft::Bare => None,
+        Draft::Bare | Draft::Expr(_) => None,
     }
 }
 
@@ -991,7 +1312,11 @@ fn make_room(injection: Injection, drafts: &mut [Draft], parameters: &[Name]) {
                 drafts[last] = Draft::Let;
             }
         }
-        Injection::Undeclared => {}
+        Injection::Undeclared => {
+            if drafts.iter().all(|draft| matches!(draft, Draft::Expr(_))) {
+                drafts[last] = Draft::Let;
+            }
+        }
     }
 }
 
@@ -1003,11 +1328,13 @@ enum Owed {
     Declared(usize),
     /// Nowhere: the refused read, routed in.
     Nowhere,
+    Hole,
+    Offered,
 }
 
-/// What reads routed out of a scope at `depth` hand the nested scope: each name, and where it
-/// resolves.
-fn obligations(depth: usize, routed: &[Read]) -> Vec<(Name, Owed)> {
+/// What reads routed out of a scope at `depth` hand the nested scope: each name, where it
+/// resolves, and how it is marked.
+fn obligations(depth: usize, routed: &[Read]) -> Vec<(Name, Owed, Marking)> {
     routed
         .iter()
         .map(|read| {
@@ -1015,8 +1342,10 @@ fn obligations(depth: usize, routed: &[Read]) -> Vec<(Name, Owed)> {
                 Lands::Binder { up } => Owed::Declared(depth - up),
                 Lands::Builtin => Owed::Builtin,
                 Lands::Nowhere => Owed::Nowhere,
+                Lands::Hole => Owed::Hole,
+                Lands::Offered => Owed::Offered,
             };
-            (read.name, owed)
+            (read.name, owed, read.mark)
         })
         .collect()
 }
@@ -1082,8 +1411,12 @@ pub(super) fn refused(stream: &[u32], which: usize, scope: usize) -> (Scope, Ref
 }
 
 impl Generator<'_> {
-    /// Enter a scope: the injection, if this is the scope it targets.
+    /// Enter a scope: the injection, if this is the scope it targets. A quote's code holds none.
     fn claim(&mut self) -> Option<Injection> {
+        // A quote's code is never a target, so it is not counted.
+        if self.code.is_some() {
+            return None;
+        }
         self.entered += 1;
         let (injection, target) = self.injection?;
         (target == self.entered - 1).then_some(injection)
@@ -1195,20 +1528,24 @@ impl Generator<'_> {
         let mut candidates = Vec::new();
         for path in paths.iter().filter(|path| !path.is_empty()) {
             let mut enclosing = Vec::new();
+            let mut in_code = false;
             for depth in 0..path.len() {
-                for (name, _) in program.at_path(&path[..depth]).binders() {
+                let scope = program.at_path(&path[..depth]);
+                in_code |= scope.kind == Kind::Code;
+                for (name, _) in scope.binders() {
                     if name != Name::It {
                         enclosing.push((depth, name));
                     }
                 }
             }
             let nested = program.at_path(path);
+            in_code |= nested.kind == Kind::Code;
             for (renamed, _) in nested.binders() {
                 if renamed == Name::It {
                     continue;
                 }
                 for (depth, name) in &enclosing {
-                    if name.is_type() == renamed.is_type() && !nested.reads_name(*name) {
+                    if name.is_type() == renamed.is_type() && !nested.reads_name(*name, in_code) {
                         candidates.push((path.clone(), *depth, renamed, *name));
                     }
                 }
@@ -1230,6 +1567,14 @@ pub(super) enum Token {
     /// The body of the scope at this index of [`Rendering::scopes`] opens.
     Open(usize),
     Close,
+    /// A keyworded use: the one at this index of [`Rendering::uses`], or a `ZZ` call.
+    Use(Option<usize>),
+}
+
+/// A planned keyworded use, in the scope it is written in.
+pub(super) struct PlacedUse<'p> {
+    pub expected: &'p [Listed],
+    pub scope: usize,
 }
 
 pub(super) struct Placed<'p> {
@@ -1253,6 +1598,7 @@ pub(super) struct Rendering<'p> {
     pub source: String,
     pub tokens: Vec<Token>,
     pub reads: Vec<Placed<'p>>,
+    pub uses: Vec<PlacedUse<'p>>,
     pub scopes: Vec<Rendered<'p>>,
     /// Every binder and parameter name, beside where in the source it is written.
     pub declared: Vec<(Name, u32)>,
@@ -1264,9 +1610,12 @@ struct Renderer<'p> {
     statement: u32,
 }
 
-/// The source of the program `choices` plans — what a suite above `scope` runs a plan as.
+/// The source of the program `choices` plans, writing no quote value — what the knot suite runs a
+/// plan as, which does not read how a quote ties.
 pub(crate) fn program_source(choices: &[u32]) -> String {
-    render_program(&Generator::new(choices).program()).source
+    let mut generator = Generator::new(choices);
+    generator.quotes = false;
+    render_program(&generator.program()).source
 }
 
 /// A program's source: one line per statement.
@@ -1288,6 +1637,7 @@ impl<'p> Renderer<'p> {
                 source: String::new(),
                 tokens: Vec::new(),
                 reads: Vec::new(),
+                uses: Vec::new(),
                 scopes: vec![Rendered {
                     scope: root,
                     parent: None,
@@ -1311,7 +1661,17 @@ impl<'p> Renderer<'p> {
         self.out.tokens.push(Token::Other);
     }
 
+    /// A read, its sigil written before it; a marked type name in a group, as `:$Taa` does not parse.
     fn read(&mut self, read: &'p Read) {
+        let sigil = match read.mark {
+            Marking::Unmarked => "",
+            Marking::Written => "$",
+            Marking::Built => "\\",
+        };
+        let grouped = !sigil.is_empty() && read.name.is_type();
+        if grouped {
+            self.text("(");
+        }
         self.out.tokens.push(Token::Mention(self.out.reads.len()));
         self.out.reads.push(Placed {
             read,
@@ -1319,7 +1679,11 @@ impl<'p> Renderer<'p> {
             statement: self.statement,
             offset: self.out.source.len() as u32,
         });
+        self.text(sigil);
         self.text(&read.name.text());
+        if grouped {
+            self.text(")");
+        }
     }
 
     fn body(&mut self, scope: &'p Scope) {
@@ -1399,6 +1763,16 @@ impl<'p> Renderer<'p> {
                 self.carriers(carriers);
                 self.text(")");
             }
+            BuiltinShape::Expr { key, body } => {
+                self.text(&format!("EXPR #({} ", key.text()));
+                self.other(body.body.parameters[0]);
+                self.text(" :");
+                self.read(&body.types[0]);
+                self.text(") -> ");
+                self.read(&body.returns);
+                self.text(" = #");
+                self.body(&body.body);
+            }
         }
     }
 
@@ -1408,8 +1782,8 @@ impl<'p> Renderer<'p> {
         let (deferred, eager): (Vec<&Carrier>, Vec<&Carrier>) =
             carriers.iter().partition(|carrier| match carrier {
                 Carrier::Read(read) => read.class == Class::Deferred,
-                Carrier::Lambda(class, _) => *class == Class::Deferred,
-                Carrier::Arm { .. } => false,
+                Carrier::Lambda(class, _) | Carrier::Quote(class, _) => *class == Class::Deferred,
+                Carrier::Arm { .. } | Carrier::Use { .. } => false,
             });
         match (deferred.len(), eager.len()) {
             (0, 0) => self.text("1"),
@@ -1421,6 +1795,8 @@ impl<'p> Renderer<'p> {
                     self.lambda(callable);
                     self.text(" 1)");
                 }
+                // Alone, a quote would be a deferred one.
+                Carrier::Quote(..) => self.call(&eager),
                 other => self.eager(other),
             },
             (0, _) => self.call(&eager),
@@ -1439,7 +1815,13 @@ impl<'p> Renderer<'p> {
                     match carrier {
                         Carrier::Read(read) => self.read(read),
                         Carrier::Lambda(_, callable) => self.lambda(callable),
-                        Carrier::Arm { .. } => unreachable!("an arm is eager"),
+                        Carrier::Quote(_, code) => {
+                            self.text("#");
+                            self.body(code);
+                        }
+                        Carrier::Arm { .. } | Carrier::Use { .. } => {
+                            unreachable!("an arm and a use are eager")
+                        }
                     }
                 }
                 if !eager.is_empty() {
@@ -1458,6 +1840,7 @@ impl<'p> Renderer<'p> {
             if index > 0 {
                 self.text(" ");
             }
+            self.out.tokens.push(Token::Use(None));
             self.text("(ZZ ");
             self.eager(argument);
         }
@@ -1470,6 +1853,31 @@ impl<'p> Renderer<'p> {
         match carrier {
             Carrier::Read(read) => self.read(read),
             Carrier::Lambda(_, callable) => self.lambda(callable),
+            Carrier::Quote(_, code) => {
+                self.text("#");
+                self.body(code);
+            }
+            Carrier::Use {
+                key,
+                mark,
+                expected,
+            } => {
+                self.out.tokens.push(Token::Use(Some(self.out.uses.len())));
+                self.out.uses.push(PlacedUse {
+                    expected,
+                    scope: self.scope,
+                });
+                let key = match key {
+                    Use::Key(key) => key.text(),
+                    Use::Builtin => "ZZ".to_string(),
+                };
+                let sigil = match mark {
+                    Marking::Unmarked => "",
+                    Marking::Written => "$",
+                    Marking::Built => "\\",
+                };
+                self.text(&format!("{sigil}({key} 1)"));
+            }
             Carrier::Arm {
                 scrutinee,
                 ty,

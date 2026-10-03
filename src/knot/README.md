@@ -475,7 +475,8 @@ carries the scalar types alone.
   captures, a list node holding a function equal to itself, a module
   incomparable, and a ring renders with a label where it closes.
 - [`tests/properties.rs`](tests/properties.rs) — over `scope`'s generated shape
-  plans ([TEST.md](../../TEST.md#scope-property-laws)): a component of value
+  plans ([TEST.md](../../TEST.md#scope-property-laws)), written with no quote
+  value: a component of value
   binders that is cyclic or all callable ties iff the reads among its data
   members are acyclic, and refuses with `TypeCycle` naming data members
   otherwise; a tied data node holds one link per planned read, a lambda item

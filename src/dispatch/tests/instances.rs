@@ -644,7 +644,7 @@ fn an_earlier_contribution_that_never_admits_drops_the_candidate() {
 }
 
 #[test]
-fn an_instance_argument_after_two_earlier_classes_takes_their_pooled_solution() {
+fn an_instance_argument_after_two_earlier_classes_takes_each_class_s_solution() {
     // `y` solves `Elt` at class 0; `h`, at class 1, solves `Key` and reads `Elt` again.
     let pick3 = "EXPR #(PICK 3 AT 1 OR 2)\n\
                  EXPR FOR ALL #[Elt Key] \
@@ -659,4 +659,20 @@ fn an_instance_argument_after_two_earlier_classes_takes_their_pooled_solution() 
         )
     );
     assert_eq!(run(&source), "1\ns");
+}
+
+#[test]
+fn a_later_earlier_class_checks_what_an_earlier_one_solved() {
+    // `y` solves `Elt` to `Number | Str` at class 0, reaching it only from above; `h` at class 1
+    // is admitted against that, and its `a = 1` gives `Elt` no lower end.
+    let source = concat!(
+        "EXPR #(PICK 3 AT 1 OR 2)\n",
+        "EXPR FOR ALL #[Elt Key] #(PICK f :(FN :{x :Elt} -> Elt) AT y :(FN :{x :Elt} -> Null) ",
+        "OR h :{a :Elt, b :Key}) -> Elt = #(f {x = h.a})\n",
+        "MODULE lib = ((LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))) ",
+        "(LET g = (FN :{y :(FN :{x :(Number | Str)} -> Null)} -> Any = ",
+        "#(PICK pick AT y OR {a = 1, b = true}))) ",
+        "(PRINT (g {y = (FN :{x :(Number | Str)} -> Null = #(null))})))",
+    );
+    assert_eq!(run(source), "1");
 }

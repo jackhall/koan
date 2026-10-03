@@ -286,6 +286,69 @@ fn a_built_use_is_its_key_offered_where_the_code_is_built() {
     );
 }
 
+#[test]
+fn a_built_use_lists_its_codes_registrations_beside_its_offered_key() {
+    for (source, registered) in [
+        (
+            "LET q = #((EXPR #(GREET y :Any) -> Any = #(y)) (PRINT \\(GREET 1)))",
+            true,
+        ),
+        // A registration written after the use is not seen by it.
+        (
+            "LET q = #((PRINT \\(GREET 1)) (EXPR #(GREET y :Any) -> Any = #(y)))",
+            false,
+        ),
+    ] {
+        built(source, |fixture, shape| {
+            let code = code(shape, 0);
+            let at = usize::from(registered);
+            let parts = code.body()[at].parts;
+            let greet = candidates(code, node(&parts[1].value));
+            let offered = match (registered, greet.candidates) {
+                (
+                    true,
+                    [
+                        Candidate::One(Coordinate::Activation {
+                            hops: 0,
+                            target: Target::Local(own),
+                        }),
+                        Candidate::Spread(offered),
+                    ],
+                ) => {
+                    assert_eq!(*own, code.registrations()[0].slot, "`{source}`");
+                    offered
+                }
+                (false, [Candidate::Spread(offered)]) => offered,
+                (_, listed) => panic!("`{source}` lists {listed:?}"),
+            };
+            let Coordinate::Activation {
+                target: Target::Capture(index),
+                ..
+            } = offered
+            else {
+                panic!("`{source}`: an offered key is a capture");
+            };
+            let capture = code.captures()[index.0 as usize];
+            assert_eq!(
+                (capture.name, capture.mark, capture.source),
+                (
+                    key(fixture, "GREET _"),
+                    Some(Mark::Built),
+                    CaptureSource::Offered
+                ),
+                "`{source}`"
+            );
+            // The quote's type still needs the key, as the offered capture does.
+            let needing = fixture.types.code_needing(
+                fixture.scratch(),
+                KType::BLOCK,
+                &[key(fixture, "GREET _")],
+            );
+            assert_eq!(code.code_type(), needing, "`{source}`");
+        });
+    }
+}
+
 /// Every key a `\(…)` leaves open renders as written, even one no source spells: the combiner of
 /// a chained comparison, and the `==` of a `!=`.
 #[test]

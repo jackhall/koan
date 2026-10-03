@@ -141,7 +141,9 @@ The [scope](src/scope/README.md) laws are round trips at the tier's full depth, 
 filtered. [`src/scope/tests/plan.rs`](src/scope/tests/plan.rs) generates a *shape plan* from a
 stream of choices. A plan says what each scope should come out as: its binders in the value and
 type channels, how they partition into components, each read's class, and the binder each read
-lands on. The plan is rendered to koan source, which is parsed and built. Every plan is valid by
+lands on. A plan also writes quote values, whose code holds holes, `$` and `\` names,
+registrations and keyworded uses at planned keys, each use beside the candidates its mark says it
+lists. The plan is rendered to koan source, which is parsed and built. Every plan is valid by
 construction and names are unique across the program, so the expected shape is the plan itself
 and nothing is re-derived from the source. `MODULE` and operator bodies are not generated, and
 neither is `USING … SCOPE`: a `USING` block's parameters are *derived* — from the declaration its
@@ -157,19 +159,36 @@ itself, asserting on the shape a body owns: the four rewrites, where an operator
 run is reached, equality and the `!=` negation, the groups a `USING` body and a
 quote's code see, and each refusal. [`src/scope/tests/quotes.rs`](src/scope/tests/quotes.rs)
 covers a quote value's code shape by example: how a hole, a `$` name and a `\` name each resolve,
-its carried type, a malformed quote kept as a refusal, a mark no quote value holds, and the names
-an `EVAL` offers.
+its carried type, a malformed quote kept as a refusal, a refused code handing nothing to the next
+body drafted, a mark no quote value holds, and the names an `EVAL` offers.
 [`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds four laws:
 
 - a planned program shapes back into its plan: kinds, layouts, components and whether each is
   cyclic, one mention per planned read with its class, statement and landing, nested scopes,
   which captures are knot edges, and a unit order in which a unit runs after every unit it reads
-  and every statement is in exactly one unit;
+  and every statement is in exactly one unit; and every name and keyworded use in a quote's code
+  lands where its mark says — a hole, a binder of the code, where a read written at the quote lands
+  through `$`, or offered through `\`;
 - a plan with exactly one refusal injected (an eager cycle, an eager read ahead, an undeclared
   name, a rebind, a shadowed builtin) is refused with that refusal;
 - a name re-declared inside a nested scope takes the reads nearest it;
 - every activation of a planned program reads by name what its coordinates name, and closure
-  bindings copy the enclosing words or hold knot edges.
+  bindings copy the enclosing words or hold knot edges. A quote's code is not activated, since
+  only an `EVAL` runs one.
+
+The knot suite renders the same plans with no quote value, since its law does not read how a
+quote ties.
+
+### Dispatch property laws
+
+The [dispatch](src/dispatch/README.md#testing) laws draw types, values and whole programs from
+[`src/dispatch/tests/generate.rs`](src/dispatch/tests/generate.rs), every program valid by
+construction. The narrowing law runs each program as loaded and again under the test-only
+`unnarrowed` switch in [`statics.rs`](src/dispatch/statics.rs), which leaves every keyworded use
+whole and refuses none: a program the load accepts runs as it does unnarrowed, and a use the load
+refuses faults when run unnarrowed.
+The lexical-variable law runs a site naming a quantified variable by a type with and without the
+contexts drawn around it, the bare program its oracle.
 
 ## Tutorial snippets
 

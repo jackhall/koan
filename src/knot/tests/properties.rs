@@ -8,7 +8,9 @@
 //!
 //! The plans render a data binder of a cyclic component as a list literal: its deferred reads as
 //! name tokens, and a lambda or a call over its eager reads as parenthesized items. The law reads
-//! the planned reads back from that rendering through the shape's mentions.
+//! the planned reads back from that rendering through the shape's mentions. The plans write
+//! registrations, each its own component, but no quote value: the law does not read how a quote
+//! ties.
 
 use std::ptr;
 
@@ -60,7 +62,8 @@ fn rebuilt<'graph>(original: KValue<'graph, '_>, copied: KValue<'graph, '_>) -> 
     }
 }
 
-/// The value a runner binds a slot the tie does not: a fresh number, or a type for a type name.
+/// The value a runner binds a slot the tie does not: a fresh number, a type for a type name, or
+/// `null` for a registration.
 fn synthetic<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
@@ -73,9 +76,9 @@ fn synthetic<'graph, 'cell>(
             *next += 1.0;
             Value::Number(*next)
         }
-        BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
-            unreachable!("the plans declare no registration")
-        }
+        // No planned read reaches a registration outside a quote's code.
+        BinderSymbol::Registration(_) => Value::Null,
+        BinderSymbol::Key(_) => unreachable!("no binder declares a key"),
     }
 }
 

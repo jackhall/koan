@@ -22,111 +22,9 @@ use crate::values::record_type;
 use super::super::builtins::Native;
 use super::super::rules::{Given, typed};
 use super::ascription::{WHICH, ends};
+use super::generate::{Desc, NAMES, chain};
 use super::run;
 use super::statics::{body, loaded};
-
-/// The field names a drawn record or name list picks from.
-const NAMES: [&str; 3] = ["x", "y", "z"];
-
-/// A type, drawn as a plain description and interned inside the test.
-#[derive(Clone, Debug)]
-enum Desc {
-    Never,
-    Number,
-    Str,
-    Null,
-    Any,
-    /// The slot's declared type, so a draw can lie under a slot no plain type lies under.
-    Declared,
-    List(Box<Desc>),
-    Record(Vec<(u8, Desc)>),
-    Union(Box<Desc>, Box<Desc>),
-}
-
-fn desc() -> BoxedStrategy<Desc> {
-    let leaf = prop_oneof![
-        Just(Desc::Never),
-        Just(Desc::Number),
-        Just(Desc::Str),
-        Just(Desc::Null),
-        Just(Desc::Any),
-        Just(Desc::Declared),
-    ];
-    leaf.prop_recursive(3, 12, 3, |inner| {
-        prop_oneof![
-            1 => inner.clone().prop_map(|each| Desc::List(Box::new(each))),
-            2 => prop::collection::vec((0..3u8, inner.clone()), 0..3).prop_map(Desc::Record),
-            1 => (inner.clone(), inner).prop_map(|(a, b)| Desc::Union(Box::new(a), Box::new(b))),
-        ]
-    })
-    .boxed()
-}
-
-/// Four types, each above the one before, built alike so they often differ only deep inside: a
-/// scalar climbing through `Never`, itself, a union over it and `Any`; a list of a chain; or a
-/// record of chained fields, its lower positions holding an extra field or split into a union of
-/// two records each holding one. Some positions from the bottom may be `Never` and some from the
-/// top `Any`.
-fn chain() -> BoxedStrategy<[Desc; 4]> {
-    let scalar = prop_oneof![Just(Desc::Number), Just(Desc::Str), Just(Desc::Null)];
-    let leaf = (scalar.clone(), scalar, levels()).prop_map(|(own, other, levels)| {
-        levels.map(|level| match level {
-            0 => Desc::Never,
-            1 => own.clone(),
-            2 => Desc::Union(Box::new(own.clone()), Box::new(other.clone())),
-            _ => Desc::Any,
-        })
-    });
-    leaf.prop_recursive(3, 12, 3, |inner| {
-        let list = inner
-            .clone()
-            .prop_map(|chain| chain.map(|each| Desc::List(Box::new(each))));
-        let record = (
-            prop::collection::vec((0..2u8, inner), 1..3),
-            (0..3u8, desc()),
-            prop::option::weighted(0.7, (0..3u8, desc())),
-            prop_oneof![0..4usize, Just(3)],
-        )
-            .prop_map(|(fields, extra, split, below)| {
-                std::array::from_fn(|position| {
-                    let record: Vec<(u8, Desc)> = (fields.iter())
-                        .map(|(name, chain)| (*name, chain[position].clone()))
-                        .collect();
-                    let with = |field: &(u8, Desc)| {
-                        let mut record = record.clone();
-                        record.push(field.clone());
-                        Desc::Record(record)
-                    };
-                    match &split {
-                        _ if position >= below => Desc::Record(record.clone()),
-                        None => with(&extra),
-                        Some(split) => Desc::Union(Box::new(with(&extra)), Box::new(with(split))),
-                    }
-                })
-            });
-        let clipped = (
-            prop_oneof![list.clone(), record.clone()],
-            0..2usize,
-            3..5usize,
-        )
-            .prop_map(|(chain, never, any): ([Desc; 4], usize, usize)| {
-                let mut chain = chain;
-                chain[..never].fill(Desc::Never);
-                chain[any..].fill(Desc::Any);
-                chain
-            });
-        prop_oneof![1 => list, 3 => record, 1 => clipped]
-    })
-    .boxed()
-}
-
-/// Four levels in `0..4`, each at least the one before.
-fn levels() -> impl Strategy<Value = [u8; 4]> {
-    [0..4u8, 0..4u8, 0..4u8, 0..4u8].prop_map(|mut levels| {
-        levels.sort_unstable();
-        levels
-    })
-}
 
 /// One slot as drawn: pinned at most its declared type in both intervals, or a chain `J.lower ≤
 /// I.lower ≤ I.upper ≤ J.upper`, a lower end the load never computes read as `Never`; and the
@@ -176,6 +74,7 @@ impl World<'_, '_> {
             Desc::Null => KType::NULL,
             Desc::Any => KType::ANY,
             Desc::Declared => declared,
+            Desc::Variable(_) => unreachable!("the rules law draws no variable"),
             Desc::List(element) => self.types.list(intern(element)),
             Desc::Record(fields) => {
                 let mut distinct: Vec<(BinderSymbol, KType)> = Vec::new();

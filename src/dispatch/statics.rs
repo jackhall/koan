@@ -11,7 +11,9 @@
 //! otherwise. What the load cannot bound is `[Never, Any]`. A static type may hold the lexical
 //! variables of its **chain** — the shapes from the program or a quote's code down, numbered as the
 //! type channel numbers them — and a crossing into code, or an `EVAL` leaving it, is read through
-//! [`bound_above`], so no variable leaks across.
+//! [`bound_above`], so no variable leaks across. A capture is followed to its source through one
+//! walk, which reports a crossing into code; a candidate it reaches across a code root whose
+//! registered shape names a variable of the chain outside is unknown.
 //!
 //! Each keyworded use **judges** each candidate class by class ([`judge_by_class`]): *never*
 //! drops it, *always* means it admits whatever the run carries, and a *maybe* one the call admits.
@@ -60,13 +62,18 @@
 //! record, and a keyworded argument's slot at each candidate — and the site is instantiated at the
 //! least instance under it ([`instance_under`]). A quantified callee's other arguments solve its
 //! group first, and the slot is read through that solve: a variable a class before the slot's
-//! solves is taken from that class's solving slots at their contributions, as the call solves it,
-//! where a run reproduces the solve.
+//! solves is taken from that class's solving slots at their contributions, as the call solves it —
+//! class by class, each pinned to what the classes before it solved — where a run reproduces the
+//! solve.
 //! The candidates a use keeps must agree on each instance. A name's solution is recorded by its
 //! site and a literal's in its body's born-instance cell; a site the wanted type fixes nothing at
 //! refuses the load. A solution naming a lexical variable records where the site reads it, as a
 //! contribution does, and the run reads the type it binds there. So a part's and a statement's
 //! static type is never a scheme.
+//!
+//! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
+//! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
+//! one.
 //!
 //! See [README.md § Static types](README.md#static-types).
 
@@ -75,9 +82,9 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate, Narrowing,
-    Position, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution, StaticType, Statics,
-    Target, UnitWork, Variable as Located, source_of,
+    BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate,
+    Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution, StaticType,
+    Statics, Target, UnitWork, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, Symbol};
@@ -140,6 +147,29 @@ fn unknown() -> Interval {
     under(KType::ANY.into())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Whether the pass leaves every keyworded use whole and refuses none: what the narrowing law
+    /// loads a program under to see the call a narrowing or a refusal stands for.
+    static UNNARROWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `load` with every keyworded use left whole — no narrowing, no refusal — and each argument's
+/// contribution still recorded.
+#[cfg(test)]
+pub(super) fn unnarrowed<R>(load: impl FnOnce() -> R) -> R {
+    /// Clears the switch however `load` ends, so a panicking case leaves it off for the next.
+    struct Cleared;
+    impl Drop for Cleared {
+        fn drop(&mut self) {
+            UNNARROWED.with(|switch| switch.set(false));
+        }
+    }
+    UNNARROWED.with(|switch| switch.set(true));
+    let _cleared = Cleared;
+    load()
+}
+
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
 type Bound = DeclaredType<Interval>;
 
@@ -156,6 +186,30 @@ pub(super) fn retyped_to(types: &TypeRegistry<'_>, declared: Parametric) -> Inte
         | TypeNode::SetMember { .. } => Interval::point(declared),
         _ => under(declared),
     }
+}
+
+/// Where a coordinate lands, its captures followed to their sources.
+#[derive(Clone, Copy)]
+enum Landing {
+    Builtin(BuiltinIndex),
+    /// A slot of the shape at `level`: a local, or the knot member a capture names.
+    Slot {
+        level: usize,
+        slot: Slot,
+    },
+    /// A capture whose source the chain does not hold: a hole, a name offered, or a read past the
+    /// chain's first shape.
+    Open {
+        hole: bool,
+    },
+}
+
+/// A landing, and whether the walk to it crossed into a quote's code: took a capture of a shape
+/// that roots a chain.
+#[derive(Clone, Copy)]
+struct Followed {
+    landing: Landing,
+    crossed: bool,
 }
 
 /// One shape on the chain, innermost last, with what the pass has typed of it so far.
@@ -900,13 +954,14 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     }
 
     /// The variables of the slot at `position` of the candidate `shape` that a class before that
-    /// slot's solves, each solved as the call solves it: from the solving slots of those classes,
-    /// each at its argument's contribution the load knows among `contributions`. A variable is
-    /// fixed only where that solve is reproducible ([`Collector::reproducible`]): the call binds
-    /// each lexical variable as the load did. `None` for every other variable, and empty where
-    /// there is none. `Misfit` where those contributions never admit at any binding, since the call
-    /// then never runs; `Open` naming a variable a slot that solves it reads no contribution at —
-    /// an instance argument's, or unknown — or one a run may solve otherwise.
+    /// slot's solves, each solved as the call solves it: class by class, from each earlier class's
+    /// solving slots at their contributions the load knows among `contributions`, pinned to what
+    /// the classes before it solved. A variable is fixed only where that solve is reproducible
+    /// ([`Collector::reproducible`]): the call binds each lexical variable as the load did. `None`
+    /// for every other variable, and empty where there is none. `Misfit` where those contributions
+    /// never admit at any binding, since the call then never runs; `Open` naming a variable a slot
+    /// that solves it reads no contribution at — an instance argument's, or unknown — or one a run
+    /// may solve otherwise.
     fn solved_earlier(
         &self,
         shape: DeclaredType<Parametric>,
@@ -947,41 +1002,74 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             open.extend(shared.iter().copied());
             Unsolved::Open(open)
         };
-        let mut collector = Collector::<Parametric>::new(scratch, bounds);
-        for slot in 0..slots.len() {
-            if !(earlier(slot) && solving[slot] && shared.iter().any(|v| names(slot, *v))) {
+        // Each earlier class in order, in a collector of its own pinned to what the classes before
+        // it solved, as `admit_by_class` admits the call. Only the shared variables are pinned: a
+        // variable these slots name beside them may take contributions from slots skipped here.
+        let first = |variable: usize| {
+            (0..slots.len())
+                .filter(|slot| names(*slot, variable))
+                .map(class)
+                .min()
+        };
+        let mut earlier_classes = BumpVec::new_in(scratch);
+        earlier_classes.extend((0..slots.len()).filter(|slot| earlier(*slot)).map(class));
+        earlier_classes.sort_unstable();
+        earlier_classes.dedup();
+        let mut fixed = BumpVec::with_capacity_in(bounds.len(), scratch);
+        fixed.resize(bounds.len(), None);
+        for current in earlier_classes.iter().copied() {
+            let mut collector = Collector::<Parametric>::new(scratch, bounds);
+            for (variable, to) in fixed.iter().enumerate() {
+                if let Some(to) = to {
+                    collector.pin(variable, bounds[variable], *to);
+                }
+            }
+            let mut admitted_any = false;
+            for slot in 0..slots.len() {
+                if !(class(slot) == current
+                    && solving[slot]
+                    && shared.iter().any(|v| names(slot, *v)))
+                {
+                    continue;
+                }
+                admitted_any = true;
+                let contribution = match contributions[slot] {
+                    Static::Closed(contribution) => contribution.into(),
+                    Static::Rigid { value, .. } => value,
+                    Static::Unknown => return Err(open(slot)),
+                };
+                let admitted = admits_with(
+                    types,
+                    scratch,
+                    slots[slot],
+                    contribution,
+                    Variance::Co,
+                    &mut collector,
+                );
+                // A failure a run may not reproduce may admit at some binding: it fixes nothing.
+                if admitted.is_err() {
+                    return Err(match collector.reproducible(types) {
+                        true => Unsolved::Misfit,
+                        false => open(slot),
+                    });
+                }
+            }
+            if !admitted_any {
                 continue;
             }
-            let contribution = match contributions[slot] {
-                Static::Closed(contribution) => contribution.into(),
-                Static::Rigid { value, .. } => value,
-                Static::Unknown => return Err(open(slot)),
+            let reproducible = collector.reproducible(types);
+            let solution = match collector.solve(types) {
+                Ok(solution) if reproducible => solution,
+                Err(_) if reproducible => return Err(Unsolved::Misfit),
+                _ => return Err(all_open()),
             };
-            let admitted = admits_with(
-                types,
-                scratch,
-                slots[slot],
-                contribution,
-                Variance::Co,
-                &mut collector,
-            );
-            // A failure a run may not reproduce may admit at some binding: it fixes nothing.
-            if admitted.is_err() {
-                return Err(match collector.reproducible(types) {
-                    true => Unsolved::Misfit,
-                    false => open(slot),
-                });
+            for variable in shared.iter().copied() {
+                if first(variable) == Some(current) {
+                    fixed[variable] = Some(solution[variable]);
+                }
             }
         }
-        let reproducible = collector.reproducible(types);
-        let solution = match collector.solve(types) {
-            Ok(solution) if reproducible => solution,
-            Err(_) if reproducible => return Err(Unsolved::Misfit),
-            _ => return Err(all_open()),
-        };
-        Ok(scratch.alloc_slice_fill_iter(
-            (0..bounds.len()).map(|v| shared.contains(&v).then(|| solution[v])),
-        ))
+        Ok(scratch.alloc_slice_fill_iter(fixed.iter().copied()))
     }
 
     /// The instance each of `sites`, the instance arguments of a keyworded use whose arguments'
@@ -989,8 +1077,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// candidate the load knows as `known`: wanted at its slot's type, read through the candidate's
     /// group solved from its other arguments where it has one — a variable a class before the
     /// slot's solves taken from that class's solving slots at their contributions, as the call
-    /// solves it. Refused where the load does not know the candidate's shape or makes no instance;
-    /// `None` where the other arguments do not fit their slots, which the judge refuses.
+    /// solves it, class by class. Refused where the load does not know the candidate's shape or
+    /// makes no instance; `None` where the other arguments do not fit their slots, which the judge
+    /// refuses.
     fn instances(
         &self,
         known: Known,
@@ -1439,35 +1528,19 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// callable's its scheme. A capture along the chain reads its source's; one crossing into a
     /// quote's code reads it through its bounds.
     fn read_declared(&self, level: usize, coordinate: Coordinate) -> Bound {
-        let (hops, target) = match coordinate {
-            Coordinate::Builtin(index) => {
+        let Followed { landing, crossed } = self.follow(level, coordinate);
+        let read = match landing {
+            Landing::Builtin(index) => {
                 return self
                     .builtins
                     .get(index)
                     .ktype()
                     .map(|ktype| Interval::point(ktype.into()));
             }
-            Coordinate::Activation { hops, target } => (hops, target),
+            Landing::Slot { level, slot } => self.chain[level].binders[slot.index()],
+            Landing::Open { .. } => return DeclaredType::Type(unknown()),
         };
-        let at = level - hops as usize;
-        let capture = match target {
-            Target::Local(slot) => return self.chain[at].binders[slot.index()],
-            Target::Capture(capture) => capture,
-        };
-        let outer = at.checked_sub(1);
-        let read = match (
-            self.chain[at].shape.captures()[capture.index()].source,
-            outer,
-        ) {
-            (CaptureSource::Read(inner), Some(outer)) => self.read_declared(outer, inner),
-            (CaptureSource::Member { component, index }, Some(outer)) => {
-                let member =
-                    self.chain[outer].shape.components()[component.index()].members[index as usize];
-                self.chain[outer].binders[member.index()]
-            }
-            _ => return DeclaredType::Type(unknown()),
-        };
-        if !self.chain[at].roots_chain {
+        if !crossed {
             return read;
         }
         let (types, scratch) = (self.types, self.scratch);
@@ -1481,27 +1554,66 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// Where `coordinate`, read in the shape at `level`, lands: a slot of the shape at some level,
-    /// followed through the captures it reads.
-    fn slot_of(&self, level: usize, coordinate: Coordinate) -> Option<(usize, Slot)> {
-        let Coordinate::Activation { hops, target } = coordinate else {
-            return None;
+    /// Follow `coordinate`, read in the shape at `level`, to where it lands: a hop per block, and
+    /// each capture to its source in the shape outside. The one walk every reader of a capture
+    /// takes.
+    fn follow(&self, mut level: usize, mut coordinate: Coordinate) -> Followed {
+        let mut crossed = false;
+        let open = |hole, crossed| Followed {
+            landing: Landing::Open { hole },
+            crossed,
         };
-        let at = level.checked_sub(hops as usize)?;
-        match target {
-            Target::Local(slot) => Some((at, slot)),
-            Target::Capture(capture) => {
-                let outer = at.checked_sub(1)?;
-                match self.chain[at].shape.captures()[capture.index()].source {
-                    CaptureSource::Read(inner) => self.slot_of(outer, inner),
-                    CaptureSource::Member { component, index } => {
-                        let members =
-                            self.chain[outer].shape.components()[component.index()].members;
-                        Some((outer, members[index as usize]))
-                    }
-                    CaptureSource::Hole | CaptureSource::Offered => None,
+        loop {
+            let (hops, target) = match coordinate {
+                Coordinate::Builtin(index) => {
+                    return Followed {
+                        landing: Landing::Builtin(index),
+                        crossed,
+                    };
+                }
+                Coordinate::Activation { hops, target } => (hops, target),
+            };
+            let Some(at) = level.checked_sub(hops as usize) else {
+                return open(false, crossed);
+            };
+            let capture = match target {
+                Target::Local(slot) => {
+                    return Followed {
+                        landing: Landing::Slot { level: at, slot },
+                        crossed,
+                    };
+                }
+                Target::Capture(capture) => capture,
+            };
+            let holder = &self.chain[at];
+            let outer = at.checked_sub(1);
+            match (holder.shape.captures()[capture.index()].source, outer) {
+                (CaptureSource::Hole, _) => return open(true, crossed),
+                (CaptureSource::Offered, _) | (_, None) => return open(false, crossed),
+                (CaptureSource::Read(inner), Some(outer)) => {
+                    crossed |= holder.roots_chain;
+                    (level, coordinate) = (outer, inner);
+                }
+                (CaptureSource::Member { component, index }, Some(outer)) => {
+                    let members = self.chain[outer].shape.components()[component.index()].members;
+                    return Followed {
+                        landing: Landing::Slot {
+                            level: outer,
+                            slot: members[index as usize],
+                        },
+                        crossed: crossed || holder.roots_chain,
+                    };
                 }
             }
+        }
+    }
+
+    /// The slot `coordinate`, read in the shape at `level`, lands at, whether or not the walk to
+    /// it crossed into a quote's code.
+    fn landed_slot(&self, level: usize, coordinate: Coordinate) -> Option<(usize, Slot)> {
+        match self.follow(level, coordinate).landing {
+            Landing::Slot { level, slot } => Some((level, slot)),
+            Landing::Builtin(_) | Landing::Open { .. } => None,
         }
     }
 
@@ -1865,7 +1977,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                         _ => None,
                     };
                 }
-                let (at, slot) = self.slot_of(level, coordinate)?;
+                let (at, slot) = self.landed_slot(level, coordinate)?;
                 let holder = self.chain[at].shape;
                 holder.declarations(slot)?;
                 match holder.declared_type(slot) {
@@ -2059,6 +2171,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         if contributes && !self.unfilled {
             self.chain[level].contributions[index] =
                 collect(self.writer, contributions.iter().copied());
+        }
+        // The narrowing law's unnarrowed load: see `unnarrowed`.
+        #[cfg(test)]
+        if UNNARROWED.with(std::cell::Cell::get) {
+            return Ok(unknown());
         }
         if judged.is_empty() {
             // One candidate's own instance refusal, or every candidate's at once.
@@ -2276,7 +2393,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             ExpressionPart::QuotedExpression(_) => shape.nested(Site::of(operand)),
             ExpressionPart::Identifier(_) => {
                 let coordinate = shape.mention(Site::of(operand))?.coordinate;
-                let (at, slot) = self.slot_of(level, coordinate)?;
+                let (at, slot) = self.landed_slot(level, coordinate)?;
                 let holder = self.chain[at].shape;
                 match holder.rhs(slot)? {
                     rhs @ ExpressionPart::QuotedExpression(_) => holder.nested(Site::of(rhs)),
@@ -2288,23 +2405,18 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     }
 
     /// Whether `candidate`, read in the shape at `level`, is an unmarked key's hole: a spread a
-    /// `USING` fills.
+    /// `USING` fills. A hole past a quote's code root is not this code's.
     fn hole(&self, level: usize, candidate: Candidate) -> bool {
-        let Candidate::Spread(Coordinate::Activation {
-            hops,
-            target: Target::Capture(capture),
-        }) = candidate
-        else {
+        let Candidate::Spread(coordinate) = candidate else {
             return false;
         };
-        let at = level - hops as usize;
-        match self.chain[at].shape.captures()[capture.index()].source {
-            CaptureSource::Hole => true,
-            CaptureSource::Read(inner) if !self.chain[at].roots_chain => {
-                self.hole(at - 1, Candidate::Spread(inner))
+        matches!(
+            self.follow(level, coordinate),
+            Followed {
+                landing: Landing::Open { hole: true },
+                crossed: false,
             }
-            _ => false,
-        }
+        )
     }
 
     /// The builtin `candidate` names, where it names one.
@@ -2325,15 +2437,18 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let Candidate::One(coordinate) = candidate else {
             return false;
         };
-        self.slot_of(level, coordinate).is_some_and(|(at, slot)| {
-            self.chain[at]
-                .shape
-                .registration(slot)
-                .is_some_and(|registration| registration.surfaced.is_some())
-        })
+        self.landed_slot(level, coordinate)
+            .is_some_and(|(at, slot)| {
+                self.chain[at]
+                    .shape
+                    .registration(slot)
+                    .is_some_and(|registration| registration.surfaced.is_some())
+            })
     }
 
-    /// What the load knows of `candidate`'s registered shape, read from the shape at `level`.
+    /// What the load knows of `candidate`'s registered shape, read from the shape at `level`. A
+    /// candidate reached across a quote's code root whose registered shape names a variable of the
+    /// chain outside is unknown: the code roots a chain of its own.
     fn candidate(&self, level: usize, candidate: Candidate) -> Known {
         let coordinate = match candidate {
             Candidate::Spread(_) => return Known::Unknown,
@@ -2345,7 +2460,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             }
             Candidate::One(coordinate) => coordinate,
         };
-        let Some((at, slot)) = self.slot_of(level, coordinate) else {
+        let Followed {
+            landing: Landing::Slot { level: at, slot },
+            crossed,
+        } = self.follow(level, coordinate)
+        else {
             return Known::Unknown;
         };
         let holder = self.chain[at].shape;
@@ -2354,8 +2473,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
         match holder.registered_type(slot) {
             Static::Closed(registered) => Known::Closed(registered.shape),
-            Static::Rigid { value, .. } => Known::Rigid(value.shape),
-            Static::Unknown => Known::Unknown,
+            Static::Rigid { value, .. } if !crossed => Known::Rigid(value.shape),
+            Static::Rigid { .. } | Static::Unknown => Known::Unknown,
         }
     }
 }

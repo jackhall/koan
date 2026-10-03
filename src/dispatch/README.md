@@ -328,8 +328,9 @@ nothing, and `NoInstance` where the scheme does not fit the wanted type. A
 quantified callee's slot is read through its group solved from its **other**
 arguments first. A variable that a class before the slot's
 [solves](../type_lattice/solving.md#priority-classes) is taken as the call
-solves it, from those classes' solving slots, each at its argument's
-contribution: under `EXPR #(APPLY 2 TO 1)` and
+solves it: class by class, from each class's solving slots at their arguments'
+contributions, each class pinned to what the classes before it solved. Under
+`EXPR #(APPLY 2 TO 1)` and
 `EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :Elt) -> Elt`,
 `APPLY pick TO b` over a parameter `b :(Number | Str)` instantiates `pick` at
 `Elt = Number | Str`. A contribution holding a lexical variable fixes the
@@ -427,7 +428,11 @@ under `Elt`, and a parameter `x :Elt` fills a slot `:Elt` with nothing to solve.
 Against any other type a variable lies under what its bound lies under, and a
 meet reads both sides through `bound_above`. A quote's code roots a chain of its
 own, so a static type crossing into it, a `$` name's, or leaving it, an
-`EVAL`'s, is read through `bound_above` too.
+`EVAL`'s, is read through `bound_above` too. A candidate a use in the code
+reaches across its root, a `$(…)` use's, keeps its registered shape where that
+shape is closed and is unknown to the load where the shape names a variable of
+the chain outside: read through its bounds, `#(GREET x :Outer) -> Outer` would
+admit nothing.
 
 **Verdicts.** Each keyworded use gives each candidate one of three, as
 [`judge_by_class`](../type_lattice/solving.md#priority-classes) judges it:
@@ -701,9 +706,9 @@ outranking it;
 [generic](tests/generic.rs) — generic code at load: a nested callable
 substituted by level and agreeing with its load-time type where it is born, a
 quote's code typed twice interning nothing, a nested group's parameters and
-return check, exact static types, crossings into and out of code, an `EVAL`'s
-declared type, a quantified candidate selected where its static solve is the
-call's, a
+return check, exact static types, crossings into and out of code, a candidate
+over a variable outside code unknown in it, an `EVAL`'s declared type, a
+quantified candidate selected where its static solve is the call's, a
 *maybe* an *always* outranks dropped, a use ranked at load and one ranked at the
 call, and returns read through a group's intervals, by keyword and by name;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
@@ -718,7 +723,9 @@ record access, construction, error values, and a program nested to the
 shape run on a [`STACK_BYTES`](../program/README.md#the-stack) thread, one
 level more refused at load; [quotes](tests/quotes.rs) —
 an `EVAL` run to its declared return, a bare return spelling and an `EVAL`
-declaring none, unmarked uses, `USING` fills, both marks and `NEEDING` keys;
+declaring none, unmarked uses, `USING` fills, both marks and `NEEDING` keys, a
+`\(…)` use selecting among its code's registrations and the offered ones, and a
+refused code handing nothing to the next body drafted;
 [ascription](tests/ascription.rs) — `:!` retyping member by member, a tagged
 value, a cyclic value, a miss and a module operand at run, a declared parameter
 retyping by keyword and by name with the solution substituted, a tail chain
@@ -740,7 +747,8 @@ arguments first, candidates disagreeing, a call by name's record, a closed
 solution, a solution over a type each run binds — at each kind of site, through
 nested callables and a block, and its equality under one binding and two — a
 keyworded slot's variables an earlier class solves, ranked, in written order
-and pooled over two earlier classes, fixed at each binding over a lexical
+and solved class by class over two earlier classes, a later one checking what
+an earlier one solved, fixed at each binding over a lexical
 earlier argument, a rigid candidate and a shared variable a reproducible solve
 fixes, and refused over an unknown earlier argument or one read through a
 lexical bound, an instance's body reading
@@ -761,6 +769,14 @@ and a later slot reading an earlier lexical solution at its ends;
 [rules](tests/rules.rs) — the law every native's type rule obeys over drawn
 argument intervals and names, and what `FROM`'s and `ATTR`'s rules make
 the load type and refuse and the run carry;
+[narrowing](tests/narrowing.rs) — the law that static narrowing is
+transparent: a drawn program the load accepts runs as it does loaded under the
+test-only `unnarrowed` switch, which leaves every use whole and refuses none,
+and a use the load refuses faults there; [lexical](tests/lexical.rs) — the law that a
+lexical variable reads the same through any context, a site naming one by a
+type run inside drawn functions, closures, hoisting blocks, modules and a
+quote's code and without them; [generate](tests/generate.rs) holds the types,
+values and programs these laws and `rules` draw;
 [surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
 through a newtype or a family seeing only what the carried type names, one node
 seen at two types, a widened literal's element, and `FROM` sharing its record's

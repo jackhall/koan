@@ -616,9 +616,15 @@ Inside a quote, a name or a keyworded use is in one of three states:
 - **`\` resolves where the code is built**, as the list of free names a
   syntactic closure leaves open does (Bawden and Rees). `\x` binds to the
   nearest binder in the code it is composed into, and otherwise to what the
-  build supplies ([building code](#building-code)); `\(…)` does the same for
-  the one keyworded use it wraps, again covering only that use. A mark keeps
-  its `\` through every composition until something binds it.
+  build supplies ([building code](#building-code)); `\(…)` covers only the one
+  keyworded use it wraps. Since an overload set accumulates where a name binds
+  once, `\(…)` lists the registrations at its key that its code holds where the
+  use sees them beside its key offered where the code is built, as a hole lists
+  them beside its key's hole: in
+  `#((EXPR #(GREET y :Any) -> Any = #(y)) (PRINT \(GREET 1)))` both the code's
+  `GREET` and the one the build offers are candidates, and the quote still needs
+  `GREET _`. A mark keeps its `\` through every composition until something
+  binds it.
 - **`code USING src`** binds the holes `src` surfaces — a record's fields, a
   module's members, and a keyworded hole to the module's registrations at its
   key — and returns code with the others still holes, as

@@ -445,3 +445,23 @@ fn an_eval_of_a_parameter_needing_names_offers_them_where_it_is_written() {
         },
     );
 }
+
+#[test]
+fn a_refused_code_hands_nothing_to_the_next_body() {
+    // The code surfaces `Shown`'s head into the `USING` block, then refuses its operator run; the
+    // next body drafted must not take that head as a registration of its own.
+    shaped(
+        "LET q = #((SIG Shown = #[(EXPR #(SHOW _ :Number) -> Str)]) (USING (m :! Shown) SCOPE (1 + 2 == 3)))\nLET f = (FN :{} -> Number = #(1))",
+        |fixture, shape| {
+            let shape = shape.expect("a quote's code is never refused where the program loads");
+            assert!(matches!(
+                code(shape, 0).refusal(),
+                Some(ShapeError::MixedGroups { .. })
+            ));
+            let (f, _) = shape.slot(value(fixture, "f")).unwrap();
+            let body = shape.births(f).expect("`f` births its body");
+            assert!(body.registrations().is_empty());
+            assert_eq!(body.slots(), 0);
+        },
+    );
+}

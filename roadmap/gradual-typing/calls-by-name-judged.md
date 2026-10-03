@@ -66,8 +66,9 @@ early return makes `scheme` always `Some`, and `exact` equals `contributed`.
 
 ## Dependencies
 
-**Requires:**
+Its laws draw from dispatch's shared program generator
+([generate.rs](../../src/dispatch/tests/generate.rs)).
 
-- [One entry per draft, one walk per capture](entry-and-capture-walk.md) — the narrowing law's program generator, which this item's laws draw from.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

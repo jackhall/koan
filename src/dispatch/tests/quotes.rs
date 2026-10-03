@@ -194,3 +194,29 @@ fn a_using_source_fills_only_the_fields_its_type_names() {
         "error: unbound name 'y'"
     );
 }
+
+#[test]
+fn a_refused_code_hands_nothing_to_the_next_body() {
+    assert_eq!(
+        run(concat!(
+            "LET q = #((SIG Shown = #[(EXPR #(SHOW _ :Number) -> Str)]) ",
+            "(USING (m :! Shown) SCOPE (1 + 2 == 3)))\n",
+            "LET f = (FN :{} -> Number = #(1))\n",
+            "PRINT (f {})",
+        )),
+        "1"
+    );
+}
+
+#[test]
+fn a_built_use_selects_among_the_codes_registrations_and_the_offered_ones() {
+    let source = concat!(
+        "EXPR #(RUN body :(Block NEEDING #[(GREET _)])) -> Any = #(\n",
+        "  EXPR #(GREET x :Str) -> Str = #(\"offered\")\n",
+        "  EVAL body -> Any\n",
+        ")\n",
+        "PRINT (RUN #((EXPR #(GREET x :Number) -> Str = #(\"own\")) (\\(GREET 1))))\n",
+        "PRINT (RUN #((EXPR #(GREET x :Number) -> Str = #(\"own\")) (\\(GREET \"bob\"))))",
+    );
+    assert_eq!(run(source), "own\noffered");
+}

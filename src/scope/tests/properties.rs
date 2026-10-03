@@ -1,6 +1,8 @@
-//! The laws: a generated shape plan, rendered and parsed, shapes back into the plan; a plan with one
-//! refusal injected is refused with it; a re-declared name takes the reads nearest it; and every
-//! activation of a planned shape reads what its coordinates name.
+//! The laws: a generated shape plan, rendered and parsed, shapes back into the plan, every name and
+//! keyworded use in a quote's code landing where its mark says; a plan with one refusal injected is
+//! refused with it; a re-declared name takes the reads nearest it; and every activation of a
+//! planned shape reads what its coordinates name. A quote's code is never activated: only an `EVAL`
+//! runs one.
 
 use std::collections::BTreeSet;
 
@@ -9,24 +11,37 @@ use proptest::prelude::*;
 use crate::memory::{BumpAllocator, KnotPlan, Writer, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Activation, BodyShape, Builtins, CaptureSource, ClosureBindings, Coordinate, MentionClass,
-    Position, ShapeError, ShapeKind, Site, Slot, Target, UnitWork,
+    Activation, BodyShape, Builtins, Candidate, CaptureSource, ClosureBindings, Coordinate,
+    MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target, UnitWork,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::{Link, Value};
 
-use super::plan::{self, Class, Generator, Kind, Lands, Refusal, Rendering, Token};
+use super::plan::{self, Class, Generator, Kind, Lands, Listed, Refusal, Rendering, Token};
 use super::{NOWHERE, Probe, ProbeFamily, builtins, unlocated, with_fixture};
 
 // ---------- reading the rendering back ----------
 
-/// A name part or a nested body met walking parsed parts in source order.
+/// A name part, a nested body or a keyworded use met walking parsed parts in source order.
 enum Met<'g> {
     Name(Site),
     Open(&'g BodyShape<'g>),
     Close,
+    /// A node its shape holds a candidate list for, at its [`Site::of_node`].
+    Use(Site),
+}
+
+/// Meet `node` as a keyworded use where the innermost shape holds a candidate list for it.
+fn meet_use<'g>(node: &KExpression<'g>, shapes: &[&'g BodyShape<'g>], met: &mut Vec<Met<'g>>) {
+    let site = Site::of_node(node);
+    if shapes
+        .last()
+        .is_some_and(|shape| shape.candidates(site).is_some())
+    {
+        met.push(Met::Use(site));
+    }
 }
 
 /// Walk `part` in source order. With a shape chain, a part the innermost shape nests a body at opens
@@ -37,11 +52,11 @@ fn walk<'g>(
     met: &mut Vec<Met<'g>>,
 ) {
     match part {
-        ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
-            met.push(Met::Name(Site::of(part)))
-        }
-        ExpressionPart::MarkedName(..) => {}
+        ExpressionPart::Identifier(_)
+        | ExpressionPart::Type(_)
+        | ExpressionPart::MarkedName(..) => met.push(Met::Name(Site::of(part))),
         ExpressionPart::MarkedUse(_, node) => {
+            meet_use(node.reference(), shapes, met);
             for inner in node.reference().parts {
                 walk(&inner.value, shapes, met);
             }
@@ -57,6 +72,7 @@ fn walk<'g>(
                 met.push(Met::Open(nested));
                 shapes.push(nested);
             }
+            meet_use(node.reference(), shapes, met);
             for inner in node.reference().parts {
                 walk(&inner.value, shapes, met);
             }
@@ -85,9 +101,11 @@ fn walk<'g>(
     }
 }
 
-/// Where each planned read and each planned scope landed in the parsed source.
+/// Where each planned read, keyworded use and scope landed in the parsed source.
 struct Located<'g> {
     sites: Vec<Site>,
+    /// Each planned use's site, met only where the walk had shapes.
+    uses: Vec<Option<Site>>,
     shapes: Vec<Option<&'g BodyShape<'g>>>,
 }
 
@@ -101,6 +119,7 @@ fn locate<'g>(
     let mut met = Vec::new();
     let mut shapes: Vec<_> = root.into_iter().collect();
     for node in nodes {
+        meet_use(node, &shapes, &mut met);
         for part in node.parts {
             walk(&part.value, &mut shapes, &mut met);
         }
@@ -118,6 +137,7 @@ fn locate<'g>(
         "`{source}` parsed out of step with its rendering"
     );
     let mut sites = vec![None; rendering.reads.len()];
+    let mut uses = vec![None; rendering.uses.len()];
     let mut shapes = vec![None; rendering.scopes.len()];
     shapes[0] = root;
     for (token, met) in tokens.into_iter().zip(met) {
@@ -125,6 +145,11 @@ fn locate<'g>(
             (Token::Mention(index), Met::Name(site)) => sites[index] = Some(site),
             (Token::Other, Met::Name(_)) | (Token::Close, Met::Close) => {}
             (Token::Open(index), Met::Open(shape)) => shapes[index] = Some(shape),
+            (Token::Use(index), Met::Use(site)) => {
+                if let Some(index) = index {
+                    uses[index] = Some(site);
+                }
+            }
             (token, _) => panic!("`{source}` parsed out of step with its rendering at {token:?}"),
         }
     }
@@ -133,6 +158,7 @@ fn locate<'g>(
             .into_iter()
             .map(|site| site.expect("every read is met"))
             .collect(),
+        uses,
         shapes,
     }
 }
@@ -144,6 +170,7 @@ fn kind(kind: Kind) -> ShapeKind {
         Kind::Program => ShapeKind::Program,
         Kind::Callable => ShapeKind::Callable,
         Kind::Arm => ShapeKind::Block,
+        Kind::Code => ShapeKind::Code,
     }
 }
 
@@ -154,11 +181,14 @@ fn class(class: Class) -> MentionClass {
     }
 }
 
-/// Where a coordinate lands: a builtin, or a binder of the shape at `level` of the chain.
+/// Where a coordinate lands: a builtin, a binder of the shape at `level` of the chain, or a hole or
+/// offered name of a quote's code.
 #[derive(PartialEq, Eq, Debug)]
 enum Found {
     Builtin,
     Binder { level: usize, name: BinderSymbol },
+    Hole,
+    Offered,
 }
 
 /// Follow `coordinate`, read at `level`, back through the chain's block steps and captures.
@@ -183,10 +213,9 @@ fn follow(chain: &[&BodyShape<'_>], level: usize, coordinate: Coordinate) -> Fou
             name: shape.slot_name(slot),
         },
         Target::Capture(slot) => {
-            assert_eq!(
-                shape.kind(),
-                ShapeKind::Callable,
-                "only a callable captures"
+            assert!(
+                matches!(shape.kind(), ShapeKind::Callable | ShapeKind::Code),
+                "only a callable or a quote's code captures"
             );
             match shape.captures()[slot.index()].source {
                 CaptureSource::Read(source) => follow(chain, at - 1, source),
@@ -198,9 +227,8 @@ fn follow(chain: &[&BodyShape<'_>], level: usize, coordinate: Coordinate) -> Fou
                         name: enclosing.slot_name(member),
                     }
                 }
-                CaptureSource::Hole | CaptureSource::Offered => {
-                    unreachable!("a plan writes no quote value")
-                }
+                CaptureSource::Hole => Found::Hole,
+                CaptureSource::Offered => Found::Offered,
             }
         }
     }
@@ -266,14 +294,19 @@ fn check<'graph>(
         assert_eq!(shape.kind(), kind(planned.kind), "`{source}`");
         assert_eq!(shape.statements(), planned.statements.len() as u32);
 
-        // The layout: values in symbol order, then types in symbol order, each at its position.
+        // The layout: values in symbol order, then types in symbol order, each at its position, then
+        // one registration slot for each planned registration.
         let mut layout: Vec<_> = planned
             .binders()
             .into_iter()
             .map(|(name, position)| (name.is_type(), name.symbol(symbols), position))
             .collect();
         layout.sort();
-        assert_eq!(shape.slots(), layout.len(), "`{source}`");
+        let registrations = (planned.statements.iter())
+            .filter(|statement| matches!(statement.form, plan::BuiltinShape::Expr { .. }))
+            .count();
+        assert_eq!(shape.registrations().len(), registrations, "`{source}`");
+        assert_eq!(shape.slots(), layout.len() + registrations, "`{source}`");
         for (slot, (_, name, position)) in layout.into_iter().enumerate() {
             assert_eq!(
                 shape.slot(name),
@@ -286,9 +319,19 @@ fn check<'graph>(
         let self_reads = self_reads(symbols, rendering, index);
         let components =
             |sets: Vec<BTreeSet<BinderSymbol>>| sets.into_iter().collect::<BTreeSet<_>>();
+        let registration = |slot: &Slot| shape.registration(*slot).is_some();
         let built: Vec<BTreeSet<BinderSymbol>> = shape
             .components()
             .iter()
+            .filter(|component| {
+                // A registration is a component of its own.
+                let registers = component.members.iter().any(registration);
+                assert!(
+                    !registers || component.members.len() == 1,
+                    "`{source}`: a registration shares no component"
+                );
+                !registers
+            })
             .map(|component| {
                 assert!(component.deferred_only, "`{source}`");
                 let members: BTreeSet<BinderSymbol> = component
@@ -318,7 +361,9 @@ fn check<'graph>(
             .enumerate()
             .filter(|(_, placed)| placed.scope == index)
             .collect();
-        assert_eq!(shape.mentions().len(), reads.len(), "`{source}`");
+        let named = (shape.mentions().iter())
+            .filter(|mention| !matches!(mention.name, BinderSymbol::Registration(_)));
+        assert_eq!(named.count(), reads.len(), "`{source}`");
         for (read, placed) in reads {
             let mention = shape
                 .mentions()
@@ -338,6 +383,8 @@ fn check<'graph>(
                     level: level - up,
                     name: placed.read.name.symbol(symbols),
                 },
+                Lands::Hole => Found::Hole,
+                Lands::Offered => Found::Offered,
                 Lands::Nowhere => unreachable!("a valid plan reads nowhere"),
             };
             assert_eq!(
@@ -359,6 +406,33 @@ fn check<'graph>(
                 );
             }
         }
+        // Each planned keyworded use lists exactly its planned candidates.
+        let uses = (rendering.uses.iter().enumerate()).filter(|(_, placed)| placed.scope == index);
+        for (at, placed) in uses {
+            let site = located.uses[at].expect("every use is met");
+            let list = shape.candidates(site).expect("a use has a candidate list");
+            let mut listed: Vec<Listed> = (list.candidates.iter())
+                .map(|candidate| match *candidate {
+                    Candidate::One(coordinate) | Candidate::Spread(coordinate) => {
+                        match follow(&chain, level, coordinate) {
+                            Found::Builtin => Listed::Builtin,
+                            Found::Binder { level: at, name } => {
+                                let (_, position) = chain[at].slot(name).expect("a registration");
+                                Listed::Registration {
+                                    up: level - at,
+                                    statement: position.0 - 1,
+                                }
+                            }
+                            Found::Hole => Listed::Hole,
+                            Found::Offered => Listed::Offered,
+                        }
+                    }
+                })
+                .collect();
+            listed.sort();
+            assert_eq!(listed, placed.expected, "`{source}`");
+        }
+
         // Every statement is in exactly one unit, and every unit is emitted once.
         let mut performed: Vec<usize> = (0..shape.statements())
             .map(|statement| unit_of_statement(shape, statement))
@@ -394,10 +468,7 @@ fn check<'graph>(
                         hops: 0,
                         target: Target::Local(_),
                     }) => assert!(!fellows.contains(&capture.name), "`{source}`"),
-                    CaptureSource::Read(_) => {}
-                    CaptureSource::Hole | CaptureSource::Offered => {
-                        unreachable!("a plan writes no quote value")
-                    }
+                    CaptureSource::Read(_) | CaptureSource::Hole | CaptureSource::Offered => {}
                 }
             }
         }
@@ -630,9 +701,9 @@ fn activate<'g, 'c>(
                     next,
                 );
             }
-            ShapeKind::Program | ShapeKind::Module | ShapeKind::Code => {
-                panic!("a plan nests no such shape")
-            }
+            // Only an `EVAL` runs a quote's code, and a plan writes none.
+            ShapeKind::Code => {}
+            ShapeKind::Program | ShapeKind::Module => panic!("a plan nests no such shape"),
         }
     }
     chain.pop();
@@ -647,7 +718,8 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: crate::tests::case_share(1, 1), ..ProptestConfig::default() })]
 
     /// A planned program shapes back into its plan — every scope's kind, layout,
-    /// components and nested scopes, and every mention's site, class, statement and landing.
+    /// components and nested scopes, and every mention's site, class, statement and landing —
+    /// and every name and key in a quote's code lands where its mark says.
     #[test]
     fn a_planned_program_shapes_back_into_its_plan(choices in plan::choices()) {
         let program = Generator::new(&choices).program();

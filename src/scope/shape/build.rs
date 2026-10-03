@@ -16,6 +16,11 @@
 //! follows every unit it reads and independent ones come out as written; the runner performs them
 //! in that order.
 //!
+//! A nested draft takes everything it needs from its statement through one [`Entry`] — its
+//! parameters, signature, surfaced heads and held groups — and is built under
+//! [`Builder::nested`], which sets the enclosing walk's state aside and restores it whether or not
+//! the draft is built, so nothing one draft leaves is taken by the next.
+//!
 //! A keyworded node inside a type expression is a type the elaborator reads, not a use, so the walk
 //! counts the type expressions it is inside and resolves no candidates there.
 //!
@@ -121,8 +126,6 @@ pub(super) fn program<'graph, X: Knotted>(
         ShapeKind::Program,
         Entry::PLAIN,
         Position::PARAMETER,
-        &[],
-        &[],
         statements,
     )?;
     Ok(builder.seal(draft, None))
@@ -371,36 +374,38 @@ struct Listing {
     closed: bool,
 }
 
-/// What a nested body is to the statement it is entered from: whether its last statement is in
-/// tail position, for a `MATCH` or `TRY` arm the arm's facts, and whether it is a `USING … SCOPE`
-/// body.
+/// Everything a nested body takes from the statement it is entered from: whether its last
+/// statement is in tail position, for a `MATCH` or `TRY` arm the arm's facts, its parameters (each
+/// beside where the node declaring it is written), a callable body's signature run, a `USING …
+/// SCOPE` body's quantified names and surfaced heads, and the groups it holds.
 #[derive(Clone, Copy)]
-struct Entry<'graph> {
+struct Entry<'e, 'graph> {
     tail: bool,
     arm: Option<Arm<'graph>>,
-    surfaced: bool,
+    parameters: &'e [(BinderSymbol, SourceRef)],
+    signature: Option<&'graph KExpression<'graph>>,
+    surfacing: Option<Surfacing<'e, 'graph>>,
+    held: &'e [&'graph DeclaredGroup<'graph>],
 }
 
-impl Entry<'_> {
-    /// A body that is no tail and no arm: the program, a module, a synthesized block.
-    const PLAIN: Entry<'static> = Entry {
+/// What a `USING … SCOPE` body takes from its operand beyond its parameters: the names bound to
+/// quantified functions, and each surfaced head under each key it registers at.
+#[derive(Clone, Copy)]
+struct Surfacing<'e, 'graph> {
+    quantified: &'e [BinderSymbol],
+    heads: &'e [SurfacedKey<'graph>],
+}
+
+impl Entry<'_, '_> {
+    /// A body that is no tail, no arm, binds nothing and holds no group: the program, a
+    /// synthesized block.
+    const PLAIN: Entry<'static, 'static> = Entry {
         tail: false,
         arm: None,
-        surfaced: false,
-    };
-
-    /// A callable's body, whose last statement is its value.
-    const CALLABLE: Entry<'static> = Entry {
-        tail: true,
-        arm: None,
-        surfaced: false,
-    };
-
-    /// A `USING … SCOPE` body.
-    const SURFACED: Entry<'static> = Entry {
-        tail: false,
-        arm: None,
-        surfaced: true,
+        parameters: &[],
+        signature: None,
+        surfacing: None,
+        held: &[],
     };
 }
 
@@ -658,18 +663,11 @@ struct Builder<'graph, 'x, 'e> {
     /// Where the current draft's own entries in `skip` start; a nested body declares its enclosing
     /// form's type parameters as parameters and reads them as mentions.
     skip_floor: usize,
-    /// The signature run of the callable body about to be drafted, taken by that draft.
-    signature: Option<&'graph KExpression<'graph>>,
     /// How many type expressions the walk is inside: a keyworded node there is a type the
     /// elaborator reads, not a use dispatch selects for.
     in_type: u32,
     /// What the next part may be; see [`Admits`].
     admits: Admits,
-    /// The quantified parameters of the `USING … SCOPE` body about to be drafted, taken by that
-    /// draft.
-    quantified: BumpVec<'x, BinderSymbol>,
-    /// The surfaced heads of the `USING … SCOPE` body about to be drafted, taken by that draft.
-    heads: BumpVec<'x, SurfacedKey<'graph>>,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -698,11 +696,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             parts: bump_table(scratch),
             skip: BumpVec::new_in(scratch),
             skip_floor: 0,
-            signature: None,
             in_type: 0,
             admits: Admits::Nothing,
-            quantified: BumpVec::new_in(scratch),
-            heads: BumpVec::new_in(scratch),
         }
     }
 
@@ -712,10 +707,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     fn draft<'n>(
         &mut self,
         kind: ShapeKind,
-        entry: Entry<'graph>,
+        entry: Entry<'_, 'graph>,
         entered_at: Position,
-        parameters: &[(BinderSymbol, SourceRef)],
-        held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>>
     where
@@ -724,14 +717,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         // A body holding a group is built under a frame of its own, which every operator run inside
         // it — and every body nested in it — chains against.
         let writer = self.brand.writer();
-        let held: &'graph [&'graph DeclaredGroup<'graph>] = collect(writer, held.iter().copied());
-        let outer = self.frame;
+        let held: &'graph [&'graph DeclaredGroup<'graph>] =
+            collect(writer, entry.held.iter().copied());
         if !held.is_empty() {
-            self.frame = resident(writer, GroupFrame::new(held, Some(outer), self.claims));
+            self.frame = resident(writer, GroupFrame::new(held, Some(self.frame), self.claims));
         }
-        let built = self.body(kind, entry, entered_at, parameters, held, statements);
-        self.frame = outer;
-        built
+        self.body(kind, entry, held, entered_at, statements)
     }
 
     /// [`draft`](Self::draft) with this body's frame already standing: rewrite each statement's
@@ -739,10 +730,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     fn body<'n>(
         &mut self,
         kind: ShapeKind,
-        entry: Entry<'graph>,
-        entered_at: Position,
-        parameters: &[(BinderSymbol, SourceRef)],
+        entry: Entry<'_, 'graph>,
         held: &'graph [&'graph DeclaredGroup<'graph>],
+        entered_at: Position,
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>>
     where
@@ -770,21 +760,23 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .chain
             .last()
             .map_or(u32::MAX, |parent| parent.current.0);
-        let heads = std::mem::replace(&mut self.heads, BumpVec::new_in(self.scratch));
+        let heads = entry.surfacing.map_or(&[][..], |surfacing| surfacing.heads);
         let mut draft = self.binders(
             kind,
             entered_at,
             parent_statement,
-            (parameters, &heads),
+            (entry.parameters, heads),
             &nodes,
         )?;
-        draft.signature = self.signature.take();
-        draft.quantified = std::mem::replace(&mut self.quantified, BumpVec::new_in(self.scratch));
+        draft.signature = entry.signature;
+        if let Some(surfacing) = entry.surfacing {
+            draft.quantified.extend_from_slice(surfacing.quantified);
+        }
         draft.frame = self.frame;
         draft.held = held;
         draft.tail = entry.tail;
         draft.arm = entry.arm;
-        draft.surfaced = entry.surfaced;
+        draft.surfaced = entry.surfacing.is_some();
         draft.nodes.extend(nodes.iter().map(|node| **node));
         self.chain.push(draft);
         let level = self.chain.len() - 1;
@@ -1467,8 +1459,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         Site::of(part),
                         ShapeKind::Block,
                         Entry::PLAIN,
-                        (&[], node.reference().source),
-                        &[],
                         node.reference().body_statements(),
                     );
                 }
@@ -1793,7 +1783,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         part: &ExpressionPart<'graph>,
         kind: BodyKind,
-        signature: &[BinderSymbol],
+        signature_names: &[BinderSymbol],
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
         // A callable's body is a written quote; an in-place body is a bare group. The static check
@@ -1830,14 +1820,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .extend(binders.iter().map(|binder| (binder, site)));
             }
         }
-        let (shape_kind, class, entry) = match kind {
-            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => (
-                ShapeKind::Callable,
-                state.constructor().class(),
-                Entry::CALLABLE,
-            ),
-            BodyKind::Module => (ShapeKind::Module, MentionClass::Eager, Entry::PLAIN),
-            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager, Entry::SURFACED),
+        let (shape_kind, class) = match kind {
+            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => {
+                (ShapeKind::Callable, state.constructor().class())
+            }
+            BodyKind::Module => (ShapeKind::Module, MentionClass::Eager),
+            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager),
         };
         let operator = [
             BinderSymbol::Value(IMPLICIT.left.symbol()),
@@ -1881,28 +1869,38 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             own = [record];
             held = &own;
         }
-        if kind == BodyKind::Lambda {
+        let signature = if kind == BodyKind::Lambda {
             let form = node
                 .cache()
                 .builtin_shape()
                 .expect("a body role is a form's");
-            self.signature = form
-                .roles()
+            form.roles()
                 .zip(node.parts)
                 .find(|(role, _)| matches!(role, Role::Signature | Role::Head))
-                .and_then(|(_, part)| signature_run(&part.value));
-        }
+                .and_then(|(_, part)| signature_run(&part.value))
+        } else {
+            None
+        };
         let parameters: &[BinderSymbol] = match kind {
-            BodyKind::Lambda => signature,
+            BodyKind::Lambda => signature_names,
             BodyKind::Operator => &operator,
             BodyKind::UnaryOperator => &unary,
             BodyKind::Module => &[],
             BodyKind::Surfaced => &surfaced.names,
         };
-        if kind == BodyKind::Surfaced {
-            self.quantified = surfaced.quantified;
-            self.heads = surfaced.heads;
-        }
+        let mut paired = BumpVec::with_capacity_in(parameters.len(), self.scratch);
+        paired.extend(parameters.iter().map(|name| (*name, at)));
+        let entry = Entry {
+            tail: shape_kind == ShapeKind::Callable,
+            arm: None,
+            parameters: &paired,
+            signature,
+            surfacing: (kind == BodyKind::Surfaced).then_some(Surfacing {
+                quantified: &surfaced.quantified,
+                heads: &surfaced.heads,
+            }),
+            held,
+        };
         self.enter_child(
             level,
             statement,
@@ -1910,8 +1908,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             Site::of(part),
             shape_kind,
             entry,
-            (parameters, node.source),
-            held,
             body.body_statements(),
         )
     }
@@ -1960,11 +1956,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
             }
             let body = quoted_body(body_part).expect("the static check admits only quotes");
-            let it = [BinderSymbol::Value(IMPLICIT.it.symbol())];
+            let it = [(BinderSymbol::Value(IMPLICIT.it.symbol()), node.source)];
             let entry = Entry {
                 tail,
                 arm: Some(Arm { guard, heads, tail }),
-                surfaced: false,
+                parameters: &it,
+                ..Entry::PLAIN
             };
             self.enter_child(
                 level,
@@ -1973,8 +1970,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Site::of(body_part),
                 ShapeKind::Block,
                 entry,
-                (&it, node.source),
-                &[],
                 body.body_statements(),
             )?;
         }
@@ -2000,13 +1995,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let parent = &mut self.chain[level];
         parent.current = (statement, state.constructor().class());
         let entered_at = parent.boundary();
-        let saved = (self.claims, self.frame);
-        let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
-        let in_type = std::mem::replace(&mut self.in_type, 0);
-        let built = self.code_draft(entered_at, code);
-        (self.claims, self.frame) = saved;
-        self.skip_floor = floor;
-        self.in_type = in_type;
+        let built = self.nested(|builder| builder.code_draft(entered_at, code));
         let child = match built {
             Ok(mut draft) => {
                 let mut offered = BumpVec::new_in(self.scratch);
@@ -2038,14 +2027,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let statements = code.body_statements().map(|(statement, _)| statement);
         self.claims = groups::claims(self.brand, self.scratch, statements, Some(self.claims))?;
         self.frame = resident(self.brand.writer(), GroupFrame::new(&[], None, self.claims));
-        self.draft(
-            ShapeKind::Code,
-            Entry::CALLABLE,
-            entered_at,
-            &[],
-            &[],
-            code.body_statements(),
-        )
+        let entry = Entry {
+            tail: true,
+            ..Entry::PLAIN
+        };
+        self.draft(ShapeKind::Code, entry, entered_at, code.body_statements())
     }
 
     /// The code draft of a quote whose code could not be built: no statements, its `$` names and
@@ -2269,9 +2255,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
     }
 
-    /// Build a nested draft under the statement being walked at `level`, entered with `class`, and
-    /// hold it under `site` until this draft's components settle its captures. `parameters` come
-    /// beside where the node declaring them is written.
+    /// Build a nested draft from `entry` under the statement being walked at `level`, entered with
+    /// `class`, and hold it under `site` until this draft's components settle its captures.
     #[allow(clippy::too_many_arguments)]
     fn enter_child<'n>(
         &mut self,
@@ -2280,26 +2265,37 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         class: MentionClass,
         site: Site,
         kind: ShapeKind,
-        entry: Entry<'graph>,
-        (parameters, declared_at): (&[BinderSymbol], SourceRef),
-        held: &[&'graph DeclaredGroup<'graph>],
+        entry: Entry<'_, 'graph>,
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<(), ShapeError<'graph>>
     where
         'graph: 'n,
     {
-        let mut paired = BumpVec::with_capacity_in(parameters.len(), self.scratch);
-        paired.extend(parameters.iter().map(|name| (*name, declared_at)));
         let parent = &mut self.chain[level];
         parent.current = (statement, class);
         let entered_at = parent.boundary();
-        let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
-        let in_type = std::mem::replace(&mut self.in_type, 0);
-        let child = self.draft(kind, entry, entered_at, &paired, held, statements);
-        self.skip_floor = floor;
-        self.in_type = in_type;
+        let child = self.nested(|builder| builder.draft(kind, entry, entered_at, statements));
         self.chain[level].children.push((site, child?));
         Ok(())
+    }
+
+    /// Run `build` — one nested draft — with the walk state its enclosing draft's walk holds set
+    /// aside: the claims, the group frame, the skip stack and its floor, the type depth, the group
+    /// mark, what the next part admits, and the chain's height. Each is restored after `build`,
+    /// whether or not it succeeded, so a refused code leaves nothing for the next draft. The nested
+    /// draft starts with its own skip floor and outside any type expression.
+    fn nested<R>(&mut self, build: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = (self.claims, self.frame, self.marking, self.admits);
+        let (skip, floor, height) = (self.skip.len(), self.skip_floor, self.chain.len());
+        let in_type = std::mem::replace(&mut self.in_type, 0);
+        self.skip_floor = skip;
+        let built = build(self);
+        (self.claims, self.frame, self.marking, self.admits) = saved;
+        self.skip.truncate(skip);
+        self.skip_floor = floor;
+        self.chain.truncate(height);
+        self.in_type = in_type;
+        built
     }
 
     /// Whether `name` is a type parameter of a form enclosing the walk within the current draft.
@@ -2336,10 +2332,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// at the key visible to it, resolved as an eager read there, so each is a mention of the use's
     /// statement. In a quote's code the use's mark decides: unmarked, the registrations it sees
     /// within the code and then its key as a hole a `USING` fills; `$(…)`, what a use written
-    /// where the quote is sees, captured; `\(…)`, its key as a `\` capture alone, which the `EVAL`
-    /// running the code offers. Every registration must carry one ranking, and a use with no
-    /// candidate is refused — except under a `USING … SCOPE` body, whose operand's registrations
-    /// are candidates this builder does not read.
+    /// where the quote is sees, captured; `\(…)`, the registrations it sees within the code and
+    /// then its key as a `\` capture, which the `EVAL` running the code offers. Every registration
+    /// must carry one ranking, and a use with no candidate is refused — except under a
+    /// `USING … SCOPE` body, whose operand's registrations are candidates this builder does not
+    /// read.
     fn candidates(
         &mut self,
         level: usize,
@@ -2362,12 +2359,24 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut candidates = BumpVec::new_in(self.scratch);
         let classes = match (mark, code) {
             (Some(Mark::Built), _) => {
+                // The listing an unmarked use makes, which stops at the code root, less the
+                // builtins: a `\(…)` lists none.
+                let listing = Listing {
+                    level,
+                    reader,
+                    site: level,
+                    at,
+                    mark: None,
+                    closed: false,
+                };
+                let classes =
+                    self.registered(listing, elements, node.source, &mut candidates, None)?;
                 let open = BinderSymbol::Key(self.spelled(elements));
                 let offered = self
                     .resolve(level, open, Some(Mark::Built), at, reader)
                     .expect("a quote's code leaves a `\\` key open");
                 candidates.push(Candidate::Spread(offered));
-                self.written(elements)
+                classes
             }
             (Some(Mark::Written), Some(code)) => {
                 let site = code - 1;
@@ -2446,7 +2455,24 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 .overloads(key)
                 .map(|index| Candidate::One(Coordinate::Builtin(BuiltinIndex(index)))),
         );
-        let mut classes = (candidates.len() > before).then(|| self.written(elements));
+        let classes = (candidates.len() > before).then(|| self.written(elements));
+        self.registered(listing, elements, source, candidates, classes)
+    }
+
+    /// [`listed`](Self::listed)'s registrations: unless the listing is closed, each registration
+    /// at the key a use at the listing's site sees, resolved from its level through its mark and
+    /// pushed onto `candidates`. Returns the ranking they share with `classes`, the ranking of the
+    /// candidates listed before them, or written order when none ranks the key. Two rankings among
+    /// them are refused at `source`.
+    fn registered(
+        &mut self,
+        listing: Listing,
+        elements: &'graph [KeyElement],
+        source: SourceRef,
+        candidates: &mut BumpVec<'x, Candidate>,
+        mut classes: Option<&'graph [u8]>,
+    ) -> Result<&'graph [u8], ShapeError<'graph>> {
+        let key = KeyElement::key(elements.iter().copied());
         let mut found = BumpVec::new_in(self.scratch);
         if !listing.closed {
             let draft = &self.chain[listing.site];

@@ -1,6 +1,7 @@
 //! Static types of generic code: lexical variables in a body's static types, intervals, verdicts,
 //! ranking at load, an `EVAL`'s declared type, and returns read through a group's intervals.
 
+use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
 use crate::scope::{BodyShape, ShapeKind, Site, Static};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
@@ -209,6 +210,58 @@ fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
         "load: <test>:2:9: this `EVAL`'s code returns :(FN :{t :Never} -> Any), which can never \
          satisfy its declared return Number"
     );
+}
+
+/// The keyworded use leading with the keyword `lead` written anywhere in `node`, wrapped or marked.
+fn use_leading<'graph>(
+    program: &Program<'graph>,
+    node: &'graph KExpression<'graph>,
+    lead: &str,
+) -> Option<&'graph KExpression<'graph>> {
+    let leads = node
+        .cache()
+        .stored_key()
+        .iter()
+        .find_map(|element| element.keyword())
+        .is_some_and(|keyword| program.symbols().display(keyword.symbol()).to_string() == lead);
+    if leads {
+        return Some(node);
+    }
+    node.parts.iter().find_map(|part| match &part.value {
+        ExpressionPart::Expression(inner) | ExpressionPart::MarkedUse(_, inner) => {
+            use_leading(program, inner.reference(), lead)
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
+    // `GREET`'s registered shape names `Outer`, a variable of the chain outside the code: in the
+    // code it is unknown, so `ONLY` solves from nothing the load can name.
+    let wrap = |quoted: &str| {
+        format!(
+            "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\n\
+             EXPR FOR ALL #[Outer] #(WRAP a :Outer) -> Any = #(\n  \
+             EXPR #(GREET x :Outer) -> Outer = #(x)\n  \
+             EVAL #({quoted}) -> Any\n\
+             )"
+        )
+    };
+    for quoted in ["$(ONLY $(GREET $a))", "$(GREET $a)"] {
+        let source = wrap(quoted);
+        loaded(&source, |program| {
+            let wrapped = expressed(program, program.shape(), "WRAP");
+            let code = code(wrapped);
+            let greet = use_leading(program, &code.body()[0], "GREET").expect("a `GREET` use");
+            assert_eq!(
+                rendered(code.narrowing(Site::of_node(greet))),
+                "full",
+                "`{source}`"
+            );
+        });
+        assert_eq!(run(&format!("{source}\nPRINT (WRAP 1)")), "1", "`{source}`");
+    }
 }
 
 #[test]
