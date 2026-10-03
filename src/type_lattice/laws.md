@@ -280,7 +280,9 @@ ascription retypes without checking. Each is sound only if the verdict was.
 `a_verdict_holds_of_every_call_within_its_static_types`,
 `a_reproducible_solve_commutes_with_binding` and
 `bounding_above_lies_over_every_instance`, which draw carried types within the
-static ones and bind each lexical variable as a run does. Debug builds check
+static ones and bind each lexical variable as a run does; and
+`a_type_read_below_its_variables_fits_itself_read_above`, which reads one type,
+a nested binder included, at both ends of its variables as the judge does. Debug builds check
 it on every run: a finished value's carried type lies within its node's static
 type, and a call the load decided runs what selection over the full candidate
 list would.

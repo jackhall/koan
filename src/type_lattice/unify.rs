@@ -505,9 +505,10 @@ fn most_determined_first<'s>(
     order
 }
 
-/// The collecting [`Lockstep`] instance. It holds the caller's collector so a declared-side union
-/// can try each member in turn, rolling back what a rejected one contributed and keeping the first
-/// that admits.
+/// The collecting [`Lockstep`] instance. It holds the caller's collector so a union's members can
+/// be tried in turn — the declared side's at a covariant position, the carried side's at a
+/// contravariant one — rolling back what a rejected one contributed and keeping the first that
+/// admits.
 struct Admits<'c, 's, T> {
     collector: &'c mut Collector<'s, T>,
 }
@@ -534,6 +535,46 @@ impl<T: TypeHandle> Admits<'_, '_, T> {
             }
         }
         false
+    }
+
+    /// Contravariant, the declared side lies under the carried one: every declared member must lie
+    /// under some carried member, an exact match tried first and a rejected choice rolled back —
+    /// except a declared variable, which lies under the carried side whole. Its one upper end is
+    /// the union; a member chosen for it would narrow it to that member alone.
+    fn under_carried(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        declared: &[Handle],
+        carried: &[Handle],
+        recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Admission,
+    ) -> Admission {
+        for one in declared {
+            if matches!(types.node(*one), TypeNode::Quantified { .. }) {
+                let whole = match carried {
+                    [single] => *single,
+                    _ => types.union_of(scratch, carried),
+                };
+                recurse(self, *one, whole, Variance::Contra)?;
+                continue;
+            }
+            let exact = carried.iter().filter(|option| *option == one);
+            let rest = carried.iter().filter(|option| *option != one);
+            let admitted = exact.chain(rest).any(|option| {
+                let mark = self.collector.mark();
+                match recurse(self, *one, *option, Variance::Contra) {
+                    Ok(()) => true,
+                    Err(_) => {
+                        self.collector.rollback(mark);
+                        false
+                    }
+                }
+            });
+            if !admitted {
+                return Err(UnifyFailure::Mismatch);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -601,10 +642,14 @@ impl<T: TypeHandle> Lockstep for Admits<'_, '_, T> {
         v: Variance,
         recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Admission,
     ) -> Admission {
-        // Every carried member must be admitted by some declared member. A non-union side arrives
-        // as a one-element slice, so this covers a union on either side and on both. The
-        // declared-side choice rolls back on rejection, so a rejected member leaves no contribution
-        // behind; contributions from every carried member accumulate in the one collector.
+        // A non-union side arrives as a one-element slice, so this covers a union on either side
+        // and on both. A rejected choice rolls back, so it leaves no contribution behind; the
+        // contributions of every member admitted accumulate in the one collector.
+        if v == Variance::Contra {
+            return self.under_carried(types, scratch, declared, carried, recurse);
+        }
+        // Covariant, the carried side lies under the declared one: every carried member must be
+        // admitted by some declared member.
         for one in carried {
             if self.admit_one(types, scratch, declared, *one, v, recurse) {
                 continue;

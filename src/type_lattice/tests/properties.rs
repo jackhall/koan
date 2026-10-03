@@ -578,6 +578,23 @@ proptest! {
         let instance = substitute_quantified(&types, scratch, a, &lowest);
         prop_assert!(order::is_subtype_of(&types, scratch, instance, above));
     }
+
+    /// A type read at the lower ends of its variables fits itself read at their upper ends, a
+    /// nested binder included: the two readings of one slot the judge compares before any call.
+    /// Over a binder *fits* is the unifier's instantiation clause, so this law draws one against
+    /// itself where the one above draws none.
+    #[test]
+    fn a_type_read_below_its_variables_fits_itself_read_above(a in one()) {
+        let a = a.raw();
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let below = read_through(&types, scratch, a, Side::Below, &mut |variable| {
+            Some(variable.interval().raw())
+        });
+        let above = bound_above(&types, scratch, a);
+        prop_assert!(order::fits(&types, scratch, below, above));
+    }
 }
 
 // --- 6. Shapes ---
