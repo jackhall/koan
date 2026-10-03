@@ -326,12 +326,13 @@ at a contravariant child, so a function's parameter narrows and a record drops a
 field — two shapes share one key, an argument shape is mostly its candidate's
 own instance, and a scheme comes with its own instance, widened half the time so
 the solve has an interval to choose from. A binder's group has as many variables
-as its positions hold two of, each planted at two, so a solve relates positions
-and solves variables side by side. An instance's bindings are pool types —
-grounds, composites and `Never` — or lexical variables over them, slot by slot,
-so a solve lands on a rigid variable as often as on a type, and on both at once.
-What still misses is a counted rejection, capped per law, so a generator that
-drifts off a precondition fails the suite.
+as its positions hold two of, each planted at two — bare, in a list or as a
+function's parameter — so a solve relates positions, caps a join from above, and
+solves variables side by side. An instance's bindings are pool types — grounds,
+composites and `Never` — or lexical variables over them, slot by slot, so a
+solve lands on a rigid variable as often as on a type, and on both at once. What
+still misses is a counted rejection, capped per law, so a generator that drifts
+off a precondition fails the suite.
 
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in

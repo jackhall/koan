@@ -650,9 +650,10 @@ fn arb_shape(
 /// so a one-slot shape binds a group too — so the laws about quantified shapes run over variables
 /// that relate two positions, which a group sprinkled at random would rarely give; the group has
 /// at most `(key.len() + 1) / 2` variables, so no planting overwrites another. Each slot is ranked
-/// `_` or by a small integer, so written order and rankings with ties both occur. Both occurrences
-/// take one [`planted`] form, so a union argument can pour its members into one variable through a
-/// list or a function's parameter.
+/// `_` or by a small integer, so written order and rankings with ties both occur. Each occurrence
+/// takes a [`planted`] form, both one form half the time, so a union argument can pour its members
+/// into one variable through a list or a function's parameter, and a function's parameter can cap
+/// what a bare occurrence pours in.
 fn arb_shape_over(
     world: World,
     key: Vec<KeywordSymbol>,
@@ -693,10 +694,9 @@ fn arb_shape_over(
                 arb_plantings(positions + 1, vars.len()),
             )
                 .prop_map(move |(mut slots, ranks, plantings)| {
-                    for (variable, (pair, form)) in vars.iter().zip(&plantings) {
-                        let planted = planted(&world, *variable, *form);
-                        for position in pair {
-                            slots[*position] = planted;
+                    for (variable, (pair, forms)) in vars.iter().zip(&plantings) {
+                        for (position, form) in pair.iter().zip(forms) {
+                            slots[*position] = planted(&world, *variable, *form);
                         }
                     }
                     let ret = slots.pop().expect("the return is the last position");
@@ -727,22 +727,25 @@ fn arb_shape_over(
 }
 
 /// Where a binder's `variables` are planted among its `positions`: two distinct positions each,
-/// no position shared between two variables, and a [`planted`] form each.
+/// no position shared between two variables, and a [`planted`] form at each position. The second
+/// position repeats the first's form half the time, so two bare or two wrapped occurrences stay
+/// as frequent as a bare one beside a function's parameter.
 fn arb_plantings(
     positions: usize,
     variables: usize,
-) -> impl Strategy<Value = Vec<([usize; 2], u8)>> {
+) -> impl Strategy<Value = Vec<([usize; 2], [u8; 2])>> {
     debug_assert!(positions >= 2 * variables, "two positions per variable");
     (
         prop::sample::subsequence((0..positions).collect::<Vec<usize>>(), 2 * variables)
             .prop_shuffle(),
-        prop::collection::vec(0..3u8, variables),
+        prop::collection::vec((0..3u8, prop::option::of(0..3u8)), variables),
     )
         .prop_map(|(picked, forms)| {
             picked
                 .chunks(2)
                 .map(|pair| [pair[0], pair[1]])
                 .zip(forms)
+                .map(|(pair, (first, second))| (pair, [first, second.unwrap_or(first)]))
                 .collect()
         })
 }
@@ -752,7 +755,7 @@ fn arb_plantings(
 ///
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
 /// for the reason [`arb_shape_over`] plants one at two, so the group has at most
-/// `(arity + 1) / 2` variables. Both occurrences take one [`planted`] form.
+/// `(arity + 1) / 2` variables. Each occurrence takes a [`planted`] form, as there.
 fn arb_function(
     world: World,
     depth: u32,
@@ -794,10 +797,9 @@ fn arb_function(
                 arb_plantings(arity + 1, vars.len()),
             )
                 .prop_map(move |(mut positions, plantings)| {
-                    for (variable, (pair, form)) in vars.iter().zip(&plantings) {
-                        let planted = planted(&world, *variable, *form);
-                        for position in pair {
-                            positions[*position] = planted;
+                    for (variable, (pair, forms)) in vars.iter().zip(&plantings) {
+                        for (position, form) in pair.iter().zip(forms) {
+                            positions[*position] = planted(&world, *variable, *form);
                         }
                     }
                     let ret = positions.pop().expect("the return is the last position");
@@ -1656,8 +1658,10 @@ pub fn arb_fits_chain(
 /// positions give that variable, and `c` puts two ground types at those positions.
 ///
 /// The binder is a function, or a shape with both slots in one class. A position is the variable
-/// itself — two ground types join into it — or `FN :{x :_} -> Null` over it, where they meet. An
-/// optional filler position holds one generated type in all three.
+/// itself — two ground types join into it — or `FN :{x :_} -> Null` over it, where they meet; or
+/// one of each, where the bare position's ground pours in from below, the wrapped one holds its
+/// join with the other ground as a cap, and the instance is the bare one's ground. An optional
+/// filler position holds one generated type in all three.
 pub fn arb_instance_chain(
     world: World,
 ) -> BoxedStrategy<(
@@ -1673,23 +1677,23 @@ pub fn arb_instance_chain(
         pool
     };
     let filler = prop::option::of(arb_raw(world.clone(), 1));
-    (
-        any::<bool>(),
-        0..pool.len(),
-        0..pool.len(),
-        any::<bool>(),
-        filler,
-    )
+    let wrapped = prop::sample::select(vec![
+        [false, false],
+        [true, true],
+        [false, true],
+        [true, false],
+    ]);
+    (any::<bool>(), 0..pool.len(), 0..pool.len(), wrapped, filler)
         .prop_map(move |(shape, g1, g2, wrapped, filler)| {
             let (g1, g2) = (pool[g1], pool[g2]);
-            let position = |kt| if wrapped { function_of(&world, kt) } else { kt };
+            let position = |kt, wrap: bool| if wrap { function_of(&world, kt) } else { kt };
             let variable = world.types.quantified(0, KType::ANY).raw();
-            let instance = with_scratch(|scratch| {
-                if wrapped {
-                    meet(&world.types, scratch, g1, g2)
-                } else {
-                    join(&world.types, scratch, g1, g2)
-                }
+            // The two grounds and the least instance the binder has at them.
+            let ([g1, g2], instance) = with_scratch(|scratch| match wrapped {
+                [false, false] => ([g1, g2], join(&world.types, scratch, g1, g2)),
+                [true, true] => ([g1, g2], meet(&world.types, scratch, g1, g2)),
+                [false, true] => ([g1, join(&world.types, scratch, g1, g2)], g1),
+                [true, false] => ([join(&world.types, scratch, g1, g2), g2], g2),
             });
             let (g1, g2, instance) = (g1.raw(), g2.raw(), instance.raw());
             let build = |quantifiers: &[TypeSymbol], first: Handle, second: Handle| {
@@ -1741,11 +1745,15 @@ pub fn arb_instance_chain(
             };
             let a = build(
                 &world.type_names[..1],
-                position(variable),
-                position(variable),
+                position(variable, wrapped[0]),
+                position(variable, wrapped[1]),
             );
-            let b = build(&[], position(instance), position(instance));
-            let c = build(&[], position(g1), position(g2));
+            let b = build(
+                &[],
+                position(instance, wrapped[0]),
+                position(instance, wrapped[1]),
+            );
+            let c = build(&[], position(g1, wrapped[0]), position(g2, wrapped[1]));
             (world.declared(a), world.declared(b), world.declared(c))
         })
         .boxed()
