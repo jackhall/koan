@@ -323,7 +323,9 @@ ordered pair or chain is built by widening — a step up the order, read down it
 at a contravariant child, so a function's parameter narrows and a record drops
 a field — two shapes share one key, an argument shape is mostly its candidate's
 own instance, and a scheme comes with its own instance, widened half the time
-so the solve has an interval to choose from. What still misses is a counted
+so the solve has an interval to choose from. An instance's bindings are ground
+types or lexical variables over them, so a solve lands on a rigid variable as
+often as on a type. What still misses is a counted
 rejection, capped per law, so a generator that drifts off a precondition fails
 the suite.
 

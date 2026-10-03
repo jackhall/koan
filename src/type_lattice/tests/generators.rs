@@ -49,6 +49,7 @@ use crate::type_lattice::typed::{
     instantiate_quantified, is_subtype_of, join, meet, quantifier_bounds,
 };
 use crate::type_lattice::walk::Variance;
+use crate::type_lattice::walk::unary::{Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 use crate::type_lattice::{lattice, substitute};
 
@@ -127,6 +128,23 @@ impl World {
             .filter(|ground| is_subtype_of(&self.types, scratch, *ground, bound))
             .collect();
         within[pick % within.len()]
+    }
+
+    /// `binding` within `bound`: its ground, or where `lexical` the lexical variable over that
+    /// ground.
+    fn bind_within(
+        &self,
+        scratch: BumpAllocator<'_>,
+        bound: KType,
+        binding: &Binding,
+        lexical: bool,
+    ) -> Handle {
+        let ground = self.ground_within(scratch, bound, binding.ground);
+        if !lexical {
+            return ground.raw();
+        }
+        let name = self.type_names[binding.name];
+        lexical_over(self, scratch, binding.level, name, ground, binding.lower).raw()
     }
 
     /// The index of the ground spanning two members among [`grounds`](World::grounds).
@@ -489,20 +507,68 @@ pub fn arb_lexical(world: World) -> BoxedStrategy<Parametric> {
     let bound = prop_oneof![2 => Just(world.spanning_ground()), 1 => 0..grounds];
     (0..2usize, 0..world.type_names.len(), bound, 0..3u8)
         .prop_map(move |(level, name, bound, lower)| {
-            let (types, name) = (&world.types, world.type_names[name]);
-            let bound = world.grounds()[bound];
-            let spans = matches!(types.node(bound), TypeNode::Union { .. });
-            match lower {
-                1 if spans => with_scratch(|scratch| {
-                    types.lexical_between(scratch, level, name, KType::NUMBER, bound)
-                }),
-                2 if spans => with_scratch(|scratch| {
-                    types.lexical_between(scratch, level, name, KType::STR, bound)
-                }),
-                _ => types.lexical(level, name, bound),
-            }
+            let (name, bound) = (world.type_names[name], world.grounds()[bound]);
+            with_scratch(|scratch| lexical_over(&world, scratch, level, name, bound, lower))
         })
         .boxed()
+}
+
+/// The lexical variable at `level` named `name` over `bound`, above a lower end of one member —
+/// `Number` for `lower` 1, `Str` for 2 — where `bound` spans two.
+fn lexical_over(
+    world: &World,
+    scratch: BumpAllocator<'_>,
+    level: usize,
+    name: TypeSymbol,
+    bound: KType,
+    lower: u8,
+) -> Parametric {
+    let types = &world.types;
+    let spans = matches!(types.node(bound), TypeNode::Union { .. });
+    match lower {
+        1 if spans => types.lexical_between(scratch, level, name, KType::NUMBER, bound),
+        2 if spans => types.lexical_between(scratch, level, name, KType::STR, bound),
+        _ => types.lexical(level, name, bound),
+    }
+}
+
+/// One quantifier's binding, drawn before its bound is known: a ground within the bound, or the
+/// lexical variable over that ground at a level and name, with a lower end where the ground spans
+/// two members. Which of the two is the drawing strategy's to say.
+#[derive(Clone, Debug)]
+pub struct Binding {
+    ground: usize,
+    level: usize,
+    name: usize,
+    lower: u8,
+}
+
+/// A [`Binding`] over the world's alphabets.
+fn arb_binding(world: &World) -> impl Strategy<Value = Binding> + use<> {
+    (
+        0..world.grounds().len(),
+        0..2usize,
+        0..world.type_names.len(),
+        0..3u8,
+    )
+        .prop_map(|(ground, level, name, lower)| Binding {
+            ground,
+            level,
+            name,
+            lower,
+        })
+}
+
+/// Whether a quantified binder — a shape or function over a group of its own — is reachable from
+/// `kt`.
+fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle) -> bool {
+    visit(types, scratch, kt, &mut |_, node, _| {
+        if node.binds_quantifiers() {
+            Visit::Stop
+        } else {
+            Visit::Descend
+        }
+    })
 }
 
 /// The declaring scope a generated opaque mint is sourced at — any id that is not the canonical
@@ -981,18 +1047,20 @@ pub fn arb_shape_pair(
         .boxed()
 }
 
-/// A candidate shape drawn under `candidate` and a concrete shape over its key whose slots are
-/// arguments for it: three times in four the candidate's own slots at ground bindings within its
-/// group's bounds, each kept or met with a pool type; otherwise an unrelated draw. A slot whose
-/// instance is not concrete takes the unrelated draw's slot, and one whose meet is `Never` stays
-/// unmet. Two independent draws admit one another only by accident.
+/// A candidate shape drawn under `candidate` and a shape over its key, binding no group, whose
+/// slots are arguments for it: three times in four the candidate's own slots at bindings within
+/// its group's bounds — ground types, or half the time where `candidate` has variables, lexical
+/// variables over them — each kept or met with a pool type; otherwise an unrelated draw. A slot
+/// whose instance holds a binder takes the unrelated draw's slot, and one whose meet is `Never`
+/// stays unmet. Two independent draws admit one another only by accident.
 pub fn arb_argument_pair(
     world: World,
     depth: u32,
     candidate: Vocabulary,
 ) -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
     let pool = world.argument_pool();
-    let (shapes, pools, grounds) = (world.clone(), pool.len(), world.grounds().len());
+    let (shapes, pools) = (world.clone(), pool.len());
+    let bindings = world.clone();
     arb_key(world.clone(), least_key(candidate)..5)
         .prop_flat_map(move |key| {
             let positions = key.len();
@@ -1001,11 +1069,12 @@ pub fn arb_argument_pair(
                 arb_shape_over(shapes.clone(), key.clone(), depth, none(), candidate),
                 arb_shape_over(shapes.clone(), key, depth, none(), Vocabulary::CONCRETE),
                 prop::bool::weighted(0.75),
-                prop::collection::vec(0..grounds, 1),
+                prop::collection::vec(arb_binding(&bindings), 1),
+                any::<bool>(),
                 prop::collection::vec(prop::option::of(0..pools), positions),
             )
         })
-        .prop_map(move |(a, unrelated, own, picks, narrowings)| {
+        .prop_map(move |(a, unrelated, own, picks, lexical, narrowings)| {
             if !own {
                 return (world.declared(a), world.declared(unrelated));
             }
@@ -1020,10 +1089,11 @@ pub fn arb_argument_pair(
                 unreachable!("a drawn shape is one");
             };
             let b = with_scratch(|scratch| {
-                let bindings: Vec<KType> = substitute::quantifier_bounds(types, a)
+                let lexical = candidate.variables && lexical;
+                let bindings: Vec<Handle> = substitute::quantifier_bounds(types, a)
                     .iter()
                     .zip(&picks)
-                    .map(|(bound, pick)| world.ground_within(scratch, *bound, *pick))
+                    .map(|(bound, pick)| world.bind_within(scratch, *bound, pick, lexical))
                     .collect();
                 let mut own = shape_slots(a, types).zip(&narrowings);
                 let run: Vec<DispatchTokenElement> = elements
@@ -1033,13 +1103,18 @@ pub fn arb_argument_pair(
                             let (slot, narrowing) = own.next().expect("one key, one arity");
                             let instance =
                                 substitute::substitute_quantified(types, scratch, slot, &bindings);
-                            DispatchTokenElement::Slot(match types.concrete(wrap(instance)) {
-                                None => *unrelated,
-                                Some(instance) => narrowing
-                                    .map(|index| meet(types, scratch, instance, pool[index]))
-                                    .filter(|met| *met != KType::NEVER)
+                            DispatchTokenElement::Slot(if holds_binder(types, scratch, instance) {
+                                *unrelated
+                            } else {
+                                narrowing
+                                    .map(|index| {
+                                        let other = pool[index].raw();
+                                        lattice::meet_through_variables(
+                                            types, scratch, instance, other,
+                                        )
+                                    })
+                                    .filter(|met| *met != Handle::NEVER)
                                     .unwrap_or(instance)
-                                    .raw(),
                             })
                         }
                         keyword => *keyword,
@@ -1126,7 +1201,8 @@ pub fn arb_function_type(world: World, depth: u32) -> BoxedStrategy<DeclaredType
 ///
 /// `scheme` binds its group at the outermost function, so it is `Always` or `Outer`; the unrelated
 /// type binds none. Where `wanted` has variables an own instance binds each variable to a lexical
-/// variable under its bound, and to a ground type within it otherwise.
+/// variable over a ground within its bound — above a lower end of one member where that ground
+/// spans two — and to the ground otherwise.
 pub fn arb_wanted_instance(
     world: World,
     depth: u32,
@@ -1168,10 +1244,8 @@ pub fn arb_own_instance(
     scheme: Vocabulary,
     wanted: Vocabulary,
 ) -> BoxedStrategy<(Scheme, Parametric)> {
-    let grounds = world.grounds();
     let pool = world.widening_pool();
-    let bindings =
-        prop::collection::vec((0..2usize, 0..world.type_names.len(), 0..grounds.len()), 1);
+    let bindings = prop::collection::vec(arb_binding(&world), 1);
     let widening = prop::option::of(arb_function_widening(pool.len(), 2));
     (arb_scheme(world.clone(), depth, scheme), bindings, widening)
         .prop_map(move |(scheme, picks, widening)| {
@@ -1180,12 +1254,7 @@ pub fn arb_own_instance(
                 let bindings: Vec<Handle> = quantifier_bounds(types, scheme)
                     .iter()
                     .zip(&picks)
-                    .map(|(bound, (level, name, ground))| {
-                        if wanted.variables {
-                            return types.lexical(*level, world.type_names[*name], *bound).raw();
-                        }
-                        world.ground_within(scratch, *bound, *ground).raw()
-                    })
+                    .map(|(bound, pick)| world.bind_within(scratch, *bound, pick, wanted.variables))
                     .collect();
                 let instance = instantiate_quantified(types, scratch, scheme, &bindings).raw();
                 let wanted = match &widening {
