@@ -563,14 +563,69 @@ fn an_earlier_argument_the_load_knows_nothing_of_fixes_nothing() {
 }
 
 #[test]
-fn an_earlier_argument_over_a_lexical_variable_fixes_nothing() {
-    // `rigid-solves.md` turns this into a load.
+fn an_earlier_argument_over_a_lexical_variable_fixes_the_instance_at_each_binding() {
     let source = format!(
         "{RANKED_APPLY}{}",
-        module("(EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any = #(APPLY pick TO xs))")
+        module(
+            "(EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any = \
+             #((LET r = (APPLY pick TO xs)) (r))) \
+             (PRINT (WRAP [1])) (PRINT (WRAP [\"s\"]))"
+        )
+    );
+    // `pick` is made at `Elt = LIST OF Outer`, which the call returns exactly.
+    loaded(&source, |program| {
+        let wrap = expressed(program, module_body(program, "lib"), "WRAP");
+        let typed = interval(program, wrap, "r");
+        assert_eq!(typed.lower, typed.upper, "the call is exact");
+        assert_eq!(binder(program, wrap, "r"), ":(LIST OF Outer)");
+    });
+    assert_eq!(run(&source), "[1]\n[s]");
+}
+
+/// `Outer` is read through its bound, which a run binding it lower does not reproduce.
+#[test]
+fn an_earlier_argument_read_through_a_lexical_bound_fixes_nothing() {
+    let apply = "EXPR #(APPLY 2 TO 1)\n\
+                 EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :(LIST OF Elt)) -> Elt = \
+                 #(f {x = 1})\n";
+    let source = format!(
+        "{apply}{}",
+        module(
+            "(EXPR FOR ALL #{Outer: :(LIST OF Number)} #(WRAP xs :Outer) -> Any = \
+             #(APPLY pick TO xs))"
+        )
     );
     let column = pick_column(&source);
     assert_eq!(run(&source), format!("load: <test>:3:{column}: {UNFIXED}"));
+}
+
+#[test]
+fn a_candidate_over_a_lexical_variable_fixes_an_instance_argument() {
+    let source = module(&format!(
+        "{} (PRINT (WRAP 1)) (PRINT (WRAP \"s\"))",
+        wrap(
+            "Any",
+            "(EXPR #(APPLY 2 TO 1)) \
+             (EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :Elt) -> Outer = \
+             #(f {x = y})) \
+             (APPLY pick TO a)"
+        )
+    ));
+    assert_eq!(run(&source), "1\ns");
+}
+
+#[test]
+fn a_shared_variable_a_reproducible_solve_fixes_takes_its_point() {
+    let map = "EXPR FOR ALL #[Elt Out] #(MAP f :(FN :{x :Elt} -> Out) AT y :Elt) -> Out = \
+               #(f {x = y})\n";
+    let source = format!(
+        "{map}{}",
+        module(
+            "(EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any = #(MAP pick AT xs)) \
+             (PRINT (WRAP [1])) (PRINT (WRAP [\"s\"]))"
+        )
+    );
+    assert_eq!(run(&source), "[1]\n[s]");
 }
 
 #[test]

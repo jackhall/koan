@@ -40,8 +40,8 @@
 //! exactly an unquantified function refuses the load where its argument can never satisfy the
 //! parameters. A call by name of a quantified function solves its group from its argument record's
 //! fields, each contributing as a keyworded argument does, and records the contributions by its
-//! argument's site for the frame; it refuses the load where a closed contribution misses its
-//! parameter or closed ones leave the group unsolved. What the pass fixes rests in each shape's
+//! argument's site for the frame; it refuses the load where a contribution misses its parameter or
+//! the contributions leave the group unsolved, where a run reproduces that solve. What the pass fixes rests in each shape's
 //! write-once [`Statics`] cell, which [`evaluate`](super::evaluate) reads.
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
@@ -59,7 +59,8 @@
 //! record, and a keyworded argument's slot at each candidate — and the site is instantiated at the
 //! least instance under it ([`instance_under`]). A quantified callee's other arguments solve its
 //! group first, and the slot is read through that solve: a variable a class before the slot's
-//! solves is taken from that class's solving slots at their contributions, as the call solves it.
+//! solves is taken from that class's solving slots at their contributions, as the call solves it,
+//! where a run reproduces the solve.
 //! The candidates a use keeps must agree on each instance. A name's solution is recorded by its
 //! site and a literal's in its body's born-instance cell; a site the wanted type fixes nothing at
 //! refuses the load. A solution naming a lexical variable records where the site reads it, as a
@@ -785,7 +786,8 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// bounded by `bounds` is wanted at: the group solved from the `others` first — each other slot
     /// beside its argument's static type — then `slot` read from above through it. A variable an
     /// earlier class than the slot's solves is taken as `fixed` gives it, which is empty where none
-    /// is. Any other variable the slot shares with the others must come out one closed type; one
+    /// is. Any other variable the slot shares with the others must come out one point the call
+    /// reproduces — a closed one, or one of a reproducible solve ([`Collector::reproducible`]); one
     /// only the slot names is read through `[Never, bound]`. Refused where the others admit no
     /// solve, or leave a shared variable open.
     fn slot_wanted(
@@ -793,7 +795,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         bounds: &[KType],
         slot: Parametric,
         others: &[(Parametric, Interval)],
-        fixed: &[Option<KType>],
+        fixed: &[Option<Parametric>],
     ) -> Result<Parametric, Unsolved<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let names = |declared: Parametric, variable: usize| {
@@ -808,7 +810,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         let mut collector = Collector::<Parametric>::new(scratch, bounds);
         for (variable, bound) in bounds.iter().enumerate() {
             if let Some(to) = fixed(variable) {
-                collector.pin(variable, *bound, to.into());
+                collector.pin(variable, *bound, to);
             }
         }
         let mut declared = BumpVec::with_capacity_in(others.len(), scratch);
@@ -843,18 +845,26 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                     },
                 );
             }
-            exact &= argument.is_exact() && types.concrete(argument.upper).is_some();
+            exact &= argument.is_exact();
             declared.push(*other);
         }
         let Ok(solution) = collector.solve(types) else {
             return Err(named());
         };
-        let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
+        let reproducible = collector.reproducible(types);
+        let solved = intervals(
+            types,
+            scratch,
+            &declared,
+            bounds,
+            &solution,
+            exact && reproducible,
+        );
         let mut chosen = BumpVec::with_capacity_in(bounds.len(), scratch);
         let mut open = BumpVec::new_in(scratch);
         for (variable, bound) in bounds.iter().enumerate() {
             if let Some(to) = fixed(variable) {
-                chosen.push(Interval::point(to.into()));
+                chosen.push(Interval::point(to));
                 continue;
             }
             // Never `intervals`' answer for a variable no other slot names: it reads as the bound.
@@ -863,8 +873,11 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 continue;
             }
             let interval = solved[variable];
+            // A concrete point of a solve a run may not reproduce is still the run's: with `exact`
+            // false, only a meet of concrete upper contributions comes out one.
             if names(slot, variable)
-                && !(interval.is_exact() && types.concrete(interval.upper).is_some())
+                && !(interval.is_exact()
+                    && (reproducible || types.concrete(interval.upper).is_some()))
             {
                 open.push(variable);
             }
@@ -885,18 +898,20 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         ))
     }
 
-    /// The variables of the slot at `position` of the closed candidate `shape` that a class before
-    /// that slot's solves, each solved as the call solves it: from the solving slots of those
-    /// classes, each at its argument's closed contribution among `contributions`. `None` for every
-    /// other variable, and empty where there is none. `Misfit` where those contributions never
-    /// admit, since the call then never runs; `Open` naming a variable a slot that solves it reads
-    /// no closed contribution at — an instance argument's, unknown, or over a lexical variable.
+    /// The variables of the slot at `position` of the candidate `shape` that a class before that
+    /// slot's solves, each solved as the call solves it: from the solving slots of those classes,
+    /// each at its argument's contribution the load knows among `contributions`. A variable is
+    /// fixed only where that solve is reproducible ([`Collector::reproducible`]): the call binds
+    /// each lexical variable as the load did. `None` for every other variable, and empty where
+    /// there is none. `Misfit` where those contributions never admit at any binding, since the call
+    /// then never runs; `Open` naming a variable a slot that solves it reads no contribution at —
+    /// an instance argument's, or unknown — or one a run may solve otherwise.
     fn solved_earlier(
         &self,
-        shape: DeclaredType<KType>,
+        shape: DeclaredType<Parametric>,
         position: usize,
         contributions: &[StaticType<'graph>],
-    ) -> Result<&'p [Option<KType>], Unsolved<'p>> {
+    ) -> Result<&'p [Option<Parametric>], Unsolved<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let DeclaredType::Scheme(scheme) = shape else {
             return Ok(&[]);
@@ -908,7 +923,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             unreachable!("a candidate's shape is an expression shape")
         };
         let class = |slot: usize| class_of(classes, slot);
-        let solving = solving_slots(types, scratch, shape.into());
+        let solving = solving_slots(types, scratch, shape);
         let names = |slot: usize, variable: usize| {
             types.references_quantifier(scratch, slots[slot], variable)
         };
@@ -921,15 +936,25 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         if shared.is_empty() {
             return Ok(&[]);
         }
-        let mut collector = Collector::<KType>::new(scratch, bounds);
+        let open = |slot: usize| {
+            let mut open = BumpVec::new_in(scratch);
+            open.extend(shared.iter().copied().filter(|v| names(slot, *v)));
+            Unsolved::Open(open)
+        };
+        let all_open = || {
+            let mut open = BumpVec::new_in(scratch);
+            open.extend(shared.iter().copied());
+            Unsolved::Open(open)
+        };
+        let mut collector = Collector::<Parametric>::new(scratch, bounds);
         for slot in 0..slots.len() {
             if !(earlier(slot) && solving[slot] && shared.iter().any(|v| names(slot, *v))) {
                 continue;
             }
-            let Static::Closed(contribution) = contributions[slot] else {
-                let mut open = BumpVec::new_in(scratch);
-                open.extend(shared.iter().copied().filter(|v| names(slot, *v)));
-                return Err(Unsolved::Open(open));
+            let contribution = match contributions[slot] {
+                Static::Closed(contribution) => contribution.into(),
+                Static::Rigid { value, .. } => value,
+                Static::Unknown => return Err(open(slot)),
             };
             let admitted = admits_with(
                 types,
@@ -939,12 +964,19 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 Variance::Co,
                 &mut collector,
             );
+            // A failure a run may not reproduce may admit at some binding: it fixes nothing.
             if admitted.is_err() {
-                return Err(Unsolved::Misfit);
+                return Err(match collector.reproducible(types) {
+                    true => Unsolved::Misfit,
+                    false => open(slot),
+                });
             }
         }
-        let Ok(solution) = collector.solve(types) else {
-            return Err(Unsolved::Misfit);
+        let reproducible = collector.reproducible(types);
+        let solution = match collector.solve(types) {
+            Ok(solution) if reproducible => solution,
+            Err(_) if reproducible => return Err(Unsolved::Misfit),
+            _ => return Err(all_open()),
         };
         Ok(scratch.alloc_slice_fill_iter(
             (0..bounds.len()).map(|v| shared.contains(&v).then(|| solution[v])),
@@ -956,7 +988,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// candidate the load knows as `known`: wanted at its slot's type, read through the candidate's
     /// group solved from its other arguments where it has one — a variable a class before the
     /// slot's solves taken from that class's solving slots at their contributions, as the call
-    /// solves it, where the candidate is closed. Refused where the load does not know the
+    /// solves it. Refused where the load does not know the
     /// candidate's shape or makes no instance; `None` where the other arguments do not fit their
     /// slots, which the judge refuses.
     fn instances(
@@ -968,12 +1000,15 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     ) -> Result<&'p [Made<'p>], Option<ShapeError<'graph>>> {
         let (types, scratch) = (self.types, self.scratch);
         let mut slots = BumpVec::new_in(scratch);
-        let (bounds, quantifiers) = match known.shape() {
-            Some(DeclaredType::Type(shape)) => {
+        let Some(shape) = known.shape() else {
+            return Err(Some(self.unfixed(sites[0].scheme, None, sites[0].at)));
+        };
+        let (bounds, quantifiers) = match shape {
+            DeclaredType::Type(shape) => {
                 slots.extend(shape_slots(shape, types));
                 (&[][..], &[][..])
             }
-            Some(DeclaredType::Scheme(scheme)) => {
+            DeclaredType::Scheme(scheme) => {
                 slots.extend(scheme_slots(scheme, types));
                 let quantifiers = match types.scheme_node(scheme) {
                     TypeNode::ExpressionShape { quantifiers, .. } => quantifiers,
@@ -981,7 +1016,6 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
                 };
                 (quantifier_bounds(types, scheme), quantifiers)
             }
-            None => return Err(Some(self.unfixed(sites[0].scheme, None, sites[0].at))),
         };
         let mut others = BumpVec::with_capacity_in(slots.len(), scratch);
         for (position, slot) in slots.iter().enumerate() {
@@ -995,12 +1029,7 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
             let wanted = if bounds.is_empty() {
                 slot
             } else {
-                let fixed = match known {
-                    Known::Closed(shape) => {
-                        self.solved_earlier(shape, site.position, contributions)
-                    }
-                    _ => Ok(&[][..]),
-                };
+                let fixed = self.solved_earlier(shape, site.position, contributions);
                 match fixed.and_then(|fixed| self.slot_wanted(bounds, slot, &others, fixed)) {
                     Ok(wanted) => wanted,
                     Err(Unsolved::Misfit) => return Err(None),
@@ -1694,8 +1723,9 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
     /// Where the callee is the quantified function typed by `scheme`, each parameter naming its
     /// group solves from its field's contribution, which the call records by `argument`'s site
     /// whenever its record names every parameter, as a keyworded use records its arguments'; the
-    /// load refuses the call where a closed contribution does not fit its parameter, or where every
-    /// solving parameter's contribution is closed and the group has no solution.
+    /// load refuses the call where a contribution the load knows does not fit its parameter, or
+    /// where every solving parameter's contribution is known and the group has no solution — each
+    /// where a run reproduces the solve ([`Collector::reproducible`]).
     fn called(
         &mut self,
         level: usize,
@@ -1758,33 +1788,35 @@ impl<'p, 'graph> Pass<'p, '_, 'graph> {
         }
         let mut collector = Collector::<Parametric>::new(scratch, bounds);
         let mut declared = BumpVec::with_capacity_in(read.len(), scratch);
-        let (mut exact, mut closed) = (true, true);
+        let (mut exact, mut contributed) = (true, true);
         for ((name, param, field, solving), contribution) in
             read.iter().copied().zip(contributions.iter())
         {
+            let contributes = matches!(contribution, Static::Closed(_) | Static::Rigid { .. });
             if admits_with(types, scratch, param, field, Variance::Co, &mut collector).is_err() {
-                if let Static::Closed(_) = contribution {
+                if contributes && collector.reproducible(types) {
                     return Err(never());
                 }
                 return Ok((self.through(ret, None), false));
             }
             if solving {
                 // As a keyworded use judges it: a variable makes no solve the call's, save where
-                // the call solves from this closed type itself.
-                let contributes = matches!(contribution, Static::Closed(_));
-                closed &= contributes;
+                // the call solves from this type itself.
+                contributed &= contributes;
                 exact &= contributes
                     || lower.and_then(|lower| lower.get(name)) == Some(field)
                         && types.concrete(field).is_some();
             }
             declared.push(param);
         }
+        let reproducible = collector.reproducible(types);
         match collector.solve(types) {
             Ok(solution) => {
+                let exact = exact && reproducible;
                 let solved = intervals(types, scratch, &declared, bounds, &solution, exact);
                 Ok((self.through(ret, Some(&solved)), exact))
             }
-            Err(_) if scheme.is_some() && closed => Err(never()),
+            Err(_) if scheme.is_some() && contributed && reproducible => Err(never()),
             Err(_) => Ok((self.through(ret, None), false)),
         }
     }
