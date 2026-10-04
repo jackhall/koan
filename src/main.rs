@@ -11,16 +11,11 @@ use koan::dispatch::Koan;
 use koan::program::{CellSubstrate, Outcome, Output, STACK_BYTES};
 
 // The dhat attribution profiler owns the global allocator outright: it wraps the system
-// allocator and records a backtrace per allocation. Otherwise the binary runs on mimalloc, except
-// under Miri, which can't call mimalloc's FFI (`mi_malloc_aligned`) and falls back to the system
+// allocator and records a backtrace per allocation. Otherwise the binary runs on the system
 // allocator.
 #[cfg(feature = "dhat")]
 #[global_allocator]
 static GLOBAL: dhat::Alloc = dhat::Alloc;
-
-#[cfg(all(not(miri), not(feature = "dhat")))]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// The slab's cap: the whole width a graph's type fixes, so the cap is never what refuses a cell.
 const CELLS: u32 = 64;

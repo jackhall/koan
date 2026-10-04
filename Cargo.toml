@@ -23,7 +23,6 @@ path = "src/main.rs"
 dhat = ["dep:dhat"]
 
 [dependencies]
-mimalloc = { version = "0.1", default-features = false }
 # The cell tier's substrate: cells, their regions, the carrier states and the liveness matrix.
 cellgraph = { path = "cellgraph" }
 # The layout half of the parser: whitespace-sensitive s-expressions with glue, no vocabulary.

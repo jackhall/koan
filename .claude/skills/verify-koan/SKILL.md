@@ -33,7 +33,8 @@ The tier is the argument; the scope is read from the changed paths. Nothing to c
 report which ran.
 
 - **Routine** (`tools/verify.sh`, the default and what the pre-commit hook runs): slate-audit,
-  tests (unit, integration and doctests in one pass), the cellgraph surface pair, clippy, doclinks.
+  tests (unit, integration and doctests in one pass), a warning-free `--release` check of the
+  workspace, the tutorial snippets, the cellgraph surface pair, clippy, doclinks.
   Property laws run at 64 cases. It measures nothing — no coverage, no modgraph, no Miri — and
   costs seconds.
 - **Total** (`tools/verify.sh --total`, what CI runs): the routine steps plus coverage, Miri over
@@ -58,10 +59,10 @@ than reassembling one from the step lines. It names its own tier and scope, so a
 never mistaken for a full one:
 
 ```
-Verify (routine): slate ok, tests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok.
+Verify (routine): slate ok, tests ok, release ok, snippets ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok.
 Verify (docs only): doclinks ok.
 Verify (cellgraph only): tests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, koan compiles.
-Verify (total): slate ok, tests ok, doctests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, miri ok, coverage 87.18% (Δ -0.00 vs 87.18%), modgraph tests ok, modgraph score 1809.79 (Δ +0.00 vs 1809.79).
+Verify (total): slate ok, tests ok, doctests ok, release ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, miri ok, coverage 87.18% (Δ -0.00 vs 87.18%), modgraph tests ok, modgraph score 1809.79 (Δ +0.00 vs 1809.79).
 ```
 
 Two things the line does not carry, which are worth adding in your own words

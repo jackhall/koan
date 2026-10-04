@@ -17,8 +17,8 @@
 # to override the tier's choice — `PROPTEST_CASES=16384 tools/verify.sh --total` for an overnight
 # sweep of the lattice laws.
 #
-# Every cargo step builds the default feature set. The routine tier runs the tutorial's snippets
-# through the interpreter binary.
+# Every cargo step builds the default feature set, and every one but the release check builds the
+# debug profile. The routine tier runs the tutorial's snippets through the interpreter binary.
 #
 # One line per step, then one summary line. A step that passes is worth a count, a score, or a
 # delta — not its runner chatter — so the whole green slate reads without scrolling, and the
@@ -176,6 +176,18 @@ cellgraph_surface() {
     fi
 }
 
+# The release profile drops `cfg(debug_assertions)` items, but `debug_assert!` still type-checks its
+# arguments, so a debug-only helper named in a `debug_assert!` builds in debug and breaks in
+# release. Every other step builds debug; this one checks the whole workspace under `--release`,
+# warnings included, since an import only debug code uses goes unused there.
+release_step() {
+    run release 'release build FAILED' cargo check --workspace --all-targets --release --quiet
+    if grep -q '^warning' <<<"$OUT"; then
+        fail release 'release build WARNS' "$OUT"
+    fi
+    ok release 'checks clean under --release' 'release ok'
+}
+
 # clippy, auto-fixing once before it gates. `$@` is the package/feature selection.
 clippy_step() {
     if OUT="$(cargo clippy "$@" -- -D warnings 2>&1)"; then
@@ -267,6 +279,7 @@ if [ "$TIER" = routine ]; then
     run tests 'tests FAILED' cargo test --workspace --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
+    release_step
     snippets_step
     cellgraph_surface
     clippy_step --workspace --all-targets
@@ -293,6 +306,7 @@ ok tests "ok ($(passed) passed → $LCOV)" 'tests ok'
 run doctests 'doctests FAILED' cargo test --workspace --doc --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
 
+release_step
 cellgraph_surface
 # `cellgraph/perf` is the one feature in the workspace, and it gates the measurement binary the
 # perf step below runs. A default build hides that source from clippy, so the total tier's lint

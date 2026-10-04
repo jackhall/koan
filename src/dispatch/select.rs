@@ -27,10 +27,9 @@ use crate::scope::{ParameterBinding, Registered};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, satisfied_by,
-    scheme_return, select_by_class, shape_return, solving_slots, substitute_quantified,
+    scheme_return, scheme_slots, select_by_class, shape_return, shape_slots, solving_slots,
+    substitute_quantified,
 };
-#[cfg(debug_assertions)]
-use crate::type_lattice::{scheme_slots, shape_slots};
 use crate::values::{List, Record, TypeValue, Value};
 
 use super::{Evaluation, Operand};
@@ -207,8 +206,8 @@ fn solved_from<'x>(
     }))
 }
 
-/// Whether each of `carried` lies under its slot of `shape` at `solution`.
-#[cfg(debug_assertions)]
+/// Whether each of `carried` lies under its slot of `shape` at `solution`. Not gated on
+/// `debug_assertions`: its one caller is a `debug_assert!`, which type-checks in every profile.
 pub(super) fn carried_fit(
     types: &TypeRegistry<'_>,
     scratch: &Bump,

@@ -45,8 +45,10 @@ use crate::scope::{
     BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site, Static, StaticType,
 };
 use crate::symbols::BinderSymbol;
+#[cfg(debug_assertions)]
+use crate::type_lattice::bound_above;
 use crate::type_lattice::{
-    DeclaredType, KType, TypeNode, Verdict, bound_above, satisfied_by, substitute_levels,
+    DeclaredType, KType, TypeNode, Verdict, satisfied_by, substitute_levels,
 };
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
