@@ -74,5 +74,3 @@ outer name, and nothing at the binder says what it captures.
 
 - [Families as parameters](families-as-parameters.md) — a signature over a
   family is exercised only by a view that runs.
-- [Retire the old runtime](retire-the-old-runtime.md) — the module surface
-  `machine` still owns.

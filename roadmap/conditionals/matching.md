@@ -77,4 +77,3 @@ read an arm's `it` as `Any`.
 **Unblocks:**
 
 - [Catching errors](catching.md) — `TRY` selects an arm as `MATCH … UNDER` does.
-- [Retire the old runtime](../rewrite/retire-the-old-runtime.md) — the branching surface `machine` still owns.

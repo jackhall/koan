@@ -52,6 +52,4 @@ and its examples catch an unbound name.
 - [Matching](matching.md) — `TRY` selects an arm as `MATCH … UNDER` does.
 - [Faults and call traces](faults.md) — what `TRY` and `CATCH` catch, and the frames they read.
 
-**Unblocks:**
-
-- [Retire the old runtime](../rewrite/retire-the-old-runtime.md) — the catching surface `machine` still owns.
+**Unblocks:** none.

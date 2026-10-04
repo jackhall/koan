@@ -66,5 +66,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Modules](rewrite/modules.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
+- [Retire the old runtime](rewrite/retire-the-old-runtime.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 

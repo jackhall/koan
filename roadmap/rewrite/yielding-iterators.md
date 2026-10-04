@@ -80,4 +80,3 @@ elements a consumer takes lazily.
 **Unblocks:**
 
 - [Destination-homed construction](../old_foundation/destination-homed-construction.md) — carried edge; its demand-edge premise predates `alloc_into` and needs re-checking.
-- [Retire the old runtime](retire-the-old-runtime.md) — the last of the execution surface `workgraph`'s DAG layer still owns.
