@@ -34,8 +34,8 @@
 use crate::elaborate::denoted;
 use crate::knot::{KValue, Knotted, instance, lambda, quote, refused_construction};
 use crate::memory::{Bump, BumpVec, Writer, collect};
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::role::Role;
+use crate::parse::BuiltinShapeId;
+use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, block};
 use crate::scheduler::{

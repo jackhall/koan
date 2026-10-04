@@ -28,11 +28,11 @@
 //! See [README.md § Names that arrive at run time](../../README.md#names-that-arrive-at-run-time).
 
 use crate::memory::{BumpAllocator, BumpVec, collect, resident};
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::binder::quantifier_entries;
-use crate::parse::builtin_shapes::binder::{fn_def_binder_bucket, op_def_binder_bucket};
-use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Role};
+use crate::parse::BuiltinShapeId;
+use crate::parse::quantifier_entries;
+use crate::parse::{BodyKind, DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
+use crate::parse::{fn_def_binder_bucket, op_def_binder_bucket};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::DeclaredGroup;
 

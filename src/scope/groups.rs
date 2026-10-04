@@ -24,12 +24,10 @@
 //! See [README.md § Operator groups](README.md#operator-groups).
 
 use crate::memory::{BumpAllocator, BumpVec, ProgramBrand, collect, resident};
-use crate::parse::builtin_shapes::binder::{
-    OpArity, op_declaration_arity, quoted_body, symbol_from_quote_body,
-};
-use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Reading, Role};
-use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
+use crate::parse::{BodyKind, DefinitionKind, Reading, Role};
+use crate::parse::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{OpArity, op_declaration_arity, quoted_body, symbol_from_quote_body};
 use crate::symbols::{KeywordSymbol, StaticName};
 use crate::type_lattice::{DeclaredGroup, FoldDirection, ReductionMode};
 

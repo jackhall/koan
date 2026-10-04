@@ -10,7 +10,7 @@
 //! whole component of type binders and hands back one handle per member, sealing a group of
 //! mutually recursive declarations in one window. [`builtin_shape_types`] interns a builtin
 //! bucket's own overloads — the `static` slot types of a
-//! [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry — as one handle apiece,
+//! [`BUILTIN_SHAPES`](crate::parse::BUILTIN_SHAPES) entry — as one handle apiece,
 //! and [`builtin_result`] and [`builtin_error`] seal the builtin nominals. [`self_signature`] reads a
 //! module's own signature off the activation its body ran in.
 //!

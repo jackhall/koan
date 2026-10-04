@@ -3,7 +3,7 @@
 
 use crate::memory::Bump;
 use crate::parse::KeyElement;
-use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId, builtin_shape_for};
+use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, builtin_shape_for};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
 
 use super::super::builtin_shape_types;
@@ -23,7 +23,7 @@ fn erasure(types: &TypeRegistry<'_>, handle: KType) -> Vec<KeyElement> {
 }
 
 /// The entry a bucket key probes to, by identity.
-fn entry_of(key: &[KeyElement]) -> &'static crate::parse::builtin_shapes::BuiltinShape {
+fn entry_of(key: &[KeyElement]) -> &'static crate::parse::BuiltinShape {
     builtin_shape_for(key.iter().copied()).expect("an interned overload names a builtin bucket")
 }
 

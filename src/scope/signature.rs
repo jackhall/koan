@@ -6,11 +6,11 @@
 //! they are mentions of the enclosing shape; only the names are the body's.
 
 use crate::memory::BumpVec;
-use crate::parse::builtin_shapes::binder::{
+use crate::parse::{
     SlotLabel, declarator_parameters, next_is_type_slot, quantifier_entries, slot_label,
 };
 
-pub(crate) use crate::parse::builtin_shapes::binder::quoted_body;
+pub(crate) use crate::parse::quoted_body;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::BinderSymbol;
 

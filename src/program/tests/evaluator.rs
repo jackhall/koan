@@ -20,7 +20,7 @@ use std::cell::RefCell;
 
 use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda, quote};
 use crate::memory::{Active, Bump, BumpAllocator, Writer, collect};
-use crate::parse::builtin_shapes::BuiltinShapeId;
+use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
 use crate::program::{
     CallKind, Contract, Evaluated, KBirth, KBundle, KState, Language, Program, call, eval,

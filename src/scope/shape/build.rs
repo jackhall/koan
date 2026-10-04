@@ -44,11 +44,11 @@ use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, collect, resident,
     strongly_connected_components,
 };
-use crate::parse::builtin_shapes::binder::{
+use crate::parse::{
     BinderSurface, DeclaredElement, SlotLabel, declared_element, head_run, needed_key, needed_name,
     needing, next_is_type_slot, slot_label,
 };
-use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
+use crate::parse::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{
@@ -73,7 +73,7 @@ use super::{
     QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead, Target,
     TypeExpression, Unit, UnitWork, Which, resolve_here,
 };
-use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
+use crate::parse::{BodyKind, DefinitionKind, Heads, Reading, Role};
 use std::cell::Cell;
 
 mod locate;

@@ -21,7 +21,7 @@
 use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
 use crate::knot::{KBuiltins, KValue, UsingRefused, builtin, using};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
-use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId, ShapeElement};
+use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, ShapeElement};
 use crate::scope::Builtins;
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{

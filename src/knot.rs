@@ -39,11 +39,11 @@
 //!
 //! See [knot/README.md](knot/README.md).
 
-pub mod builtin;
-pub mod code;
+mod builtin;
+mod code;
 mod copy;
 mod data;
-pub mod function;
+mod function;
 pub mod module;
 mod tie;
 
@@ -53,7 +53,7 @@ pub(crate) mod tests;
 pub use builtin::{BuiltinFunction, builtin};
 pub use code::{Code, UsingRefused, quote, using};
 pub use function::{Function, instance, lambda};
-pub use module::{Coerced, Module};
+pub use module::{Coerced, Module, body_activation};
 pub use tie::tie;
 
 use std::fmt;

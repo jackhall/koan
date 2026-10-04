@@ -33,7 +33,7 @@
 use std::fmt;
 
 use crate::elaborate::{denoted, type_declarations};
-use crate::knot::module::body_activation;
+use crate::knot::body_activation;
 use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Untieable, tie};
 use crate::memory::{Bump, BumpVec, resident};
 use crate::parse::ExpressionPart;

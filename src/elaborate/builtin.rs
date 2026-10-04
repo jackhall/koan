@@ -1,7 +1,7 @@
 //! A builtin shape's overloads, interned as lattice handles, the builtin `Result` family, and the
 //! builtin `Error` nominal a koan error value is tagged with.
 //!
-//! [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) states each bucket's overloads
+//! [`BUILTIN_SHAPES`](crate::parse::BUILTIN_SHAPES) states each bucket's overloads
 //! as `static` data — a `const` [`KType`] per slot per overload, and one return apiece — because
 //! the parser probes the table before any registry exists. This is the one door that assembles
 //! such an entry's handles into [`ExpressionShape`](crate::type_lattice::TypeNode::ExpressionShape)
@@ -13,7 +13,7 @@
 //! Nothing here reads a name, so nothing here fails.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::{BuiltinShape, ShapeElement};
+use crate::parse::{BuiltinShape, ShapeElement};
 use crate::symbols::{BinderSymbol, StaticName, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry,

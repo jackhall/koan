@@ -2,8 +2,8 @@
 //! passes, a callable's quoted body and head, an arm set as a dict of quotes, a union's variants, a
 //! `FOR ALL` group, a signature's member list, a field label, and a value dict's `_` key.
 
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::role::Heads;
+use crate::parse::BuiltinShapeId;
+use crate::parse::Heads;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BodyShape, Builtins, Position, QuotedPart, ShapeError, ShapeKind, Site};
 use crate::symbols::BinderSymbol;

@@ -9,9 +9,9 @@
 use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
-use crate::parse::builtin_shapes::role::{BodyKind, Role};
+use crate::parse::BuiltinShapeId;
+use crate::parse::symbol_from_quote_body;
+use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Callable, Elaboration, FunctionGroupMap, IMPLICIT, ParameterBinding, Registered, Registration,

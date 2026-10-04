@@ -12,12 +12,12 @@
 use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::binder::{
+use crate::parse::BuiltinShapeId;
+use crate::parse::{DefinitionKind, Role};
+use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{
     bounded, declarator_parameters, quoted_body, quoted_part, symbol_from_quote_body,
 };
-use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
-use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{

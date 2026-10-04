@@ -24,11 +24,10 @@
 //!
 //! See [parse/README.md](parse/README.md).
 
-pub mod ast;
-pub mod builtin_shapes;
-
+mod ast;
 mod atom;
 mod brace;
+mod builtin_shapes;
 mod depth;
 mod error;
 mod lower;
@@ -51,6 +50,19 @@ pub use ast::{
     NodeCache, PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
 };
 pub use builtin_shapes::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
+pub use builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
+pub use builtin_shapes::{
+    BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for,
+};
+
+pub(crate) use ast::RunIter;
+pub(crate) use builtin_shapes::KEYWORDS;
+pub(crate) use builtin_shapes::binder::{
+    DeclaredElement, OpArity, SlotLabel, bounded, declarator_parameters, declared_element,
+    fn_def_binder_bucket, head_run, needed_entry, needed_key, needed_name, needing,
+    next_is_type_slot, op_declaration_arity, op_def_binder_bucket, quantifier_entries, quoted_body,
+    quoted_part, slot_label, symbol_from_quote_body,
+};
 
 #[cfg(test)]
 mod tests;

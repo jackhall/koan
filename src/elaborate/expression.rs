@@ -14,9 +14,9 @@ use std::cell::Cell;
 
 use super::reads::{Reads, TypeAt};
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
-use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
+use crate::parse::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{

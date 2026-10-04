@@ -10,7 +10,7 @@
 use std::fmt;
 
 use crate::memory::{BumpAllocator, Writer, collect};
-use crate::parse::ast::RunIter;
+use crate::parse::RunIter;
 use crate::parse::{
     DispatchShape, ExpressionPart, KExpression, KeyElement, NodeCache, PartClass, StoredBinderKey,
 };

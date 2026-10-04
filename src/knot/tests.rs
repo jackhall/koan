@@ -23,7 +23,7 @@ use crate::memory::{
     Bump, BumpAllocator, CellGraph, Prices, ProgramBrand, ReleaseAbsorption, StepContext, Verdict,
     Writer, program_storage, reattachable, resident,
 };
-use crate::parse::builtin_shapes::role::{BodyKind, Role};
+use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::scope::{BodyShape, Builtins, Component, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};

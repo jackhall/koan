@@ -2,7 +2,7 @@
 //! bucket declaration's ranking and the ranking each registration carries, the candidate list of
 //! every keyworded use, and the refusals a keyworded definition, declaration or use meets.
 
-use crate::parse::builtin_shapes::BuiltinShapeId;
+use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KeyElement};
 use crate::scope::{
     BodyShape, Builtins, Candidate, CandidateList, CaptureSource, Coordinate, Position, ShapeError,

@@ -25,8 +25,8 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::KExpression;
-use crate::parse::builtin_shapes::binder::quoted_body;
-use crate::parse::builtin_shapes::role::Role;
+use crate::parse::Role;
+use crate::parse::quoted_body;
 use crate::scope::{
     BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
     FunctionGroupMap, ParameterBinding, Registered, Registration, ShapeError, ShapeGroupMap,

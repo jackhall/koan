@@ -48,8 +48,8 @@ use std::cell::Cell;
 use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
+use crate::parse::BuiltinShapeId;
+use crate::parse::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};

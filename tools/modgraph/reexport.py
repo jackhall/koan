@@ -21,6 +21,9 @@ only to build a fixture constrains no production reshuffle. Test files are
 skipped whole and a production file's own `#[cfg(test)] mod` block is stripped
 before its `use` statements are read.
 
+A leaf that names a module the consumer cannot see — a private `mod tie` beside
+a re-exported `pub use tie::tie` — names the item, so it attributes to the parent.
+
 Limitation: attribution is parsed from `use` statements. Inline fully-qualified
 path references (no `use`) are not captured; the `use`-based signal dominates.
 """
@@ -153,6 +156,30 @@ def written_module(abs_segs: list[str], known: set[str]) -> str | None:
     return None
 
 
+_PRIVATE_MOD = re.compile(r"^\s*mod\s+(\w+)\s*[;{]", re.M)
+
+
+def private_modules(src_root: Path, package: str = "koan") -> set[str]:
+    """The module paths declared with a bare `mod` (no `pub`) — visible only
+    from their parent and its descendants."""
+    out: set[str] = set()
+    for rs in src_root.rglob("*.rs"):
+        mod = relpath_to_module("src/" + str(rs.relative_to(src_root)).replace("\\", "/"), package)
+        if mod is None or is_test_file(rs):
+            continue
+        for name in _PRIVATE_MOD.findall(strip_comments(rs.read_text(errors="ignore"))):
+            out.add(f"{mod}::{name}")
+    return out
+
+
+def visible_from(module: str, consumer: str, private: set[str]) -> bool:
+    """Whether `consumer` can name `module`: a private module only from inside its parent."""
+    if module not in private:
+        return True
+    parent = module.rsplit("::", 1)[0]
+    return consumer == parent or consumer.startswith(parent + "::")
+
+
 def iter_use_edges(known: set[str], src_root: Path, package: str = "koan"):
     """Yield (consumer_module, written_module, item_name) per resolved use-leaf.
 
@@ -165,6 +192,7 @@ def iter_use_edges(known: set[str], src_root: Path, package: str = "koan"):
 
     `known` is the module node set (from the cargo-modules graph).
     """
+    private = private_modules(src_root, package)
     for rs in sorted(src_root.rglob("*.rs")):
         if is_test_file(rs):
             continue
@@ -191,6 +219,10 @@ def iter_use_edges(known: set[str], src_root: Path, package: str = "koan"):
                 if not abs_segs or abs_segs[0] != package:
                     continue
                 dst = written_module(abs_segs, known)
+                # `use crate::knot::tie` names the re-exported fn when the
+                # same-named module `tie` is private to `knot`: enter the parent
+                if dst == "::".join(abs_segs) and not visible_from(dst, mod, private):
+                    dst = written_module(abs_segs[:-1], known)
                 if dst and dst != mod:
                     yield mod, dst, abs_segs[-1]
 

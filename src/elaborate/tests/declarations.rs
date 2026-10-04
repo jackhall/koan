@@ -575,7 +575,7 @@ fn a_bound_naming_a_parameter_or_on_a_family_is_refused() {
 /// type name besides: `declares_member` and the signature door name one set.
 #[test]
 fn every_member_declaring_shape_is_a_signature_member() {
-    use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId};
+    use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId};
     let members = [
         (BuiltinShapeId::Val, "VAL x :Str"),
         (

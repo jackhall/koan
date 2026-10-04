@@ -383,10 +383,6 @@ class ProposeNaming(unittest.TestCase):
         self.assertFalse(propose._is_test("koan::m::testing::Bar"))  # not a segment
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCodeExcludedFromEdges(unittest.TestCase):
     """Test-only imports draw no edge. `cargo modules` runs without `--cfg-test`,
     so a test module is never a graph node; the edge set must filter to match, or
@@ -436,3 +432,37 @@ class TestCodeExcludedFromEdges(unittest.TestCase):
         edges = self._edges()
         self.assertIn(("koan::machine::model", "koan::machine::core::scope"), edges)
         self.assertNotIn(("koan::machine::model", "koan::builtins::test_support"), edges)
+
+
+class PrivateModuleLeafNamesTheItem(unittest.TestCase):
+    """`use crate::knot::tie` beside a private `mod tie` and `pub use tie::tie`
+    names the re-exported fn, so it attributes to the facade `knot`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.src_root = Path(self._tmp.name) / "src"
+        (self.src_root / "knot").mkdir(parents=True)
+        (self.src_root / "knot.rs").write_text(
+            "mod tie;\npub mod module;\npub use tie::tie;\npub use module::module;\n"
+        )
+        (self.src_root / "knot" / "tie.rs").write_text("pub fn tie() {}\nuse crate::knot::module;\n")
+        (self.src_root / "knot" / "module.rs").write_text("pub fn module() {}\n")
+        (self.src_root / "program.rs").write_text(
+            "use crate::knot::tie;\nuse crate::knot::module;\n"
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_private_module_leaf_attributes_to_parent(self):
+        known = {"koan::knot", "koan::knot::tie", "koan::knot::module", "koan::program"}
+        edges = reexport.correct(known, self.src_root, "koan")
+        self.assertIn(("koan::program", "koan::knot"), edges)
+        self.assertNotIn(("koan::program", "koan::knot::tie"), edges)
+        # a public module stays nameable, and a private one from inside its parent
+        self.assertIn(("koan::program", "koan::knot::module"), edges)
+        self.assertIn(("koan::knot::tie", "koan::knot::module"), edges)
+
+
+if __name__ == "__main__":
+    unittest.main()

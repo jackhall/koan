@@ -1,7 +1,7 @@
 //! Fixed shapes: the design document's classification examples, the diagnostics each error renders,
 //! the kinds of nested shape, and the forms the builder refuses.
 
-use crate::parse::builtin_shapes::BuiltinShapeId;
+use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     BodyShape, Builtins, CaptureSource, Coordinate, MentionClass, Position, ShapeError, ShapeKind,

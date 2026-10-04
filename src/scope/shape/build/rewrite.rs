@@ -37,8 +37,8 @@
 //! See [README.md § Operator groups](../../README.md#operator-groups).
 
 use crate::memory::{BumpVec, collect};
-use crate::parse::builtin_shapes::KEYWORDS;
-use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
+use crate::parse::KEYWORDS;
+use crate::parse::{DefinitionKind, Heads, Role};
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, ProgramNode, Spanned};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
