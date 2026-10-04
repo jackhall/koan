@@ -34,7 +34,7 @@
 # Outputs, total tier only (override paths via env vars):
 #   - DOT graph from cargo-modules → observe/modules.dot   (`KOAN_DOT`)
 #   - llvm-cov lcov report          → observe/coverage.lcov (`KOAN_LCOV`)
-#     (workspace-wide: koan plus both embedded crates)
+#     (workspace-wide: koan plus its embedded crates)
 #   - cellgraph verb readings       → cellgraph/observe/perf.csv, appended under `KOAN_REBASELINE`
 #
 # Scope, routine tier only. When every changed path is a Markdown file the change cannot reach a
@@ -281,7 +281,7 @@ printf 'Tier: total — %s property cases per law, coverage, Miri, module graph.
 
 slate_audit
 
-# `--workspace`, so the reading covers all three crates rather than the root one: the embedded
+# `--workspace`, so the reading covers every workspace crate rather than the root one: the embedded
 # crates are koan's own code, and a slate that scored only `src/` would let a whole crate ship with
 # no coverage signal at all.
 run tests 'tests FAILED' cargo llvm-cov --quiet --workspace --lcov --output-path "$LCOV"

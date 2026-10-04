@@ -2,7 +2,7 @@
 
 Koan's lexical environments: the layer that answers what a name means at the
 point it is read, over the values in [`values`](../values/README.md) and the
-types in [`type_lattice`](../type_lattice/README.md).
+types in [`type_lattice`](../../lattice/src/types/README.md).
 
 A scope resolves value names, type names and bucket keys. A keyworded use
 resolves where its shape is built, as a name does, to the list of callables it
@@ -291,7 +291,7 @@ unbound-name error.
 
 **Components.** With every mention resolved, the shape's bindings form a
 reference graph, and the shape computes its strongly connected components, as
-the [type lattice](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+the [type lattice](../../lattice/src/types/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
 does for a group of recursive types. A component whose internal mentions are
 all deferred is a group of values that only store and capture one another. Its
 members can be born together as one [knot](../memory/README.md#the-knot) once
@@ -432,7 +432,7 @@ refused.
 
 **One ranking per key.** A bucket declaration, `EXPR #(MOVE 2 TO 1)`, binds
 nothing: it gives its key a ranking, each slot's
-[priority class](../type_lattice/solving.md#priority-classes). A definition
+[priority class](../../lattice/src/types/solving.md#priority-classes). A definition
 takes the ranking of the declaration visible where it is written — visible as a
 name read at its statement is — and with none, its slots' written order; an
 operator takes its chaining's, fold left and pairwise ranking `left` first and
@@ -822,7 +822,7 @@ fold-left, fold-right, unary, or pairwise with a combiner symbol and the
 direction its pair results fold in. Its identity is its content: two
 declarations of an equal member set under an equal mode are one group, so a
 functor's `GROUP` is one group however often it is instantiated. The record is
-the lattice's [`DeclaredGroup`](../type_lattice/schema.rs), so a signature's
+the lattice's [`DeclaredGroup`](../../lattice/src/types/schema.rs), so a signature's
 operator channel and a body's held group are the same type and compare with
 `==`. [groups.rs](groups.rs) holds the model; [shape/build/rewrite.rs](shape/build/rewrite.rs)
 holds the rewrite.

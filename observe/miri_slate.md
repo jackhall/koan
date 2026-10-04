@@ -10,10 +10,11 @@ Each test is a minimal-shape driver of one region-substrate discipline; the
 slate passes when Miri reports zero process-exit leaks and zero UB across the
 whole list. It runs on the default build: `python3 tools/miri.py`.
 
-`src/` carries no `unsafe` of its own. Every `unsafe` these tests reach lives in
+`src/` carries no `unsafe` of its own, and `lattice` forbids it outside its test build. Every
+`unsafe` these tests reach lives in
 `cellgraph` — `Writer::fill`, the reattach seam, the region release — pinned
 library-side by [cellgraph/observe/miri_slate.md](../cellgraph/observe/miri_slate.md),
-or in `bumpalo`'s allocator under the bump tier. `Writer::thin_run`, under
+or in `bumpalo`'s allocator under `lattice`'s bump tier. `Writer::thin_run`, under
 `memory`'s knot, is pinned library-side: the knot is safe indexing over the
 `ThinRun` handle, with no layout or retype of its own. What this slate pins is
 the *safe* koan code that drives them: a bump-hosted table, write-once slots laid
@@ -35,7 +36,7 @@ memory error *no other slate test catches*. Do not whitelist a group just to
 silence the stale-anchor check; delete a redundant test instead.
 
 <!-- slate-audit-whitelist:start -->
-- `src/type_lattice/registry.rs` — the registry's node table is built over its region's bump
+- `lattice/src/types/registry.rs` — the registry's node table is built over its region's bump
   (`bump_table`) and every interned node's slices are bumped into the same region, so nothing the
   lattice owns carries drop glue and the region releases it whole; the relations take a scratch
   allocator from the caller. The backing `unsafe` is `bumpalo`'s.
@@ -81,7 +82,7 @@ Test names, grouped by the discipline each pins. `python3 tools/observe_tests.py
 slate` reads every `` - `name` `` line below; a name must match exactly one test
 in the lib binary.
 
-**Region-hosted type registry** ([src/type_lattice/registry.rs](../src/type_lattice/registry.rs)) —
+**Region-hosted type registry** ([lattice/src/types/registry.rs](../lattice/src/types/registry.rs)) —
 the table, every node and every slice live in the registry's region; a relation's transient
 buffers live in a scratch region the caller hands it.
 
@@ -252,9 +253,9 @@ in a tenant's storage and crossed into the callee's birth.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-04: 398s — 28 tests, 0 leaks, 0 UB
 - 2026-10-02: 264s — 27 tests, 0 leaks, 0 UB
 - 2026-09-30: 307s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 293s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 231s — 26 tests, 0 leaks, 0 UB
-- 2026-09-28: 531s — 26 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

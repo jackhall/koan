@@ -6,7 +6,7 @@ A field a program writes into a container literal stays reachable.
 (`list_type` and `dict_type` in [`values`](../../src/values/admission.rs)), and
 the load types a literal the same way. The join of two record types related by
 width is the wider one (`join` in the
-[type lattice](../../src/type_lattice/lattice.rs)), so
+[type lattice](../../lattice/src/types/lattice.rs)), so
 `[{x = 1, y = 2}, {x = 3}]` is a `LIST OF {x :Number}`: an overload over
 `LIST OF :{x :Number}` is selected for it. Each element is read at that type,
 since [a value's type is its surface](../../src/values/README.md#the-type-memo-and-satisfies),

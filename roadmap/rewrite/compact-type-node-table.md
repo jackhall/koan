@@ -1,10 +1,10 @@
 # A compact type node table
 
-**Problem.** A [`TypeNode`](../../src/type_lattice/node.rs) is 112 B, sized by
+**Problem.** A [`TypeNode`](../../lattice/src/types/node.rs) is 112 B, sized by
 its largest variants: `Signature` (a `SigSchema` is 88 B), `SetMember` and
 `ExpressionShape`. The variants a
 program mints most often (`List`, `Dict`, `Record`, `KFunction`, `Union`) need
-48 B or less. The [registry](../../src/type_lattice/registry.rs)'s node table
+48 B or less. The [registry](../../lattice/src/types/registry.rs)'s node table
 stores an `Entry` beside each key: the node plus its `quantified` and `rigid`
 flags, which pad it to 128 B, so each bucket is 144 B. The table is a hashbrown map
 in [program storage](../../src/program/README.md) that doubles when full. The

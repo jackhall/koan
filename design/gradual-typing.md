@@ -6,7 +6,7 @@ early where they decide it; one that leaves them out still runs, and each call
 checks what the load could not.
 
 This doc tells that story across the modules that carry it. Each owns its own
-part: [the type lattice](../src/type_lattice/README.md) holds the types and the
+part: [the type lattice](../lattice/src/types/README.md) holds the types and the
 relations between them, [the elaborator](../src/elaborate/README.md) reads a
 written type into a handle, [dispatch](../src/dispatch/README.md) types
 expressions and selects candidates, [values](../src/values/README.md) carry
@@ -40,12 +40,12 @@ EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)
 given.
 
 So parametric types never enter the lattice's order. They are related by
-[*fits*](../src/type_lattice/relations.md#the-relations), which solves: a
+[*fits*](../lattice/src/types/relations.md#the-relations), which solves: a
 scheme fits another type when some instance of it lies under that type. In
 Rust the split is three handle types — `KType`, `Parametric` and `Scheme` —
 and passing one for another is a compile error
-([typed handles](../src/type_lattice/identity.md#typed-handles)).
-[The laws](../src/type_lattice/laws.md) says what each side of the split
+([typed handles](../lattice/src/types/identity.md#typed-handles)).
+[The laws](../lattice/src/types/laws.md) says what each side of the split
 guarantees and what breaks when the two are mixed, and
 [quantified types](quantified-types.md) says where a `FOR ALL` may be written
 and what a program writes where it may not.
@@ -111,7 +111,7 @@ Every value carries a concrete type, memoized where the value is laid down
 reads its arguments' carried types and does whatever the load left:
 
 1. it **admits** each remaining candidate, solving a quantified candidate's
-   group ([the unifier](../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind))
+   group ([the unifier](../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind))
    from what the load knows of each argument — the upper end of its static
    type, at a slot that solves — and from the carried type only where the load
    knows nothing ([contributions](../src/dispatch/README.md#static-types));
@@ -138,11 +138,11 @@ argument's static type does ([where a call runs](#where-a-call-runs)).
 - A lexical variable stands for whatever a run binds, so a relation over one
   must hold for every binding. The load compares a rigid type only along the
   lexical chain it was typed in, and reads it from outside through
-  [`bound_above`](../src/type_lattice/solving.md#substitute-then-ask).
+  [`bound_above`](../lattice/src/types/solving.md#substitute-then-ask).
 - Where a relation holds at some bindings and not others, the answer is
   *maybe* or *unknown*, and the call decides.
 - A static solve naming a lexical variable is the call's own only where a run,
-  binding each variable, [reproduces it](../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind):
+  binding each variable, [reproduces it](../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind):
   a solve that reads a variable through its bound is not.
 
 Under `EXPR #(WHICH x :Number) -> Str`, `WHICH a` over a parameter
@@ -184,9 +184,9 @@ changes what a reader sees and which overload runs.
 
 | Piece | Owner |
 |---|---|
-| Concrete and parametric handles, the order, *fits*, `join`, `meet` | [type lattice: relations](../src/type_lattice/relations.md), [identity](../src/type_lattice/identity.md) |
-| The laws and what breaks without them | [type lattice: laws](../src/type_lattice/laws.md) |
-| The solve, intervals, priority classes, verdicts | [type lattice: solving](../src/type_lattice/solving.md) |
+| Concrete and parametric handles, the order, *fits*, `join`, `meet` | [type lattice: relations](../lattice/src/types/relations.md), [identity](../lattice/src/types/identity.md) |
+| The laws and what breaks without them | [type lattice: laws](../lattice/src/types/laws.md) |
+| The solve, intervals, priority classes, verdicts | [type lattice: solving](../lattice/src/types/solving.md) |
 | A written type read into a handle; closed, rigid, unknown | [elaborator](../src/elaborate/README.md) |
 | Static types, static selection, instance sites, the return, ascription and annotation checks | [dispatch: static types](../src/dispatch/README.md#static-types) |
 | Admission and ranking at a call | [dispatch: selection](../src/dispatch/README.md#selection) |

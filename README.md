@@ -49,6 +49,7 @@ For a walk-through of the language surface with runnable snippets, see the [tuto
 ```sh
 cargo test                               # every module's unit tests
 cargo test parse::                       # tests under one module
+cargo test -p lattice                    # the symbols, the type lattice and the bump tier
 ```
 
 Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the code. For the full testing and linting workflow — including the Miri audit slate that signs off the memory model under tree borrows — see [TEST.md](TEST.md).
@@ -91,7 +92,8 @@ The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an order
 [scope](src/scope/README.md) builds each body's shape: its statements rewritten,
 its names classified into mentions, its components and the order its units run
 in. [elaborate](src/elaborate/README.md) types every type expression, binder and
-callable where the program loads, and dispatch's static selection narrows each
+callable where the program loads, as handles in the
+[type lattice](lattice/src/types/README.md), and dispatch's static selection narrows each
 keyworded use's candidates and checks returns, ascriptions and `EVAL`s. A load
 that refuses writes `error: <message>` and runs nothing.
 
@@ -110,8 +112,8 @@ program does not catch ends the run.
 ## Source layout
 
 The crate's top-level modules are [memory/](src/memory) (where a value lives
-and how long), [symbols](src/symbols.rs) (the symbol vocabulary — see
-[src/symbols/README.md](src/symbols/README.md)), [parse](src/parse.rs) (text →
+and how long — the cell tier and program storage, with `lattice`'s bump tier
+re-exported), [parse](src/parse.rs) (text →
 `KExpression`, plus the AST and builtin shape table that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
 laid down in a cell's region — see [src/values/README.md](src/values/README.md)),
@@ -135,10 +137,11 @@ body runner that performs it — see
 [dispatch/](src/dispatch.rs) (the language koan's programs run under: the
 builtin table and each builtin's type rule, the evaluator and keyword selection,
 the overlap check, and static selection — see
-[src/dispatch/README.md](src/dispatch/README.md)), and
-[type_lattice/](src/type_lattice.rs) (the closed algebra over interned type
-nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)). `parse`
-splits into [ast/](src/parse/ast.rs) (the syntax types, the node cache and the
+[src/dispatch/README.md](src/dispatch/README.md)), and two re-exports of the
+[lattice](lattice/README.md) crate: `symbols` ([the symbol
+vocabulary](lattice/src/symbols/README.md)) and `type_lattice`, which is
+`lattice::types` ([the closed algebra over interned type
+nodes](lattice/src/types/README.md)). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types, the node cache and the
 eternal-tier program marker), and
 [builtin_shapes/](src/parse/builtin_shapes.rs) (`BUILTIN_SHAPES` and the role /
 binder / slot-layout facts riding its entries).
@@ -146,20 +149,15 @@ binder / slot-layout facts riding its entries).
 ```
 src/
 ├── main.rs              the interpreter binary — reads a program from a path or stdin, loads it under dispatch's Koan with stdout / stderr sinks, runs it, and exits non-zero on an uncaught error
-├── lib.rs               library facade — declares every module, so the binary and the tests reach the interpreter through one module graph
+├── lib.rs               library facade — declares every module and re-exports `lattice`'s symbols and types (the latter as type_lattice), so the binary and the tests reach the interpreter through one module graph
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally an allocation bracket reads; tests/boundary.rs is the source scanner every module's boundary test hands its import lists to
 ├── source.rs            source-span and provenance carrier for errors
-├── memory.rs            pub mod memory — where a value lives and how long, in two tiers: the cell tier over cellgraph and the bump tier outside the graph
+├── memory.rs            pub mod memory — where a value lives and how long: the cell tier over cellgraph and program storage, with `lattice`'s bump tier re-exported
 ├── memory/
 │   ├── substrate.rs        the crate's only import of cellgraph — a re-export block binding the liveness width once (WIDTH), with the width-bound Ready / Operand / CellGraph / StepContext aliases
-│   ├── bump.rs             the bump tier — Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap and bump_table; the crate's only import of bumpalo / hashbrown / allocator_api2
 │   ├── slots.rs            SlotArray / SlotView — a fixed run of two-state write-once binding slots in a cell's region, safe code over cellgraph's once-written run: the invariant array binds, the covariant view reads
-│   ├── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and a scope's bindings both condense by
-│   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
+│   ├── knot.rs             Knot / KnotPlan / Edge / Member — a group of values that refer to each other, one run of index-edged nodes in a cell's region, tied once from a plan
 │   └── program.rs          ProgramStorage / ProgramBrand — outside the graph, the one cellgraph Storage program text, the parsed AST, the builtin table and the program record are all written into at 'graph, through the brand's Writer
-├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so parse and type_lattice rest on it rather than on each other
-├── symbols/
-│   └── tests.rs            interning laws, including how a static_name! records
 ├── parse.rs             pub mod parse — the parser and what it produces: the syntax AST and the builtin shape table, written in the symbol vocabulary
 ├── parse/
 │   ├── lower.rs            layout tree → KExpressions: sigils, marks and `#[…]`/`#{…}` element quoting, the layout-line peel, adjacency, spans
@@ -175,32 +173,6 @@ src/
 │       ├── role.rs         Role / Reading / BodyKind / Heads / DefinitionKind — what each part of an entry is to name resolution, and how the shape builder reads it
 │       ├── binder.rs       BinderFacts and the structural extractors: which name and bucket key(s) a binder shape declares, read off the node's cached entry
 │       └── layout.rs       SlotLayout — a body's value binders as a symbol-sorted run, computed where the shape is lexically fixed
-├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols, `ScopeId` and the region bump seam and nothing else
-├── type_lattice/
-│   ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle; Variable, the view of the three variable nodes and their two ends
-│   ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType; the pinned builtin constants, and the name/kind readings off one
-│   ├── run.rs            Run / Elements — typed views over a node's raw child runs
-│   ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
-│   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags), the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the binder doors `shape_scheme` and `function_scheme` keeping every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
-│   ├── verdicts.rs       VerdictTable — the fixed two-way cache of relation verdicts the registry lays in its region
-│   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
-│   ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
-│   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity, the readers of a shape's parts (`Shape`), and the element and record rebuild helpers
-│   ├── operators.rs      ReductionMode / FoldDirection — how a run of a signature's operators reduces, which is part of the signature's identity
-│   ├── schema.rs         SigSchema over symbol-sorted Members tables, the SchemaDraft the signature door canonicalizes, and the channels' canonical orders
-│   ├── walk.rs           Variance and the two drivers every structural recursion goes through
-│   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the union door, the position context, and `visit_free_quantified`
-│   ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
-│   ├── order.rs          is_subtype_of — the order, which never solves — and fits, the relation a question reads, as one Lockstep instance differing at its leaf; satisfied_by
-│   ├── lattice.rs        join (subsumption-or-union, not a walk) and the meet (the rebuilding Lockstep instance, relating a variable by the rigid rule for the solver)
-│   ├── unify.rs          admits_with and the Collector: contributions solved to a pair of ends and bound at its least instance; the Interval a solve reports per variable
-│   ├── substitute.rs     the quantifier, level and head-parameter substitutions, instantiation and erasure, and a type read through intervals (bound_above among them)
-│   ├── signatures.rs     a signature type as a set of applications: the order between two sets and the meet the signature_meet door interns
-│   ├── sig_relations.rs  sig_fits and fits_application — *fits* over signature types, solving each unpinned head parameter — with their failure record, the binder relations admits_shape and admits_function, and shape_specificity
-│   ├── ranking.rs        priority classes — admit_by_class, the per-class verdict class_at_least the registry records, select_by_class, and judge_by_class's never/always/maybe over static types
-│   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
-│   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
 │   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the expression shape a callable body sits in, the body each binder births and each LET binder's right-hand side, its registrations, bucket declarations and each keyworded use's candidate list, and for a quote's code shape its carried type, its refusal, its required keyworded holes and the names and keys each EVAL offers, in program storage; the write-once load-time type cells — each recorded TypeExpression, type binder, registration and callable body, a callable body's group levels, the lexical variables a body declares and the type captures a callable reads them through, and a code shape's typing refusal — the load pass fills; Position / Coordinate / Site and ShapeError
@@ -273,20 +245,58 @@ src/
     └── errors.rs         the messages of the error values dispatch raises
 ```
 
+The [lattice](lattice/README.md) crate's tree:
+
+```
+lattice/src/
+├── lib.rs               the crate root — the import rule and `forbid(unsafe_code)` outside the test build
+├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for this crate's test binary, the tally the heap-contract tests bracket, and the property-case share
+├── bump.rs              pub mod bump — the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpBackedSet and bump_table / bump_set; the crate's only import of bumpalo / hashbrown / allocator_api2
+├── bump/
+│   ├── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
+│   └── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
+├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
+├── symbols/
+│   └── tests.rs            interning laws, including how a static_name! records
+├── types.rs             pub mod types — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols and the bump tier and nothing else
+└── types/
+    ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle; Variable, the view of the three variable nodes and their two ends
+    ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType; the pinned builtin constants, and the name/kind readings off one
+    ├── run.rs            Run / Elements — typed views over a node's raw child runs
+    ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
+    ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
+    ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags), the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the binder doors `shape_scheme` and `function_scheme` keeping every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
+    ├── verdicts.rs       VerdictTable — the fixed two-way cache of relation verdicts the registry lays in its region
+    ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
+    ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
+    ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity, the readers of a shape's parts (`Shape`), and the element and record rebuild helpers
+    ├── operators.rs      ReductionMode / FoldDirection — how a run of a signature's operators reduces, which is part of the signature's identity
+    ├── schema.rs         SigSchema over symbol-sorted Members tables, the SchemaDraft the signature door canonicalizes, and the channels' canonical orders
+    ├── walk.rs           Variance and the two drivers every structural recursion goes through
+    ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the union door, the position context, and `visit_free_quantified`
+    ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
+    ├── order.rs          is_subtype_of — the order, which never solves — and fits, the relation a question reads, as one Lockstep instance differing at its leaf; satisfied_by
+    ├── lattice.rs        join (subsumption-or-union, not a walk) and the meet (the rebuilding Lockstep instance, relating a variable by the rigid rule for the solver)
+    ├── unify.rs          admits_with and the Collector: contributions solved to a pair of ends and bound at its least instance; the Interval a solve reports per variable
+    ├── substitute.rs     the quantifier, level and head-parameter substitutions, instantiation and erasure, and a type read through intervals (bound_above among them)
+    ├── signatures.rs     a signature type as a set of applications: the order between two sets and the meet the signature_meet door interns
+    ├── sig_relations.rs  sig_fits and fits_application — *fits* over signature types, solving each unpinned head parameter — with their failure record, the binder relations admits_shape and admits_function, and shape_specificity
+    ├── ranking.rs        priority classes — admit_by_class, the per-class verdict class_at_least the registry records, select_by_class, and judge_by_class's never/always/maybe over static types
+    ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
+    └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner
+```
+
 ## Design and roadmap
 
 A module's design doc is the `README.md` in its own source directory, linked
 from that module's top-of-file comment. The kept modules carry theirs:
 
-- [src/symbols/README.md](src/symbols/README.md) — the symbol vocabulary: why
-  identity is a content digest, why the interner is not a lookup authority, and
-  what a symbol's binding class buys.
 - [src/parse/README.md](src/parse/README.md) — the division of labour with
   `sexlex`, the borrowed splice-free AST and its structural cache, and the
   `BUILTIN_SHAPES` table every node is classified against at construction.
-- [src/memory/README.md](src/memory/README.md) — the three storage tiers, the
-  frame shell that names no Koan value, the one-place substrate alias layer, the
-  two table shapes, and the drop-freeness the region discipline rests on.
+- [src/memory/README.md](src/memory/README.md) — the storage tiers, the
+  one-place substrate alias layer, the slot array and the knot, and the
+  drop-freeness the region discipline rests on.
 - [src/values/README.md](src/values/README.md) — the data values: per-kind
   resident structs born through a `Writer`, the one lifetime a value borrows at, the type memo `satisfies` reads, weight and the crossing
   verb, dict key order, and working expressions.
@@ -296,10 +306,6 @@ from that module's top-of-file comment. The kept modules carry theirs:
   channels and unshadowable builtins, keyworded uses and their candidate lists
   and rankings, write-once slots, and the operator groups a body's statements
   are chained under.
-- [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
-  its invariants, and an index of its parts — identity, the node vocabulary,
-  the relations, solving, and [the laws](src/type_lattice/laws.md) with what
-  breaks without each.
 - [src/elaborate/README.md](src/elaborate/README.md) — type expressions
   elaborated into lattice handles through the activation they are read in, and
   why one did not.
@@ -320,6 +326,16 @@ from that module's top-of-file comment. The kept modules carry theirs:
 - [src/dispatch/README.md](src/dispatch/README.md) — the language koan's
   programs run under: what a node is, the builtin table, selection by priority
   class, tails under a contract, errors, and the overlap check.
+- [lattice/README.md](lattice/README.md) — the symbol vocabulary, the type
+  lattice and the bump tier as one crate below koan, its import rule, the
+  component walk and `ScopeId`; with
+  [lattice/src/symbols/README.md](lattice/src/symbols/README.md) for why a
+  symbol's identity is a content digest, why the interner is not a lookup
+  authority, and what a symbol's binding class buys, and
+  [lattice/src/types/README.md](lattice/src/types/README.md) for the closed
+  algebra: its invariants, and an index of its parts — identity, the node
+  vocabulary, the relations, solving, and [the laws](lattice/src/types/laws.md)
+  with what breaks without each.
 - [sexlex/README.md](sexlex/README.md) — the layout half of the parser: what it
   decides, the three things it refuses, and the three indentation regimes.
 - [cellgraph/README.md](cellgraph/README.md) — the cell substrate's contract and
@@ -351,3 +367,10 @@ the parser, with no vocabulary of its own. Unlike cellgraph it carries no
 roadmap tree — its README is the whole design statement, and the crate doc on
 [sexlex/src/lib.rs](sexlex/src/lib.rs) is the precise form of the five rules
 about whitespace, brackets, quotes, adjacency and indentation it rests on.
+
+[lattice/](lattice/README.md) is the third: the symbol vocabulary, the type
+lattice and the bump tier, so the lattice's closure — it names nothing of koan
+— holds by the crate edge. Koan re-exports its modules under `crate::symbols`,
+`crate::type_lattice` and `crate::memory`, so no koan file outside `lib.rs` and
+`memory.rs` names the crate. Like sexlex it carries no roadmap tree: its open
+work stays in koan's.

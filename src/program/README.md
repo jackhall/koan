@@ -37,10 +37,10 @@ than a generic `cellgraph` type.
     held in the dependent could not be borrowed by a sibling, and would reach a
     step only through a per-call channel on the step context. It takes a bump
     of its own rather than program storage's `Writer` because it is a
-    [collections arena](../memory/README.md#two-tiers-and-why-the-boundary-falls-where-it-does)
+    [collections arena](../../lattice/README.md#the-bump-tier)
     client — it grows tables as it interns. Resting there is sound because the
     registry owns nothing on the global heap — its
-    [verdict table](../type_lattice/identity.md#storage-one-region) is a fixed
+    [verdict table](../../lattice/src/types/identity.md#storage-one-region) is a fixed
     cache in the registry's own bump — so its destructor never needs to run.
   - the **program record**, [below](#the-program-record), in program storage.
   - what the top level **left at rest** when it last ran, for a later root work

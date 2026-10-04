@@ -84,7 +84,7 @@ as surprises, not scheduled.
   their own rather than as operands of a builtin overload. A singleton static
   type for a type value — the type whose one value is the type value `Number` —
   would carry the denoted type through ordinary static typing. It is a
-  [type lattice](../../src/type_lattice/README.md) change.
+  [type lattice](../../lattice/src/types/README.md) change.
 - **`CLOSE OVER` limits what an `EVAL` can see.** The scope builder reports
   `CLOSE` and `CLOSE OVER` unsupported; which item gives them their rewrite
   home is undecided.
@@ -97,7 +97,7 @@ as surprises, not scheduled.
   a callable or a tagged nominal value
   ([the tie](../../src/knot/README.md#the-tie)), so `LET a = [1 a]` or a ring of
   plain records needs a nominal declaration. Structural `μ`-types in the
-  [type lattice](../../src/type_lattice/README.md) would admit them without
+  [type lattice](../../lattice/src/types/README.md) would admit them without
   breaking a program the nominal cut admits.
 - **Binding a knot's members walks the knot per member.**
   [`Knotted::of`](../../src/knot/tie.rs) resolves member `index` through
@@ -116,7 +116,7 @@ as surprises, not scheduled.
   admit it — a slot declared `Carrier | Number` over a source solving `Carrier`
   to `Number` — which one is reached decides whether the member is wrapped in the
   view's carrier or carried as a plain number. Union identity is order-blind
-  ([the type lattice](../../src/type_lattice/vocabulary.md#the-node-vocabulary)), so
+  ([the type lattice](../../lattice/src/types/vocabulary.md#the-node-vocabulary)), so
   the stored member order is whichever spelling interned first anywhere in the
   program, and an unrelated `:(Number | Carrier)` elsewhere can change what this
   slot builds. A rule that does not depend on interning order — the carrier
@@ -164,12 +164,6 @@ as surprises, not scheduled.
   `static`, which cannot hold an application over declared types.
   [Catching errors](../conditionals/catching.md) names `Result`
   there, and has to get past that.
-- **`parse` and the type lattice import each other.** The lattice names
-  `parse`'s label and symbol types, and the
-  [builtin shapes](../../src/parse/builtin_shapes.rs) name the lattice's `const`
-  handles.
-  Lifting the labels out of `parse` into a module below both would make the
-  edge one-way.
 - **A value's weight counts a knot once per reference.** A knot member weighs
   its whole knot ([weight](../../src/values/README.md#weight)), and a
   composite's weight is the sum of its cells', so a value holding two members

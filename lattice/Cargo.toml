@@ -1,0 +1,22 @@
+[package]
+name = "lattice"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Symbol identity and type identity are content digests.
+blake3 = "1.8.5"
+# The bump tier's arena: storage outside the graph for the type registry and the scratch a caller
+# passes. `allocator-api2` turns on `impl Allocator for &Bump`, the seam the tier's growable
+# vector and hash table are built over. Same version cellgraph pins.
+bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
+# The bump tier's hash table — the type registry's node table rides it.
+hashbrown = "0.17"
+# The `Allocator` trait `&Bump` implements, and the growable `Vec` the bump tier builds over it —
+# `std::vec::Vec` has no stable custom-allocator seam.
+allocator-api2 = "0.2.21"
+
+[dev-dependencies]
+# Generated type trees for the lattice's laws and generated spellings for the symbol classes.
+proptest = "1"

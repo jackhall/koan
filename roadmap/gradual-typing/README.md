@@ -10,7 +10,7 @@ program that leaves them out still runs, each call checking what the load could
 not.
 
 [The design](../../design/gradual-typing.md) follows a type from its
-declaration to a call. The pieces sit in the [type lattice](../../src/type_lattice/README.md), the
+declaration to a call. The pieces sit in the [type lattice](../../lattice/src/types/README.md), the
 [elaborator](../../src/elaborate/README.md) and
 [dispatch](../../src/dispatch/README.md#static-types).
 
@@ -35,7 +35,7 @@ as surprises, not scheduled.
   weight, and so in the copy-or-pin verdict.
 - **A function argument's union parameter solves by storage order.** A
   declared union's members are tried most specific first, and a tie is refused
-  where it is declared ([solving](../../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind)),
+  where it is declared ([solving](../../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind)),
   but a union the *argument* carries at a contravariant position is still tried
   member by member in the order the union stores them. Under
   `EXPR FOR ALL #[Elt] #(KAA f :(FN :{x :(LIST OF Elt)} -> Null)) -> Any`, a

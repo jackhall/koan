@@ -3,7 +3,7 @@
 Source text becomes a sequence of `KExpression`s in two passes, and this module
 is the second one plus everything the first one's output is spelled in: the
 syntax AST and the builtin shape table every node is classified against at
-construction, written in the [symbol vocabulary](../symbols/README.md) every
+construction, written in the [symbol vocabulary](../../lattice/src/symbols/README.md) every
 name is minted in.
 
 The [`sexlex`](../../sexlex/README.md) crate reads the text into a layout tree
@@ -12,12 +12,12 @@ that tree koan's meaning. `parse` and `parse_with_path` are the entire
 text-to-AST surface; `atom`, `brace`, `lower` and `operators` are private.
 
 Outside `#[cfg(test)]` this module reaches [`source`](../source.rs),
-[`memory`](../memory/README.md), [`symbols`](../symbols/README.md) and one name
-from the [type lattice](../type_lattice/README.md): `KType`, whose builtin
+[`memory`](../memory/README.md), [`symbols`](../../lattice/src/symbols/README.md) and one name
+from the [type lattice](../../lattice/src/types/README.md): `KType`, whose builtin
 handles are `const` content digests, so a builtin shape states its slots' types
 without a registry in hand. That is the whole of the lattice edge — no node, no
 registry, no relation — and it runs one way: the lattice rests on
-[`symbols`](../symbols/README.md) too, and on nothing here.
+[`symbols`](../../lattice/src/symbols/README.md) too, and on nothing here.
 A failure is this module's own [`ParseError`](error.rs). The runtime operations
 on the types here — lowering a literal, resolving a part to a cell, installing a
 binder — are inherent impls in the runtime, which imports them by name.
@@ -113,14 +113,14 @@ part, so there is no runtime quoting operation and the body never dispatches —
 quote behaves as a literal everywhere.
 
 **Code is taken as a quote.** A callee takes code through a slot typed by a
-[code kind](../type_lattice/vocabulary.md#the-code-family), and its caller quotes
+[code kind](../../lattice/src/types/vocabulary.md#the-code-family), and its caller quotes
 it, as a builtin's caller quotes a part that runs later: hygienic fexprs, with
 no expansion system and no global execution phase. Rewriting stays the shape
 builder's own, as its [pairwise rewrite](../scope/README.md#operator-groups) is,
 since a user's rewrite rule would act at a distance.
 
 **A quote is typed by its body as written.** `KExpression::code_kind` reads the
-body's [code kind](../type_lattice/vocabulary.md#the-code-family): two or more
+body's [code kind](../../lattice/src/types/vocabulary.md#the-code-family): two or more
 statements are a `Block`; a statement of a member-declaring builtin shape a
 `Declaration`, and one that installs a `Binder`; a lone scalar literal or nested
 quote a `Literal`; a lone name, keyword, `:(…)` or `:{…}` its own kind; and every
@@ -217,7 +217,7 @@ alone. The table only states those types: the shape builder's static check
 through [`admits_part`](../values/admission.rs) over the program's registry, the
 one admission rule, so no rule here restates a container's elements.
 
-A slot type rests in the table as a [`KType`](../type_lattice/handle.rs), whose
+A slot type rests in the table as a [`KType`](../../lattice/src/types/handle.rs), whose
 handle is a `const` content digest, so an entry states its types with no registry
 in hand and its erasure and laws are computed at build time. Every compound a
 slot is typed by is a pinned constant of the same kind: the code containers

@@ -27,7 +27,8 @@ python3 tools/miri.py --log                    # full slate; on a clean run, log
 ```
 
 It runs `MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --lib …`. The **`--lib` is
-load-bearing**: every slate test lives in the lib unit-test binary, so restricting to it skips any
+load-bearing**: every slate test lives in a lib unit-test binary — koan's, or `lattice`'s for the
+type registry group, both default members run from the root — so restricting to them skips any
 integration binary, which would otherwise print a misleading `0 passed; all filtered out`. The
 slate names come from [`observe/miri_slate.md`](../../../observe/miri_slate.md) via
 `tools/observe_tests.py slate` — never hard-code them.
@@ -40,7 +41,8 @@ silent green. Read that one line; do not re-inspect the raw log unless triaging 
 
 ## Embedded crates: their own slates, run directly
 
-`tools/miri.py` drives koan's own slate only. An embedded crate owns a separate lib test binary and
+`tools/miri.py` drives koan's own slate only — which includes the registry group in `lattice`'s
+lib binary, since that crate has no slate of its own. An embedded crate with its own slate owns a separate lib test binary and
 a separate slate log, so a change scoped to it runs `cargo` directly with the crate as the target —
 `-p <crate> --lib` — and reads that crate's log:
 
@@ -65,7 +67,7 @@ When a slate test is added, removed, or renamed:
 2. Re-run the full slate (`python3 tools/miri.py --log`); the script's count guard confirms it still holds.
 3. `python3 tools/doclinks.py check` to catch any broken inbound links.
 
-A non-slate change to a test in `parse/`, `memory/` or `type_lattice/` does not trigger this rule — only changes that affect a test named in `observe/miri_slate.md` do.
+A non-slate change to a test in `parse/`, `memory/` or `lattice/` does not trigger this rule — only changes that affect a test named in `observe/miri_slate.md` do.
 
 ## Scheduling: run synchronously in the foreground
 

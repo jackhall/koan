@@ -9,7 +9,7 @@ polymorphic function *as a value* — a higher-ranked slot, a polymorphic payloa
 
 The rule exists because a parametric type is contagious. A quantified type let
 into a concrete one weakens every type built over it
-([the laws](../src/type_lattice/laws.md#a-values-type-is-concrete)), so the
+([the laws](../lattice/src/types/laws.md#a-values-type-is-concrete)), so the
 design keeps one out of every type a value carries and gives it exactly one
 sealed home.
 
@@ -34,7 +34,7 @@ scheme in two places only: a `MODULE` or `GROUP` body's member,
 concrete ([below](#where-a-quantified-function-is-instantiated)), or refused.
 
 In Rust the same rule is the handle types
-([typed handles](../src/type_lattice/identity.md#typed-handles)). A quantified
+([typed handles](../lattice/src/types/identity.md#typed-handles)). A quantified
 callable's type is a `Scheme`, which is no child handle: no door that builds a
 list, union, record or function type takes one. `Value::ktype` answers a
 `DeclaredType`, a scheme for a quantified callable and a `KType` for every
@@ -81,7 +81,7 @@ local generic helper binds it under the type it is used at,
 module body, where it stays generic and each call solves its group.
 
 The solve is the least instance of the scheme under the wanted type
-([`instance_under`](../src/type_lattice/relations.md#quantified-binders)). A
+([`instance_under`](../lattice/src/types/relations.md#quantified-binders)). A
 variable no contribution from the wanted type reaches is refused and named,
 never read as its bound; one some contribution reaches binds its least
 instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A solution
@@ -106,7 +106,7 @@ parameter is reached through an application's pins, never by entering the
 signature.
 
 **The order never looks at members.** A signature type is a set of
-[applications](../src/type_lattice/relations.md#signature-types), ordered by
+[applications](../lattice/src/types/relations.md#signature-types), ordered by
 their pins alone, each pin at an *equal* type. `Stack WITH {Elt = Number}`
 lies under `Stack`; two different pins are unordered, even `Number` and
 `Number | Str`, since a head parameter may sit at both variances across

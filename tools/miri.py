@@ -9,7 +9,8 @@ Two things make the raw command easy to misread:
 
   * `cargo miri test -- <names>` runs EVERY test binary (the lib unit-test
     binary plus each `tests/*.rs` integration binary) and applies the name
-    filter to each independently. All slate tests live in the lib binary, so
+    filter to each independently. All slate tests live in lib binaries (koan's,
+    and `lattice`'s for the type registry group), so
     every other binary prints `0 passed; N filtered out` — normal, but it buries
     the real `<N> passed` line and traps anything reading the last summary.
   * The leak detector and UB checks only surface at process exit.

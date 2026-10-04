@@ -1,6 +1,6 @@
 ---
 name: type-system
-description: Use this skill before any work that touches koan's type system — editing or reviewing `src/type_lattice`, the elaborator's type channel, dispatch's static types or selection, a value's carried type or retyping, or answering a design question about types, generics, `FOR ALL`, signatures or gradual typing. Holds the lattice's invariants, the checklist to run before a change, and the tells that a change breaks a law.
+description: Use this skill before any work that touches koan's type system — editing or reviewing `lattice/src/types` (koan's `type_lattice`), the elaborator's type channel, dispatch's static types or selection, a value's carried type or retyping, or answering a design question about types, generics, `FOR ALL`, signatures or gradual typing. Holds the lattice's invariants, the checklist to run before a change, and the tells that a change breaks a law.
 ---
 
 # type-system
@@ -12,7 +12,7 @@ would memory safety.
 
 ## Read first
 
-- [`src/type_lattice/laws.md`](../../../src/type_lattice/laws.md) — each law,
+- [`lattice/src/types/laws.md`](../../../lattice/src/types/laws.md) — each law,
   what rests on it, and a worked example of what breaks without it. Read the
   section for every law your change touches, not the headings.
 - [`design/gradual-typing.md`](../../../design/gradual-typing.md) — how a type
@@ -21,7 +21,7 @@ would memory safety.
   `FOR ALL` may live, how a signature keeps a scheme safe, and the workarounds
   and limits for higher-ranked types. Read it before any work on signatures,
   modules or quantified callables; do not re-derive it.
-- The part of [`src/type_lattice/README.md`](../../../src/type_lattice/README.md)
+- The part of [`lattice/src/types/README.md`](../../../lattice/src/types/README.md)
   that owns what you are changing.
 
 ## The invariants
@@ -50,8 +50,8 @@ Answer each in your plan, in a sentence:
    not.
 3. Does anything read a variable as its bound, or read one end of an interval?
 4. Is anything built — a union, a set, a key — from a *fits* answer?
-5. Can the change live downstream of the lattice? A change to `type_lattice`
-   itself needs the user's approval first: stop and ask.
+5. Can the change live downstream of the lattice? A change to the lattice
+   (`lattice/src/types`) itself needs the user's approval first: stop and ask.
 6. Which generators and laws in `tests/properties.rs` must grow to cover it?
 
 A new language rule or type spelling is the user's decision. Enumerate the
@@ -77,7 +77,7 @@ changing either, and take a law change to the user.
 
 ## Verification
 
-- `cargo test type_lattice` for a lattice change; the property suite is the
+- `cargo test -p lattice` for a lattice change; the property suite is the
   gate, and one run decides.
 - The `verify-koan` skill before handing off.
 - `PROPTEST_CASES=16384 tools/verify.sh --total` for a change to a relation or

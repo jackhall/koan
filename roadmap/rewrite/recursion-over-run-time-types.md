@@ -4,13 +4,13 @@
 level is a structural type: a list of lists a thousand deep carries a list type
 a thousand deep. Solved type parameters and run-time type expressions carry
 such types further, into function types, unions and meets. Every structural
-walk in the [type lattice](../../src/type_lattice/README.md) recurses once per
+walk in the [type lattice](../../lattice/src/types/README.md) recurses once per
 level of the types it reads:
 
-- the unary drivers [`visit` and `rebuild`](../../src/type_lattice/walk/unary.rs);
-- the binary driver [`lockstep`](../../src/type_lattice/walk/binary.rs), and
+- the unary drivers [`visit` and `rebuild`](../../lattice/src/types/walk/unary.rs);
+- the binary driver [`lockstep`](../../lattice/src/types/walk/binary.rs), and
   the three instances over it. The order re-enters
-  [`is_subtype_of`](../../src/type_lattice/order.rs) per nested pair to
+  [`is_subtype_of`](../../lattice/src/types/order.rs) per nested pair to
   memoize it, the meet re-enters the order through `join` at a contravariant
   position, and each instance's set-wise rule recurses through a callback. The
   unifier's set-wise rule also undoes its partial solution before trying the
@@ -18,7 +18,7 @@ level of the types it reads:
 - the leaf doors — the signature relation, and the instantiation that relates
   quantified shapes and function types — which run whole relations from inside
   a leaf;
-- [`display_name`](../../src/type_lattice/render.rs), the one walk written by
+- [`display_name`](../../lattice/src/types/render.rs), the one walk written by
   hand.
 
 With the release binary and a 16 000-level list, each of these koan programs
@@ -70,7 +70,7 @@ about a thousand.
 
 **Requires:**
 
-- [`type_lattice`](../../src/type_lattice/README.md) — shipped: the walks this
+- [`type_lattice`](../../lattice/src/types/README.md) — shipped: the walks this
   item turns into explicit stacks.
 
 **Unblocks:** none — a leaf.

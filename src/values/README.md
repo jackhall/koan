@@ -160,7 +160,7 @@ is total. No AST node is ever homed in a cell.
 
 ## The type memo and `satisfies`
 
-Every composite stores its type as a memoized [`type_lattice`](../type_lattice/README.md)
+Every composite stores its type as a memoized [`type_lattice`](../../lattice/src/types/README.md)
 handle, computed in the pass that lays its cells down: a list the join of its
 cells' types (`Never` when empty), a dict the joins over its keys and its
 cells, a record the record type of its fields in written order, a type value
@@ -169,7 +169,7 @@ knot member reports its own. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
 `Value::ktype` copies that handle or names a leaf constant, and reads no
 registry and walks nothing. It answers a
-[`DeclaredType`](../type_lattice/identity.md#typed-handles): a concrete `KType`
+[`DeclaredType`](../../lattice/src/types/identity.md#typed-handles): a concrete `KType`
 for every value but a quantified callable, which answers its `Scheme`. A
 quantified callable is read only at the head of a call or as a `MODULE` or
 `GROUP` member's binding, and the load makes every other read of one an instance with a concrete
@@ -180,7 +180,7 @@ candidates — the functions a `USING` hole or an `EVAL` offer gathers at one
 key — are laid down by `List::of_candidates`, typed `List<Any>` without reading
 any function's type: dispatch alone reads such a list, each function by its own
 type, and a quantified registration's scheme joins into no list type. A quote's type is its carried type, memoized on its
-node: its [code kind](../type_lattice/vocabulary.md#the-code-family), read off its
+node: its [code kind](../../lattice/src/types/vocabulary.md#the-code-family), read off its
 body as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)),
 needing the `\` names no binder in its code fills
 ([code parameters](../scope/README.md#code-parameters)): `#(y)` is a `Name`,

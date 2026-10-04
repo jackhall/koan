@@ -30,7 +30,8 @@ is the only tier that rebaselines the trend logs under `observe/`, and then only
 
 Property depth is the one variable `PROPTEST_CASES`, which `ProptestConfig::default()` reads: the
 routine tier sets 64, the total tier 2048, and every property module states its share of that
-default (`crate::tests::case_share`) rather than a literal, so the modules' relative depths hold at
+default (`crate::tests::case_share`, one in koan's test scaffolding and one in `lattice`'s) rather
+than a literal, so the modules' relative depths hold at
 whatever the tier — or you — ask for. No module goes below 64 cases.
 
 ```sh
@@ -43,6 +44,7 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 cargo test --workspace         # every module's unit tests, across the workspace
 cargo test parse::             # one module
 cargo test -p sexlex           # the layout crate alone
+cargo test -p lattice          # the symbols, the type lattice's laws and its heap contract
 cargo test -- --nocapture      # show stdout
 ```
 
@@ -75,8 +77,8 @@ beside its sibling unit tests. Five files hold the twenty-one properties:
   shape.
 - [`src/parse/ast/tests.rs`](src/parse/ast/tests.rs) — node laws: the dispatch
   shape as a function of the key and the head class, and the summary rendering.
-- [`src/symbols/tests.rs`](src/symbols/tests.rs) — interning laws, including
-  how a [name fixed in Rust source](src/symbols/README.md#names-fixed-in-rust-source)
+- [`lattice/src/symbols/tests.rs`](lattice/src/symbols/tests.rs) — interning laws, including
+  how a [name fixed in Rust source](lattice/src/symbols/README.md#names-fixed-in-rust-source)
   records.
 - [`src/parse/builtin_shapes/tests/`](src/parse/builtin_shapes/tests.rs) — the builtin shape
   table, split two ways: static table-shape walks including the
@@ -168,7 +170,7 @@ cargo fmt --all -- --check
 Run these locally before pushing. Clippy is configured per-crate in
 [Cargo.toml](Cargo.toml); per-site `#[allow(...)]` is fine when the lint is
 wrong (e.g., the `clippy::large_enum_variant` allow on `Pairing` in
-[`walk/binary.rs`](src/type_lattice/walk/binary.rs), whose structural arm is the
+[`walk/binary.rs`](lattice/src/types/walk/binary.rs), whose structural arm is the
 common one, where boxing it would put an allocation on the hot path of every
 relation in the lattice).
 
@@ -205,13 +207,16 @@ leaks and zero UB required for sign-off. `memory`'s knot adds no layout or
 retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
 has, including a fill writing into the same region); what koan's slate pins is
 `knot`'s copy of a knot, whose node run is filled while closure runs and data
-node residents are written into the same region. `src/` carries no `unsafe` at all — koan's only
+node residents are written into the same region. `src/` carries no `unsafe` at all, and
+`lattice` forbids it outside its test build (`forbid(unsafe_code)`) — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
 outside the tree the slate audit censuses (`tools/observe_tests.py` walks `src/`
 only). It is still exercised under Miri: [`src/tests.rs`](src/tests.rs) installs
-it as the lib-test binary's global allocator, so every slate test allocates
-through it. The slate covers the safe koan code that drives the substrate's
+it as koan's lib-test binary's global allocator and
+[`lattice/src/tests.rs`](lattice/src/tests.rs) as `lattice`'s, so every slate
+test allocates through it, and the lattice's heap-contract test
+([`tests/heap.rs`](lattice/src/types/tests/heap.rs)) brackets its tally. The slate covers the safe koan code that drives the substrate's
 retypes, and
 cellgraph's own slate covers that library in isolation:
 [cellgraph/observe/miri_slate.md](cellgraph/observe/miri_slate.md).
@@ -231,10 +236,10 @@ pinned-id allocation tracking) lives in
 [.claude/skills/miri/SKILL.md](.claude/skills/miri/SKILL.md).
 
 Read the **whole** output — never `tail` it. The slate tests live in the lib
-unit-test binary; any other test binary matches none of the slate filter and
-reports `0 passed; N filtered out`, which reads identically to "Miri ran
-nothing." Confirm the lib `test result:`
-line shows `passed` ≈ the slate size (`python3 tools/observe_tests.py slate | wc -w`)
+unit-test binaries — koan's, and `lattice`'s for the type registry group; any
+other test binary matches none of the slate filter and reports `0 passed; N
+filtered out`, which reads identically to "Miri ran nothing." Confirm the lib
+`test result:` lines sum to `passed` ≈ the slate size (`python3 tools/observe_tests.py slate | wc -w`)
 before trusting a clean result — exit code 0 alone is not sufficient, since
 `cargo test` exits 0 when zero tests run.
 

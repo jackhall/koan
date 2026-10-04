@@ -11,7 +11,7 @@ its sibling owns, which it never names. It reaches the shared node vocabulary
 through [`knot`](../README.md#what-sits-where) and rests on
 [`values`](../../values/README.md), [`scope`](../../scope/README.md),
 [`elaborate`](../../elaborate/README.md) and the
-[type lattice](../../type_lattice/README.md).
+[type lattice](../../../lattice/src/types/README.md).
 
 What it does *not* do is evaluate anything. `m :| Sig`, `m.f`, a `USING`
 expression and a call through a barrier are
@@ -78,7 +78,7 @@ one copy, and nothing downstream asks which it holds.
 The ascribed type must be one application of a declared signature,
 `Counter` or `Counter WITH {Carrier = Number}`; a meet of several is refused,
 since a view lays out one signature's members. The door checks that the source's
-self-signature [*fits*](../../type_lattice/relations.md#signature-types) the
+self-signature [*fits*](../../../lattice/src/types/relations.md#signature-types) the
 application, which solves each head parameter the application leaves unpinned
 from what the source's members offer, and then fixes two substitutions over the
 signature's head parameters:

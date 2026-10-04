@@ -56,10 +56,10 @@ REPO = Path(__file__).resolve().parent.parent
 EMBEDDED_CRATES = ("cellgraph",)
 
 # Embedded crates with a source tree and a README but no doc trees of their own:
-# small enough that the crate README is the whole design statement. They are
-# scanned for links and orphan-gated on their module READMEs like any other
+# their design is the crate README and its module READMEs, and their open work,
+# if any, lives in koan's roadmap. They are scanned for links and orphan-gated on their module READMEs like any other
 # source tree, and contribute nothing to the roadmap or design gates.
-LEAF_CRATES = ("sexlex",)
+LEAF_CRATES = ("sexlex", "lattice")
 
 MD_GLOBS = (
     "*.md", "audit/**/*.md", "src/**/*.md", "design/**/*.md",

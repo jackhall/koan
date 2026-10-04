@@ -2,9 +2,9 @@
 //!
 //! Lives outside `src/` because it is measurement scaffolding, not library code: the
 //! `unsafe impl` here is not a production site the Miri slate owes a group, and koan's
-//! shipped binary never compiles it. Two targets `#[path]`-include this one file — the
-//! library's own test build (`src/tests.rs`) and the cellgraph measurement harness
-//! (`cellgraph/perf/main.rs`) — so there is one wrapper, not one per target.
+//! shipped binary never compiles it. Three targets `#[path]`-include this one file — koan's
+//! library test build (`src/tests.rs`), `lattice`'s (`lattice/src/tests.rs`) and the cellgraph
+//! measurement harness (`cellgraph/perf/main.rs`) — so there is one wrapper, not one per target.
 //!
 //! Three thread-local tallies, all moved on the way through — a pair and a balance. Thread-local
 //! because the test harness runs tests concurrently, so a bracket around one call has to be

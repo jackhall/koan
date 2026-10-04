@@ -478,7 +478,7 @@ impl<'a> KExpression<'a> {
     }
 
     /// The code kind of a quote whose body is this node, read off the body as written — see the
-    /// lattice [README.md](../type_lattice/README.md) § The code family. Two or more statements are
+    /// lattice [README.md](../../lattice/src/types/README.md) § The code family. Two or more statements are
     /// a `Block`; a statement of a member-declaring builtin shape a `Declaration`, and one that
     /// installs a `Binder`; a lone scalar literal or nested quote a `Literal`; a lone name, keyword,
     /// `:(…)` or `:{…}` its own kind; and every other statement an `Expression`. A written paren is

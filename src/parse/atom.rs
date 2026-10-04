@@ -286,7 +286,7 @@ fn take_digits(bytes: &[u8], at: &mut usize) -> usize {
 }
 
 /// Classify a sub-token per the token-class rules
-/// ([symbols/README.md](../symbols/README.md)).
+/// ([symbols/README.md](../../lattice/src/symbols/README.md)).
 /// Capital-leading tokens
 /// that match neither the keyword nor the type shape are rejected rather than falling
 /// through to Identifier, so a stray `A` or `K9` can't silently shadow a future

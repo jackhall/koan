@@ -26,6 +26,8 @@ python3 tools/modgraph regen --root koan --baseline observe/complexity.txt
 
 `regen` rebuilds the two source-data files before scoring: `observe/modules.dot` (via `cargo modules dependencies …` with the symbol-filtering flags baked in, then re-export correction) and `observe/doc_graph.dot` (via `tools/doclinks.py signals` — kept in sync so source and doc graphs match the same working tree). This is the canonical command for "rescore after I changed something." Always prefer it over hand-running `cargo modules` — that path is fragile (missing `--no-fns --no-types --no-traits` silently zeros LOC, and it skips re-export correction).
 
+The graph is package `koan` alone. The embedded crates — `cellgraph`, `sexlex` and `lattice` — get no DOT of their own, so a change inside one of them does not move the score; koan reaches `lattice`'s modules through the re-exports in `lib.rs` and `memory.rs`.
+
 ### 2. Score a subtree directly
 
 ```sh

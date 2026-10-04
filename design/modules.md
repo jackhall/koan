@@ -7,7 +7,7 @@ passed, stored and returned like any other value. A functor is an ordinary
 function whose body returns a module, so no part of the module system is
 confined to a static layer of the program. The pieces live in their own
 modules: [the module layer](../src/knot/module/README.md) builds and reads a
-module, [the type lattice](../src/type_lattice/identity.md) digests a type, and
+module, [the type lattice](../lattice/src/types/identity.md) digests a type, and
 [values](../src/values/README.md#the-type-memo-and-satisfies) carry what a value
 is.
 

@@ -3,31 +3,28 @@
 The shape of things in storage, and no storage of its own.
 
 The substrate is [cellgraph](../../cellgraph/README.md); this module is koan's
-shapes over a cell's region, plus the things that need no cell at all. It
+shapes over a cell's region, plus program storage beside the graph. It
 manages no cell storage: no frame, no region owner, no run root. A call's
 storage is a cell, and its resident is a value at rest in that cell's region,
 captured by the cell's continuation at the cell's own brand.
 [`substrate`](substrate.rs) is the one-place spelling of every substrate name,
 [`slots`](slots.rs) the layout-addressed table shape, [`knot`](knot.rs) the
-index-edged group of values that refer to each other, [`bump`](bump.rs) the
-arena tier outside the graph, [`program`](program.rs) the program-text owner
-beside it, [`components`](components.rs) the strongly-connected-component walk
-over an index graph, and [`scope_id`](scope_id.rs) the position-independent
-identity a resident carries.
+index-edged group of values that refer to each other, and
+[`program`](program.rs) the program-text owner beside the graph.
+
+The bump tier — the arena outside any graph, the strongly-connected-component
+walk staged in it, and `ScopeId` — is [`lattice`](../../lattice/README.md#the-bump-tier)'s,
+since the type lattice's registry is built over it. `memory` re-exports it, so
+koan names every storage shape as `memory`'s.
 
 ## Two tiers, and why the boundary falls where it does
 
-- **The bump tier** ([bump.rs](bump.rs)) — storage outside the graph, with no
-  reach and no cell, released whole when its owner drops. It holds the
-  [type lattice](../type_lattice/README.md)'s registry and the scratch a caller
-  passes. It is a *collections* arena: `BumpAllocator` is `&Bump`, both bumpalo's verb receiver
-  and the `Allocator` its growable `BumpVec` and its hashbrown `BumpBackedMap`
-  and `BumpBackedSet` are built over. A cell's `Writer` has no verb that grows a buffer, so the
-  tier does not pretend to be a region, and it carries no door of its own:
-  callers use bumpalo's `alloc`, `alloc_slice_copy`, `alloc_slice_fill_iter`
-  and `alloc_str`. Bumpalo runs no destructor, so nothing with drop glue goes
-  in; `bump_table` and `bump_set` assert that for their entries at compile time, and a
-  slice or a single value is the caller's to keep `Copy`.
+- **The bump tier** ([lattice's](../../lattice/README.md#the-bump-tier)) —
+  storage outside the graph, with no reach and no cell, released whole when its
+  owner drops. It holds the [type lattice](../../lattice/src/types/README.md)'s
+  registry and the scratch a caller passes, and since it is a *collections*
+  arena — growable vectors and hash tables over `&Bump` — a cell's `Writer`,
+  which has no verb that grows a buffer, is no substitute for it.
 - **Program storage** ([program.rs](program.rs)) — program text, the raw AST,
   and what a loaded program lays down at `'graph`, in the one store it owns:
   `cellgraph`'s `Storage`, written through the same `Writer` a region is.
@@ -76,8 +73,8 @@ vocabulary. What is *storage* in a binding table is the table shape, and that
 lives here.
 
 **No keyed table lives in a cell.** `memory` ships no name-to-value lookup
-table meant to rest in a cell's region. Its hash tables, `BumpBackedMap` and
-`BumpBackedSet`, cannot: a hash table allocates and grows its buckets, and a cell's `Writer`
+table meant to rest in a cell's region. The bump tier's hash tables it
+re-exports, `BumpBackedMap` and `BumpBackedSet`, cannot: a hash table allocates and grows its buckets, and a cell's `Writer`
 never exposes an allocator. The [scope layer](../scope/README.md), which
 owns koan's name lookup, needs none either: a body's names resolve to slot
 indices where its shape is built in program storage, so a cell holds only a
@@ -132,7 +129,7 @@ closes a cycle without a placeholder. It is the shape both circular data and a
 group of mutually recursive functions are born in.
 
 **Not the type lattice's recursive group.** A sealed group in the
-[type lattice](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+[type lattice](../../lattice/src/types/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
 is never stored as a run: each member is its own entry in the bump-tier
 registry, keyed by the digest of `(SCC digest, index)`, and a sibling reference
 is an ordinary `KType` resolved through the registry's table. Its identity is
@@ -194,24 +191,6 @@ may form a knot is delimited by a [scope's shape](../scope/README.md#visibility)
 and tying a component of value binders — functions and data nodes — belongs to
 [`knot`](../knot/README.md#the-tie).
 
-## Strongly connected components
-
-[`strongly_connected_components`](components.rs) is Tarjan's walk over an index
-graph: `edges[i]` lists the nodes `i` references, and the components come back
-as runs of node indices, every buffer staged in a bump the caller passes. The
-emission order is reverse topological on the condensation — a component comes
-out only after every component it references — which is the order a caller
-that finishes each component against the ones below it relies on. The walk
-keeps its own stack of frames in the bump rather than recursing, since a
-program's chain of bindings is as long as its author writes it.
-
-It lives here because it names nothing of what a node stands for and has two
-callers above `memory` that must not depend on each other: the
-[type lattice](../type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
-condenses a recursive group's members to digest them, and a
-[scope's shape](../scope/README.md#visibility) condenses a body's bindings to
-find the components a knot can tie and the eager cycles it refuses.
-
 ## Drop-freeness is a compile-time fact
 
 A region releases its chunks whole and runs no destructor, so nothing stored
@@ -220,36 +199,18 @@ slot array and the knot each restate it as a `const` assert against the cell typ
 instantiation, so **a payload bringing drop glue with it fails the build at
 the instantiation site**, not at runtime and not in review. The knot's
 message names the knot, so the failure points at the shape rather than the
-cellgraph verb under it.
+cellgraph verb under it. The bump tier holds its tables to the same rule
+([lattice](../../lattice/README.md#the-bump-tier)).
 
 The same discipline is why a cell's death is O(1): its region releases its
 chunks rather than walking a graph.
 
-## `ScopeId`: identity independent of placement
-
-Pointer-derived identity couples equality to memory placement, so a relocated
-or freed scope would silently break dispatch on user-declared types. A
-counter-allocated newtype decouples identity from the pointer — which is
-exactly why the id lives with the memory model rather than with the lexical
-record it names: **what it buys is independence _from_ placement.**
-
-Layout is `(session, idx)`. `session` is minted once per process from
-entropy-derived randomness; `idx` comes from a global atomic counter. The pair
-gives within-session monotonic identity and a cross-session collision
-probability of 2⁻⁶⁴ — sufficient for non-adversarial use such as a
-compile-then-run split where one process serializes a scope graph and another
-loads and runs it.
-
-**The counter is an identity source, not a registry.** It only ever mints:
-nothing is looked up against it, no scope is reachable from an id, and the
-process-wide static holds no run state — so it is not the global runtime state
-this module otherwise exists to keep out. A second run in the same process
-continues the counter and is none the worse for it.
-
 ## The import rule
 
 **`memory` names no item from the rest of koan outside doc comments and
-`#[cfg(test)]`**, and depends on `cellgraph` and `bumpalo` — with `hashbrown`
-and `allocator_api2` named only by the bump tier, never by a cell-tier shape. It is a leaf under the rest
-of the tree, and anything not on the list above is a new edge rather than a
-detail.
+`#[cfg(test)]`**, and depends on `cellgraph` and on `lattice`'s bump tier. No
+koan file outside `memory` names `cellgraph`, and no koan file outside
+`memory` and the crate root names `lattice`: the crate root re-exports
+`symbols` and the type lattice, and `memory` the bump tier. It is a leaf under
+the rest of the tree, and anything not on the list above is a new edge rather
+than a detail.

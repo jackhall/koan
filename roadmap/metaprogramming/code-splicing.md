@@ -82,7 +82,7 @@ without bound.
   `EVAL` supplies. A written quote's is built where the program loads
   ([building code](../../src/scope/README.md#building-code)); composed code's is built once and kept where
   the code value lives, as invisible as a view, and code keeps its syntactic kind
-  ([the code family](../../src/type_lattice/vocabulary.md#the-code-family)). Code
+  ([the code family](../../lattice/src/types/vocabulary.md#the-code-family)). Code
   becomes a callable as the body of an `FN` ([quotes and functions](../../src/scope/README.md#quotes-and-functions)).
 
 ## Dependencies

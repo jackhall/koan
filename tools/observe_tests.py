@@ -280,7 +280,8 @@ SLATE_TEST_RE = re.compile(r"^- `([A-Za-z_][A-Za-z_0-9]*)`\s*$", re.MULTILINE)
 
 # Captures the display path inside the group-header pattern:
 #     **Group name** ([src/path/to/file.rs](...))
-SLATE_GROUP_RE = re.compile(r"\*\*[^*]+\*\*\s*\(\[(src/[^\]]+\.rs)\]")
+# An anchor in an embedded crate carries the crate's directory: `lattice/src/...`.
+SLATE_GROUP_RE = re.compile(r"\*\*[^*]+\*\*\s*\(\[((?:[a-z_]+/)?src/[^\]]+\.rs)\]")
 # Visible whitelist for the stale-group check: paths listed (one per `- \`path\``
 # bullet) between the start/end sentinels are exempted when they have no
 # `unsafe` left, on the rationale that the test anchors a safe-code invariant
@@ -290,7 +291,7 @@ SLATE_WHITELIST_RE = re.compile(
     r"<!-- slate-audit-whitelist:start -->(.*?)<!-- slate-audit-whitelist:end -->",
     re.DOTALL,
 )
-SLATE_WHITELIST_PATH_RE = re.compile(r"^- `(src/[^`]+\.rs)`", re.MULTILINE)
+SLATE_WHITELIST_PATH_RE = re.compile(r"^- `((?:[a-z_]+/)?src/[^`]+\.rs)`", re.MULTILINE)
 
 UNSAFE_RE = re.compile(r"\bunsafe\b")
 
