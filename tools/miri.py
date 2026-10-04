@@ -21,8 +21,7 @@ equals the slate count. A filter that matches nothing becomes a loud error
 instead of a silent pass.
 
 Usage:
-  python3 tools/miri.py                      # full slate (the modules the rewrite keeps)
-  python3 tools/miri.py --pending-rewrite    # the old runtime's slate, under --features pending_rewrite
+  python3 tools/miri.py                      # full slate
   python3 tools/miri.py --tests A B C        # triage specific tests
   python3 tools/miri.py --tests A --track 1234   # + -Zmiri-track-alloc-id=1234
   python3 tools/miri.py --log                # on a clean full-slate run, prepend
@@ -44,9 +43,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SLATE_MD = ROOT / "observe" / "miri_slate.md"
-# The old runtime's slate: frozen with the code it audits, which compiles only under
-# `pending_rewrite`, so selecting it also turns that feature on.
-PENDING_REWRITE_SLATE_MD = ROOT / "observe" / "miri_slate_pending_rewrite.md"
 MIRIFLAGS = "-Zmiri-tree-borrows"
 
 RESULT_RE = re.compile(
@@ -190,15 +186,10 @@ def main() -> int:
                     help="cargo features to enable; needed for slate tests behind a feature gate")
     ap.add_argument("--log", action="store_true",
                     help="on a clean full-slate run, prepend the duration entry to the slate doc")
-    ap.add_argument("--pending-rewrite", action="store_true",
-                    help="run the old runtime's slate (observe/miri_slate_pending_rewrite.md) "
-                         "with --features pending_rewrite")
     args = ap.parse_args()
 
-    slate = PENDING_REWRITE_SLATE_MD if args.pending_rewrite else SLATE_MD
-    features = ["pending_rewrite", *args.features] if args.pending_rewrite else args.features
     is_slate = args.tests is None
-    names = slate_names(slate) if is_slate else args.tests
+    names = slate_names(SLATE_MD) if is_slate else args.tests
     if not names:
         print("no tests to run", file=sys.stderr)
         return 2
@@ -206,12 +197,12 @@ def main() -> int:
     # fails fast (before the long Miri build) rather than as a post-run miscount; triage
     # keeps substring matching so a partial name still works interactively.
     if is_slate:
-        names = resolve_slate(names, features)
+        names = resolve_slate(names, args.features)
     expected = len(names)
 
     label = "slate" if is_slate else f"triage ({expected} test(s))"
     print(f"running Miri {label} under {MIRIFLAGS} (--lib)…", file=sys.stderr)
-    code, output, seconds = run_miri(names, args.track, exact=is_slate, features=features)
+    code, output, seconds = run_miri(names, args.track, exact=is_slate, features=args.features)
 
     log_path = ROOT / "observe" / "miri-last-run.log"
     log_path.write_text(output)
@@ -253,7 +244,7 @@ def main() -> int:
         print(f"ERROR: Miri reported {r['leaks']} leaked allocation(s) — see {log_path}.", file=sys.stderr)
 
     if ok and is_slate and args.log:
-        update_duration_log(slate, r["passed"], r["leaks"], r["ub"], seconds)
+        update_duration_log(SLATE_MD, r["passed"], r["leaks"], r["ub"], seconds)
 
     return 0 if ok else 1
 

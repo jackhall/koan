@@ -3,12 +3,10 @@
 //!
 //! A per-call frame's value bindings are addressed by *slot* — a position in this run — rather than
 //! by hash probe, so an activation allocates one sized array instead of building a table from
-//! nothing ([`SlotArray`](crate::memory::SlotArray)). Two halves meet here and neither is a second
-//! enumeration of the other: the body half is read off the same
+//! nothing ([`SlotArray`](crate::memory::SlotArray)). The run is read off the same
 //! [`statement_binder_plan`](crate::parse::ast::KExpression::statement_binder_plan) the
 //! `CLOSE` capture walk and the dispatch-time claim stamp read
-//! ([`of_body`](SlotLayout::of_body)), and the parameter half is the signature's own `params()` run,
-//! merged in where a callable is born ([`for_function`](SlotLayout::for_function)).
+//! ([`of_body`](SlotLayout::of_body)), so it is not a second enumeration of a body's binders.
 //!
 //! **Slot order is symbol order**, never signature or source order: a `FN` and its body agree on a
 //! name's slot because both resolve it through the same sorted search, with nothing to keep in step.
@@ -108,67 +106,6 @@ impl<'a> SlotLayout<'a> {
             })
             .collect();
         Self::seal(writer, &mut entries)
-    }
-
-    /// A callable's whole layout: its parameters at position `0` merged with the body layout above.
-    /// Built once where the callable is born, beside the signature the parameter half is read from,
-    /// so no activation rebuilds it and the bind loop and the layout read one schema.
-    ///
-    /// A parameter beats a body binder of the same name on position — `0 < i + 1` — which is the
-    /// same first-wins rule `of_body` applies inside the body, and leaves the body's own `LET` of a
-    /// parameter name a rebind of the parameter's slot exactly as it is against the keyed map.
-    /// Type-denoting parameters register types, so they take no slot.
-    ///
-    /// Generic in what a parameter is paired with: only the [`BinderSymbol`] is read, so the caller
-    /// hands its own pairs through without restating their type half.
-    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
-    pub(crate) fn for_function<T>(
-        writer: Writer<'a>,
-        params: &[(BinderSymbol, T)],
-        body: &SlotLayout<'_>,
-    ) -> &'a SlotLayout<'a> {
-        let mut entries: Staged = params
-            .iter()
-            .filter_map(|(binder, _)| match binder {
-                BinderSymbol::Value(name) => Some((*name, 0)),
-                BinderSymbol::Type(_) | BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
-                    None
-                }
-            })
-            .collect();
-        entries.extend(body.entries.iter().copied());
-        Self::seal(writer, &mut entries)
-    }
-
-    /// One binder at one position — the layout of a frame whose whole body is a single statement
-    /// submitted at a position the call site fixes rather than the body's own shape (`EVAL`).
-    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
-    pub(crate) fn single(
-        writer: Writer<'a>,
-        name: ValueSymbol,
-        position: usize,
-    ) -> &'a SlotLayout<'a> {
-        resident(
-            writer,
-            SlotLayout {
-                entries: collect(writer, std::iter::once((name, position as u32))),
-            },
-        )
-    }
-
-    /// Re-home this layout into `writer`'s region — what a copied environment's scope takes, minted
-    /// at the destination the way the copied callable's signature is.
-    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
-    pub(crate) fn rehomed<'b>(&self, writer: Writer<'b>) -> &'b SlotLayout<'b> {
-        if self.entries.is_empty() {
-            return SlotLayout::EMPTY;
-        }
-        resident(
-            writer,
-            SlotLayout {
-                entries: collect(writer, self.entries.iter().copied()),
-            },
-        )
     }
 
     /// Sort, dedupe first-wins, and freeze — the one place a layout is written, so every door above

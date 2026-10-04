@@ -6,9 +6,7 @@ implemented by handlers, and a path through an application.
 **Problem.** The rewritten stack tracks no effect. A function's type says
 nothing of what its body performs, so the load cannot tell a pure application
 from an effectful one, and the [module design](../../design/modules.md) has no
-way to read `(MAKESET m).Set` as a path. [Monadic side
-effects](../old_foundation/monadic-side-effects.md) records the requirement
-against the old runtime.
+way to read `(MAKESET m).Set` as a path.
 
 **Acceptance criteria.**
 

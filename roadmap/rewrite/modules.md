@@ -6,9 +6,7 @@ through paths.
 **Problem.** The [module layer](../../src/knot/module/README.md) builds views and
 binds a `USING … SCOPE` block over activations a test binds by hand, but nothing
 evaluates a module program: [dispatch](../../src/dispatch/README.md) answers an
-ascription and a member read with a fault, and the old runtime's
-[`Module`](../../src/machine/model/values/module.rs) is the module surface
-`machine` still owns. An opaque view's carrier is a nonce minted at each
+ascription and a member read with a fault. An opaque view's carrier is a nonce minted at each
 application ([`view.rs`](../../src/knot/module/view.rs)), so two evaluations of
 `ints :| Counter` give two types where the
 [module design](../../design/modules.md) gives one. No value has a content

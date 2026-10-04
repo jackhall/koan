@@ -212,7 +212,7 @@ fn operator_function<'graph, R: Reads<'graph> + ?Sized>(
     let ExpressionPart::QuotedExpression(quoted) = symbol else {
         return Err(unsupported);
     };
-    let symbol = symbol_from_quote_body(quoted.reference()).map_err(|_| unsupported)?;
+    let symbol = symbol_from_quote_body(quoted.reference()).ok_or(unsupported)?;
     // `!=` is nobody's to declare: every infix `a != b` is rewritten to `NOT (a == b)` before it
     // reaches a bucket, so a declaration of it would answer no call.
     if is_unequal(symbol) {

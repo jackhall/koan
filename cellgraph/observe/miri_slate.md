@@ -14,10 +14,9 @@ reference is aligned and non-null, and no `&mut` can reach a live region under
 a step's writer, because the step holds the region table shared. Tests of those
 shapes stay in the suite as ordinary tests.
 
-Sibling to [koan's own slate](../../observe/miri_slate.md) and
-[workgraph's](../../workgraph/observe/miri_slate.md) — split because these
-tests live in the `cellgraph` crate's own lib test binary, a separate
-`cargo test` target from either. Not wired into `tools/observe_tests.py`'s
+Sibling to [koan's own slate](../../observe/miri_slate.md) — split because
+these tests live in the `cellgraph` crate's own lib test binary, a separate
+`cargo test` target from koan's. Not wired into `tools/observe_tests.py`'s
 automated drift check (that stays scoped to koan's own `src/`): this is plain
 documentation, kept current by hand, for a manual run per
 [.claude/skills/miri/SKILL.md](../../.claude/skills/miri/SKILL.md).

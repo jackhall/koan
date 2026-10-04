@@ -51,9 +51,8 @@ says so and falls back to the recorded figures, with the time column reading as 
 cross-session comparison it then is.
 
 Totals, not means: a per-call figure is `allocations / calls` on read, so the row
-keeps the exact count. The per-unit table is derived the same way
-`tools/alloc_audit.py` derives its terms, as `(large - small) / (n_large -
-n_small)` over a benchmark's two sizes.
+keeps the exact count. The per-unit table is derived as `(large - small) /
+(n_large - n_small)` over a benchmark's two sizes.
 
 Debug profile, matching every other measurement in the repo.
 

@@ -1,5 +1,4 @@
-//! Layout laws: what a body's value-binder run holds, in what order, and what the merge with a
-//! signature's parameters does to it.
+//! Layout laws: what a body's value-binder run holds, and in what order.
 
 use proptest::prelude::*;
 
@@ -7,8 +6,7 @@ use super::SlotLayout;
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::KExpression;
 use crate::parse::parse;
-use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::KType;
+use crate::symbols::{SymbolInterner, ValueSymbol};
 
 /// One statement of a generated body: a value binder, a type binder, or a statement that binds
 /// nothing.
@@ -42,18 +40,6 @@ fn statement() -> impl Strategy<Value = Statement> {
         3 => "[a-z]{2,3}".prop_map(Statement::Bind),
         1 => "[A-Z][a-z]{1,3}".prop_map(Statement::TypeBind),
         1 => "[a-z]{2,3}".prop_map(Statement::Plain),
-    ]
-}
-
-/// A parameter as a signature spells it: a value name takes a slot, a type-denoting one does not.
-fn parameter() -> impl Strategy<Value = BinderSymbol> {
-    prop_oneof![
-        3 => "[a-z]{2,3}".prop_map(|name| BinderSymbol::Value(
-            ValueSymbol::classify(&name).expect("a value token by construction")
-        )),
-        1 => "[A-Z][a-z]{1,3}".prop_map(|name| BinderSymbol::Type(
-            TypeSymbol::classify(&name).expect("a Type token by construction")
-        )),
     ]
 }
 
@@ -141,48 +127,6 @@ proptest! {
             );
             let wrapped = SlotLayout::of_body(brand.writer(), &body(brand, &source));
             prop_assert_eq!(pairs(wrapped), pairs(bare), "{}", source);
-        }
-    }
-
-    /// The merge: value parameters sit at position `0`, type-denoting parameters take no slot, and
-    /// a parameter beats a body `LET` of the same name on position — the same first-wins rule the
-    /// body half applies to itself. A re-homed layout is an independent copy with the same content,
-    /// which is what a copied environment's scope takes at the destination region.
-    #[test]
-    fn the_merge_puts_parameters_at_zero_and_rehoming_copies_content(
-        statements in prop::collection::vec(statement(), 1..5),
-        parameters in prop::collection::vec(parameter(), 0..4),
-    ) {
-        let program = program_storage();
-        let brand = program.brand();
-        let source: String = statements
-            .iter()
-            .map(Statement::source)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let inner = SlotLayout::of_body(brand.writer(), &body(brand, &source));
-
-        let typed: Vec<(BinderSymbol, KType)> = parameters
-            .iter()
-            .map(|binder| (*binder, KType::ANY))
-            .collect();
-        let merged = SlotLayout::for_function(brand.writer(), &typed, inner);
-
-        let mut entries: Vec<(ValueSymbol, usize)> = parameters
-            .iter()
-            .filter_map(|binder| match binder {
-                BinderSymbol::Value(name) => Some((*name, 0)),
-                _ => None,
-            })
-            .collect();
-        entries.extend(pairs(inner));
-        prop_assert_eq!(pairs(merged), expected(entries));
-
-        let other = program_storage();
-        let copy = merged.rehomed(other.brand().writer());
-        prop_assert_eq!(pairs(copy), pairs(merged));
-        if !merged.is_empty() {
-            prop_assert!(!std::ptr::eq(merged, copy));
         }
     }
 }

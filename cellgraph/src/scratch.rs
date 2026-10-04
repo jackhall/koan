@@ -22,7 +22,7 @@ use crate::sealed::{IdBuffer, IdSet, ScratchSet};
 /// `allocator_api2`'s `Vec` over `&Bump` rather than `bumpalo::collections::Vec`: the former is a
 /// fork of std's, so a push, a pop and an `extend_from_slice` are the specialized, inlined shapes
 /// the rest of the crate is measured against, and it derefs to `[T]` so a slice-taking callee is
-/// reached unchanged. Same alias workgraph's `BumpVec` is, over the same two crates.
+/// reached unchanged.
 ///
 /// A door mints one only for a `T` with no drop glue, so nothing is lost by the reset that ends
 /// its life without running a destructor. Growth abandons the old buffer as dead region bytes, so

@@ -37,7 +37,23 @@ ASCII-uppercase letters and no lowercase ones. A single uppercase letter is
 therefore neither a keyword nor a type name — it classifies as neither and is a
 parse error.
 
+## Names fixed in Rust source
+
+Some names are never read out of a program: a keyword a builtin shape fixes, a
+builtin type's name, the wildcard `_`. Their spelling is a Rust literal, so
+their symbol is the same bits for the whole process. Such a name is **declared
+once and compared by symbol thereafter**.
+
+[`static_name!`](../symbols.rs) builds a `StaticName<S>`: the spelling beside a
+`LazyLock` memo of its classified symbol, minted through the class's own
+`classify`. A memo of a pure function is not run state, since `Symbol::of`
+answers the same bits in every run. The class predicate runs once, at first
+touch, and a spelling that does not classify panics there, naming itself and
+the class it failed. `SymbolInterner::record` reads the memo and records the
+spelling, so a diagnostic can still render the name, at the cost of one map
+lookup and no hash.
+
 ## Testing
 
-[tests.rs](tests.rs) states the interning laws, beside the four fixed-name pins
-[TEST.md](../../TEST.md#symbol-mints) describes.
+[tests.rs](tests.rs) states the interning laws, including how a `StaticName`
+records.

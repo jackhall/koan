@@ -4,8 +4,8 @@
 
 -->
 
-The canonical list of tests Miri's tree-borrows mode signs off on for the
-modules the rewrite keeps ([TEST.md § The pending rewrite](../TEST.md#the-pending-rewrite)).
+The canonical list of tests Miri's tree-borrows mode signs off on for koan's own
+modules.
 Each test is a minimal-shape driver of one region-substrate discipline; the
 slate passes when Miri reports zero process-exit leaks and zero UB across the
 whole list. It runs on the default build: `python3 tools/miri.py`.
@@ -20,11 +20,6 @@ the *safe* koan code that drives them: a bump-hosted table, write-once slots lai
 down in a cell's region and read through a covariant view, a scratch arena shared with the
 registry it serves, and a knot re-tied at a crossing's destination. Each anchor file is therefore whitelisted below, and the
 fingerprint block stays empty.
-
-The old runtime's slate is frozen beside this one in
-[miri_slate_pending_rewrite.md](miri_slate_pending_rewrite.md) and runs only
-through `python3 tools/miri.py --pending-rewrite`. Nothing moves between the
-two: a test named there goes with the runtime it audits.
 
 Command of record and triage workflow live in
 [.claude/skills/miri/SKILL.md](../.claude/skills/miri/SKILL.md).

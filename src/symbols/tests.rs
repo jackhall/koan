@@ -16,9 +16,6 @@ const MISSING: &str = "<symbol>";
 /// spelling a builtin happens to declare.
 static SLOT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "slot");
 
-// A group of this module's own, pinning `slots!` the same way.
-crate::slots! { GROUP { width, height } }
-
 /// Token text drawn across the whole space the classifiers are defined over: value spellings, Type
 /// spellings, keyword words, glyph runs, and free-form text that lands wherever it lands.
 fn token_text() -> impl Strategy<Value = String> {
@@ -101,19 +98,14 @@ proptest! {
             prop_assert_eq!(resolved.as_deref(), Some(absent.as_str()));
         }
 
-        // A `StaticName` records under its memo, and a second recording adds nothing. Each field of
-        // a `slots!` group carries its own memo, so a group records one entry per slot.
+        // A `StaticName` records under its memo, and a second recording adds nothing.
         let before = interner.len();
-        for (name, spelling) in [(&SLOT, "slot"), (&GROUP.width, "width"), (&GROUP.height, "height")] {
-            let classified = interner.record(name);
-            prop_assert_eq!(classified, name.symbol());
-            let resolved = interner.resolve(classified.symbol());
-            prop_assert_eq!(resolved.as_deref(), Some(spelling));
-            interner.record(name);
-        }
-        prop_assert_eq!(interner.len(), before + 3 - texts.iter()
-            .filter(|text| ["slot", "width", "height"].contains(&text.as_str()))
-            .count());
+        let classified = interner.record(&SLOT);
+        prop_assert_eq!(classified, SLOT.symbol());
+        let resolved = interner.resolve(classified.symbol());
+        prop_assert_eq!(resolved.as_deref(), Some("slot"));
+        interner.record(&SLOT);
+        prop_assert_eq!(interner.len(), before + 1 - usize::from(texts.iter().any(|text| text == "slot")));
     }
 
     /// The `Display` view prints what `render` returns on a hit and the placeholder on a miss, and
@@ -257,23 +249,6 @@ fn classified_symbols_hash_through_the_identity_hasher() {
         keywords.get(&KeywordSymbol::of("+ *").expect("keyword token")),
         Some(&3)
     );
-}
-
-/// A grouped slot is the same declaration a lone [`StaticName`] is: the ident supplies the
-/// spelling, and each field carries its own memo rather than sharing one.
-#[test]
-fn a_slot_group_declares_each_field_independently() {
-    assert_eq!(GROUP.width.text(), "width");
-    assert_eq!(GROUP.height.text(), "height");
-    assert_eq!(
-        GROUP.width.symbol(),
-        ValueSymbol::classify("width").expect("`width` is a value token")
-    );
-    assert_eq!(
-        GROUP.height.symbol(),
-        ValueSymbol::classify("height").expect("`height` is a value token")
-    );
-    assert_ne!(GROUP.width.symbol(), GROUP.height.symbol());
 }
 
 /// A key is its run of keywords and slots: the same run mints the same key with or without an

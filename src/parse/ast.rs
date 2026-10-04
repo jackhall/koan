@@ -275,9 +275,7 @@ impl<'a> ExpressionPart<'a> {
     /// [`write_summary`](Self::write_summary) as a `Display` view — what a `format!` argument
     /// naming a part uses.
     ///
-    /// Its own view rather than the generic
-    /// [`PartSummary`](crate::machine::model::ast::PartSummary), which resolves through the whole run
-    /// bundle: parse renders a part here — a record literal's field-name error names the token it
+    /// Parse renders a part here — a record literal's field-name error names the token it
     /// rejected — while still filling the interner a run frame has yet to adopt.
     pub fn summary<'x>(&'x self, symbols: &'x SymbolInterner) -> AstPartSummary<'x, 'a> {
         AstPartSummary {
@@ -528,11 +526,8 @@ impl<'a> KExpression<'a> {
     }
 
     /// True when this expression is a statement block: two or more parts, all of them
-    /// `Expression`. The single definition the body splitters (`split_leading_tail` /
-    /// [`body_statement_refs`]) and the binder-install aggregation share, so the multi-statement
-    /// cutoff is stated once.
-    ///
-    /// [`body_statement_refs`]: crate::machine::body_statement_refs
+    /// `Expression`. The single definition every body splitter and the binder-install aggregation
+    /// share, so the multi-statement cutoff is stated once.
     pub fn is_statement_block(&self) -> bool {
         self.parts.len() >= 2
             && self

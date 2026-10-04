@@ -1,5 +1,5 @@
 [workspace]
-members = ["workgraph", "cellgraph", "sexlex"]
+members = ["cellgraph", "sexlex"]
 default-members = [".", "cellgraph", "sexlex"]
 resolver = "2"
 
@@ -7,6 +7,7 @@ resolver = "2"
 name = "koan"
 version = "0.1.0"
 edition = "2024"
+default-run = "koan"
 
 [lib]
 name = "koan"
@@ -17,33 +18,8 @@ name = "koan"
 path = "src/main.rs"
 
 [features]
-# The pre-rewrite runtime: `machine`, `builtins`, the integration tests
-# and every kept-module test that reaches the old runtime. Off by default so the default build,
-# test and lint slate covers only the modules the rewrite keeps (TEST.md § The pending rewrite).
-# `cargo test --features pending_rewrite` runs the whole old suite. The seam and region-audit
-# features below are knobs on the old runtime, so each turns this one on.
-pending_rewrite = []
-
-# Escape-seam verification builds — mutually exclusive (a `compile_error!` guards the pair).
-# Force every record escape seam to a single verb so the output-asserting suite becomes an
-# equivalence battery: identical hardcoded expectations under each prove the policy is
-# semantically invisible.
-seam-force-copy = ["pending_rewrite"]   # escape seam always copies records
-seam-force-pin  = ["pending_rewrite"]   # escape seam always pins records
-
-# Reach-tightness auditing: the over-pinning report at the fold chokepoint
-# (`machine::core::reach_audit`). Off by default and absent from a release build.
-region-audit = ["pending_rewrite"]
-
-# Whole-program instrument counts: wraps the binary's allocator in the delegating counter
-# at `audit/counting_alloc.rs` and arms the symbol-mint tally in `symbols`, reporting the
-# run's `allocations:` and `symbols_minted:` totals on stderr.
-# `cargo run --features alloc-count -- audit/shapes/wide_n100.koan` reads one shape;
-# `tools/alloc_audit.py` reads them all. Off by default, so a normal build keeps `mimalloc`
-# unwrapped — and because the counter wraps rather than replaces, the counted build and
-# the shipped build allocate through the same allocator. Neither this nor `dhat` is a knob on
-# the old runtime: both instrument the interpreter binary.
-alloc-count = []
+# The dhat attribution profiler: owns the binary's global allocator and writes `dhat-heap.json`
+# (`tools/dhat_diff.py`).
 dhat = ["dep:dhat"]
 
 [dependencies]
@@ -78,5 +54,4 @@ imbl = "7"
 dhat = { version = "0.3.3", optional = true }
 
 [dev-dependencies]
-trybuild = "1.0"
 proptest = "1"

@@ -17,11 +17,8 @@
 # to override the tier's choice — `PROPTEST_CASES=16384 tools/verify.sh --total` for an overnight
 # sweep of the lattice laws.
 #
-# Every cargo step builds the default feature set: the modules the rewrite keeps — plus
-# `workgraph/test-hooks` on a workspace-wide step, since workgraph's doctests read the fixture that
-# feature compiles and no other crate turns it on. The old runtime behind `pending_rewrite` is not
-# part of either tier; TEST.md § The pending rewrite lists the commands that run it on demand. The
-# interpreter binary is the rewrite's, and the routine tier runs the tutorial's snippets through it.
+# Every cargo step builds the default feature set. The routine tier runs the tutorial's snippets
+# through the interpreter binary.
 #
 # One line per step, then one summary line. A step that passes is worth a count, a score, or a
 # delta — not its runner chatter — so the whole green slate reads without scrolling, and the
@@ -40,13 +37,9 @@
 #     (workspace-wide: koan plus both embedded crates)
 #   - cellgraph verb readings       → cellgraph/observe/perf.csv, appended under `KOAN_REBASELINE`
 #
-# Not run by either tier (run on demand): `tools/seam_equivalence.sh`, the record-escape-seam
-# equivalence battery, which re-runs the suite under `--features seam-force-copy` and
-# `--features seam-force-pin` to prove the cost-driven copy-vs-pin choice is semantically invisible.
-#
 # Scope, routine tier only. When every changed path is a Markdown file the change cannot reach a
 # build, so the slate is the link audit and nothing else. When every changed path is under one
-# embedded crate — `workgraph/` or `cellgraph/` — the change is library-side and the adoption of
+# embedded crate — `cellgraph/` — the change is library-side and the adoption of
 # the new surface above it is a separate work item, so that crate's slate runs and everything above
 # it is reported rather than gated — that is what lets a library-only commit land ahead of its
 # adoption. Anything else takes the whole workspace, where every crate compiling is a gate as
@@ -218,15 +211,13 @@ if [ "$TIER" = routine ]; then
     # there is no narrower commit to unblock. A change spanning two scopes clears both flags.
     CHANGED="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
     DOCS_ONLY=1
-    WORKGRAPH_ONLY=1
     CELLGRAPH_ONLY=1
     while IFS= read -r path; do
         [ -n "$path" ] || { DOCS_ONLY=0; continue; }
         case "$path" in
-            *.md) WORKGRAPH_ONLY=0; CELLGRAPH_ONLY=0 ;;
-            workgraph/*) DOCS_ONLY=0; CELLGRAPH_ONLY=0 ;;
-            cellgraph/*) DOCS_ONLY=0; WORKGRAPH_ONLY=0 ;;
-            *) DOCS_ONLY=0; WORKGRAPH_ONLY=0; CELLGRAPH_ONLY=0 ;;
+            *.md) CELLGRAPH_ONLY=0 ;;
+            cellgraph/*) DOCS_ONLY=0 ;;
+            *) DOCS_ONLY=0; CELLGRAPH_ONLY=0 ;;
         esac
     done <<<"$CHANGED"
 
@@ -234,32 +225,6 @@ if [ "$TIER" = routine ]; then
         SCOPE="docs only"
         printf 'Change scope: Markdown only — running the link audit.\n\n'
         doclinks_step
-        summary
-        exit 0
-    fi
-
-    if [ "$WORKGRAPH_ONLY" = 1 ]; then
-        SCOPE="workgraph only"
-        printf 'Change scope: workgraph only — running the library slate.\n\n'
-
-        # `test-hooks` widens the white-box surface koan's own tests reach. It is off in a default
-        # build, so compiling it here is what keeps the gated code in the slate.
-        run tests 'tests FAILED' cargo test -p workgraph --features test-hooks --quiet
-        ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
-
-        clippy_step -p workgraph --all-targets --features test-hooks
-        doclinks_step
-
-        # Informational, never gating: koan failing to compile against workgraph HEAD is the
-        # expected mid-migration state, and its size is the adoption debt now owed.
-        if OUT="$(cargo check -p koan --all-targets 2>&1)"; then
-            ok koan 'compiles — no adoption debt' 'koan compiles'
-        else
-            errors="$(grep -c '^error' <<<"$OUT")"
-            ok koan "does NOT compile — $errors errors of adoption debt owed by a koan-side item" \
-                "koan does NOT compile — $errors errors of adoption debt"
-        fi
-
         summary
         exit 0
     fi
@@ -277,18 +242,14 @@ if [ "$TIER" = routine ]; then
         clippy_step -p cellgraph --all-targets --features perf
         doclinks_step
 
-        # Informational, never gating: nothing above cellgraph depends on it yet, so both are
-        # expected to compile untouched. A failure here is a workspace-level break (a manifest or
-        # lockfile slip), not adoption debt.
-        for crate in workgraph koan; do
-            if OUT="$(cargo check -p "$crate" --all-targets 2>&1)"; then
-                ok "$crate" 'compiles' "$crate compiles"
-            else
-                errors="$(grep -c '^error' <<<"$OUT")"
-                ok "$crate" "does NOT compile — $errors errors" \
-                    "$crate does NOT compile — $errors errors"
-            fi
-        done
+        # Informational, never gating: koan failing to compile against cellgraph HEAD is the
+        # adoption debt a koan-side item owes.
+        if OUT="$(cargo check -p koan --all-targets 2>&1)"; then
+            ok koan 'compiles' 'koan compiles'
+        else
+            errors="$(grep -c '^error' <<<"$OUT")"
+            ok koan "does NOT compile — $errors errors" "koan does NOT compile — $errors errors"
+        fi
 
         summary
         exit 0
@@ -303,12 +264,12 @@ if [ "$TIER" = routine ]; then
     # One pass: unit tests, integration binaries and doctests — including the `compile_fail`
     # escape guards, which are doctests. The total tier has to split these, since llvm-cov cannot
     # run doctests; here nothing instruments the build, so there is nothing to split.
-    run tests 'tests FAILED' cargo test --workspace --features workgraph/test-hooks --quiet
+    run tests 'tests FAILED' cargo test --workspace --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
     snippets_step
     cellgraph_surface
-    clippy_step --workspace --all-targets --features workgraph/test-hooks
+    clippy_step --workspace --all-targets
     doclinks_step
 
     summary
@@ -323,20 +284,20 @@ slate_audit
 # `--workspace`, so the reading covers all three crates rather than the root one: the embedded
 # crates are koan's own code, and a slate that scored only `src/` would let a whole crate ship with
 # no coverage signal at all.
-run tests 'tests FAILED' cargo llvm-cov --quiet --workspace --features workgraph/test-hooks --lcov --output-path "$LCOV"
+run tests 'tests FAILED' cargo llvm-cov --quiet --workspace --lcov --output-path "$LCOV"
 ok tests "ok ($(passed) passed → $LCOV)" 'tests ok'
 
 # llvm-cov does not run doctests (instrumented doctests are nightly-only), so the `compile_fail`
 # escape guards on the lifetime-erasure accessors go unchecked above. Run them here: a
 # `compile_fail` doctest that *starts* compiling is a test failure.
-run doctests 'doctests FAILED' cargo test --workspace --doc --features workgraph/test-hooks --quiet
+run doctests 'doctests FAILED' cargo test --workspace --doc --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
 
 cellgraph_surface
 # `cellgraph/perf` is the one feature in the workspace, and it gates the measurement binary the
 # perf step below runs. A default build hides that source from clippy, so the total tier's lint
 # turns it on — the same reason the cellgraph-only routine scope does.
-clippy_step --workspace --all-targets --features cellgraph/perf,workgraph/test-hooks
+clippy_step --workspace --all-targets --features cellgraph/perf
 doclinks_step
 
 # The leak/UB audit over the slate the `slate-audit` step just proved current. Minutes, and the

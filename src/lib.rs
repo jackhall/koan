@@ -1,32 +1,15 @@
-//! Library facade for the koan interpreter, exposing the module graph to integration
-//! tests.
-//!
-//! The runtime is being rewritten from the ground up over the modules the rewrite keeps — every
-//! module below not gated on `pending_rewrite`, and the embedded crates. Everything above them —
-//! the machine, the builtins, the interpreter binary, the guard fixtures and the
-//! integration tests — is the old runtime, compiled only under the `pending_rewrite` feature, so
-//! the default build and test slate spend nothing on code slated for replacement. Under that
-//! feature the canonical entry points are `machine::interpret` and `machine::interpret_with_writer`.
+//! Library facade for the koan interpreter: the modules the binary and the tests reach the
+//! interpreter through.
 
-#[cfg(feature = "pending_rewrite")]
-pub mod builtins;
 /// The language koan's programs run under: the builtin table, keyword selection over a use's
 /// candidates, and the step every evaluation runs.
 pub mod dispatch;
 /// Type expressions elaborated into lattice handles where they are read, and a callable's type
 /// read off its signature where it is born.
 pub mod elaborate;
-/// Guard-fixture surface for the fold-provenance `compile_fail` tests, which compile as
-/// external crates and so cannot name the `pub(crate)` fold machinery directly. Hidden from
-/// docs; not part of koan's real API.
-#[cfg(feature = "pending_rewrite")]
-#[doc(hidden)]
-pub mod fold_fixture;
 /// Functions, modules and circular data as values: the node that closes a value's knot-member
 /// parameter, born by the tie of its component and copied by re-tying its knot.
 pub mod knot;
-#[cfg(feature = "pending_rewrite")]
-pub mod machine;
 /// The shape of things in storage: the cell tier over `cellgraph` — its names under Koan's
 /// spelling and the slot array — and the bump tier outside the graph, where program storage lives.
 pub mod memory;
@@ -41,21 +24,14 @@ pub mod scheduler;
 /// closure bindings a callable captures, and the activation a call reads and binds.
 pub mod scope;
 pub mod source;
-/// Guard-fixture surface for the step-brand `compile_fail` tests, which compile as external
-/// crates and so cannot name the `pub(crate)` `StepCarried` directly. Hidden from docs; not part
-/// of koan's real API.
-#[cfg(feature = "pending_rewrite")]
-#[doc(hidden)]
-pub mod step_fixture;
 /// Symbol identity: the classified newtypes every syntactic name travels as, the interner
-/// that turns one back into text, and the `static_name!` and `slots!` declarations over them. A
+/// that turns one back into text, and the `static_name!` declaration over them. A
 /// leaf — it names nothing else in the crate — so [`parse`] and [`type_lattice`] both rest on it
 /// without naming each other.
 pub mod symbols;
 /// Crate-wide test scaffolding: installs the counting global allocator from
 /// [`audit/counting_alloc.rs`](../audit/counting_alloc.rs) for the lib-test binary and exposes
-/// the thread-local tally an allocation-count bracket reads — the type lattice's heap contract,
-/// and the relocation path's fixed-cost measurements under `pending_rewrite`. A
+/// the thread-local tally an allocation-count bracket reads — the type lattice's heap contract. A
 /// `#[global_allocator]` is a crate-level declaration, so it lives at the crate root.
 #[cfg(test)]
 mod tests;

@@ -14,7 +14,7 @@ Score module-structure changes before doing them. `python3 tools/modgraph <verb>
 
 Defaults are calibrated on the koan tree — see the package docstring (`tools/modgraph/__main__.py` / `score.py` / `loc.py`) for the rationale.
 
-**Re-export correction (default).** `cargo modules` resolves every `use` edge to the item's *definition* module, discarding `pub use` facades — so a consumer writing `use crate::machine::Scope` is charged a deep edge to `core::scope` even though moving `scope` anywhere under machine wouldn't break it. `regen` corrects this: it re-attributes each `uses` edge to the module path the author actually wrote (`reexport.py`). The corrected graph is the canonical `observe/modules.dot`; it is what every score reflects. This is core graph construction, not an option (`regen --no-reexport` exists for raw-vs-corrected diagnostics only).
+**Re-export correction (default).** `cargo modules` resolves every `use` edge to the item's *definition* module, discarding `pub use` facades — so a consumer writing `use crate::parse::KExpression` is charged a deep edge to `parse::ast` even though moving `ast` anywhere under `parse` wouldn't break it. `regen` corrects this: it re-attributes each `uses` edge to the module path the author actually wrote (`reexport.py`). The corrected graph is the canonical `observe/modules.dot`; it is what every score reflects. This is core graph construction, not an option (`regen --no-reexport` exists for raw-vs-corrected diagnostics only).
 
 ## Recipes
 
@@ -30,7 +30,7 @@ python3 tools/modgraph regen --root koan --baseline observe/complexity.txt
 
 ```sh
 python3 tools/modgraph score --root koan
-python3 tools/modgraph score --root koan::machine
+python3 tools/modgraph score --root koan::scope
 ```
 
 `--edges` defaults to `observe/modules.dot`. Run `regen` (Recipe 1) first after a code change so the DOT reflects the current tree; subsequent subtree scores in the same session can be plain `score`.
@@ -69,7 +69,7 @@ python3 tools/modgraph rewrite item \
     --scip /tmp/koan.scip --edges observe/modules.dot --src-root src \
     --output-edges /tmp/koan_proposed.dot \
     --output-src /tmp/koan_proposed_src \
-    --move koan::machine::core::scope::Scope::register_nominal=koan::machine::core::nominal
+    --move koan::parse::builtin_shapes::layout::SlotLayout::of_body=koan::parse::builtin_shapes::slots
 ```
 
 Item paths follow Rust-canonical spelling (`Module::Struct::method`). Requires `rust-analyzer` on PATH (`rustup component add rust-analyzer` or rely on `rust-toolchain.toml`).
@@ -80,5 +80,5 @@ The score before/after gap is what to optimize under either mode: a rewrite is w
 
 - **Score deltas, not absolutes.** The defaults are calibrated, but the absolute number depends on tree shape. Always compare current vs. proposed under the same flags.
 - **Stale `observe/modules.dot`.** If you edited code since the last regen, scoring against the tracked DOT compares the old structure to itself. Run `regen` (Recipe 1) before trusting a delta.
-- **Re-export correction means "where it's written, not where it's defined."** A facade-routed import (`use crate::machine::Scope`) attributes to the facade; only a deep import (`use crate::machine::core::scope::…`) is charged as deep coupling. Merging files to lower `fan` games nothing if consumers already import through a facade — fix the layout or the import, not the file boundary.
+- **Re-export correction means "where it's written, not where it's defined."** A facade-routed import (`use crate::parse::KExpression`) attributes to the facade; only a deep import (`use crate::parse::ast::…`) is charged as deep coupling. Merging files to lower `fan` games nothing if consumers already import through a facade — fix the layout or the import, not the file boundary.
 - **The size term is intentionally orthogonal.** Splitting a 2000-line leaf into two 1000-line leaves drops the size charge sharply, but it adds one wrapper layer at structural cost `β · loc(subtree)` — the split is worth it only when the size drop exceeds the structural add.

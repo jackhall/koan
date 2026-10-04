@@ -2,10 +2,10 @@
 """Maintain links between docs and source for the koan repo.
 
 A module's design doc is the `README.md` in its source directory, so the gates
-reach into `src/` as well as the doc trees. Three doc trees are covered: koan's
-own `design/` + `roadmap/`, and one per embedded crate — `workgraph/` and
-`cellgraph/`, each with its own `design/` + `roadmap/` pair. Roadmap items across
-all three form one dependency graph — cross-tree edges are gated for symmetry
+reach into `src/` as well as the doc trees. Two doc trees are covered: koan's
+own `design/` + `roadmap/`, and one per embedded crate — `cellgraph/`, with its
+own `design/` + `roadmap/` pair. Roadmap items across
+both form one dependency graph — cross-tree edges are gated for symmetry
 like any other — but each tree derives its own "Next items" index. A roadmap
 directory whose name starts with `old_` holds retired requirements docs: linked,
 gated for symmetry and orphans, but never listed as next and given no derived
@@ -53,7 +53,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 # Crates embedded in the repo that carry their own `design/` + `roadmap/` pair
 # and their own source tree, alongside koan's at the root.
-EMBEDDED_CRATES = ("workgraph", "cellgraph")
+EMBEDDED_CRATES = ("cellgraph",)
 
 # Embedded crates with a source tree and a README but no doc trees of their own:
 # small enough that the crate README is the whole design statement. They are
@@ -62,11 +62,11 @@ EMBEDDED_CRATES = ("workgraph", "cellgraph")
 LEAF_CRATES = ("sexlex",)
 
 MD_GLOBS = (
-    "*.md", "audit/**/*.md", "src/**/*.md", "design/**/*.md", "old_design/**/*.md",
+    "*.md", "audit/**/*.md", "src/**/*.md", "design/**/*.md",
     "roadmap/**/*.md",
     *(g for c in EMBEDDED_CRATES
       for g in (f"{c}/*.md", f"{c}/src/**/*.md", f"{c}/design/**/*.md",
-                f"{c}/old_design/**/*.md", f"{c}/roadmap/**/*.md")),
+                f"{c}/roadmap/**/*.md")),
     *(g for c in LEAF_CRATES for g in (f"{c}/*.md", f"{c}/src/**/*.md")),
 )
 SRC_GLOBS = (
@@ -92,21 +92,20 @@ MODULE_README_GLOBS = (
 # index, so none reaches across the split to list another's work.
 ROADMAP_ROOTS = (
     REPO / "roadmap",
-    *(REPO / c / r for c in EMBEDDED_CRATES for r in ("roadmap", "old_roadmap")),
+    *(REPO / c / "roadmap" for c in EMBEDDED_CRATES),
 )
 
-# A directory whose name starts with `old_` — `roadmap/old_foundation/`,
-# `workgraph/old_roadmap/` — holds retired requirements docs: items written
-# against the runtime the rewrite replaces, kept because each still records a
-# requirement. They stay in the link, symmetry and orphan gates, but are never
+# A directory whose name starts with `old_` — `roadmap/old_editor_tooling/` —
+# holds retired requirements docs: items written against the first runtime,
+# kept because each still records a requirement. They stay in the link, symmetry and orphan gates, but are never
 # "next" and their READMEs carry no derived slice.
 RETIRED_PREFIX = "old_"
 
 # Doc trees whose files are subject to the orphan gate, paired with the roadmap
 # roots above.
 DESIGN_ROOTS = (
-    REPO / "design", REPO / "old_design",
-    *(REPO / c / d for c in EMBEDDED_CRATES for d in ("design", "old_design")),
+    REPO / "design",
+    *(REPO / c / "design" for c in EMBEDDED_CRATES),
 )
 
 
@@ -312,7 +311,7 @@ def parse_dep_section(path: Path) -> tuple[set[Path], set[Path]]:
     (`## ...`) or EOF. Targets outside the roadmap trees (e.g. `design/foo.md`)
     are ignored — only intra-roadmap edges have a symmetric partner. Targets are
     resolved against the link's source file's directory so `../sibling.md`,
-    `../topic/item.md`, and cross-tree `../../workgraph/roadmap/item.md` all work.
+    `../topic/item.md`, and cross-tree `../../cellgraph/roadmap/item.md` all work.
     """
     requires: set[Path] = set()
     unblocks: set[Path] = set()

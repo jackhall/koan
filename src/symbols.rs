@@ -3,8 +3,8 @@
 //!
 //! A symbol — a record field name, a struct schema field, an FN parameter name — originates in
 //! source text and is fixed at declaration, so its identity is a content digest: the low 128 bits
-//! of BLAKE3 over its UTF-8 bytes, the same width and collision footing as a
-//! [`TypeDigest`](crate::machine::model::types::TypeDigest). [`Symbol::of`] is a pure function:
+//! of BLAKE3 over its UTF-8 bytes, the same width and collision footing as a type lattice
+//! digest. [`Symbol::of`] is a pure function:
 //! making a symbol needs no interner, no registry, no execution context, and equal text yields
 //! equal symbols in every run.
 //!
@@ -33,30 +33,13 @@ impl Symbol {
         Symbol::of_hash(blake3::hash(text.as_bytes()))
     }
 
-    /// The low 128 bits of a finished BLAKE3 hash — the single funnel [`of`](Self::of) ends in, and
-    /// so the one site the mint tally counts.
+    /// The low 128 bits of a finished BLAKE3 hash — the single funnel [`of`](Self::of) ends in.
     fn of_hash(hash: blake3::Hash) -> Symbol {
-        #[cfg(feature = "alloc-count")]
-        MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let low: [u8; 16] = hash.as_bytes()[..16]
             .try_into()
             .expect("BLAKE3 output is 32 bytes");
         Symbol(u128::from_le_bytes(low))
     }
-}
-
-/// How many symbols the process has minted, behind the `alloc-count` audit feature. Hashing takes
-/// no allocation, so the allocation counter cannot see a mint go away and this is the instrument
-/// that can. A process-wide tally, read once by `main` after the run — an audit counter of the
-/// same standing as `audit/counting_alloc.rs`'s, compiled out of every build that does not ask
-/// for it.
-#[cfg(feature = "alloc-count")]
-static MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The process's symbol-mint total — every symbol minted since startup.
-#[cfg(feature = "alloc-count")]
-pub fn symbols_minted() -> u64 {
-    MINTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// What a render path prints for a symbol whose text this run never recorded. Rendering is total,
@@ -264,8 +247,7 @@ macro_rules! classified_symbol {
                 Some(classified)
             }
 
-            /// The raw digest — for digest feeds, schema scans and
-            /// [`render_label`](crate::machine::model::render_label).
+            /// The raw digest — for digest feeds and schema scans.
             pub fn symbol(self) -> Symbol {
                 self.0
             }
@@ -542,9 +524,8 @@ pub fn is_keyword_token(s: &str) -> bool {
 }
 
 /// The hasher every 128-bit-digest-keyed table runs: the interner here, the type registry's node
-/// table, and the classified scope binding tables. A
-/// [`TypeDigest`](crate::machine::model::types::TypeDigest) and a [`Symbol`] are each the low 128
-/// bits of a BLAKE3 hash, so they
+/// table, and the classified scope binding tables. A type lattice digest and a [`Symbol`] are each
+/// the low 128 bits of a BLAKE3 hash, so they
 /// are already uniformly distributed and re-hashing would only cost cycles: keep the low 64 bits
 /// and use them directly as the bucket index.
 ///
@@ -582,13 +563,13 @@ impl ClassifiedSymbol for BinderSymbol {
     }
 }
 
-/// A symbol whose spelling is fixed in Rust source — a builtin's parameter name, a tag a builtin
-/// raises under — declared once and minted once.
+/// A symbol whose spelling is fixed in Rust source — a keyword a builtin shape fixes, a builtin
+/// type's name — declared once and minted once.
 ///
 /// The text is `&'static`, so its symbol is the same bits for the whole process and there is no
 /// reason to re-derive it. The memo is a [`LazyLock`](std::sync::LazyLock) over the class's own
-/// `classify`, which makes the first read a mint and every read after it a load: a builtin body that
-/// reads a slot on every call hashes nothing, and the class predicate still runs, at first touch,
+/// `classify`, which makes the first read a mint and every read after it a load: a path that reads
+/// the name on every call hashes nothing, and the class predicate still runs, at first touch,
 /// on the same text the spelling would have been classified from.
 ///
 /// A `LazyLock` memo of a pure function is not run state: [`Symbol::of`] answers the same bits in
@@ -610,7 +591,7 @@ impl<S: 'static> StaticName<S> {
         }
     }
 
-    /// The spelling as written — what a diagnostic naming this slot renders.
+    /// The spelling as written — what a diagnostic naming this name renders.
     pub fn text(&self) -> &'static str {
         self.text
     }
@@ -628,10 +609,7 @@ impl<S: Copy> StaticName<S> {
 ///
 /// The class predicate runs at first read, and a spelling that will not classify panics there
 /// naming itself and the class it failed — a build-time mistake in programmer-written text, not a
-/// runtime disposition. Every builtin slot reaches [`arg`](crate::builtins::arg) at registration
-/// and every tag reaches its own registration, so building a prelude forces each declared name
-/// once: a spelling that will not classify fails every test that runs a program, not only the one
-/// that exercises its builtin.
+/// runtime disposition.
 #[macro_export]
 macro_rules! static_name {
     ($class:ty, $text:literal) => {
@@ -643,43 +621,6 @@ macro_rules! static_name {
                 stringify!($class)
             ))
         })
-    };
-}
-
-/// Declare a builtin's parameter slots as one group:
-/// `slots! { SLOTS { left, right } }`, read as `&SLOTS.left`.
-///
-/// Each slot is written once, as the ident that names it: the spelling the signature registers and
-/// the body reads back is [`stringify!`]-ed out of that ident, so the two cannot disagree. Grouping
-/// is a matter of where the declarations sit and nothing else — every field is its own
-/// [`StaticName`], forced independently at its first read, so a group of *n* slots mints exactly
-/// the *n* symbols the same slots declared one at a time would.
-///
-/// Value class is the whole vocabulary here: a parameter slot binds a value name, so the group is
-/// [`StaticName<ValueSymbol>`] throughout and a spelling that will not classify panics at its first
-/// read. A name the machine fixes in Rust source that is *not* a slot — a type or a variant tag —
-/// declares through [`static_name!`](crate::static_name) instead, which names its class.
-#[macro_export]
-macro_rules! slots {
-    ($group:ident { $($slot:ident),+ $(,)? }) => {
-        /// One builtin's parameter slots, each a name fixed in Rust source.
-        struct SlotNames {
-            $(
-                $slot: $crate::symbols::StaticName<$crate::symbols::ValueSymbol>,
-            )+
-        }
-
-        static $group: SlotNames = SlotNames {
-            $(
-                $slot: $crate::symbols::StaticName::new(stringify!($slot), || {
-                    <$crate::symbols::ValueSymbol>::classify(stringify!($slot)).expect(concat!(
-                        "`",
-                        stringify!($slot),
-                        "` classifies as a value-class parameter slot"
-                    ))
-                }),
-            )+
-        };
     };
 }
 

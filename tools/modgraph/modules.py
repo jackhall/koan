@@ -25,7 +25,7 @@ def direct_children(parent: str, modules: set[str]) -> list[str]:
 
 
 def module_to_file(module: str, src_root: Path) -> Path | None:
-    """`koan::machine::core::scope` -> `src/machine/core/scope.rs` (or
+    """`koan::scope::shape` -> `src/scope/shape.rs` (or
     `.../mod.rs`). The crate root (`koan`, no path parts) maps to no file —
     `lib.rs` is intentionally uncounted, matching the scorer's longstanding
     behaviour."""
@@ -42,7 +42,7 @@ def module_to_file(module: str, src_root: Path) -> Path | None:
 
 
 def relpath_to_module(relpath: str, package: str = "koan") -> str | None:
-    """`src/machine/core/scope.rs` -> `koan::machine::core::scope`
+    """`src/scope/shape.rs` -> `koan::scope::shape`
     (`mod.rs`/`lib.rs`/`main.rs` collapse to the directory module). Accepts
     paths with or without the leading `src/`."""
     p = relpath

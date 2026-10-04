@@ -9,9 +9,6 @@ once can be the body of several callables. What it buys the language: programs
 that assemble declarations and expressions as data, with the shape such code
 runs in built once and laid down where the code lives.
 
-The first runtime's requirements for this ground sit in
-[old_metaprogramming/](../old_metaprogramming/README.md).
-
 ## Next items
 
 This project's items with no unshipped prerequisite — ready to start.

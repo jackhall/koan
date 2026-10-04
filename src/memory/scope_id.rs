@@ -1,5 +1,4 @@
-//! `ScopeId` — position-independent identity for
-//! [`Scope`](crate::machine::core::Scope) instances.
+//! `ScopeId` — position-independent identity for scopes.
 //!
 //! Pointer-derived identity couples equality to memory placement, so a relocated or freed scope
 //! would silently break dispatch on user-declared types. A counter-allocated newtype decouples
@@ -23,7 +22,7 @@ use std::hash::{BuildHasher, Hasher};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Position-independent identity for a [`Scope`](crate::machine::core::Scope). Equality is by
+/// Position-independent identity for a scope. Equality is by
 /// the `(session, idx)` pair, minted once at construction time.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScopeId {
@@ -32,12 +31,6 @@ pub struct ScopeId {
 }
 
 impl ScopeId {
-    /// Sentinel for the `_typeconstructor` placeholder in
-    /// [`crate::builtins::type_ops`] — a parametric carrier with no concrete
-    /// declaring scope. Real minted ids have a nonzero random session, so the
-    /// sentinel cannot collide.
-    pub const SENTINEL: ScopeId = ScopeId { session: 0, idx: 0 };
-
     pub fn next() -> ScopeId {
         ScopeId {
             session: session_id(),
@@ -46,8 +39,7 @@ impl ScopeId {
     }
 
     /// Build a `ScopeId` from raw halves. Reserved for test fixtures
-    /// constructing identity-equal pairs; production code uses [`Self::next`] or
-    /// [`Self::SENTINEL`].
+    /// constructing identity-equal pairs; production code uses [`Self::next`].
     pub const fn from_raw(session: u64, idx: u64) -> ScopeId {
         ScopeId { session, idx }
     }
@@ -111,14 +103,6 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.session(), b.session());
         assert_ne!(a.idx(), b.idx());
-    }
-
-    #[test]
-    fn sentinel_cannot_collide_with_minted() {
-        let live = ScopeId::next();
-        assert_ne!(ScopeId::SENTINEL, live);
-        assert_eq!(ScopeId::SENTINEL.idx(), 0);
-        assert_eq!(ScopeId::SENTINEL.session(), 0);
     }
 
     #[test]

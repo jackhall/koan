@@ -1,21 +1,18 @@
 """Difference two dhat heap profiles into per-unit allocation-site attribution.
 
-The attribution half of the allocation audit: `tools/alloc_audit.py` prices a term
-(allocations per step / per live frame / per declared name), this names the sites
-the term is made of.
-Run one shape at two sizes under the `dhat` cargo feature and difference the block
-counts per allocation site — a site whose count scales with the size difference is
-on the per-unit path; constant-cost sites (startup, seeding) cancel.
+Run one program at two sizes under the `dhat` cargo feature and difference the
+block counts per allocation site — a site whose count scales with the size
+difference is on the per-unit path; constant-cost sites (startup, seeding) cancel.
 
-    cargo run --features dhat -- audit/shapes/wide_n10.koan
+    cargo run --features dhat -- small.koan
     mv dhat-heap.json small.json
-    cargo run --features dhat -- audit/shapes/wide_n100.koan
+    cargo run --features dhat -- big.koan
     mv dhat-heap.json big.json
     python3 tools/dhat_diff.py small.json big.json 90
-    python3 tools/dhat_diff.py small.json big.json 90 --detail 'arm_tail|run_action'
+    python3 tools/dhat_diff.py small.json big.json 90 --detail 'run'
 
 `units` is the size difference (90 extra steps above). The default report aggregates
-by owning frame — the deepest koan/workgraph frame under the allocation, with its
+by owning frame — the deepest koan/cellgraph frame under the allocation, with its
 caller for context. `--detail <regex>` instead prints the full (filtered) stack of
 every scaling site whose frames match the pattern.
 """
@@ -30,7 +27,7 @@ NOISE = re.compile(
     r"<alloc::|<core::|<std::|<dhat::|<hashbrown::raw|<T as |<str as )"
 )
 OWNING = re.compile(
-    r"koan::|workgraph::|bumpalo::Bump<_>::new_chunk|hashbrown::(map|rustc)|smallvec::SmallVec"
+    r"koan::|cellgraph::|bumpalo::Bump<_>::new_chunk|hashbrown::(map|rustc)|smallvec::SmallVec"
 )
 
 

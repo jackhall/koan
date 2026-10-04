@@ -1,6 +1,6 @@
 //! The import boundary and the storage discipline, as a test over this module's own source.
 //!
-//! `knot` is the top of the rewrite's value stack: it may name `elaborate`, `memory`, `parse`,
+//! `knot` is the top of the value stack: it may name `elaborate`, `memory`, `parse`,
 //! `scope`, `symbols`, `type_lattice` and `values`, and nothing else in the crate — no scheduler,
 //! no builtins. Outside its tests it holds no owning heap type.
 //!

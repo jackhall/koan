@@ -487,7 +487,7 @@ def cmd_audit(args):
     cov_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"\n# test-coverage ({cov_path})", flush=True)
     cov_proc = subprocess.run(
-        ["cargo", "llvm-cov", "--quiet", "--features", "pending_rewrite",
+        ["cargo", "llvm-cov", "--quiet",
          "--lcov", "--output-path", str(cov_path)],
         check=False,
     )
@@ -515,7 +515,7 @@ def _llvm_bin_dir() -> Path:
 def _build_instrumented() -> list[Path]:
     """Build (and incidentally run once) the instrumented test binaries."""
     proc = subprocess.run(
-        ["cargo", "llvm-cov", "--no-report", "--tests", "--features", "pending_rewrite"],
+        ["cargo", "llvm-cov", "--no-report", "--tests"],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:

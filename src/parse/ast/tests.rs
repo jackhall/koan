@@ -1,24 +1,10 @@
-//! AST laws: what a node's structural cache says about its parts run, and what survives a copy, a
-//! resplice and a rendering. The instance pins that fix a runtime lowering or a rendered spelling
-//! live beside the impls they pin, in `machine::model::ast`.
+//! AST laws: what a node's structural cache says about its parts run, and what its rendering is.
 //!
 //! Every property here builds nodes in fresh program storage per case, so each runs 64 cases.
 
 use proptest::prelude::*;
 
-#[cfg(feature = "pending_rewrite")]
-use crate::machine::model::RunRegistries;
-#[cfg(feature = "pending_rewrite")]
-use crate::machine::model::ast::working::{WorkingExpression, WorkingPart};
-#[cfg(feature = "pending_rewrite")]
-use crate::machine::model::types::KType;
-#[cfg(feature = "pending_rewrite")]
-use crate::machine::model::values::KObject;
 use crate::memory::{ProgramBrand, collect, program_storage};
-#[cfg(feature = "pending_rewrite")]
-use crate::parse::builtin_shapes::builtin_shape_for;
-#[cfg(feature = "pending_rewrite")]
-use crate::parse::classify_dispatch_shape;
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, PartClass};
 use crate::source::Spanned;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
@@ -207,18 +193,6 @@ fn build<'a>(
     )
 }
 
-/// The bucket key a parts run spells, recomputed from the parts rather than read off the cache.
-#[cfg(feature = "pending_rewrite")]
-fn recomputed_key(parts: &[Spanned<ExpressionPart<'_>>]) -> Vec<KeyElement> {
-    parts
-        .iter()
-        .map(|part| match part.value {
-            ExpressionPart::Keyword(symbol) => KeyElement::Keyword(symbol),
-            _ => KeyElement::Slot,
-        })
-        .collect()
-}
-
 /// The dispatch shape a run with key `key` and head class `head` must take, written from the rule
 /// the design states rather than read off the classifier: keywords decide first, and only a
 /// keyword-free run branches on its head.
@@ -314,86 +288,6 @@ proptest! {
         }
     }
 
-    /// The cache is what a fresh recompute says, it rides a copy whole, and it rides a resplice
-    /// whole — the key as the very run construction bumped, not merely an equal one, so a chain
-    /// splicing once per reduction step bumps no duplicate. The type-context stamp rides with it,
-    /// for the same reason: a splice substitutes slots and does not change how the node was reached.
-    #[cfg(feature = "pending_rewrite")]
-    #[test]
-    fn the_cache_agrees_with_a_recompute_and_rides_a_copy_and_a_resplice(shapes in parts_run()) {
-        let program = program_storage();
-        let brand = program.brand();
-        let region = brand.writer();
-        let symbols = SymbolInterner::new();
-        let expression = build(brand, &shapes, &symbols);
-
-        let head = expression.parts.first().map(|part| part.value.class());
-        prop_assert_eq!(expression.stored_key().to_vec(), recomputed_key(expression.parts));
-        prop_assert_eq!(
-            expression.shape(),
-            classify_dispatch_shape(expression.stored_key(), head),
-        );
-        prop_assert_eq!(
-            expression.cache().builtin_shape().map(|form| form.id),
-            builtin_shape_for(expression.stored_key().iter().copied()).map(|form| form.id),
-        );
-
-        let copy = expression;
-        prop_assert!(std::ptr::eq(copy.stored_key(), expression.stored_key()));
-        prop_assert_eq!(copy.shape(), expression.shape());
-        prop_assert_eq!(copy.binder_name_slot(), expression.binder_name_slot());
-
-        // The splice shape: every eager slot gives way to a staging hole, every keyword stands.
-        let working = WorkingExpression::from_ast(region, expression).in_type_context();
-        let respliced = working.respliced(
-            region,
-            working.parts.iter().map(|part| Spanned {
-                value: match part.value {
-                    WorkingPart::Ast(ExpressionPart::Keyword(_)) => part.value,
-                    _ => WorkingPart::StagedSlot,
-                },
-                span: part.span,
-            }),
-        );
-        prop_assert!(std::ptr::eq(working.stored_key(), respliced.stored_key()));
-        prop_assert_eq!(
-            working.cache().builtin_shape().map(|form| form.id),
-            respliced.cache().builtin_shape().map(|form| form.id),
-        );
-        prop_assert!(respliced.under_type_sigil());
-    }
-
-    /// A node's bucket key and the untyped key of a signature spelling the same pattern agree —
-    /// the invariant a registration and a call meet under, with keywords in position and every
-    /// argument a slot.
-    #[cfg(feature = "pending_rewrite")]
-    #[test]
-    fn a_node_key_equals_the_signature_key_of_the_same_pattern(shapes in parts_run()) {
-        use crate::machine::model::types::{Argument, ReturnType, SignatureDraft, SignatureElement};
-
-        let program = program_storage();
-        let brand = program.brand();
-        let symbols = SymbolInterner::new();
-        let expression = build(brand, &shapes, &symbols);
-
-        let draft = SignatureDraft {
-            return_type: ReturnType::Resolved(KType::ANY),
-            elements: shapes
-                .iter()
-                .map(|shape| match shape {
-                    PartShape::Keyword(text) => SignatureElement::Keyword(
-                        KeywordSymbol::of(text).expect("keyword-class by construction"),
-                    ),
-                    _ => SignatureElement::Argument(Argument::new(
-                        BinderSymbol::classify("slot").expect("a value token"),
-                        KType::ANY,
-                    )),
-                })
-                .collect(),
-        };
-        prop_assert_eq!(expression.stored_key().to_vec(), draft.untyped_key());
-    }
-
     /// A node's rendering is the space-join of its parts' own renderings, so a diagnostic naming a
     /// whole expression and one naming a single part agree about every token.
     #[test]
@@ -412,34 +306,6 @@ proptest! {
         prop_assert_eq!(expression.summarize(&symbols), joined);
     }
 
-    /// Quoted code compares as syntax: two nodes are structurally equal exactly when they spell the
-    /// same part sequence, with literals compared by their written form and container literals
-    /// compared in order.
-    #[cfg(feature = "pending_rewrite")]
-    #[test]
-    fn structural_equality_is_the_same_part_sequence(
-        left in parts_run(),
-        right in parts_run(),
-    ) {
-        let program = program_storage();
-        let brand = program.brand();
-        let registries = RunRegistries::new();
-        let symbols = &registries.labels;
-
-        let make = |shapes: &[PartShape]| {
-            KObject::KExpression(brand.build_expression_from_iter(
-                build_run(brand, shapes, symbols),
-                crate::tests::source(),
-            ))
-        };
-        let a = make(&left);
-        let b = make(&left);
-        let c = make(&right);
-
-        prop_assert_eq!(a.value_equal(&b, &registries), Ok(true));
-        prop_assert_eq!(a.value_equal(&c, &registries), Ok(left == right));
-        prop_assert_eq!(a.ktype(), KType::EXPRESSION);
-    }
 }
 
 /// A quote's code kind is read off its body as written: each source here is one quote, and its

@@ -45,17 +45,11 @@ untracked) and narrows itself:
 
 - **Markdown only** — doclinks alone. A change that cannot reach a build gets the link audit and
   nothing else.
-- **`workgraph/` only** or **`cellgraph/` only** — that crate's tests, clippy and doclinks, then it
-  reports whether the crates above it still compile **as information, never as a gate**. This is
-  what lets a library change land ahead of its adoption — see
-  [the library roadmap's convention](../../../workgraph/old_roadmap/README.md). koan failing to
-  compile against `workgraph` `HEAD` is the expected mid-migration state; treat the reported error
-  count as the size of the debt now owed, not as a failure to fix before committing.
+- **`cellgraph/` only** — that crate's tests, clippy and doclinks, then it reports whether koan
+  still compiles **as information, never as a gate**. This is what lets a library change land
+  ahead of its adoption: treat a reported error count as the size of the adoption debt now owed,
+  not as a failure to fix before committing.
 - **Anything else** — the whole workspace, where every crate compiling is a gate.
-
-Every cargo step in either tier builds the default feature set — the modules the rewrite keeps — so
-the old runtime behind `pending_rewrite` is neither built nor tested; TEST.md § The pending rewrite
-lists the on-demand commands.
 
 ## Reporting the result
 
@@ -66,7 +60,7 @@ never mistaken for a full one:
 ```
 Verify (routine): slate ok, tests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok.
 Verify (docs only): doclinks ok.
-Verify (workgraph only): tests ok, clippy clean, doclinks ok, koan compiles.
+Verify (cellgraph only): tests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, koan compiles.
 Verify (total): slate ok, tests ok, doctests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, miri ok, coverage 87.18% (Δ -0.00 vs 87.18%), modgraph tests ok, modgraph score 1809.79 (Δ +0.00 vs 1809.79).
 ```
 
@@ -90,4 +84,3 @@ summary line; report the substance of it, not just the clause.
 - **`cargo fmt`.** Format drift isn't gated here. Run `cargo fmt --all` separately when needed.
 - **Rebaseline the trend logs.** The total tier's coverage and modgraph steps report a delta against the newest recorded entry but write nothing; only `KOAN_REBASELINE=1` records a new one, and the routine tier has no reading to record.
 - **Gate on the modgraph score.** It reports; it never fails the run. Use the delta as input to a code-review judgment call, and report it to the user.
-- **The allocation audit.** Run `tools/alloc_audit.py` on demand. The tutorial snippets, by contrast, are a routine-tier step: the script builds the interpreter binary and runs `tools/verify_snippets.py` through it.

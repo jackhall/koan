@@ -7,7 +7,7 @@ binders as one [knot](../memory/README.md#the-knot), and copies a member by
 re-tying its knot.
 It sits above [`values`](../values/README.md), [`scope`](../scope/README.md)
 and [`elaborate`](../elaborate/README.md), and neither `values` nor `scope`
-names it. It is the top of the rewrite's value stack.
+names it. It is the top of the value stack.
 
 ## What sits where
 

@@ -353,11 +353,3 @@ layouts, in that same notation. The files beside it hold what a law does not
 state: the diagnostic a mistake reports, and the surface rules a renderer never
 writes. [depth](tests/depth.rs) pins the depth small shapes store, and a dotted
 chain and an operator run refused one level past the limit.
-
-## A note on `pending_rewrite`
-
-The runtime is this module's consumer, and the runtime is behind the
-`pending_rewrite` feature. An item marked
-`cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` — or an
-`unused_imports` twin on a crate-visible re-export — has no caller in a default
-build until the rewrite adopts it, and the marker comes off with the adoption.

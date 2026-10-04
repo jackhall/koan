@@ -13,42 +13,23 @@ prerequisites and the items it unblocks.
 Work is grouped into project subdirectories, each a coherent body of work whose items
 share design constraints and ship together. Each has a README naming what the project
 buys the language and listing its ready-to-start items. The live projects are
-[rewrite/](rewrite/README.md), the runtime's layers up to the delete of the first
-one, and the three bodies of work that build on it:
+[rewrite/](rewrite/README.md), the runtime's layers, and the three bodies of work
+that build on it:
 [conditionals/](conditionals/README.md),
 [gradual-typing/](gradual-typing/README.md) and
 [metaprogramming/](metaprogramming/README.md).
 
-Every `old_`-prefixed project was written against the old runtime, which now sits
-behind the `pending_rewrite` feature ([TEST.md](../TEST.md#the-pending-rewrite)):
-[old_foundation/](old_foundation/README.md),
-[old_predicate_typing/](old_predicate_typing/README.md),
-[old_libraries/](old_libraries/README.md),
-[old_metaprogramming/](old_metaprogramming/README.md),
-[old_type_language/](old_type_language/README.md),
-[old_editor_tooling/](old_editor_tooling/README.md),
-[old_refactor/](old_refactor/README.md),
-[old_reduce_allocs/](old_reduce_allocs/README.md),
-[old_untyped_arena/](old_untyped_arena/README.md) and
-[old_compile_safety/](old_compile_safety/README.md). Their items are stale as
-work to pick up — the code pointers name modules the rewrite replaces — but each
-still records a requirement the language has, so they stay as requirements docs
-the rewrite reads and retires as its layers meet them. The `old_` prefix is what
-`doclinks` keys on: those items stay in the link and dependency gates but never
-appear in a "Next items" list. The same holds for
-[workgraph/old_roadmap/](../workgraph/old_roadmap/README.md): the scheduler is
-rebuilt as a fresh crate, and its items are requirements on that crate.
+The one `old_`-prefixed project, [old_editor_tooling/](old_editor_tooling/README.md),
+was written against the first runtime. Its item is stale as work to pick up, but it
+records a requirement the language has. The `old_` prefix is what `doclinks` keys on:
+such an item stays in the link and dependency gates but never appears in a "Next
+items" list.
 
 The cell substrate Koan embeds carries its own roadmap,
 [cellgraph/roadmap/](../cellgraph/roadmap/README.md). Items cross-link across
 the two trees — a library item routinely unblocks a Koan one — and `doclinks`
 gates the pair as one dependency graph, but each tree derives its own
 "Next items" list, so the one below covers this tree only.
-
-Design rationale for what's already in the language lives in [old_design/](../old_design/) — five
-topical docs covering the execution model, memory model, functional programming,
-expressions and parsing, and error handling, plus [old_design/typing/](../old_design/typing/README.md)
-covering the type and module systems end-to-end.
 
 ## Next items
 
@@ -66,6 +47,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Modules](rewrite/modules.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
-- [Retire the old runtime](rewrite/retire-the-old-runtime.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 

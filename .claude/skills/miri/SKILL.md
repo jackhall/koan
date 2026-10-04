@@ -11,8 +11,7 @@ Standardized workflow for running Miri in the koan repo. The audit slate is the 
 
 - `cargo +nightly miri` is installed. **Never** probe with `cargo +nightly miri --version`, `which miri`, `rustup component list`, etc. — assume it works and run.
 - Tree borrows is the borrow-checker mode. All audit runs use `MIRIFLAGS="-Zmiri-tree-borrows"`.
-- The canonical audit-slate test list lives in [`observe/miri_slate.md`](../../../observe/miri_slate.md), grouped by unsafe-site shape. Read that file for the test names; do not hard-code the list elsewhere. The old runtime's slate is frozen beside it in [`observe/miri_slate_pending_rewrite.md`](../../../observe/miri_slate_pending_rewrite.md) and runs only through `--pending-rewrite`.
-- The memory-model invariants the slate verifies are documented in [`old_design/memory-model.md`](../../../old_design/memory-model.md).
+- The canonical audit-slate test list lives in [`observe/miri_slate.md`](../../../observe/miri_slate.md), grouped by unsafe-site shape. Read that file for the test names; do not hard-code the list elsewhere.
 
 ## The command of record
 
@@ -21,16 +20,15 @@ script encapsulates the correct invocation and returns only the summary, so the 
 misread:
 
 ```
-python3 tools/miri.py                         # full audit slate (the modules the rewrite keeps)
-python3 tools/miri.py --pending-rewrite       # the old runtime's slate, under --features pending_rewrite
+python3 tools/miri.py                         # full audit slate
 python3 tools/miri.py --tests <name> [<name>…]  # triage specific tests
 python3 tools/miri.py --tests <name> --track <alloc-id>   # + -Zmiri-track-alloc-id
 python3 tools/miri.py --log                    # full slate; on a clean run, log the duration entry
 ```
 
 It runs `MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --lib …`. The **`--lib` is
-load-bearing**: every slate test lives in the lib unit-test binary, so restricting to it skips the
-`tests/*.rs` integration binaries that otherwise print a misleading `0 passed; all filtered out`. The
+load-bearing**: every slate test lives in the lib unit-test binary, so restricting to it skips any
+integration binary, which would otherwise print a misleading `0 passed; all filtered out`. The
 slate names come from [`observe/miri_slate.md`](../../../observe/miri_slate.md) via
 `tools/observe_tests.py slate` — never hard-code them.
 
@@ -42,12 +40,11 @@ silent green. Read that one line; do not re-inspect the raw log unless triaging 
 
 ## Embedded crates: their own slates, run directly
 
-`tools/miri.py` drives koan's own slate only. The embedded crates each own a separate lib test
-binary and a separate slate log, so a change scoped to one of them runs `cargo` directly with the
-crate as the target — `-p <crate> --lib` — and reads that crate's log:
+`tools/miri.py` drives koan's own slate only. An embedded crate owns a separate lib test binary and
+a separate slate log, so a change scoped to it runs `cargo` directly with the crate as the target —
+`-p <crate> --lib` — and reads that crate's log:
 
 ```
-MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib   # workgraph/observe/miri_slate.md
 MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib   # cellgraph/observe/miri_slate.md
 ```
 
@@ -65,11 +62,10 @@ Run `python3 tools/observe_tests.py slate-audit` to surface drift between live `
 When a slate test is added, removed, or renamed:
 
 1. Edit [`observe/miri_slate.md`](../../../observe/miri_slate.md). New tests go under the group they pin down, or under a fresh group if the shape isn't already represented.
-2. Update [`old_design/memory-model.md`](../../../old_design/memory-model.md)'s `## Verification` section if the test is named there.
-3. Re-run the full slate (`python3 tools/miri.py --log`); the script's count guard confirms it still holds.
-4. `python3 tools/doclinks.py check` to catch any broken inbound links.
+2. Re-run the full slate (`python3 tools/miri.py --log`); the script's count guard confirms it still holds.
+3. `python3 tools/doclinks.py check` to catch any broken inbound links.
 
-A non-slate change to a test in `parse/`, `memory/` or `type_lattice/` does not trigger this rule — only changes that affect a test named in `observe/miri_slate.md` do. The old runtime's slate is frozen: a test named there is not added to, renamed or moved; it goes with the runtime.
+A non-slate change to a test in `parse/`, `memory/` or `type_lattice/` does not trigger this rule — only changes that affect a test named in `observe/miri_slate.md` do.
 
 ## Scheduling: run synchronously in the foreground
 

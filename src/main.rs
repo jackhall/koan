@@ -10,36 +10,17 @@ use std::process::ExitCode;
 use koan::dispatch::Koan;
 use koan::program::{CellSubstrate, Outcome, Output, STACK_BYTES};
 
-// Allocator selection, over two axes. Miri can't call mimalloc's FFI (`mi_malloc_aligned`), so the
-// binary falls back to the system allocator under Miri. `alloc-count` then *wraps* whichever of
-// the two is in play in the delegating counter rather than replacing it, so the counted build and
-// the shipped build allocate through the same allocator.
-#[cfg(feature = "alloc-count")]
-#[path = "../audit/counting_alloc.rs"]
-mod counting_alloc;
-
-// The dhat attribution profiler must own the global allocator outright (it wraps the system
-// allocator and records a backtrace per allocation), so it cannot compose with the counter.
-#[cfg(all(feature = "dhat", feature = "alloc-count"))]
-compile_error!("`dhat` and `alloc-count` both claim the global allocator; enable exactly one");
-
+// The dhat attribution profiler owns the global allocator outright: it wraps the system
+// allocator and records a backtrace per allocation. Otherwise the binary runs on mimalloc, except
+// under Miri, which can't call mimalloc's FFI (`mi_malloc_aligned`) and falls back to the system
+// allocator.
 #[cfg(feature = "dhat")]
 #[global_allocator]
 static GLOBAL: dhat::Alloc = dhat::Alloc;
 
-#[cfg(all(not(feature = "alloc-count"), not(miri), not(feature = "dhat")))]
+#[cfg(all(not(miri), not(feature = "dhat")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-#[cfg(all(feature = "alloc-count", not(miri)))]
-#[global_allocator]
-static GLOBAL: counting_alloc::Counting<mimalloc::MiMalloc> =
-    counting_alloc::Counting(mimalloc::MiMalloc);
-
-#[cfg(all(feature = "alloc-count", miri))]
-#[global_allocator]
-static GLOBAL: counting_alloc::Counting<std::alloc::System> =
-    counting_alloc::Counting(std::alloc::System);
 
 /// The slab's cap: the whole width a graph's type fixes, so the cap is never what refuses a cell.
 const CELLS: u32 = 64;
@@ -96,7 +77,6 @@ fn load_and_run(source: &str, path: &str) -> ExitCode {
         }
     };
     let outcome = substrate.with(|running| running.run());
-    report_allocations();
     match outcome {
         Ok(Outcome::Completed) => ExitCode::SUCCESS,
         Ok(Outcome::Uncaught) => ExitCode::FAILURE,
@@ -106,17 +86,3 @@ fn load_and_run(source: &str, path: &str) -> ExitCode {
         }
     }
 }
-
-/// Print the run's allocation and symbol-mint totals to stderr — the reader half of the
-/// `alloc-count` feature. Both tallies are read before the first print, since the print allocates.
-#[cfg(feature = "alloc-count")]
-fn report_allocations() {
-    let total = counting_alloc::allocations();
-    let minted = koan::symbols::symbols_minted();
-    eprintln!("allocations: {total}");
-    eprintln!("symbols_minted: {minted}");
-}
-
-/// No-op when the counters are not compiled in, so the call site in `main` needs no cfg.
-#[cfg(not(feature = "alloc-count"))]
-fn report_allocations() {}

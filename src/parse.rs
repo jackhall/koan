@@ -22,11 +22,6 @@
 //! lowering a literal, resolving a part to a cell, installing a binder — are inherent impls in the
 //! runtime, which imports them by name.
 //!
-//! The runtime is this module's consumer, and the runtime is `pending_rewrite`: an item marked
-//! `cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` — or an `unused_imports` twin on
-//! a crate-visible re-export — has no caller in a default build until the rewrite adopts it, and
-//! the marker comes off with the adoption.
-//!
 //! See [parse/README.md](parse/README.md).
 
 pub mod ast;
@@ -56,13 +51,6 @@ pub use ast::{
     NodeCache, PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
 };
 pub use builtin_shapes::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
-
-#[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
-pub(crate) use builtin_shapes::binder::{
-    OpArity, op_declaration_arity, symbol_from_parts, symbol_from_quote_body,
-};
-#[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
-pub(crate) use builtin_shapes::layout::SlotLayout;
 
 #[cfg(test)]
 mod tests;

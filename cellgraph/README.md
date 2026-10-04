@@ -7,10 +7,9 @@ computation: an identity, a region of safely allocated memory, an optional
 continuation to run, and the holds that keep other cells alive on its behalf.
 
 The crate names no type from its embedders. The dependency direction is
-`koan` → `workgraph` → `cellgraph`, each arrow compile-enforced, so a cell
-carries no embedder vocabulary: a continuation family enters as a type
-parameter and is stored erased. [workgraph](../workgraph/README.md) is the
-first embedder and [koan](../README.md) sits above that.
+`koan` → `cellgraph`, compile-enforced, so a cell carries no embedder
+vocabulary: a continuation family enters as a type parameter and is stored
+erased. [koan](../README.md) is its embedder.
 
 This README is the substrate's design. Two parts of it are large enough to
 carry their own:
@@ -671,8 +670,6 @@ machinery and not the `alloc_into` within it.
 
 - [roadmap/](roadmap/README.md) — the crate's own tree. The substrate's
   build-out is complete; what is open is recorded there as unplanned gaps.
-- [Rebuilding workgraph over cellgraph](../workgraph/old_roadmap/adopt-cellgraph.md)
-  — the first embedder's adoption.
 
 Docs that state the *boundary* between the substrate and an embedder stay with
 the embedder: what a scheduler adds above the cell is the embedder's design to

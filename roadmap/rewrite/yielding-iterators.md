@@ -74,9 +74,6 @@ elements a consumer takes lazily.
 
 ## Dependencies
 
-**Requires:**
+**Requires:** none.
 
-
-**Unblocks:**
-
-- [Destination-homed construction](../old_foundation/destination-homed-construction.md) — carried edge; its demand-edge premise predates `alloc_into` and needs re-checking.
+**Unblocks:** none.

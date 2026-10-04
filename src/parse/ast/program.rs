@@ -26,21 +26,8 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// channel's verdicts cite.
 ///
 /// The field is private to this module, so the only way to obtain one is a door that took a
-/// `ProgramBrand` or an accessor on a value that already carries the proof. A node built at a
-/// per-call brand cannot enter the value channel:
-///
-/// ```compile_fail
-/// let storage = koan::memory::program_storage();
-/// let program = storage.brand();
-/// # use koan::source::{register, SourceFile, SourceRef, Span};
-/// # let file = register(SourceFile::new("<doc>", String::new()));
-/// # let source = SourceRef { span: Span { start: 0, end: 0 }, file };
-/// // A bare `KExpression`, whatever brand built it, is not a `ProgramExpression`.
-/// let node = koan::parse::KExpression::build(program.writer(), &[], source);
-/// let _cell = koan::machine::model::KObject::KExpression(node);
-/// ```
-///
-/// Nor can one be wrapped after the fact — the field is private:
+/// `ProgramBrand` or an accessor on a value that already carries the proof. A node cannot be
+/// wrapped after the fact:
 ///
 /// ```compile_fail
 /// let storage = koan::memory::program_storage();
@@ -128,12 +115,12 @@ impl<'a> Deref for ProgramExpression<'a> {
 /// nothing.
 ///
 /// A part at a step lifetime cannot reach a door: the brand cannot shorten to `'step`, and the
-/// part cannot lengthen to `'program`. The two-lifetime shape below is what a builtin body sees —
-/// [`BodyCtx`](crate::machine::BodyCtx) supplies `'program: 'step`, never the reverse:
+/// part cannot lengthen to `'program`. The two-lifetime shape below is `'program: 'step`, never
+/// the reverse:
 ///
 /// ```compile_fail
 /// use koan::memory::ProgramBrand;
-/// use koan::machine::model::ast::{ExpressionPart, ProgramExpression};
+/// use koan::parse::{ExpressionPart, ProgramExpression};
 /// use koan::source::{SourceRef, Spanned};
 /// fn mint_step_part<'program: 'step, 'step>(
 ///     program: ProgramBrand<'program>,

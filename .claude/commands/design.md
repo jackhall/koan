@@ -12,7 +12,7 @@ This command is doc-only. You do not write code, run cargo, or commit.
 ## Constraints
 
 - **Read-only**: every file that is not markdown — source, tests, `Cargo.toml`, `Cargo.lock`, `tools/` (you may *invoke* `tools/doclinks.py`, but do not edit it), `.claude/` settings and hooks.
-- **Write allowed** in any markdown file: `README.md`, `tutorial/`, `roadmap/`, a module's `README.md` design doc under `src/` or an embedded crate, and working notes in `scratch/`. The `documentation` skill's partition rules still apply, so `old_design/` stays frozen.
+- **Write allowed** in any markdown file: `README.md`, `tutorial/`, `roadmap/`, a module's `README.md` design doc under `src/` or an embedded crate, and working notes in `scratch/`. The `documentation` skill's partition rules still apply.
 - **Scratch notes.** When the session works from a notes file in `scratch/` (gitignored), keep it current: fold each captured ruling into it, and list its update in the synthesis proposal beside the tracked docs.
 - **No** `cargo` commands. **No** implementing the work yourself, and **no** invocation of the `Plan` or `shepherd` agents — those are `/work-item`'s lane.
 - If the user mid-discussion asks you to do anything that violates these, refuse and remind them this is a doc-only workflow. They can run `/work-item` or a normal session for code changes.

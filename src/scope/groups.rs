@@ -484,7 +484,7 @@ fn quoted_symbol(part: &ExpressionPart<'_>) -> Result<KeywordSymbol, ()> {
     let ExpressionPart::QuotedExpression(quoted) = part else {
         return Err(());
     };
-    symbol_from_quote_body(quoted.reference()).map_err(|_| ())
+    symbol_from_quote_body(quoted.reference()).ok_or(())
 }
 
 /// Whether two group records are the same group: content identity, over any two lifetimes.

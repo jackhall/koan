@@ -1,4 +1,4 @@
-//! The builtin shape table: every fixed expression shape the machine recognizes, spelled once.
+//! The builtin shape table: every fixed expression shape the interpreter recognizes, spelled once.
 //!
 //! A builtin shape is recognized by its **full untyped bucket key**, every keyword pinned in
 //! position. That recognition is sound because builtin buckets are unshadowable: a node whose key
@@ -15,10 +15,7 @@
 //! them: the binder it installs and the reserved bit.
 //!
 //! A node resolves its entry once, at construction ([`NodeCache`]), and every later reader indexes
-//! by the [`BuiltinShapeId`] tag rather than re-walking a key: the close-inference rules
-//! ([`CLOSE_RULES`](crate::machine::model::close_inference)) and the miss diagnostics
-//! ([`MISS_DIAGNOSTICS`](crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS)) are
-//! `(BuiltinShapeId, …)` pairs and hold no key of their own.
+//! by the [`BuiltinShapeId`] tag rather than re-walking a key.
 //!
 //! A slot type rests here as a [`KType`], whose handle is a `const` content digest, so the table
 //! states a type without a registry in hand and its laws run at build time. Interning an
@@ -461,9 +458,7 @@ const MODULE: KType = KType::EMPTY_SIGNATURE;
 const EMPTY_RECORD: KType = KType::EMPTY_RECORD;
 
 /// The single source of truth for the builtin shapes. One entry per distinct bucket key, in
-/// [`BuiltinShapeId`] order; the keys are pinned against the live builtin registration table by the
-/// table⟺registration property, so an entry whose builtin was renamed, re-shaped, or dropped fails
-/// the suite.
+/// [`BuiltinShapeId`] order.
 ///
 /// The table is spelled as a `const` and read through the `static` below because a `const` is what
 /// the two build-time laws above can be evaluated over — a `const` cannot read a `static`. Readers

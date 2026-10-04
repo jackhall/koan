@@ -1,8 +1,6 @@
 # Two-phase execution: build-time with pegged inputs, run-time resume
 
-**Problem.** The design model
-([execution/scheduler.md § Pegged and free execution](../../old_design/execution/scheduler.md#pegged-and-free-execution),
-[typing/scheduler.md](../../old_design/typing/scheduler.md)) is that build-time and
+**Problem.** The design model is that build-time and
 run-time are the **same scheduler engine**, differing only in which nodes
 are pegged (held without execution until external data or effects arrive).
 The intermediate representation is the **stalled DAG state** — `NodeStore`
@@ -31,9 +29,8 @@ Two consequences follow:
 
 Both fall out of the same mechanism — there is no separate "checker phase"
 to build first and "JIT phase" to build second. A third consequence is
-that nothing can consume the build phase's results for code generation:
-[old_design/compilation.md](../../old_design/compilation.md) describes the
-compilation model that treats the stalled DAG state as its intermediate
+that nothing can consume the build phase's results for code generation: the
+compilation model treats the stalled DAG state as its intermediate
 representation, and it has no build phase to consume until this item
 ships.
 
@@ -49,9 +46,7 @@ ships.
 **Directions.**
 
 - *Peg-set scope — open.* Which categories of node count as pegged at
-  build time is enumerated in
-  [execution/scheduler.md § Pegged and free execution](../../old_design/execution/scheduler.md#pegged-and-free-execution)
-  in principle — user-supplied input, plugin source files, syscalls,
+  build time is enumerated in principle — user-supplied input, plugin source files, syscalls,
   network calls. Which concrete builtins / `KObject` shapes carry the peg
   marker, and whether the marker is intrinsic to the builtin or attached
   by the build-time driver, remains to be worked out.
@@ -61,8 +56,7 @@ ships.
   separate bytecode IR; not a native object file; not an inline-cache
   sidecar. Run-time consumes the snapshot directly, supplies the pegged
   inputs and effects, and the scheduler resumes.
-- *Residual code generation — open.*
-  [old_design/compilation.md](../../old_design/compilation.md) describes a second
+- *Residual code generation — open.* The compilation model has a second
   consumer of the same stalled state: a code generator emitting
   ahead-of-time code for the residual, with direct calls where the build
   phase resolved dispatch, table dispatch through the runtime library
@@ -74,8 +68,7 @@ ships.
   is (transpiled Rust vs native).
 - *Permissive vs strict build-time errors — open.* The user-facing choice
   is whether the build-time phase permits unresolved type bindings — the
-  [dispatch-time name placeholder](../../old_design/execution/name-placeholders.md#dispatch-time-name-placeholders)
-  mechanism reaching across into build-time — or insists every type
+  dispatch-time name placeholder mechanism reaching across into build-time — or insists every type
   identifier resolves before the snapshot is taken. Permissive matches the
   dynamic-dispatch ergonomics today's runtime exhibits and gives a soft-
   rejection mode for programs that work but can't be fully resolved at
@@ -96,10 +89,6 @@ ships.
 Container type parameterization has shipped, so the build-time phase has
 parameterized containers to target.
 
-**Requires:**
-
-- [Module system stage 5 — Modular implicits](../old_predicate_typing/modular-implicits.md) —
-  the type system must be structurally complete first; stage 5 is the last stage that
-  adds new shapes the build-time phase has to handle.
+**Requires:** none.
 
 **Unblocks:** none.

@@ -718,5 +718,5 @@ fn quoted_operator(part: &ExpressionPart<'_>) -> Option<KeywordSymbol> {
     let ExpressionPart::QuotedExpression(quoted) = part else {
         return None;
     };
-    symbol_from_quote_body(quoted.reference()).ok()
+    symbol_from_quote_body(quoted.reference())
 }

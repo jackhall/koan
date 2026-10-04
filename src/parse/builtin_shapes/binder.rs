@@ -3,13 +3,10 @@
 //!
 //! Everything here is a pure `&KExpression -> Option<…>` reader plus the [`BinderFacts`] that ride
 //! a [`BUILTIN_SHAPES`](super::BUILTIN_SHAPES) entry — a shape is a binder because its entry carries them, and nothing
-//! else declares it. The keys are pinned against the live builtin registration table by the
-//! table⟺registration property, so an entry whose builtin was renamed, re-shaped, or dropped fails
-//! the suite.
+//! else declares it.
 //!
 //! What a binder *does* with what is read — installing into a scope, rendering a refusal, announcing
-//! a module body's declarations — is the machine's, in
-//! [`machine::model::binder`](crate::machine::model::binder).
+//! a module body's declarations — belongs to the runtime that reads it.
 
 use smallvec::SmallVec;
 
@@ -436,52 +433,30 @@ static RESERVED_SYMBOLS: [&StaticName<KeywordSymbol>; 12] = [
     &KEYWORDS.transparent,
 ];
 
-/// Why a quoted operator symbol will not do. The reason travels as data rather than as a rendered
-/// message because the binder hook that reads a symbol runs inside node construction, where the
-/// run's [`SymbolInterner`] is out of reach; each surface that *reports* the refusal renders the
-/// glyph itself ([`Self::into_error`]).
-pub(crate) enum SymbolError {
-    /// The quote body is not exactly one keyword token.
-    Shape,
-    /// A token the `OP` / `GROUP` surface spells with.
-    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
-    Reserved(KeywordSymbol),
-}
-
 /// The operator symbol a quote body carries: exactly one `Keyword` part. The `symbol` slot is typed
 /// `Keyword` and read as a written quote, so its body is read here as data. A multi-part body, a
-/// non-keyword token, or a reserved symbol is a shape error.
-pub(crate) fn symbol_from_quote_body(
-    inner: &KExpression<'_>,
-) -> Result<KeywordSymbol, SymbolError> {
+/// non-keyword token, or a reserved symbol is `None`.
+pub(crate) fn symbol_from_quote_body(inner: &KExpression<'_>) -> Option<KeywordSymbol> {
     let [part] = inner.parts else {
-        return Err(SymbolError::Shape);
+        return None;
     };
     let ExpressionPart::Keyword(symbol) = part.value else {
-        return Err(SymbolError::Shape);
+        return None;
     };
-    if RESERVED_SYMBOLS
+    let reserved = RESERVED_SYMBOLS
         .iter()
-        .any(|reserved| reserved.symbol() == symbol)
-    {
-        return Err(SymbolError::Reserved(symbol));
-    }
-    Ok(symbol)
+        .any(|reserved| reserved.symbol() == symbol);
+    (!reserved).then_some(symbol)
 }
 
 /// Statement-side symbol read: the declaration's first `QuotedExpression` part. `GROUP` scans its
 /// unevaluated body block with this to collect its members; the binder hook uses it to decide
-/// whether to install park edges (discarding the diagnostic — the body's own extraction surfaces
-/// it).
-pub(crate) fn symbol_from_parts(expr: &KExpression<'_>) -> Result<KeywordSymbol, SymbolError> {
-    let quoted = expr
-        .parts
-        .iter()
-        .find_map(|part| match part.value {
-            ExpressionPart::QuotedExpression(inner) => Some(inner.reference()),
-            _ => None,
-        })
-        .ok_or(SymbolError::Shape)?;
+/// whether to install park edges (the body's own extraction reports a bad symbol).
+pub(crate) fn symbol_from_parts(expr: &KExpression<'_>) -> Option<KeywordSymbol> {
+    let quoted = expr.parts.iter().find_map(|part| match part.value {
+        ExpressionPart::QuotedExpression(inner) => Some(inner.reference()),
+        _ => None,
+    })?;
     symbol_from_quote_body(quoted)
 }
 
@@ -502,7 +477,7 @@ pub(crate) fn op_def_binder_bucket<'a>(
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     // The glyph's symbol is already minted on the quoted part, so the park keys are read off it.
-    let sym = symbol_from_parts(expr).ok()?;
+    let sym = symbol_from_parts(expr)?;
     if is_unary_form(expr) {
         Some(BucketKeys {
             first: stored_unary_key(writer, sym),
@@ -513,9 +488,8 @@ pub(crate) fn op_def_binder_bucket<'a>(
     }
 }
 
-/// Region-resident twin of [`binary_key`](crate::machine::model::binary_key): the `[Slot,
-/// Keyword(sym), Slot]` run a reduced binary call computes. Agreeing with the owned builder on the
-/// symbol is what lets a park edge installed here be found by a later call's key.
+/// The `[Slot, Keyword(sym), Slot]` run a reduced binary call computes, in the region. Agreeing
+/// with a call's key on the symbol is what lets a park edge installed here be found by it.
 fn stored_binary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
     collect(
         writer,
@@ -528,8 +502,7 @@ fn stored_binary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyE
     )
 }
 
-/// Region-resident twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym),
-/// Slot]` run a reduced unary run computes.
+/// The `[Keyword(sym), Slot]` run a reduced unary run computes, in the region.
 fn stored_unary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
     collect(
         writer,
@@ -585,9 +558,7 @@ pub struct BinderFacts {
     ///
     /// The mask is opt-in, not derived: a slot may take a type without wanting the flip.
     /// `NEWTYPE <name> = <repr>` is the standing case — a bare `(…)` there already works by
-    /// evaluation, so it stays unmasked. The table⟺registration property pins that every masked
-    /// index is a slot its bucket's live registrations type as a raw type-expression carrier and
-    /// never as code.
+    /// evaluation, so it stays unmasked.
     pub type_slots: &'static [usize],
 }
 
@@ -629,15 +600,6 @@ pub(crate) fn admit_bare_type_slots(parts: &mut [Spanned<ExpressionPart<'_>>]) {
         if let ExpressionPart::Expression(node) = parts[index].value {
             parts[index].value = ExpressionPart::SigiledTypeExpr(node);
         }
-    }
-}
-
-/// The schema expression of a `UNION <name> = (<schema>)` statement — its final slot.
-#[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
-pub(crate) fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpression<'a>> {
-    match statement.parts.last()?.value {
-        ExpressionPart::Expression(schema) => Some(*schema),
-        _ => None,
     }
 }
 

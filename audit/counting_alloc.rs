@@ -2,20 +2,15 @@
 //!
 //! Lives outside `src/` because it is measurement scaffolding, not library code: the
 //! `unsafe impl` here is not a production site the Miri slate owes a group, and koan's
-//! shipped binary never compiles it. Four targets `#[path]`-include this one file —
-//! the library's own test build (`src/tests.rs`), the binary under the `alloc-count`
-//! feature (`src/main.rs`), the baseline regression test
-//! (`tests/allocation_baseline.rs`), and the cellgraph measurement harness
+//! shipped binary never compiles it. Two targets `#[path]`-include this one file — the
+//! library's own test build (`src/tests.rs`) and the cellgraph measurement harness
 //! (`cellgraph/perf/main.rs`) — so there is one wrapper, not one per target.
 //!
-//! Five tallies, all moved on the way through — two pairs and a balance:
+//! Three thread-local tallies, all moved on the way through — a pair and a balance. Thread-local
+//! because the test harness runs tests concurrently, so a bracket around one call has to be
+//! insulated from every other test's traffic:
 //!
-//! - [`allocations`] and [`bytes`] read process-wide atomics. These are the
-//!   whole-program numbers: a binary's `main` cannot read another thread's
-//!   thread-local, so a per-thread tally could not report a program run's total.
-//! - [`thread_allocations`] and [`thread_bytes`] read thread-locals. These are the
-//!   bracketing numbers: the test harness runs tests concurrently, so a bracket around
-//!   one call has to be insulated from every other test's traffic.
+//! - [`thread_allocations`] and [`thread_bytes`] count requests and the bytes they asked for.
 //! - [`thread_live_bytes`] reads a thread-local balance: what the calling thread has
 //!   asked for less what it has given back. The resident figure, which a count of
 //!   requests cannot give — a bracket around a loop reads what the loop still holds.
@@ -23,17 +18,12 @@
 //! A count says how many times the program asked; the paired byte figure says how much
 //! it asked for, which is what separates a growing buffer from a new one.
 
-// Each including target uses a different part of this surface — the binary reads the
-// process tally, the tests read the thread one — so an unused reader is expected rather
-// than dead.
+// Each including target uses a different part of this surface — the tests read only the
+// allocation count — so an unused reader is expected rather than dead.
 #![allow(dead_code)]
 
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static PROCESS_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-static PROCESS_BYTES: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     static THREAD_ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -41,19 +31,9 @@ thread_local! {
     static THREAD_LIVE_BYTES: Cell<i64> = const { Cell::new(0) };
 }
 
-/// The number of heap allocations this process has made since it started.
-pub fn allocations() -> u64 {
-    PROCESS_ALLOCATIONS.load(Ordering::Relaxed)
-}
-
 /// The number of heap allocations the calling thread has made since it started.
 pub fn thread_allocations() -> u64 {
     THREAD_ALLOCATIONS.with(Cell::get)
-}
-
-/// The number of bytes this process has asked the heap for since it started.
-pub fn bytes() -> u64 {
-    PROCESS_BYTES.load(Ordering::Relaxed)
 }
 
 /// The number of bytes the calling thread has asked the heap for since it started.
@@ -79,12 +59,10 @@ fn balance(bytes: i64) {
     THREAD_LIVE_BYTES.with(|live| live.set(live.get() + bytes));
 }
 
-/// Bump the four request tallies by one request of `bytes` bytes. Allocates nothing itself — a
+/// Bump the two request tallies by one request of `bytes` bytes. Allocates nothing itself — a
 /// `thread_local!` over a `Cell<u64>` needs no lazy heap init — so it cannot re-enter the
 /// allocator.
 fn tally(bytes: usize) {
-    PROCESS_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-    PROCESS_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
     THREAD_ALLOCATIONS.with(|count| count.set(count.get() + 1));
     THREAD_BYTES.with(|total| total.set(total.get() + bytes as u64));
 }

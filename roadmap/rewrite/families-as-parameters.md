@@ -10,8 +10,8 @@ application whose head names a `FOR ALL` variable or a signature's head
 parameter, and one whose arguments are not exactly the parameters the
 constructor declares ([refusals](../../src/elaborate/README.md#refusals)). So no
 signature quantifies over a family — a `Monad` over `Wrap`, which
-[monadic side effects](../old_foundation/monadic-side-effects.md) records the
-effect system needs, has no spelling for `Wrap` in its head group — and a
+[effects](effects.md) records the effect system needs, has no spelling for
+`Wrap` in its head group — and a
 two-parameter family never stands where a one-parameter one is asked, since
 `Result` cannot pin `Error` and leave `Ok` open. A `FOR ALL` group's dict
 spelling, `#{Elt: Number}`, writes a bound per name and nothing else

@@ -1,6 +1,6 @@
 //! A cell substrate: a capped slab of cells, each owning a bump region, over a liveness matrix
 //! that records which cell holds a value homed in which other. The crate depends on nothing —
-//! not on koan, not on `workgraph` — so a cell carries no embedder vocabulary; a continuation
+//! not on koan — so a cell carries no embedder vocabulary; a continuation
 //! family enters as a type parameter and is stored erased.
 //!
 //! The cell model — the slot-plus-generation handle, the `create` / `enter` / `release` verbs,

@@ -224,9 +224,3 @@ cell with a region of its own or runs as a tenant of an existing cell is decided
 by whether what it builds shares structure with what its host holds, which only
 the embedder knows. The substrate ships the tenant kind and no rule for when to
 use it.
-
-## Open work
-
-- [Rebuilding workgraph over cellgraph](../../../workgraph/old_roadmap/adopt-cellgraph.md)
-  — the first embedder's kind rule, its delivery walk's adoption of a tree
-  terminal, and the scheduler-shaped tests over both kinds.
