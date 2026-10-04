@@ -1,185 +1,70 @@
 # Modules
 
-Module programs: the ascription and member-reading forms, running.
+Module programs running, with a module's types keyed on its content and named
+through paths.
 
-**Problem.** The [module layer](../../src/knot/module/README.md) holds the module
-value, its self-signature, and the doors `:|`, `:!` and `USING … SCOPE` name,
-each exercised over an activation whose members a test binds by hand. Nothing
-evaluates them. An ascription is an expression, a member read is an attribute
-expression shape, and a name a `USING` surfaces resolves to a coordinate a running reader
-has to redeem, and [dispatch](../../src/dispatch/README.md) answers each with an
-error value, since nothing evaluates it. No module program runs on the rewritten
-stack, and the old runtime's [`Module`](../../src/machine/model/values/module.rs)
-is the module surface `machine` still owns. A signature hides a type through a
-head parameter, `SIG Counter FOR ALL #[Carrier] = #[…]`, and each evaluation of
-`:|` mints a fresh nonce for each parameter the application leaves unpinned, so
-two opaque views of one module never share a carrier. A `USING … SCOPE` body
-types each keyworded use of its operand signature's member heads at load
-([static types](../../src/dispatch/README.md#static-types)), but nothing binds
-those registrations where the body runs.
-
-The property law `monomorphic_specificity_is_the_lexicographic_pointwise_fold`
-([properties](../../src/type_lattice/tests/properties.rs)) fails rarely above
-the routine tier's 64 cases. Its oracle compares slots by the order, while
-ranking admits through *fits*, and the two disagree for slots typed by
-signatures of different declarations — `SIG (GROUP PAIRWISE FOLD …)` against
-`SIG FOR ALL #{Elt: Code} (…) WITH {Elt = :(Number | Str)}`, where
-`shape_specificity` answers `StrictlyLess` and the oracle `Incomparable`. The
-seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
+**Problem.** The [module layer](../../src/knot/module/README.md) builds views and
+binds a `USING … SCOPE` block over activations a test binds by hand, but nothing
+evaluates a module program: [dispatch](../../src/dispatch/README.md) answers an
+ascription and a member read with a fault, and the old runtime's
+[`Module`](../../src/machine/model/values/module.rs) is the module surface
+`machine` still owns. An opaque view's carrier is a nonce minted at each
+application ([`view.rs`](../../src/knot/module/view.rs)), so two evaluations of
+`ints :| Counter` give two types where the
+[module design](../../design/modules.md) gives one. No value has a content
+digest. No load-time type names a member through a module, so `m.zero` and
+`m.succ` are not known at load to share a type. A `MODULE` body may read any
+outer name, and nothing at the binder says what it captures.
 
 **Acceptance criteria.**
 
-- An ascription expression evaluates: `:|` and `:!` run the view door where they
-  are written and bind the view module it hands back.
-- A member read evaluates: `m.f`, and a name surfaced by `USING … SCOPE`, read
-  the [member run](../../src/knot/module/README.md#layout-order) the module holds
-  where the reader runs, and a member that is itself a knot member crosses to
-  the reader priced as its knot.
-- A registration a `USING … SCOPE` operand surfaces is a candidate for a
-  keyworded use in its body — a `MODULE` binder's own registration, or the
-  module's registration a signature's member head selects, bound where the body
-  runs — and one as specific as a registration visible from outside the body
-  makes the call an ambiguity error.
-- A `USING … SCOPE` body's static type, read where the body is written, holds
-  none of the body's own lexical variables. Sibling blocks number their names
-  alike, so one block's `Tt` never reaches a sibling that declares its own `Tt`
-  as that sibling's variable.
-- A coerced function member runs: calling the
-  [barrier](../../src/knot/module/README.md#members-are-born-coerced) an opaque view
-  holds rewrites each argument from the view's
-  types to its root implementation's, runs the underlying function, and rewrites
-  the result to the view's types where the call returns. A barrier before a
-  quantified member solves the member's group at each call first.
-- Under `ints :| Counter` the view's `Carrier` is an unbounded carrier that no
-  code outside the view constructs or matches.
-- Two evaluations of `ints :| Counter`, and `(ints :| Counter) :| Counter`,
-  yield views whose carriers are one type, so a value read from one passes to
-  the other's members; `ints :| Counter` and `strs :| Counter`, or `ints` under
-  two signatures, yield carriers that do not unify.
-- `(ints :| Counter) :| (Counter WITH {Carrier = Number})` is refused, and
-  `(ints :| Counter) :! Counter` shows the carrier, never `Number`.
-- An opaque carrier may bound a type variable. A `FOR ALL` variable or a head
-  parameter bounded by a `:|` view's carrier lies under that carrier, as one
-  bounded by a `NEWTYPE` lies under the `NEWTYPE`.
-- A head quantifier's bound gates satisfaction only: a signature quantified over
-  `#{Carrier: Number}` refuses a module whose carrier solves to `Str`, and a
-  `:|` view's carrier is a non-match at a `:Number` slot.
-- `MODULE doubling :Doubler = (…)` checks the module against `Doubler` when the
-  statement runs and binds it unnarrowed, so a member `Doubler` does not declare
-  stays readable; a module that fails the check is an error at the statement,
-  and `GROUP <name> :<Sig> FOLD LEFT = (…)` checks a group alike.
-- A definition in a body annotated with a signature takes its ranking from the
-  signature's member head at its key, so
-  `MODULE m :Mover = (EXPR #(MOVE p :Piece TO s :Square) -> Board = #(…))`
-  satisfies a `Mover` declaring `EXPR #(MOVE 2 :Piece TO 1 :Square) -> Board`
-  with no bucket declaration of its own.
-- A builtin native reads a sealed builtin value its overload admitted through
-  the seal, as [`unsealed`](../../src/values/admission.rs) reads one for
-  equality: a sealed `Number` a view's member hands to `+`, or to any native
-  whose slot admits it, computes as the number, and no member of a view over a
-  builtin type reaches a native's invariant check.
-- A functor whose slot is `m :(Monad WITH {Wrap = Context})` runs over a module
-  defining `RETURN` and `BIND` at every `Item`, its body using `BIND` at two
-  instances through that one slot.
-- A quantified member read `m.f` outside the head of a call refuses the load
-  where `m`'s static type names the member, and is a fault where the read runs
-  when its module arrived through `Any`.
-- The old runtime's tutorial programs that use modules run on the rewritten
-  stack and print the same output.
-- `monomorphic_specificity_is_the_lexicographic_pointwise_fold` holds over
-  signature-typed slots at the total tier's 2048 cases, the seed above
-  included.
+- An ascription, `m :| Counter` and `m :! Counter`, a member read, `m.f`, and a
+  `USING … SCOPE` block evaluate on the rewritten stack.
+- Every value carries a content digest, memoized where it is laid down. A
+  closure's digest composes its code's with its captures' digests, and closures
+  that call one another digest as one component.
+- A carrier is keyed on content: two evaluations of `ints :| Counter` give one
+  carrier, and so do ascriptions of two separately built modules of equal
+  content, while `MAKESET` over an ascending and over a descending `Ordered`
+  gives two.
+- `m.Carrier` is a load-time type: `m.zero` and `m.succ` read through one path
+  share a type at load, and a call solving one variable from both is *always*.
+- A body under `MODULE <name> OVER #[<names>]` that reads an outer name its list
+  leaves out is refused at load.
+- Chapters [11](../../tutorial/11-modules.md) and
+  [12](../../tutorial/12-functors.md) of the tutorial run on the rewritten stack.
 
 **Directions.**
 
-- *Where the doors live — decided.* In the
-  [module layer](../../src/knot/module/README.md). This item evaluates them and adds
-  no door of its own.
-- *Parameterized signatures — decided.* A signature quantifies at its head,
-  `SIG Ordered FOR ALL #{Carrier: Bound} = #[…]`, and
-  `Ordered WITH {Carrier = Number}` is an application. The
-  [view door](../../src/knot/module/README.md#the-view-door) already reads them,
-  and its `:|` mint carries a nonce that this item removes. Ascription solves the head quantifier against the
-  module's member types with the unifier a call solves a `FOR ALL` with, and
-  `ints :! (Ordered WITH {Carrier = …})` stays writable. It takes the
-  [least instance](../../src/type_lattice/solving.md#the-unifier-collects-it-does-not-bind)
-  a call does: a module whose members contribute `Number` and `Str` to a
-  covariant `Carrier` satisfies the signature at `Number | Str`. Under `:!` the view's
-  `Carrier` is the solution; under `:|` it is an unbounded carrier, so no slot
-  outside the view admits it and the value is hidden. The bound gates
-  satisfaction and reveals nothing under `:|`. The
-  [barrier](../../src/knot/module/README.md#members-are-born-coerced) stays: a
-  scalar carries no type of its own, so hiding a `0` wraps it, while a
-  container is retyped with no wrapper. Existential use is a universal call,
-  since a `FOR ALL` is solved when the call runs, and a
-  functor quantifies itself,
-  `EXPR FOR ALL #[Elt] #(MAKESET elem :(Ordered WITH {Carrier = Elt}))`, so
-  [dispatch](../../src/dispatch/README.md#selection) solves `Elt` through the module's member types as it
-  solves through a list's element type.
-- *Type identity — decided.* A `NEWTYPE` is the digest of its name and schema
-  ([recursive groups](../../src/type_lattice/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)),
-  so two declarations with one name and schema are one type wherever they are
-  written, and a `NEWTYPE` in a functor body is one type across the calls that
-  instantiate it alike. It is constructed and matched wherever its name
-  resolves; restricting that would protect nothing, since any scope can declare
-  the same type. Hiding is `:|`'s alone: a carrier has no constructor and no
-  pattern, only the barrier wraps and unwraps it, and naming it lets code
-  dispatch on it and nothing more.
-- *What an opaque carrier is keyed on — decided.* The root implementation a view
-  reaches, the signature instance solved relative to that root, and the
-  parameter's name, so two parameters solved to one type still get two carriers.
-  An ascription is checked against the surface of the module it is written on,
-  so a view never admits what its source hides, and built from the root, so a
-  view of a view wraps each value once. Opaque ascription is therefore
-  idempotent: `(ints :| Counter) :| Counter` has `ints :| Counter`'s carrier and
-  root members, and the two are interchangeable though two module values stay
-  incomparable. `:!` shows the source's view, never the root's. A functor whose
-  result is a `:|` view births a module per call, so each call's carrier is
-  fresh; a type two calls share is a transparent view's `NEWTYPE`. A key per
-  ascription site is unsound: one `:|` in a function called over two modules
-  would give both one carrier.
-- *A signature annotation on a module binder — decided.*
-  `MODULE <name> :<Sig> = (<body>)`, and `GROUP <name> :<Sig> <mode> = (<body>)`,
-  optionally name a signature the binder's module satisfies. The annotation
-  checks as a `:Sig` slot does, structurally and without narrowing — unlike
-  OCaml's `module M : S`, which seals — so ascription stays the only narrowing
-  and the bound value is the module the body built. The check is ascription's
-  relation run for its verdict when the statement runs, since the
-  self-signature exists only once the body has run; it solves a head quantifier
-  and discards the solution, and a `WITH` application pins as it does anywhere.
-  The one thing the annotation hands the body is each keyworded member head's
-  ranking, as a bucket declaration visible to the definitions written there
-  ([keyworded uses](../../src/scope/README.md#keyworded-uses)), so a module meeting a signature whose members are
-  ranked does not repeat the ranking. A module without an annotation is checked
-  only where it is ascribed or passed to a `:Sig` slot.
-- *An unpinned signature parameter — decided.* An application may leave a head
-  parameter unpinned, and it then stands for one type per module, as the
-  annotation's check reads it, as
-  [*fits*](../../src/type_lattice/relations.md#the-relations) reads an unpinned
-  parameter. A variable a member needs per use is written on the member.
-- *Leaving a constructor's parameter unpinned — open.* Whether a type
-  constructor's application may pin some parameters and leave the rest
-  quantified, `Pair WITH {First = Number}` leaving `Second` open, which relaxes
-  the refusal of an application missing a key.
-- *Ascribing a meet — open.* The view door refuses `m :! (A & B)`, since a view
-  lays out one signature's members. A view of several applications could lay
-  out each member once, or meet the types two applications give one name.
-- *Higher-kinded parameters — open.* A parameter ranging over type-constructor
-  families, as a `Monad` signature over `(Type AS Wrap)` needs, lacks a spelling
-  in the quantifier dict, and that spelling should be one with
-  `UNION (Elem AS Option)`'s, one of the two respelled. Open with it: how an
-  application headed by a variable pairs its arguments with a family's
-  (positional in the variable's declared order is the simplest), and whether a
-  builtin `List` or `Dict` stands as a family; `FN` never does, since its
-  parameters are contravariant. A family satisfies a constructor parameter
-  without matching parameter names.
-- *A quantified registration's name — open.* A quantified `FN` may be bound
-  only as a module member or under a declared type that solves its group
-  ([quantified types](../../design/quantified-types.md#where-a-quantified-function-is-instantiated)).
-  Whether the keyworded forms that bind one — `EXPR FOR ALL …` and
-  `LET id = FN EXPR FOR ALL …` — count as a module member's binding, so they
-  stay allowed in any body, or fall under the same rule, is open. Today both
-  stay as they are.
+- *Identity by content — decided*, per the
+  [module design](../../design/modules.md#a-module-is-its-content). A value's
+  digest composes as a type's does, and where a value sits in memory plays no
+  part.
+- *The capture contract restricts the body — decided.* An `OVER` list that only
+  documented what the load infers would let it drift from the body.
+- *No switch between generative and applicative — decided.* Equal content gives
+  equal types, and a module differs between applications only through what it
+  captures.
+- *What counts as a path — open.* Either only a name a `LET`, a parameter or a
+  member chain binds, or anything the load can show is stable. Recommended: the
+  names alone, so a module read out of a list or returned by a call is anonymous
+  until it is bound.
+- *Two different paths — open.* The load reads two different paths as *maybe*
+  one type and the run compares their carriers, or reads them as *never* one
+  type where it can prove their contents differ — different code, or `OVER`
+  values that differ — and *maybe* elsewhere.
+- *`OVER` and `CLOSE OVER` — open.* Whether one list both restricts a module's
+  body and names what its value copies rather than pins.
+- *A module with no `OVER` list — open.* Whether it captures nothing, or whether
+  a module that reads an outer value must carry the list.
+- *Brands — open.* Two opaque ascriptions of one module meant as distinct types,
+  such as `Meters` and `Feet`. Expected to fall out of the capture contract with
+  the choice between `:|` and `:!`.
+- *A path through an application — deferred.* To
+  [effects](effects.md), since only effect tracking tells the load that an
+  application's module depends on nothing but the function and its argument.
+- *A parameter over a family — deferred.* To
+  [families as parameters](families-as-parameters.md).
 
 ## Dependencies
 
@@ -187,7 +72,7 @@ seed is `cc 347a996c43b17af1b6170d787282833acaa46f49f4a0e503b2f561a1b41e614c`.
 
 **Unblocks:**
 
-- [A compact type node table](compact-type-node-table.md) — the nonce a
-  `Parameter` carries is gone before the node is sized.
+- [Families as parameters](families-as-parameters.md) — a signature over a
+  family is exercised only by a view that runs.
 - [Retire the old runtime](retire-the-old-runtime.md) — the module surface
   `machine` still owns.

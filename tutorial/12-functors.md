@@ -35,8 +35,9 @@ reading the argument's members with `.` just like any module. A signature slot i
 **structural**: any module whose own members satisfy `Ordered` is admitted, so
 `(MAKESET int_order)` on the raw module works too — ascription (`:!` / `:|`) is a
 way to *narrow* what the argument exposes, never a prerequisite for passing it.
-Each application is *generative* — it produces a fresh module distinct from every
-other application.
+Two applications to modules with the same content build modules with the same
+content, and so with the same types; applications to different modules build
+different ones.
 
 There is no return-slot restriction: a function may return anything, and a module is
 just one of the things it can return. "Functor" names how you are *reading* the

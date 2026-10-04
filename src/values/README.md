@@ -121,7 +121,8 @@ opaque view's barrier goes through
 head parameter records no representation for `construction` to check a payload
 against, so what is checked instead is that the identity is a *per-application
 mint* — a `Parameter` carrying a nonce — and that the payload satisfies what the
-source binds that parameter to. It answers the mint as the
+source binds that parameter to. (Out of date: the
+[module design](../../design/modules.md) keys a carrier on content.) It answers the mint as the
 identity, or a `SealRefused`: `NotAMint` for an identity that is no mint,
 `Misfit` for a payload the source's binding does not admit. `Tagged::seal` is
 the checked door over it, and it `peel`s, so a sealed member takes the mint as

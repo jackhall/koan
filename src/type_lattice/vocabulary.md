@@ -52,7 +52,8 @@ subtree.
   under a renaming intern to one node, and a free one in a declared slot is what
   a call solves. `Parameter` is *named*: a signature's head parameter, which its
   members read and `WITH` pins by name, or — carrying a nonce — the carrier an
-  opaque view mints for one. A **lexical variable**
+  opaque view mints for one (out of date: the
+  [module design](../../design/modules.md) keys a carrier on content). A **lexical variable**
   (`Lexical`) is a name only a run binds, read where the program loads
   ([the type channel at load](../elaborate/README.md#the-type-channel-at-load)):
   it is positional by its level along the lexical chain that declares it, and

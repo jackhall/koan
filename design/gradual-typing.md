@@ -124,11 +124,14 @@ reads its arguments' carried types and does whatever the load left:
 A retype is what makes a declaration a contract at run time: after it, the
 value's type is what the declaration says, at every depth a reader sees.
 
-## The load never contradicts the run
+## The load and the run agree
 
 Gradual typing is sound only under one rule: **a verdict the load reaches
 holds at every run.** The load decides exactly what the declarations decide,
-and never guesses.
+and never guesses. The rule binds both sides. The run is not a fixed truth the
+load must predict: where a run would answer otherwise, the run is designed to
+reproduce the load's verdict, as a call solving from the upper end of an
+argument's static type does ([where a call runs](#where-a-call-runs)).
 
 - A static type is an interval, and every rule maps both ends. Reading only an
   upper end claims a value is exactly what it is at most.

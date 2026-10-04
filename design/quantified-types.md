@@ -5,7 +5,7 @@ a program writes instead. Koan's polymorphism is on declarations: a quantified
 function is called, and each call solves its group, or it is instantiated where
 the type it is wanted at solves its group once. Anything that needs a
 polymorphic function *as a value* — a higher-ranked slot, a polymorphic payload
-— takes a module typed by a signature.
+— takes a module typed by a signature ([modules](modules.md)).
 
 The rule exists because a parametric type is contagious. A quantified type let
 into a concrete one weakens every type built over it
@@ -213,7 +213,7 @@ Each rule above is a known one, and the source says what it buys and costs.
 | *Fits* answered by a terminating, incomplete solve | containment by instantiation is undecidable | Tiuryn and Urzyczyn, *The subtyping problem for second-order types is undecidable* (1996) |
 | A variable under a declared bound | bounded quantification, whose subtyping is undecidable in its full generality | Pierce, *Bounded quantification is undecidable* (1992) |
 | A head parameter; `WITH`; a manifest member | abstract and manifest type components; `with type` | Harper and Lillibridge, *A type-theoretic approach to higher-order modules with sharing* (1994); Leroy, *Manifest types, modules, and separate compilation* (1994) |
-| `:\|` and its carrier, minted per ascription; `:!` | opaque (generative) and transparent ascription; sealing as an existential | Rossberg, Russo and Dreyer, *F-ing modules* (2014) |
+| `:\|` and its carrier, keyed on content; `:!` | opaque (generative) and transparent ascription; sealing as an existential | Rossberg, Russo and Dreyer, *F-ing modules* (2014) |
 | An unpinned head parameter: one rigid unknown offered, one solved variable asked | an existential type, packed on one side and opened on the other | the same |
 
 Two departures matter when reading those sources. Koan solves a group at the
@@ -225,7 +225,5 @@ lattice, not an unknown type, so nothing here is checked by consistency.
 
 ## Open work
 
-- [Modules](../roadmap/rewrite/modules.md) — carriers keyed on their root, a
-  carrier as a bound, higher-kinded head parameters, `m.f` outside the head of
-  a call, calling through an opaque view's quantified member, and whether a
-  keyworded form's name counts as a module member's binding.
+- [Modules](../roadmap/rewrite/modules.md) — carriers keyed on content, path
+  types, and evaluating ascriptions and member reads.

@@ -17,6 +17,8 @@ What it does *not* do is evaluate anything. `m :| Sig`, `m.f`, a `USING`
 expression and a call through a barrier are
 [module programs](../../../roadmap/rewrite/modules.md)'; the doors here are what
 that item will drive, and they are exercised over activations bound by hand.
+What a module's types are, and when two are one, is the
+[module design](../../../design/modules.md)'s.
 
 ## Birth
 
@@ -84,15 +86,20 @@ signature's head parameters:
 - `from` — what *fits* solved each one to, or its pin: under
   `SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]`, a source binding
   `zero` to `0` gives `Carrier` the type `Number`;
-- `to` — under `:!`, `from` itself; under `:|`, a **fresh mint per unpinned
-  parameter**: a `Parameter` carrying this application's nonce, under the
+- `to` — under `:!`, `from` itself; under `:|`, a **carrier per unpinned
+  parameter**, keyed on the source's content and the application, under the
   declaration's own bound. A pinned parameter keeps its pin either way.
 
 Everything after that is one body, [`build`](view.rs), so the two operators are
 not two paths that agree: `:!` is the case of `:|` where `to` is `from`, and
 every coercion below stops at its first comparison. Two `:|` ascriptions of one
-signature over one module therefore produce views whose carriers do not unify,
-while `:!` is a relabelling.
+signature over modules of equal content therefore produce views with one
+carrier, over modules that differ views whose carriers do not unify, while `:!`
+is a relabelling.
+
+> **Out of date.** [`view.rs`](view.rs) mints the carrier from a nonce per
+> application, so two ascriptions of one module never share it.
+> [Modules](../../../roadmap/rewrite/modules.md) keys it on content.
 
 The view carries a signature of its own — each head parameter a manifest member
 at what `to` gives it, every manifest member and value slot at its declared type
@@ -106,6 +113,10 @@ for it. A refusal binds nothing and writes nothing but what a partial coercion
 walk had already laid down, which no name reaches.
 
 ## Members are born coerced
+
+> **Out of date.** The seal below checks that a carrier is a per-application
+> mint; under the [module design](../../../design/modules.md) a carrier is keyed
+> on content.
 
 A view's members take the view's types where the view is built, so every read
 surface agrees by construction and nothing downstream re-checks. Under `:|` a
@@ -198,7 +209,8 @@ ties the binder with the finished activation.
   seeing it as the function it stands for.
 - [`tests/view.rs`](tests/view.rs) — a transparent view carries what the
   signature names at what *fits* solves, an opaque one mints a fresh carrier per
-  application under the parameter's name and bound and keeps a pin, each
+  application (out of date: [modules](../../../design/modules.md) keys a carrier
+  on content) under the parameter's name and bound and keeps a pin, each
   refusal, and a view copying across a cell like any module.
 - [`tests/coerce.rs`](tests/coerce.rs) — one program per arm: every slot that
   names the carrier born at the mint, a function member behind a barrier, a

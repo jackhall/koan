@@ -485,9 +485,10 @@ from that module's top-of-file comment. The kept modules carry theirs:
 
 A design no single module owns sits in [design/](design/gradual-typing.md):
 [gradual typing](design/gradual-typing.md) follows a type from its declaration,
-through the load, to a call, and [quantified types](design/quantified-types.md)
+through the load, to a call, [quantified types](design/quantified-types.md)
 says where a `FOR ALL` may be written and what stands in for a higher-ranked
-type.
+type, and [modules](design/modules.md) says what a module's types are and when
+two are one.
 
 Each rewrite item writes its own module's README the same way, fresh against the
 code it lands. The topical tree the old runtime was documented under is frozen at

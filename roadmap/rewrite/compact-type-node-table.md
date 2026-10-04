@@ -44,10 +44,10 @@ table ahead of the program it serves.
 
 **Directions.**
 
-- *`Parameter` — decided.* [Modules](modules.md) removes the nonce a `:|` mint
-  carries and the mint in [`knot/module/view.rs`](../../src/knot/module/view.rs),
-  so this item lays out `Parameter { name, bound }`, with no nonce, and mints
-  nothing.
+- *`Parameter` — open.* [Modules](modules.md) keys an opaque carrier on
+  content rather than on the nonce a `:|` mint in
+  [`knot/module/view.rs`](../../src/knot/module/view.rs) carries, so what
+  `Parameter` holds in the nonce's place follows from that item's carrier key.
 - *The layouts of `Signature` and `SetMember` — decided.*
   Each has room for a `u16` at offset 2, a `u32` at offset 4, one thin
   reference at offset 8 and two 16 B fields:
@@ -92,9 +92,6 @@ table ahead of the program it serves.
 The multiplier is measured over programs that elaborate their types, which
 needs dispatch.
 
-**Requires:**
-
-- [Modules](modules.md) — removes the nonce `Parameter` carries, so the
-  variant this item lays out is small.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

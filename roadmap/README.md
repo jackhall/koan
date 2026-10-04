@@ -61,6 +61,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Matching](conditionals/matching.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
+- [A compact type node table](rewrite/compact-type-node-table.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Modules](rewrite/modules.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)

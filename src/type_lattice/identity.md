@@ -26,7 +26,9 @@ Three things follow, and each is load-bearing:
   `ScopeId` nonce folded into the content ahead of everything else, carried by a
   recursive-group window and by the carrier an opaque view mints for a head
   parameter. Two opaque ascriptions of one signature never unify, and nothing
-  else in the vocabulary is generative.
+  else in the vocabulary is generative. *Out of date for the carrier:* the
+  [module design](../../design/modules.md) keys a carrier on content, not on a
+  nonce.
 
 The hasher lives in `digest.rs` and only there. Every payload begins with a
 distinct domain tag byte so no two variants can share a digest, every text run is
