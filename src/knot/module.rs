@@ -1,8 +1,10 @@
 //! Modules as values: the node a module is, the views `:|` and `:!` build, the coercion that
 //! births a view's members, and the binding a `USING … SCOPE` block enters on.
 //!
-//! A module's node holds its self-signature, its members in layout order and its knot weight —
-//! never an activation, since a view has no body to activate. A module is always a one-node knot:
+//! A module's node holds its self-signature, its members in layout order and its knot's facts —
+//! never an activation, since a view has no body to activate. Its content is what it is, not what
+//! it holds: a body-born module's code over what it captures, and a view's operator and application
+//! over its source. A module is always a one-node knot:
 //! a mention reached from a module binder's root is eager whatever body it sits in. [`birth`] is
 //! where a body-born one comes from, [`Module::tie`] the one private-field door a body-born module
 //! and a view both go through, so there is one representation and one copy.
@@ -41,17 +43,18 @@ pub use birth::{body_activation, tie_member};
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
 use crate::type_lattice::{DeclaredType, KType, Parametric};
-use crate::values::{Knotted as _, Weight};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Knotted as _, Weight};
 
-use super::{KValue, Knotted, Node};
+use super::{KValue, KnotFacts, Knotted, Node};
 
 /// A module: what one knot node holds.
 pub struct Module<'graph, 'cell> {
     ktype: KType,
     /// The bound members, in layout order.
     members: &'cell [KValue<'graph, 'cell>],
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What every node of the knot shares.
+    facts: &'cell KnotFacts,
 }
 
 impl Clone for Module<'_, '_> {
@@ -63,27 +66,31 @@ impl Clone for Module<'_, '_> {
 impl Copy for Module<'_, '_> {}
 
 impl<'graph, 'cell> Module<'graph, 'cell> {
-    /// A module over `members`, already in layout order under `ktype`, laid down as a one-node knot
-    /// in `writer`'s region. The one private-field constructor the tie and the view door share; the
-    /// module is node `0`.
+    /// A module over `members`, already in layout order under `ktype`, whose content is `content`,
+    /// laid down as a one-node knot in `writer`'s region. The one private-field constructor the tie
+    /// and the view door share; the module is node `0`.
     ///
     /// A member that is itself a knot member carries its whole knot's weight, since a crossing
-    /// rebuilds that knot whole.
+    /// rebuilds that knot whole. Its content is what the module is — a body's code over what it
+    /// captures, or a view's operator and application over its source — never its members, which
+    /// that content determines.
     pub fn tie(
         writer: Writer<'cell>,
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
+        content: ContentDigest,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         let knot_weight = members.iter().fold(
             Weight::flat::<usize>().plus(Weight::flat::<Node<'graph, 'cell>>()),
             |weight, member| weight.plus(member.weight()),
         );
+        let facts = KnotFacts::laid(writer, knot_weight, &[content]);
         let members = collect(writer, members.iter().copied());
         KnotPlan::new(1).tie(writer, |_| {
             Node::Module(Module {
                 ktype,
                 members,
-                knot_weight,
+                facts,
             })
         })
     }
@@ -98,17 +105,22 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         self.members
     }
 
-    pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+    /// What every node of this module's knot shares.
+    pub fn facts(&self) -> &'cell KnotFacts {
+        self.facts
     }
 
-    /// This module over `members` rebuilt at another region lifetime — the copy's arm. The
-    /// signature and the knot weight are facts about the members, which the copy preserves.
-    pub(super) fn rebuilt<'to>(&self, members: &'to [KValue<'graph, 'to>]) -> Module<'graph, 'to> {
+    /// This module over `members` rebuilt at another region lifetime — the copy's arm, inside the
+    /// knot whose copied facts are `facts`. The signature rides over.
+    pub(super) fn rebuilt<'to>(
+        &self,
+        members: &'to [KValue<'graph, 'to>],
+        facts: &'to KnotFacts,
+    ) -> Module<'graph, 'to> {
         Module {
             ktype: self.ktype,
             members,
-            knot_weight: self.knot_weight,
+            facts,
         }
     }
 }
@@ -124,8 +136,8 @@ pub struct Coerced<'graph, 'cell> {
     declared: DeclaredType<Parametric>,
     from: KType,
     to: KType,
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What every node of the knot shares.
+    facts: &'cell KnotFacts,
 }
 
 impl Clone for Coerced<'_, '_> {
@@ -159,6 +171,15 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
             .plus(Weight::flat::<Node<'graph, 'cell>>())
             .plus(Weight::flat::<Coerced<'graph, 'cell>>())
             .plus(underlying.weight());
+        // A barrier is what stands before its function, at the types the two sides read.
+        let content = DigestHasher::new(Tag::Barrier)
+            .digest(underlying.digest())
+            .feed(ktype)
+            .feed(declared)
+            .feed(from)
+            .feed(to)
+            .finished();
+        let facts = KnotFacts::laid(writer, knot_weight, &[content]);
         KnotPlan::new(1).tie(writer, |_| {
             Node::Coerced(resident(
                 writer,
@@ -168,7 +189,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
                     declared,
                     from,
                     to,
-                    knot_weight,
+                    facts,
                 },
             ))
         })
@@ -202,21 +223,25 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         self.to
     }
 
-    pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+    /// What every node of this barrier's knot shares.
+    pub fn facts(&self) -> &'cell KnotFacts {
+        self.facts
     }
 
-    /// This barrier over `underlying` rebuilt at another region lifetime — the copy's arm. The
-    /// types and the knot weight are facts about what sits behind the barrier, which the copy
-    /// preserves.
-    pub(super) fn rebuilt<'to>(&self, underlying: Knotted<'graph, 'to>) -> Coerced<'graph, 'to> {
+    /// This barrier over `underlying` rebuilt at another region lifetime — the copy's arm, inside
+    /// the knot whose copied facts are `facts`. The types ride over.
+    pub(super) fn rebuilt<'to>(
+        &self,
+        underlying: Knotted<'graph, 'to>,
+        facts: &'to KnotFacts,
+    ) -> Coerced<'graph, 'to> {
         Coerced {
             underlying,
             ktype: self.ktype,
             declared: self.declared,
             from: self.from,
             to: self.to,
-            knot_weight: self.knot_weight,
+            facts,
         }
     }
 }

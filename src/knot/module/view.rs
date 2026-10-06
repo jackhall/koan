@@ -31,7 +31,8 @@ use crate::type_lattice::{
     FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode, TypeRegistry,
     fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
-use crate::values::{TypeValue, Value};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Knotted as _, TypeValue, Value};
 
 use super::coerce::{Coercion, CoercionRefused, coerce};
 use super::{Coerced, Module, layout};
@@ -81,7 +82,17 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
         Ascription::Opaque => mint(&sig, from, &pins, types, scratch),
     };
     let view = view_signature(&sig, to, types, scratch);
-    build(writer, source, sig, view, from, to, types, scratch)
+    // A view is its operator and its application over its source.
+    let operator = match mode {
+        Ascription::Transparent => 0u8,
+        Ascription::Opaque => 1,
+    };
+    let content = DigestHasher::new(Tag::View)
+        .feed(operator)
+        .feed(signature)
+        .digest(source.digest())
+        .finished();
+    build(writer, source, sig, view, from, to, content, types, scratch)
 }
 
 /// The signature a transparent view of a module whose signature is `source` carries, seen as
@@ -158,8 +169,8 @@ pub(super) fn solved<'x>(
     )
 }
 
-/// Build the view's member run in layout order and lay the node down. `from` and `to` are what the
-/// source and the view bind the signature's head parameters to.
+/// Build the view's member run in layout order and lay the node down, its content `content`. `from`
+/// and `to` are what the source and the view bind the signature's head parameters to.
 ///
 /// Two callers: an ascription, and a nested signature slot inside one
 /// ([`coerce`](super::coerce::coerce)), which passes the enclosing substitutions unchanged —
@@ -173,6 +184,7 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     view: KType,
     from: Members<'x, TypeSymbol, KType>,
     to: Members<'x, TypeSymbol, KType>,
+    content: ContentDigest,
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
@@ -233,7 +245,7 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
             });
         }
     }
-    Ok(Knotted::of(Module::tie(writer, view, &members), 0))
+    Ok(Knotted::of(Module::tie(writer, view, &members, content), 0))
 }
 
 /// The view's bindings under `:|`: a fresh mint per head parameter of `sig` that `pins` leaves

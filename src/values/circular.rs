@@ -14,6 +14,7 @@ use crate::parse::KExpression;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 
+use super::digest::{ContentDigest, DigestHasher, Tag};
 use super::{DeepCopy, Dict, Knotted, Link, List, Nothing, Record, Tagged, Value, Weight};
 
 /// What a knot member holds.
@@ -91,6 +92,39 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
         }
     }
 
+    /// The node's content inside its knot's digest: its kind, its type, and each link's digest —
+    /// a dict's key beside its cell, a record's name beside its cell — an edge by its index.
+    pub fn content(&self) -> ContentDigest {
+        let mut hasher = DigestHasher::new(Tag::Data);
+        hasher.feed(self.ktype());
+        match *self {
+            Circular::List(list) => {
+                hasher.tag(Tag::List).count(list.cells().len());
+                for link in list.cells() {
+                    hasher.digest(link.digest());
+                }
+            }
+            Circular::Dict(dict) => {
+                hasher.tag(Tag::Dict).count(dict.cells().len());
+                for (key, link) in dict.keys().iter().zip(dict.cells()) {
+                    hasher
+                        .digest(key.value::<Nothing>().digest())
+                        .digest(link.digest());
+                }
+            }
+            Circular::Record(record) => {
+                hasher.tag(Tag::Record).count(record.cells().len());
+                for (name, link) in record.names().iter().zip(record.cells()) {
+                    hasher.feed(name).digest(link.digest());
+                }
+            }
+            Circular::Tagged(tagged) => {
+                hasher.tag(Tag::Tagged).digest(tagged.payload().digest());
+            }
+        }
+        hasher.finished()
+    }
+
     /// Every value this node's links hold, in the order [`copied`](Self::copied) asks for them.
     pub fn held(&self, out: &mut dyn FnMut(Value<'cell, X>)) {
         let mut links = |cells: &[Link<'cell, X>]| {
@@ -120,7 +154,13 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
             Circular::List(list) => {
                 let source = list.cells();
                 let cells = writer.fill(source.len(), |at| source[at].copied(&mut copy));
-                Circular::List(List::from_run(writer, cells, list.ktype(), list.weight()))
+                Circular::List(List::from_run(
+                    writer,
+                    cells,
+                    list.ktype(),
+                    list.weight(),
+                    list.contents(),
+                ))
             }
             Circular::Dict(dict) => {
                 let (source_keys, source) = (dict.keys(), dict.cells());
@@ -132,6 +172,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
                     cells,
                     dict.ktype(),
                     dict.weight(),
+                    dict.contents(),
                 ))
             }
             Circular::Record(record) => {
@@ -144,6 +185,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
                     cells,
                     record.ktype(),
                     record.weight(),
+                    record.contents(),
                 ))
             }
             Circular::Tagged(tagged) => Circular::Tagged(Tagged::from_payload(
@@ -151,6 +193,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
                 tagged.payload().copied(&mut copy),
                 tagged.ktype(),
                 tagged.weight(),
+                tagged.contents(),
             )),
         }
     }

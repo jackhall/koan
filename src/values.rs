@@ -31,6 +31,7 @@ mod admission;
 mod circular;
 mod crossing;
 mod dict;
+pub mod digest;
 mod equality;
 mod link;
 mod list;
@@ -53,9 +54,11 @@ pub use admission::{
 pub use circular::{Circular, CodeView, Resolved};
 pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
+pub use digest::ContentDigest;
 pub use equality::Incomparable;
 pub use link::Link;
 pub use list::List;
+pub use lower::literal_digest;
 pub use record::Record;
 pub use surface::{Seen, Surface};
 pub use tagged::Tagged;
@@ -81,6 +84,9 @@ pub trait Knotted: Copy + Eq + Hash {
     /// The bytes a rebuild of this member's knot at a destination writes, past the value word
     /// holding it.
     fn weight(&self) -> Weight;
+
+    /// The member's content digest: its knot's, beside its index there.
+    fn digest(&self) -> ContentDigest;
 
     /// The member `edge` names among this one's own siblings.
     fn sibling(&self, edge: Edge) -> Self;
@@ -145,6 +151,10 @@ impl Knotted for Nothing {
     }
 
     fn weight(&self) -> Weight {
+        match *self {}
+    }
+
+    fn digest(&self) -> ContentDigest {
         match *self {}
     }
 
@@ -268,6 +278,26 @@ impl<'cell, X: Knotted> Value<'cell, X> {
     /// What rebuilding this value at a destination writes: the word itself and what it points at.
     pub fn weight(&self) -> Weight {
         Weight::flat::<Self>().plus(self.referent_weight())
+    }
+
+    /// The value's content digest ([`digest`]): a scalar's from its payload, a composite's from its
+    /// type and the contents it stored where it was laid down, a knot member's its knot's.
+    pub fn digest(&self) -> ContentDigest {
+        use digest::{DigestHasher, Tag};
+        match self {
+            Value::Number(number) => DigestHasher::new(Tag::Number)
+                .feed(number.to_bits())
+                .finished(),
+            Value::Bool(flag) => DigestHasher::new(Tag::Bool).feed(flag).finished(),
+            Value::Null => DigestHasher::new(Tag::Null).finished(),
+            Value::Str(text) => DigestHasher::new(Tag::Str).text(text.as_bytes()).finished(),
+            Value::Type(value) => DigestHasher::new(Tag::Type).feed(value.handle()).finished(),
+            Value::List(list) => list.digest(),
+            Value::Dict(dict) => dict.digest(),
+            Value::Record(record) => record.digest(),
+            Value::Tagged(tagged) => tagged.digest(),
+            Value::Knotted(member) => member.digest(),
+        }
     }
 
     /// The part of [`weight`](Self::weight) past the word — what a holder that stores the word

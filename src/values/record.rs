@@ -7,6 +7,7 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeRegistry};
 
+use super::digest::{ContentDigest, DigestHasher, Tag, composite};
 use super::{Knotted, Link, Nothing, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
@@ -18,6 +19,9 @@ pub struct Record<'cell, X = Nothing, C = Value<'cell, X>> {
     cells: &'cell [C],
     ktype: KType,
     weight: Weight,
+    /// Each field's name and cell digest, in symbol order ([`NONE`](ContentDigest::NONE) for a
+    /// knot's data node).
+    contents: ContentDigest,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -57,7 +61,17 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         let weight = cells
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
-        Self::from_runs(writer, names, cells, ktype, weight)
+        let mut hasher = DigestHasher::new(Tag::Contents);
+        hasher.count(names.len());
+        for (name, cell) in names.iter().zip(cells) {
+            hasher.feed(name).digest(cell.digest());
+        }
+        Self::from_runs(writer, names, cells, ktype, weight, hasher.finished())
+    }
+
+    /// The record's content digest: its type and its fields'.
+    pub fn digest(&self) -> ContentDigest {
+        composite(Tag::Record, self.ktype, self.contents)
     }
 }
 
@@ -81,7 +95,7 @@ impl<'cell, X: Knotted> Record<'cell, X, Link<'cell, X>> {
             weight = weight.plus(cell.weight());
             cell
         });
-        Self::from_runs(writer, names, cells, ktype, weight)
+        Self::from_runs(writer, names, cells, ktype, weight, ContentDigest::NONE)
     }
 }
 
@@ -111,6 +125,7 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
         cells: &'cell [C],
         ktype: KType,
         weight: Weight,
+        contents: ContentDigest,
     ) -> &'cell Self {
         resident(
             writer,
@@ -119,14 +134,28 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
                 cells,
                 ktype,
                 weight,
+                contents,
                 member: PhantomData,
             },
         )
     }
 
-    /// The same fields under `ktype` — an ascription's retype, sharing both runs.
+    /// The same fields under `ktype` — an ascription's retype, sharing both runs and their
+    /// contents.
     pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
-        Self::from_runs(writer, self.names, self.cells, ktype, self.weight)
+        Self::from_runs(
+            writer,
+            self.names,
+            self.cells,
+            ktype,
+            self.weight,
+            self.contents,
+        )
+    }
+
+    /// Its fields' digests, as laid down.
+    pub(crate) fn contents(&self) -> ContentDigest {
+        self.contents
     }
 
     pub fn ktype(&self) -> KType {

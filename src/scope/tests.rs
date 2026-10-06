@@ -23,6 +23,8 @@ use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
+use crate::values::ContentDigest;
+use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
@@ -45,6 +47,12 @@ impl Knotted for Probe {
 
     fn weight(&self) -> Weight {
         Weight::ZERO
+    }
+
+    fn digest(&self) -> ContentDigest {
+        DigestHasher::new(Tag::Member)
+            .count(self.0 as usize)
+            .finished()
     }
 
     fn sibling(&self, edge: Edge) -> Self {

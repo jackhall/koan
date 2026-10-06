@@ -29,7 +29,8 @@ use crate::type_lattice::{
     SchemaDraft, TypeNode, TypeRegistry, display_name, fits_application, satisfied_by,
     substitute_parameters,
 };
-use crate::values::{Dict, List, Record, SealRefused, Tagged, Value, satisfies};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{Dict, Knotted as _, List, Record, SealRefused, Tagged, Value, satisfies};
 
 use super::{Coerced, view};
 
@@ -337,8 +338,14 @@ pub fn coerce<'graph, 'cell>(
                 }),
             );
             let view = view::view_signature(&schema, to, cx.types, cx.scratch);
+            // A nested view is the enclosing opaque one's, at the application its slot reads.
+            let content = DigestHasher::new(Tag::View)
+                .feed(2u8)
+                .feed(dst)
+                .digest(member.digest())
+                .finished();
             view::build(
-                cx.writer, member, schema, view, from, to, cx.types, cx.scratch,
+                cx.writer, member, schema, view, from, to, content, cx.types, cx.scratch,
             )
             .map(Value::Knotted)
             .map_err(|_| CoercionRefused::Nested)

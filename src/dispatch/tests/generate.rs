@@ -808,11 +808,14 @@ impl Lexical {
             Context::Code => vec![format!("(EVAL #({group}) -> Any)")],
             Context::Hoist => vec![format!("(\"a\" == ({group}) == \"b\")")],
             // A module lists what its body reads from outside: `WRAP`'s parameter and variable,
-            // and — inside a quote's code, whose unmarked keys are holes — `PRINT`'s key.
+            // and — inside a quote's code, whose unmarked keys are holes — every key its body can
+            // use: `PRINT`'s, and the comparison run's a hoisting context rewrites to.
             Context::Module => {
                 *modules += 1;
+                // The names the body's text spells, its string literals left out.
+                let code_text: String = group.split('"').step_by(2).collect::<Vec<_>>().join(" ");
                 let reads = |name: &str| {
-                    group
+                    code_text
                         .split(|c: char| !c.is_alphanumeric() && c != '_')
                         .any(|token| token == name)
                 };
@@ -821,7 +824,7 @@ impl Lexical {
                     .filter(|name| reads(name))
                     .collect();
                 if code {
-                    over.push("(PRINT _)");
+                    over.extend(["(PRINT _)", "(_ == _)", "(_ AND _)"]);
                 }
                 vec![
                     format!("MODULE m{modules} OVER #[{}] = ({group})", over.join(" ")),

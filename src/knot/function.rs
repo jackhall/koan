@@ -1,6 +1,8 @@
 //! A function as a knot node: its memoized type, the body shape it runs, the closure bindings a
-//! call reads its captures through, the shape a registration puts in its bucket, and the weight of
-//! the whole knot it sits in.
+//! call reads its captures through, the shape a registration puts in its bucket, and the facts of
+//! the whole knot it sits in. Its content, which its knot's digest covers, is its body's code
+//! digest, its instance's solution, and the digest of each capture the code digest does not name
+//! ([`content`]).
 //!
 //! Beside it, the staging a [tie](super::tie()) does for a function node. Everything a node needs
 //! is read into scratch with no writer in reach — its body shape, its type elaborated from the form
@@ -23,9 +25,10 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, instantiate_quantified, substitute_levels,
 };
-use crate::values::{Knotted as _, Link, Value, Weight};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Knotted as _, Link, Value, Weight};
 
-use super::{KActivationView, Knotted, Node, Untieable};
+use super::{KActivationView, KnotFacts, Knotted, Node, Untieable, composed};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -40,8 +43,8 @@ pub struct Function<'graph, 'cell, X> {
     typing: Option<&'cell Typing<'cell>>,
     shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'cell, X>,
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What every node of the knot shares.
+    facts: &'cell KnotFacts,
 }
 
 impl<X> Clone for Function<'_, '_, X> {
@@ -53,21 +56,21 @@ impl<X> Clone for Function<'_, '_, X> {
 impl<X> Copy for Function<'_, '_, X> {}
 
 impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
-    /// The function `ktype` runs through `shape` over `closure`, inside a knot weighing
-    /// `knot_weight`. The private-field constructor the tie uses.
+    /// The function `ktype` runs through `shape` over `closure`, inside a knot whose facts are
+    /// `facts`. The private-field constructor the tie uses.
     pub(super) fn new(
         ktype: DeclaredType<KType>,
         typing: Option<&'cell Typing<'cell>>,
         shape: &'graph BodyShape<'graph>,
         closure: &'cell ClosureBindings<'cell, X>,
-        knot_weight: Weight,
+        facts: &'cell KnotFacts,
     ) -> Self {
         Function {
             ktype,
             typing,
             shape,
             closure,
-            knot_weight,
+            facts,
         }
     }
 
@@ -122,17 +125,20 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.closure
     }
 
-    pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+    /// What every node of this function's knot shares.
+    pub fn facts(&self) -> &'cell KnotFacts {
+        self.facts
     }
 
-    /// This function over `closure` rebuilt at another region lifetime — the copy's arm. The type,
-    /// the body shape and the knot weight ride over: a copy re-ties the same knot. The typing
+    /// This function over `closure` rebuilt at another region lifetime — the copy's arm, inside the
+    /// knot whose copied facts are `facts`. The type and the body shape ride over: a copy re-ties
+    /// the same knot. The typing
     /// record is re-homed through `writer`, since it is a run in the source region.
     pub(super) fn rebuilt<'to, Y>(
         &self,
         writer: Writer<'to>,
         closure: &'to ClosureBindings<'to, Y>,
+        facts: &'to KnotFacts,
     ) -> Function<'graph, 'to, Y> {
         Function {
             ktype: self.ktype,
@@ -144,7 +150,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
             ),
             shape: self.shape,
             closure,
-            knot_weight: self.knot_weight,
+            facts,
         }
     }
 }
@@ -492,16 +498,35 @@ pub fn lambda<'graph, 'cell, 'x>(
     let knot_weight = Weight::flat::<usize>()
         .plus(weight)
         .plus(Weight::flat::<Node<'graph, 'cell>>());
+    let content = content(staged.shape, staged.instance, closure.links());
+    let facts = KnotFacts::laid(writer, knot_weight, &[content]);
     let knot = KnotPlan::new(1).tie(writer, |_| {
         Node::Function(Function::new(
             staged.ktype,
             typing,
             staged.shape,
             closure,
-            knot_weight,
+            facts,
         ))
     });
     Ok(Knotted::of(knot, 0))
+}
+
+/// A function node's content: its body's code digest, the solution it is an instance at, and the
+/// digest of each capture of `links` the code digest does not name — every one but a read of the
+/// program's top level, and every type capture.
+pub(super) fn content(
+    shape: &BodyShape<'_>,
+    instance: &[KType],
+    links: &[Link<'_, Knotted<'_, '_>>],
+) -> ContentDigest {
+    let mut hasher = DigestHasher::new(Tag::Function);
+    hasher.digest(shape.code_digest()).count(instance.len());
+    for solved in instance {
+        hasher.feed(solved);
+    }
+    composed(&mut hasher, shape, links);
+    hasher.finished()
 }
 
 /// `member`, a quantified function, read where the load solved its group to `solution`: a one-node
@@ -540,13 +565,15 @@ pub fn instance<'graph, 'cell>(
         .plus(closure.weight())
         .plus(Typing::weight(map.0.len(), None, solution.len()))
         .plus(Weight::flat::<Node<'graph, 'cell>>());
+    let content = content(function.shape(), solution, closure.links());
+    let facts = KnotFacts::laid(writer, knot_weight, &[content]);
     let knot = KnotPlan::new(1).tie(writer, |_| {
         Node::Function(Function::new(
             ktype,
             typing,
             function.shape(),
             closure,
-            knot_weight,
+            facts,
         ))
     });
     Knotted::of(knot, 0)

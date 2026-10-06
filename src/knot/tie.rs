@@ -14,8 +14,8 @@
 //! memos are computed and every construction checked, and a part the caller has not evaluated, a
 //! cycle of derived nodes or a construction the rule refuses stops the tie before a byte is
 //! written.
-//! Only then are the closure runs, bound runs and data nodes laid down, the knot's weight summed,
-//! and the nodes tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member
+//! Only then are the closure runs, bound runs and data nodes laid down, the knot's weight summed
+//! and its digest taken over each node's content, and the nodes tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member
 //! holds that captures a fellow member is one of them, a function node staged like a function
 //! member, and so is a quote that reads one.
 
@@ -27,7 +27,9 @@ use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
 use crate::values::Weight;
 
 use super::data::{self, Stager};
-use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
+use super::{
+    Eager, Function, KActivationView, KnotFacts, Knotted, Node, Untieable, code, function, module,
+};
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born
 /// together, each closure binding and data cell a value word or an edge into this knot, each part
@@ -151,10 +153,23 @@ pub fn tie<'graph, 'cell, 'x>(
     knot_weight = (0..nodes.len()).fold(knot_weight, |weight, _| {
         weight.plus(Weight::flat::<Node<'graph, 'cell>>())
     });
+    // Each node's content in index order, an edge to a sibling hashed as its index.
+    let mut contents = BumpVec::with_capacity_in(nodes.len(), scratch);
+    for index in 0..nodes.len() {
+        contents.push(match (&codes[index], &functions[index], circulars[index]) {
+            (Some(staged), _, _) => staged.content(),
+            (None, Some(staged), _) => {
+                function::content(staged.shape, staged.instance, &staged.captures)
+            }
+            (None, None, Some(circular)) => circular.content(),
+            (None, None, None) => unreachable!("every node is a function, a code or a data node"),
+        });
+    }
+    let facts = KnotFacts::laid(writer, knot_weight, &contents);
     Ok(plan.tie(writer, |edge| {
         let index = edge.index() as usize;
         if let Some((staged, run)) = codes[index].as_ref().zip(bound[index]) {
-            return staged.tied(writer, run, knot_weight);
+            return staged.tied(writer, run, facts);
         }
         match (functions[index].as_ref().zip(laid[index]), circulars[index]) {
             (Some((staged, (closure, typing))), _) => Node::Function(Function::new(
@@ -162,12 +177,9 @@ pub fn tie<'graph, 'cell, 'x>(
                 typing,
                 staged.shape,
                 closure,
-                knot_weight,
+                facts,
             )),
-            (None, Some(circular)) => Node::Data {
-                circular,
-                knot_weight,
-            },
+            (None, Some(circular)) => Node::Data { circular, facts },
             (None, None) => unreachable!("every node is a function, a code or a data node"),
         }
     }))

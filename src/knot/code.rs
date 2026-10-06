@@ -18,9 +18,10 @@ use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Parametric, TypeNode, TypeRegistry,
 };
-use crate::values::{CodeView, Link, List, Value, Weight};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{CodeView, ContentDigest, Link, List, Value, Weight};
 
-use super::{KActivationView, KValue, Knotted, Node};
+use super::{KActivationView, KValue, KnotFacts, Knotted, Node};
 
 /// One name the code binds, beside its binding.
 pub type Binding<'graph, 'cell> = (BinderSymbol, Link<'cell, Knotted<'graph, 'cell>>);
@@ -35,8 +36,8 @@ pub struct Code<'graph, 'cell> {
     bound: &'cell [Binding<'graph, 'cell>],
     /// Each hole a `USING` filled, sorted by name.
     supplied: &'cell [Binding<'graph, 'cell>],
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What every node of the knot shares.
+    facts: &'cell KnotFacts,
 }
 
 impl Clone for Code<'_, '_> {
@@ -71,8 +72,9 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         self.supplied
     }
 
-    pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+    /// What every node of this code's knot shares.
+    pub fn facts(&self) -> &'cell KnotFacts {
+        self.facts
     }
 
     /// What `values` reads of this code.
@@ -94,12 +96,14 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         }
     }
 
-    /// This code rebuilt in `writer`'s region — the copy's arm: each binding's value through `copy`,
-    /// each edge verbatim, and the body, shape, type and knot weight carried over.
+    /// This code rebuilt in `writer`'s region — the copy's arm, inside the knot whose copied facts
+    /// are `facts`: each binding's value through `copy`, each edge verbatim, and the body, shape
+    /// and type carried over.
     pub(super) fn rebuilt<'to>(
         &self,
         writer: Writer<'to>,
         mut copy: impl FnMut(&KValue<'graph, 'cell>) -> KValue<'graph, 'to>,
+        facts: &'to KnotFacts,
     ) -> Code<'graph, 'to> {
         let mut run = |source: &'cell [Binding<'graph, 'cell>]| {
             writer.fill(source.len(), |at| {
@@ -115,7 +119,7 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
             ktype: self.ktype,
             bound,
             supplied,
-            knot_weight: self.knot_weight,
+            facts,
         }
     }
 }
@@ -147,12 +151,12 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         (bound, weight)
     }
 
-    /// The resident code over `bound`, in a knot weighing `knot_weight`.
+    /// The resident code over `bound`, in a knot whose facts are `facts`.
     pub(super) fn tied(
         &self,
         writer: Writer<'cell>,
         bound: &'cell [Binding<'graph, 'cell>],
-        knot_weight: Weight,
+        facts: &'cell KnotFacts,
     ) -> Node<'graph, 'cell> {
         Node::Code(resident(
             writer,
@@ -162,10 +166,34 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
                 ktype: self.shape.code_type(),
                 bound,
                 supplied: &[],
-                knot_weight,
+                facts,
             },
         ))
     }
+
+    /// This node's content, over its `$` bindings.
+    pub(super) fn content(&self) -> ContentDigest {
+        content(self.shape, self.shape.code_type(), &self.bound, &[])
+    }
+}
+
+/// A code node's content: its quote's code digest, its carried type, and each binding's name and
+/// digest, bound then supplied.
+fn content<'graph, 'cell>(
+    shape: &BodyShape<'_>,
+    ktype: KType,
+    bound: &[Binding<'graph, 'cell>],
+    supplied: &[Binding<'graph, 'cell>],
+) -> ContentDigest {
+    let mut hasher = DigestHasher::new(Tag::Code);
+    hasher.digest(shape.code_digest()).feed(ktype);
+    for run in [bound, supplied] {
+        hasher.count(run.len());
+        for (name, link) in run {
+            hasher.feed(name).digest(link.digest());
+        }
+    }
+    hasher.finished()
 }
 
 /// The code shape of the quote `part`, if `part` is one `shape` holds.
@@ -217,6 +245,11 @@ fn one_node<'graph, 'cell>(
         .plus(Weight::flat::<Code<'graph, 'cell>>())
         .plus(run_weight(bound))
         .plus(run_weight(supplied));
+    let facts = KnotFacts::laid(
+        writer,
+        knot_weight,
+        &[content(shape, shape.code_type(), bound, supplied)],
+    );
     let knot = KnotPlan::new(1).tie(writer, |_| {
         Node::Code(resident(
             writer,
@@ -226,7 +259,7 @@ fn one_node<'graph, 'cell>(
                 ktype: shape.code_type(),
                 bound,
                 supplied,
-                knot_weight,
+                facts,
             },
         ))
     });

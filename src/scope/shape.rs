@@ -56,7 +56,7 @@ use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, Typ
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
 };
-use crate::values::Knotted;
+use crate::values::{ContentDigest, Knotted};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
@@ -439,6 +439,11 @@ pub struct BodyShape<'graph> {
     /// The top-level bindings a module body's `OVER` list names, sorted: part of its content
     /// whether or not the body reads them.
     listed_top: &'graph [TopLevel],
+    /// The body's code as resolved, digested where it was built.
+    code: ContentDigest,
+    /// Each capture's top-level slot, where it reads the program's top level, parallel to
+    /// `captures`.
+    top_captures: &'graph [Option<Slot>],
     nested: &'graph [(Site, &'graph BodyShape<'graph>)],
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
@@ -629,6 +634,20 @@ impl<'graph> BodyShape<'graph> {
     /// The top-level bindings a module body's `OVER` list names, sorted.
     pub fn listed_top(&self) -> &'graph [TopLevel] {
         self.listed_top
+    }
+
+    /// The body's code digest: its code as resolved, a read of the program's top level named by
+    /// the binding it reads ([build/digest.rs](shape/build/digest.rs)).
+    pub fn code_digest(&self) -> ContentDigest {
+        self.code
+    }
+
+    /// Whether capture `capture` reads the program's top level, which the run reads where it
+    /// lives: the code digest names it, so a closure's or a module's digest does not compose it.
+    pub fn composes(&self, capture: CaptureSlot) -> bool {
+        self.top_captures
+            .get(capture.index())
+            .is_none_or(|top| top.is_none())
     }
 
     pub fn components(&self) -> &'graph [Component<'graph>] {

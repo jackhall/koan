@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
+use super::digest::{ContentDigest, DigestHasher, Tag, composite};
 use super::{Knotted, Link, Nothing, Value, Weight, dict_type, unsealed};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
@@ -152,6 +153,9 @@ pub struct Dict<'cell, X = Nothing, C = Value<'cell, X>> {
     cells: &'cell [C],
     ktype: KType,
     weight: Weight,
+    /// Each entry's key digest and cell digest, in key order ([`NONE`](ContentDigest::NONE) for a
+    /// knot's data node).
+    contents: ContentDigest,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -193,7 +197,19 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         let weight = cells
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
-        Self::from_runs(writer, keys, cells, ktype, weight)
+        let mut hasher = DigestHasher::new(Tag::Contents);
+        hasher.count(keys.len());
+        for (key, cell) in keys.iter().zip(cells) {
+            hasher
+                .digest(key.value::<X>().digest())
+                .digest(cell.digest());
+        }
+        Self::from_runs(writer, keys, cells, ktype, weight, hasher.finished())
+    }
+
+    /// The dict's content digest: its type and its entries'.
+    pub fn digest(&self) -> ContentDigest {
+        composite(Tag::Dict, self.ktype, self.contents)
     }
 }
 
@@ -218,7 +234,7 @@ impl<'cell, X: Knotted> Dict<'cell, X, Link<'cell, X>> {
             weight = weight.plus(cell.weight());
             cell
         });
-        Self::from_runs(writer, keys, cells, ktype, weight)
+        Self::from_runs(writer, keys, cells, ktype, weight, ContentDigest::NONE)
     }
 }
 
@@ -257,6 +273,7 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
         cells: &'cell [C],
         ktype: KType,
         weight: Weight,
+        contents: ContentDigest,
     ) -> &'cell Self {
         resident(
             writer,
@@ -265,14 +282,28 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
                 cells,
                 ktype,
                 weight,
+                contents,
                 member: PhantomData,
             },
         )
     }
 
-    /// The same entries under `ktype` — an ascription's retype, sharing both runs.
+    /// The same entries under `ktype` — an ascription's retype, sharing both runs and their
+    /// contents.
     pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
-        Self::from_runs(writer, self.keys, self.cells, ktype, self.weight)
+        Self::from_runs(
+            writer,
+            self.keys,
+            self.cells,
+            ktype,
+            self.weight,
+            self.contents,
+        )
+    }
+
+    /// Its entries' digests, as laid down.
+    pub(crate) fn contents(&self) -> ContentDigest {
+        self.contents
     }
 
     pub fn len(&self) -> usize {

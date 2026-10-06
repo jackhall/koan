@@ -1089,3 +1089,23 @@ fn an_over_entry_is_part_of_the_module_whether_or_not_it_is_read() {
         assert_eq!(module.listed_top(), &[TopLevel::Root(top)]);
     });
 }
+
+/// A body's code digest is its code as resolved: blind to where the body sits, and naming a read of
+/// the top level by the binding it reads.
+#[test]
+fn a_code_digest_is_blind_to_position_and_names_top_level_reads_by_binding() {
+    let source = "LET t = 1\nLET u = 1\n\
+                  LET f = (FN :{x :Any} -> Any = #(t))\n\
+                  LET pad = 2\n\
+                  LET g = (FN :{x :Any} -> Any = #(t))\n\
+                  LET h = (FN :{x :Any} -> Any = #(u))";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.expect("the program shapes");
+        let code = |name: &str| {
+            let (slot, _) = shape.slot(value(fixture, name)).expect("a binder");
+            shape.births(slot).expect("a callable").code_digest()
+        };
+        assert_eq!(code("f"), code("g"), "one text at two places");
+        assert_ne!(code("f"), code("h"), "two top-level bindings of one value");
+    });
+}

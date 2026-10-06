@@ -61,7 +61,7 @@ use crate::symbols::{
     BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, SymbolInterner, TypeSymbol,
     ValueSymbol,
 };
-use crate::values::{Knotted, admits_part};
+use crate::values::{ContentDigest, Knotted, admits_part};
 
 use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, TypeRegistry, dense_classes};
 
@@ -82,6 +82,7 @@ use super::{
 use crate::parse::{BodyKind, DefinitionKind, Heads, Reading, Role};
 use std::cell::Cell;
 
+mod digest;
 mod locate;
 mod rewrite;
 mod surface;
@@ -600,6 +601,12 @@ struct Draft<'graph, 'x> {
     listed_top: BumpVec<'x, TopLevel>,
     /// The first outer name it reads that its `OVER` list leaves out.
     unlisted: Option<BinderSymbol>,
+    /// The body's code digest, once it is built.
+    code: ContentDigest,
+    /// Each top-level binding its code names, nested bodies' included, sorted.
+    named_top: BumpVec<'x, TopLevel>,
+    /// Each capture's top-level slot, where it reads one.
+    top_captures: BumpVec<'x, Option<Slot>>,
 }
 
 /// A type expression a draft records: see [`TypeExpression`](super::TypeExpression).
@@ -815,6 +822,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             self.chain.pop();
             return Err(error);
         }
+        let statements = collect(self.brand.writer(), self.chain[level].nodes.iter().copied());
+        self.digest_draft(level, statements);
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         self.components(&mut draft)?;
         self.units(&mut draft);
@@ -925,6 +934,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             over: None,
             listed_top: BumpVec::new_in(scratch),
             unlisted: None,
+            code: ContentDigest::NONE,
+            named_top: BumpVec::new_in(scratch),
+            top_captures: BumpVec::new_in(scratch),
         })
     }
 
@@ -2148,6 +2160,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             class: MentionClass::Eager,
         };
         let resolved = self.written_marks(level, statement, inner, reader, &marks);
+        // Code that cannot be built digests as written.
+        let mut statements = BumpVec::new_in(self.scratch);
+        statements.extend(code.body_statements().map(|(statement, _)| *statement));
+        self.digest_draft(inner, &statements);
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         resolved?;
         let mut built = BumpVec::new_in(self.scratch);
@@ -3313,6 +3329,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 captures: collect(writer, draft.captures.iter().copied()),
                 over: draft.over.and_then(|over| over.listed),
                 listed_top: collect(writer, draft.listed_top.iter().copied()),
+                code: draft.code,
+                top_captures: collect(writer, draft.top_captures.iter().copied()),
                 nested: collect(writer, nested.iter().copied()),
                 form,
                 births: collect(writer, births.iter().copied()),

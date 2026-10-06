@@ -17,9 +17,13 @@
 //! into the run, and the run holds members of knots the module does not own. A mention reached from
 //! a module binder's root is eager whatever body it sits in, so a module is never in a cycle.
 //!
-//! [`Knotted`] is sixteen bytes, so a value holding one stays one twenty-four-byte word. A member
-//! copies at a crossing by re-tying its whole knot at the destination, each held value deep-copied
-//! and each edge carried verbatim, priced by the knot's memoized weight under the ordinary verdict.
+//! [`Knotted`] is sixteen bytes, so a value holding one stays one twenty-four-byte word. Every node
+//! of a knot points at its [`KnotFacts`], written once beside them: the weight a rebuild of the
+//! whole knot writes, and the knot's content digest over each node's content, an edge to a sibling
+//! by its index — so values that reach one another digest as one knot, and a member's digest is
+//! its knot's beside its index. A member copies at a crossing by re-tying its whole knot at the
+//! destination, each held value deep-copied, each edge carried verbatim and the facts with them,
+//! priced by the knot's memoized weight under the ordinary verdict.
 //! A function compares by its shape's address — one per `FN` written, so a copy keeps it — and its
 //! captures, a builtin by its record's address, a quote by its code and bindings, and a module or a
 //! barrier is
@@ -58,15 +62,18 @@ pub use tie::tie;
 
 use std::fmt;
 
-use crate::memory::{BumpAllocator, DropFree, Edge, Member, Writer, covariant, reattachable};
+use crate::memory::{
+    BumpAllocator, DropFree, Edge, Member, Writer, covariant, reattachable, resident,
+};
 use crate::parse::ExpressionPart;
 use crate::scope::Elaboration;
-use crate::scope::{Activation, ActivationView, Builtins, Site};
+use crate::scope::{Activation, ActivationView, BodyShape, Builtins, CaptureSlot, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, TypeRegistry, display_name};
+use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
-    self, Circular, ConstructionRefused, KeyRejected, Resolved, Value, ValueCarrier, ValueFamily,
-    Weight,
+    self, Circular, ConstructionRefused, ContentDigest, KeyRejected, Link, Resolved, Value,
+    ValueCarrier, ValueFamily, Weight,
 };
 
 /// The payload of a knot node.
@@ -79,8 +86,8 @@ pub enum Node<'graph, 'cell> {
     /// a sibling mention.
     Data {
         circular: Circular<'cell, Knotted<'graph, 'cell>>,
-        /// What rebuilding the whole knot this node sits in writes, the same on every node.
-        knot_weight: Weight,
+        /// What every node of the knot shares.
+        facts: &'cell KnotFacts,
     },
     /// A module: its self-signature, its members in layout order, and the same weight.
     Module(Module<'graph, 'cell>),
@@ -93,6 +100,66 @@ pub enum Node<'graph, 'cell> {
 }
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
+
+/// What every node of one knot shares, written once beside its nodes and pointed at by each: what
+/// rebuilding the whole knot writes, and the knot's content digest — a [`Tag::Knot`] over its node
+/// count and each node's content in index order, an edge to a sibling hashed as its index, so
+/// values that reach one another digest as the one knot they are tied into.
+#[derive(Clone, Copy, Debug)]
+pub struct KnotFacts {
+    weight: Weight,
+    digest: ContentDigest,
+}
+
+/// Feed `hasher` the digest of each capture of `links`, a closure of `shape`, that its code digest
+/// does not name — every one but a read of the program's top level, and every type capture — beside
+/// its slot: what a closure's or a module's content composes over its code.
+fn composed(hasher: &mut DigestHasher, shape: &BodyShape<'_>, links: &[Link<'_, Knotted<'_, '_>>]) {
+    for (index, link) in links.iter().enumerate() {
+        if shape.composes(CaptureSlot(index as u32)) {
+            hasher.count(index).digest(link.digest());
+        }
+    }
+}
+
+impl KnotFacts {
+    /// The facts of a knot whose nodes weigh `weight` and whose contents, in index order, are
+    /// `contents`, laid down in `writer`'s region: a rebuild writes the facts too, so they count.
+    pub(crate) fn laid<'cell>(
+        writer: Writer<'cell>,
+        weight: Weight,
+        contents: &[ContentDigest],
+    ) -> &'cell KnotFacts {
+        let weight = weight.plus(Weight::flat::<KnotFacts>());
+        let mut hasher = DigestHasher::new(Tag::Knot);
+        hasher.count(contents.len());
+        for content in contents {
+            hasher.digest(*content);
+        }
+        resident(
+            writer,
+            KnotFacts {
+                weight,
+                digest: hasher.finished(),
+            },
+        )
+    }
+
+    /// The same facts laid down in `writer`'s region — a copy's, which keeps its digest.
+    pub(crate) fn copied<'to>(&self, writer: Writer<'to>) -> &'to KnotFacts {
+        resident(writer, *self)
+    }
+
+    /// What rebuilding the whole knot writes.
+    pub fn weight(&self) -> Weight {
+        self.weight
+    }
+
+    /// The knot's content digest.
+    pub fn digest(&self) -> ContentDigest {
+        self.digest
+    }
+}
 
 /// A knot member: one node of a knot — a function, a data node, a module or a barrier over a
 /// function. Its equality and hash are node identity.
@@ -148,6 +215,19 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
         }
     }
 
+    /// What every node of this member's knot shares; `None` for a builtin, whose record is its
+    /// own.
+    pub fn facts(self) -> Option<&'cell KnotFacts> {
+        Some(match self.node() {
+            Node::Function(function) => function.facts(),
+            Node::Builtin(_) => return None,
+            Node::Data { facts, .. } => facts,
+            Node::Module(module) => module.facts(),
+            Node::Coerced(coerced) => coerced.facts(),
+            Node::Code(code) => code.facts(),
+        })
+    }
+
     /// The barrier this member sits behind, if it is a coerced function's node.
     pub fn coerced(self) -> Option<&'cell Coerced<'graph, 'cell>> {
         match self.node() {
@@ -179,13 +259,25 @@ impl values::Knotted for Knotted<'_, '_> {
     }
 
     fn weight(&self) -> Weight {
-        match self.node() {
-            Node::Function(function) => function.knot_weight(),
-            Node::Builtin(_) => BuiltinFunction::knot_weight(),
-            Node::Data { knot_weight, .. } => *knot_weight,
-            Node::Module(module) => module.knot_weight(),
-            Node::Coerced(coerced) => coerced.knot_weight(),
-            Node::Code(code) => code.knot_weight(),
+        match self.facts() {
+            Some(facts) => facts.weight(),
+            None => BuiltinFunction::knot_weight(),
+        }
+    }
+
+    /// A builtin's digest is its overload's — its native and its shape — and every other member's
+    /// is its knot's beside its index.
+    fn digest(&self) -> ContentDigest {
+        match (self.node(), self.facts()) {
+            (Node::Builtin(builtin), _) => DigestHasher::new(Tag::Builtin)
+                .feed(builtin.id())
+                .feed(builtin.ktype())
+                .finished(),
+            (_, Some(facts)) => DigestHasher::new(Tag::Member)
+                .digest(facts.digest())
+                .count(self.0.index().index() as usize)
+                .finished(),
+            (_, None) => unreachable!("only a builtin's node has no knot facts"),
         }
     }
 

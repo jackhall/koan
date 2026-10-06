@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
+use super::digest::{ContentDigest, Tag, composite, contents};
 use super::{Knotted, Link, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
@@ -15,6 +16,8 @@ pub struct List<'cell, X = Nothing, C = Value<'cell, X>> {
     cells: &'cell [C],
     ktype: KType,
     weight: Weight,
+    /// Its cells' digests, in order ([`NONE`](ContentDigest::NONE) for a knot's data node).
+    contents: ContentDigest,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -65,7 +68,13 @@ impl<'cell, X: Knotted> List<'cell, X> {
         let weight = cells.iter().fold(Weight::flat::<Self>(), |weight, cell| {
             weight.plus(cell.weight())
         });
-        Self::from_run(writer, cells, ktype, weight)
+        let contents = contents(cells.iter().map(Value::digest));
+        Self::from_run(writer, cells, ktype, weight, contents)
+    }
+
+    /// The list's content digest: its type and its cells'.
+    pub fn digest(&self) -> ContentDigest {
+        composite(Tag::List, self.ktype, self.contents)
     }
 }
 
@@ -81,6 +90,7 @@ impl<'cell, X: Knotted> List<'cell, X, Link<'cell, X>> {
             writer.fill(cells.len(), |at| cells[at]),
             ktype,
             weight,
+            ContentDigest::NONE,
         )
     }
 }
@@ -93,6 +103,7 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
         cells: &'cell [C],
         ktype: KType,
         weight: Weight,
+        contents: ContentDigest,
     ) -> &'cell Self {
         resident(
             writer,
@@ -100,14 +111,20 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
                 cells,
                 ktype,
                 weight,
+                contents,
                 member: PhantomData,
             },
         )
     }
 
-    /// The same cells under `ktype` — an ascription's retype, sharing the run.
+    /// The same cells under `ktype` — an ascription's retype, sharing the run and its contents.
     pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
-        Self::from_run(writer, self.cells, ktype, self.weight)
+        Self::from_run(writer, self.cells, ktype, self.weight, self.contents)
+    }
+
+    /// Its cells' digests, as laid down.
+    pub(crate) fn contents(&self) -> ContentDigest {
+        self.contents
     }
 
     pub fn len(&self) -> usize {

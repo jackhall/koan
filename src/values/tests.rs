@@ -7,12 +7,14 @@ mod boundary;
 mod construction;
 mod crossing;
 mod depth;
+mod digest;
 mod equality;
 mod render;
 mod satisfaction;
 mod surface;
 mod working;
 
+use super::digest::{ContentDigest, DigestHasher, Tag};
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
     ReleaseAbsorption, StepContext, Verdict, Writer, covariant, program_storage, reattachable,
@@ -202,6 +204,12 @@ impl Knotted for Stand<'_> {
         Weight::ZERO
     }
 
+    fn digest(&self) -> ContentDigest {
+        DigestHasher::new(Tag::Member)
+            .feed(self.identity())
+            .finished()
+    }
+
     fn sibling(&self, _: Edge) -> Self {
         *self
     }
@@ -254,6 +262,14 @@ impl Knotted for Node<'_> {
 
     fn weight(&self) -> Weight {
         Weight::ZERO
+    }
+
+    /// The node's own content beside its index: the test knot keeps no facts.
+    fn digest(&self) -> ContentDigest {
+        DigestHasher::new(Tag::Member)
+            .digest(self.0.payload().content())
+            .count(self.0.index().index() as usize)
+            .finished()
     }
 
     fn sibling(&self, edge: Edge) -> Self {

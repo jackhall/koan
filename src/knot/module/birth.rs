@@ -10,10 +10,13 @@
 //! body-born module's member run is its finished activation's slots read out in slot order.
 
 use crate::elaborate::self_signature;
-use crate::knot::{Eager, KActivation, KActivationView, Knotted, Node, Supplied, Untieable};
+use crate::knot::{
+    Eager, KActivation, KActivationView, Knotted, Node, Supplied, Untieable, composed,
+};
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
 use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
 use crate::type_lattice::TypeRegistry;
+use crate::values::digest::{DigestHasher, Tag};
 
 use super::Module;
 
@@ -84,5 +87,9 @@ pub fn tie_member<'graph, 'cell, 'x>(
     let ktype = self_signature(body, &keyworded, types, scratch);
     let mut members = BumpVec::with_capacity_in(body.shape().slots(), scratch);
     members.extend(body.slots().map(|(_, value)| value));
-    Ok(Module::tie(writer, ktype, &members))
+    // A body-born module is its code over what it captures.
+    let mut content = DigestHasher::new(Tag::Module);
+    content.digest(body.shape().code_digest());
+    composed(&mut content, body.shape(), body.closure().links());
+    Ok(Module::tie(writer, ktype, &members, content.finished()))
 }
