@@ -234,22 +234,44 @@ pub struct Registration<'graph> {
     /// written order.
     pub classes: &'graph [u8],
     pub which: Which,
-    /// Where a surfaced head is written; `None` for a definition's registration.
-    pub surfaced: Option<&'graph SurfacedHead<'graph>>,
+    /// In a `USING … SCOPE` block, every head its operand declares at the key; `None` for a
+    /// definition's registration.
+    pub surfaced: Option<&'graph [SurfacedHead<'graph>]>,
 }
 
-/// A bodyless keyworded head a `USING … SCOPE` operand's signature declares, which the block holds
-/// as a registration of its own: a parameter of the registration channel, typed where the program
-/// loads and bound by nothing at run. Each place is named by how many shapes out from the block it
-/// lies, so the load pass reads it off the chain of shapes it keeps.
+/// A keyworded head a `USING … SCOPE` operand declares, which the block holds under its key as one
+/// registration parameter per key: typed where the program loads, and bound where the block runs
+/// to the list of the functions the module offers at the key. Each place is named by how many
+/// shapes out from the block it lies, so the load pass reads it off the chain of shapes it keeps.
 #[derive(Clone, Copy, Debug)]
-pub struct SurfacedHead<'graph> {
-    /// The head's statement in the signature's body.
-    pub head: &'graph KExpression<'graph>,
-    /// The `SIG` declaration's type binder: its shape's hops out, and its slot there.
-    pub signature: (u32, Slot),
-    /// The ascription naming the signature: its shape's hops out, and its type part's site there.
-    pub ascription: (u32, Site),
+pub enum SurfacedHead<'graph> {
+    /// A bodyless head the operand's signature declares.
+    Signature {
+        /// The head's statement in the signature's body.
+        head: &'graph KExpression<'graph>,
+        /// The `SIG` declaration's type binder: its shape's hops out, and its slot there.
+        signature: (u32, Slot),
+        /// The ascription naming the signature: its shape's hops out, and its type part's site
+        /// there.
+        ascription: (u32, Site),
+    },
+    /// A definition the operand's `MODULE` or `GROUP` body holds.
+    Body {
+        /// The definition's statement in the body.
+        definition: &'graph KExpression<'graph>,
+        /// The module's binder: its shape's hops out, and its slot there.
+        module: (u32, Slot),
+    },
+}
+
+impl SurfacedHead<'_> {
+    /// Where the head is written.
+    pub fn source(&self) -> SourceRef {
+        match self {
+            SurfacedHead::Signature { head, .. } => head.source,
+            SurfacedHead::Body { definition, .. } => definition.source,
+        }
+    }
 }
 
 /// A bucket declaration a body holds, `EXPR #(MOVE 2 TO 1)`: the ranking it gives its key, from

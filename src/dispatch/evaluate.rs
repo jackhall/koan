@@ -13,6 +13,8 @@
 //!   through the view door;
 //! - an **`EVAL`** `<code> -> <Type>`: its code run in a frame that owes the declared type, as a
 //!   called frame owes its return;
+//! - a **`USING … SCOPE`**: its body run as a block entered on the module, each surfaced name bound
+//!   to the member it names and each surfaced key to the module's functions there;
 //! - a bucket declaration, which is `Null`;
 //! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks
 //!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
@@ -39,7 +41,9 @@ use crate::memory::{Bump, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, block};
+use crate::program::{
+    CallKind, Evaluated, KBirth, KBundle, KState, Program, block, surfaced_block,
+};
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
@@ -79,6 +83,8 @@ pub(super) enum Form<'graph> {
     Ascribe(&'graph KExpression<'graph>),
     /// `EVAL <code> -> <Type>`.
     Eval(&'graph KExpression<'graph>),
+    /// `USING <module> SCOPE <body>`.
+    Using(&'graph KExpression<'graph>),
     Declaration,
     Call(&'graph KExpression<'graph>, &'graph CandidateList<'graph>),
     /// `(<head> <argument>)`: a call by name, or a construction.
@@ -153,6 +159,7 @@ pub(super) fn evaluate<'graph>(
         Form::Declaration => finish(step, &at, Value::Null),
         Form::Ascribe(node) => ascribe(step, &at, node, stage),
         Form::Eval(node) => evaluated(step, &at, node, stage),
+        Form::Using(node) => using(step, &at, node, stage),
         Form::Call(node, list) => call(step, &at, node, list, stage),
         Form::Apply(node) => {
             let [head, argument] = node.parts else {
@@ -206,6 +213,7 @@ pub(super) fn of_node<'graph>(
             return Form::Ascribe(node);
         }
         Some(BuiltinShapeId::Eval) => return Form::Eval(node),
+        Some(BuiltinShapeId::UsingScope) => return Form::Using(node),
         Some(BuiltinShapeId::BucketDeclaration) => return Form::Declaration,
         _ => {}
     }
@@ -339,6 +347,43 @@ fn ascribe<'graph, 'here>(
         return finish(step, at, raised.raise(program, writer));
     }
     finish(step, at, value.retyped(writer, ascribed, types, &scratch))
+}
+
+/// `USING <module> SCOPE <body>`: the body run as a block whose parameters are bound to what the
+/// module surfaces, its last statement's value its own.
+fn using<'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_>,
+    at: &Evaluation<'graph, 'here>,
+    node: &'graph KExpression<'graph>,
+    stage: u32,
+) -> Action<'graph, KBundle> {
+    let program = at.program;
+    let scratch = Bump::new();
+    let [_, operand, _, _] = node.parts else {
+        unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
+    };
+    let wanted = [Wanted::Evaluated(&operand.value)];
+    let operands = match gathered(&mut step, at, &wanted, stage, &scratch) {
+        Gathered::Ready(operands) => operands,
+        other => return unready(step, at, other),
+    };
+    let [Operand::Value(module)] = operands[..] else {
+        unreachable!("a `USING`'s operand is evaluated")
+    };
+    // The shape surfaces only an operand it reads a module's declaration off.
+    if module.as_module().is_none() {
+        let raised = Raised::NotAModule {
+            value: module.concrete_ktype(),
+        };
+        let error = raised.raise(program, step.writer());
+        return finish(step, at, error);
+    }
+    let body = Site::of_body(node)
+        .and_then(|site| at.view.shape().nested(site))
+        .expect("a `USING … SCOPE` body is a block its shape holds");
+    let request = surfaced_block(program, body, at.view, Some(module), Use::Forwards);
+    let asked = step.spawn(request);
+    park(step, at, asked, FINISHING)
 }
 
 /// `EVAL <code> -> <Type>`: the code's shape checked for overlaps as a loaded program's is, then
@@ -578,7 +623,11 @@ fn call<'graph, 'here>(
                     Use::Forwards,
                 )
             };
+            // A call through a barrier never tails: its value crosses the barrier where its
+            // frame ends.
+            let barrier = callee.as_callable().and_then(Knotted::coerced).is_some();
             if let Some(contract) = at.contract
+                && !barrier
                 && select::keeps(types, registered.shape, solution, contract)
             {
                 let request = call(Some(contract));

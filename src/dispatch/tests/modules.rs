@@ -204,3 +204,132 @@ fn a_quantified_member_over_an_unpinned_parameter_is_read_only_at_a_call_s_head(
         "ok"
     );
 }
+
+#[test]
+fn a_using_block_opens_a_module_s_names_and_definitions() {
+    assert_eq!(
+        run("MODULE greetings = (LET hello = \"hi there\")\nPRINT (USING greetings SCOPE (hello))"),
+        "hi there"
+    );
+    assert_eq!(
+        run(
+            "MODULE doubling = (LET dbl = FN EXPR #(DOUBLE x :Number) -> Number = #(x))\n\
+             PRINT (USING doubling SCOPE (DOUBLE 21))"
+        ),
+        "21",
+        "a combined definition's registration"
+    );
+    assert_eq!(
+        run(
+            "MODULE palette = (UNION Color = #{Red: Null, Blue: Null})\n\
+             PRINT (USING palette SCOPE (\
+             (EXPR #(DESCRIBE c :Color) -> Str = #(\"a color\")) (DESCRIBE (Color.Red null))))"
+        ),
+        "a color"
+    );
+    assert_eq!(
+        run("MODULE counter = (LET step = 2)\n\
+             PRINT (USING counter SCOPE ((LET half = step) (half + step)))"),
+        "4"
+    );
+    assert_eq!(
+        run("SIG Doubler = #[(EXPR #(DOUBLE _ :Number) -> Number)]\n\
+             MODULE doubling = (EXPR #(DOUBLE x :Number) -> Number = #(x * 2))\n\
+             LET doubles = (doubling :| Doubler)\n\
+             PRINT (USING doubles SCOPE (DOUBLE 21))"),
+        "42",
+        "a view's keyworded member"
+    );
+}
+
+#[test]
+fn a_quantified_head_is_called_through_a_view_at_each_type() {
+    let source = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n\
+                  MODULE boxing = (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x]))\n\
+                  PRINT (USING (boxing :| Boxes) SCOPE (BOX 7))\n\
+                  PRINT (USING (boxing :! Boxes) SCOPE (BOX \"hi\"))";
+    assert_eq!(run(source), "[7]\n[hi]");
+}
+
+#[test]
+fn a_using_block_spreads_every_overload_at_a_key() {
+    let two = "MODULE two = ((EXPR #(PICK x :Number) -> Str = #(\"number\")) \
+               (EXPR #(PICK x :Str) -> Str = #(\"str\")) \
+               (EXPR #(PICK x :Any) -> Str = #(\"any\")))\n";
+    assert_eq!(
+        run(&format!(
+            "{two}PRINT (USING two SCOPE (PICK 1))\nPRINT (USING two SCOPE (PICK \"s\"))\n\
+             PRINT (USING two SCOPE (PICK null))"
+        )),
+        "number\nstr\nany"
+    );
+    let tied = "MODULE tied = ((EXPR #(PICK x :Number) -> Str = #(\"a\")) \
+                (EXPR #(PICK x :(Number | Str)) -> Str = #(\"b\")))\n";
+    assert_eq!(
+        run(&format!("{tied}PRINT (USING tied SCOPE (PICK \"s\"))")),
+        "b"
+    );
+    let ambiguous = "MODULE both = ((EXPR #(PICK x :(Number | Str)) -> Str = #(\"a\")) \
+                     (EXPR #(PICK x :(Number | Bool)) -> Str = #(\"b\")))\n";
+    assert_eq!(
+        run(&format!("{ambiguous}PRINT (USING both SCOPE (PICK 1))")),
+        "error: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks first"
+    );
+}
+
+#[test]
+fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
+    let source = format!(
+        "{COUNTER}LET v = (ints :| Counter)\n\
+         PRINT (v.succ {{x = v.zero}})\n\
+         PRINT (v.succ {{x = (v.succ {{x = v.zero}})}})"
+    );
+    assert_eq!(run(&source), "Carrier(1)\nCarrier(2)");
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}LET v = (ints :| Counter)\nPRINT (v.succ {{x = 1}})"
+        )),
+        "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Number}: it is not \
+         sealed under Carrier",
+        "an argument the view never sealed"
+    );
+    let stepping = "SIG Stepper FOR ALL #[Carrier] = \
+                    #[(VAL zero :Carrier) (EXPR #(STEP _ :Carrier) -> Carrier)]\n\
+                    MODULE twos = ((LET zero = 0) (EXPR #(STEP x :Number) -> Number = #(x + 2)))\n\
+                    LET s = (twos :| Stepper)\n";
+    assert_eq!(
+        run(&format!(
+            "{stepping}PRINT (USING s SCOPE (STEP zero))\nPRINT (USING s SCOPE (STEP (STEP zero)))"
+        )),
+        "Carrier(2)\nCarrier(4)",
+        "a keyworded member behind a barrier"
+    );
+    // A tail call through a barrier keeps its frame, so its value crosses the barrier.
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}LET v = (ints :| Counter)\n\
+             LET bump = (FN :{{}} -> Any = #(v.succ {{x = v.zero}}))\nPRINT (bump {{}})"
+        )),
+        "Carrier(1)"
+    );
+}
+
+#[test]
+fn an_argument_crossing_a_union_slot_inwards_unseals_by_the_member_over_the_carrier() {
+    let source = "SIG Shown FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL show :(FN :{x :(Carrier | Str)} -> Str))]\n\
+                  MODULE m = ((LET zero = 0) \
+                  (LET show = (FN :{x :(Number | Str)} -> Str = #(\"shown\"))))\n\
+                  LET v = (m :| Shown)\n";
+    assert_eq!(
+        run(&format!(
+            "{source}PRINT (v.show {{x = v.zero}})\nPRINT (v.show {{x = \"s\"}})"
+        )),
+        "shown\nshown"
+    );
+    assert_eq!(
+        run(&format!("{source}PRINT (v.show {{x = 1}})")),
+        "error: :(FN :{x :(Carrier | Str)} -> Str) cannot be called with :{x :Number}: no member \
+         of its union admits it"
+    );
+}

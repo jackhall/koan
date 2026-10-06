@@ -452,7 +452,7 @@ struct Registered<'graph> {
     elements: &'graph [KeyElement],
     classes: &'graph [u8],
     which: Which,
-    surfaced: Option<&'graph SurfacedHead<'graph>>,
+    surfaced: Option<&'graph [SurfacedHead<'graph>]>,
 }
 
 /// A ranking some statement gives a key, as a statement or a use at the same key sees it.
@@ -917,25 +917,49 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let depth = self.chain.len() as u32;
         let mut registered: BumpVec<'x, Registered<'graph>> = BumpVec::new_in(self.scratch);
         let mut rankings: BumpVec<'x, Ranking<'graph>> = BumpVec::new_in(self.scratch);
-        // A surfaced head writes where a parameter does, under an index no statement takes.
-        for (index, entry) in heads.iter().enumerate() {
-            let (at, source) = (Position::PARAMETER, entry.head.head.source);
-            self.open_key(entry.elements, source)?;
+        // A surfaced key writes where a parameter does, under an index no statement takes: one
+        // registration per key, over every head the operand declares there.
+        let mut keys: BumpVec<'x, KeySymbol> = BumpVec::new_in(self.scratch);
+        for entry in heads {
             let key = KeyElement::key(entry.elements.iter().copied());
-            let classes = match head_run(entry.head.head) {
-                Some(run) => self.head_classes(run),
-                None => self.operator_classes(entry.elements),
-            };
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        for (index, key) in keys.iter().copied().enumerate() {
+            let at = Position::PARAMETER;
+            let mut at_key = heads
+                .iter()
+                .filter(|entry| KeyElement::key(entry.elements.iter().copied()) == key);
+            let first = *at_key.clone().next().expect("a key has a head");
+            let source = first.head.source();
+            self.open_key(first.elements, source)?;
             let own = (kind, &registered[..], &rankings[..], at);
-            self.agrees(own, key, entry.elements, classes, source)?;
+            let classes = self.surfaced_classes(own, key, first);
+            if at_key.any(|entry| self.surfaced_classes(own, key, *entry) != classes) {
+                return Err(ShapeError::RankingDisagrees {
+                    key: first.elements,
+                    at: source,
+                });
+            }
+            self.agrees(own, key, first.elements, classes, source)?;
+            let surfaced = heads
+                .iter()
+                .filter(|entry| KeyElement::key(entry.elements.iter().copied()) == key)
+                .map(|entry| entry.head);
+            let surfaced = {
+                let mut staged = BumpVec::new_in(self.scratch);
+                staged.extend(surfaced);
+                collect(self.brand.writer(), staged.iter().copied())
+            };
             registered.push(Registered {
                 symbol: RegistrationSymbol::of(key, depth, (nodes.len() + index) as u32, 0),
                 at,
                 key,
-                elements: entry.elements,
+                elements: first.elements,
                 classes,
-                which: entry.which,
-                surfaced: Some(entry.head),
+                which: first.which,
+                surfaced: Some(surfaced),
             });
         }
         for (index, node) in nodes.iter().enumerate() {
@@ -1055,6 +1079,25 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             _ => &[0],
         };
         collect(self.brand.writer(), classes.iter().copied())
+    }
+
+    /// The ranking a surfaced head gives `key`: a signature's head the ranking its run writes, an
+    /// operator its chaining, and a body's definition the ranking a definition at the block would
+    /// adopt.
+    fn surfaced_classes(
+        &self,
+        own: Own<'_, 'graph>,
+        key: KeySymbol,
+        entry: SurfacedKey<'graph>,
+    ) -> &'graph [u8] {
+        match entry.head {
+            SurfacedHead::Signature { head, .. } => match head_run(head) {
+                Some(run) => self.head_classes(run),
+                None => self.operator_classes(entry.elements),
+            },
+            SurfacedHead::Body { .. } if entry.operator => self.operator_classes(entry.elements),
+            SurfacedHead::Body { .. } => self.adopted(own, key, slots(entry.elements)),
+        }
     }
 
     /// The ranking a signature member's head `run` writes: an integer per slot, or written order
@@ -2484,12 +2527,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             );
             self.visible(own, listing.site, key, |seen| {
                 if let Seen::Registration(entry) = seen {
-                    found.push((entry.symbol, entry.classes));
+                    found.push((entry.symbol, entry.classes, entry.surfaced.is_some()));
                 }
                 None::<()>
             });
         }
-        for (symbol, theirs) in found.iter().copied() {
+        for (symbol, theirs, surfaced) in found.iter().copied() {
             if classes.is_some_and(|classes| classes != theirs) {
                 return Err(ShapeError::RankingDisagrees {
                     key: elements,
@@ -2507,7 +2550,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     listing.reader,
                 )
                 .expect("a visible registration resolves");
-            candidates.push(Candidate::One(coordinate));
+            // A surfaced key holds the list of the functions the module offers there.
+            candidates.push(match surfaced {
+                true => Candidate::Spread(coordinate),
+                false => Candidate::One(coordinate),
+            });
         }
         Ok(classes.unwrap_or_else(|| self.written(elements)))
     }

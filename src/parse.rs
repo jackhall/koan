@@ -49,7 +49,9 @@ pub use ast::{
     DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, Mark,
     NodeCache, PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
 };
-pub use builtin_shapes::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
+pub use builtin_shapes::binder::{
+    BinderBucketFn, BinderNameFn, BinderSurface, BucketKeys, StoredBinderKey,
+};
 pub use builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
 pub use builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for,

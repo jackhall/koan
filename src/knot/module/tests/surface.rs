@@ -59,7 +59,8 @@ fn a_surfaced_name_reads_the_member_it_names() {
             let m = module(fixture, activation, "m");
             let block = entered(writer, activation);
 
-            surface(m, block, types, scratch).expect("the block's parameters are `m`'s members");
+            surface(writer, m, block, types, scratch)
+                .expect("the block's parameters are `m`'s members");
 
             let read = |name: &str| {
                 let name = fixture.name(name);
@@ -96,14 +97,26 @@ USING m SCOPE (zero name)";
             let block = entered(writer, activation);
 
             assert_eq!(
-                surface(module(fixture, activation, "n"), block, types, scratch),
+                surface(
+                    writer,
+                    module(fixture, activation, "n"),
+                    block,
+                    types,
+                    scratch
+                ),
                 Err(Unsurfaceable::Count {
                     expected: 3,
                     found: 2
                 }),
             );
             assert_eq!(
-                surface(module(fixture, activation, "o"), block, types, scratch),
+                surface(
+                    writer,
+                    module(fixture, activation, "o"),
+                    block,
+                    types,
+                    scratch
+                ),
                 Err(Unsurfaceable::Unnamed {
                     name: fixture.name("zero")
                 }),
@@ -134,7 +147,7 @@ USING m SCOPE (zero)";
             let f = crate::knot::tests::callable(fixture, activation, "f");
             let block = entered(writer, activation);
             assert_eq!(
-                surface(f, block, types, scratch),
+                surface(writer, f, block, types, scratch),
                 Err(Unsurfaceable::NotAModule)
             );
         })

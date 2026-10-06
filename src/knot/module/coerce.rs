@@ -13,17 +13,23 @@
 //! substitutions of the *declared* type say what the member is coming from and going to, and where
 //! they agree there is nothing to do — which is the whole of `:!`, and every concrete slot of `:|`.
 //!
-//! Going the other way — a value arriving at a barrier from outside — is the call's work, and
-//! [modules](../../../roadmap/rewrite/modules.md)'.
+//! A call through a barrier crosses it both ways: its arguments [`inward`] — the walk with the two
+//! substitutions swapped, where a carrier's side unseals a value sealed under it — and its result
+//! [`outward`].
 
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol};
+use std::fmt;
+
+use crate::scope::{IMPLICIT, ParameterBinding};
+use crate::symbols::SymbolInterner;
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, SchemaDraft, TypeNode, TypeRegistry,
-    fits_application, satisfied_by, substitute_parameters,
+    DeclaredType, DispatchTokenElement, KType, Members, Parametric, Record as TypeRecord,
+    SchemaDraft, TypeNode, TypeRegistry, display_name, fits_application, satisfied_by,
+    substitute_parameters,
 };
-use crate::values::{Dict, List, Record, SealRefused, Tagged, Value};
+use crate::values::{Dict, List, Record, SealRefused, Tagged, Value, satisfies};
 
 use super::{Coerced, view};
 
@@ -40,11 +46,63 @@ pub enum CoercionRefused {
     Nested,
     /// A union slot: no declared member's source side admits the value.
     NoUnionMember,
+    /// A union slot: two members naming a head parameter the view hides admit the value, so
+    /// neither says which the value is.
+    TiedUnion,
     /// A declared type this walk has no arm for, or a value whose shape does not match the arm
     /// its declaration took. A **cyclic data value** lands here: a container that is a knot's data
     /// node is a knot member, not a container word, and nothing yet rebuilds one through a
     /// barrier.
     Unsupported(DeclaredType<Parametric>),
+}
+
+impl CoercionRefused {
+    /// The refusal worded for a message, its types rendered through `types` and `symbols`.
+    pub fn display<'a>(
+        self,
+        types: &'a TypeRegistry<'_>,
+        symbols: &'a SymbolInterner,
+    ) -> impl fmt::Display + 'a {
+        CoercionRefusedDisplay {
+            refused: self,
+            types,
+            symbols,
+        }
+    }
+}
+
+/// A [`CoercionRefused`] beside the registry and interner it renders through.
+struct CoercionRefusedDisplay<'a, 'run> {
+    refused: CoercionRefused,
+    types: &'a TypeRegistry<'run>,
+    symbols: &'a SymbolInterner,
+}
+
+impl fmt::Display for CoercionRefusedDisplay<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = |handle: KType| display_name(handle, self.types, self.symbols);
+        match self.refused {
+            CoercionRefused::Seal(SealRefused::NotAMint(identity)) => {
+                write!(f, "{} is no carrier", name(identity))
+            }
+            CoercionRefused::Seal(SealRefused::Misfit { witness, .. }) => {
+                write!(f, "its value does not satisfy {}", name(witness))
+            }
+            CoercionRefused::Seal(SealRefused::NotSealed { carrier }) => {
+                write!(f, "it is not sealed under {}", name(carrier))
+            }
+            CoercionRefused::NotAFunction => f.write_str("it is no function"),
+            CoercionRefused::NotAModule => f.write_str("it is no module"),
+            CoercionRefused::Nested => f.write_str("its module does not fit its view"),
+            CoercionRefused::NoUnionMember => f.write_str("no member of its union admits it"),
+            CoercionRefused::TiedUnion => {
+                f.write_str("two members of its union over hidden types admit it")
+            }
+            CoercionRefused::Unsupported(_) => {
+                f.write_str("nothing carries a value of its shape across the view")
+            }
+        }
+    }
 }
 
 /// What a coercion reads: the region it writes into, the lattice, and the two substitutions a
@@ -118,15 +176,30 @@ pub fn coerce<'graph, 'cell>(
     // Only a function slot is a scheme, so every other arm's two sides are types.
     let (src_type, dst_type) = (src.as_type(), dst.as_type());
     match node {
-        // A reference to a head parameter: the value takes the mint as its one tagged layer, the
-        // barrier checking the mint is one and the payload fits.
+        // A reference to a head parameter. Outwards, the value takes the carrier as its one tagged
+        // layer, the barrier checking the carrier is one and the payload fits; inwards, through a
+        // barrier, a value sealed under the carrier gives up its payload at the source's type.
         TypeNode::Parameter { nonce: None, .. } => {
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
-            Tagged::seal(cx.writer, value, dst, src, cx.types, cx.scratch)
-                .map(Value::Tagged)
-                .map_err(CoercionRefused::Seal)
+            if !carrier(cx.types, src) {
+                return Tagged::seal(cx.writer, value, dst, src, cx.types, cx.scratch)
+                    .map(Value::Tagged)
+                    .map_err(CoercionRefused::Seal);
+            }
+            let not_sealed = CoercionRefused::Seal(SealRefused::NotSealed { carrier: src });
+            let Value::Tagged(sealed) = value else {
+                return Err(not_sealed);
+            };
+            if sealed.ktype() != src {
+                return Err(not_sealed);
+            }
+            let payload = *sealed.payload();
+            if !satisfies(dst, &payload, cx.types, cx.scratch) {
+                return Err(not_sealed);
+            }
+            Ok(payload.retyped(cx.writer, dst, cx.types, cx.scratch))
         }
         TypeNode::List { element } => {
             let (Value::List(list), Some(dst)) = (value, dst_type) else {
@@ -184,19 +257,28 @@ pub fn coerce<'graph, 'cell>(
                 built.with_type(cx.writer, dst)
             }))
         }
-        // The first declared member whose source side admits the value, in the union's interned
-        // order. Two members that both admit it — a slot declared `Carrier | Number` over a source
-        // binding `Carrier` to `Number` — take whichever that order reaches first.
+        // The member whose source side admits the value, by a rule blind to the union's member
+        // order: where several do, the one naming a head parameter the view reads otherwise — a
+        // slot declared `Carrier | Number` over a source binding `Carrier` to `Number` takes
+        // `Carrier` — and two such refuse. A member naming none reads alike either side, so any
+        // one of those carries the value as it is.
         TypeNode::Union { members } => {
             let carried = value.ktype();
-            let member = members
-                .iter()
-                .find(|member| {
-                    let source = cx.source_side((*member).into());
-                    satisfied_by(cx.types, cx.scratch, source, carried)
-                })
-                .ok_or(CoercionRefused::NoUnionMember)?;
-            coerce(cx, value, member.into())
+            let mut hiding = None;
+            let mut plain = None;
+            for member in members.iter() {
+                let declared: DeclaredType<Parametric> = member.into();
+                if !satisfied_by(cx.types, cx.scratch, cx.source_side(declared), carried) {
+                    continue;
+                }
+                if cx.source_side(declared) == cx.view_side(declared) {
+                    plain = plain.or(Some(declared));
+                } else if hiding.replace(declared).is_some() {
+                    return Err(CoercionRefused::TiedUnion);
+                }
+            }
+            let member = hiding.or(plain).ok_or(CoercionRefused::NoUnionMember)?;
+            coerce(cx, value, member)
         }
         TypeNode::KFunction { .. } => {
             let Value::Knotted(member) = value else {
@@ -262,5 +344,168 @@ pub fn coerce<'graph, 'cell>(
             .map_err(|_| CoercionRefused::Nested)
         }
         _ => Err(unsupported),
+    }
+}
+
+/// Whether `handle` is a carrier an opaque view hides a head parameter behind.
+fn carrier(types: &TypeRegistry<'_>, handle: KType) -> bool {
+    matches!(
+        types.node(handle),
+        TypeNode::Parameter { nonce: Some(_), .. }
+    )
+}
+
+/// What the barrier `barrier` reads its declared type under: the source module's bindings and the
+/// view's, out of the signature handles it holds — swapped for a value crossing it inwards.
+fn across<'a, 'cell, 'run, 'x>(
+    writer: Writer<'cell>,
+    barrier: &Coerced<'_, '_>,
+    inwards: bool,
+    types: &'a TypeRegistry<'run>,
+    scratch: BumpAllocator<'x>,
+) -> Coercion<'a, 'cell, 'run, 'x> {
+    let bindings = |signature: KType| {
+        let schema =
+            super::layout::schema_of(signature, types).expect("a barrier holds signatures");
+        Members::from_pairs(
+            scratch,
+            schema.manifest_members.iter().map(|(name, bound)| {
+                (
+                    *name,
+                    types.concrete(*bound).expect("a binding is concrete"),
+                )
+            }),
+        )
+    };
+    let (from, to) = (bindings(barrier.from()), bindings(barrier.to()));
+    let (from, to) = if inwards { (to, from) } else { (from, to) };
+    Coercion {
+        writer,
+        types,
+        scratch,
+        from,
+        to,
+    }
+}
+
+/// `value` at the type `declared`, a slot of a barrier's declared type, read under `cx`: carried
+/// as it is where both sides read it alike — a slot over the member's own `FOR ALL` group among
+/// them — and coerced otherwise.
+fn crossed<'graph, 'cell>(
+    cx: &Coercion<'_, 'cell, '_, '_>,
+    value: KValue<'graph, 'cell>,
+    declared: Parametric,
+) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
+    let (types, scratch) = (cx.types, cx.scratch);
+    let src = substitute_parameters(types, scratch, declared, cx.from);
+    let dst = substitute_parameters(types, scratch, declared, cx.to);
+    if src == dst {
+        return Ok(value);
+    }
+    if types.concrete(src).is_none() || types.concrete(dst).is_none() {
+        return Err(CoercionRefused::Unsupported(declared.into()));
+    }
+    coerce(cx, value, declared.into())
+}
+
+/// `arguments`, the record a call through the barrier `barrier` was handed at the view's types,
+/// coerced inwards to the types the function behind it takes: a function member's parameters by
+/// name, or a keyworded member's slots under the names `parameters` binds them to, packed into
+/// one list where it packs them. The record holds those fields alone, so the function behind the
+/// barrier is called by name and solves its own group.
+pub fn inward<'graph, 'cell>(
+    writer: Writer<'cell>,
+    barrier: &Coerced<'graph, 'cell>,
+    arguments: KValue<'graph, 'cell>,
+    parameters: ParameterBinding<'_>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
+    let cx = across(writer, barrier, true, types, scratch);
+    let unsupported = CoercionRefused::Unsupported(barrier.declared());
+    let field = |name: BinderSymbol| {
+        arguments
+            .field(name.symbol(), types, scratch)
+            .map(|seen| seen.value())
+            .ok_or(unsupported)
+    };
+    let mut fields = BumpVec::new_in(scratch);
+    match (declared_of(types, scratch, barrier.declared()), parameters) {
+        (Declared::Function { params, .. }, _) => {
+            for (name, declared) in params.iter() {
+                fields.push((name, crossed(&cx, field(name)?, declared)?));
+            }
+        }
+        (Declared::Shape { slots, .. }, ParameterBinding::Named(names)) => {
+            for (name, declared) in names.iter().zip(slots.iter()) {
+                fields.push((*name, crossed(&cx, field(*name)?, *declared)?));
+            }
+        }
+        (Declared::Shape { slots, .. }, ParameterBinding::Operands) => {
+            let name = BinderSymbol::Value(IMPLICIT.operands.symbol());
+            let packed = field(name)?;
+            let surface = packed.surface(types, scratch).ok_or(unsupported)?;
+            let mut operands = BumpVec::with_capacity_in(slots.len(), scratch);
+            for (at, declared) in slots.iter().enumerate() {
+                let operand = surface.child(at, types, scratch).value();
+                operands.push(crossed(&cx, operand, *declared)?);
+            }
+            let list = List::new(writer, operands.iter().copied(), types, scratch);
+            fields.push((name, Value::List(list)));
+        }
+    }
+    Ok(Value::Record(Record::new(writer, &fields, types, scratch)))
+}
+
+/// `value`, what the function behind the barrier `barrier` returned at the source's types, coerced
+/// outwards to the type the view declares its return at.
+pub fn outward<'graph, 'cell>(
+    writer: Writer<'cell>,
+    barrier: &Coerced<'graph, 'cell>,
+    value: KValue<'graph, 'cell>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
+    let cx = across(writer, barrier, false, types, scratch);
+    let ret = match declared_of(types, scratch, barrier.declared()) {
+        Declared::Function { ret, .. } | Declared::Shape { ret, .. } => ret,
+    };
+    crossed(&cx, value, ret)
+}
+
+/// The slot types and return of a barrier's declared type: a function type's parameters by name,
+/// or an expression shape's slots in element order.
+enum Declared<'run, 'x> {
+    Function {
+        params: TypeRecord<'run, Parametric>,
+        ret: Parametric,
+    },
+    Shape {
+        slots: BumpVec<'x, Parametric>,
+        ret: Parametric,
+    },
+}
+
+/// The slot types and return of the barrier's declared type `declared`.
+fn declared_of<'run, 'x>(
+    types: &TypeRegistry<'run>,
+    scratch: BumpAllocator<'x>,
+    declared: DeclaredType<Parametric>,
+) -> Declared<'run, 'x> {
+    let node = match declared {
+        DeclaredType::Type(declared) => types.node(declared),
+        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+    };
+    match node {
+        TypeNode::KFunction { params, ret, .. } => Declared::Function { params, ret },
+        TypeNode::ExpressionShape { elements, ret, .. } => {
+            let mut slots = BumpVec::new_in(scratch);
+            slots.extend(elements.iter().filter_map(|element| match element {
+                DispatchTokenElement::Slot(slot) => Some(slot),
+                DispatchTokenElement::Keyword(_) => None,
+            }));
+            Declared::Shape { slots, ret }
+        }
+        _ => unreachable!("a barrier stands before a function"),
     }
 }

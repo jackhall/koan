@@ -328,14 +328,16 @@ pub(super) fn run<'graph, 'here>(
             // is at a call's head, which the load records as a solution it leaves unknown.
             match at.view.shape().instance_at(Site::of_node(node)) {
                 Some(Static::Unknown) => member,
-                Some(solution) => {
-                    let Value::Knotted(function) = member else {
-                        unreachable!("an instance site reads a quantified function")
-                    };
-                    Value::Knotted(instance(
+                // A quantified member behind a barrier names a carrier, which the load refuses to
+                // instantiate at.
+                Some(solution) => match member.as_callable().filter(|f| f.function().is_some()) {
+                    Some(function) => Value::Knotted(instance(
                         writer, function, solution, &at.view, types, scratch,
-                    ))
-                }
+                    )),
+                    None => raise(Raised::QuantifiedMember {
+                        name: name.symbol(),
+                    }),
+                },
                 None if member.ktype().as_type().is_none() => raise(Raised::QuantifiedMember {
                     name: name.symbol(),
                 }),

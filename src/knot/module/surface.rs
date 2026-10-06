@@ -8,14 +8,16 @@
 //!
 //! A block declares locals of its own beside its parameters, and a local sorts in among them
 //! rather than after, so the parameters are picked out by declared position — `Position::PARAMETER`
-//! — and not by taking the first `n` slots. Only the value and type channels are surfaced: a
-//! signature's bodyless head is a registration parameter the load types, which nothing binds here.
+//! — and not by taking the first `n` slots. A surfaced key is a registration parameter, bound to
+//! the list of the functions the module offers at it ([`layout::functions_at`]), which a use at
+//! the key spreads.
 
 use crate::knot::{KActivation, Knotted};
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::scope::{Position, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::TypeRegistry;
+use crate::values::{List, Value};
 
 use super::layout;
 
@@ -34,9 +36,11 @@ pub enum Unsurfaceable {
     Unnamed { name: BinderSymbol },
 }
 
-/// Bind each surfaced parameter of `block` to the member of `module` it names. A refusal binds
-/// nothing.
+/// Bind each surfaced parameter of `block` to the member of `module` it names, and each surfaced
+/// key to the list of the functions `module` offers there, laid down through `writer`. A refusal
+/// binds nothing.
 pub fn surface<'graph, 'cell>(
+    writer: Writer<'cell>,
     module: Knotted<'graph, 'cell>,
     block: &KActivation<'graph, 'cell>,
     types: &TypeRegistry<'_>,
@@ -55,9 +59,19 @@ pub fn surface<'graph, 'cell>(
         let name = shape.slot_name(slot);
         let (_, position) = shape.slot(name).expect("a slot's own name resolves to it");
         // A block declares locals of its own, and a local sorts in among the parameters rather
-        // than after them, so a parameter is picked out by its declared position. A surfaced
-        // head's registration is a parameter too, and binds nothing here.
-        if position != Position::PARAMETER || matches!(name, BinderSymbol::Registration(_)) {
+        // than after them, so a parameter is picked out by its declared position.
+        if position != Position::PARAMETER {
+            continue;
+        }
+        // A surfaced key holds every function the module offers at it.
+        if let BinderSymbol::Registration(_) = name {
+            let key = shape
+                .registration(slot)
+                .expect("a registration parameter is a surfaced key")
+                .key;
+            let functions = layout::functions_at(module, key, types, scratch);
+            let list = List::of_candidates(writer, functions.iter().copied());
+            bindings.push((slot, Value::List(list)));
             continue;
         }
         // The `k`-th parameter of a channel is member `k` of that channel — the layout law, which

@@ -411,3 +411,47 @@ MODULE m = ((LET Carrier = Any) (LET ring = [1 spin]) \
         })
     });
 }
+
+/// A slot over `Carrier | Number` where the source binds `Carrier` to `Number`, and one over two
+/// parameters the source binds alike.
+const UNIONS: &str = "\
+SIG Either FOR ALL #[Carrier] = #[(VAL v :(Carrier | Number))]
+SIG Twins FOR ALL #[Carrier Other] = #[(VAL a :Carrier) (VAL b :Other) (VAL v :(Carrier | Other))]
+MODULE m = ((LET a = 1) (LET b = 2) (LET v = 3))";
+
+#[test]
+fn a_union_member_naming_a_hidden_parameter_takes_the_value_whatever_the_union_s_order() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(UNIONS);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let m = module(fixture, activation, "m");
+            let either = declared(fixture, activation, "Either");
+            let view = ascribe(writer, m, either, Ascription::Opaque, types, scratch)
+                .unwrap_or_else(|error| panic!("`m` satisfies `Either`: {error:?}"));
+            let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
+                panic!("`Carrier` is a type member");
+            };
+            assert_eq!(
+                member(fixture, view, "v", types, scratch).concrete_ktype(),
+                carrier.handle(),
+                "both members admit a number, and the one over the carrier is taken"
+            );
+
+            let twins = declared(fixture, activation, "Twins");
+            let refused = ascribe(writer, m, twins, Ascription::Opaque, types, scratch);
+            assert!(
+                matches!(
+                    refused,
+                    Err(Unascribable::Coercion {
+                        refused: CoercionRefused::TiedUnion,
+                        ..
+                    })
+                ),
+                "two members over hidden parameters both admit the value: {refused:?}"
+            );
+        })
+    });
+}

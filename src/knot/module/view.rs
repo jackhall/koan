@@ -14,6 +14,10 @@
 //! produce views whose carriers do not unify. Every member is then born [coerced](super::coerce)
 //! to the mints. A pinned parameter keeps its pin either way.
 //!
+//! A view carries a keyworded member too: past its named members, each overload the source offers
+//! at the member's key that the member read under the source's bindings admits, behind a barrier
+//! where the view reads the member otherwise.
+//!
 //! Nothing is minted at a *nested* boundary. A slot declared at an application whose pins name the
 //! outer signature's parameters is re-viewed against it read under the outer view's bindings, so
 //! the nested view's identities are the outer mints, arriving through the declared type rather

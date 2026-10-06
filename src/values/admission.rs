@@ -187,6 +187,8 @@ pub enum SealRefused {
     NotAMint(KType),
     /// The payload's type does not satisfy what the source binds the member to.
     Misfit { mint: KType, witness: KType },
+    /// A value crossing a barrier inwards at a carrier is not sealed under it.
+    NotSealed { carrier: KType },
 }
 
 /// The identity a payload of type `payload` takes when sealed under `mint`, the per-application

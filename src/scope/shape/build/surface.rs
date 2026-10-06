@@ -13,9 +13,11 @@
 //! group is content, so the record a binder surfaces is the one its claim already holds and the
 //! record a signature surfaces is built here, from the same member scan.
 //!
-//! A signature's bodyless keyworded heads are surfaced too, as records of where each head, its
-//! `SIG` and the ascription naming it are written: the block holds each as a registration of its
-//! own, which the load types through the ascription's pins.
+//! The keyworded heads an operand declares are surfaced too, each under each of its keys: a
+//! signature's bodyless heads, as records of where each head, its `SIG` and the ascription naming
+//! it are written, which the load types through the ascription's pins; and a `MODULE` or `GROUP`
+//! body's definitions, as records of where each definition and the module's binder are written.
+//! The block holds one registration per key, over every head at it.
 //!
 //! The reader records no mention and pushes no capture: it only reads names. The operand itself is
 //! walked as an ordinary eager argument by the mention pass.
@@ -30,9 +32,9 @@
 use crate::memory::{BumpAllocator, BumpVec, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::quantifier_entries;
+use crate::parse::{BinderSurface, BucketKeys, fn_def_binder_bucket, op_def_binder_bucket};
 use crate::parse::{BodyKind, DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
-use crate::parse::{fn_def_binder_bucket, op_def_binder_bucket};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::DeclaredGroup;
 
@@ -57,13 +59,14 @@ pub(super) struct Surfaced<'x, 'graph> {
     body: usize,
 }
 
-/// One bucket key a surfaced head registers the block at: the head, the key, and which of the
-/// head's keys it is.
+/// One bucket key a surfaced head registers the block at: the head, the key, which of the head's
+/// keys it is, and whether the head is an operator's.
 #[derive(Clone, Copy)]
 pub(super) struct SurfacedKey<'graph> {
-    pub head: &'graph SurfacedHead<'graph>,
+    pub head: SurfacedHead<'graph>,
     pub elements: &'graph [KeyElement],
     pub which: Which,
+    pub operator: bool,
 }
 
 impl<'x, 'graph> Surfaced<'x, 'graph> {
@@ -141,7 +144,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             }
             ExpressionPart::Identifier(name) => {
                 let name = BinderSymbol::Value(*name);
-                let (level, at, _, statement) = self.declaring(level, name, at).ok_or(())?;
+                let (level, at, slot, statement) = self.declaring(level, name, at).ok_or(())?;
                 match statement.cache().builtin_shape().map(|shape| shape.id) {
                     Some(
                         BuiltinShapeId::Module
@@ -151,7 +154,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         | BuiltinShapeId::GroupPairwiseFoldRight,
                     ) => {
                         self.surfaced_group(statement, out)?;
-                        body_binders(statement, out)
+                        let module = ((out.body - level) as u32, slot);
+                        body_binders(statement, module, out)
                     }
                     Some(BuiltinShapeId::LetValue) => {
                         let rhs = role_part(statement, Role::Rhs).ok_or(())?;
@@ -351,26 +355,16 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         _ => op_def_binder_bucket(writer, line),
                     }
                     .ok_or(())?;
-                    let head = resident(
-                        writer,
-                        SurfacedHead {
-                            head: line,
-                            signature,
-                            ascription,
-                        },
+                    let head = SurfacedHead::Signature {
+                        head: line,
+                        signature,
+                        ascription,
+                    };
+                    let operator = !matches!(
+                        id,
+                        BuiltinShapeId::ExpressionHead | BuiltinShapeId::QuantifiedExpressionHead
                     );
-                    let unary = keys.count() == 2;
-                    for (which, elements) in keys.iter().enumerate() {
-                        out.heads.push(SurfacedKey {
-                            head,
-                            elements,
-                            which: match (unary, which) {
-                                (false, _) => Which::Only,
-                                (true, 0) => Which::Unary,
-                                (true, _) => Which::Binary,
-                            },
-                        });
-                    }
+                    push_keys(head, keys, operator, out);
                 }
                 // A result-less `UNARY OP` head is refused where the signature is typed.
                 Some(BuiltinShapeId::UnaryOperatorHead) => {}
@@ -465,21 +459,58 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
 }
 
 /// The names the body of a `MODULE` or `GROUP` binder binds, read through the very call the binders
-/// pass makes, so the two cannot drift, and which of them are bound to quantified functions.
+/// pass makes, so the two cannot drift, which of them are bound to quantified functions, and each
+/// definition's keys, the binder lying at `module`.
 fn body_binders<'graph>(
     statement: &KExpression<'graph>,
+    module: (u32, Slot),
     out: &mut Surfaced<'_, 'graph>,
 ) -> Result<(), ()> {
     let body = body_of(role_part(statement, Role::Body(BodyKind::Module)).ok_or(())?).ok_or(())?;
     for (line, _) in body.body_statements() {
-        if let Some(name) = line.statement_binder_plan().and_then(|plan| plan.name) {
+        let Some(plan) = line.statement_binder_plan() else {
+            continue;
+        };
+        if let Some(name) = plan.name {
             out.names.push(name);
             if quantified_statement(line) {
                 out.quantified.push(name);
             }
         }
+        if let Some(keys) = plan.buckets {
+            let definition = line.statement_spine();
+            let operator = definition
+                .cache()
+                .builtin_shape()
+                .and_then(|form| form.binder)
+                .is_some_and(|binder| binder.surface == BinderSurface::OperatorDef);
+            let head = SurfacedHead::Body { definition, module };
+            push_keys(head, keys, operator, out);
+        }
     }
     Ok(())
+}
+
+/// Push `head` under each of its `keys`, a unary operator's two keys told apart.
+fn push_keys<'graph>(
+    head: SurfacedHead<'graph>,
+    keys: BucketKeys<'graph>,
+    operator: bool,
+    out: &mut Surfaced<'_, 'graph>,
+) {
+    let unary = keys.count() == 2;
+    for (which, elements) in keys.iter().enumerate() {
+        out.heads.push(SurfacedKey {
+            head,
+            elements,
+            which: match (unary, which) {
+                (false, _) => Which::Only,
+                (true, 0) => Which::Unary,
+                (true, _) => Which::Binary,
+            },
+            operator,
+        });
+    }
 }
 
 /// How a value name is bound to a quantified function, which decides where it may be read.

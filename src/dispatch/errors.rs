@@ -12,7 +12,7 @@ use crate::program::Program;
 use crate::scope::spelled;
 use crate::symbols::{KeySymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeRegistry, display_name};
-use crate::values::{KeyRejected, SealRefused};
+use crate::values::KeyRejected;
 
 /// Why dispatch raised an error value.
 #[derive(Clone, Copy)]
@@ -153,30 +153,12 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_> {
             }
             Raised::NotAModule { value } => write!(f, "{} is no module to ascribe", ktype(value)),
             Raised::NotASignature { ascribed } => write!(f, "{} is no signature", ktype(ascribed)),
-            Raised::Coercion { name, refused } => {
-                write!(
-                    f,
-                    "member {} cannot take its view's type: ",
-                    self.symbols.display(name)
-                )?;
-                match refused {
-                    CoercionRefused::Seal(SealRefused::NotAMint(identity)) => {
-                        write!(f, "{} is no carrier", ktype(identity))
-                    }
-                    CoercionRefused::Seal(SealRefused::Misfit { witness, .. }) => {
-                        write!(f, "its value does not satisfy {}", ktype(witness))
-                    }
-                    CoercionRefused::NotAFunction => f.write_str("it is no function"),
-                    CoercionRefused::NotAModule => f.write_str("it is no module"),
-                    CoercionRefused::Nested => f.write_str("its module does not fit its view"),
-                    CoercionRefused::NoUnionMember => {
-                        f.write_str("no member of its union admits it")
-                    }
-                    CoercionRefused::Unsupported(_) => {
-                        f.write_str("nothing carries a value of its shape across the view")
-                    }
-                }
-            }
+            Raised::Coercion { name, refused } => write!(
+                f,
+                "member {} cannot take its view's type: {}",
+                self.symbols.display(name),
+                refused.display(self.types, self.symbols)
+            ),
             Raised::QuantifiedMember { name } => write!(
                 f,
                 "member {} is quantified, and no type was known to instantiate it at",

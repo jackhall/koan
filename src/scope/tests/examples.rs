@@ -723,10 +723,9 @@ fn only_block<'graph>(shape: &BodyShape<'graph>) -> &'graph BodyShape<'graph> {
 /// The names `block` declares, spelled out.
 fn parameters_of(fixture: &Fixture<'_, '_>, block: &BodyShape<'_>) -> Vec<String> {
     (0..block.slots())
-        .map(|slot| {
-            let name = block.slot_name(Slot(slot as u32));
-            fixture.symbols.display(name.symbol()).to_string()
-        })
+        .map(|slot| block.slot_name(Slot(slot as u32)))
+        .filter(|name| !matches!(name, BinderSymbol::Registration(_)))
+        .map(|name| fixture.symbols.display(name.symbol()).to_string())
         .collect()
 }
 

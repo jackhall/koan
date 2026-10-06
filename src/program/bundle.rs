@@ -57,12 +57,14 @@ pub enum KBirth<'graph, 'cell> {
         view: KActivationView<'graph, 'cell>,
         contract: Option<Contract>,
     },
-    /// A block — a synthesized block part's shape — run beside the view of the activation it sits
-    /// in, its last statement's value its own.
+    /// A block — a synthesized block part's shape, or a `USING … SCOPE` body — run beside the
+    /// view of the activation it sits in, its last statement's value its own; a `USING` body's
+    /// parameters bound to what `module` surfaces.
     Block {
         program: &'graph Program<'graph>,
         shape: &'graph BodyShape<'graph>,
         enclosing: KActivationView<'graph, 'cell>,
+        module: Option<KValue<'graph, 'cell>>,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
     /// work to read a top-level binding through.

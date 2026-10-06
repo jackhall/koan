@@ -60,7 +60,10 @@
 //! view: refused where an exact operand can never fit it, exactly the view's signature under `:!`
 //! over an exact operand, and at most the signature otherwise. A member read `m.f` is typed by its
 //! [rule](super::rules), which reads the member off the operand's signature, and refused where a
-//! signature its lower end is lacks the member.
+//! signature its lower end is lacks the member. A `USING … SCOPE` body is typed as a block, each
+//! surfaced name at the member read it names; a key it surfaces is a spread typed by the one head
+//! its operand declares there, at most *maybe*, since a view carries every overload its member
+//! admits.
 //!
 //! A static type is over [`Parametric`] types: it may hold the lexical variables of its chain. A
 //! binder of a quantified callable is typed by its scheme — a module body's plain `LET` member, or a
@@ -98,7 +101,7 @@ use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate,
     Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution, StaticType,
-    Statics, Target, UnitWork, Variable as Located, source_of,
+    Statics, SurfacedHead, Target, UnitWork, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::BinderSymbol;
@@ -133,6 +136,7 @@ pub(super) fn statics<'graph>(
         chain: BumpVec::new_in(scratch),
         unfilled: false,
         ran: BumpVec::new_in(scratch),
+        surfacing: None,
     };
     pass.push(root, true);
     let visited = pass.visit(0);
@@ -262,6 +266,9 @@ struct Pass<'p, 'x, 'graph> {
     unfilled: bool,
     /// Each quote's code beside its last statement's static type as it runs unfilled.
     ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
+    /// The static upper end of the module the `USING … SCOPE` body pushed next surfaces, which
+    /// types its surfaced names.
+    surfacing: Option<Parametric>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -387,8 +394,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// shape nested in it.
     fn visit(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
+        let surfacing = self.surfacing.take();
         for slot in 0..shape.slots() {
-            let seeded = self.seeded(level, Slot(slot as u32));
+            let seeded = self.seeded(level, Slot(slot as u32), surfacing);
             self.chain[level].binders[slot] = seeded;
         }
         for (_, nested) in shape.nested_shapes() {
@@ -657,10 +665,27 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// A slot's static type before any unit runs: a registration's function type, a type name's
-    /// type value's, a parameter's declared type as its body reads it, and `[Never, Any]` for a
-    /// local its unit sets.
-    fn seeded(&self, level: usize, slot: Slot) -> Bound {
+    /// type value's, a parameter's declared type as its body reads it, a name a `USING … SCOPE`
+    /// body surfaces from a module at most `surfacing` the member it names, and `[Never, Any]` for
+    /// a local its unit sets.
+    fn seeded(&self, level: usize, slot: Slot, surfacing: Option<Parametric>) -> Bound {
         let shape = self.chain[level].shape;
+        if let (Some(upper), BinderSymbol::Value(_)) = (surfacing, shape.slot_name(slot))
+            && shape.slot(shape.slot_name(slot)).map(|(_, at)| at) == Some(Position::PARAMETER)
+        {
+            let name = shape.slot_name(slot);
+            return match rules::member_of(self.types, self.scratch, upper, name) {
+                Some(rules::Member {
+                    declared: DeclaredType::Type(declared),
+                    unpinned: None,
+                }) => DeclaredType::Type(under(declared)),
+                Some(rules::Member {
+                    declared: DeclaredType::Scheme(scheme),
+                    unpinned: None,
+                }) => DeclaredType::Scheme(scheme),
+                _ => DeclaredType::Type(unknown()),
+            };
+        }
         if shape.registration(slot).is_some() {
             return shape
                 .births(slot)
@@ -1429,6 +1454,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Form::Declaration => Interval::point(KType::NULL.into()),
             Form::Ascribe(node) => self.ascribe(level, node)?,
             Form::Eval(node) => self.eval(level, node)?,
+            Form::Using(node) => self.using(level, node)?,
             Form::Call(node, list) => match self.member_scheme(level, node) {
                 Some((scheme, None)) => {
                     let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
@@ -1640,6 +1666,25 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         Ok(retyped_to(types, declared))
+    }
+
+    /// `USING <module> SCOPE <body>`: its body's last statement's type, the body typed with each
+    /// surfaced name at the member read of the operand it names.
+    fn using(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let [_, operand, _, _] = node.parts else {
+            unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
+        };
+        let typed = self.part(level, &operand.value)?;
+        let shape = self.chain[level].shape;
+        let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
+            return Ok(unknown());
+        };
+        self.surfacing = Some(typed.upper);
+        Ok(self.nested(level, body, false)?.unwrap_or_else(unknown))
     }
 
     /// `EVAL <code> -> <Type>`: its declared type, exactly where the retype makes it so
@@ -2430,11 +2475,22 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
                 ruled = Some(typed.returns);
             }
+            // A surfaced key's list may hold functions admitting more than the head it is typed
+            // by — a view carries every overload its member admits — so it is at most *maybe*,
+            // and *never* only where one body definition is the whole of the key.
+            let surfaced = self.surfaced(level, *candidate);
+            if let Some(heads) = surfaced {
+                let exact = matches!(heads, [SurfacedHead::Body { .. }]);
+                verdict = match verdict {
+                    Verdict::Never if exact => Verdict::Never,
+                    _ => Verdict::Maybe,
+                };
+            }
             if verdict != Verdict::Never {
                 judged.push(Judgement {
                     candidate: *candidate,
                     known,
-                    surfaced: self.surfaced(level, *candidate),
+                    surfaced: surfaced.is_some(),
                     verdict,
                     intervals,
                     ruled,
@@ -2740,19 +2796,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// Whether `candidate`, read from the shape at `level`, is a `USING … SCOPE` block's surfaced
-    /// head.
-    fn surfaced(&self, level: usize, candidate: Candidate) -> bool {
-        let Candidate::One(coordinate) = candidate else {
-            return false;
+    /// The heads a `USING … SCOPE` block's surfaced key holds, where `candidate`, read from the
+    /// shape at `level`, is one.
+    fn surfaced(
+        &self,
+        level: usize,
+        candidate: Candidate,
+    ) -> Option<&'graph [SurfacedHead<'graph>]> {
+        let Candidate::Spread(coordinate) = candidate else {
+            return None;
         };
-        self.landed_slot(level, coordinate)
-            .is_some_and(|(at, slot)| {
-                self.chain[at]
-                    .shape
-                    .registration(slot)
-                    .is_some_and(|registration| registration.surfaced.is_some())
-            })
+        let (at, slot) = self.landed_slot(level, coordinate)?;
+        self.chain[at].shape.registration(slot)?.surfaced
     }
 
     /// What the load knows of `candidate`'s registered shape, read from the shape at `level`. A
@@ -2760,6 +2815,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// chain outside is unknown: the code roots a chain of its own.
     fn candidate(&self, level: usize, candidate: Candidate) -> Known {
         let coordinate = match candidate {
+            // A surfaced key's list is typed by its head; any other spread is unknown.
+            Candidate::Spread(coordinate) if self.surfaced(level, candidate).is_some() => {
+                coordinate
+            }
             Candidate::Spread(_) => return Known::Unknown,
             Candidate::One(Coordinate::Builtin(_)) => {
                 return match self.builtin(candidate) {

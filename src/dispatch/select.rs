@@ -19,11 +19,12 @@
 //! its registration names for it — or packs every slot into `operands` — and carries each of its
 //! type parameters, by name, as the type the call solved it to.
 
+use crate::knot::module::layout;
 use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpVec, Writer};
 use crate::program::Contract;
 use crate::scope::{Candidate, Coordinate, IMPLICIT};
-use crate::scope::{ParameterBinding, Registered};
+use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, satisfied_by,
@@ -133,15 +134,31 @@ pub(super) fn selected<'x, 'graph, 'here>(
     if let Some(builtin) = member.builtin() {
         return Selection::Builtin(builtin);
     }
-    let registered = member
-        .function()
-        .and_then(|function| function.registered())
-        .expect("a candidate with a shape is a builtin or a registration's function");
     Selection::Function {
         callee: chosen.callee,
-        registered,
+        registered: registration(member)
+            .expect("a candidate with a shape is a builtin or a registration's function"),
         solution: chosen.solution,
     }
+}
+
+/// What a keyworded call of `member` binds its arguments by: a registration's function's own
+/// registration, or — for a function behind a view's barriers — the shape the barrier shows its
+/// caller, its slots bound to the names the function behind it registers. A barrier's call is that
+/// function's by name, which solves its own group, so it binds no type parameter.
+fn registration<'here>(member: Knotted<'_, 'here>) -> Option<Registered<'here, KType>> {
+    let Some(barrier) = member.coerced() else {
+        return member.function()?.registered();
+    };
+    let mut innermost = member;
+    while let Some(behind) = innermost.coerced() {
+        innermost = behind.underlying();
+    }
+    Some(Registered {
+        shape: barrier.ktype(),
+        quantifier_map: ShapeGroupMap::default(),
+        parameters: innermost.function()?.registered()?.parameters,
+    })
 }
 
 /// The candidate the load selected, read at `coordinate` through `at`'s view, for operands of the
@@ -162,9 +179,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
     if let Some(builtin) = member.builtin() {
         return Selection::Builtin(builtin);
     }
-    let registered = member
-        .function()
-        .and_then(|function| function.registered())
+    let registered = registration(member)
         .expect("a selected candidate is a builtin or a registration's function");
     let solution = if matches!(registered.shape, DeclaredType::Type(_)) {
         &[][..]
@@ -265,13 +280,13 @@ pub(super) fn agree<'graph, 'here>(
     }
 }
 
-/// The expression shape `candidate` is registered at: a builtin's, or a registration's function's.
-/// `None` for anything else a spread list holds.
+/// The expression shape `candidate` is registered at: a builtin's, a registration's function's, or
+/// the one a barrier shows its caller. `None` for anything else a spread list holds.
 fn registered_shape(candidate: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
     let member = candidate.as_callable()?;
     match member.builtin() {
         Some(builtin) => Some(builtin.ktype().into()),
-        None => member.function()?.registered_shape(),
+        None => layout::registered_shape(candidate),
     }
 }
 
@@ -309,7 +324,8 @@ pub(super) fn arguments<'graph, 'here>(
 }
 
 /// Whether a call of the function registered at `shape`, its group solved to `solution`, returns a
-/// type satisfying `contract` — so the evaluation owing the contract can hop to its frame.
+/// type satisfying `contract` — so the evaluation owing the contract can hop to its frame. A call
+/// through a barrier never hops, which its caller checks.
 pub(super) fn keeps(
     types: &TypeRegistry<'_>,
     shape: DeclaredType<KType>,
