@@ -1169,6 +1169,19 @@ pub enum ShapeError<'graph> {
         field: BinderSymbol,
         at: SourceRef,
     },
+    /// A member read whose operand's static type `of`, a signature, names no member `member`.
+    NoMember {
+        of: KType,
+        member: BinderSymbol,
+        at: SourceRef,
+    },
+    /// A quantified member read anywhere but a call's head whose scheme names `parameter`, a head
+    /// parameter its module's signature leaves unpinned, which the load cannot name there.
+    UnpinnedMember {
+        member: BinderSymbol,
+        parameter: BinderSymbol,
+        at: SourceRef,
+    },
     /// A keyworded use every candidate of which always admits its arguments' static types, none of
     /// which ranks first, and no builtin among them.
     Ambiguous {
@@ -1300,6 +1313,8 @@ impl ShapeError<'_> {
             | ShapeError::Overlaps { at, .. }
             | ShapeError::NoAdmittingCandidate { at, .. }
             | ShapeError::NoField { at, .. }
+            | ShapeError::NoMember { at, .. }
+            | ShapeError::UnpinnedMember { at, .. }
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::AscriptionNeverSatisfied { at, .. }
@@ -1517,6 +1532,22 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "{} has no field {}",
                 display_name(*of, self.types, self.symbols),
                 name(field)
+            ),
+            ShapeError::NoMember { of, member, .. } => write!(
+                f,
+                "{} has no member {}",
+                display_name(*of, self.types, self.symbols),
+                name(member)
+            ),
+            ShapeError::UnpinnedMember {
+                member, parameter, ..
+            } => write!(
+                f,
+                "`{}` is quantified over `{}`, which the load cannot name here; call it, or \
+                 ascribe its module with `{}` pinned",
+                name(member),
+                name(parameter),
+                name(parameter)
             ),
             ShapeError::Ambiguous {
                 key,

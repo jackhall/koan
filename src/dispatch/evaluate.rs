@@ -9,7 +9,8 @@
 //!   [block door](crate::program::block) with its last statement's value its own;
 //! - a `FN`, born through the [lambda door](crate::knot::lambda);
 //! - an **ascription** `<value> :! <Type>`: its operand checked against the type, unless the load
-//!   settled it, and retyped to it; a module operand is an error until modules arrive;
+//!   settled it, and retyped to it; a module operand, under `:!` or `:|`, is seen as its signature
+//!   through the view door;
 //! - an **`EVAL`** `<code> -> <Type>`: its code run in a frame that owes the declared type, as a
 //!   called frame owes its return;
 //! - a bucket declaration, which is `Null`;
@@ -32,6 +33,7 @@
 //! full list would.
 
 use crate::elaborate::denoted;
+use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{KValue, Knotted, instance, lambda, quote, refused_construction};
 use crate::memory::{Bump, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
@@ -73,7 +75,7 @@ pub(super) enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
     Block(&'graph BodyShape<'graph>),
     Lambda(&'graph KExpression<'graph>),
-    /// `<value> :! <Type>`.
+    /// `<value> :! <Type>`, or `<module> :| <Sig>`.
     Ascribe(&'graph KExpression<'graph>),
     /// `EVAL <code> -> <Type>`.
     Eval(&'graph KExpression<'graph>),
@@ -200,7 +202,9 @@ pub(super) fn of_node<'graph>(
         Some(BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda) => {
             return Form::Lambda(node);
         }
-        Some(BuiltinShapeId::AscribeTransparent) => return Form::Ascribe(node),
+        Some(BuiltinShapeId::AscribeTransparent | BuiltinShapeId::AscribeOpaque) => {
+            return Form::Ascribe(node);
+        }
         Some(BuiltinShapeId::Eval) => return Form::Eval(node),
         Some(BuiltinShapeId::BucketDeclaration) => return Form::Declaration,
         _ => {}
@@ -256,7 +260,9 @@ fn leaf<'graph, 'here>(
 }
 
 /// `<value> :! <Type>`: the operand checked against the type — where the load did not settle it —
-/// and retyped to it. A module's view arrives with modules.
+/// and retyped to it. A module operand ascribed a signature, or under `:|`, is seen as it through
+/// the [view door](crate::knot::module::view), which checks it fits; `:|` over anything else
+/// raises.
 fn ascribe<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_>,
     at: &Evaluation<'graph, 'here>,
@@ -278,9 +284,6 @@ fn ascribe<'graph, 'here>(
         unreachable!("an ascription's operand is evaluated")
     };
     let writer = step.writer();
-    if value.as_module().is_some() {
-        return finish(step, at, Raised::ModuleAscription.raise(program, writer));
-    }
     let ascribed = match denoted(&ascribed.value, &at.view, types, &scratch) {
         Ok(ascribed) => ascribed,
         Err(refused) => {
@@ -288,6 +291,41 @@ fn ascribe<'graph, 'here>(
             return finish(step, at, error);
         }
     };
+    let mode = match node.cache().builtin_shape().map(|shape| shape.id) {
+        Some(BuiltinShapeId::AscribeOpaque) => Ascription::Opaque,
+        _ => Ascription::Transparent,
+    };
+    let signature = matches!(
+        types.node(ascribed),
+        TypeNode::Signature { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. }
+    );
+    if let Some(module) = value
+        .as_module()
+        .filter(|_| signature || mode == Ascription::Opaque)
+    {
+        let raised = match view::ascribe(writer, module, ascribed, mode, types, &scratch) {
+            Ok(view) => return finish(step, at, Value::Knotted(view)),
+            Err(Unascribable::Unsatisfied(_)) => Raised::Unascribable {
+                value: value.concrete_ktype(),
+                ascribed,
+            },
+            Err(Unascribable::NotASignature(ascribed)) => Raised::NotASignature { ascribed },
+            Err(Unascribable::Coercion { name, refused }) => Raised::Coercion {
+                name: name.symbol(),
+                refused,
+            },
+            Err(Unascribable::NotAModule) => unreachable!("the operand is a module"),
+        };
+        return finish(step, at, raised.raise(program, writer));
+    }
+    if mode == Ascription::Opaque {
+        let raised = Raised::NotAModule {
+            value: value.concrete_ktype(),
+        };
+        return finish(step, at, raised.raise(program, writer));
+    }
     if at.view.shape().settled(Site::of_node(node)) {
         debug_assert!(
             satisfies(ascribed, &value, types, &scratch),
@@ -515,7 +553,7 @@ fn call<'graph, 'here>(
     let raised = match selection {
         Selection::Builtin(builtin) => {
             let native = Native::of(builtin.id());
-            let value = builtins::run(native, at, writer, &operands, &scratch);
+            let value = builtins::run(native, at, node, writer, &operands, &scratch);
             return finish(step, at, value);
         }
         Selection::Function {

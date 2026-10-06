@@ -52,6 +52,6 @@ pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
 pub use channel::{type_channel, writes_for_all};
 pub use declaration::type_declarations;
 pub use expression::{declared_field, type_expression};
-pub use module::self_signature;
+pub use module::{module_signature, self_signature};
 pub use reads::{Reads, TypeAt, denoted};
 pub use signature::callable_type;

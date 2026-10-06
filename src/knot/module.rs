@@ -20,9 +20,8 @@
 //! is re-viewed, and a function is wrapped in a [`Coerced`] barrier node a call will later go
 //! through.
 //!
-//! What this layer does *not* do is evaluate anything: `m :| Sig`, `m.f`, a `USING` expression and
-//! a call through a barrier are all [modules](../../roadmap/rewrite/modules.md)' work. Here are the
-//! doors those will drive.
+//! What this layer does *not* do is evaluate anything: dispatch evaluates
+//! `m :| Sig`, `m :! Sig` and `m.f` through the doors here.
 //!
 //! This module names its [knot vocabulary](crate::knot) through the facade and never its sibling
 //! [`function`](super::function).

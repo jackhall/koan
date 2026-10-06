@@ -323,9 +323,9 @@ pub fn using<'graph, 'cell>(
     Ok(one_node(writer, node.body(), shape, &bound, &supplied))
 }
 
-/// Push onto `found` each registration `source` holds whose registered shape's key is `key`. A
-/// function's key and ranking are read off its registered shape; a ranking other than the one
-/// `shape`'s own candidates at `key` carry is refused.
+/// Push onto `found` each function the module `source` offers at `key` — a registration, or an
+/// overload a view carries. A ranking other than the one `shape`'s own candidates at `key` carry
+/// is refused.
 fn keyed<'graph, 'cell>(
     shape: &BodyShape<'graph>,
     key: KeySymbol,
@@ -334,13 +334,13 @@ fn keyed<'graph, 'cell>(
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {
-    for member in super::registrations(source, types, scratch) {
-        let registered = member
-            .as_callable()
-            .and_then(Knotted::function)
-            .and_then(|function| function.registered_shape())
-            .expect("a registration member is the function born for it");
-        // Only the key and the ranking are read, which a scheme's node spells as a type's does.
+    let Some(module) = source.as_module() else {
+        return Ok(());
+    };
+    for member in super::module::layout::functions_at(module, key, types, scratch) {
+        let registered = super::module::layout::registered_shape(member)
+            .expect("a registration member is a function");
+        // Only the ranking is read, which a scheme's node spells as a type's does.
         let node = match registered {
             DeclaredType::Type(shape) => types.node(Parametric::from(shape)),
             DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
@@ -351,18 +351,12 @@ fn keyed<'graph, 'cell>(
         else {
             unreachable!("a registered shape is an expression shape")
         };
-        let run = || {
-            elements.iter().map(|element| match element {
-                DispatchTokenElement::Keyword(keyword) => Some(keyword),
-                DispatchTokenElement::Slot(_) => None,
-            })
-        };
-        if KeySymbol::of(run()) != key {
-            continue;
-        }
         // The lattice stores written order as no classes; the shape spells every class out.
         let ranking = if classes.is_empty() {
-            let slots = run().filter(Option::is_none).count();
+            let slots = elements
+                .iter()
+                .filter(|element| matches!(element, DispatchTokenElement::Slot(_)))
+                .count();
             scratch.alloc_slice_fill_iter((0..slots).map(|class| class as u8))
         } else {
             classes
@@ -370,7 +364,7 @@ fn keyed<'graph, 'cell>(
         if !shape.ranks_alike(key, ranking) {
             return Err(UsingRefused::Ranking { key });
         }
-        found.push(*member);
+        found.push(member);
     }
     Ok(())
 }

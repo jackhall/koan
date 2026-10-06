@@ -54,6 +54,14 @@
 //! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing.
 //! Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running it reports it.
 //!
+//! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
+//! binder is exactly the signature the run ties where every member is exact
+//! ([`module_signature`]), else at most `Module`. An ascription of a module to a signature is a
+//! view: refused where an exact operand can never fit it, exactly the view's signature under `:!`
+//! over an exact operand, and at most the signature otherwise. A member read `m.f` is typed by its
+//! [rule](super::rules), which reads the member off the operand's signature, and refused where a
+//! signature its lower end is lacks the member.
+//!
 //! A static type is over [`Parametric`] types: it may hold the lexical variables of its chain. A
 //! binder of a quantified callable is typed by its scheme — a module body's plain `LET` member, or a
 //! keyworded form's name — and a call's head reads it as a [`DeclaredType`]. Anywhere else a
@@ -61,7 +69,10 @@
 //! an annotation's, an ascription's, a callable body's declared return for its last statement, a
 //! container's element type where that is the container's own type, a call by name's parameter
 //! record, and an argument's slot at each candidate — and the site is instantiated at the least
-//! instance under it ([`instance_under`]). A quantified callee's other arguments solve its group
+//! instance under it ([`instance_under`]). A member read of a quantified member is a site too,
+//! where its operand is a name or a chain of member reads rooted at one; one over a head parameter
+//! its signature leaves unpinned is refused there, and read only at a call's head, whose site the
+//! cell records with no solution. A quantified callee's other arguments solve its group
 //! first, each read as the solve reads it — a contributing one exactly at its upper end — and the
 //! slot is read through that solve: a variable a class before the slot's solves is taken from that
 //! class's solving slots at their contributions, as the call solves it — class by class, each
@@ -78,6 +89,8 @@
 //!
 //! See [README.md § Static types](README.md#static-types).
 
+use crate::elaborate::module_signature;
+use crate::knot::module::view::transparent_view_type;
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
@@ -144,7 +157,7 @@ pub(super) fn under(upper: Parametric) -> Interval {
 }
 
 /// `[Never, Any]`: what the load cannot bound.
-fn unknown() -> Interval {
+pub(super) fn unknown() -> Interval {
     under(KType::ANY.into())
 }
 
@@ -292,12 +305,14 @@ struct Judgement<'x> {
 /// site is recorded.
 type Made<'x> = (Interval, &'x [Parametric]);
 
-/// Where an instance site is written: a name read there, or a quantified `FN` written in place,
-/// whose body the instance is born from.
+/// Where an instance site is written: a name read there, a quantified `FN` written in place, whose
+/// body the instance is born from, or a member read of a quantified member.
 #[derive(Clone, Copy)]
 enum Instanced<'graph> {
     Name(&'graph ExpressionPart<'graph>),
     Literal(&'graph BodyShape<'graph>),
+    /// A member read, `m.f`, of a quantified member.
+    Member(&'graph KExpression<'graph>),
 }
 
 /// An instance argument of a keyworded use: its slot's position, its part as written, where its
@@ -451,6 +466,58 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let last = self.chain[level + 1].statements.last().copied();
         self.chain.pop();
         visited.map(|_| last)
+    }
+
+    /// The static type of a `MODULE` or `GROUP` binder whose body is `body`, nested in the shape at
+    /// `level`. The body runs inline before its binder is tied, so it is typed here, ahead of the
+    /// shapes nested after it. Exactly the signature the run ties ([`module_signature`]) where the
+    /// load knows every member exactly — each value binder at a closed point or a closed scheme,
+    /// each type binder and each registration closed — and at most `Module` otherwise.
+    fn module(
+        &mut self,
+        level: usize,
+        body: &'graph BodyShape<'graph>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        self.push(body, false);
+        let visited = self.visit(level + 1);
+        let binders = self.chain.pop().expect("the body was pushed").binders;
+        visited?;
+        let mut members = BumpVec::with_capacity_in(binders.len(), scratch);
+        let mut keyworded = BumpVec::new_in(scratch);
+        for (index, bound) in binders.iter().enumerate() {
+            let slot = Slot(index as u32);
+            let exact = match body.slot_name(slot) {
+                BinderSymbol::Value(_) => match bound {
+                    DeclaredType::Type(typed) if typed.is_exact() => types
+                        .concrete(typed.upper)
+                        .map(|closed| DeclaredType::Type(closed.into())),
+                    DeclaredType::Scheme(scheme) => body
+                        .births(slot)
+                        .filter(|born| matches!(born.callable_type(), Static::Closed(_)))
+                        .map(|_| DeclaredType::Scheme(*scheme)),
+                    DeclaredType::Type(_) => None,
+                },
+                BinderSymbol::Type(_) => match body.declared_type(slot) {
+                    Static::Closed(held) => Some(DeclaredType::Type(held.into())),
+                    _ => None,
+                },
+                BinderSymbol::Registration(_) => {
+                    let Static::Closed(registered) = body.registered_type(slot) else {
+                        return Ok(under(KType::EMPTY_SIGNATURE.into()));
+                    };
+                    keyworded.push(registered.shape);
+                    continue;
+                }
+                BinderSymbol::Key(_) => unreachable!("no binder declares a key"),
+            };
+            let Some(exact) = exact else {
+                return Ok(under(KType::EMPTY_SIGNATURE.into()));
+            };
+            members.push((slot, exact));
+        }
+        let signature = module_signature(body, members, &keyworded, types, scratch);
+        Ok(Interval::point(signature.into()))
     }
 
     /// Lay what the pass typed of the shape at `level` down in its cell.
@@ -667,6 +734,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if let Some(body) = shape.births(*member) {
                 let typed = match body.form() {
                     Some(_) => callable(body),
+                    None if body.kind() == ShapeKind::Module => {
+                        DeclaredType::Type(self.module(level, body)?)
+                    }
                     None => DeclaredType::Type(unknown()),
                 };
                 let typed = match typed {
@@ -856,6 +926,59 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         Some((Instanced::Literal(body), scheme, node.source))
                     }
                     DeclaredType::Type(_) => None,
+                }
+            }
+            // One naming a parameter the load cannot name is refused where it is typed.
+            Form::Call(node, _) => match self.member_scheme(level, node) {
+                Some((scheme, None)) => Some((Instanced::Member(node), scheme, node.source)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The member read `node`, `ATTR <operand> <label>` with its label written, where it reads a
+    /// quantified member: the member's scheme, beside the unpinned head parameter it names, if it
+    /// names one. The operand's static type is read without typing it — a name, or a chain of
+    /// member reads rooted at one ([`peeked`](Self::peeked)) — so a read the load cannot see into
+    /// is no instance site, and faults at run if it reads a scheme there.
+    fn member_scheme(
+        &self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+    ) -> Option<(Scheme, Option<BinderSymbol>)> {
+        let (operand, name) = member_read(node)?;
+        let upper = self.peeked(level, operand)?.upper;
+        let member = rules::member_of(self.types, self.scratch, upper, name)?;
+        let DeclaredType::Scheme(scheme) = member.declared else {
+            return None;
+        };
+        Some((scheme, member.unpinned.map(BinderSymbol::Type)))
+    }
+
+    /// The static type of `part`, a name or a chain of member reads rooted at one, read without
+    /// typing it: a name's binder's, and a member read's as its rule gives it. `None` for any other
+    /// part.
+    fn peeked(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
+        let shape = self.chain[level].shape;
+        match of_part(shape, part) {
+            Form::Leaf(
+                leaf @ (ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(_)
+                | ExpressionPart::MarkedName(..)),
+            ) => {
+                let mention = shape.mention(Site::of(leaf))?;
+                self.read_declared(level, mention.coordinate).as_type()
+            }
+            Form::Call(node, _) => {
+                let (operand, name) = member_read(node)?;
+                let upper = self.peeked(level, operand)?.upper;
+                match rules::member_of(self.types, self.scratch, upper, name)? {
+                    rules::Member {
+                        declared: DeclaredType::Type(declared),
+                        unpinned: None,
+                    } => Some(under(declared)),
+                    _ => None,
                 }
             }
             _ => None,
@@ -1306,7 +1429,27 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Form::Declaration => Interval::point(KType::NULL.into()),
             Form::Ascribe(node) => self.ascribe(level, node)?,
             Form::Eval(node) => self.eval(level, node)?,
-            Form::Call(node, list) => self.narrow(level, node, list)?,
+            Form::Call(node, list) => match self.member_scheme(level, node) {
+                Some((scheme, None)) => {
+                    let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
+                    if !self.unfilled {
+                        let solution = self.solution(level, solution);
+                        self.chain[level]
+                            .instances
+                            .push((Site::of_node(node), solution));
+                    }
+                    typed
+                }
+                Some((_, Some(parameter))) => {
+                    let (_, name) = member_read(node).expect("a member read");
+                    return Err(ShapeError::UnpinnedMember {
+                        member: name,
+                        parameter,
+                        at: node.source,
+                    });
+                }
+                None => self.narrow(level, node, list)?,
+            },
             Form::Apply(node) => self.apply(level, node)?,
             Form::Unevaluable(_) => unknown(),
         })
@@ -1332,6 +1475,25 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Form::Lambda(node) => Site::of_body(node)
                 .and_then(|site| shape.nested(site))
                 .map(callable),
+            // A member read at a call's head is read as it is, a quantified member by its scheme:
+            // its site is recorded with no solution, which the run reads as the head's mark.
+            Form::Call(node, list) if member_read(node).is_some() => {
+                if !self.unfilled {
+                    self.chain[level]
+                        .instances
+                        .push((Site::of_node(node), Static::Unknown));
+                }
+                match self.member_scheme(level, node) {
+                    Some((scheme, None)) => Some(DeclaredType::Scheme(scheme)),
+                    // A scheme over a parameter the load cannot name: the run solves the call.
+                    Some((_, Some(_))) => {
+                        let typed = self.narrow(level, node, list)?;
+                        self.chain[level].parts.push((Site::of(head), typed));
+                        return Ok(DeclaredType::Type(unknown()));
+                    }
+                    None => None,
+                }
+            }
             _ => None,
         };
         match read {
@@ -1353,12 +1515,72 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         let declared = self.declared(level, &ascribed.value);
         let typed = self.part_at(level, &operand.value, declared)?;
+        if let Some(declared) = declared
+            && let Some(viewed) = self.viewed(level, node, typed, declared)
+        {
+            return viewed;
+        }
         let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
         held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
             value,
             ascribed,
             at: node.source,
         })
+    }
+
+    /// `<module> :! <Sig>` or `<module> :| <Sig>`, the ascription `node` of the shape at `level`
+    /// whose operand's static type `typed` is a signature type, as is `declared`: a view, which the
+    /// run builds where the module fits. Refused where the operand is exactly a signature that does
+    /// not fit `declared` — signatures meet to a set, never to `Never`, so the meet test cannot say
+    /// so. A transparent view of an exact operand is exactly the signature the view door lays down;
+    /// any other is at most `declared`. `None` where either type is no signature type.
+    fn viewed(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        typed: Interval,
+        declared: Parametric,
+    ) -> Option<Result<Interval, ShapeError<'graph>>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let signature = |handle: KType| {
+            matches!(
+                types.node(handle),
+                TypeNode::Signature { .. }
+                    | TypeNode::SignatureApply { .. }
+                    | TypeNode::SignatureMeet { .. }
+            )
+        };
+        let ascribed = bound_above(types, scratch, declared);
+        if !signature(ascribed) || !signature(bound_above(types, scratch, typed.upper)) {
+            return None;
+        }
+        if fits(types, scratch, typed.upper, declared) {
+            self.chain[level].settled.push(Site::of_node(node));
+        }
+        let Some(exact) = typed
+            .is_exact()
+            .then(|| types.concrete(typed.upper))
+            .flatten()
+        else {
+            return Some(Ok(under(declared)));
+        };
+        if !fits(types, scratch, exact, declared) {
+            return Some(Err(ShapeError::AscriptionNeverSatisfied {
+                value: exact,
+                ascribed,
+                at: node.source,
+            }));
+        }
+        let opaque = node.cache().builtin_shape().map(|shape| shape.id)
+            == Some(BuiltinShapeId::AscribeOpaque);
+        let view = types
+            .concrete(declared)
+            .filter(|_| !opaque)
+            .and_then(|declared| transparent_view_type(exact, declared, types, scratch));
+        Some(Ok(view.map_or_else(
+            || under(declared),
+            |view| Interval::point(view.into()),
+        )))
     }
 
     /// `LET <name> <type> = <value>`, the binder at `member` of the shape at `level`, whose value
@@ -2240,19 +2462,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     },
                 });
             }
-            let missing = dropped.and_then(|(lower, need)| self.missing(lower, need));
-            return Err(match missing {
-                Some((of, field)) => ShapeError::NoField {
-                    of,
-                    field,
-                    at: node.source,
-                },
-                None => ShapeError::NoAdmittingCandidate {
-                    key: list.elements,
-                    arguments: uppers(),
-                    at: node.source,
-                },
-            });
+            let missing = dropped.and_then(|(lower, need)| self.missing(lower, need, node.source));
+            return Err(missing.unwrap_or_else(|| ShapeError::NoAdmittingCandidate {
+                key: list.elements,
+                arguments: uppers(),
+                at: node.source,
+            }));
         }
         // A *maybe* an *always* one strictly outranks at the first class never runs: wherever it
         // admits, the *always* one does too, and beats it.
@@ -2388,6 +2603,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         match site.instanced {
             Instanced::Name(leaf) => self.chain[level].instances.push((Site::of(leaf), solution)),
             Instanced::Literal(body) => body.fix_born_instance(solution),
+            Instanced::Member(node) => {
+                self.chain[level]
+                    .instances
+                    .push((Site::of_node(node), solution));
+            }
         }
     }
 
@@ -2431,17 +2651,33 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Where a builtin's need `need` dropped a candidate over an argument whose lower end is
-    /// `lower`, both records: that end, read through its bounds, and the first field the need names
-    /// that it lacks.
-    fn missing(&self, lower: Parametric, need: KType) -> Option<(KType, BinderSymbol)> {
+    /// `lower`, the refusal in the native's own words: a record lacking the first field the need
+    /// names, or a module's signature lacking the member a read needs — that end read through its
+    /// bounds.
+    fn missing(&self, lower: Parametric, need: KType, at: SourceRef) -> Option<ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
-        let (TypeNode::Record { fields: has }, TypeNode::Record { fields: needs }) =
-            (types.node(lower), types.node(need))
-        else {
-            return None;
-        };
-        let field = needs.keys().find(|name| has.get(name.symbol()).is_none())?;
-        Some((bound_above(types, scratch, lower), field))
+        let of = bound_above(types, scratch, lower);
+        match (types.node(lower), types.node(need)) {
+            (TypeNode::Record { fields: has }, TypeNode::Record { fields: needs }) => {
+                let field = needs.keys().find(|name| has.get(name.symbol()).is_none())?;
+                Some(ShapeError::NoField { of, field, at })
+            }
+            (TypeNode::Signature { .. }, TypeNode::Signature { schema, .. }) => {
+                let member = (schema
+                    .value_slots
+                    .iter()
+                    .map(|(name, _)| BinderSymbol::Value(*name)))
+                .chain(
+                    schema
+                        .parameters
+                        .iter()
+                        .map(|(name, _)| BinderSymbol::Type(*name)),
+                )
+                .next()?;
+                Some(ShapeError::NoMember { of, member, at })
+            }
+            _ => None,
+        }
     }
 
     /// The type of the code the part `operand` runs, where the load traces it to a written quote:
@@ -2572,6 +2808,24 @@ fn written_names<'x>(
         part => names.push(quoted(part)?),
     }
     Some(names.leak())
+}
+
+/// The operand and the written label of `node` where it is a member read, `ATTR <operand> <label>`.
+fn member_read<'graph>(
+    node: &'graph KExpression<'graph>,
+) -> Option<(&'graph ExpressionPart<'graph>, BinderSymbol)> {
+    if node.cache().builtin_shape()?.id != BuiltinShapeId::Attribute {
+        return None;
+    }
+    let [_, operand, label] = node.parts else {
+        return None;
+    };
+    let name = match label.value {
+        ExpressionPart::Identifier(name) => BinderSymbol::Value(name),
+        ExpressionPart::Type(name) => BinderSymbol::Type(name),
+        _ => return None,
+    };
+    Some((&operand.value, name))
 }
 
 /// Whether the pass has typed `nested`, or need not: a quote's code the load refused is left.

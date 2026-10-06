@@ -18,15 +18,16 @@
 //! See [README.md § The builtin table](README.md#the-builtin-table).
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::symbols::BinderSymbol;
+use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    Interval, KType, Parametric, Side, TypeNode, TypeRegistry, bound_above, fits, read_through,
-    shape_return, shape_slots,
+    DeclaredType, Interval, KType, Members, Parametric, SchemaDraft, Side, SigOrigin, TypeNode,
+    TypeRegistry, bound_above, fits, member, read_through, shape_return, shape_slots,
+    substitute_parameters,
 };
 use crate::values::record_type;
 
 use super::builtins::Native;
-use super::statics::{retyped_to, under};
+use super::statics::{retyped_to, under, unknown};
 
 /// What a rule reads of one slot of a call.
 #[derive(Clone, Copy)]
@@ -93,6 +94,28 @@ fn returns(
                 }),
             }
         }
+        // An operand that never arrives reads nothing.
+        (Native::ModuleMember, Some(_)) if given[0].typed.upper == KType::NEVER.into() => {
+            Interval::point(KType::NEVER.into())
+        }
+        (Native::ModuleMember, Some([name])) => {
+            match member_of(types, scratch, given[0].typed.upper, *name) {
+                Some(Member {
+                    declared: DeclaredType::Type(declared),
+                    unpinned: None,
+                }) => match name {
+                    BinderSymbol::Type(_) => match types.concrete(declared) {
+                        Some(held) => Interval::point(KType::of_kind(held.kind_of(types)).into()),
+                        None => under(KType::ANY_TYPE.into()),
+                    },
+                    _ => under(declared),
+                },
+                _ => match name {
+                    BinderSymbol::Type(_) => under(KType::ANY_TYPE.into()),
+                    _ => unknown(),
+                },
+            }
+        }
         (Native::Field, Some([name])) => {
             let value = given[0].typed;
             let upper = upper_field(types, scratch, value.upper, *name);
@@ -152,11 +175,30 @@ fn needs<'x>(
     match (native, named(given, native)) {
         (Native::Project, Some(names)) => needs[1] = holding(&distinct(names, scratch)),
         // Over a lower end no record, `ATTR` reads a type, a tagged value or a module, and faults
-        // on its own.
+        // on its own. Over a module it never reads a field, so a record holding the label is what
+        // it needs, which no module is.
         (Native::Field, Some(names @ [_]))
-            if matches!(types.node(given[0].typed.lower), TypeNode::Record { .. }) =>
+            if matches!(
+                types.node(given[0].typed.lower),
+                TypeNode::Record { .. } | TypeNode::Signature { .. }
+            ) =>
         {
             needs[0] = holding(names);
+        }
+        // Over a lower end that is a signature, a module naming the label is what a read needs.
+        (Native::ModuleMember, Some([name]))
+            if matches!(types.node(given[0].typed.lower), TypeNode::Signature { .. }) =>
+        {
+            let mut draft = SchemaDraft::new(scratch);
+            draft.origin = SigOrigin::Declared;
+            match name {
+                BinderSymbol::Value(value) => draft.insert_value_slot(*value, KType::ANY),
+                BinderSymbol::Type(held) => {
+                    draft.insert_parameter(*held, types.head_parameter(*held, KType::ANY));
+                }
+                BinderSymbol::Registration(_) | BinderSymbol::Key(_) => return needs,
+            }
+            needs[0] = types.signature(scratch, draft);
         }
         _ => {}
     }
@@ -168,9 +210,82 @@ fn needs<'x>(
 fn named<'x>(given: &[Given<'x>], native: Native) -> Option<&'x [BinderSymbol]> {
     match native {
         Native::Project => given[0].names,
-        Native::Field => given[1].names,
+        Native::Field | Native::ModuleMember => given[1].names,
         _ => None,
     }
+}
+
+/// A member a signature declares, as a read of it sees it.
+#[derive(Clone, Copy)]
+pub(super) struct Member {
+    /// Its declared type — a type member's own type, a value slot's type or scheme — each pin of
+    /// the application substituted.
+    pub declared: DeclaredType<Parametric>,
+    /// The first head parameter it names that the application leaves unpinned, which stands for a
+    /// different type at each module the read may reach.
+    pub unpinned: Option<TypeSymbol>,
+}
+
+/// The member `name` of every module under `upper`, a signature or an application of one read
+/// through a rigid variable's bound — a union's value member joined over its members: `None` where
+/// `upper` is no such type, or declares no such member.
+pub(super) fn member_of(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    upper: Parametric,
+    name: BinderSymbol,
+) -> Option<Member> {
+    let upper = bound_above(types, scratch, upper);
+    let (declared, pinned) = match types.node(upper) {
+        TypeNode::Signature { .. } => (upper, None),
+        TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
+        // A union's value member is the join of its members', where each declares it at a type.
+        TypeNode::Union { members } if matches!(name, BinderSymbol::Value(_)) => {
+            let mut joined = BumpVec::with_capacity_in(members.len(), scratch);
+            for each in members.iter() {
+                match member_of(types, scratch, each.into(), name)? {
+                    Member {
+                        declared: DeclaredType::Type(declared),
+                        unpinned: None,
+                    } => joined.push(declared),
+                    _ => return None,
+                }
+            }
+            return Some(Member {
+                declared: DeclaredType::Type(types.union_of(scratch, &joined)),
+                unpinned: None,
+            });
+        }
+        _ => return None,
+    };
+    let TypeNode::Signature { schema, .. } = types.node(declared) else {
+        return None;
+    };
+    let read: DeclaredType<Parametric> = match name {
+        BinderSymbol::Value(value) => member(schema.value_slots, value)?,
+        BinderSymbol::Type(held) => member(schema.manifest_members, held)
+            .or_else(|| member(schema.parameters, held))?
+            .into(),
+        BinderSymbol::Registration(_) | BinderSymbol::Key(_) => return None,
+    };
+    let mut pins = BumpVec::new_in(scratch);
+    let mut open = BumpVec::new_in(scratch);
+    for (parameter, _) in schema.parameters.iter() {
+        match pinned.and_then(|pins| pins.get(BinderSymbol::Type(*parameter).symbol())) {
+            Some(pin) => pins.push((*parameter, pin)),
+            None => open.push(*parameter),
+        }
+    }
+    let read = substitute_parameters(types, scratch, read, Members::from_table(pins));
+    // A parameter left open is named where substituting it changes the type.
+    let unpinned = open.into_iter().find(|parameter| {
+        let erased = Members::from_pairs(scratch, [(*parameter, KType::NEVER)]);
+        substitute_parameters(types, scratch, read, erased) != read
+    });
+    Some(Member {
+        declared: read,
+        unpinned,
+    })
 }
 
 /// `names`, each once, in the order first listed.

@@ -5,6 +5,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{FitsFailure, KType, TypeNode, sig_fits};
 use crate::values::{Value, satisfies};
 
+use super::super::layout;
 use super::super::view::{Ascription, Unascribable, ascribe};
 use super::{member, module, schema};
 
@@ -311,6 +312,69 @@ fn an_opaque_view_keeps_a_pin() {
                 member(fixture, view, "zero", types, scratch),
                 Value::Number(zero) if zero == 0.0
             ));
+        })
+    });
+}
+
+/// `Boxes` declares one keyworded head; `two` offers two overloads at its key and one elsewhere.
+const KEYWORDED: &str = "\
+SIG Boxes = #[(EXPR #(BOX _ :Number) -> :(LIST OF Number))]
+SIG Stack FOR ALL #[Elt] = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]
+MODULE two = ((EXPR #(BOX x :Number) -> :(LIST OF Number) = #([x])) (EXPR #(BOX x :Str) -> :(LIST OF Str) = #([x])) (EXPR #(UNBOX x :Number) -> Number = #(x)))
+MODULE one = (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x]))";
+
+#[test]
+fn a_view_carries_each_overload_its_keyworded_members_admit() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(KEYWORDED);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let two = module(fixture, activation, "two");
+            let boxes = declared(fixture, activation, "Boxes");
+            let view = ascribe(writer, two, boxes, Ascription::Transparent, types, scratch)
+                .unwrap_or_else(|error| panic!("`two` satisfies `Boxes`: {error:?}"));
+            // `BOX _ :Str` is no overload the member admits, and `UNBOX` sits at another key.
+            let carried = layout::registrations(view, types, scratch);
+            assert_eq!(carried.len(), 1, "the one overload `Boxes` admits");
+            assert!(
+                carried[0]
+                    .as_callable()
+                    .and_then(|f| f.function())
+                    .is_some(),
+                "a member reading no parameter is carried as it is"
+            );
+            let node = view.module().expect("a view is a module");
+            assert_eq!(schema(node.ktype(), types).keyworded.len(), 1);
+            assert!(
+                sig_fits(types, scratch, node.ktype(), boxes).is_ok(),
+                "the view fits the signature it was ascribed to"
+            );
+        })
+    });
+}
+
+#[test]
+fn an_opaque_view_wraps_an_overload_over_a_carrier_in_a_barrier() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(KEYWORDED);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let one = module(fixture, activation, "one");
+            let stack = declared(fixture, activation, "Stack");
+            let view = ascribe(writer, one, stack, Ascription::Opaque, types, scratch)
+                .unwrap_or_else(|error| panic!("`one` satisfies `Stack`: {error:?}"));
+            let carried = layout::registrations(view, types, scratch);
+            assert_eq!(carried.len(), 1);
+            assert!(
+                carried[0].as_callable().and_then(|f| f.coerced()).is_some(),
+                "a head reading an unpinned parameter sits behind a barrier"
+            );
+            let node = view.module().expect("a view is a module");
+            assert!(sig_fits(types, scratch, node.ktype(), stack).is_ok());
         })
     });
 }

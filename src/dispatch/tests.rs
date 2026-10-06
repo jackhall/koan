@@ -9,6 +9,7 @@ mod generate;
 mod generic;
 mod instances;
 mod lexical;
+mod modules;
 mod narrowing;
 mod programs;
 mod quotes;

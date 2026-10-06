@@ -247,19 +247,6 @@ fn field<'graph, 'cell>(
     }
 }
 
-/// The registrations `source` holds, each a function a keyworded use at its registered shape's key
-/// may select: a module's registration run, and none for any other value.
-fn registrations<'graph, 'cell>(
-    source: KValue<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> &'cell [KValue<'graph, 'cell>] {
-    match source {
-        Value::Knotted(member) => module::layout::registrations(member, types, scratch),
-        _ => &[],
-    }
-}
-
 /// What the caller supplies for a part only it can produce: an evaluated value for a data member's
 /// part, or a module binder's body already run.
 #[derive(Clone, Copy)]

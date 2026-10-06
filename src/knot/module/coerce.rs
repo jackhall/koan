@@ -77,18 +77,18 @@ impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
     }
 
     /// `declared` read under the source module's bindings.
-    fn source_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
+    pub(super) fn source_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
         self.read(declared, self.from)
     }
 
     /// `declared` read under the view's bindings.
-    fn view_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
+    pub(super) fn view_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
         self.read(declared, self.to)
     }
 
     /// A `Signature` handle whose manifest members are `table` — what a barrier node holds, since
     /// a node carries `Copy`, lifetime-free handles and not a borrowed table.
-    fn sig_of(&self, table: Members<'_, TypeSymbol, KType>) -> KType {
+    pub(super) fn sig_of(&self, table: Members<'_, TypeSymbol, KType>) -> KType {
         let mut draft = SchemaDraft::new(self.scratch);
         for (name, kt) in table.iter().copied() {
             draft.insert_manifest(name, kt);

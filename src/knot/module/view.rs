@@ -25,12 +25,12 @@ use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode, TypeRegistry,
-    fits_application, member as bound_member, substitute_parameters,
+    fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
 use crate::values::{TypeValue, Value};
 
 use super::coerce::{Coercion, CoercionRefused, coerce};
-use super::{Module, layout};
+use super::{Coerced, Module, layout};
 
 /// Which operator is ascribing: `:!` keeps the source's types, `:|` mints its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +68,49 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
+    let held = source.module().ok_or(Unascribable::NotAModule)?.ktype();
+    let (sig, from, pins) = fitted(held, signature, types, scratch)?;
+    let to = match mode {
+        // Transparent: the parameters keep the source's bindings, so every slot type reads the
+        // same either side and the coercion walk stops at its first comparison.
+        Ascription::Transparent => from,
+        Ascription::Opaque => mint(&sig, from, &pins, types, scratch),
+    };
+    let view = view_signature(&sig, to, types, scratch);
+    build(writer, source, sig, view, from, to, types, scratch)
+}
+
+/// The signature a transparent view of a module whose signature is `source` carries, seen as
+/// `signature` — what the load types `m :! Sig` as, where it knows `m`'s signature exactly. The
+/// very handle [`ascribe`] lays down, since both are one computation. `None` where the view door
+/// would refuse.
+pub fn transparent_view_type(
+    source: KType,
+    signature: KType,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Option<KType> {
+    let (sig, from, _) = fitted(source, signature, types, scratch).ok()?;
+    Some(view_signature(&sig, from, types, scratch))
+}
+
+/// The ascribed signature's schema, what a module of signature `held` binds its head parameters
+/// to under *fits*, and the application's pins. Refused where `signature` names no one application
+/// of a signature, or `held` does not fit it.
+#[allow(clippy::type_complexity)]
+fn fitted<'run, 'x>(
+    held: KType,
+    signature: KType,
+    types: &TypeRegistry<'run>,
+    scratch: BumpAllocator<'x>,
+) -> Result<
+    (
+        SigSchema<'run>,
+        Members<'x, TypeSymbol, KType>,
+        BumpVec<'x, (BinderSymbol, KType)>,
+    ),
+    Unascribable<'run, 'x>,
+> {
     let mut pins = BumpVec::new_in(scratch);
     let declared = match types.node(signature) {
         TypeNode::Signature { .. } => signature,
@@ -81,7 +124,6 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
         _ => return Err(Unascribable::NotASignature(signature)),
     };
     let sig = layout::schema_of(declared, types).ok_or(Unascribable::NotASignature(signature))?;
-    let held = source.module().ok_or(Unascribable::NotAModule)?.ktype();
     // The empty signature asks nothing, and every module fits it.
     let from = if sig.is_empty() {
         Members::EMPTY
@@ -90,14 +132,7 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
             .map_err(Unascribable::Unsatisfied)?;
         solved(types, scratch, solution)
     };
-    let to = match mode {
-        // Transparent: the parameters keep the source's bindings, so every slot type reads the
-        // same either side and the coercion walk stops at its first comparison.
-        Ascription::Transparent => from,
-        Ascription::Opaque => mint(&sig, from, &pins, types, scratch),
-    };
-    let view = view_signature(&sig, to, types, scratch);
-    build(writer, source, sig, view, from, to, types, scratch)
+    Ok((sig, from, pins))
 }
 
 /// What *fits* solved a module's own signature against an application to. A module's
@@ -164,6 +199,36 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
             .expect("a view's type members are bound");
         members.push(Value::Type(TypeValue::new(writer, handle, types)));
     }
+    // Then, per keyworded member, each overload the source offers at its key that the member
+    // read under `from` admits — behind a barrier where the view reads the member otherwise.
+    for declared in sig.keyworded.iter().copied() {
+        let (src, dst) = (cx.source_side(declared), cx.view_side(declared));
+        for function in
+            layout::functions_at(source, layout::key_of(declared, types), types, scratch)
+        {
+            let registered = layout::registered_shape(function).expect("a function");
+            if !satisfied_by(types, scratch, src, registered) {
+                continue;
+            }
+            members.push(match src == dst {
+                true => function,
+                false => {
+                    let Value::Knotted(function) = function else {
+                        unreachable!("a registration member is a knot member")
+                    };
+                    let barrier = Coerced::tie(
+                        writer,
+                        function,
+                        dst,
+                        declared,
+                        cx.sig_of(from),
+                        cx.sig_of(to),
+                    );
+                    Value::Knotted(Knotted::of(barrier, 0))
+                }
+            });
+        }
+    }
     Ok(Knotted::of(Module::tie(writer, view, &members), 0))
 }
 
@@ -196,8 +261,9 @@ fn mint<'x>(
 }
 
 /// The signature the view itself carries: each of `sig`'s parameters a manifest member at what `to`
-/// gives it, each manifest member and value slot at its declared type read under `to`. A view's
-/// signature is a module's, so it has no parameters, and a view lays out no keyworded member.
+/// gives it, each manifest member, value slot and keyworded member at its declared type read under
+/// `to`. A view's signature is a module's, so it has no parameters, and it fits the signature it
+/// was ascribed to.
 pub(super) fn view_signature(
     sig: &SigSchema<'_>,
     to: Members<'_, TypeSymbol, KType>,
@@ -216,6 +282,9 @@ pub(super) fn view_signature(
     }
     for (name, declared) in sig.value_slots.iter().copied() {
         draft.insert_value_slot(name, substitute_parameters(types, scratch, declared, to));
+    }
+    for declared in sig.keyworded.iter().copied() {
+        draft.push_keyworded(substitute_parameters(types, scratch, declared, to));
     }
     types.signature(scratch, draft)
 }
