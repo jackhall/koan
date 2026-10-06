@@ -37,7 +37,7 @@ pub use lattice::symbols;
 #[cfg(test)]
 mod tests;
 /// The type lattice: `lattice::types`, re-exported under the path koan's modules name — a closed
-/// algebra over [`symbols`] and `ScopeId`, with no value, cell, AST or scope type reachable from it.
+/// algebra over [`symbols`], with no value, cell, AST or scope type reachable from it.
 pub use lattice::types as type_lattice;
 /// Koan's data values and the per-dispatch expression form, laid down in a cell's region over
 /// `memory`'s shapes, typed by memoized `type_lattice` handles.

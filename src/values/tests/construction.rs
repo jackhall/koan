@@ -581,14 +581,13 @@ fn a_family_construction_takes_the_application_its_payload_solves() {
 
 #[test]
 fn a_member_seals_under_a_mint_its_source_binding_admits() {
-    use crate::memory::ScopeId;
+    use crate::type_lattice::ContentKey;
     use crate::values::{SealRefused, sealing};
     with_fixture(|fixture| {
         let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
         let distance = fixture.newtype("Distance", KType::NUMBER);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
-        let nonce = ScopeId::next();
-        let mint = types.carrier(carrier, KType::ANY, nonce);
+        let mint = types.carrier(carrier, KType::ANY, ContentKey(1));
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let sealed = Tagged::seal(
@@ -617,13 +616,13 @@ fn a_member_seals_under_a_mint_its_source_binding_admits() {
                     scratch
                 )
                 .err(),
-                Some(SealRefused::NotAMint(distance)),
-                "a nominal type is no per-application mint",
+                Some(SealRefused::NotACarrier(distance)),
+                "a nominal type is no carrier",
             );
             assert_eq!(
                 sealing(types, scratch, mint, KType::STR, KType::NUMBER.into()),
                 Err(SealRefused::Misfit {
-                    mint,
+                    carrier: mint,
                     witness: KType::STR
                 }),
             );
@@ -633,7 +632,7 @@ fn a_member_seals_under_a_mint_its_source_binding_admits() {
 
 #[test]
 fn a_payload_is_read_at_its_identitys_representation() {
-    use crate::memory::ScopeId;
+    use crate::type_lattice::ContentKey;
     use crate::values::representation;
     with_fixture(|fixture| {
         let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
@@ -670,8 +669,7 @@ fn a_payload_is_read_at_its_identitys_representation() {
         let silent = fixture.family("Silent", &["Type"], |_| None);
         assert_eq!(representation(types, scratch, silent), None);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
-        let nonce = ScopeId::next();
-        let mint = types.carrier(carrier, KType::ANY, nonce);
+        let mint = types.carrier(carrier, KType::ANY, ContentKey(1));
         assert_eq!(representation(types, scratch, mint), None);
     });
 }

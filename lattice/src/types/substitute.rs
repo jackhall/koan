@@ -200,7 +200,7 @@ pub(super) fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: Handle) ->
 /// `kt` with each head parameter `bindings` names replaced by its binding — how a signature's
 /// member types are read under a module's solution, a view's mints or an application's pins.
 ///
-/// A parameter is matched by name, and only a nonce-free one: a nonced `Parameter` is an opaque
+/// A parameter is matched by name, and only a carrier-free one: a carrier `Parameter` is an opaque
 /// view's mint, which no declaration names. A `Signature` node is opaque — its own parameters are
 /// its own, and a declared signature is closed — so the walk reaches only an application's pins.
 pub(super) fn substitute_parameters<B: TypeHandle>(
@@ -219,7 +219,9 @@ pub(super) fn substitute_parameters<B: TypeHandle>(
         CANONICAL,
         &mut |_, node, _| match *node {
             TypeNode::Parameter {
-                name, nonce: None, ..
+                name,
+                carrier: None,
+                ..
             } => member(bindings, name).map(TypeHandle::raw),
             _ => None,
         },

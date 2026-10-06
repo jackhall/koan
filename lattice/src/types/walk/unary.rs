@@ -366,7 +366,7 @@ fn reassemble(
         TypeNode::Lexical { level, name, .. } => types
             .lexical_between(scratch, level, name, wrap(new[0]), wrap(new[1]))
             .raw(),
-        TypeNode::Parameter { name, nonce, .. } => types.parameter(name, wrap(new[0]), nonce),
+        TypeNode::Parameter { name, carrier, .. } => types.parameter(name, wrap(new[0]), carrier),
         TypeNode::SignatureApply { signature, pins } => {
             let mut values = new.iter();
             let pins = map_fields(scratch, pins.raw(), |_| {

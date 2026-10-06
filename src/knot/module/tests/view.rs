@@ -59,58 +59,69 @@ fn a_transparent_view_carries_what_the_signature_names_and_drops_the_rest() {
     });
 }
 
+/// `m`, a twin of equal content built apart, and a module of other content, each fitting `Ord`.
+const TWINS: &str = "\
+SIG Ord FOR ALL #[Carrier] = #[(VAL zero :Carrier)]
+MODULE m = (LET zero = 0)
+MODULE twin = (LET zero = 0)
+MODULE other = (LET zero = 1)";
+
 #[test]
-fn an_opaque_view_mints_a_fresh_carrier_per_application() {
+fn an_opaque_view_keys_its_carrier_on_content() {
     with_fixture(|fixture| {
-        let lines = fixture.parse(PROGRAM);
+        let lines = fixture.parse(TWINS);
         let (types, scratch) = (fixture.types, fixture.scratch());
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
-            let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
-            let opaque = |()| {
-                ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
-                    .unwrap_or_else(|error| panic!("`m` satisfies `Ord`: {error:?}"))
+            let opaque = |name| {
+                let source = module(fixture, activation, name);
+                ascribe(writer, source, ord, Ascription::Opaque, types, scratch)
+                    .unwrap_or_else(|error| panic!("`{name}` satisfies `Ord`: {error:?}"))
             };
-            let (first, second) = (opaque(()), opaque(()));
-
-            let Value::Type(carrier) = member(fixture, first, "Carrier", types, scratch) else {
-                panic!("`Carrier` is a type member");
+            let carrier = |view| match member(fixture, view, "Carrier", types, scratch) {
+                Value::Type(carrier) => carrier.handle(),
+                _ => panic!("`Carrier` is a type member"),
             };
-            let mint = carrier.handle();
+            let (first, second) = (opaque("m"), opaque("m"));
+            let key = carrier(first);
             assert!(
-                matches!(types.node(mint), TypeNode::Parameter { nonce: Some(_), .. }),
-                "an opaque view's carrier is a mint"
+                matches!(
+                    types.node(key),
+                    TypeNode::Parameter {
+                        carrier: Some(_),
+                        ..
+                    }
+                ),
+                "an opaque view's carrier is keyed on content"
             );
-            assert_ne!(mint, KType::NUMBER);
-
-            let Value::Type(other) = member(fixture, second, "Carrier", types, scratch) else {
-                panic!("`Carrier` is a type member");
-            };
-            assert_ne!(
-                mint,
-                other.handle(),
-                "two applications of one signature do not unify"
-            );
-            assert_ne!(
+            assert_ne!(key, KType::NUMBER);
+            assert_eq!(key, carrier(second), "two applications over one module");
+            assert_eq!(
                 first.module().expect("a module").ktype(),
                 second.module().expect("a module").ktype(),
             );
+            assert_eq!(key, carrier(opaque("twin")), "two modules of equal content");
+            assert_ne!(
+                key,
+                carrier(opaque("other")),
+                "two modules of other content"
+            );
 
-            // The value member is sealed at the mint, so it no longer reads as a number.
+            // The value member is sealed at the carrier, so it no longer reads as a number.
             let zero = member(fixture, first, "zero", types, scratch);
-            assert_eq!(zero.concrete_ktype(), mint);
+            assert_eq!(zero.concrete_ktype(), key);
             assert!(
                 matches!(zero, Value::Tagged(_)),
-                "the member is behind the mint, not a bare number"
+                "the member is behind the carrier, not a bare number"
             );
         })
     });
 }
 
 #[test]
-fn a_mint_carries_its_parameters_name_and_bound() {
+fn a_carrier_carries_its_parameters_name_and_bound() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
         let (types, scratch) = (fixture.types, fixture.scratch());
@@ -124,18 +135,20 @@ fn a_mint_carries_its_parameters_name_and_bound() {
             let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
                 panic!("`Carrier` is a type member");
             };
-            let TypeNode::Parameter { bound, nonce, name } = types.node(carrier.handle()) else {
-                panic!("an opaque view's carrier is a mint");
+            let TypeNode::Parameter {
+                bound,
+                carrier: key,
+                name,
+            } = types.node(carrier.handle())
+            else {
+                panic!("an opaque view's carrier is a parameter");
             };
-            assert!(
-                nonce.is_some(),
-                "a mint carries the nonce that makes it generative"
-            );
+            assert!(key.is_some(), "a carrier is keyed on content");
             assert_eq!(BinderSymbol::Type(name), fixture.name("Carrier"));
             assert_eq!(
                 bound,
                 KType::ANY,
-                "the parameter declares no bound, so the mint is bounded by Any"
+                "the parameter declares no bound, so the carrier is bounded by Any"
             );
         })
     });

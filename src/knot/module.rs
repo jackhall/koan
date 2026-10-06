@@ -17,7 +17,7 @@
 //! A **view** narrows: [`view::ascribe`] checks the source satisfies the signature, keeps only what
 //! the signature names, and lays a module node of its own down through the same door. Under `:!`
 //! the view's types are the source's, so every member is carried verbatim. Under `:|` each abstract
-//! member is minted afresh per application, and every member is born **coerced** to the mint: data
+//! member is hidden behind a carrier keyed on content, and every member is born **coerced** to it: data
 //! is re-tagged through the admission barrier, containers are rebuilt cell by cell, a nested module
 //! is re-viewed, and a function is wrapped in a [`Coerced`] barrier node a call will later go
 //! through.

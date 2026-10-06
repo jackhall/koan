@@ -3,9 +3,8 @@
 use std::ptr;
 
 use crate::knot::tests::{declared, pin, with_fixture};
-use crate::memory::ScopeId;
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, Members, TypeNode};
+use crate::type_lattice::{ContentKey, KType, Members, TypeNode};
 use crate::values::tests::parts;
 use crate::values::{Knotted as _, Record, Resolved, Value};
 
@@ -306,7 +305,7 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
             let reference = types.head_parameter(carrier, KType::ANY);
             let slot = types.signature_apply(scratch, inner, &[(fixture.name("Elem"), reference)]);
 
-            let mint = types.carrier(carrier, KType::ANY, ScopeId::next());
+            let mint = types.carrier(carrier, KType::ANY, ContentKey(7));
             let cx = Coercion {
                 writer,
                 types,
@@ -363,7 +362,7 @@ LET f = (FN :{} -> Number = #(1))";
             };
             let reference = types.head_parameter(carrier, KType::ANY);
             let slot = types.signature_apply(scratch, inner, &[(fixture.name("Elem"), reference)]);
-            let mint = types.carrier(carrier, KType::ANY, ScopeId::next());
+            let mint = types.carrier(carrier, KType::ANY, ContentKey(7));
             let cx = Coercion {
                 writer,
                 types,

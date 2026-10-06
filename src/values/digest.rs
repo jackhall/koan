@@ -31,6 +31,11 @@ impl ContentDigest {
     /// The contents a knot's data node stores beside its links, which nothing reads: a data node
     /// digests as a member of its knot.
     pub const NONE: ContentDigest = ContentDigest(0);
+
+    /// The digest's bits, for an identity keyed on content outside `values` — a carrier's.
+    pub fn bits(self) -> u128 {
+        self.0
+    }
 }
 
 /// The domain tag every digest begins with, one per digestible shape, so no two shapes share a
@@ -49,6 +54,8 @@ pub enum Tag {
     Tagged = 0x09,
     /// A run of digests: a container's contents.
     Contents = 0x0A,
+    /// An opaque view's carrier key: its source's digest and its application.
+    Carrier = 0x0B,
     /// A knot: its node count and each node's content in index order.
     Knot = 0x10,
     /// One member of a knot: the knot's digest and the member's index.

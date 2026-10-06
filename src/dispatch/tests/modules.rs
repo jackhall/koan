@@ -466,3 +466,72 @@ fn a_type_a_contribution_reads_is_listed_too() {
     assert_eq!(run(&program("a Outer")), "pair");
     unlisted(&program("a"), "Outer");
 }
+
+/// A carrier is keyed on content: the ascribed module's, the signature application's and the
+/// parameter's name — never on when or how often the ascription runs.
+#[test]
+fn a_carrier_is_keyed_on_content() {
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}LET a = (ints :| Counter)\nLET b = (ints :| Counter)\n\
+             PRINT (a.Carrier == b.Carrier)\nPRINT (a.succ {{x = b.zero}})"
+        )),
+        "true\nCarrier(1)",
+        "two evaluations of one ascription share their carrier"
+    );
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}MODULE twin = ((LET zero = 0) \
+             (LET succ = (FN :{{x :Number}} -> Number = #(x + 1))))\n\
+             MODULE other = ((LET zero = 0) \
+             (LET succ = (FN :{{x :Number}} -> Number = #(x + 2))))\n\
+             LET a = (ints :| Counter)\nLET b = (twin :| Counter)\nLET c = (other :| Counter)\n\
+             PRINT (a.Carrier == b.Carrier)\nPRINT (a.Carrier == c.Carrier)\n\
+             PRINT (a.succ {{x = c.zero}})"
+        )),
+        "true\nfalse\nerror: :(FN :{x :Carrier} -> Carrier) cannot be called with \
+         :{x :Carrier}: it is not sealed under Carrier",
+        "modules of equal content share a carrier, and of other content do not"
+    );
+    assert_eq!(
+        run(
+            "SIG Pair FOR ALL #[Left Right] = #[(VAL l :Left) (VAL r :Right)]\n\
+             MODULE p = ((LET l = 1) (LET r = 2))\nLET v = (p :| Pair)\n\
+             PRINT (v.Left == v.Right)"
+        ),
+        "false",
+        "two unpinned parameters of one signature"
+    );
+}
+
+#[test]
+fn a_functor_s_carrier_follows_what_its_module_captures() {
+    let source = "SIG Ordered = #[(VAL compare :Number)]\n\
+                  SIG Set FOR ALL #[Elt] = #[(VAL empty :Elt)]\n\
+                  MODULE ascending = (LET compare = 1)\n\
+                  MODULE descending = (LET compare = 2)\n\
+                  EXPR #(MAKESET elem :Ordered) -> Module = #(\n  \
+                  MODULE built OVER #[elem] = (LET empty = elem.compare)\n  \
+                  built :| Set\n)\n\
+                  LET up = (MAKESET ascending)\nLET again = (MAKESET ascending)\n\
+                  LET down = (MAKESET descending)\n\
+                  PRINT (up.Elt == again.Elt)\nPRINT (up.Elt == down.Elt)";
+    assert_eq!(run(source), "true\nfalse");
+    let unread = "SIG Ord FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                  LET mk = (FN :{x :Any, u :Any} -> Any = #(\n  \
+                  MODULE m OVER #[x u] = (LET zero = x)\n  m :| Ord\n))\n\
+                  LET a = (mk {x = 1, u = 1})\nLET b = (mk {x = 1, u = 2})\n\
+                  PRINT (a.Carrier == b.Carrier)";
+    assert_eq!(run(unread), "false", "an unread `OVER` entry is content");
+    let branded = "SIG Ord FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                   LET metric = 1\nLET imperial = 2\n\
+                   MODULE meters OVER #[metric] = (LET zero = 0)\n\
+                   MODULE feet OVER #[imperial] = (LET zero = 0)\n\
+                   LET m = (meters :| Ord)\nLET f = (feet :| Ord)\n\
+                   PRINT (m.Carrier == f.Carrier)";
+    assert_eq!(
+        run(branded),
+        "false",
+        "one body listing two top-level names"
+    );
+}

@@ -1,6 +1,6 @@
 //! Members born coerced: what an opaque view does to each thing it carries across its barrier.
 //!
-//! Under `:|` a view's unpinned head parameters are fresh mints, so a member declared at one of
+//! Under `:|` a view's unpinned head parameters are carriers, so a member declared at one of
 //! them has a type other than the one it has in the source. The member is therefore not carried but rebuilt at
 //! the view's types: data is re-tagged through the admission barrier, a container is rebuilt part
 //! by part from what its type shows — a record from the fields its slot declares, and no other —
@@ -37,7 +37,7 @@ use super::{Coerced, view};
 /// Why a member could not take the view's type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoercionRefused {
-    /// The admission barrier refused the mint or the witness.
+    /// The admission barrier refused the carrier or the witness.
     Seal(SealRefused),
     /// A slot declared a function type and the member is no function.
     NotAFunction,
@@ -83,7 +83,7 @@ impl fmt::Display for CoercionRefusedDisplay<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |handle: KType| display_name(handle, self.types, self.symbols);
         match self.refused {
-            CoercionRefused::Seal(SealRefused::NotAMint(identity)) => {
+            CoercionRefused::Seal(SealRefused::NotACarrier(identity)) => {
                 write!(f, "{} is no carrier", name(identity))
             }
             CoercionRefused::Seal(SealRefused::Misfit { witness, .. }) => {
@@ -114,7 +114,7 @@ pub struct Coercion<'a, 'cell, 'run, 'x> {
     pub scratch: BumpAllocator<'x>,
     /// What the source module binds the signature's head parameters to.
     pub from: Members<'x, TypeSymbol, KType>,
-    /// What the view binds them to: the mints under `:|`, the source's own under `:!`.
+    /// What the view binds them to: the carriers under `:|`, the source's own under `:!`.
     pub to: Members<'x, TypeSymbol, KType>,
 }
 
@@ -180,7 +180,7 @@ pub fn coerce<'graph, 'cell>(
         // A reference to a head parameter. Outwards, the value takes the carrier as its one tagged
         // layer, the barrier checking the carrier is one and the payload fits; inwards, through a
         // barrier, a value sealed under the carrier gives up its payload at the source's type.
-        TypeNode::Parameter { nonce: None, .. } => {
+        TypeNode::Parameter { carrier: None, .. } => {
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
@@ -219,7 +219,7 @@ pub fn coerce<'graph, 'cell>(
                 built.with_type(cx.writer, dst)
             }))
         }
-        // Keys are untouched: a dict's key type names no parameter a view mints.
+        // Keys are untouched: a dict's key type names no parameter a view hides.
         TypeNode::Dict {
             value: cell_type, ..
         } => {
@@ -358,7 +358,10 @@ pub fn coerce<'graph, 'cell>(
 fn carrier(types: &TypeRegistry<'_>, handle: KType) -> bool {
     matches!(
         types.node(handle),
-        TypeNode::Parameter { nonce: Some(_), .. }
+        TypeNode::Parameter {
+            carrier: Some(_),
+            ..
+        }
     )
 }
 

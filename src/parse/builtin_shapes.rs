@@ -1555,7 +1555,8 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // <module> :| <Sig> — the opaque ascription: a view whose unpinned parameters are minted afresh.
+    // <module> :| <Sig> — the opaque ascription: a view whose unpinned parameters are hidden behind
+    // carriers keyed on content.
     BuiltinShape {
         id: BuiltinShapeId::AscribeOpaque,
         elements: &[

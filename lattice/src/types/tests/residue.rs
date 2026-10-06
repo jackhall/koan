@@ -855,7 +855,7 @@ fn a_carrier_under_the_rest_of_a_union_is_dropped() {
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    let carrier = types.carrier(name, number_or_str, crate::bump::ScopeId::from_raw(1, 1));
+    let carrier = types.carrier(name, number_or_str, crate::types::ContentKey(1));
     assert_eq!(
         types.union_of(region, &[carrier, KType::NUMBER, KType::STR]),
         number_or_str

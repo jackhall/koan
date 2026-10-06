@@ -9,27 +9,28 @@
 //!
 //! Under `:!` they mean what *fits* solved them to, or what the application pins them to, so the
 //! view's members are the source's own words and the view is a relabelling. Under `:|` each
-//! unpinned one is **minted afresh, once per application**: a [`Parameter`](TypeNode::Parameter)
-//! carrying a nonce nothing else can name, so two ascriptions of one signature over one module
-//! produce views whose carriers do not unify. Every member is then born [coerced](super::coerce)
-//! to the mints. A pinned parameter keeps its pin either way.
+//! unpinned one is hidden behind a **carrier keyed on content**: a [`Parameter`](TypeNode::Parameter)
+//! keyed on the source's digest and the signature application, so two ascriptions of modules of
+//! equal content share their carriers and two of other content never unify, however often either
+//! runs. Every member is then born [coerced](super::coerce) to the carriers. A pinned parameter
+//! keeps its pin either way.
 //!
 //! A view carries a keyworded member too: past its named members, each overload the source offers
 //! at the member's key that the member read under the source's bindings admits, behind a barrier
 //! where the view reads the member otherwise.
 //!
-//! Nothing is minted at a *nested* boundary. A slot declared at an application whose pins name the
-//! outer signature's parameters is re-viewed against it read under the outer view's bindings, so
-//! the nested view's identities are the outer mints, arriving through the declared type rather
-//! than being made again. [`build`] is the one body both the outer ascription and the nested case
+//! No carrier is made at a *nested* boundary. A slot declared at an application whose pins name
+//! the outer signature's parameters is re-viewed against it read under the outer view's bindings,
+//! so the nested view's identities are the outer carriers, arriving through the declared type
+//! rather than being made again. [`build`] is the one body both the outer ascription and the nested case
 //! go through.
 
 use crate::knot::{KValue, Knotted};
-use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
+use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode, TypeRegistry,
-    fits_application, member as bound_member, satisfied_by, substitute_parameters,
+    ContentKey, FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
+    TypeRegistry, fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{ContentDigest, Knotted as _, TypeValue, Value};
@@ -37,10 +38,10 @@ use crate::values::{ContentDigest, Knotted as _, TypeValue, Value};
 use super::coerce::{Coercion, CoercionRefused, coerce};
 use super::{Coerced, Module, layout};
 
-/// Which operator is ascribing: `:!` keeps the source's types, `:|` mints its own.
+/// Which operator is ascribing: `:!` keeps the source's types, `:|` hides them behind carriers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ascription {
-    /// `:|` — each unpinned head parameter becomes a fresh mint, and every member is born coerced
+    /// `:|` — each unpinned head parameter is hidden behind a carrier, and every member is born coerced
     /// to it.
     Opaque,
     /// `:!` — the parameters keep what *fits* solved them to, so every member is carried verbatim.
@@ -79,7 +80,15 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
         // Transparent: the parameters keep the source's bindings, so every slot type reads the
         // same either side and the coercion walk stops at its first comparison.
         Ascription::Transparent => from,
-        Ascription::Opaque => mint(&sig, from, &pins, types, scratch),
+        // A carrier is keyed on content: the source's and the application's. Two views of equal
+        // content share one, and the parameter's name keeps two of one view apart.
+        Ascription::Opaque => {
+            let key = DigestHasher::new(Tag::Carrier)
+                .digest(source.digest())
+                .feed(signature)
+                .finished();
+            mint(&sig, from, &pins, ContentKey(key.bits()), types, scratch)
+        }
     };
     let view = view_signature(&sig, to, types, scratch);
     // A view is its operator and its application over its source.
@@ -174,7 +183,7 @@ pub(super) fn solved<'x>(
 ///
 /// Two callers: an ascription, and a nested signature slot inside one
 /// ([`coerce`](super::coerce::coerce)), which passes the enclosing substitutions unchanged —
-/// a nested boundary mints nothing of its own. Satisfaction is the caller's: an ascription checks
+/// a nested boundary makes no carrier of its own. Satisfaction is the caller's: an ascription checks
 /// it outright, and a nested slot was checked when the enclosing one was.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build<'graph, 'cell, 'run, 'x>(
@@ -248,17 +257,17 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     Ok(Knotted::of(Module::tie(writer, view, &members, content), 0))
 }
 
-/// The view's bindings under `:|`: a fresh mint per head parameter of `sig` that `pins` leaves
-/// unpinned — a [`Parameter`](TypeNode::Parameter) carrying this application's nonce, under the
-/// bound the declaration gives it — and each pinned one at what `from` holds for it, its pin.
+/// The view's bindings under `:|`: a carrier per head parameter of `sig` that `pins` leaves
+/// unpinned — a [`Parameter`](TypeNode::Parameter) keyed on `key`, under the parameter's name and
+/// the bound the declaration gives it — and each pinned one at what `from` holds for it, its pin.
 fn mint<'x>(
     sig: &SigSchema<'_>,
     from: Members<'_, TypeSymbol, KType>,
     pins: &[(BinderSymbol, KType)],
+    key: ContentKey,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Members<'x, TypeSymbol, KType> {
-    let nonce = ScopeId::next();
     Members::from_pairs(
         scratch,
         sig.parameters.iter().map(|(name, declared)| {
@@ -269,7 +278,7 @@ fn mint<'x>(
                 bound_member(from, *name).expect("fits binds every parameter")
             } else {
                 let bound = types.node(*declared).rigid_bound().unwrap_or(KType::ANY);
-                types.carrier(*name, bound, nonce)
+                types.carrier(*name, bound, key)
             };
             (*name, to)
         }),

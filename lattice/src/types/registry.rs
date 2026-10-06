@@ -27,13 +27,13 @@
 
 use std::cell::RefCell;
 
-use crate::bump::{BumpAllocator, BumpBackedMap, BumpVec, ScopeId, bump_table};
+use crate::bump::{BumpAllocator, BumpBackedMap, BumpVec, bump_table};
 use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 
 use super::digest::{self, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use super::kind::KKind;
-use super::node::{NodeSchema, TypeNode};
+use super::node::{ContentKey, NodeSchema, TypeNode};
 use super::order::{Dropped, is_subtype_of, unsubsumed};
 use super::record::{Record, map_fields};
 use super::run::{Elements, Run};
@@ -93,14 +93,16 @@ impl<'run> Entry<'run> {
                 rigid: true,
                 parametric: true,
             },
-            TypeNode::Lexical { .. } | TypeNode::Parameter { nonce: None, .. } => Entry {
+            TypeNode::Lexical { .. } | TypeNode::Parameter { carrier: None, .. } => Entry {
                 node,
                 quantified,
                 rigid: true,
                 parametric: true,
             },
             // An opaque carrier: a value carries it and dispatches on it, so it is concrete.
-            TypeNode::Parameter { nonce: Some(_), .. } => Entry {
+            TypeNode::Parameter {
+                carrier: Some(_), ..
+            } => Entry {
                 node,
                 quantified,
                 rigid: true,
@@ -548,23 +550,27 @@ impl<'run> TypeRegistry<'run> {
         wrap(self.parameter(name, bound, None))
     }
 
-    /// The opaque carrier a view mints for a head parameter, under `nonce`, which nothing else can
-    /// name, so two opaque ascriptions of one signature never unify. A value carries it and
-    /// dispatches on it, so it is concrete.
-    pub fn carrier(&self, name: TypeSymbol, bound: KType, nonce: ScopeId) -> KType {
-        wrap(self.parameter(name, bound, Some(nonce)))
+    /// The carrier an opaque view hides a head parameter behind, keyed on `key`, the content the
+    /// view hides: two views of equal content share it, and two of different content never unify.
+    /// A value carries it and dispatches on it, so it is concrete.
+    pub fn carrier(&self, name: TypeSymbol, bound: KType, key: ContentKey) -> KType {
+        wrap(self.parameter(name, bound, Some(key)))
     }
 
-    /// A named rigid variable — a head parameter, or with `nonce` set a carrier.
+    /// A named rigid variable — a head parameter, or with `carrier` set a carrier.
     pub(super) fn parameter(
         &self,
         name: TypeSymbol,
         bound: KType,
-        nonce: Option<ScopeId>,
+        carrier: Option<ContentKey>,
     ) -> Handle {
         self.assert_bound(bound);
-        self.intern_digested(digest::parameter_digest(name, bound, nonce), || {
-            TypeNode::Parameter { name, bound, nonce }
+        self.intern_digested(digest::parameter_digest(name, bound, carrier), || {
+            TypeNode::Parameter {
+                name,
+                bound,
+                carrier,
+            }
         })
     }
 
@@ -1112,7 +1118,7 @@ impl<'run> TypeRegistry<'run> {
         let carrier_bound = |member: Handle| match self.node(member) {
             TypeNode::Parameter {
                 bound,
-                nonce: Some(_),
+                carrier: Some(_),
                 ..
             } if bound != KType::ANY => Some(bound.raw()),
             _ => None,

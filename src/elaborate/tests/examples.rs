@@ -138,7 +138,6 @@ fn shapes(
             scratch,
             crate::symbols::TypeSymbol::declared(name, symbols).unwrap(),
             RelativeSchema::NewType(KType::NUMBER),
-            None,
             types,
             scratch,
         )

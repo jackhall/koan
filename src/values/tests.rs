@@ -364,7 +364,6 @@ impl<'graph> Fixture<'_, 'graph> {
             scratch,
             TypeSymbol::declared(name, self.symbols).unwrap(),
             RelativeSchema::NewType(representation),
-            None,
             types,
             scratch,
         )
@@ -394,7 +393,6 @@ impl<'graph> Fixture<'_, 'graph> {
             self.scratch(),
             TypeSymbol::declared(name, self.symbols).unwrap(),
             schema,
-            None,
             self.types,
             self.scratch(),
         )
@@ -406,7 +404,6 @@ impl<'graph> Fixture<'_, 'graph> {
             self.scratch(),
             TypeSymbol::declared(name, self.symbols).unwrap(),
             RelativeSchema::NewType(representation),
-            None,
             self.types,
             self.scratch(),
         )

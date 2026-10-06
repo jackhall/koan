@@ -265,15 +265,17 @@ fn circular_values_compare_as_a_bisimulation() {
 
 #[test]
 fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
-    use crate::memory::ScopeId;
+    use crate::type_lattice::ContentKey;
     use crate::values::KeyRejected;
     with_fixture(|fixture| {
         let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
         let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
-        // Each opaque ascription mints its own nonce, so two mints of one bound are two identities.
+        // Views of two contents key their carriers apart, so two carriers of one bound are two
+        // identities.
+        let keys = std::cell::Cell::new(0);
         let mint = |bound| {
-            let nonce = ScopeId::next();
-            types.carrier(carrier, bound, nonce)
+            keys.set(keys.get() + 1);
+            types.carrier(carrier, bound, ContentKey(keys.get()))
         };
         let number_or_str = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
         let (by_number, by_number_again) = (mint(KType::NUMBER), mint(KType::NUMBER));
@@ -319,14 +321,15 @@ fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
 #[test]
 fn a_seal_bounded_by_a_code_kind_reveals_every_quote() {
     use super::{Stand, quote};
-    use crate::memory::ScopeId;
+    use crate::type_lattice::ContentKey;
     use crate::values::Value as Holding;
     with_fixture(|fixture| {
         let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
         let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
+        let keys = std::cell::Cell::new(0);
         let mint = |bound| {
-            let nonce = ScopeId::next();
-            types.carrier(carrier, bound, nonce)
+            keys.set(keys.get() + 1);
+            types.carrier(carrier, bound, ContentKey(keys.get()))
         };
         let name = quote(fixture, "#(y)");
         let call = quote(fixture, "#(f x)");

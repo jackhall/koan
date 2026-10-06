@@ -23,7 +23,6 @@ impl Fixture<'_, '_> {
             scratch,
             crate::symbols::TypeSymbol::declared("Node", self.symbols).unwrap(),
             RelativeSchema::NewType(representation),
-            None,
             types,
             scratch,
         )

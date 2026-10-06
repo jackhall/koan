@@ -30,12 +30,12 @@ use std::rc::Rc;
 
 use proptest::prelude::*;
 
-use crate::bump::{Bump, BumpAllocator, ScopeId};
+use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use crate::types::kind::KKind;
-use crate::types::node::TypeNode;
+use crate::types::node::{ContentKey, TypeNode};
 use crate::types::operators::{FoldDirection, ReductionMode};
 use crate::types::registry::TypeRegistry;
 use crate::types::schema::{SchemaDraft, SigOrigin};
@@ -592,7 +592,7 @@ fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle
 
 /// The declaring scope a generated opaque mint is sourced at — any id that is not the canonical
 /// binder, since the canonical binder is reserved for a signature's own members.
-const OPAQUE_MINT: ScopeId = ScopeId::from_raw(1, 1);
+const OPAQUE_MINT: ContentKey = ContentKey(1);
 
 /// Zero to three named fields over `value`, keyed from the binder alphabet, each name once: a
 /// later draw for a name replaces an earlier one in place, the record a parser that rejects

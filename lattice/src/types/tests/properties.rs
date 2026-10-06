@@ -527,7 +527,7 @@ proptest! {
             _ if node.binds_quantifiers() => Visit::Stop,
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
-            | TypeNode::Parameter { nonce: None, .. } => Visit::Stop,
+            | TypeNode::Parameter { carrier: None, .. } => Visit::Stop,
             _ => Visit::Descend,
         });
         prop_assert_eq!(types.contains_quantified(a), quantified);

@@ -55,18 +55,18 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         composite(Tag::Tagged, self.ktype, self.contents)
     }
 
-    /// A member sealed behind an opaque view's barrier: [`sealing`] checks the identity is a mint
-    /// of that view and the payload satisfies what the source binds the member to, and the payload
-    /// takes the mint as its one tagged layer.
+    /// A member sealed behind an opaque view's barrier: [`sealing`] checks the identity is a
+    /// carrier and the payload satisfies what the source binds the member to, and the payload takes
+    /// the carrier as its one tagged layer.
     pub fn seal(
         writer: Writer<'cell>,
         value: Value<'cell, X>,
-        mint: KType,
+        carrier: KType,
         witness: KType,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, SealRefused> {
-        let identity = sealing(types, scratch, mint, witness, value.ktype())?;
+        let identity = sealing(types, scratch, carrier, witness, value.ktype())?;
         Ok(Self::peel(writer, value, identity))
     }
 

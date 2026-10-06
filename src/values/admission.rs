@@ -121,7 +121,7 @@ pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>
 
 /// The type a tagged value's payload is read at: its identity's representation — a newtype's, a
 /// family application's with its arguments substituted, a bare family's with each parameter at
-/// `Any`. `None` for an identity with none: an opaque view's mint, a family that constructs
+/// `Any`. `None` for an identity with none: an opaque view's carrier, a family that constructs
 /// nothing.
 pub fn representation(
     types: &TypeRegistry<'_>,
@@ -180,51 +180,54 @@ pub fn solves_identity(types: &TypeRegistry<'_>, head: KType) -> bool {
     )
 }
 
-/// What sealing a payload under an opaque mint refuses.
+/// What sealing a payload under an opaque view's carrier refuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SealRefused {
-    /// The identity is no per-application mint: no nonced `Parameter`.
-    NotAMint(KType),
+    /// The identity is no carrier: no `Parameter` keyed on content.
+    NotACarrier(KType),
     /// The payload's type does not satisfy what the source binds the member to.
-    Misfit { mint: KType, witness: KType },
+    Misfit { carrier: KType, witness: KType },
     /// A value crossing a barrier inwards at a carrier is not sealed under it.
     NotSealed { carrier: KType },
 }
 
-/// The identity a payload of type `payload` takes when sealed under `mint`, the per-application
-/// carrier an opaque ascription minted for a parameter the source binds to `witness`.
+/// The identity a payload of type `payload` takes when sealed under `carrier`, the carrier an
+/// opaque ascription hides a parameter the source binds to `witness` behind.
 ///
-/// The barrier's rule, beside [`construction`]: a mint records no representation for a
+/// The barrier's rule, beside [`construction`]: a carrier records no representation for a
 /// construction to check against, so what is checked is the source's own binding. Sealing happens
 /// where a view is built, never where a koan program writes a construction.
 pub fn sealing(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    mint: KType,
+    carrier: KType,
     witness: KType,
     payload: DeclaredType<KType>,
 ) -> Result<KType, SealRefused> {
-    if !is_mint(types, mint) {
-        return Err(SealRefused::NotAMint(mint));
+    if !is_carrier(types, carrier) {
+        return Err(SealRefused::NotACarrier(carrier));
     }
     if satisfied_by(types, scratch, witness, payload) {
-        Ok(mint)
+        Ok(carrier)
     } else {
-        Err(SealRefused::Misfit { mint, witness })
+        Err(SealRefused::Misfit { carrier, witness })
     }
 }
 
-/// Whether `ktype` is a per-application mint: a nonced head parameter.
-fn is_mint(types: &TypeRegistry<'_>, ktype: KType) -> bool {
+/// Whether `ktype` is a carrier: a head parameter keyed on content.
+fn is_carrier(types: &TypeRegistry<'_>, ktype: KType) -> bool {
     matches!(
         types.node(ktype),
-        TypeNode::Parameter { nonce: Some(_), .. }
+        TypeNode::Parameter {
+            carrier: Some(_),
+            ..
+        }
     )
 }
 
 /// `value` read through its seal where the seal's bound licenses it. An opaque view's seal is
-/// transparent exactly where the member's bound reveals the kind of value it holds — where the mint
-/// lies under its payload's kind. A seal bounded by `Value`, or by a union spanning kinds, stays.
+/// transparent exactly where the member's bound reveals the kind of value it holds — where the
+/// carrier lies under its payload's kind. A seal bounded by `Value`, or by a union spanning kinds, stays.
 /// A seal re-tags rather than wraps ([`Tagged::seal`](super::Tagged::seal)), so there is one layer
 /// to read through. Equality and dict keys read a value through this.
 pub fn unsealed<'cell, X: Knotted>(
@@ -236,7 +239,7 @@ pub fn unsealed<'cell, X: Knotted>(
         return value;
     };
     let payload = *tagged.payload();
-    let revealed = is_mint(types, tagged.ktype())
+    let revealed = is_carrier(types, tagged.ktype())
         && kind_of(&payload, types, scratch)
             .is_some_and(|kind| fits(types, scratch, tagged.ktype(), kind));
     if revealed { payload } else { value }
