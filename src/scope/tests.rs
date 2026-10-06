@@ -281,6 +281,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         }
         E::NoField { of, field, .. } => E::NoField { of, field, at },
         E::NoMember { of, member, .. } => E::NoMember { of, member, at },
+        E::Unlisted { name, .. } => E::Unlisted { name, at },
         E::UnpinnedMember {
             member, parameter, ..
         } => E::UnpinnedMember {

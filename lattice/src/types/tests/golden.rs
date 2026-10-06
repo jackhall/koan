@@ -114,6 +114,11 @@ fn constants_match_freshly_interned_nodes() {
         ("TYPE_CODE", KType::TYPE_CODE, type_code),
         ("LIST_OF_NAME", KType::LIST_OF_NAME, types.list(KType::NAME)),
         (
+            "LIST_OF_EXPRESSION",
+            KType::LIST_OF_EXPRESSION,
+            types.list(KType::EXPRESSION),
+        ),
+        (
             "LIST_OF_DECLARATION",
             KType::LIST_OF_DECLARATION,
             types.list(KType::DECLARATION),

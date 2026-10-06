@@ -21,7 +21,8 @@
 //! static upper end to the solve, unless that is `Any`: the judge reads it as exactly that type, and
 //! the use records it for the call. A contribution naming a lexical variable records where the use
 //! reads it — a hop per block, and a **type capture** per callable or module between the use and the
-//! variable's home, which the shape lays down past its builder's captures.
+//! variable's home, which the shape lays down past its builder's captures; a module body's `OVER`
+//! list must name each one it holds, as it names a capture the builder made.
 //! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
 //! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
 //! first, is **selected** and runs without admitting; where they rank none first, the load refuses
@@ -100,11 +101,11 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate,
-    Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution, StaticType,
-    Statics, SurfacedHead, Target, UnitWork, Variable as Located, source_of,
+    Listed, Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution,
+    StaticType, Statics, SurfacedHead, Target, UnitWork, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
-use crate::symbols::BinderSymbol;
+use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KType, Parametric,
     Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above,
@@ -251,7 +252,9 @@ struct Level<'p, 'graph> {
     named: BumpVec<'p, (Site, &'graph [StaticType<'graph>])>,
     /// Each type capture a contribution read in a shape nested here added, by the variable's level,
     /// beside the coordinate it reads in the enclosing activation.
-    type_captures: BumpVec<'p, (usize, Coordinate)>,
+    /// Each type capture's variable's name, and the use that added it, ride beside it: a module
+    /// body's `OVER` list must name it.
+    type_captures: BumpVec<'p, (usize, Coordinate, (TypeSymbol, SourceRef))>,
 }
 
 /// The walk's state: the chain of enclosing shapes.
@@ -428,8 +431,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if !self.unfilled && !at.type_captures.is_empty() {
             at.shape.fix_type_captures(collect(
                 self.writer,
-                at.type_captures.iter().map(|(_, source)| *source),
+                at.type_captures.iter().map(|(_, source, _)| *source),
             ));
+        }
+        // A module body reads a type its enclosing callable binds only where its `OVER` list
+        // names it.
+        if at.shape.kind() == ShapeKind::Module {
+            let listed = at.shape.over().unwrap_or(&[]);
+            for (_, _, (name, used)) in at.type_captures.iter() {
+                let name = BinderSymbol::Type(*name);
+                if !listed.contains(&Listed::Name(name)) {
+                    return Err(ShapeError::Unlisted { name, at: *used });
+                }
+            }
         }
         Ok(())
     }
@@ -556,7 +570,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// hop per block, a type capture per callable or module. The type channel numbers each lexical
     /// variable of a chain in the shape that declares it, so a static type names none without a
     /// home on its own chain.
-    fn coordinate_of(&mut self, level: usize, variable: usize) -> Coordinate {
+    fn coordinate_of(
+        &mut self,
+        level: usize,
+        variable: usize,
+        named: (TypeSymbol, SourceRef),
+    ) -> Coordinate {
         const HOMED: &str = "a lexical variable a static type names has its home on its chain";
         let mut home = level;
         let target = loop {
@@ -574,7 +593,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 ShapeKind::Block => coordinate.through_block(),
                 ShapeKind::Callable | ShapeKind::Module => Coordinate::Activation {
                     hops: 0,
-                    target: Target::Capture(self.type_capture(inner, variable, coordinate)),
+                    target: Target::Capture(self.type_capture(inner, variable, named, coordinate)),
                 },
                 ShapeKind::Program | ShapeKind::Code => unreachable!("{HOMED}"),
             };
@@ -583,13 +602,24 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The closure slot of the shape at `level` that holds the lexical variable `variable`, read at
-    /// `source` in the enclosing activation: the type capture already recorded for it, or a new one.
-    fn type_capture(&mut self, level: usize, variable: usize, source: Coordinate) -> CaptureSlot {
+    /// `source` in the enclosing activation: the type capture already recorded for it, or a new one
+    /// beside the variable's name and the use adding it.
+    fn type_capture(
+        &mut self,
+        level: usize,
+        variable: usize,
+        named: (TypeSymbol, SourceRef),
+        source: Coordinate,
+    ) -> CaptureSlot {
         let at = &mut self.chain[level];
-        let index = match at.type_captures.iter().position(|(v, _)| *v == variable) {
+        let index = match at
+            .type_captures
+            .iter()
+            .position(|capture| capture.0 == variable)
+        {
             Some(index) => index,
             None => {
-                at.type_captures.push((variable, source));
+                at.type_captures.push((variable, source, named));
                 at.type_captures.len() - 1
             }
         };
@@ -599,11 +629,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// What an argument whose static upper end is `upper`, in the shape at `level`, contributes to
     /// a solve where its call runs: `Unknown` — the carried type — where `upper` is `Any`; `upper`
     /// where it is closed; and `upper` beside where each lexical variable it names is read.
-    fn contribution(&mut self, level: usize, upper: Parametric) -> StaticType<'graph> {
+    fn contribution(
+        &mut self,
+        level: usize,
+        upper: Parametric,
+        at: SourceRef,
+    ) -> StaticType<'graph> {
         if upper == KType::ANY.into() {
             return Static::Unknown;
         }
-        let variables = self.located(level, &[upper]);
+        let variables = self.located(level, &[upper], at);
         if variables.is_empty() {
             return self
                 .types
@@ -619,14 +654,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// The solution `solution` of an instance site in the shape at `level`, as its cell records it:
     /// closed where every entry is concrete, and otherwise beside where the site reads each lexical
     /// variable an entry names.
-    fn solution(&mut self, level: usize, solution: &[Parametric]) -> StaticSolution<'graph> {
+    fn solution(
+        &mut self,
+        level: usize,
+        solution: &[Parametric],
+        at: SourceRef,
+    ) -> StaticSolution<'graph> {
         let types = self.types;
         let mut closed = BumpVec::with_capacity_in(solution.len(), self.scratch);
         closed.extend(solution.iter().map_while(|each| types.concrete(*each)));
         if closed.len() == solution.len() {
             return Static::Closed(collect(self.writer, closed.iter().copied()));
         }
-        let variables = self.located(level, solution);
+        let variables = self.located(level, solution, at);
         assert!(
             !variables.is_empty(),
             "an instance's solution names no variable but its chain's lexical ones"
@@ -638,24 +678,29 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Where the shape at `level` reads each lexical variable `values` name, by level: a hop per
-    /// block and a type capture per callable or module between the read and the variable's home.
-    /// Empty where they name none.
-    fn located(&mut self, level: usize, values: &[Parametric]) -> &'graph [Located] {
+    /// block and a type capture per callable or module between the read and the variable's home,
+    /// each added for the use at `used`. Empty where they name none.
+    fn located(
+        &mut self,
+        level: usize,
+        values: &[Parametric],
+        used: SourceRef,
+    ) -> &'graph [Located] {
         let (types, scratch) = (self.types, self.scratch);
-        let mut levels: BumpVec<'_, usize> = BumpVec::new_in(scratch);
+        let mut levels: BumpVec<'_, (usize, TypeSymbol)> = BumpVec::new_in(scratch);
         for value in values {
             read_through(types, scratch, *value, Side::Above, &mut |variable| {
-                if let Variable::Lexical { level, .. } = variable
-                    && !levels.contains(&level)
+                if let Variable::Lexical { level, name, .. } = variable
+                    && !levels.iter().any(|(at, _)| *at == level)
                 {
-                    levels.push(level);
+                    levels.push((level, name));
                 }
                 None
             });
         }
         let mut located = BumpVec::with_capacity_in(levels.len(), scratch);
-        for variable in levels.iter().copied() {
-            let at = self.coordinate_of(level, variable);
+        for (variable, name) in levels.iter().copied() {
+            let at = self.coordinate_of(level, variable, (name, used));
             located.push(Located {
                 level: variable,
                 at,
@@ -860,7 +905,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         let (typed, solution) = self.instantiate(scheme, wanted, statement.source)?;
         if !self.unfilled {
-            body.fix_born_instance(self.solution(level, solution));
+            body.fix_born_instance(self.solution(level, solution, statement.source));
         }
         Ok(DeclaredType::Type(typed))
     }
@@ -1444,7 +1489,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     DeclaredType::Scheme(scheme) => {
                         let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
                         if !self.unfilled {
-                            body.fix_born_instance(self.solution(level, solution));
+                            body.fix_born_instance(self.solution(level, solution, node.source));
                         }
                         typed
                     }
@@ -1459,7 +1504,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 Some((scheme, None)) => {
                     let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
                     if !self.unfilled {
-                        let solution = self.solution(level, solution);
+                        let solution = self.solution(level, solution, node.source);
                         self.chain[level]
                             .instances
                             .push((Site::of_node(node), solution));
@@ -1766,7 +1811,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         let at = self.source(level, site);
                         let (typed, solution) = self.instantiate(scheme, wanted, at)?;
                         if !self.unfilled {
-                            let solution = self.solution(level, solution);
+                            let solution = self.solution(level, solution, at);
                             self.chain[level].instances.push((site, solution));
                         }
                         typed
@@ -2100,7 +2145,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 if !callee.exact {
                     return at_most(self);
                 }
-                let contributions = self.contributions(level, callee, arguments, |_| true);
+                let contributions =
+                    self.contributions(level, callee, arguments, node.source, |_| true);
                 (payload.upper, arguments, contributions)
             }
         };
@@ -2125,13 +2171,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         callee: Callee<'_>,
         arguments: &[Interval],
+        at: SourceRef,
         typed: impl Fn(usize) -> bool,
     ) -> &'p [StaticType<'graph>] {
         let solving = solving_slots(self.types, self.scratch, callee.shape);
         let mut contributions = BumpVec::with_capacity_in(arguments.len(), self.scratch);
         for (slot, argument) in arguments.iter().enumerate() {
             contributions.push(match solving.get(slot) == Some(&true) && typed(slot) {
-                true => self.contribution(level, argument.upper),
+                true => self.contribution(level, argument.upper, at),
                 false => Static::Unknown,
             });
         }
@@ -2208,7 +2255,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         let instanced = |slot: usize| sites.iter().any(|site| site.position == slot);
-        let contributions = self.contributions(level, callee, &arguments, |slot| !instanced(slot));
+        let contributions = self.contributions(level, callee, &arguments, node.source, |slot| {
+            !instanced(slot)
+        });
         if !sites.is_empty() {
             let made = match self.instances(Some(callee.shape), &sites, &arguments, contributions) {
                 Ok(made) => made,
@@ -2411,7 +2460,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             let instance = sites.iter().any(|site| site.position == position);
             contributions.push(match wanted {
                 Wanted::Evaluated(_) if solved[position] && !instance => {
-                    self.contribution(level, arguments[position].upper)
+                    self.contribution(level, arguments[position].upper, node.source)
                 }
                 _ => Static::Unknown,
             });
@@ -2655,7 +2704,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if self.unfilled {
             return;
         }
-        let solution = self.solution(level, solution);
+        let solution = self.solution(level, solution, site.at);
         match site.instanced {
             Instanced::Name(leaf) => self.chain[level].instances.push((Site::of(leaf), solution)),
             Instanced::Literal(body) => body.fix_born_instance(solution),

@@ -124,7 +124,7 @@ fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
 fn a_nested_quantified_callable_reads_its_own_names_and_checks_its_return() {
     loaded(
         "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
-         MODULE inner = (LET h = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t)))\n  \
+         MODULE inner OVER #[Elt] = (LET h = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t)))\n  \
          x\n\
          )))",
         |program| {
@@ -139,11 +139,11 @@ fn a_nested_quantified_callable_reads_its_own_names_and_checks_its_return() {
     assert_eq!(
         run(
             "MODULE lib = (LET f = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(\n  \
-             MODULE inner = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Elt = #(\"no\")))\n  \
+             MODULE inner OVER #[Elt] = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Elt = #(\"no\")))\n  \
              x\n\
              )))"
         ),
-        "load: <test>:2:66: this body returns Str, which can never satisfy its declared return \
+        "load: <test>:2:78: this body returns Str, which can never satisfy its declared return \
          Number"
     );
 }

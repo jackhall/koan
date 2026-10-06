@@ -433,6 +433,12 @@ pub struct BodyShape<'graph> {
     components: &'graph [Component<'graph>],
     mentions: &'graph [Mention],
     captures: &'graph [CaptureSpec],
+    /// A `MODULE` or `GROUP` body's `OVER` list, where it writes one; `None` for every other body,
+    /// and for a module body written with none, which captures nothing from outside.
+    over: Option<&'graph [Listed<'graph>]>,
+    /// The top-level bindings a module body's `OVER` list names, sorted: part of its content
+    /// whether or not the body reads them.
+    listed_top: &'graph [TopLevel],
     nested: &'graph [(Site, &'graph BodyShape<'graph>)],
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
@@ -487,6 +493,22 @@ pub struct BodyShape<'graph> {
     typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
     /// The value channel's static types and narrowings, fixed by the language's load pass.
     statics: &'graph Cell<Option<Statics<'graph>>>,
+}
+
+/// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
+/// with `_` in each slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listed<'graph> {
+    Name(BinderSymbol),
+    Key(&'graph [KeyElement]),
+}
+
+/// A top-level binding a module's `OVER` list names: a slot of the program's own shape, or a
+/// builtin. The run never reads one through a capture, so it is part of the module's content alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TopLevel {
+    Root(Slot),
+    Builtin(BuiltinIndex),
 }
 
 /// What an `EVAL` of a code parameter offers the code it runs for one name its `NEEDING` list
@@ -597,6 +619,16 @@ impl<'graph> BodyShape<'graph> {
     /// `EVAL` runs it.
     pub fn captures(&self) -> &'graph [CaptureSpec] {
         self.captures
+    }
+
+    /// A `MODULE` or `GROUP` body's `OVER` list, where it writes one.
+    pub fn over(&self) -> Option<&'graph [Listed<'graph>]> {
+        self.over
+    }
+
+    /// The top-level bindings a module body's `OVER` list names, sorted.
+    pub fn listed_top(&self) -> &'graph [TopLevel] {
+        self.listed_top
     }
 
     pub fn components(&self) -> &'graph [Component<'graph>] {
@@ -1197,6 +1229,9 @@ pub enum ShapeError<'graph> {
         member: BinderSymbol,
         at: SourceRef,
     },
+    /// A `MODULE` or `GROUP` body reading `name` from outside it — bound neither by the body nor by
+    /// a top-level statement — where its `OVER` list does not name it.
+    Unlisted { name: BinderSymbol, at: SourceRef },
     /// A quantified member read anywhere but a call's head whose scheme names `parameter`, a head
     /// parameter its module's signature leaves unpinned, which the load cannot name there.
     UnpinnedMember {
@@ -1336,6 +1371,7 @@ impl ShapeError<'_> {
             | ShapeError::NoAdmittingCandidate { at, .. }
             | ShapeError::NoField { at, .. }
             | ShapeError::NoMember { at, .. }
+            | ShapeError::Unlisted { at, .. }
             | ShapeError::UnpinnedMember { at, .. }
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
@@ -1560,6 +1596,13 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "{} has no member {}",
                 display_name(*of, self.types, self.symbols),
                 name(member)
+            ),
+            ShapeError::Unlisted { name: read, .. } => write!(
+                f,
+                "`{}` is read from outside this module; list it under its `OVER`, as \
+                 `OVER #[{}]`",
+                name(read),
+                name(read)
             ),
             ShapeError::UnpinnedMember {
                 member, parameter, ..

@@ -333,3 +333,136 @@ fn an_argument_crossing_a_union_slot_inwards_unseals_by_the_member_over_the_carr
          of its union admits it"
     );
 }
+
+/// What `source` refuses at load with, where it refuses an unlisted `name`.
+fn unlisted(source: &str, name: &str) {
+    let refused = run(source);
+    assert!(
+        refused.starts_with("load: ")
+            && refused.contains(&format!("`{name}` is read from outside this module")),
+        "`{source}` refuses `{name}` unlisted, not: {refused}"
+    );
+}
+
+#[test]
+fn a_module_reading_an_outer_name_lists_it_under_over() {
+    // A parameter and a local of the enclosing callable.
+    let reads = |over: &str| {
+        format!(
+            "EXPR #(MK p :Number) -> Any = #(\n  LET loc = 1\n  \
+             MODULE m{over} = (LET x = (p + loc))\n  m.x\n)\nPRINT (MK 2)"
+        )
+    };
+    assert_eq!(run(&reads(" OVER #[p loc]")), "3");
+    unlisted(&reads(""), "p");
+    unlisted(&reads(" OVER #[p]"), "loc");
+    // A type the enclosing callable binds is listed as a value is.
+    let typed = |over: &str| {
+        format!(
+            "EXPR FOR ALL #[Elt] #(MK p :Elt) -> Any = #(\n  \
+             MODULE m{over} = (LET x :Elt = p)\n  m.x\n)\nPRINT (MK 2)"
+        )
+    };
+    assert_eq!(run(&typed(" OVER #[p Elt]")), "2");
+    unlisted(&typed(" OVER #[p]"), "Elt");
+    // A registration, by its key.
+    let keyed = |over: &str| {
+        format!(
+            "EXPR #(MK p :Number) -> Any = #(\n  \
+             (EXPR #(HELPER z :Number) -> Number = #(z * 10))\n  \
+             MODULE m{over} = (LET x = (HELPER p))\n  m.x\n)\nPRINT (MK 2)"
+        )
+    };
+    assert_eq!(run(&keyed(" OVER #[p (HELPER _)]")), "20");
+    let refused = run(&keyed(" OVER #[p]"));
+    assert!(
+        refused.contains("is read from outside this module"),
+        "{refused}"
+    );
+    // A name only a function nested in the body reads.
+    let nested = |over: &str| {
+        format!(
+            "EXPR #(MK p :Number) -> Any = #(\n  \
+             MODULE m{over} = (LET f = (FN :{{}} -> Number = #(p)))\n  m.f {{}}\n)\nPRINT (MK 4)"
+        )
+    };
+    assert_eq!(run(&nested(" OVER #[p]")), "4");
+    unlisted(&nested(""), "p");
+}
+
+#[test]
+fn a_top_level_name_is_read_where_it_lives() {
+    assert_eq!(
+        run("LET y = 5\nMODULE m = (LET x = y)\nPRINT m.x"),
+        "5",
+        "a top-level read needs no list"
+    );
+    assert_eq!(
+        run("LET y = 5\nMODULE m OVER #[y (PRINT _)] = (LET x = y)\nPRINT m.x"),
+        "5",
+        "a top-level name or a builtin may be listed"
+    );
+    assert_eq!(
+        run("MODULE m OVER #[nowhere] = (LET x = 1)"),
+        "load: <test>:1:1: `nowhere` names no binding visible here"
+    );
+}
+
+#[test]
+fn a_nested_module_and_an_eval_offer_fall_under_the_contract() {
+    let nested = |inner: &str| {
+        format!(
+            "EXPR #(MK p :Number) -> Any = #(\n  \
+             MODULE outer OVER #[p] = (MODULE inner{inner} = (LET x = p))\n  outer.inner.x\n)\n\
+             PRINT (MK 3)"
+        )
+    };
+    assert_eq!(run(&nested(" OVER #[p]")), "3");
+    unlisted(&nested(""), "p");
+    let offered = |over: &str| {
+        format!(
+            "EXPR #(RUN c :(Expression NEEDING #[y]) y :Number) -> Any = #(\n  \
+             MODULE m{over} = (LET v = (EVAL c -> Any))\n  m.v\n)\n\
+             PRINT (RUN #(\\y + 1) 4)"
+        )
+    };
+    assert_eq!(run(&offered(" OVER #[c y]")), "5");
+    unlisted(&offered(" OVER #[c]"), "y");
+}
+
+#[test]
+fn a_group_body_lists_what_it_reads_after_its_name() {
+    let groups = [
+        "GROUP g{over} FOLD LEFT = (OP #(<+>) OVER Number = #(left + right + k))",
+        "GROUP g{over} FOLD RIGHT = (OP #(<+>) OVER Number = #(left + right + k))",
+        "GROUP g{over} PAIRWISE FOLD #(AND) LEFT = \
+         (OP #(<+>) OVER Number -> Bool = #(left < (right + k)))",
+        "GROUP g{over} PAIRWISE FOLD #(AND) RIGHT = \
+         (OP #(<+>) OVER Number -> Bool = #(left < (right + k)))",
+    ];
+    for group in groups {
+        let program = |over: &str| {
+            format!(
+                "EXPR #(MK k :Number) -> Any = #(\n  {}\n  null\n)\nPRINT (MK 1)",
+                group.replace("{over}", over)
+            )
+        };
+        assert_eq!(run(&program(" OVER #[k]")), "null", "{group}");
+        unlisted(&program(""), "k");
+    }
+}
+
+/// A type a call's contribution reads, though the body names it nowhere, is a capture the list
+/// must name.
+#[test]
+fn a_type_a_contribution_reads_is_listed_too() {
+    let program = |over: &str| {
+        format!(
+            "EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str = #(\"pair\")\n\
+             EXPR FOR ALL #[Outer] #(MK a :Outer) -> Any = #(\n  \
+             MODULE m OVER #[{over}] = (LET v = (PAIR a WITH a))\n  m.v\n)\nPRINT (MK 1)"
+        )
+    };
+    assert_eq!(run(&program("a Outer")), "pair");
+    unlisted(&program("a"), "Outer");
+}

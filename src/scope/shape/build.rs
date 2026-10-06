@@ -16,8 +16,14 @@
 //! follows every unit it reads and independent ones come out as written; the runner performs them
 //! in that order.
 //!
+//! A `MODULE` or `GROUP` body is held to its **capture contract**: a name it reads from outside —
+//! bound neither by the body nor by a top-level statement — is captured only where its `OVER` list
+//! names it, a registration by its key, and the first that is not refuses the body. An entry the
+//! body never reads is captured all the same, and a top-level one counts by its binding, recorded
+//! on the shape, since the run reads it where it lives.
+//!
 //! A nested draft takes everything it needs from its statement through one [`Entry`] — its
-//! parameters, signature, surfaced heads and held groups — and is built under
+//! parameters, signature, surfaced heads, held groups and capture contract — and is built under
 //! [`Builder::nested`], which sets the enclosing walk's state aside and restores it whether or not
 //! the draft is built, so nothing one draft leaves is taken by the next.
 //!
@@ -69,9 +75,9 @@ use super::super::signature::{
 use super::super::typed::Static;
 use super::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
-    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead, Target,
-    TypeExpression, Unit, UnitWork, Which, resolve_here,
+    CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
+    Position, QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead,
+    Target, TopLevel, TypeExpression, Unit, UnitWork, Which, resolve_here,
 };
 use crate::parse::{BodyKind, DefinitionKind, Heads, Reading, Role};
 use std::cell::Cell;
@@ -386,6 +392,17 @@ struct Entry<'e, 'graph> {
     signature: Option<&'graph KExpression<'graph>>,
     surfacing: Option<Surfacing<'e, 'graph>>,
     held: &'e [&'graph DeclaredGroup<'graph>],
+    /// A `MODULE` or `GROUP` body's capture contract.
+    over: Option<Over<'graph>>,
+}
+
+/// A `MODULE` or `GROUP` body's capture contract: its `OVER` list, `None` where it writes none
+/// and so captures nothing from outside, beside where the list and the binder are written.
+#[derive(Clone, Copy)]
+struct Over<'graph> {
+    listed: Option<&'graph [Listed<'graph>]>,
+    site: Site,
+    at: SourceRef,
 }
 
 /// What a `USING … SCOPE` body takes from its operand beyond its parameters: the names bound to
@@ -406,6 +423,7 @@ impl Entry<'_, '_> {
         signature: None,
         surfacing: None,
         held: &[],
+        over: None,
     };
 }
 
@@ -576,6 +594,12 @@ struct Draft<'graph, 'x> {
     /// The statement being walked when a nested draft was entered, and the class that path takes
     /// at this level.
     current: (u32, MentionClass),
+    /// A `MODULE` or `GROUP` body's capture contract.
+    over: Option<Over<'graph>>,
+    /// The top-level bindings its `OVER` list names.
+    listed_top: BumpVec<'x, TopLevel>,
+    /// The first outer name it reads that its `OVER` list leaves out.
+    unlisted: Option<BinderSymbol>,
 }
 
 /// A type expression a draft records: see [`TypeExpression`](super::TypeExpression).
@@ -777,6 +801,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         draft.tail = entry.tail;
         draft.arm = entry.arm;
         draft.surfaced = entry.surfacing.is_some();
+        draft.over = entry.over;
         draft.nodes.extend(nodes.iter().map(|node| **node));
         self.chain.push(draft);
         let level = self.chain.len() - 1;
@@ -785,6 +810,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 self.chain.pop();
                 return Err(error);
             }
+        }
+        if let Err(error) = self.contract(level) {
+            self.chain.pop();
+            return Err(error);
         }
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         self.components(&mut draft)?;
@@ -893,6 +922,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             quantified: BumpVec::new_in(scratch),
             arm: None,
             current: (0, MentionClass::Eager),
+            over: None,
+            listed_top: BumpVec::new_in(scratch),
+            unlisted: None,
         })
     }
 
@@ -1396,7 +1428,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
-                Role::Keyword | Role::Name | Role::Data => {}
+                // An `OVER` list names captures, read where the module body's shape is built.
+                Role::Keyword | Role::Name | Role::Data | Role::Captures => {}
                 // A bare name is the label itself; any other label is evaluated.
                 Role::Field => {
                     if !matches!(
@@ -1721,7 +1754,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
-                Role::Keyword | Role::Data => {}
+                Role::Keyword | Role::Data | Role::Captures => {}
                 Role::Quantifiers => {
                     for bound in quantifier_bounds(part) {
                         self.walk_definition_part(level, statement, bound, state)?;
@@ -1933,6 +1966,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         let mut paired = BumpVec::with_capacity_in(parameters.len(), self.scratch);
         paired.extend(parameters.iter().map(|name| (*name, at)));
+        let over = match kind {
+            BodyKind::Module => Some(self.over(node)?),
+            _ => None,
+        };
         let entry = Entry {
             tail: shape_kind == ShapeKind::Callable,
             arm: None,
@@ -1943,6 +1980,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 heads: &surfaced.heads,
             }),
             held,
+            over,
         };
         self.enter_child(
             level,
@@ -2682,7 +2720,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let source = match (kind, mark) {
             (ShapeKind::Program, _) => return None,
             (ShapeKind::Block, _) => return Some(outer(self, mark)?.through_block()),
-            (ShapeKind::Callable | ShapeKind::Module, _) => CaptureSource::Read(outer(self, mark)?),
+            (ShapeKind::Module, _) => {
+                let read = outer(self, mark)?;
+                if !self.allowed(level, name, read) {
+                    self.chain[level].unlisted.get_or_insert(name);
+                }
+                CaptureSource::Read(read)
+            }
+            (ShapeKind::Callable, _) => CaptureSource::Read(outer(self, mark)?),
             (ShapeKind::Code, Some(Mark::Written)) => CaptureSource::Read(outer(self, None)?),
             (ShapeKind::Code, Some(Mark::Built)) => CaptureSource::Offered,
             (ShapeKind::Code, None) => CaptureSource::Hole,
@@ -2693,6 +2738,218 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             hops: 0,
             target: Target::Capture(CaptureSlot(captures.len() as u32 - 1)),
         })
+    }
+
+    /// The capture contract of `node`, a `MODULE` or `GROUP` binder: its `OVER` list read entry by
+    /// entry — a name, or a key written with `_` in each slot — or `None` where it writes none.
+    fn over(&self, node: &KExpression<'graph>) -> Result<Over<'graph>, ShapeError<'graph>> {
+        let form = node
+            .cache()
+            .builtin_shape()
+            .expect("a body role is a form's");
+        let malformed = ShapeError::Malformed {
+            form: form.id,
+            at: node.source,
+        };
+        let Some((_, part)) = form
+            .roles()
+            .zip(node.parts)
+            .find(|(role, _)| *role == Role::Captures)
+        else {
+            return Ok(Over {
+                listed: None,
+                site: Site::of_node(node),
+                at: node.source,
+            });
+        };
+        let ExpressionPart::ListLiteral(items) = &part.value else {
+            return Err(malformed);
+        };
+        let writer = self.brand.writer();
+        let mut listed = BumpVec::with_capacity_in(items.len(), self.scratch);
+        for item in items.iter() {
+            let entry = match (needed_name(item), needed_key(item)) {
+                (Some(name), _) => Listed::Name(name),
+                (None, Some(run)) => {
+                    let mut staged = BumpVec::new_in(self.scratch);
+                    staged.extend(run);
+                    Listed::Key(collect(writer, staged.iter().copied()))
+                }
+                (None, None) => return Err(malformed),
+            };
+            listed.push(entry);
+        }
+        Ok(Over {
+            listed: Some(collect(writer, listed.iter().copied())),
+            site: Site::of(&part.value),
+            at: node.source,
+        })
+    }
+
+    /// Whether the module body at `level` may capture `name`, read at `read` in the shape outside
+    /// it: a binding of the program's top level, read where it lives, or one its `OVER` list
+    /// names — a registration by its key.
+    fn allowed(&self, level: usize, name: BinderSymbol, read: Coordinate) -> bool {
+        let landed = self.landing(level - 1, read);
+        if let Some((0, _)) = landed
+            && self.chain[0].kind == ShapeKind::Program
+        {
+            return true;
+        }
+        let listed = self.chain[level]
+            .over
+            .and_then(|over| over.listed)
+            .unwrap_or(&[]);
+        let lists_key = |key: KeySymbol| {
+            listed.iter().any(|listed| {
+                matches!(listed, Listed::Key(elements) if KeyElement::key(elements.iter().copied()) == key)
+            })
+        };
+        match name {
+            BinderSymbol::Registration(symbol) => {
+                let Some((at, _)) = landed else {
+                    return false;
+                };
+                (self.chain[at].registered.iter())
+                    .find(|entry| entry.symbol == symbol)
+                    .is_some_and(|entry| lists_key(entry.key))
+            }
+            // A quote's code's keyworded hole, which its filler binds.
+            BinderSymbol::Key(key) => lists_key(key),
+            name => listed.contains(&Listed::Name(name)),
+        }
+    }
+
+    /// The draft and target a coordinate read in the draft at `level` lands at, each capture
+    /// followed to its source; `None` for a builtin, a hole, a name offered, or a read past the
+    /// chain's first draft.
+    fn landing(&self, mut level: usize, mut coordinate: Coordinate) -> Option<(usize, Target)> {
+        loop {
+            let Coordinate::Activation { hops, target } = coordinate else {
+                return None;
+            };
+            level = level.checked_sub(hops as usize)?;
+            let Target::Capture(capture) = target else {
+                return Some((level, target));
+            };
+            let CaptureSource::Read(inner) = self.chain[level].captures[capture.index()].source
+            else {
+                return None;
+            };
+            level = level.checked_sub(1)?;
+            coordinate = inner;
+        }
+    }
+
+    /// The draft and slot `name` is bound at, read from the module body at `level` as its first
+    /// statement would read it — `None` where nothing binds it, or the walk meets a quote's code,
+    /// whose free names are holes.
+    fn bound_outside(&self, level: usize, name: BinderSymbol) -> Option<(usize, Slot)> {
+        let mut at = level;
+        while let Some(parent) = at.checked_sub(1) {
+            at = parent;
+            let draft = &self.chain[at];
+            let names = draft.channels();
+            if let Some(index) = names.find(name)
+                && draft.boundary().sees(names.get(index))
+            {
+                return Some((at, Slot(index as u32)));
+            }
+            if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Hold the module body at `level` to its capture contract once every statement is walked:
+    /// capture each `OVER` entry the body did not read — a top-level one recorded by its binding,
+    /// since the run reads it where it lives — and refuse the first outer name read but not listed.
+    fn contract(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
+        let Some(over) = self.chain[level].over else {
+            return Ok(());
+        };
+        let unbound = |name| ShapeError::Unbound {
+            name,
+            site: over.site,
+            at: over.at,
+        };
+        let reader = Reader {
+            level,
+            statement: 0,
+            class: MentionClass::Eager,
+        };
+        let top =
+            |builder: &Self, at: usize| at == 0 && builder.chain[0].kind == ShapeKind::Program;
+        for entry in over.listed.unwrap_or(&[]) {
+            match *entry {
+                // One the body reads is captured already, under whatever mark it reads it through.
+                Listed::Name(name)
+                    if self.chain[level]
+                        .captures
+                        .iter()
+                        .any(|capture| capture.name == name) => {}
+                Listed::Name(name) => {
+                    if let Some(index) = self.builtins.lookup(name) {
+                        self.chain[level].listed_top.push(TopLevel::Builtin(index));
+                        continue;
+                    }
+                    match self.bound_outside(level, name) {
+                        Some((at, slot)) if top(self, at) => {
+                            self.chain[level].listed_top.push(TopLevel::Root(slot));
+                        }
+                        Some(_) => {
+                            self.resolve(level, name, None, Position::PARAMETER, reader);
+                        }
+                        None => return Err(unbound(name)),
+                    }
+                }
+                Listed::Key(elements) => {
+                    let key = KeyElement::key(elements.iter().copied());
+                    let builtin = self.builtins.overloads(key);
+                    for index in builtin.clone() {
+                        self.chain[level]
+                            .listed_top
+                            .push(TopLevel::Builtin(BuiltinIndex(index)));
+                    }
+                    let parent = level - 1;
+                    let draft = &self.chain[parent];
+                    let own = (
+                        draft.kind,
+                        &draft.registered[..],
+                        &draft.rankings[..],
+                        draft.boundary(),
+                    );
+                    let mut found = BumpVec::new_in(self.scratch);
+                    self.visible(own, parent, key, |seen| {
+                        if let Seen::Registration(entry) = seen {
+                            found.push(BinderSymbol::Registration(entry.symbol));
+                        }
+                        None::<()>
+                    });
+                    if found.is_empty() && builtin.is_empty() {
+                        return Err(unbound(BinderSymbol::Key(key)));
+                    }
+                    for name in found.iter().copied() {
+                        match self.bound_outside(level, name) {
+                            Some((at, slot)) if top(self, at) => {
+                                self.chain[level].listed_top.push(TopLevel::Root(slot));
+                            }
+                            _ => {
+                                self.resolve(level, name, None, Position::PARAMETER, reader);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let draft = &mut self.chain[level];
+        draft.listed_top.sort_unstable();
+        draft.listed_top.dedup();
+        match draft.unlisted {
+            Some(name) => Err(ShapeError::Unlisted { name, at: over.at }),
+            None => Ok(()),
+        }
     }
 
     /// Whether the draft at `level` is a quote value's code or lies inside one — where a mark may
@@ -3054,6 +3311,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 components: collect(writer, components.iter().copied()),
                 mentions: collect(writer, mentions.iter().copied()),
                 captures: collect(writer, draft.captures.iter().copied()),
+                over: draft.over.and_then(|over| over.listed),
+                listed_top: collect(writer, draft.listed_top.iter().copied()),
                 nested: collect(writer, nested.iter().copied()),
                 form,
                 births: collect(writer, births.iter().copied()),

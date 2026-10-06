@@ -189,6 +189,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         Role::Keyword
                         | Role::Name
                         | Role::Data
+                        | Role::Captures
                         | Role::Branches(Heads::Labels)
                         | Role::Body(_)
                         | Role::Unsupported => None,

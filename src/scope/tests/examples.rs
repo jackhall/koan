@@ -5,7 +5,7 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     BodyShape, Builtins, CaptureSource, Coordinate, MentionClass, Position, ShapeError, ShapeKind,
-    Site, Slot, Target,
+    Site, Slot, Target, TopLevel,
 };
 use crate::symbols::BinderSymbol;
 
@@ -1061,4 +1061,31 @@ fn a_body_s_value_binds_no_keyworded_quantified_function() {
             }
         });
     }
+}
+
+/// An `OVER` entry the body never reads is captured all the same, and a top-level one counts by
+/// its binding, which the run reads where it lives.
+#[test]
+fn an_over_entry_is_part_of_the_module_whether_or_not_it_is_read() {
+    let source = "LET top = 1\n\
+                  EXPR #(MK unread :Number) -> Any = #(MODULE m OVER #[unread top] = (LET x = 2))";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.unwrap_or_else(|error| {
+            panic!(
+                "the program shapes: {}",
+                error.display(fixture.symbols, fixture.types)
+            )
+        });
+        let (_, callable) = shape.nested_shapes()[0];
+        let (_, module) = callable.nested_shapes()[0];
+        assert_eq!(module.kind(), ShapeKind::Module);
+        let captured: Vec<BinderSymbol> = module.captures().iter().map(|c| c.name).collect();
+        assert_eq!(
+            captured,
+            vec![value(fixture, "unread")],
+            "only the outer entry is a capture"
+        );
+        let (top, _) = shape.slot(value(fixture, "top")).expect("`top` is bound");
+        assert_eq!(module.listed_top(), &[TopLevel::Root(top)]);
+    });
 }

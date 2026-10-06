@@ -145,7 +145,11 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             ExpressionPart::Identifier(name) => {
                 let name = BinderSymbol::Value(*name);
                 let (level, at, slot, statement) = self.declaring(level, name, at).ok_or(())?;
-                match statement.cache().builtin_shape().map(|shape| shape.id) {
+                match statement
+                    .cache()
+                    .builtin_shape()
+                    .map(|shape| shape.id.without_over())
+                {
                     Some(
                         BuiltinShapeId::Module
                         | BuiltinShapeId::GroupFoldLeft

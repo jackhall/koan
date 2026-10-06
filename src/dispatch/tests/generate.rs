@@ -807,9 +807,26 @@ impl Lexical {
             )],
             Context::Code => vec![format!("(EVAL #({group}) -> Any)")],
             Context::Hoist => vec![format!("(\"a\" == ({group}) == \"b\")")],
+            // A module lists what its body reads from outside: `WRAP`'s parameter and variable,
+            // and — inside a quote's code, whose unmarked keys are holes — `PRINT`'s key.
             Context::Module => {
                 *modules += 1;
-                vec![format!("MODULE m{modules} = ({group})"), "null".to_string()]
+                let reads = |name: &str| {
+                    group
+                        .split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .any(|token| token == name)
+                };
+                let mut over: Vec<&str> = ["a", "Outer"]
+                    .into_iter()
+                    .filter(|name| reads(name))
+                    .collect();
+                if code {
+                    over.push("(PRINT _)");
+                }
+                vec![
+                    format!("MODULE m{modules} OVER #[{}] = ({group})", over.join(" ")),
+                    "null".to_string(),
+                ]
             }
         }
     }

@@ -374,15 +374,16 @@ pub(crate) fn declared_group<'x>(
     let Some(form) = node.cache().builtin_shape() else {
         return Ok(None);
     };
+    let id = form.id.without_over();
     let definition = matches!(
-        form.id,
+        id,
         BuiltinShapeId::GroupHeadFoldLeft
             | BuiltinShapeId::GroupHeadFoldRight
             | BuiltinShapeId::GroupHeadPairwiseFoldLeft
             | BuiltinShapeId::GroupHeadPairwiseFoldRight
     );
     let statement = matches!(
-        form.id,
+        id,
         BuiltinShapeId::GroupFoldLeft
             | BuiltinShapeId::GroupFoldRight
             | BuiltinShapeId::GroupPairwiseFoldLeft
@@ -405,7 +406,7 @@ pub(crate) fn declared_group<'x>(
             _ => {}
         }
     }
-    let mode = match form.id {
+    let mode = match id {
         BuiltinShapeId::GroupFoldLeft | BuiltinShapeId::GroupHeadFoldLeft => {
             ReductionMode::FoldLeft
         }
@@ -414,7 +415,7 @@ pub(crate) fn declared_group<'x>(
         }
         _ => ReductionMode::Pairwise {
             combiner: quoted_symbol(combiner.ok_or(())?)?,
-            direction: match form.id {
+            direction: match id {
                 BuiltinShapeId::GroupPairwiseFoldLeft
                 | BuiltinShapeId::GroupHeadPairwiseFoldLeft => FoldDirection::Left,
                 _ => FoldDirection::Right,
@@ -587,6 +588,10 @@ impl<'graph> Scan<'graph, '_> {
             // head, an arm, a signature's members — are code of this program; every other quote
             // is data.
             for (role, part) in form.roles().zip(node.parts) {
+                // An `OVER` list's quotes name captures: data.
+                if role == Role::Captures {
+                    continue;
+                }
                 match (role.reading(), &part.value) {
                     (Reading::Quote, ExpressionPart::QuotedExpression(quoted)) => {
                         self.node(quoted.reference())?

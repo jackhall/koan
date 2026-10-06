@@ -30,6 +30,9 @@ pub enum Role {
     /// A `FOR ALL` group: a list of name quotes, or a dict of name quotes to bound quotes — type
     /// parameters the body declares.
     Quantifiers,
+    /// A `MODULE` or `GROUP` body's `OVER` list: a list of quotes, each a name or a key, read as
+    /// written and never as a mention.
+    Captures,
     /// A body that is its own body shape.
     Body(BodyKind),
     /// A dict of guard quotes to arm quotes, each arm a block shape.
@@ -78,6 +81,7 @@ impl Role {
             | Role::Keyword => Reading::Bare,
             Role::Branches(_)
             | Role::Quantifiers
+            | Role::Captures
             | Role::Definition(DefinitionKind::Union | DefinitionKind::Members) => {
                 Reading::Container
             }

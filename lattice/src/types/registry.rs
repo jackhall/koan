@@ -220,6 +220,7 @@ impl<'run> TypeRegistry<'run> {
             ],
         );
         self.list(Handle::NAME);
+        self.list(Handle::EXPRESSION);
         self.list(Handle::DECLARATION);
         self.dict(Handle::NAME, Handle::BLOCK);
         self.dict(Handle::NAME, type_code);

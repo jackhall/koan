@@ -302,6 +302,7 @@ const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
                         every_overload_is(types, KType::TYPE_CODE)
                     }
                     Role::Quantifiers => every_overload_is(types, KType::QUANTIFIER_CODE),
+                    Role::Captures => every_overload_is(types, KType::LIST_OF_EXPRESSION),
                     Role::Name => every_overload_within(types, KType::EXPRESSION),
                     Role::Rhs => every_overload_is(types, KType::ANY),
                     _ => true,
@@ -329,10 +330,15 @@ pub enum BuiltinShapeId {
     LetAnnotated,
     TypeDeclaration,
     Module,
+    ModuleOver,
     GroupFoldLeft,
+    GroupFoldLeftOver,
     GroupFoldRight,
+    GroupFoldRightOver,
     GroupPairwiseFoldLeft,
+    GroupPairwiseFoldLeftOver,
     GroupPairwiseFoldRight,
+    GroupPairwiseFoldRightOver,
     Sig,
     QuantifiedSig,
     Union,
@@ -384,6 +390,20 @@ pub enum BuiltinShapeId {
 }
 
 impl BuiltinShapeId {
+    /// The shape this one is with its `OVER` list dropped: a `MODULE` or `GROUP` binder's plain
+    /// twin, and every other shape itself. A reader of the binder asks this rather than matching
+    /// both spellings.
+    pub const fn without_over(self) -> BuiltinShapeId {
+        match self {
+            BuiltinShapeId::ModuleOver => BuiltinShapeId::Module,
+            BuiltinShapeId::GroupFoldLeftOver => BuiltinShapeId::GroupFoldLeft,
+            BuiltinShapeId::GroupFoldRightOver => BuiltinShapeId::GroupFoldRight,
+            BuiltinShapeId::GroupPairwiseFoldLeftOver => BuiltinShapeId::GroupPairwiseFoldLeft,
+            BuiltinShapeId::GroupPairwiseFoldRightOver => BuiltinShapeId::GroupPairwiseFoldRight,
+            other => other,
+        }
+    }
+
     /// True for a shape that declares a signature member without installing it where it is
     /// written: a `VAL` and every bodyless head, and the reserved `TYPE` declarator, which reaches
     /// the shape builder's refusal as a member. A statement of one of these shapes is a
@@ -426,8 +446,8 @@ const fn slot(role: Role, types: &'static [KType]) -> ShapeElement {
 }
 
 use Role::{
-    Argument, Body, Branches, Data, Definition, Field, Head, InPlace, Name, Quantifiers, Rhs,
-    Signature, TypeExpression as Te, Unsupported,
+    Argument, Body, Branches, Captures, Data, Definition, Field, Head, InPlace, Name, Quantifiers,
+    Rhs, Signature, TypeExpression as Te, Unsupported,
 };
 
 // The slot types the table spells, each a `const` handle named as the lattice names it, so an
@@ -444,6 +464,7 @@ const ANY_CODE: KType = KType::ANY_CODE;
 /// The code a type is written as: a type name, a `:(…)` or a `:{…}`.
 const TYPE_CODE: KType = KType::TYPE_CODE;
 const LIST_OF_NAME: KType = KType::LIST_OF_NAME;
+const LIST_OF_EXPRESSION: KType = KType::LIST_OF_EXPRESSION;
 const LIST_OF_DECLARATION: KType = KType::LIST_OF_DECLARATION;
 const DICT_NAME_BLOCK: KType = KType::DICT_NAME_BLOCK;
 const DICT_TYPE_CODE_BLOCK: KType = KType::DICT_TYPE_CODE_BLOCK;
@@ -538,6 +559,27 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
+    // The same, its `OVER` list naming every outer value and type the body may read.
+    BuiltinShape {
+        id: BuiltinShapeId::ModuleOver,
+        elements: &[
+            Kw(&KEYWORDS.module),
+            slot(Name, &[IDENTIFIER]),
+            Kw(&KEYWORDS.over),
+            slot(Captures, &[LIST_OF_EXPRESSION]),
+            Kw(&KEYWORDS.equals),
+            slot(Body(BodyKind::Module), &[BLOCK]),
+        ],
+        returns: &[MODULE],
+        binder: Some(BinderFacts {
+            names: &[identifier_part_binder_name],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: Some(1),
+            type_slots: &[],
+        }),
+        reserved: false,
+    },
     // GROUP <name> FOLD LEFT = <body>.
     BuiltinShape {
         id: BuiltinShapeId::GroupFoldLeft,
@@ -559,12 +601,58 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
+    // The same, its `OVER` list naming every outer value and type the body may read.
+    BuiltinShape {
+        id: BuiltinShapeId::GroupFoldLeftOver,
+        elements: &[
+            Kw(&KEYWORDS.group),
+            slot(Name, &[IDENTIFIER]),
+            Kw(&KEYWORDS.over),
+            slot(Captures, &[LIST_OF_EXPRESSION]),
+            Kw(&KEYWORDS.fold),
+            Kw(&KEYWORDS.left),
+            Kw(&KEYWORDS.equals),
+            slot(Body(BodyKind::Module), &[BLOCK]),
+        ],
+        returns: &[MODULE],
+        binder: Some(BinderFacts {
+            names: &[identifier_part_binder_name],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: Some(1),
+            type_slots: &[],
+        }),
+        reserved: false,
+    },
     // GROUP <name> FOLD RIGHT = <body>.
     BuiltinShape {
         id: BuiltinShapeId::GroupFoldRight,
         elements: &[
             Kw(&KEYWORDS.group),
             slot(Name, &[IDENTIFIER]),
+            Kw(&KEYWORDS.fold),
+            Kw(&KEYWORDS.right),
+            Kw(&KEYWORDS.equals),
+            slot(Body(BodyKind::Module), &[BLOCK]),
+        ],
+        returns: &[MODULE],
+        binder: Some(BinderFacts {
+            names: &[identifier_part_binder_name],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: Some(1),
+            type_slots: &[],
+        }),
+        reserved: false,
+    },
+    // The same, its `OVER` list naming every outer value and type the body may read.
+    BuiltinShape {
+        id: BuiltinShapeId::GroupFoldRightOver,
+        elements: &[
+            Kw(&KEYWORDS.group),
+            slot(Name, &[IDENTIFIER]),
+            Kw(&KEYWORDS.over),
+            slot(Captures, &[LIST_OF_EXPRESSION]),
             Kw(&KEYWORDS.fold),
             Kw(&KEYWORDS.right),
             Kw(&KEYWORDS.equals),
@@ -603,12 +691,62 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
+    // The same, its `OVER` list naming every outer value and type the body may read.
+    BuiltinShape {
+        id: BuiltinShapeId::GroupPairwiseFoldLeftOver,
+        elements: &[
+            Kw(&KEYWORDS.group),
+            slot(Name, &[IDENTIFIER]),
+            Kw(&KEYWORDS.over),
+            slot(Captures, &[LIST_OF_EXPRESSION]),
+            Kw(&KEYWORDS.pairwise),
+            Kw(&KEYWORDS.fold),
+            slot(Data, &[KEYWORD]),
+            Kw(&KEYWORDS.left),
+            Kw(&KEYWORDS.equals),
+            slot(Body(BodyKind::Module), &[BLOCK]),
+        ],
+        returns: &[MODULE],
+        binder: Some(BinderFacts {
+            names: &[identifier_part_binder_name],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: Some(1),
+            type_slots: &[],
+        }),
+        reserved: false,
+    },
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
     BuiltinShape {
         id: BuiltinShapeId::GroupPairwiseFoldRight,
         elements: &[
             Kw(&KEYWORDS.group),
             slot(Name, &[IDENTIFIER]),
+            Kw(&KEYWORDS.pairwise),
+            Kw(&KEYWORDS.fold),
+            slot(Data, &[KEYWORD]),
+            Kw(&KEYWORDS.right),
+            Kw(&KEYWORDS.equals),
+            slot(Body(BodyKind::Module), &[BLOCK]),
+        ],
+        returns: &[MODULE],
+        binder: Some(BinderFacts {
+            names: &[identifier_part_binder_name],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: Some(1),
+            type_slots: &[],
+        }),
+        reserved: false,
+    },
+    // The same, its `OVER` list naming every outer value and type the body may read.
+    BuiltinShape {
+        id: BuiltinShapeId::GroupPairwiseFoldRightOver,
+        elements: &[
+            Kw(&KEYWORDS.group),
+            slot(Name, &[IDENTIFIER]),
+            Kw(&KEYWORDS.over),
+            slot(Captures, &[LIST_OF_EXPRESSION]),
             Kw(&KEYWORDS.pairwise),
             Kw(&KEYWORDS.fold),
             slot(Data, &[KEYWORD]),

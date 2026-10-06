@@ -487,6 +487,8 @@ fixed_handles! {
     TYPE_CODE = 0xc41b235d_9ca37012_2069fcb7_39c1082e;
     /// `List<Name>` — a `FOR ALL` group or `FROM`'s field list.
     LIST_OF_NAME = 0xe4ef6471_b3309818_6e9fe04f_0c66f18a;
+    /// `List<Expression>` — a `MODULE` or `GROUP` body's `OVER` list, each entry read as written.
+    LIST_OF_EXPRESSION = 0x032c551d_dc7157af_ef4bf417_a34e1910;
     /// `List<Declaration>` — a `SIG` body, or the heads a bodyless `GROUP` declares.
     LIST_OF_DECLARATION = 0xdaf2c481_09b90725_35f0053e_594b6591;
     /// `Dict<Name, Block>` — a `MATCH … OVER` or `TRY` arm set, each guard a label.

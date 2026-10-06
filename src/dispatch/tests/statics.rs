@@ -205,7 +205,7 @@ fn a_capture_keeps_its_type_along_the_chain() {
     loaded(
         "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
          LET g = (FN :{} -> Any = #(\n    LET y = x\n    y\n  ))\n  \
-         MODULE inner = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Any = #(\n    LET z = x\n    z\n  )))\n  \
+         MODULE inner OVER #[x] = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Any = #(\n    LET z = x\n    z\n  )))\n  \
          x\n)))",
         |program| {
             let f = body(program, module_body(program, "lib"), "f");
