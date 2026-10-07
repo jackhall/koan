@@ -240,6 +240,8 @@ pub struct Collector<'s, T = Parametric> {
     /// Every contribution in arrival order — the cell it landed in and the bound that cell held
     /// before — so a [`rollback`](Self::rollback) pops exactly what a rejected attempt added.
     trail: BumpVec<'s, (usize, Variance, KType)>,
+    /// What each [pinned](Self::pin) variable is pinned to.
+    pins: BumpVec<'s, Option<Handle>>,
     /// Whether some admission read a rigid variable through its ends: `Admits::leaf`, the bound
     /// split in `Admits::set_wise`, or a false verdict over one. Never rolled back — a rejected
     /// union member that read one is a choice some binding makes otherwise.
@@ -279,12 +281,15 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
         };
         let mut held = BumpVec::with_capacity_in(arity, scratch);
         held.extend(bounds);
+        let mut pins = BumpVec::with_capacity_in(arity, scratch);
+        pins.resize(arity, None);
         Collector {
             scratch,
             lower: cells(),
             upper: cells(),
             bounds: held,
             trail: BumpVec::new_in(scratch),
+            pins,
             bound_read: false,
             takes: PhantomData,
         }
@@ -313,14 +318,22 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
         self.lower.truncate(mark.cells);
         self.upper.truncate(mark.cells);
         self.bounds.truncate(mark.cells);
+        self.pins.truncate(mark.cells);
     }
 
-    /// Pin the `index`-th variable to `to`, as though `to` had reached it at both polarities: every
-    /// later contribution must then lie on the right side of `to` for the variable to solve, and it
-    /// solves to `to`. How a class-by-class admission holds a variable an earlier class solved.
+    /// Pin the `index`-th variable to `to`, as though `to` had reached it at both polarities, and it
+    /// solves to `to`. A later contribution on the wrong side of `to` is refused where it arrives,
+    /// so a union whose walk reaches the variable chooses a member the pin allows. How a
+    /// class-by-class admission holds a variable an earlier class solved.
     pub fn pin(&mut self, index: usize, bound: KType, to: T) {
         self.contribute(index, bound, to.raw(), Variance::Co);
         self.contribute(index, bound, to.raw(), Variance::Contra);
+        self.pins[index] = Some(to.raw());
+    }
+
+    /// What the `index`-th variable is pinned to, if anything.
+    fn pinned(&self, index: usize) -> Option<Handle> {
+        self.pins.get(index).copied().flatten()
     }
 
     /// Record that `carried` reached the `index`-th variable at `variance`.
@@ -332,6 +345,7 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
             self.upper
                 .resize_with(index + 1, || BumpVec::new_in(scratch));
             self.bounds.resize(index + 1, KType::ANY);
+            self.pins.resize(index + 1, None);
         }
         let cell = match variance {
             Variance::Co => &mut self.lower[index],
@@ -730,6 +744,18 @@ impl<T: TypeHandle> Lockstep for Admits<'_, '_, T> {
         }
         match types.node(declared) {
             TypeNode::Quantified { index, bound } => {
+                // A pinned variable takes only what lies on the pin's side: below it at a covariant
+                // position, above it at a contravariant one.
+                if let Some(to) = self.collector.pinned(index)
+                    && !match v {
+                        Variance::Co => fits(types, scratch, carried, to),
+                        Variance::Contra => fits(types, scratch, to, carried),
+                    }
+                {
+                    self.collector.bound_read |=
+                        types.contains_rigid(carried) || types.contains_rigid(to);
+                    return Some(Err(UnifyFailure::Mismatch));
+                }
                 self.collector.contribute(index, bound, carried, v);
                 Some(Ok(()))
             }
