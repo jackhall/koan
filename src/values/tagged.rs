@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::digest::{ContentDigest, Tag, composite};
+use super::digest::{ContentDigest, Digests, Tag, composite};
 use super::{
     ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Value, Weight,
     construction, sealing,
@@ -19,8 +19,6 @@ pub struct Tagged<'cell, X = Nothing, C = Value<'cell, X>> {
     payload: C,
     ktype: KType,
     weight: Weight,
-    /// Its payload's digest ([`NONE`](ContentDigest::NONE) for a knot's data node).
-    contents: ContentDigest,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -47,12 +45,12 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         identity: KType,
     ) -> &'cell Tagged<'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
-        Self::from_payload(writer, payload, identity, weight, payload.digest())
+        Self::from_payload(writer, payload, identity, weight)
     }
 
-    /// The tagged value's content digest: its identity and its payload's.
-    pub fn digest(&self) -> ContentDigest {
-        composite(Tag::Tagged, self.ktype, self.contents)
+    /// The tagged value's content digest: its identity and its payload's, through `memo`.
+    pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
+        composite(Tag::Tagged, self.ktype, self.payload.digest_in(memo))
     }
 
     /// A member sealed behind an opaque view's barrier: [`sealing`] checks the identity is a
@@ -92,7 +90,6 @@ impl<'cell, X: Knotted> Tagged<'cell, X, Link<'cell, X>> {
             payload,
             identity,
             Weight::flat::<Self>().plus(payload.referent_weight()),
-            ContentDigest::NONE,
         )
     }
 }
@@ -105,7 +102,6 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
         payload: C,
         ktype: KType,
         weight: Weight,
-        contents: ContentDigest,
     ) -> &'cell Self {
         resident(
             writer,
@@ -113,7 +109,6 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
                 payload,
                 ktype,
                 weight,
-                contents,
                 member: PhantomData,
             },
         )
@@ -122,11 +117,6 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
     /// The same payload under another identity.
     pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
         resident(writer, Tagged { ktype, ..*self })
-    }
-
-    /// Its payload's digest, as laid down.
-    pub(crate) fn contents(&self) -> ContentDigest {
-        self.contents
     }
 
     pub fn payload(&self) -> &C {

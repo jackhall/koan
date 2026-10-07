@@ -2,39 +2,42 @@
 //! holds and never by where it sits.
 //!
 //! A [`ContentDigest`] is the low 128 bits of a BLAKE3 hash. The recipe is one rule throughout: a
-//! digest is a domain [`Tag`], then the value's own scalar payload, then its parts' digests, which
-//! are already known — so nothing walks a value to digest it, as nothing walks a type to digest
-//! one ([the type lattice's digest](crate::type_lattice::TypeDigest)).
+//! digest is a domain [`Tag`], then the value's own scalar payload, then its parts' digests.
 //!
-//! - A scalar computes its digest on read: a number from its bits, a bool, `null`, a string
+//! A digest is computed on demand and never stored on a value: only a view asks for one, so a value
+//! no module captures never pays for it. A demand walks what the value reaches, through one
+//! [`Digests`] memo, so a part shared many times over is digested once per demand.
+//!
+//! - A scalar digests from its payload: a number from its bits, a bool, `null`, a string
 //!   length-prefixed, a type value from its handle's bits.
-//! - A list, dict, record and tagged value store their **contents** where they are laid down — a
-//!   list its cells' digests in order, a dict each key's digest then each cell's, in key order, a
-//!   record each field's name and cell digest in symbol order, so field order is blind, and a tagged
-//!   value its payload's. Its digest is its kind's tag, its type's handle and its contents, so a
-//!   retype, which shares the contents, digests at the new type with no walk.
-//! - A knot member's digest is its knot's, beside its index there
-//!   ([knot facts](../knot/README.md)): values that reach one another — closures that call one
-//!   another, a ring of containers — digest as the one knot they are tied into.
+//! - A list, dict, record and tagged value digest as its kind's tag, its type's handle and its
+//!   **contents** — a list its cells' digests in order, a dict each key's digest then each cell's,
+//!   in key order, a record each field's name and cell digest in symbol order, so field order is
+//!   blind, and a tagged value its payload's.
+//! - A knot member's digest is its knot's, beside its index there: a knot digests its node count
+//!   and each node's content in index order, an edge to a sibling hashed as its index, so values
+//!   that reach one another — closures that call one another, a ring of containers — digest as the
+//!   one knot they are tied into.
 //!
 //! The digest covers the carried type and every cell, hidden ones included, so two values no reader
 //! can tell apart may digest apart. That over-distinction is sound: a digest keys what is equal by
 //! content, and keying two equal things apart costs only a key.
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-/// A value's content identity: the low 128 bits of a BLAKE3 hash of its content.
+/// A value's content identity: the low 128 bits of a BLAKE3 hash of its content, held as bytes so a
+/// node storing one keeps a word's alignment.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct ContentDigest(u128);
+pub struct ContentDigest([u8; 16]);
 
 impl ContentDigest {
-    /// The contents a knot's data node stores beside its links, which nothing reads: a data node
-    /// digests as a member of its knot.
-    pub const NONE: ContentDigest = ContentDigest(0);
+    /// A placeholder for a digest not yet computed.
+    pub const NONE: ContentDigest = ContentDigest([0; 16]);
 
     /// The digest's bits, for an identity keyed on content outside `values` — a carrier's.
     pub fn bits(self) -> u128 {
-        self.0
+        u128::from_le_bytes(self.0)
     }
 }
 
@@ -129,7 +132,7 @@ impl DigestHasher {
 
     /// Feed a part's digest.
     pub fn digest(&mut self, digest: ContentDigest) -> &mut Self {
-        self.0.update(&digest.0.to_le_bytes());
+        self.0.update(&digest.0);
         self
     }
 
@@ -145,7 +148,7 @@ impl DigestHasher {
         let bytes = self.0.finalize();
         let mut low = [0u8; 16];
         low.copy_from_slice(&bytes.as_bytes()[..16]);
-        ContentDigest(u128::from_le_bytes(low))
+        ContentDigest(low)
     }
 }
 
@@ -156,7 +159,7 @@ impl Hasher for DigestHasher {
 
     /// The low 64 bits of the digest, for a reader that asks a `Hasher` for one.
     fn finish(&self) -> u64 {
-        self.finished().0 as u64
+        self.finished().bits() as u64
     }
 }
 
@@ -180,4 +183,28 @@ pub fn composite(
         .feed(ktype)
         .digest(contents)
         .finished()
+}
+
+/// One demand's memo: the digest of each part a walk has already met, keyed by the address of the
+/// resident it sits in. Nothing a walk reads is freed or moved while it runs, so an address names
+/// one part for the walk's life.
+#[derive(Default)]
+pub struct Digests(HashMap<usize, ContentDigest>);
+
+impl Digests {
+    /// The digest of the part resident at `at`: `compute`'s answer, the first time this demand
+    /// meets it.
+    pub fn memo<T>(
+        &mut self,
+        at: &T,
+        compute: impl FnOnce(&mut Digests) -> ContentDigest,
+    ) -> ContentDigest {
+        let address = std::ptr::from_ref(at).addr();
+        if let Some(digest) = self.0.get(&address) {
+            return *digest;
+        }
+        let digest = compute(self);
+        self.0.insert(address, digest);
+        digest
+    }
 }

@@ -1,6 +1,6 @@
-//! Content digests: equal content digests alike wherever it was laid down, a container's contents
-//! are memoized where it is built and shared by a retype, and a literal's digest is known without
-//! laying it down.
+//! Content digests: equal content digests alike wherever it was laid down, a retype digests at its
+//! new type, a part shared many times over is digested once per demand, and a literal's digest is
+//! known without laying it down.
 
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, TestRunner};
@@ -49,8 +49,7 @@ fn a_dict_digests_in_key_order_and_a_record_blind_to_field_order() {
     });
 }
 
-/// A retype shares its value's contents, so it digests at its new type with no walk; a cell the new
-/// type hides still counts.
+/// A retype digests at its new type; a cell the new type hides still counts.
 #[test]
 fn a_retype_changes_the_digest_and_hidden_cells_count() {
     with_fixture(|fixture| {
@@ -78,6 +77,28 @@ fn a_retype_changes_the_digest_and_hidden_cells_count() {
                 Value::Record(narrowed).digest(),
                 "the hidden `y` is part of what the retyped record holds"
             );
+        })
+    });
+}
+
+/// Each level holds the one below twice over, so a walk that digested a part each time it met one
+/// would hash `2^64` lists; one memo per demand hashes each once.
+#[test]
+fn a_part_shared_many_times_over_is_digested_once_per_demand() {
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let mut level = Value::Number(1.0);
+            for _ in 0..64 {
+                level = Value::List(List::new(
+                    writer,
+                    [level, level].into_iter(),
+                    types,
+                    scratch,
+                ));
+            }
+            assert_eq!(level.digest(), level.digest());
         })
     });
 }

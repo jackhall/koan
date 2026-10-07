@@ -12,9 +12,7 @@ use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::function::Typing;
-use super::super::{
-    Eager, KActivation, KValue, KnotFacts, Knotted, Node, Supplied, Untieable, tie,
-};
+use super::super::{Eager, KActivation, KValue, Knotted, Node, Supplied, Untieable, tie};
 use super::{
     Fixture, at_key, bound, callable, circular, declared, follow, pin, registered, with_fixture,
 };
@@ -75,13 +73,12 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                     .births(activation.shape().slot(fixture.name("f")).unwrap().0)
                     .unwrap()
             ));
-            // The knot's weight: its header, one node, an empty closure run and its facts.
+            // The knot's weight: its header, one node, and an empty closure run.
             assert_eq!(
                 f.weight(),
                 Weight::flat::<usize>()
                     .plus(Weight::flat::<Node<'static, 'static>>())
                     .plus(f.function().expect("a function").closure().weight())
-                    .plus(Weight::flat::<KnotFacts>())
             );
         });
     });
@@ -155,7 +152,6 @@ fn a_function_born_for_a_registration_carries_its_shape() {
                     .plus(member)
                     .plus(member)
                     .plus(typing)
-                    .plus(Weight::flat::<KnotFacts>())
             );
         });
     });

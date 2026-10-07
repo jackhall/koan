@@ -8,7 +8,7 @@ use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::values::{Knotted as _, Resolved, Value, Weight};
 
 use crate::knot::tests::{Step, callable, copy, declared, with_fixture};
-use crate::knot::{KnotFacts, Knotted, Node};
+use crate::knot::{Knotted, Node};
 
 use super::super::Coerced;
 
@@ -22,7 +22,6 @@ fn priced(underlying: Knotted<'_, '_>) -> Weight {
     Weight::flat::<usize>()
         .plus(Weight::flat::<Node<'_, '_>>())
         .plus(Weight::flat::<Coerced<'_, '_>>())
-        .plus(Weight::flat::<KnotFacts>())
         .plus(underlying.weight())
 }
 
@@ -50,7 +49,7 @@ fn a_barrier_holds_its_view_and_the_function_behind_it() {
                 assert_eq!(node.from(), dist);
                 assert_eq!(node.to(), plain);
                 assert_eq!(barrier.weight(), priced(f));
-                assert_eq!(node.facts().weight(), barrier.weight());
+                assert_eq!(node.knot_weight(), barrier.weight());
             })
             .unwrap();
         graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();

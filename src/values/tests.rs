@@ -14,7 +14,7 @@ mod satisfaction;
 mod surface;
 mod working;
 
-use super::digest::{ContentDigest, DigestHasher, Tag};
+use super::digest::{ContentDigest, DigestHasher, Digests, Tag};
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
     ReleaseAbsorption, StepContext, Verdict, Writer, covariant, program_storage, reattachable,
@@ -204,7 +204,7 @@ impl Knotted for Stand<'_> {
         Weight::ZERO
     }
 
-    fn digest(&self) -> ContentDigest {
+    fn digest(&self, _: &mut Digests) -> ContentDigest {
         DigestHasher::new(Tag::Member)
             .feed(self.identity())
             .finished()
@@ -264,10 +264,10 @@ impl Knotted for Node<'_> {
         Weight::ZERO
     }
 
-    /// The node's own content beside its index: the test knot keeps no facts.
-    fn digest(&self) -> ContentDigest {
+    /// The node's own content beside its index: the test knot digests no siblings.
+    fn digest(&self, memo: &mut Digests) -> ContentDigest {
         DigestHasher::new(Tag::Member)
-            .digest(self.0.payload().content())
+            .digest(self.0.payload().content(memo))
             .count(self.0.index().index() as usize)
             .finished()
     }

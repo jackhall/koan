@@ -5,7 +5,7 @@
 
 use crate::memory::Edge;
 
-use super::digest::{ContentDigest, DigestHasher, Tag};
+use super::digest::{ContentDigest, DigestHasher, Digests, Tag};
 use super::{Knotted, Nothing, Value, Weight};
 
 /// A value word, or an edge into the holder's own knot.
@@ -51,9 +51,9 @@ impl<'cell, X: Knotted> Link<'cell, X> {
 
     /// The link's digest inside its knot's: a value's own, or an edge's index, since the edge names
     /// a sibling the knot's digest covers.
-    pub fn digest(&self) -> ContentDigest {
+    pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
         match self {
-            Link::Value(value) => value.digest(),
+            Link::Value(value) => value.digest_in(memo),
             Link::Edge(edge) => DigestHasher::new(Tag::Edge)
                 .count(edge.index() as usize)
                 .finished(),

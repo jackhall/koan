@@ -2,8 +2,8 @@
 //!
 //! Every node of the source knot is rebuilt in index order, so an edge means the same node in the
 //! copy and is carried verbatim; each closure binding's value, each data node's value cell and each
-//! module member is the finished copy the crossing hands back, and the types and body shapes ride
-//! over, beside one copy of the knot's facts, so a copy keeps its weight and its digest. A builtin's node points into program storage, so it is carried as-is. The
+//! module member is the finished copy the crossing hands back, and the types, body shapes, knot
+//! weight and a module's content ride over. A builtin's node points into program storage, so it is carried as-is. The
 //! copied member is the one at the source's own index.
 //!
 //! [`held`](values::KnottedFamily::held) lists the values a rebuild asks for, in the order it asks,
@@ -51,37 +51,33 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
         'graph: 'to,
     {
         let source = member.member().knot();
-        // The knot's facts are laid down once and shared by every copied node, as the source's are.
-        let facts = member.facts().map(|facts| facts.copied(writer));
-        let shared = || facts.expect("a knot of more than a builtin has facts");
         let knot =
             KnotPlan::new(source.len()).tie(writer, |edge| match source.member(edge).payload() {
-                Node::Function(function) => Node::Function(function.rebuilt(
-                    writer,
-                    function.closure().copied(writer, &mut *copy),
-                    shared(),
-                )),
+                Node::Function(function) => Node::Function(
+                    function.rebuilt(writer, function.closure().copied(writer, &mut *copy)),
+                ),
                 // The record lives in program storage, which outlives the destination.
                 Node::Builtin(builtin) => Node::Builtin(builtin),
-                Node::Data { circular, .. } => Node::Data {
+                Node::Data {
+                    circular,
+                    knot_weight,
+                } => Node::Data {
                     circular: circular.copied(writer, copy),
-                    facts: shared(),
+                    knot_weight: *knot_weight,
                 },
                 Node::Module(module) => {
                     let source = module.members();
                     let members = writer.fill(source.len(), |at| copy(&source[at]));
-                    Node::Module(module.rebuilt(members, shared()))
+                    Node::Module(module.rebuilt(writer, members))
                 }
                 Node::Coerced(coerced) => {
                     let underlying = match copy(&Value::Knotted(coerced.underlying())) {
                         Value::Knotted(member) => member,
                         _ => unreachable!("the copy of a knot member is a knot member"),
                     };
-                    Node::Coerced(resident(writer, coerced.rebuilt(underlying, shared())))
+                    Node::Coerced(resident(writer, coerced.rebuilt(underlying)))
                 }
-                Node::Code(code) => {
-                    Node::Code(resident(writer, code.rebuilt(writer, &mut *copy, shared())))
-                }
+                Node::Code(code) => Node::Code(resident(writer, code.rebuilt(writer, &mut *copy))),
             });
         Knotted(knot.member(member.member().index()))
     }

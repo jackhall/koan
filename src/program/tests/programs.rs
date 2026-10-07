@@ -468,20 +468,15 @@ fn a_lambda_reads_a_later_binding_when_it_is_born() {
 #[test]
 fn a_lambda_returned_from_a_frame_keeps_its_captures() {
     // Each lambda is born as its frame's last statement, in its calling evaluation's region, and
-    // crosses into the root when that evaluation finishes. `constantly`'s region holds little
-    // beside what its lambda reaches, a capture worth more than the frame, so the lambda pins and
-    // the region splices in; `wasteful`'s also holds a long list the lambda never reaches, so the
-    // lambda's knot copies, its capture deep-copied, and the region is reclaimed. Each is called
-    // after, reading its capture where it now lies.
+    // crosses into the root when that evaluation finishes. `constantly`'s region holds only what
+    // its lambda reaches, so the lambda pins and the region splices in; `wasteful`'s also holds a
+    // long list the lambda never reaches, so the lambda's knot copies, its capture deep-copied, and
+    // the region is reclaimed. Each is called after, reading its capture where it now lies.
     let long = vec!["x"; 256].join(" ");
-    let captured = (1..=32)
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
     let source = format!(
         "LET constantly = (FN :{{x :Any}} -> Any = #(FN :{{y :Number}} -> Any = #(x)))\n\
          LET wasteful = (FN :{{x :Any}} -> Any = #((LET big = [{long}]) (FN :{{y :Number}} -> Any = #(x))))\n\
-         LET pinned = (constantly [{captured}])\nLET copied = (wasteful [3 4])\n\
+         LET pinned = (constantly [1 2])\nLET copied = (wasteful [3 4])\n\
          LET r = (pinned 0)\nLET s = (copied 0)"
     );
     let mut substrate = loaded(&source, 2);
@@ -531,7 +526,7 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
         born[1].0,
         "the copied lambda's knot is re-tied in the root"
     );
-    assert!(read[2].starts_with("[1 2 3 "), "{read:?}");
+    assert!(read[2].starts_with("[1 2]@"), "{read:?}");
     assert!(read[3].starts_with("[3 4]@"), "{read:?}");
 }
 

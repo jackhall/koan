@@ -16,7 +16,7 @@ use crate::knot::{
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
 use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
 use crate::type_lattice::TypeRegistry;
-use crate::values::digest::{DigestHasher, Tag};
+use crate::values::digest::{DigestHasher, Digests, Tag};
 
 use super::Module;
 
@@ -87,9 +87,16 @@ pub fn tie_member<'graph, 'cell, 'x>(
     let ktype = self_signature(body, &keyworded, types, scratch);
     let mut members = BumpVec::with_capacity_in(body.shape().slots(), scratch);
     members.extend(body.slots().map(|(_, value)| value));
-    // A body-born module is its code over what it captures.
+    // A body-born module is its code over what it captures, digested now: the module keeps no
+    // captures to digest later.
     let mut content = DigestHasher::new(Tag::Module);
     content.digest(body.shape().code_digest());
-    composed(&mut content, body.shape(), body.closure().links());
+    let mut memo = Digests::default();
+    composed(
+        &mut content,
+        body.shape(),
+        body.closure().links(),
+        &mut memo,
+    );
     Ok(Module::tie(writer, ktype, &members, content.finished()))
 }

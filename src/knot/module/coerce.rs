@@ -29,7 +29,7 @@ use crate::type_lattice::{
     SchemaDraft, TypeNode, TypeRegistry, display_name, fits_application, satisfied_by,
     substitute_parameters,
 };
-use crate::values::digest::{DigestHasher, Tag};
+use crate::values::digest::{DigestHasher, Digests, Tag};
 use crate::values::{Dict, Knotted as _, List, Record, SealRefused, Tagged, Value, satisfies};
 
 use super::{Coerced, view};
@@ -342,7 +342,7 @@ pub fn coerce<'graph, 'cell>(
             let content = DigestHasher::new(Tag::View)
                 .feed(2u8)
                 .feed(dst)
-                .digest(member.digest())
+                .digest(member.digest(&mut Digests::default()))
                 .finished();
             view::build(
                 cx.writer, member, schema, view, from, to, content, cx.types, cx.scratch,

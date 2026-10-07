@@ -54,7 +54,7 @@ pub use admission::{
 pub use circular::{Circular, CodeView, Resolved};
 pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
-pub use digest::ContentDigest;
+pub use digest::{ContentDigest, Digests};
 pub use equality::Incomparable;
 pub use link::Link;
 pub use list::List;
@@ -85,8 +85,8 @@ pub trait Knotted: Copy + Eq + Hash {
     /// holding it.
     fn weight(&self) -> Weight;
 
-    /// The member's content digest: its knot's, beside its index there.
-    fn digest(&self) -> ContentDigest;
+    /// The member's content digest, through `memo`: its knot's, beside its index there.
+    fn digest(&self, memo: &mut Digests) -> ContentDigest;
 
     /// The member `edge` names among this one's own siblings.
     fn sibling(&self, edge: Edge) -> Self;
@@ -154,7 +154,7 @@ impl Knotted for Nothing {
         match *self {}
     }
 
-    fn digest(&self) -> ContentDigest {
+    fn digest(&self, _: &mut Digests) -> ContentDigest {
         match *self {}
     }
 
@@ -280,9 +280,14 @@ impl<'cell, X: Knotted> Value<'cell, X> {
         Weight::flat::<Self>().plus(self.referent_weight())
     }
 
-    /// The value's content digest ([`digest`]): a scalar's from its payload, a composite's from its
-    /// type and the contents it stored where it was laid down, a knot member's its knot's.
+    /// The value's content digest ([`digest`]), computed now: a scalar's from its payload, a
+    /// composite's from its type and its contents, a knot member's its knot's.
     pub fn digest(&self) -> ContentDigest {
+        self.digest_in(&mut Digests::default())
+    }
+
+    /// [`digest`](Self::digest) inside a demand already walking, through its `memo`.
+    pub fn digest_in(&self, memo: &mut Digests) -> ContentDigest {
         use digest::{DigestHasher, Tag};
         match self {
             Value::Number(number) => DigestHasher::new(Tag::Number)
@@ -292,11 +297,11 @@ impl<'cell, X: Knotted> Value<'cell, X> {
             Value::Null => DigestHasher::new(Tag::Null).finished(),
             Value::Str(text) => DigestHasher::new(Tag::Str).text(text.as_bytes()).finished(),
             Value::Type(value) => DigestHasher::new(Tag::Type).feed(value.handle()).finished(),
-            Value::List(list) => list.digest(),
-            Value::Dict(dict) => dict.digest(),
-            Value::Record(record) => record.digest(),
-            Value::Tagged(tagged) => tagged.digest(),
-            Value::Knotted(member) => member.digest(),
+            Value::List(list) => list.digest(memo),
+            Value::Dict(dict) => dict.digest(memo),
+            Value::Record(record) => record.digest(memo),
+            Value::Tagged(tagged) => tagged.digest(memo),
+            Value::Knotted(member) => member.digest(memo),
         }
     }
 
