@@ -150,6 +150,37 @@ pub(super) fn bound_above(
     })
 }
 
+/// `kt` with each opaque carrier read as the bound its view's source met, and each of `offered`
+/// as the bound beside it: what a signature's fit checks a head parameter's bound against
+/// ([`Collector::heads`](super::unify::Collector::heads)).
+pub(super) fn as_met(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    kt: Handle,
+    offered: &[(Handle, KType)],
+) -> Handle {
+    if !types.contains_rigid(kt) {
+        return kt;
+    }
+    rebuild(
+        types,
+        scratch,
+        kt,
+        CANONICAL,
+        &mut |at, node, _| match *node {
+            TypeNode::Parameter {
+                bound,
+                carrier: Some(_),
+                ..
+            } => Some(bound.raw()),
+            _ => offered
+                .iter()
+                .find(|(held, _)| *held == at)
+                .map(|(_, bound)| bound.raw()),
+        },
+    )
+}
+
 /// Which extreme a read through intervals takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {

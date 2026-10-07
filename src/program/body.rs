@@ -774,22 +774,18 @@ fn crossed_in<'graph, 'here>(
 ) -> Result<(KValue<'graph, 'here>, KValue<'graph, 'here>), CoercionRefused> {
     let (types, bump) = (program.types(), Bump::new());
     // A keyworded member's slots bind the names the function behind every barrier registers.
-    let mut innermost = outermost;
-    while let Some(barrier) = innermost.coerced() {
-        innermost = barrier.underlying();
-    }
+    let innermost = outermost.behind_barriers();
     let parameters = innermost
         .function()
         .and_then(|function| function.registered())
         .map_or(ParameterBinding::Named(&[]), |registered| {
             registered.parameters
         });
-    let (mut at, mut arguments) = (outermost, arguments);
-    while let Some(barrier) = at.coerced() {
+    let mut arguments = arguments;
+    for barrier in outermost.barriers() {
         arguments = coerce::inward(writer, barrier, arguments, parameters, types, &bump)?;
-        at = barrier.underlying();
     }
-    Ok((Value::Knotted(at), arguments))
+    Ok((Value::Knotted(innermost), arguments))
 }
 
 /// `value`, what the function behind the barrier `outermost` returned, crossed outwards through
@@ -805,10 +801,8 @@ fn crossed_out<'graph, 'here>(
     }
     let (types, bump) = (program.types(), Bump::new());
     let mut stacked = BumpVec::new_in(&bump);
-    let mut at = outermost;
-    while let Some(barrier) = at.coerced() {
+    for barrier in outermost.barriers() {
         stacked.push(barrier);
-        at = barrier.underlying();
     }
     let mut value = value;
     for barrier in stacked.iter().rev() {

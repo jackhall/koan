@@ -140,21 +140,14 @@ fn a_key_refuses_nan_and_non_scalars_and_folds_the_zeros() {
                 fixture.types,
                 fixture.scratch(),
             );
+            assert_eq!(Key::of(&Value::Number(f64::NAN)), Err(KeyRejected::NaN));
             assert_eq!(
-                Key::of(&Value::Number(f64::NAN), fixture.types, fixture.scratch()),
-                Err(KeyRejected::NaN)
-            );
-            assert_eq!(
-                Key::of(&Value::List(list), fixture.types, fixture.scratch()),
+                Key::of(&Value::List(list)),
                 Err(KeyRejected::NotAScalar(list.ktype()))
             );
             assert_eq!(Key::number(-0.0), Ok(Key::number(0.0).unwrap()));
             assert_eq!(Key::number(f64::NAN), Err(KeyRejected::NaN));
-            let Value::Number(zero) =
-                Key::of(&Value::Number(-0.0), fixture.types, fixture.scratch())
-                    .unwrap()
-                    .value()
-            else {
+            let Value::Number(zero) = Key::of(&Value::Number(-0.0)).unwrap().value() else {
                 panic!("a number key is a number");
             };
             assert!(zero.is_sign_positive());
@@ -580,30 +573,30 @@ fn a_family_construction_takes_the_application_its_payload_solves() {
 }
 
 #[test]
-fn a_member_seals_under_a_mint_its_source_binding_admits() {
+fn a_member_seals_under_a_carrier_its_source_binding_admits() {
     use crate::type_lattice::ContentKey;
     use crate::values::{SealRefused, sealing};
     with_fixture(|fixture| {
         let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
         let distance = fixture.newtype("Distance", KType::NUMBER);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
-        let mint = types.carrier(carrier, KType::ANY, ContentKey(1));
+        let hidden = types.carrier(carrier, KType::ANY, ContentKey(1));
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let sealed = Tagged::seal(
                 writer,
                 Value::Number(1.0),
-                mint,
+                hidden,
                 KType::NUMBER,
                 types,
                 scratch,
             );
-            assert_eq!(sealed.map(|tagged| tagged.ktype()), Ok(mint));
+            assert_eq!(sealed.map(|tagged| tagged.ktype()), Ok(hidden));
 
-            // A tagged payload takes the mint as its one layer, not a second one.
+            // A tagged payload takes the carrier as its one layer, not a second one.
             let tagged = Value::Tagged(Tagged::hold(writer, Value::Number(2.0), distance));
-            let sealed = Tagged::seal(writer, tagged, mint, distance, types, scratch).unwrap();
-            assert_eq!(sealed.ktype(), mint);
+            let sealed = Tagged::seal(writer, tagged, hidden, distance, types, scratch).unwrap();
+            assert_eq!(sealed.ktype(), hidden);
             assert!(matches!(sealed.payload(), Value::Number(2.0)));
 
             assert_eq!(
@@ -620,9 +613,9 @@ fn a_member_seals_under_a_mint_its_source_binding_admits() {
                 "a nominal type is no carrier",
             );
             assert_eq!(
-                sealing(types, scratch, mint, KType::STR, KType::NUMBER.into()),
+                sealing(types, scratch, hidden, KType::STR, KType::NUMBER.into()),
                 Err(SealRefused::Misfit {
-                    carrier: mint,
+                    carrier: hidden,
                     witness: KType::STR
                 }),
             );
@@ -669,7 +662,7 @@ fn a_payload_is_read_at_its_identitys_representation() {
         let silent = fixture.family("Silent", &["Type"], |_| None);
         assert_eq!(representation(types, scratch, silent), None);
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
-        let mint = types.carrier(carrier, KType::ANY, ContentKey(1));
-        assert_eq!(representation(types, scratch, mint), None);
+        let hidden = types.carrier(carrier, KType::ANY, ContentKey(1));
+        assert_eq!(representation(types, scratch, hidden), None);
     });
 }

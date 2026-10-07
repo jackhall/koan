@@ -495,14 +495,34 @@ fn arb_leaf(
     .boxed()
 }
 
+/// A head parameter, named from the type alphabet over a ground bound, beside a type that may read
+/// it anywhere a signature's member type may.
+pub fn arb_over_head_parameter(world: World, depth: u32) -> BoxedStrategy<(TypeSymbol, Handle)> {
+    (0..world.type_names.len(), 0..world.grounds().len())
+        .prop_flat_map(move |(name, bound)| {
+            let name = world.type_names[name];
+            let parameter = world.types.head_parameter(name, world.grounds()[bound]);
+            let members = Rc::new(vec![parameter.raw()]);
+            arb_type_in(
+                world.clone(),
+                depth,
+                Rc::new(Vec::new()),
+                members,
+                Vocabulary::ANY,
+            )
+            .prop_map(move |kt| (name, kt))
+        })
+        .boxed()
+}
+
 /// An opaque carrier, named from the type alphabet, over a ground bound.
-fn arb_opaque(world: World) -> BoxedStrategy<KType> {
+pub fn arb_opaque(world: World) -> BoxedStrategy<KType> {
     (0..world.type_names.len(), 0..world.grounds().len())
         .prop_map(move |(name, bound)| {
             let bound = world.grounds()[bound];
             world
                 .types
-                .carrier(world.type_names[name], bound, OPAQUE_MINT)
+                .carrier(world.type_names[name], bound, OPAQUE_KEY)
         })
         .boxed()
 }
@@ -592,7 +612,7 @@ fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle
 
 /// The declaring scope a generated opaque mint is sourced at — any id that is not the canonical
 /// binder, since the canonical binder is reserved for a signature's own members.
-const OPAQUE_MINT: ContentKey = ContentKey(1);
+const OPAQUE_KEY: ContentKey = ContentKey(1);
 
 /// Zero to three named fields over `value`, keyed from the binder alphabet, each name once: a
 /// later draw for a name replaces an earlier one in place, the record a parser that rejects
@@ -1650,6 +1670,51 @@ pub fn arb_fits_chain(
                 world.declared(b),
                 world.declared(c.raw()),
             )
+        })
+        .boxed()
+}
+
+/// A *fits* chain of signatures through a bounded head parameter, which [`arb_fits_chain`] never
+/// draws: an opaque view's signature, its slot at a carrier recorded under one ground; a signature
+/// over a head parameter bounded by that ground, its slot at the parameter; and a signature over a
+/// parameter bounded by another ground, or one whose slot is that ground itself. Not every step
+/// fits: a bound decides which modules fit and reveals nothing, so a bounded parameter fits no
+/// ground.
+pub fn arb_bounded_head_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> {
+    let grounds = world.grounds().len();
+    (0..grounds, 0..grounds, any::<bool>())
+        .prop_map(move |(bound, target, over_a_parameter)| {
+            let types = &world.types;
+            let (name, slot) = (world.type_names[0], world.values[0]);
+            let (bound, target) = (world.grounds()[bound], world.grounds()[target]);
+            with_scratch(|scratch| {
+                let signature = |parameter: Option<Parametric>, read: Handle| {
+                    let mut draft = SchemaDraft::new(scratch);
+                    match parameter {
+                        Some(parameter) => {
+                            draft.insert_parameter(name, parameter);
+                            draft.origin = SigOrigin::Declared;
+                        }
+                        None => draft.origin = SigOrigin::Declared,
+                    }
+                    draft.insert_value_slot(slot, world.declared(read));
+                    draft
+                };
+                let carrier = types.carrier(name, bound, OPAQUE_KEY);
+                let mut view = signature(None, carrier.raw());
+                view.insert_manifest(name, carrier);
+                view.origin = SigOrigin::Module;
+                let view = types.signature(scratch, view);
+                let over = |bound| {
+                    let parameter = types.head_parameter(name, bound);
+                    types.signature(scratch, signature(Some(parameter), parameter.raw()))
+                };
+                let last = match over_a_parameter {
+                    true => over(target),
+                    false => types.signature(scratch, signature(None, target.raw())),
+                };
+                (view, over(bound), last)
+            })
         })
         .boxed()
 }

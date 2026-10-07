@@ -91,8 +91,14 @@ are two variables, and a call may solve one to `Number` and the other to
   beat each other in a cycle eliminate each other, and no candidate survives a
   call that all three admit.
 
+An opaque carrier is a concrete type whose bound the order never reads: it lies
+under itself, a union holding it and `Any` alone. Reading it through the bound
+its source met would put a sealed value under that bound outside its view, and
+reduce `Carrier | Number` to `Number`.
+
 **What enforces it.** `the_order_is_reflexive_and_bounded`,
-`the_order_is_antisymmetric` and `the_order_is_transitive` in
+`the_order_is_antisymmetric`, `the_order_is_transitive` and
+`a_carrier_lies_under_any_alone` in
 [tests/properties.rs](tests/properties.rs), over generated concrete types; the
 `KType` parameters of `is_subtype_of`; and the one descent in `order.rs`, so no
 second walk can drift from it.
@@ -198,7 +204,16 @@ and are two types. An overload set deduplicated by *fits* would keep whichever
 was declared first and drop the other's registration; a union canonicalized by
 *fits* would have a handle that depends on the order of its members.
 
+**What breaks when a hidden bound is read.** A view of
+`SIG Counter FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]` fits
+`Counter`. Were `Counter`'s own `Carrier` read at its bound, `Counter` would
+fit `#[(VAL zero :Number)]`, while the view, whose carrier lies under `Any`
+alone, does not: a module passed as a `Counter` would reach a slot its own
+signature refuses. So a bound is read only where an asked head parameter's
+bound is checked, for a carrier and an offered unknown alike.
+
 **What enforces it.** `fits_is_reflexive`, `fits_is_transitive`,
+`fits_is_transitive_through_a_bounded_head_parameter`,
 `fits_is_transitive_through_an_instance`, `fits_contains_the_order`,
 `fits_bounds_the_signature_meet`, and, for
 [`instance_under`](relations.md#quantified-binders),
@@ -245,6 +260,7 @@ fails exactly where it fails.
 
 **What enforces it.** `a_solution_is_the_least_instance_of_its_contributions`,
 `admission_without_quantifiers_is_the_order`,
+`a_solve_puts_every_type_under_any_and_over_never`,
 `a_carried_variable_is_admitted_where_its_bound_is`,
 `a_solution_reads_only_its_solving_slots`,
 `a_reproducible_solve_commutes_with_binding` and

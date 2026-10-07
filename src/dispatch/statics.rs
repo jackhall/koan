@@ -137,10 +137,9 @@ pub(super) fn statics<'graph>(
         chain: BumpVec::new_in(scratch),
         unfilled: false,
         ran: BumpVec::new_in(scratch),
-        surfacing: None,
     };
     pass.push(root, true);
-    let visited = pass.visit(0);
+    let visited = pass.visit(0, None);
     pass.chain.pop();
     visited
 }
@@ -269,9 +268,6 @@ struct Pass<'p, 'x, 'graph> {
     unfilled: bool,
     /// Each quote's code beside its last statement's static type as it runs unfilled.
     ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
-    /// The static upper end of the module the `USING … SCOPE` body pushed next surfaces, which
-    /// types its surfaced names.
-    surfacing: Option<Parametric>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -394,10 +390,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Type the shape at chain level `level` — its code first — fix its cell, then type every
-    /// shape nested in it.
-    fn visit(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
+    /// shape nested in it. A `USING … SCOPE` body's `surfacing` is the static upper end of the
+    /// module it surfaces, which types its surfaced names.
+    fn visit(
+        &mut self,
+        level: usize,
+        surfacing: Option<Parametric>,
+    ) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
-        let surfacing = self.surfacing.take();
         for slot in 0..shape.slots() {
             let seeded = self.seeded(level, Slot(slot as u32), surfacing);
             self.chain[level].binders[slot] = seeded;
@@ -456,7 +456,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         nested: &'graph BodyShape<'graph>,
     ) -> Result<(), ShapeError<'graph>> {
         let code = nested.kind() == ShapeKind::Code;
-        let visited = self.nested(level, nested, code);
+        let visited = self.nested(level, nested, code, None);
         match visited {
             Err(error) if code => {
                 nested.refuse_typing(resident(self.writer, error));
@@ -465,7 +465,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Ok(_) if code => {
                 let unfilled = std::mem::replace(&mut self.unfilled, true);
                 // A use unfilled code can never run refuses nothing: its `EVAL` faults.
-                if let Ok(Some(last)) = self.nested(level, nested, true) {
+                if let Ok(Some(last)) = self.nested(level, nested, true, None) {
                     self.ran.push((nested, last));
                 }
                 self.unfilled = unfilled;
@@ -475,16 +475,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// Push `nested` above the shape at `level`, type it, and pop it: its last statement's static
-    /// type.
+    /// Push `nested` above the shape at `level`, type it — a `USING … SCOPE` body over what it
+    /// is `surfacing` — and pop it: its last statement's static type.
     fn nested(
         &mut self,
         level: usize,
         nested: &'graph BodyShape<'graph>,
         roots_chain: bool,
+        surfacing: Option<Parametric>,
     ) -> Result<Option<Interval>, ShapeError<'graph>> {
         self.push(nested, roots_chain);
-        let visited = self.visit(level + 1);
+        let visited = self.visit(level + 1, surfacing);
         let last = self.chain[level + 1].statements.last().copied();
         self.chain.pop();
         visited.map(|_| last)
@@ -502,7 +503,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Interval, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         self.push(body, false);
-        let visited = self.visit(level + 1);
+        let visited = self.visit(level + 1, None);
         let binders = self.chain.pop().expect("the body was pushed").binders;
         visited?;
         let mut members = BumpVec::with_capacity_in(binders.len(), scratch);
@@ -1482,7 +1483,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let shape = self.chain[level].shape;
         Ok(match form {
             Form::Leaf(part) => self.leaf(level, part, wanted)?,
-            Form::Block(nested) => self.nested(level, nested, false)?.unwrap_or_else(unknown),
+            Form::Block(nested) => self
+                .nested(level, nested, false, None)?
+                .unwrap_or_else(unknown),
             Form::Lambda(node) => match Site::of_body(node).and_then(|site| shape.nested(site)) {
                 Some(body) => match callable(body) {
                     DeclaredType::Type(typed) => typed,
@@ -1728,8 +1731,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
             return Ok(unknown());
         };
-        self.surfacing = Some(typed.upper);
-        Ok(self.nested(level, body, false)?.unwrap_or_else(unknown))
+        Ok(self
+            .nested(level, body, false, Some(typed.upper))?
+            .unwrap_or_else(unknown))
     }
 
     /// `EVAL <code> -> <Type>`: its declared type, exactly where the retype makes it so

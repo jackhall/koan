@@ -64,10 +64,11 @@ to find the components a knot can tie and the eager cycles it refuses.
 
 - **The crate depends on no koan code.** Its manifest names none, so the edge
   holds by the build: a path into koan does not compile.
-- **No koan file names `bumpalo`, `hashbrown`, `allocator_api2` or `blake3`.**
-  They are this crate's dependencies, not koan's. Inside the crate,
-  [`bump.rs`](src/bump.rs) is the only file naming the first three; `blake3`
-  is the content digest under symbol and type identity.
+- **No koan file names `bumpalo`, `hashbrown` or `allocator_api2`.** They are
+  this crate's dependencies, not koan's. Inside the crate,
+  [`bump.rs`](src/bump.rs) is the only file naming them. `blake3` is the content
+  digest under symbol and type identity here, and koan depends on it in its own
+  right for a value's [content digest](../src/values/README.md#content-digests).
 - **No `unsafe` outside the test build.** The crate root carries
   `#![cfg_attr(not(test), forbid(unsafe_code))]`. The test build admits one
   site: [`src/tests.rs`](src/tests.rs) installs the counting global allocator

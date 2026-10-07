@@ -58,6 +58,11 @@ pub(super) enum Raised<'a> {
     QuantifiedMember {
         name: Symbol,
     },
+    /// A quantified member behind a view's barrier, whose type names a carrier, read anywhere but
+    /// a call's head. The load refuses the read, so this stands behind it.
+    BarrierInstance {
+        name: Symbol,
+    },
     /// A value `:!` checks against a type it does not satisfy, or a module its signature.
     Unascribable {
         value: KType,
@@ -162,6 +167,11 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_> {
             Raised::QuantifiedMember { name } => write!(
                 f,
                 "member {} is quantified, and no type was known to instantiate it at",
+                self.symbols.display(name)
+            ),
+            Raised::BarrierInstance { name } => write!(
+                f,
+                "member {} is quantified behind its view's barrier, and is read only at a call's head",
                 self.symbols.display(name)
             ),
             Raised::Unascribable { value, ascribed } => write!(

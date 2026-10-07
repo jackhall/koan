@@ -527,7 +527,7 @@ fn container<'graph, 'here>(
         ExpressionPart::DictLiteral(_) => {
             let mut entries = BumpVec::with_capacity_in(values.len() / 2, &scratch);
             for pair in values.chunks(2) {
-                match Key::of(&pair[0], types, &scratch) {
+                match Key::of(&pair[0]) {
                     Ok(key) => entries.push((key, pair[1])),
                     Err(rejected) => {
                         let error = Raised::NotAKey { rejected }.raise(at.program, writer);

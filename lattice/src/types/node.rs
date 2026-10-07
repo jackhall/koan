@@ -361,7 +361,9 @@ pub enum Variable {
         lower: KType,
         bound: KType,
     },
-    /// A signature's head parameter, or with a `carrier` key an opaque view's carrier.
+    /// A signature's head parameter, or with a `carrier` key an opaque view's carrier. A carrier's
+    /// `bound` is the one its view's source met, which only a signature's fit reads
+    /// ([`Collector::heads`](super::unify::Collector::heads)); as a variable it is bounded by `Any`.
     Parameter {
         name: TypeSymbol,
         bound: KType,
@@ -398,9 +400,12 @@ impl Variable {
         })
     }
 
-    /// The variable's bound.
+    /// The variable's bound. A carrier reveals none outside its view, so it lies under `Any` alone.
     pub fn bound(self) -> KType {
         match self {
+            Variable::Parameter {
+                carrier: Some(_), ..
+            } => KType::ANY,
             Variable::Quantified { bound, .. }
             | Variable::Lexical { bound, .. }
             | Variable::Parameter { bound, .. } => bound,

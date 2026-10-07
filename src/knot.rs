@@ -190,6 +190,18 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
             _ => None,
         }
     }
+
+    /// The barriers stacked at this member, outermost first: one per view of a view.
+    pub fn barriers(self) -> impl Iterator<Item = &'cell Coerced<'graph, 'cell>> {
+        std::iter::successors(self.coerced(), |barrier| barrier.underlying().coerced())
+    }
+
+    /// The member behind every barrier stacked here: itself where none is.
+    pub fn behind_barriers(self) -> Self {
+        self.barriers()
+            .last()
+            .map_or(self, |barrier| barrier.underlying())
+    }
 }
 
 impl fmt::Debug for Knotted<'_, '_> {
@@ -237,7 +249,7 @@ impl values::Knotted for Knotted<'_, '_> {
         }
         let knot = self.0.knot();
         let root = knot.members().next().expect("a knot holds a node");
-        let digest = memo.memo(root.payload(), |memo| {
+        let digest = memo.memo(Tag::Knot, root.payload(), |memo| {
             let mut hasher = DigestHasher::new(Tag::Knot);
             hasher.count(knot.len() as usize);
             for member in knot.members() {

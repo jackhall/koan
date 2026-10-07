@@ -579,7 +579,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             site: Site::of(part),
         };
         let bound = self.closed_operands(Site::of(part), || self.part(part, groups))?;
-        // An opaque carrier is concrete, but one as a bound waits on modules.
+        // An opaque carrier is concrete, but a variable's bound holds none.
         match self.types.concrete(bound) {
             Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => Ok(bound),
             _ => Err(refused),

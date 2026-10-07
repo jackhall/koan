@@ -89,17 +89,17 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
                 .digest(digest)
                 .feed(signature)
                 .finished();
-            mint(&sig, from, &pins, ContentKey(key.bits()), types, scratch)
+            carriers(&sig, from, &pins, ContentKey(key.bits()), types, scratch)
         }
     };
     let view = view_signature(&sig, to, types, scratch);
     // A view is its operator and its application over its source.
     let operator = match mode {
-        Ascription::Transparent => 0u8,
-        Ascription::Opaque => 1,
+        Ascription::Transparent => Tag::Transparent,
+        Ascription::Opaque => Tag::Opaque,
     };
     let content = DigestHasher::new(Tag::View)
-        .feed(operator)
+        .tag(operator)
         .feed(signature)
         .digest(digest)
         .finished();
@@ -262,7 +262,7 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
 /// The view's bindings under `:|`: a carrier per head parameter of `sig` that `pins` leaves
 /// unpinned — a [`Parameter`](TypeNode::Parameter) keyed on `key`, under the parameter's name and
 /// the bound the declaration gives it — and each pinned one at what `from` holds for it, its pin.
-fn mint<'x>(
+fn carriers<'x>(
     sig: &SigSchema<'_>,
     from: Members<'_, TypeSymbol, KType>,
     pins: &[(BinderSymbol, KType)],

@@ -277,11 +277,9 @@ pub(super) fn member_of(
         }
     }
     let read = substitute_parameters(types, scratch, read, Members::from_table(pins));
-    // A parameter left open is named where substituting it changes the type.
-    let unpinned = open.into_iter().find(|parameter| {
-        let erased = Members::from_pairs(scratch, [(*parameter, KType::NEVER)]);
-        substitute_parameters(types, scratch, read, erased) != read
-    });
+    let unpinned = open
+        .into_iter()
+        .find(|parameter| types.mentions_parameter(scratch, read, *parameter));
     Some(Member {
         declared: read,
         unpinned,

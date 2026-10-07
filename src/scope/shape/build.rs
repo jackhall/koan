@@ -963,34 +963,42 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut rankings: BumpVec<'x, Ranking<'graph>> = BumpVec::new_in(self.scratch);
         // A surfaced key writes where a parameter does, under an index no statement takes: one
         // registration per key, over every head the operand declares there.
+        let mut head_keys: BumpVec<'x, KeySymbol> =
+            BumpVec::with_capacity_in(heads.len(), self.scratch);
+        head_keys.extend(
+            heads
+                .iter()
+                .map(|entry| KeyElement::key(entry.elements.iter().copied())),
+        );
         let mut keys: BumpVec<'x, KeySymbol> = BumpVec::new_in(self.scratch);
-        for entry in heads {
-            let key = KeyElement::key(entry.elements.iter().copied());
+        for key in head_keys.iter().copied() {
             if !keys.contains(&key) {
                 keys.push(key);
             }
         }
         for (index, key) in keys.iter().copied().enumerate() {
             let at = Position::PARAMETER;
-            let mut at_key = heads
-                .iter()
-                .filter(|entry| KeyElement::key(entry.elements.iter().copied()) == key);
-            let first = *at_key.clone().next().expect("a key has a head");
+            let at_key = || {
+                heads
+                    .iter()
+                    .zip(head_keys.iter())
+                    .filter(move |(_, head_key)| **head_key == key)
+                    .map(|(entry, _)| entry)
+            };
+            let mut others = at_key();
+            let first = *others.next().expect("a key has a head");
             let source = first.head.source();
             self.open_key(first.elements, source)?;
             let own = (kind, &registered[..], &rankings[..], at);
             let classes = self.surfaced_classes(own, key, first);
-            if at_key.any(|entry| self.surfaced_classes(own, key, *entry) != classes) {
+            if others.any(|entry| self.surfaced_classes(own, key, *entry) != classes) {
                 return Err(ShapeError::RankingDisagrees {
                     key: first.elements,
                     at: source,
                 });
             }
             self.agrees(own, key, first.elements, classes, source)?;
-            let surfaced = heads
-                .iter()
-                .filter(|entry| KeyElement::key(entry.elements.iter().copied()) == key)
-                .map(|entry| entry.head);
+            let surfaced = at_key().map(|entry| entry.head);
             let surfaced = {
                 let mut staged = BumpVec::new_in(self.scratch);
                 staged.extend(surfaced);
@@ -2738,8 +2746,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             (ShapeKind::Block, _) => return Some(outer(self, mark)?.through_block()),
             (ShapeKind::Module, _) => {
                 let read = outer(self, mark)?;
-                if !self.allowed(level, name, read) {
-                    self.chain[level].unlisted.get_or_insert(name);
+                if let Some(unlisted) = self.unlisted(level, name, read) {
+                    self.chain[level].unlisted.get_or_insert(unlisted);
                 }
                 CaptureSource::Read(read)
             }
@@ -2802,15 +2810,20 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         })
     }
 
-    /// Whether the module body at `level` may capture `name`, read at `read` in the shape outside
-    /// it: a binding of the program's top level, read where it lives, or one its `OVER` list
-    /// names — a registration by its key.
-    fn allowed(&self, level: usize, name: BinderSymbol, read: Coordinate) -> bool {
+    /// `name` as a diagnostic spells it — a registration by its key — where the module body at
+    /// `level` may not capture it, read at `read` in the shape outside it. A body may capture a
+    /// binding of the program's top level, read where it lives; an open hole or `\` mark of a
+    /// quote's code it sits in, which the code's own filling binds before it runs, as a builtin
+    /// fills a keyworded hole; or one its `OVER` list names.
+    fn unlisted(&self, level: usize, name: BinderSymbol, read: Coordinate) -> Option<BinderSymbol> {
         let landed = self.landing(level - 1, read);
         if let Some((0, _)) = landed
             && self.chain[0].kind == ShapeKind::Program
         {
-            return true;
+            return None;
+        }
+        if self.opens(level - 1, read) {
+            return None;
         }
         let listed = self.chain[level]
             .over
@@ -2823,16 +2836,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         match name {
             BinderSymbol::Registration(symbol) => {
-                let Some((at, _)) = landed else {
-                    return false;
-                };
-                (self.chain[at].registered.iter())
-                    .find(|entry| entry.symbol == symbol)
-                    .is_some_and(|entry| lists_key(entry.key))
+                let entry = landed.and_then(|(at, _)| {
+                    (self.chain[at].registered.iter()).find(|entry| entry.symbol == symbol)
+                });
+                match entry {
+                    Some(entry) if lists_key(entry.key) => None,
+                    Some(entry) => Some(BinderSymbol::Key(self.spelled(entry.elements))),
+                    None => Some(name),
+                }
             }
             // A quote's code's keyworded hole, which its filler binds.
-            BinderSymbol::Key(key) => lists_key(key),
-            name => listed.contains(&Listed::Name(name)),
+            BinderSymbol::Key(key) => (!lists_key(key)).then_some(name),
+            name => (!listed.contains(&Listed::Name(name))).then_some(name),
         }
     }
 
@@ -2854,6 +2869,30 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             };
             level = level.checked_sub(1)?;
             coordinate = inner;
+        }
+    }
+
+    /// Whether `coordinate`, read in the draft at `level`, reaches an open hole or `\` mark of a
+    /// quote's code: a capture chain ending at one the code leaves for its filling.
+    fn opens(&self, mut level: usize, mut coordinate: Coordinate) -> bool {
+        loop {
+            let Coordinate::Activation { hops, target } = coordinate else {
+                return false;
+            };
+            let Some(at) = level.checked_sub(hops as usize) else {
+                return false;
+            };
+            let Target::Capture(capture) = target else {
+                return false;
+            };
+            match self.chain[at].captures[capture.index()].source {
+                CaptureSource::Hole | CaptureSource::Offered => return true,
+                CaptureSource::Read(inner) => match at.checked_sub(1) {
+                    Some(parent) => (level, coordinate) = (parent, inner),
+                    None => return false,
+                },
+                CaptureSource::Member { .. } => return false,
+            }
         }
     }
 

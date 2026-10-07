@@ -177,14 +177,15 @@ pub fn coerce<'graph, 'cell>(
     // Only a function slot is a scheme, so every other arm's two sides are types.
     let (src_type, dst_type) = (src.as_type(), dst.as_type());
     match node {
-        // A reference to a head parameter. Outwards, the value takes the carrier as its one tagged
-        // layer, the barrier checking the carrier is one and the payload fits; inwards, through a
-        // barrier, a value sealed under the carrier gives up its payload at the source's type.
+        // A reference to a head parameter. Where the view side is a carrier the value takes it as
+        // its one tagged layer, the barrier checking it is one and the value fits the source side —
+        // a view, a view of a view, or a crossing inwards to a barrier stacked behind; where only
+        // the source side is, a value sealed under it gives up its payload at the view's type.
         TypeNode::Parameter { carrier: None, .. } => {
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
-            if !carrier(cx.types, src) {
+            if carrier(cx.types, dst) {
                 return Tagged::seal(cx.writer, value, dst, src, cx.types, cx.scratch)
                     .map(Value::Tagged)
                     .map_err(CoercionRefused::Seal);
@@ -340,7 +341,7 @@ pub fn coerce<'graph, 'cell>(
             let view = view::view_signature(&schema, to, cx.types, cx.scratch);
             // A nested view is the enclosing opaque one's, at the application its slot reads.
             let content = DigestHasher::new(Tag::View)
-                .feed(2u8)
+                .tag(Tag::Reviewed)
                 .feed(dst)
                 .digest(member.digest(&mut Digests::default()))
                 .finished();

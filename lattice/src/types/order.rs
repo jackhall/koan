@@ -47,7 +47,8 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 /// - A **rigid variable** — `Quantified`, `Lexical` or `Parameter` — is a nominal identity
 ///   between its lower end (`Never` but for a lexical variable's) and its bound: below it lie
 ///   itself and whatever lies under its lower end, above it itself and everything above its bound,
-///   a union included. The clauses agree because both ends are variable-free types.
+///   a union included. The clauses agree because both ends are variable-free types. An opaque
+///   carrier reveals no bound outside its view, so above it lie only itself and `Any`.
 /// - A quantified shape or function type lies under only itself.
 /// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other.
 /// - Every other pair is unrelated.

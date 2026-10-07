@@ -240,11 +240,12 @@ fn a_view_copies_across_a_cell_like_any_module() {
     });
 }
 
+/// A carrier records the bound its source met, and the view still fits the bounded signature; but
+/// outside the view the bound reveals nothing, so what is sealed behind it lies under `Any` alone.
 #[test]
-fn a_bounded_member_bounds_its_mint_and_what_is_sealed_behind_it() {
+fn a_bounded_member_records_its_bound_and_reveals_it_nowhere() {
     let source = "\
 SIG Ord FOR ALL #{Carrier: Value} = #[(VAL zero :Carrier)]
-SIG Loose FOR ALL #[Carrier] = #[(VAL zero :Carrier)]
 SIG Counted FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]
 MODULE m = ((LET Carrier = Number) (LET zero = 0))
 MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
@@ -258,39 +259,30 @@ MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
                 module(fixture, activation, "m"),
                 module(fixture, activation, "s"),
             );
-            let ord = declared(fixture, activation, "Ord");
-            let view = ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
-                .unwrap_or_else(|error| panic!("`m` satisfies `Ord`: {error:?}"));
-            let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
-                panic!("`Carrier` is a type member");
-            };
-            assert!(matches!(
-                types.node(carrier.handle()),
-                TypeNode::Parameter {
-                    bound: KType::ANY_VALUE,
-                    ..
-                }
-            ));
-            let zero = member(fixture, view, "zero", types, scratch);
-            assert!(satisfies(KType::ANY_VALUE, &zero, types, scratch));
-            assert!(
-                sig_fits(
-                    types,
-                    scratch,
-                    view.module().expect("a module").ktype(),
-                    ord
-                )
-                .is_ok(),
-                "an opaque view of a bounded signature still fits it"
-            );
-
-            // Unbounded, the seal hides which family it holds.
-            let loose = declared(fixture, activation, "Loose");
-            let view = ascribe(writer, m, loose, Ascription::Opaque, types, scratch)
-                .unwrap_or_else(|error| panic!("`m` satisfies `Loose`: {error:?}"));
-            let zero = member(fixture, view, "zero", types, scratch);
-            assert!(!satisfies(KType::ANY_VALUE, &zero, types, scratch));
-
+            for (name, bound) in [("Ord", KType::ANY_VALUE), ("Counted", KType::NUMBER)] {
+                let sig = declared(fixture, activation, name);
+                let view = ascribe(writer, m, sig, Ascription::Opaque, types, scratch)
+                    .unwrap_or_else(|error| panic!("`m` satisfies `{name}`: {error:?}"));
+                let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
+                    panic!("`Carrier` is a type member");
+                };
+                assert!(matches!(
+                    types.node(carrier.handle()),
+                    TypeNode::Parameter { bound: recorded, .. } if recorded == bound
+                ));
+                let zero = member(fixture, view, "zero", types, scratch);
+                assert!(!satisfies(bound, &zero, types, scratch), "{name}");
+                assert!(
+                    sig_fits(
+                        types,
+                        scratch,
+                        view.module().expect("a module").ktype(),
+                        sig
+                    )
+                    .is_ok(),
+                    "an opaque view of a bounded signature still fits it"
+                );
+            }
             let counted = declared(fixture, activation, "Counted");
             assert!(matches!(
                 ascribe(writer, s, counted, Ascription::Opaque, types, scratch),

@@ -314,6 +314,103 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
     );
 }
 
+/// A head parameter's bound decides which modules fit, and nothing more: outside the view a sealed
+/// member is opaque, so no `Number` slot, builtin or annotation takes it, while the view's own
+/// functions see its payload behind their barriers, and the view still fits its signature.
+#[test]
+fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
+    let source = |program: &str| {
+        format!(
+            "SIG Counter FOR ALL #{{Carrier: Number}} = \
+             #[(VAL zero :Carrier) (VAL succ :(FN :{{x :Carrier}} -> Carrier))]\n\
+             MODULE ints = ((LET zero = 4) (LET succ = (FN :{{x :Number}} -> Number = #(x + 1))))\n\
+             LET c = (ints :| Counter)\n\
+             EXPR #(USE m :Counter) -> Any = #(m.zero + 1)\n\
+             EXPR #(STEP m :Counter) -> Any = #(m.succ {{x = m.zero}})\n\
+             EXPR #(SHOW n :Number) -> Any = #(n)\n\
+             SIG Plain = #[(VAL zero :Number)]\n\
+             EXPR #(TAKE m :Plain) -> Number = #(m.zero + 1)\n\
+             EXPR #(PASS p :Counter) -> Any = #(TAKE p)\n{program}"
+        )
+    };
+    let refused_plus = "error: no overload of _ + _ admits (Carrier, Number)";
+    let refused_take = "error: no overload of TAKE _ admits (SIG (Carrier: Carrier, zero: \
+                        Carrier, succ: :(FN :{x :Carrier} -> Carrier)))";
+    for (program, printed) in [
+        ("PRINT (c.zero + 1)", refused_plus),
+        (
+            "PRINT (SHOW c.zero)",
+            "error: no overload of SHOW _ admits (Carrier)",
+        ),
+        (
+            "LET n :Number = c.zero\nPRINT n",
+            "error: Carrier does not satisfy its annotation Number",
+        ),
+        ("PRINT (c.zero == 4)", "false"),
+        ("PRINT (c.succ {x = c.zero})", "Carrier(5)"),
+        ("PRINT (USE ints)", "5"),
+        ("PRINT (USE c)", refused_plus),
+        ("PRINT (STEP c)", "Carrier(5)"),
+        // A bounded parameter offers no `Number`, so neither the view nor a `Counter` fits `Plain`.
+        ("PRINT (TAKE ints)", "5"),
+        ("PRINT (TAKE c)", refused_take),
+        ("PRINT (PASS c)", refused_take),
+    ] {
+        assert_eq!(run(&source(program)), printed, "{program}");
+    }
+}
+
+/// An opaque view of an opaque view reseals each member under its own carrier, and a call through
+/// it crosses both barriers each way; a value sealed under the inner view is no value of the outer.
+#[test]
+fn an_opaque_view_of_an_opaque_view_reseals_and_stacks_its_barriers() {
+    let source = |program: &str| {
+        format!(
+            "SIG Counter FOR ALL #[Carrier] = \
+             #[(VAL zero :Carrier) (VAL succ :(FN :{{x :Carrier}} -> Carrier))]\n\
+             SIG Again FOR ALL #[Carrier] = \
+             #[(VAL zero :Carrier) (VAL succ :(FN :{{x :Carrier}} -> Carrier))]\n\
+             MODULE ints = ((LET zero = 4) (LET succ = (FN :{{x :Number}} -> Number = #(x + 1))))\n\
+             LET c = (ints :| Counter)\nLET d = (c :| Again)\n{program}"
+        )
+    };
+    assert_eq!(
+        run(&source("PRINT (d.succ {x = (d.succ {x = d.zero})})")),
+        "Carrier(6)"
+    );
+    assert_eq!(
+        run(&source("PRINT (d.succ {x = c.zero})")),
+        "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Carrier}: its value \
+         does not satisfy Carrier"
+    );
+}
+
+/// The Miri slate's barrier call: a list crosses a barrier inwards, and one built from a captured
+/// string crosses it outwards, twice over.
+#[test]
+fn a_call_by_name_through_a_barrier_rebuilds_its_value_both_ways() {
+    let source = "SIG Stepper FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL step :(FN :{x :Carrier} -> Carrier))]\n\
+                  MODULE named = ((LET tag = \"seen\") (LET zero = [\"z\"]) \
+                  (LET step = (FN :{x :(LIST OF Str)} -> :(LIST OF Str) = #([tag]))))\n\
+                  LET v = (named :| Stepper)\n\
+                  PRINT (v.step {x = (v.step {x = v.zero})})";
+    assert_eq!(run(source), "Carrier([seen])");
+}
+
+/// The Miri slate's `USING` block: a keyworded member behind a barrier, reached by its surfaced
+/// key, over a surfaced value member.
+#[test]
+fn a_using_block_calls_a_surfaced_member_through_its_barrier() {
+    let source = "SIG Stepper FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (EXPR #(STEP _ :Carrier) -> Carrier)]\n\
+                  MODULE twos = ((LET tag = \"two\") (LET zero = [\"z\"]) \
+                  (EXPR #(STEP x :(LIST OF Str)) -> :(LIST OF Str) = #([tag])))\n\
+                  LET s = (twos :| Stepper)\n\
+                  PRINT (USING s SCOPE (STEP (STEP zero)))";
+    assert_eq!(run(source), "Carrier([two])");
+}
+
 #[test]
 fn an_argument_crossing_a_union_slot_inwards_unseals_by_the_member_over_the_carrier() {
     let source = "SIG Shown FOR ALL #[Carrier] = \
@@ -374,10 +471,12 @@ fn a_module_reading_an_outer_name_lists_it_under_over() {
         )
     };
     assert_eq!(run(&keyed(" OVER #[p (HELPER _)]")), "20");
-    let refused = run(&keyed(" OVER #[p]"));
     assert!(
-        refused.contains("is read from outside this module"),
-        "{refused}"
+        run(&keyed(" OVER #[p]")).ends_with(
+            "`HELPER _` is read from outside this module; list it under its `OVER`, as \
+             `OVER #[(HELPER _)]`"
+        ),
+        "an unlisted registration is named by its key"
     );
     // A name only a function nested in the body reads.
     let nested = |over: &str| {
@@ -428,6 +527,29 @@ fn a_nested_module_and_an_eval_offer_fall_under_the_contract() {
     };
     assert_eq!(run(&offered(" OVER #[c y]")), "5");
     unlisted(&offered(" OVER #[c]"), "y");
+}
+
+/// A quote's open hole is no outer name: what fills it — a builtin, or a code `USING` — binds before
+/// the code runs, so a module in the code reads it unlisted. A local of the code is outer, as a
+/// callable's is.
+#[test]
+fn a_module_in_a_quote_reads_the_code_s_holes_unlisted() {
+    let run_made = |code: &str, filled: &str| {
+        run(&format!(
+            "LET code = #({code})\nLET made = (EVAL {filled} -> Any)\nPRINT made.x"
+        ))
+    };
+    assert_eq!(run_made("MODULE m = (LET x = (1 + 2))", "code"), "3");
+    assert_eq!(
+        run_made("MODULE m = (LET x = y)", "(code USING {y = 5})"),
+        "5"
+    );
+    // Code's shapes are built where it runs, so the refusal waits for the `EVAL`.
+    assert_eq!(
+        run("LET code = #((LET y = 1) (MODULE m = (LET x = y)))\nEVAL code -> Any"),
+        "error: <test>:1:26: `y` is read from outside this module; list it under its `OVER`, \
+         as `OVER #[y]`"
+    );
 }
 
 #[test]

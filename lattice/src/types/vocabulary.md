@@ -51,9 +51,9 @@ subtree.
   positional and bound by the enclosing binder, so two binders alpha-equivalent
   under a renaming intern to one node, and a free one in a declared slot is what
   a call solves. `Parameter` is *named*: a signature's head parameter, which its
-  members read and `WITH` pins by name, or — carrying a nonce — the carrier an
-  opaque view mints for one (out of date: the
-  [module design](../../../design/modules.md) keys a carrier on content). A **lexical variable**
+  members read and `WITH` pins by name, or — carrying a `ContentKey` — the
+  carrier an opaque view hides one behind, keyed on the content the view hides
+  ([module design](../../../design/modules.md#carriers-and-paths)). A **lexical variable**
   (`Lexical`) is a name only a run binds, read where the program loads
   ([the type channel at load](../../../src/elaborate/README.md#the-type-channel-at-load)):
   it is positional by its level along the lexical chain that declares it, and
@@ -64,6 +64,10 @@ subtree.
   no opaque carrier and is not `Never` — and lies under its bound and
   under everything above it, a union included: a variable bounded by
   `Number | Str` lies under `Number | Str | Bool`, though under neither member.
+  A carrier records the bound its view's source met, but as a variable it is
+  bounded by `Any`: outside its view it reveals no bound, and only a
+  signature's fit reads the recorded one
+  ([*fits* over signatures](relations.md#signature-types)).
   A lexical variable has a **lower end** too, a closed type under its bound:
   below it lie itself and whatever lies under that end, where below
   `Quantified` and `Parameter` lie only themselves and `Never`. A name a

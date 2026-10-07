@@ -7,18 +7,19 @@
 //! contents. A raw part is checked by shape, since an unevaluated literal has no value yet;
 //! [`admits_part`] is also the one rule the shape builder's static check admits a written part by.
 //!
-//! [`unsealed`] is the one peel: a value sealed behind an opaque view read through each seal whose
-//! bound reveals the payload's kind.
+//! A value sealed behind an opaque view is read through nowhere outside the view: its carrier lies
+//! under `Any` alone, so only a slot naming the carrier takes it, and only the view's own functions,
+//! behind their barriers, see the payload.
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, DeclaredType, KKind, KType, NodeSchema, Parametric, TypeHandle, TypeNode,
-    TypeRegistry, Variance, admits_with, fits, satisfied_by, substitute_quantified,
+    TypeRegistry, Variance, admits_with, satisfied_by, substitute_quantified,
 };
 
-use super::{Knotted, Resolved, Value, WorkingPart};
+use super::{Knotted, Value, WorkingPart};
 
 /// Whether `slot` takes `value`: *fits* over the value's memoized type — a quantified callable's
 /// scheme fitting a function slot through an instance.
@@ -223,51 +224,6 @@ fn is_carrier(types: &TypeRegistry<'_>, ktype: KType) -> bool {
             ..
         }
     )
-}
-
-/// `value` read through its seal where the seal's bound licenses it. An opaque view's seal is
-/// transparent exactly where the member's bound reveals the kind of value it holds — where the
-/// carrier lies under its payload's kind. A seal bounded by `Value`, or by a union spanning kinds, stays.
-/// A seal re-tags rather than wraps ([`Tagged::seal`](super::Tagged::seal)), so there is one layer
-/// to read through. Equality and dict keys read a value through this.
-pub fn unsealed<'cell, X: Knotted>(
-    value: Value<'cell, X>,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> Value<'cell, X> {
-    let Value::Tagged(tagged) = value else {
-        return value;
-    };
-    let payload = *tagged.payload();
-    let revealed = is_carrier(types, tagged.ktype())
-        && kind_of(&payload, types, scratch)
-            .is_some_and(|kind| fits(types, scratch, tagged.ktype(), kind));
-    if revealed { payload } else { value }
-}
-
-/// The top of `value`'s own kind — `Number` for a number, `LIST OF Any` for a list, the empty
-/// record for a record, `Code` for a quote's code, since every quote is one representation whatever
-/// its carried type — or `None` for every other knot member, which no seal reads through.
-fn kind_of<X: Knotted>(
-    value: &Value<'_, X>,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> Option<KType> {
-    Some(match value {
-        Value::Number(_) => KType::NUMBER,
-        Value::Bool(_) => KType::BOOL,
-        Value::Null => KType::NULL,
-        Value::Str(_) => KType::STR,
-        Value::Type(_) => KType::ANY_TYPE,
-        Value::List(_) => KType::LIST_OF_ANY,
-        Value::Dict(_) => KType::DICT_ANY_ANY,
-        Value::Record(_) => types.record(scratch, &[]),
-        Value::Tagged(tagged) => tagged.ktype(),
-        Value::Knotted(member) => match member.resolve() {
-            Resolved::Code(_) => KType::ANY_CODE,
-            _ => return None,
-        },
-    })
 }
 
 /// The type dispatch matches a raw part on, and the one a diagnostic naming the slot renders. `None`

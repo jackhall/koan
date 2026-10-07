@@ -247,6 +247,14 @@ in a tenant's storage and crossed into the callee's birth.
   the enclosing call's binding of a type name its body never writes, read from the frame's
   activation into the closure run — handed back across the frame's crossing and compared where it
   lands with one born under another binding.
+- `a_call_by_name_through_a_barrier_rebuilds_its_value_both_ways`
+  an opaque view's function member called by name through its barrier, twice nested: a list
+  re-tagged inwards into the callee's frame, and a list built there from a captured string
+  re-tagged outwards across the barrier frame's crossing, each read back where it lands.
+- `a_using_block_calls_a_surfaced_member_through_its_barrier`
+  a `USING … SCOPE` block run as a frame over a view's surfaced members: a keyworded member behind
+  a barrier reached by its key, over a value member the block reads, its result crossing the
+  block's frame and the barrier both, every captured byte read back.
 
 ## Recent full-slate run durations
 

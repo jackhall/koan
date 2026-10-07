@@ -150,14 +150,14 @@ fn registration<'here>(member: Knotted<'_, 'here>) -> Option<Registered<'here, K
     let Some(barrier) = member.coerced() else {
         return member.function()?.registered();
     };
-    let mut innermost = member;
-    while let Some(behind) = innermost.coerced() {
-        innermost = behind.underlying();
-    }
     Some(Registered {
         shape: barrier.ktype(),
         quantifier_map: ShapeGroupMap::default(),
-        parameters: innermost.function()?.registered()?.parameters,
+        parameters: member
+            .behind_barriers()
+            .function()?
+            .registered()?
+            .parameters,
     })
 }
 

@@ -328,7 +328,10 @@ pub(super) fn fits_application<'run, 's>(
 
 /// The class walks' stand-in level less one: the offered side's own unpinned parameters read as
 /// lexical variables at `OFFERED_LEVEL - k` for its `k`th application, apart from every level the
-/// elaborator mints and from the stand-ins an asked binder opens its group to.
+/// elaborator mints and from the stand-ins an asked binder opens its group to. Each is bounded by
+/// `Any`: a head parameter's bound reveals nothing to a reader, so a signature over `Carrier`
+/// bounded by `Number` offers no `Number`. Only an asked head parameter's bound reads the bound it
+/// was declared under ([`Collector::heads`]).
 const OFFERED_LEVEL: usize = STAND_IN_LEVEL - 1;
 
 /// What the offered side's applications hold, pooled, every member type read under its
@@ -341,6 +344,8 @@ struct Offered<'run, 's> {
     values: BumpVec<'s, (ValueSymbol, Handle)>,
     keyworded: BumpVec<'s, Handle>,
     operators: BumpVec<'s, DeclaredGroup<'run>>,
+    /// Each unpinned parameter's stand-in, beside the bound it was declared under.
+    declared: BumpVec<'s, (Handle, KType)>,
 }
 
 impl<'run, 's> Offered<'run, 's> {
@@ -350,6 +355,7 @@ impl<'run, 's> Offered<'run, 's> {
             values: BumpVec::new_in(scratch),
             keyworded: BumpVec::new_in(scratch),
             operators: BumpVec::new_in(scratch),
+            declared: BumpVec::new_in(scratch),
         };
         let set = applications(types, scratch, offered).expect("fits offers a signature type");
         for (k, application) in set.iter().enumerate() {
@@ -357,8 +363,10 @@ impl<'run, 's> Offered<'run, 's> {
             let mut bindings = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
             bindings.extend(schema.parameters.iter().map(|(name, parameter)| {
                 let read = application.pin(name.symbol()).unwrap_or_else(|| {
+                    let stand_in = types.lexical(OFFERED_LEVEL - k, *name, KType::ANY).raw();
                     let bound = parameter_bound(types, parameter.raw());
-                    types.lexical(OFFERED_LEVEL - k, *name, bound).raw()
+                    pool.declared.push((stand_in, bound));
+                    stand_in
                 });
                 (*name, read)
             }));
@@ -475,7 +483,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
                 .iter()
                 .map(|(_, parameter)| parameter_bound(types, *parameter)),
         );
-        let mut collector = Collector::new(scratch, &bounds);
+        let mut collector = Collector::heads(scratch, &bounds, &self.pool.declared);
         // Manifest members and value slots involve no choice, so they contribute first.
         for (name, declared) in self.schema.manifest_members.iter().copied() {
             let Some(got) = self.pool.manifest(name) else {

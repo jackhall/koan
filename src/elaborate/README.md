@@ -83,6 +83,11 @@ registry's own doors:
   representation, a union variant's payload — so a field's type is reached the
   way its value is. The read chains where a field is itself record-shaped:
   `Outer.inner.x`, `Shape.Circle.r`;
+- `m.Carrier` and `outer.inner.Carrier`, where the owner is a value name
+  holding a module or a chain of value members rooted at one, are the module's
+  type member: read off its carried signature where it runs, a nested module's
+  value slot being its own signature, and unknown at load. A signature that
+  declares no such member is `NoSuchMember`;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
   by the parameter names the family declares — every parameter named once and no
   name it does not declare — and `Number AS Wrap` is the same application spelled
@@ -420,14 +425,19 @@ return like with like. Every `FOR ALL` name is such a variable, a name only the
 return reads included: under `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`
 the body reads `Elt` as rigid, and each call binds it.
 
-**A surfaced head.** A `USING … SCOPE` block's
-[surfaced head](../scope/README.md#names-that-arrive-at-run-time) is typed by the
-shape its `SIG` declares for it: the load reads the ascription's already-typed
-type, takes it only where it is a closed signature or application, re-reads the
-`SIG` where it is declared, and substitutes each head parameter by its pin or,
-unpinned, by the block's own type name for it — a lexical variable, so the
-registration is rigid. The shape is ranked as the registration is. Anything else
-— a rigid ascription, a meet — leaves the registration unknown.
+**A surfaced key.** A `USING … SCOPE` block's
+[surfaced key](../scope/README.md#names-that-arrive-at-run-time) is typed by the
+one head its operand declares there, and left unknown where it declares
+several. A signature's head is typed by the shape its `SIG` declares for it:
+the load reads the ascription's already-typed type, takes it only where it is a
+closed signature or application, re-reads the `SIG` where it is declared, and
+substitutes each head parameter by its pin or, unpinned, by the block's own
+type name for it — a lexical variable, so the registration is rigid. The shape
+is ranked as the registration is. Anything else — a rigid ascription, a meet —
+leaves the registration unknown. A `MODULE` or `GROUP` body's definition is
+typed where the body is, so its closed registered shape is the entry. The
+function the key's list holds where the block runs answers each call, so the
+entry carries no quantifier map and binds no parameter.
 
 **What stays unknown.** A spelling whose value over a rigid variable can differ
 from substituting first and elaborating after: a meet (`Elt & Number` meets to
@@ -570,8 +580,11 @@ refusal refusing the load, or kept on its quote's code shape.
 
 ## Open work
 
-- [Module programs](../../roadmap/rewrite/modules.md) — higher-kinded head
-  parameters, and a constructor application leaving a parameter unpinned.
+- [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
+  higher-kinded head parameters, and a constructor application leaving a
+  parameter unpinned.
+- [Path types](../../roadmap/rewrite/path-types.md) — a type member read through
+  a module-valued expression at load.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
   variance, which no declaration states, and a nominal over a run-bound type
   declared per call.

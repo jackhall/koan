@@ -5,9 +5,8 @@
 //! when their seen types are related, one satisfied by the other in either direction; an unrelated
 //! pair is unequal without descending. That makes `==` intransitive across ascriptions by design.
 //!
-//! A value sealed behind an opaque view compares as its payload wherever the seal's bound reveals
-//! the payload's kind ([`unsealed`]), so a sealed number behind a `Number`-bounded member equals
-//! the number; any other seal compares by identity, as every tagged value does.
+//! A value sealed behind an opaque view compares by identity, as every tagged value does: outside
+//! the view nothing reads its payload.
 //!
 //! A module or a barrier has no structural equality: a comparison that reaches one on either side
 //! is [`Incomparable`], which the `==` builtin reports, never `false`. A function compares by its
@@ -32,7 +31,7 @@ use crate::type_lattice::{DeclaredType, KType, TypeRegistry, satisfied_by};
 
 use super::circular::{CodeView, Resolved};
 use super::surface::Parts;
-use super::{Knotted, Seen, Surface, Value, unsealed};
+use super::{Knotted, Seen, Surface, Value};
 
 /// A comparison reached a module or a barrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,8 +46,7 @@ type Entered<'x, X, Y> = BumpBackedSet<'x, ((X, DeclaredType<KType>), (Y, Declar
 
 impl<'left, X: Knotted> Value<'left, X> {
     /// Whether two values are equal. Numbers follow IEEE (`NaN != NaN`, `-0 == 0`); a tagged value
-    /// compares its identity first, so it never equals its bare payload — save a sealed value whose
-    /// seal [`unsealed`] reads through, which compares as its payload; two types are equal when
+    /// compares its identity first, so it never equals its bare payload; two types are equal when
     /// they are the same handle; a knot's data node compares as the plain value of its kind would,
     /// its cells read through it; two functions by identity, then their closure bindings; two
     /// quotes' code as syntax, part by part with spans ignored, then the values their names bind.
@@ -75,33 +73,17 @@ impl<'left, X: Knotted> Value<'left, X> {
     }
 }
 
-/// `seen` read through its seal where [`unsealed`] reads through it: the payload, at its own memo.
-fn unsealed_seen<'cell, X: Knotted>(
-    seen: Seen<'cell, X>,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> Seen<'cell, X> {
-    match (seen.value(), unsealed(seen.value(), types, scratch)) {
-        (Value::Tagged(sealed), Value::Tagged(read)) if std::ptr::eq(sealed, read) => seen,
-        (Value::Tagged(_), payload) => Seen::of(payload),
-        _ => seen,
-    }
-}
-
 /// One pair's own answer — its gate or its leaf — with the children a passed gate pushes onto
 /// `pending`. A pair of knot members already entered at the same seen types answers `true` and
 /// pushes nothing.
 fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
-    left: Seen<'left, X>,
-    right: Seen<'right, Y>,
+    this: Seen<'left, X>,
+    that: Seen<'right, Y>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     seen: &mut Entered<'_, X, Y>,
     pending: &mut Pending<'_, 'left, 'right, X, Y>,
 ) -> Result<bool, Incomparable> {
-    // A seal whose bound reveals its payload's kind is read through, on either side.
-    let this = unsealed_seen(left, types, scratch);
-    let that = unsealed_seen(right, types, scratch);
     if this.value().as_opaque().is_some() || that.value().as_opaque().is_some() {
         return Err(Incomparable);
     }

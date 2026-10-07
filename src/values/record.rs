@@ -64,7 +64,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
     /// The record's content digest: its type and each field's name and cell, in symbol order, so
     /// field order is blind, through `memo`.
     pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
-        memo.memo(self, |memo| {
+        memo.memo(Tag::Record, self, |memo| {
             let mut hasher = DigestHasher::new(Tag::Contents);
             hasher.count(self.names.len());
             for (name, cell) in self.names.iter().zip(self.cells) {

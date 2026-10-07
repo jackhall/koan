@@ -97,6 +97,10 @@ pub enum Tag {
     Untyped = 0x2B,
     /// A mark on a name or a use, by which mark.
     Mark = 0x2C,
+    /// A view's operator: `:!`, `:|`, or the re-view a nested module takes at an opaque boundary.
+    Transparent = 0x2D,
+    Opaque = 0x2E,
+    Reviewed = 0x2F,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's
@@ -185,26 +189,28 @@ pub fn composite(
         .finished()
 }
 
-/// One demand's memo: the digest of each part a walk has already met, keyed by the address of the
-/// resident it sits in. Nothing a walk reads is freed or moved while it runs, so an address names
-/// one part for the walk's life.
+/// One demand's memo: the digest of each part a walk has already met, keyed by the shape it
+/// digests as and the address of the resident it sits in. Nothing a walk reads is freed or moved
+/// while it runs, so an address names one part of a shape for the walk's life, and the shape
+/// keeps two kinds of resident that could share an address apart.
 #[derive(Default)]
-pub struct Digests(HashMap<usize, ContentDigest>);
+pub struct Digests(HashMap<(u8, usize), ContentDigest>);
 
 impl Digests {
-    /// The digest of the part resident at `at`: `compute`'s answer, the first time this demand
-    /// meets it.
+    /// The digest of the part resident at `at`, digested as `tag`: `compute`'s answer, the first
+    /// time this demand meets it.
     pub fn memo<T>(
         &mut self,
+        tag: Tag,
         at: &T,
         compute: impl FnOnce(&mut Digests) -> ContentDigest,
     ) -> ContentDigest {
-        let address = std::ptr::from_ref(at).addr();
-        if let Some(digest) = self.0.get(&address) {
+        let key = (tag as u8, std::ptr::from_ref(at).addr());
+        if let Some(digest) = self.0.get(&key) {
             return *digest;
         }
         let digest = compute(self);
-        self.0.insert(address, digest);
+        self.0.insert(key, digest);
         digest
     }
 }

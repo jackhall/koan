@@ -71,7 +71,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
 
     /// The list's content digest: its type and its cells', through `memo`.
     pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
-        memo.memo(self, |memo| {
+        memo.memo(Tag::List, self, |memo| {
             let cells = contents(self.cells.iter().map(|cell| cell.digest_in(memo)));
             composite(Tag::List, self.ktype, cells)
         })

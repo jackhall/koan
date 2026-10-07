@@ -844,26 +844,44 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     assert_eq!(meet(&types, region, number_or_str, elt_or_bool), elt);
 }
 
-/// No law: the generators rarely draw a carrier beside every member its bound spans. An opaque
-/// carrier is concrete, so the order reduces it like any concrete member, under the union of the
-/// rest as well as under one member.
+/// No law: no generator builds a module signature beside a bounded application of its own. A
+/// carrier meets a signature head parameter's bound through the bound its view's source met, and
+/// a `FOR ALL` bound not at all, since the order reads a carrier as under `Any` alone.
 #[test]
-fn a_carrier_under_the_rest_of_a_union_is_dropped() {
+fn a_carrier_meets_a_head_parameter_s_bound_through_the_bound_its_source_met() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    let carrier = types.carrier(name, number_or_str, crate::types::ContentKey(1));
+    let under_number = types.carrier(name, KType::NUMBER, crate::types::ContentKey(1));
+    let under_either = types.carrier(name, number_or_str, crate::types::ContentKey(2));
+    let solve = |mut collector: Collector<'_, KType>, carrier: KType| {
+        collector.pin(0, KType::NUMBER, carrier);
+        collector.solve(&types).map(|solution| solution.to_vec())
+    };
     assert_eq!(
-        types.union_of(region, &[carrier, KType::NUMBER, KType::STR]),
-        number_or_str
+        solve(
+            Collector::heads(region, &[KType::NUMBER], &[]),
+            under_number
+        ),
+        Ok(vec![under_number])
     );
-    assert_eq!(
-        typed::join(&types, region, carrier, number_or_str),
-        number_or_str
+    assert!(
+        solve(
+            Collector::heads(region, &[KType::NUMBER], &[]),
+            under_either
+        )
+        .is_err()
     );
+    assert!(solve(Collector::new(region, &[KType::NUMBER]), under_number).is_err());
+    assert!(!is_subtype_of(
+        &types,
+        region,
+        under_number.raw(),
+        KType::NUMBER.raw()
+    ));
 }
 
 /// No law: the unifier's carried-variable rule is covered by a property, but the solution it

@@ -1249,7 +1249,8 @@ pub enum ShapeError<'graph> {
         at: SourceRef,
     },
     /// A `MODULE` or `GROUP` body reading `name` from outside it — bound neither by the body nor by
-    /// a top-level statement — where its `OVER` list does not name it.
+    /// a top-level statement — where its `OVER` list does not name it. A registration is named by
+    /// its key.
     Unlisted { name: BinderSymbol, at: SourceRef },
     /// A quantified member read anywhere but a call's head whose scheme names `parameter`, a head
     /// parameter its module's signature leaves unpinned, which the load cannot name there.
@@ -1616,13 +1617,19 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 display_name(*of, self.types, self.symbols),
                 name(member)
             ),
-            ShapeError::Unlisted { name: read, .. } => write!(
-                f,
-                "`{}` is read from outside this module; list it under its `OVER`, as \
-                 `OVER #[{}]`",
-                name(read),
-                name(read)
-            ),
+            ShapeError::Unlisted { name: read, .. } => {
+                // A key is listed as its use is written, in parentheses.
+                let listed = match read {
+                    BinderSymbol::Key(_) => format!("({})", name(read)),
+                    _ => name(read).to_string(),
+                };
+                write!(
+                    f,
+                    "`{}` is read from outside this module; list it under its `OVER`, as \
+                     `OVER #[{listed}]`",
+                    name(read)
+                )
+            }
             ShapeError::UnpinnedMember {
                 member, parameter, ..
             } => write!(

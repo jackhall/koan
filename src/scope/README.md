@@ -178,6 +178,43 @@ builder's captures, then the type captures, so the closure is `capture_count()`
 slots long. A type capture is never merged with a builder capture of the same
 name.
 
+**A module body is held to its capture contract**
+([build.rs](shape/build.rs)), per the
+[module design](../../design/modules.md#the-capture-contract). A `MODULE` or
+`GROUP` binder may write an `OVER` list after its name,
+`MODULE m OVER #[x Elt (HELPER _)] = (…)`: each entry a value or type name, or a
+registration's key written with `_` in each slot, read as data where the
+binder's statement is walked. An **outer** name is one the body reads that
+neither the body nor a top-level statement binds, each capture followed to its
+source; a top-level binding or a builtin is read where it lives and needs no
+listing. The first outer name the list leaves out refuses the body,
+`` `x` is read from outside this module; list it under its `OVER`, as
+`OVER #[x]` ``, a registration named by its key; a body with no list captures
+nothing from outside. A type capture the static pass adds must be listed too,
+which [dispatch](../dispatch/README.md#static-types) checks where it adds one.
+An entry the body never reads is captured all the same, and a top-level entry
+is recorded by its binding (`BodyShape::listed_top`), since the run never reads
+one through a capture. An entry naming nothing visible is `Unbound`. Inside a
+quote's code, a read that reaches one of the code's open holes or `\` marks is
+no outer name: the `USING` or `EVAL` filling it decides it, and the module's
+content composes what it is filled with. A name the code itself binds outside
+the module is outer, as anywhere.
+
+**A body's code is digested as resolved** where its shape is built
+([digest.rs](shape/build/digest.rs)), nested shapes first, into the content
+digest a closure's or a module's [content](../values/README.md#content-digests)
+composes: its kind, its parameter layout and each statement part by part. A
+keyword hashes its symbol and a literal its value's digest; a name hashes its
+resolution — a builtin by its index, a local slot by its hops and slot, a read
+of the program's top level by the binding it reads, any other capture by its
+hops and capture slot — and a keyworded use its key and each candidate's
+coordinate by the same rule, so two bodies of one text whose uses resolve apart
+digest apart. A nested shape hashes its own code digest, and spans are left
+out, so the digest does not depend on where the body is written. A module's
+digest then takes each `listed_top` entry its code does not already name. A
+capture that reads the top level is therefore not **composed** into a closure's
+or a module's content (`BodyShape::composes`): the code digest names it.
+
 A code shape is where a [mark](#holes-and-marks) is spent, so its captures are
 keyed by name **and** mark: a hole `x`, a `$x` and a `\x` read in one body are
 three captures. A `$x` skips every binder in the code, the parameters of a
@@ -217,6 +254,10 @@ function resolves by how it is bound, read off the syntax of its declaration:
 - any other binding of a quantified `FN`, a `LET` outside a `MODULE` or `GROUP`
   body included, resolves as an ordinary name: the static pass instantiates it where
   it is bound, or refuses the load.
+
+A quantified member read through its module, `m.pick`, is no name: the read is
+an `ATTR` call, and the static pass makes it an instance site where it sees the
+member's scheme ([static types](../dispatch/README.md#static-types)).
 
 A quantified `FN` literal is written anywhere; outside a call's head, the
 static pass instantiates it where it is written. A body whose value is read — a
@@ -544,18 +585,25 @@ Two forms introduce names no shape can see.
 - **`USING … SCOPE`** makes the names its operand surfaces the **parameters of
   its body's block shape**, so a mention of one resolves through the ordinary
   local read, a callable nested in the block captures it the ordinary way, and
-  no coordinate names a member. The registrations it surfaces are parameters
-  the same way, and candidates for a keyworded use in the body. Only the binding is left to run time, which is
-  [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s.
+  no coordinate names a member. The keys it surfaces are parameters the same
+  way, and each is a spread candidate for a keyworded use in the body. Only the
+  binding is left to run time, which is
+  [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s:
+  a surfaced key is bound to the list of every function the module offers
+  there.
 
-  An operand ascribed to a signature surfaces each bodyless `EXPR` and `OP`
-  head the signature declares as such a registration — one per bucket key the
-  head's definition would register at, two for a `UNARY OP` — laid out among
-  the parameters at an index no statement takes and ranked by the head's own
-  written ranks, or an operator's chaining, so a ranking that disagrees with
-  another at its key is refused as a definition's is. Each records where its
-  head, its `SIG` and the ascription naming it are written
-  (`Registration::surfaced`), which is how
+  The operand surfaces each keyworded head it declares under every bucket key
+  the head's definition would register at, two for a `UNARY OP`: an operand
+  ascribed to a signature each bodyless `EXPR` and `OP` head the signature
+  declares, and a `MODULE` or `GROUP` binder each definition its body holds.
+  The block holds **one registration per key**, over every head at it, laid
+  out among the parameters at an index no statement takes and ranked by the
+  heads' written ranks — or an operator's chaining, or the ranking a definition
+  at the block would adopt — so heads that disagree at a key, or a ranking that
+  disagrees with another at its key, are refused as a definition's is. It
+  records each head's place (`Registration::surfaced`): a signature head's
+  statement, `SIG` and naming ascription, or a body definition's statement and
+  module binder, which is how
   [the load](../elaborate/README.md#the-type-channel-at-load) types it.
 
   That works only if the names are readable where the shape is built, so the
@@ -955,6 +1003,8 @@ program only for a `$` name nothing binds where the quote is written:
 - a **mark outside a quote** — a `$` or `\` no quote value holds;
 - an **unsurfaced** `USING` — an operand that does not say, where the shape is
   built, which names it surfaces;
+- an **unlisted** read — a `MODULE` or `GROUP` body reading an outer name its
+  `OVER` list leaves out ([resolution](#resolution));
 - an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
   rewrite home yet, and the reserved forms that exist only to diagnose a miss,
   `TYPE` among them, since a signature hides a type through a head parameter;
@@ -1000,8 +1050,11 @@ its arguments' static types; an **ambiguity**, a keyworded use every candidate
 of which always admits and none of which ranks first, naming the same; and a
 **return never satisfied**, a callable body whose static type meets its declared
 return at `Never` — beside the refusals of its
-[instance sites](../dispatch/README.md#static-types), an annotated binder or a
-call by name that can never be satisfied, and the static pass's other checks;
+[instance sites](../dispatch/README.md#static-types), an annotated binder, an
+ascription or a call by name that can never be satisfied, a member read of a
+signature lacking the member (**no member**) or of a quantified member over an
+unpinned head parameter (**unpinned member**), a type capture a module's `OVER`
+list leaves out, and the static pass's other checks;
 
 two the [elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
 finds — a **type** that does not elaborate, carrying the elaborator's refusal,

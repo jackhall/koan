@@ -44,10 +44,13 @@ table ahead of the program it serves.
 
 **Directions.**
 
-- *`Parameter` — open.* [Modules](modules.md) keys an opaque carrier on
-  content rather than on the nonce a `:|` mint in
-  [`knot/module/view.rs`](../../src/knot/module/view.rs) carries, so what
-  `Parameter` holds in the nonce's place follows from that item's carrier key.
+- *`Parameter` — open.* An opaque view's carrier is a `Parameter` holding an
+  `Option<ContentKey>`, a 16 B key the
+  [view door](../../src/knot/module/view.rs) computes, beside its 16 B name and
+  its 16 B bound, so the three do not fit 48 B inline with a tag. Options: move
+  the key behind one `&'run` reference laid on an intern miss, which costs a
+  hop only where a carrier is digested or compared; or give the carrier a
+  variant of its own, leaving a head parameter's at name and bound.
 - *The layouts of `Signature` and `SetMember` — decided.*
   Each has room for a `u16` at offset 2, a `u32` at offset 4, one thin
   reference at offset 8 and two 16 B fields:

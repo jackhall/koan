@@ -90,6 +90,17 @@ fills: a `Held` bounded by `LIST OF Number` fills `LIST OF Elt`, solving `Elt` t
 `Number`, just as the monomorphic instance between the two would. Below a rigid
 variable is only itself, so at a contravariant position it fills nothing more.
 
+Whatever its variables solve to, a declared type lies above `Never` and under
+`Any`, so the walk admits a carried `Never` at a covariant position and a
+carried `Any` at a contravariant one outright, as the order does, rather than
+pairing either structurally against `LIST OF Elt` or a record. Each variable
+the declared type names takes what a part-by-part pairing would give it, since
+an extreme is `Never` in every covariant part and `Any` in every contravariant
+one: a variable at a covariant position binds `Never`, as a bare one does, so
+`LIST OF (LIST OF Elt)` over `[]` binds `Elt` to `Never`, and one only at
+contravariant positions keeps its bound. Every member of a declared union is
+read alike, so no member order enters.
+
 A **construction** collects through `Collector::least`, under which a variable
 no contribution reaches is bounded by `Never` rather than its bound: a family is
 covariant in its parameters, so its least instance is the one the payload asks
@@ -164,6 +175,12 @@ that pair. So
 `FOR ALL #[Elt] #(PAIR x :(LIST OF Elt) WITH y :(LIST OF Elt))` fixes `Elt`
 from `x` and refuses a `y` that does not lie under it, while one class over both
 slots — or a call by name, whose record has no order — solves them jointly.
+A later class holds the solution as a **pin** in its collector, and a pin
+refuses a contribution on its wrong side where it arrives — above it at a
+covariant position, below it at a contravariant one — rather than when the
+class's solve is read. So a union whose walk reaches a pinned variable takes a
+member the pin allows, and a later contribution cannot contradict an earlier
+class's solution through a member it happened to choose.
 [`solving_slots`](ranking.rs) names the slots a solve reads: each one naming a
 variable whose first class is its own. In written order `PAIR`'s `x` solves and
 its `y` only admits, so dispatch hands the solve an argument's static type at

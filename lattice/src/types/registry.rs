@@ -46,7 +46,7 @@ use super::signatures::canonical_applications;
 use super::substitute::substitute_quantified;
 use super::verdicts::{Relation, VERDICT_SLOTS, VerdictTable};
 use super::walk::Variance;
-use super::walk::unary::{Visit, children, visit_free_quantified};
+use super::walk::unary::{Visit, children, visit, visit_free_quantified};
 
 /// One interned node, and the three probe answers computed off its children when it was interned.
 #[derive(Clone, Copy)]
@@ -552,7 +552,8 @@ impl<'run> TypeRegistry<'run> {
 
     /// The carrier an opaque view hides a head parameter behind, keyed on `key`, the content the
     /// view hides: two views of equal content share it, and two of different content never unify.
-    /// A value carries it and dispatches on it, so it is concrete.
+    /// A value carries it and dispatches on it, so it is concrete. It records `bound`, the bound its
+    /// source met, for a signature's fit alone: the order reads a carrier as under `Any` only.
     pub fn carrier(&self, name: TypeSymbol, bound: KType, key: ContentKey) -> KType {
         wrap(self.parameter(name, bound, Some(key)))
     }
@@ -574,9 +575,8 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
-    /// A bound is concrete by its type. An opaque carrier is concrete too, but one as a variable's
-    /// bound waits on [modules](../../../roadmap/rewrite/modules.md) to re-key carriers, so the
-    /// elaborator refuses it; this checks that it did.
+    /// A bound is concrete by its type. An opaque carrier is concrete too, but a variable's bound
+    /// holds none: the elaborator refuses one there, and this checks that it did.
     fn assert_bound(&self, bound: KType) {
         debug_assert!(
             !self.contains_rigid(bound.raw()),
@@ -1089,7 +1089,6 @@ impl<'run> TypeRegistry<'run> {
             let keep = unsubsumed(self, scratch, &flat, Dropped::Below);
             let mut keep = keep.iter();
             flat.retain(|_| *keep.next().unwrap_or(&true));
-            self.drop_carriers_under_the_rest(scratch, &mut flat);
         }
         // The three family tops together hold every type, so their union is `Any` — and must be, or
         // a type variable bounded by `Any` would lie under `Any` but not under the union that equals it.
@@ -1104,40 +1103,6 @@ impl<'run> TypeRegistry<'run> {
             1 => flat[0],
             _ => self.intern_union_members(scratch, &flat),
         }
-    }
-
-    /// Drop from `flat` every opaque carrier whose bound lies under the union of the other
-    /// concrete members that are no rigid variable — a bound spanning several members, which the
-    /// pairwise pass cannot see. A carrier is concrete, so the order reduces it; a bound holds no
-    /// rigid variable, so no rigid member holds one up.
-    fn drop_carriers_under_the_rest(
-        &self,
-        scratch: BumpAllocator<'_>,
-        flat: &mut BumpVec<'_, Handle>,
-    ) {
-        let carrier_bound = |member: Handle| match self.node(member) {
-            TypeNode::Parameter {
-                bound,
-                carrier: Some(_),
-                ..
-            } if bound != KType::ANY => Some(bound.raw()),
-            _ => None,
-        };
-        if !flat.iter().any(|member| carrier_bound(*member).is_some()) {
-            return;
-        }
-        let mut rest = BumpVec::with_capacity_in(flat.len(), scratch);
-        rest.extend(flat.iter().copied().filter(|member| {
-            self.is_concrete(*member) && self.node(*member).rigid_bound().is_none()
-        }));
-        // With one such member the pairwise pass already decided.
-        if rest.len() < 2 {
-            return;
-        }
-        let rest = self.intern_union_members(scratch, &rest);
-        flat.retain(|member| {
-            carrier_bound(*member).is_none_or(|bound| !is_subtype_of(self, scratch, bound, rest))
-        });
     }
 
     /// Intern a union from members that are already flat and already an antichain — dedup by handle
@@ -1210,8 +1175,7 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// Whether `kt` holds an opaque carrier outside sealed content — the one rigid variable a
-    /// concrete type may hold. A carrier as a variable's bound waits on
-    /// [modules](../../../roadmap/rewrite/modules.md), so the elaborator refuses one there.
+    /// concrete type may hold. A variable's bound holds none, so the elaborator refuses one there.
     pub fn holds_carrier(&self, kt: KType) -> bool {
         self.contains_rigid(kt.raw())
     }
@@ -1232,6 +1196,30 @@ impl<'run> TypeRegistry<'run> {
                 } else {
                     Visit::Skip
                 }
+            })
+    }
+
+    /// Whether `kt` reads the head parameter `name`: a carrier-free `Parameter` of that name, which
+    /// substituting `name` would replace. A signature is opaque, as it is there. What a member read
+    /// asks of each head parameter its application leaves unpinned; it builds nothing.
+    pub fn mentions_parameter(
+        &self,
+        scratch: BumpAllocator<'_>,
+        kt: DeclaredType<Parametric>,
+        name: TypeSymbol,
+    ) -> bool {
+        let kt = match kt {
+            DeclaredType::Type(kt) => kt.raw(),
+            DeclaredType::Scheme(scheme) => scheme.raw(),
+        };
+        self.contains_rigid(kt)
+            && visit(self, scratch, kt, &mut |_, node, _| match *node {
+                TypeNode::Parameter {
+                    name: found,
+                    carrier: None,
+                    ..
+                } if found == name => Visit::Stop,
+                _ => Visit::Descend,
             })
     }
 

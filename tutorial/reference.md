@@ -70,7 +70,9 @@ the link in each section to the relevant chapter.
 | Form                                             | Meaning                            |
 |--------------------------------------------------|------------------------------------|
 | `MODULE <name> = (<bindings>)`                   | Group bindings under a name (snake_case — a module is a value). |
+| `MODULE <name> OVER #[<names>] = (<bindings>)`  | A module listing what it reads from the function around it; a keyworded definition is listed by its key, `(SCALE _)`. |
 | `<module>.<member>`                              | Read a module member.              |
+| `:(<module>.<Type>)`                             | A module's type member.            |
 | `SIG <Name> = #[(VAL <name> :<Type>) ...]`       | Declare a signature (a module's type; Type-token name). |
 | `SIG <Name> FOR ALL #[<names>] = #[...]`         | A signature over head parameters, each one type per module, which its members name. |
 | `VAL <name> :<Type>`                             | A required value member, inside a `SIG`; its type may be a quantified function type. |
@@ -81,7 +83,6 @@ the link in each section to the relevant chapter.
 | `EXPR #(<KW> <p> :<Sig>) -> Module = #(<body>)`    | A functor: a function returning a module (a module parameterized by a module). |
 | `<Sig> WITH {<Param> = <Type>}`                  | An application: pin some of a signature's head parameters. |
 | `:(<Sig> & <Sig>)`                               | The meet of two signatures: a module fits it when it fits both. |
-| `TYPE OF <value>`                                | The type a value reports for itself; a module's is its signature. |
 
 ## Type expressions — see [2](02-values-and-types.md)
 

@@ -49,7 +49,7 @@ pub(crate) mod tests;
 
 pub use admission::{
     ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,
-    part_ktype, record_type, representation, satisfies, sealing, solves_identity, unsealed,
+    part_ktype, record_type, representation, satisfies, sealing, solves_identity,
 };
 pub use circular::{Circular, CodeView, Resolved};
 pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};

@@ -234,7 +234,22 @@ that misnames a parameter, an argument that does not fit its parameter, and a
 group the arguments cannot solve are each a
 [fault](#faults-and-output). Born as `KBirth::Block` it lays a block's
 activation down beside the view it sits in, in the asker's own cell, and yields
-its last statement's value.
+its last statement's value. A `USING … SCOPE` body is such a block entered on a
+module (`surfaced_block`): its parameters are bound to what the module surfaces
+([entering a block](../knot/module/README.md#entering-a-using--scope-block))
+before its first unit runs, and since its shape and the module cannot disagree,
+a refusal there is an invariant break.
+
+**A frame called through a barrier** — a function an opaque view carries
+([members are born coerced](../knot/module/README.md#members-are-born-coerced)) —
+crosses it both ways. The argument record crosses each stacked barrier
+inwards, unsealing what is sealed under a carrier, and the function behind them
+is then bound as a call by name, so its frame admits the arguments and solves
+its group; an argument that cannot cross is the call's misfit,
+`… cannot be called with …: it is not sealed under Carrier`. The frame's value,
+once held to its contract, crosses the barriers outwards, innermost first, and
+a value that cannot is a fault. Such a frame never tails, since its value
+crosses where the frame ends.
 
 It performs the units in the order the shape emitted them
 ([Units](../scope/README.md#units)), each after every unit it reads, over a
@@ -311,7 +326,7 @@ outermost return of the chain — the contract's `retype`. So beside
 returns a `LIST OF Any`. An `EVAL`'s frame owes the type the `EVAL` declares
 as a called frame owes its return; its contract names no callee, so a miss
 names the `EVAL`'s code (`` `EVAL`'s code returned Str, which does not satisfy
-Number ``). A block never tails.
+Number ``). A block never tails, and nor does a frame called through a barrier.
 
 ### Faults and output
 

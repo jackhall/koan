@@ -334,7 +334,7 @@ pub(super) fn run<'graph, 'here>(
                     Some(function) => Value::Knotted(instance(
                         writer, function, solution, &at.view, types, scratch,
                     )),
-                    None => raise(Raised::QuantifiedMember {
+                    None => raise(Raised::BarrierInstance {
                         name: name.symbol(),
                     }),
                 },

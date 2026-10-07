@@ -18,10 +18,10 @@
 //! A **view** narrows: [`view::ascribe`] checks the source satisfies the signature, keeps only what
 //! the signature names, and lays a module node of its own down through the same door. Under `:!`
 //! the view's types are the source's, so every member is carried verbatim. Under `:|` each abstract
-//! member is hidden behind a carrier keyed on content, and every member is born **coerced** to it: data
-//! is re-tagged through the admission barrier, containers are rebuilt cell by cell, a nested module
-//! is re-viewed, and a function is wrapped in a [`Coerced`] barrier node a call will later go
-//! through.
+//! member is hidden behind a carrier keyed on content, and every member is born **coerced** to it:
+//! data is re-tagged through the admission barrier, containers are rebuilt cell by cell, a nested
+//! module is re-viewed, and a function is wrapped in a [`Coerced`] barrier node a call will later
+//! go through.
 //!
 //! What this layer does *not* do is evaluate anything: dispatch evaluates
 //! `m :| Sig`, `m :! Sig` and `m.f` through the doors here.
@@ -75,9 +75,9 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     /// and the view door share; the module is node `0`.
     ///
     /// A member that is itself a knot member carries its whole knot's weight, since a crossing
-    /// rebuilds that knot whole, and so does the content beside the node. Its content is what the module is — a body's code over what it
-    /// captures, or a view's operator and application over its source — never its members, which
-    /// that content determines.
+    /// rebuilds that knot whole; the content beside the node weighs in too. The content is what the
+    /// module is — a body's code over what it captures, or a view's operator and application over
+    /// its source — never its members, which that content determines.
     pub fn tie(
         writer: Writer<'cell>,
         ktype: KType,
@@ -139,9 +139,8 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
 
 /// A function member behind an opaque view's barrier: what one knot node points at.
 ///
-/// A call goes through the barrier — coercing its arguments inwards and its return outwards —
-/// before `underlying` runs; that is [modules](../../roadmap/rewrite/modules.md)' work, not this
-/// item's, which only gives the barrier somewhere to live.
+/// A call goes through the barrier before `underlying` runs: its arguments cross
+/// [`inward`](coerce::inward) and its return [`outward`](coerce::outward).
 pub struct Coerced<'graph, 'cell> {
     underlying: Knotted<'graph, 'cell>,
     ktype: DeclaredType<KType>,

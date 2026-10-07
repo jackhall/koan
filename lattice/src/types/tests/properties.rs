@@ -39,15 +39,16 @@ use crate::types::unify::{
     Collector, Interval, UnifyFailure, admits, intervals, most_determined_first, ties,
 };
 use crate::types::walk::Variance;
-use crate::types::walk::unary::{Visit, visit};
+use crate::types::walk::unary::{Visit, visit, visit_free_quantified};
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 use crate::types::{lattice, order};
 
 use super::generators::{
-    Groups, Vocabulary, World, arb_any, arb_any_with, arb_argument_pair, arb_arguments, arb_chain,
-    arb_concrete, arb_fits_chain, arb_function_type, arb_instance_chain, arb_ordered_pair,
-    arb_own_instance, arb_rigid, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
-    arb_signature_type, arb_wanted_instance,
+    Groups, Vocabulary, World, arb_any, arb_any_with, arb_argument_pair, arb_arguments,
+    arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain, arb_function_type,
+    arb_instance_chain, arb_opaque, arb_ordered_pair, arb_over_head_parameter, arb_own_instance,
+    arb_rigid, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature, arb_signature_type,
+    arb_wanted_instance,
 };
 
 thread_local! {
@@ -317,6 +318,23 @@ proptest! {
 proptest! {
     #![proptest_config(binary())]
 
+    /// The chains [`fits_is_transitive`] never draws: an opaque view's signature, a signature over
+    /// a head parameter bounded as its carrier's source was, and a signature over another bound or
+    /// a ground slot. A hidden bound read anywhere but a head's fit breaks the chain.
+    #[test]
+    fn fits_is_transitive_through_a_bounded_head_parameter(
+        (a, b, c) in arb_bounded_head_chain(world()),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let fits = |a: KType, b: KType| sig_fits(&types, scratch, a.raw(), b.raw()).is_ok();
+        prop_assert!(fits(a, b), "a view fits the signature its source fits");
+        if fits(b, c) {
+            prop_assert!(fits(a, c));
+        }
+    }
+
     /// The chains [`fits_is_transitive`] almost never draws: a binder, its instance at a least
     /// instance, and a type whose two positions take that instance apart.
     #[test]
@@ -547,6 +565,27 @@ proptest! {
 
 proptest! {
     #![proptest_config(binary())]
+
+    /// A type reads a head parameter exactly where substituting it changes the type: a binding of
+    /// a parameter it does not read leaves it whole, and one it reads moves it, read at a fresh
+    /// carrier, which no other member absorbs.
+    #[test]
+    fn a_type_mentions_a_head_parameter_where_substituting_it_moves_it(
+        (name, a) in arb_over_head_parameter(world(), 2),
+        b in concrete(),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let substituted =
+            |to: KType| substitute_parameters(&types, scratch, a, Members::from_pairs(scratch, [(name, to)]));
+        if types.mentions_parameter(scratch, world().declared(a), name) {
+            let fresh = types.carrier(name, KType::ANY, crate::types::ContentKey(u128::MAX));
+            prop_assert_ne!(substituted(fresh), a);
+        } else {
+            prop_assert_eq!(substituted(b), a);
+        }
+    }
 
     #[test]
     fn substitution_of_nothing_is_the_identity(a in one(), b in one()) {
@@ -854,6 +893,18 @@ proptest! {
     }
 
     #[test]
+    fn a_carrier_lies_under_any_alone(a in concrete(), carrier in arb_opaque(world())) {
+        let (a, carrier) = (a.raw(), carrier.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let holding = a == carrier
+            || a == Handle::ANY
+            || matches!(types.node(a), TypeNode::Union { members } if members.contains(&carrier));
+        prop_assert_eq!(order::is_subtype_of(&types, scratch, carrier, a), holding);
+    }
+
+    #[test]
     fn a_carried_variable_is_admitted_where_its_bound_is(a in one(), b in arb_rigid(world())) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
@@ -876,6 +927,41 @@ proptest! {
                 admits(&types, scratch, declared, b, Variance::Co, &mut collector).is_ok(),
                 "a position its bound fills refused the variable",
             );
+        }
+    }
+
+    /// A type over a group's variables lies under `Any` and above `Never` whatever they solve to,
+    /// so the unifier admits both extremes at every slot, a structural one included. Each variable
+    /// binds as a bare one given the extreme part by part would: `Never` where it pairs
+    /// covariantly, its bound where it pairs only contravariantly or not at all.
+    #[test]
+    fn a_solve_puts_every_type_under_any_and_over_never(
+        (a, _) in arb_argument_pair(world(), 3, BINDER),
+    ) {
+        let a = a.raw();
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let bounds = quantifier_bounds(&types, a);
+        for slot in shape_slots(a, &types) {
+            for (carried, variance) in [(Handle::NEVER, Variance::Co), (Handle::ANY, Variance::Contra)] {
+                let mut collector = Collector::<Handle>::new(scratch, bounds);
+                prop_assert!(
+                    admits(&types, scratch, slot, carried, variance, &mut collector).is_ok(),
+                    "a slot refused an extreme of the order",
+                );
+                let solution = collector.solve(&types);
+                prop_assert!(solution.is_ok());
+                let mut covariant = vec![false; bounds.len()];
+                visit_free_quantified(&types, scratch, slot, variance, &mut |index, context| {
+                    covariant[index] |= context.variance() == Variance::Co;
+                    Visit::Descend
+                });
+                for (index, solved) in solution.expect("asserted").iter().enumerate() {
+                    let expected = if covariant[index] { Handle::NEVER } else { bounds[index].raw() };
+                    prop_assert_eq!(*solved, expected, "a variable bound unlike a bare one");
+                }
+            }
         }
     }
 

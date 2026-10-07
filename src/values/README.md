@@ -119,30 +119,26 @@ nothing to keep in agreement.
 opaque view's barrier goes through
 ([members are born coerced](../knot/module/README.md#members-are-born-coerced)): a
 head parameter records no representation for `construction` to check a payload
-against, so what is checked instead is that the identity is a *per-application
-mint* — a `Parameter` carrying a nonce — and that the payload satisfies what the
-source binds that parameter to. (Out of date: the
-[module design](../../design/modules.md) keys a carrier on content.) It answers the mint as the
-identity, or a `SealRefused`: `NotAMint` for an identity that is no mint,
-`Misfit` for a payload the source's binding does not admit. `Tagged::seal` is
-the checked door over it, and it `peel`s, so a sealed member takes the mint as
-its one tagged layer rather than a second one. Sealing happens where a view is
-built, never where a koan program writes a construction.
+against, so what is checked instead is that the identity is a **carrier** — a
+`Parameter` keyed on content — and that the payload satisfies what the source
+binds that parameter to. It answers the carrier as the identity, or a
+`SealRefused`: `NotACarrier` for an identity that is no carrier, `Misfit` for a
+payload the source's binding does not admit. `Tagged::seal` is the checked door
+over it, and it `peel`s, so a sealed member takes the carrier as its one tagged
+layer rather than a second one. Sealing happens where a view is built, never
+where a koan program writes a construction; a value crossing a barrier inwards
+that is not sealed under the carrier is `NotSealed`.
 
-**A seal its bound reveals is read through.** A sealed value stays a `Tagged`
-wrapper — a scalar carries no type of its own, so the mint rides on the wrapper
-— and rendering keeps it. A reader that needs a representation reads through
-the mint layer exactly where the mint lies under the representation it reads,
-which is where the member's declared bound reveals it. [`unsealed`](admission.rs)
-is that one reading for equality and dict keys, under the payload's own kind —
-`Number` for a number, `LIST OF Any` for a list, `Code` for a quote, since every
-quote is one representation whatever its carried type: a 5 sealed behind a member
-bounded by `Number` equals 5, equals another view's sealed 5, and keys a dict as
-5, and a quote sealed behind a member bounded by any code kind is read through.
-Behind a member bounded by `Value`, or by `Number | Str`, the mint lies under
-no one kind, so the seal stays opaque to both. A reader reached through a slot
-typed `T` reads through a mint lying under `T` by the same rule. A seal takes
-one layer, so there is one layer to read through.
+**A seal is read through nowhere outside its view.** A sealed value stays a
+`Tagged` wrapper — a scalar carries no type of its own, so the carrier rides on
+the wrapper — and rendering keeps it. A carrier lies under `Any` alone
+([the order](../../lattice/src/types/relations.md#the-relations)),
+whatever bound the member declares: the bound decides which modules fit the
+signature, and nothing more. So no slot but one naming the carrier takes a
+sealed value, equality compares it by identity as it does any tagged value,
+and it keys no dict. A 5 sealed behind a member bounded by `Number` neither
+equals 5 nor passes a `Number` slot. Only the view's own functions, behind
+their barriers, see the payload.
 
 ## One lifetime
 
@@ -229,7 +225,7 @@ to any reader and prints `{x = 1}`, though its cells still hold `y`; a
 `LIST OF (LIST OF Any)` retype hands back each inner list as a `LIST OF Any`;
 and `(Point {x = 1, y = 2, z = 3})`, a `Point` over `{x :Number, y :Number}`,
 prints `Point({x = 1, y = 2})`. An identity with no representation, such as an
-opaque view's mint, hands its payload back at the payload's own type. A retype
+opaque view's carrier, hands its payload back at the payload's own type. A retype
 walks nothing, and a nested part obeys it all the same, so downstream dispatch
 sees the contract at every depth rather than the contents' incidental
 precision. An element is read at the type its container names, so a literal
@@ -390,9 +386,8 @@ lookup is a binary search and **entry order is key order**. A key is a string, a
 number or a bool behind a private representation, and every door that makes
 one refuses NaN and folds `-0` to `0`, so the key order agrees with IEEE
 equality on every key there is. The order is total: every bool, then every
-number in numeric order, then every string by bytes. A sealed scalar
-[its bound reveals](#what-a-value-is) keys as that scalar; any other value is
-refused, naming its own type. A
+number in numeric order, then every string by bytes. Any other value — a
+[sealed](#what-a-value-is) scalar included — is refused, naming its own type. A
 repeated key keeps its last occurrence. The sort and the de-duplication are
 staged in a `BumpVec` over the caller's scratch, and string keys are written
 into the dict's own region wherever they borrowed from.
@@ -406,11 +401,49 @@ binary search too, and two records compare order-blind. Rendering is the one
 place symbol order would show, so a record renders its fields in the order of
 their names' text.
 
+## Content digests
+
+A value's **content digest** ([digest.rs](digest.rs)) identifies it for the
+life of the loaded program by what it holds, never by where it sits: two values
+of equal content digest alike wherever they were built, and a copy keeps its
+digest. It is what a [carrier](../knot/module/README.md#the-view-door) is keyed
+on, per the [module design](../../design/modules.md#a-module-is-its-content).
+A digest is the low 128 bits of a BLAKE3 hash over one recipe: a domain tag,
+the value's own scalar payload, then its parts' digests.
+
+- A scalar digests from its payload: a number from its bits, a bool, `null`, a
+  string length-prefixed, a type value from its handle.
+- A list, dict, record or tagged value digests its kind, its carried type's
+  handle and its contents — a list its cells in order, a dict each key and cell
+  in key order, a record each field's name and cell in symbol order, so field
+  order is blind, and a tagged value its payload. A retype therefore changes
+  the digest.
+- A [knot member](../knot/README.md#what-a-knot-member-is) digests as its knot
+  beside its index there, the knot over each node's content in index order with
+  an edge to a sibling hashed as its index, so values that reach one another —
+  closures that call one another, a ring of containers — digest as the one knot
+  they are tied into.
+
+The digest covers the carried type and every cell, hidden ones included, so two
+values no reader can tell apart may digest apart. That over-distinction is
+sound: keying two equal things apart costs only a key.
+
+**A digest is computed on demand**, never stored on a value: only a view asks
+for one, so a value no view reaches never pays for it. A demand walks what the
+value reaches through one `Digests` memo, keyed by the address of the resident
+each part sits in, so a part shared many times over is digested once per
+demand. A module is the one value whose content is digested where it is born
+([birth](../knot/module/README.md#birth)), since it keeps no captures to digest
+later.
+
+The load computes the digest a literal lowers to without laying it down
+(`literal_digest`), which a property test holds equal to the lowered value's.
+
 ## Equality and rendering
 
 `Value::equals` is what `==` means over data. Numbers follow IEEE; a tagged
 value compares its identity before its payload, so it never equals its bare
-payload — save a seal its bound reveals, which is read through on either side;
+payload, a sealed one included;
 two type values are equal when they name the same handle; two quotes' code
 compares as syntax, part by part with spans ignored and marks included, then
 the values its `$` names and its supplied holes bind, name by name, under the
@@ -556,6 +589,11 @@ a dict whose string keys are written inside its key run's `fill`, read after
 the region it was copied from is released. The pinned and kept paths it would
 otherwise pair with are `cellgraph`'s own slate.
 
+The digest recipe is [tests/digest.rs](tests/digest.rs): equal content alike
+across cells, key order and field-order blindness, a retype and a hidden cell
+counting, a shared part digested once per demand, and a literal digesting as
+the value it lowers to.
+
 ## Open work
 
 - [A container literal's element type](../../roadmap/gradual-typing/container-literal-types.md)
@@ -567,6 +605,3 @@ otherwise pair with are `cellgraph`'s own slate.
   the lazy transformations that run koan code.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — the lattice walks over a value's carried type, as deep as the value.
-- [Module programs](../../roadmap/rewrite/modules.md) — a builtin native
-  reading a sealed builtin value its overload admitted through the seal, once
-  a view's members reach a program.

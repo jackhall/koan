@@ -80,7 +80,7 @@ pub fn tie<'graph, 'cell, 'x>(
             }
         }
     }
-    let nodes = Stager::nodes(activation, component, &roots, types, scratch, eager)?;
+    let nodes = Stager::nodes(activation, component, &roots, scratch, eager)?;
     let plan = KnotPlan::new(nodes.len() as u32);
     let mut bodies = BumpVec::with_capacity_in(nodes.len(), scratch);
     bodies.extend(nodes.iter().enumerate().map(|(index, node)| match node {
