@@ -29,25 +29,35 @@ in two fields, and `Statics.binders` is read only by a test.
   hand-written binary search remains in `shape.rs`.
 - A call site's narrowing and contributions are read through one
   `use_statics(site)` door, and no `debug_assert` on parallel lengths exists
-  because the lengths are one.
+  because no table runs parallel to the candidate lists.
 - `birth_site`, `annotation` and a `position_of(slot)` are field reads;
   `shape.slot(shape.slot_name(slot))` appears nowhere.
 - `enter_body` takes the builtin shape from its caller.
-- `narrow` holds one vector of `(argument, given)` pairs, and `dropped` reads
-  it.
-- `Native` is stored on the overload it belongs to, or a `const` assert pins
-  `ALL[i] as usize == i` and the two table lengths.
-- `Coerced` holds its substitution members directly.
-- One refusal field; `Statics.binders` is deleted or read in production.
+- `narrow` holds one vector of `Given` — each argument's static type beside
+  its written names — and `dropped` reads the candidate's copy of it.
+- A `const` assert pins `Native::ALL[i] as usize == i`, and another pins each
+  dispatched builtin shape's native count to its overload count.
+- `across` reads a barrier's two substitutions off its signature handles'
+  manifest members without copying them, and a view interns its two
+  substitution handles once.
+- One refusal field; `Statics.binders` and `BodyShape::binder_type` exist only
+  in test builds.
 
 **Directions.**
 
-- *Record versus `Keyed<K, V>` — decided.* A per-slot record for the dense
-  tables; a `Keyed` sorted-slice newtype only for a table that is genuinely
-  sparse over its key, if one remains.
-- *Where the record is filled — open.* `seal` fills every field at once, or the
-  builder fills a draft record as it walks and `seal` freezes it. Recommended:
-  the draft, since the builder holds each fact at the moment it is known.
+- *Record versus `Keyed` — decided.* A per-slot record for the dense tables; a
+  `Keyed` sorted-slice newtype, over entries that carry their own key, for each
+  table that is genuinely sparse over its key: every site-keyed one.
+- *Where the record is filled — decided.* The builder fills a draft record per
+  slot as it walks, and `seal` freezes it.
+- *A barrier's substitutions — decided.* The barrier keeps its two interned
+  signature handles and the call reads their manifest members as they are,
+  since `substitute_parameters` takes `Parametric` bindings. Holding the members
+  in the cell region still rebuilds a `Members` per call, and interning bare
+  member tables in the registry duplicates the signature node.
+- *Use statics — decided.* `Statics.uses` is one sparse site-keyed table of each
+  use's narrowing and contributions, like `named`; the candidate lists are
+  untouched.
 
 ## Dependencies
 
