@@ -173,6 +173,22 @@ pub(super) fn unnarrowed<R>(load: impl FnOnce() -> R) -> R {
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
 type Bound = DeclaredType<Interval>;
 
+/// `value` and `wanted` read through their bounds, where they meet at `Never`: no value of the
+/// static type `value` can ever satisfy `wanted`. `None` where one might. Each end is named
+/// through its bound, since a variable's name is its binder's.
+fn never_satisfies(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    value: Parametric,
+    wanted: Parametric,
+) -> Option<(KType, KType)> {
+    let (value, wanted) = (
+        bound_above(types, scratch, value),
+        bound_above(types, scratch, wanted),
+    );
+    (meet(types, scratch, value, wanted) == KType::NEVER).then_some((value, wanted))
+}
+
 /// Where a coordinate lands, its captures followed to their sources.
 #[derive(Clone, Copy)]
 enum Landing {
@@ -1076,14 +1092,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if admitted.is_err() {
                 // Only an argument meeting its slot at `Never` never fits; an imprecise one fixes
                 // nothing.
-                let (other, argument) = (
-                    bound_above(types, scratch, *other),
-                    bound_above(types, scratch, argument.upper),
-                );
                 return Err(
-                    match meet(types, scratch, other, argument) == KType::NEVER {
-                        true => Unsolved::Misfit,
-                        false => named(),
+                    match never_satisfies(types, scratch, argument.upper, *other) {
+                        Some(_) => Unsolved::Misfit,
+                        None => named(),
                     },
                 );
             }
@@ -1389,12 +1401,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if body == KType::NEVER.into() {
             return Ok(());
         }
-        // Compared, and named, through their bounds: a variable's name is its binder's.
-        let (body, returns) = (
-            bound_above(types, scratch, body),
-            bound_above(types, scratch, ret),
-        );
-        if meet(types, scratch, body, returns) == KType::NEVER {
+        if let Some((body, returns)) = never_satisfies(types, scratch, body, ret) {
             return Err(ShapeError::ReturnNeverSatisfied {
                 body,
                 returns,
@@ -1665,13 +1672,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(unknown());
         };
         let (types, scratch) = (self.types, self.scratch);
-        // Compared, and named, through their bounds: a variable's name is its binder's.
-        let (value, bounded) = (
-            bound_above(types, scratch, typed.upper),
-            bound_above(types, scratch, declared),
-        );
-        if meet(types, scratch, value, bounded) == KType::NEVER {
-            return Err((value, bounded));
+        if let Some(refused) = never_satisfies(types, scratch, typed.upper, declared) {
+            return Err(refused);
         }
         if fits(types, scratch, typed.upper, declared) {
             self.chain[level].settled.push(site);
@@ -1720,8 +1722,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(Interval::point(KType::NEVER.into()));
         }
         let (types, scratch) = (self.types, self.scratch);
-        let value = bound_above(types, scratch, typed.upper);
-        if meet(types, scratch, value, KType::ANY_CODE) == KType::NEVER {
+        if let Some((value, _)) =
+            never_satisfies(types, scratch, typed.upper, KType::ANY_CODE.into())
+        {
             return Err(ShapeError::NotCode {
                 value,
                 at: node.source,
@@ -1734,8 +1737,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if let Some(code) = self.traced(level, &operand.value)
             && code != KType::NEVER
         {
-            let returns = bound_above(types, scratch, declared);
-            if meet(types, scratch, code, returns) == KType::NEVER {
+            if let Some((code, returns)) = never_satisfies(types, scratch, code.into(), declared) {
                 return Err(ShapeError::EvalNeverSatisfied {
                     code,
                     returns,
