@@ -14,7 +14,8 @@
 //!   for — mask validity, over the whole reach table rather than one stored continuation;
 //! - the relocation map and the lineages agree in both directions, and every relocated key names
 //!   an entry that exists — so a dormant carrier forwarded through any number of merges still
-//!   redeems to the value it was kept as, which the redeem verb reads back and checks;
+//!   redeems to the value it was kept as, which the redeem verb reads back and checks — and a
+//!   departure that kept nothing but carries tree tombstones forwards them to an empty block;
 //! - no hold set names its own owner, and every present sealed cell has a holder — which together
 //!   make a sealed cell that survives a wound-down run a ring by arithmetic, with no ring walk in
 //!   the loop;
@@ -381,8 +382,19 @@ fn check_invariants(
                     "slot {slot} answers for {handle:?} without carrying it on its chain"
                 );
                 assert!(
-                    first_index < cell.reaches.len(),
+                    first_index <= cell.reaches.len(),
                     "{handle:?} is relocated past the end of slot {slot}'s reach table"
+                );
+                // An empty block is legal only for a departure that kept nothing and is relocated
+                // solely to forward the tree tombstones that spliced into its bundle.
+                assert!(
+                    first_index < cell.reaches.len()
+                        || graph
+                            .cells
+                            .departed_tombstones
+                            .iter()
+                            .any(|(named, _)| *named == handle),
+                    "{handle:?} is relocated to an empty block with no tree tombstone to forward"
                 );
             }
             SlabForward::Sealed(id) => {
@@ -1094,6 +1106,44 @@ proptest! {
     ) {
         run(&verbs, alternating());
     }
+}
+
+/// A root that kept nothing but took a tree tombstone, absorbed into its holder, forwards the
+/// tombstone through an empty reach-table block — and the tree key still redeems through it. The
+/// shrunk proptest case that first showed the relocation check assuming every block is non-empty.
+#[test]
+fn a_tombstone_only_departure_forwards_through_an_empty_block() {
+    let verbs = [
+        Verb::CreateTree {
+            parent: 0,
+            under_tree: false,
+        },
+        Verb::PlaceFromTree {
+            producer: 0,
+            consumer: 0,
+            into_tree: false,
+        },
+        Verb::Create,
+        Verb::Continue { cell: 1, over: 0 },
+        Verb::CreateTree {
+            parent: 0,
+            under_tree: false,
+        },
+        Verb::ReleaseTree { cell: 1 },
+        Verb::Release {
+            cell: 0,
+            refuse: false,
+        },
+        Verb::CreateTree {
+            parent: 5,
+            under_tree: false,
+        },
+        Verb::KeepTree { cell: 0 },
+        // The kept tree cell disposes into slot 0, whose holder slot 1 then absorbs it.
+        Verb::ReleaseTree { cell: 3 },
+        Verb::RedeemInTree { cell: 2, index: 0 },
+    ];
+    run(&verbs, alternating());
 }
 
 /// The generated corpus reaches every locality merge, rather than only being able to.
