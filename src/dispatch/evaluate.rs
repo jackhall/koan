@@ -51,11 +51,11 @@ use crate::scope::{
     BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site, Static, StaticType,
 };
 use crate::symbols::BinderSymbol;
-#[cfg(debug_assertions)]
-use crate::type_lattice::bound_above;
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, Verdict, satisfied_by, substitute_levels,
 };
+#[cfg(debug_assertions)]
+use crate::type_lattice::{Side, bound_above, fits, read_through};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
@@ -781,7 +781,9 @@ fn returns_within(
     }
 }
 
-/// Check that `value`, unless it is an error value, carries a type within its node's static type.
+/// Check that `value`, unless it is an error value, carries a type within its node's static type:
+/// under its upper end read above its variables, and over its lower end read below them, as a
+/// candidate's judgement reads an argument's.
 #[cfg(debug_assertions)]
 fn carried_under_static<'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
@@ -807,16 +809,20 @@ fn carried_under_static<'graph, 'here>(
     let types = at.program.types();
     let scratch = Bump::new();
     let carried = value.ktype();
+    let lower = read_through(
+        types,
+        &scratch,
+        expected.lower,
+        Side::Below,
+        &mut |variable| Some(variable.interval().into()),
+    );
     debug_assert!(
         satisfied_by(
             types,
             &scratch,
             bound_above(types, &scratch, expected.upper),
             carried
-        ) && (types
-            .concrete(expected.lower)
-            .is_none_or(|lower| types.holds_carrier(lower))
-            || satisfied_by(types, &scratch, carried, expected.lower)),
+        ) && fits(types, &scratch, lower, carried),
         "the carried type lies within the load-time static type"
     );
 }

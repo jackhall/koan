@@ -15,6 +15,7 @@ mod narrowing;
 mod programs;
 mod quotes;
 mod rankings;
+mod retypes;
 mod rules;
 mod selection;
 mod spellings;

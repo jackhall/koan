@@ -22,7 +22,7 @@ use crate::values::record_type;
 use super::super::builtins::Native;
 use super::super::rules::{Given, typed};
 use super::ascription::{WHICH, ends};
-use super::generate::{Desc, NAMES, chain};
+use super::generate::{Desc, NAMES, RETYPED_ONLY, chain};
 use super::run;
 use super::statics::{body, loaded};
 
@@ -91,6 +91,9 @@ impl World<'_, '_> {
                 record_type(self.types, self.scratch, distinct.into_iter())
             }
             Desc::Union(a, b) => self.types.union_of(self.scratch, &[intern(a), intern(b)]),
+            Desc::Dict(_) | Desc::Boxed | Desc::Wrapped(_) | Desc::Maybe | Desc::MaybeSome => {
+                unreachable!("{RETYPED_ONLY}")
+            }
         }
     }
 

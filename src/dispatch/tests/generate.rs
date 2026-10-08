@@ -10,12 +10,16 @@
 //! [`narrowing`](super::narrowing) runs [`dispatched`] programs, a keyworded use over drawn
 //! registrations, narrowed and unnarrowed; [`spellings`](super::spellings) runs [`spelled_calls`],
 //! one registration called by keyword and by name; [`lexical`](super::lexical) runs [`lexical`]
-//! programs, a site naming a quantified variable, with and without the contexts drawn around it.
+//! programs, a site naming a quantified variable, with and without the contexts drawn around it;
+//! [`retypes`](super::retypes) retypes a value drawn under a [`retyped_type`] at each retype site.
 
 use proptest::prelude::*;
 
 /// What the load's refusal of a registration whose union ties says.
 pub(super) const TIED: &str = "tie in one union";
+
+/// Why a law other than the retype law never meets a dict or a nominal type.
+pub(super) const RETYPED_ONLY: &str = "only the retype law draws a dict or nominal type";
 
 /// The field names a drawn record or name list picks from.
 pub(super) const NAMES: [&str; 3] = ["x", "y", "z"];
@@ -38,7 +42,23 @@ pub(super) enum Desc {
     List(Box<Desc>),
     Record(Vec<(u8, Desc)>),
     Union(Box<Desc>, Box<Desc>),
+    /// A dict keyed by `Str`. This and the nominal types below are drawn by [`retyped_type`] alone,
+    /// over the types [`NOMINALS`] declares.
+    Dict(Box<Desc>),
+    /// The newtype `Boxed`, over `Number`.
+    Boxed,
+    /// `Wrap`'s application to a type.
+    Wrapped(Box<Desc>),
+    /// The union `Maybe`.
+    Maybe,
+    /// `Maybe`'s variant `Some`.
+    MaybeSome,
 }
+
+/// The nominal types [`retyped_type`] draws from, declared ahead of a program that names them.
+pub(super) const NOMINALS: &str = "NEWTYPE Boxed = Number\n\
+                                   NEWTYPE (Type AS Wrap)\n\
+                                   UNION Maybe = #{Some: Number, None: Null}";
 
 pub(super) fn desc() -> BoxedStrategy<Desc> {
     let leaf = prop_oneof![
@@ -169,6 +189,34 @@ fn inhabited_type() -> BoxedStrategy<Desc> {
     .boxed()
 }
 
+/// A closed, inhabited type as [`inhabited_type`] draws one, and also a dict, a nominal type or a
+/// family's application: every kind of type a retype re-stamps a value at.
+pub(super) fn retyped_type() -> BoxedStrategy<Desc> {
+    let leaf = prop_oneof![
+        Just(Desc::Number),
+        Just(Desc::Str),
+        Just(Desc::Null),
+        Just(Desc::Any),
+        Just(Desc::Boxed),
+        Just(Desc::Maybe),
+        Just(Desc::MaybeSome),
+    ];
+    leaf.prop_recursive(3, 12, 3, |inner| {
+        prop_oneof![
+            1 => typed(0).prop_map(|each| Desc::List(Box::new(each))),
+            1 => inner.clone().prop_map(|each| Desc::List(Box::new(each))),
+            2 => prop::collection::vec((0..3u8, inner.clone()), 0..3).prop_map(Desc::Record),
+            1 => inner.clone().prop_map(|each| Desc::Dict(Box::new(each))),
+            1 => inner.clone().prop_map(|each| Desc::Wrapped(Box::new(each))),
+            1 => (inner, typed(0), any::<bool>()).prop_map(|(inhabited, other, first)| {
+                let (a, b) = if first { (inhabited, other) } else { (other, inhabited) };
+                Desc::Union(Box::new(a), Box::new(b))
+            }),
+        ]
+    })
+    .boxed()
+}
+
 /// A record's fields as a type keeps them: the first of each name.
 fn kept(fields: &[(u8, Desc)]) -> impl Iterator<Item = &(u8, Desc)> {
     let mut seen = [false; NAMES.len()];
@@ -195,11 +243,16 @@ pub(super) fn spelled(desc: &Desc, variables: &[&str]) -> String {
             format!(":{{{}}}", fields.join(", "))
         }
         Desc::Union(a, b) => format!("({} | {})", spelled(a, variables), spelled(b, variables)),
+        Desc::Dict(value) => format!(":(MAP Str -> {})", spelled(value, variables)),
+        Desc::Boxed => "Boxed".to_string(),
+        Desc::Wrapped(inner) => format!(":({} AS Wrap)", spelled(inner, variables)),
+        Desc::Maybe => "Maybe".to_string(),
+        Desc::MaybeSome => "Maybe.Some".to_string(),
     }
 }
 
 /// `desc` as written after a name it types: `:Number`, `:{x :Str}`.
-fn ascribed(desc: &Desc, variables: &[&str]) -> String {
+pub(super) fn ascribed(desc: &Desc, variables: &[&str]) -> String {
     let spelled = spelled(desc, variables);
     match spelled.starts_with(':') {
         true => spelled,
@@ -214,6 +267,8 @@ pub(super) fn inhabited(desc: &Desc) -> bool {
         Desc::Number | Desc::Str | Desc::Null | Desc::Any | Desc::List(_) => true,
         Desc::Record(fields) => kept(fields).all(|(_, field)| inhabited(field)),
         Desc::Union(a, b) => inhabited(a) || inhabited(b),
+        Desc::Dict(value) | Desc::Wrapped(value) => inhabited(value),
+        Desc::Boxed | Desc::Maybe | Desc::MaybeSome => true,
         Desc::Declared | Desc::Variable(_) => unreachable!("an inhabited type is closed"),
     }
 }
@@ -260,6 +315,23 @@ pub(super) fn value_under(desc: &Desc) -> BoxedStrategy<String> {
             (true, false) => value_under(a),
             (false, _) => value_under(b),
         },
+        // Koan spells no empty dict, so every drawn dict holds an entry.
+        Desc::Dict(value) => prop_oneof![
+            value_under(value).prop_map(|v| format!("{{\"a\": {v}}}")),
+            (value_under(value), value_under(value))
+                .prop_map(|(v, w)| format!("{{\"a\": {v}, \"b\": {w}}}")),
+        ]
+        .boxed(),
+        Desc::Boxed => Just("(Boxed 1)".to_string()).boxed(),
+        Desc::Wrapped(inner) => value_under(inner)
+            .prop_map(|value| format!("(Wrap ({value}))"))
+            .boxed(),
+        Desc::Maybe => prop_oneof![
+            Just("(Maybe.Some 1)".to_string()),
+            Just("(Maybe.None null)".to_string()),
+        ]
+        .boxed(),
+        Desc::MaybeSome => Just("(Maybe.Some 1)".to_string()).boxed(),
         Desc::Never | Desc::Declared | Desc::Variable(_) => {
             unreachable!("a value lies under a closed, inhabited type")
         }
@@ -380,6 +452,9 @@ fn untie(desc: &mut Desc) {
         }
         Desc::List(element) => untie(element),
         Desc::Record(fields) => fields.iter_mut().for_each(|(_, field)| untie(field)),
+        Desc::Dict(_) | Desc::Boxed | Desc::Wrapped(_) | Desc::Maybe | Desc::MaybeSome => {
+            unreachable!("{RETYPED_ONLY}")
+        }
         _ => {}
     }
 }
@@ -391,6 +466,9 @@ fn names(desc: &Desc, variable: u8) -> bool {
         Desc::List(element) => names(element, variable),
         Desc::Record(fields) => kept(fields).any(|(_, field)| names(field, variable)),
         Desc::Union(a, b) => names(a, variable) || names(b, variable),
+        Desc::Dict(_) | Desc::Boxed | Desc::Wrapped(_) | Desc::Maybe | Desc::MaybeSome => {
+            unreachable!("{RETYPED_ONLY}")
+        }
         _ => false,
     }
 }
@@ -402,6 +480,9 @@ fn place(slot: &mut Desc, variable: u8, leaf: usize) {
         let leaf = match &*desc {
             Desc::Record(fields) => fields.is_empty(),
             Desc::Variable(_) | Desc::List(_) | Desc::Union(..) => false,
+            Desc::Dict(_) | Desc::Boxed | Desc::Wrapped(_) | Desc::Maybe | Desc::MaybeSome => {
+                unreachable!("{RETYPED_ONLY}")
+            }
             _ => true,
         };
         if leaf {
