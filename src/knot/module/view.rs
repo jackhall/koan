@@ -16,14 +16,14 @@
 //! [coerced](super::coerce) to the carriers. A pinned parameter keeps its pin either way.
 //!
 //! A view carries a keyworded member too: past its named members, each overload the source offers
-//! at the member's key that the member read under the source's bindings admits, behind a barrier
-//! where the view reads the member otherwise.
+//! at the member's key that the member read under the source's bindings admits, [coerced](super::coerce::coerce)
+//! as any member is — behind a barrier where the view reads the member otherwise.
 //!
 //! No carrier is made at a *nested* boundary. A slot declared at an application whose pins name
 //! the outer signature's parameters is re-viewed against it read under the outer view's bindings,
 //! so the nested view's identities are the outer carriers, arriving through the declared type
-//! rather than being made again. [`build`] is the one body both the outer ascription and the nested case
-//! go through.
+//! rather than being made again. [`fitted`] and [`build`] are the one fit and the one body both
+//! the outer ascription and the nested case go through.
 
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
@@ -35,7 +35,7 @@ use crate::type_lattice::{
 use crate::values::{TypeValue, Value};
 
 use super::coerce::{Coercion, CoercionRefused, coerce};
-use super::{Coerced, Module, ModuleContent, Operator, layout};
+use super::{Module, ModuleContent, Operator, layout};
 
 /// Which operator is ascribing: `:!` keeps the source's types, `:|` hides them behind carriers. The
 /// two of the three [`Operator`]s a program writes; the third is a nested re-view's.
@@ -114,7 +114,7 @@ pub fn transparent_view_type(
 /// to under *fits*, and the application's pins. Refused where `signature` names no one application
 /// of a signature, or `held` does not fit it.
 #[allow(clippy::type_complexity)]
-fn fitted<'run, 'x>(
+pub(super) fn fitted<'run, 'x>(
     held: KType,
     signature: KType,
     types: &TypeRegistry<'run>,
@@ -155,7 +155,7 @@ fn fitted<'run, 'x>(
 /// What *fits* solved a module's own signature against an application to. A module's
 /// self-signature declares no head parameter, so no offered stand-in reaches the solution, and
 /// each parameter is solved to a concrete type.
-pub(super) fn solved<'x>(
+fn solved<'x>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
     solution: Members<'_, TypeSymbol, Parametric>,
@@ -225,7 +225,7 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     // Then, per keyworded member, each overload the source offers at its key that the member
     // read under `from` admits — behind a barrier where the view reads the member otherwise.
     for declared in sig.keyworded.iter().copied() {
-        let (src, dst) = (cx.source_side(declared), cx.view_side(declared));
+        let src = cx.source_side(declared);
         for function in
             layout::functions_at(source, layout::key_of(declared, types), types, scratch)
         {
@@ -233,23 +233,10 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
             if !satisfied_by(types, scratch, src, registered) {
                 continue;
             }
-            members.push(match src == dst {
-                true => function,
-                false => {
-                    let Value::Knotted(function) = function else {
-                        unreachable!("a registration member is a knot member")
-                    };
-                    let barrier = Coerced::tie(
-                        writer,
-                        function,
-                        dst,
-                        declared,
-                        cx.sig_of(from),
-                        cx.sig_of(to),
-                    );
-                    Value::Knotted(Knotted::of(barrier, 0))
-                }
-            });
+            members.push(
+                coerce(&cx, function, declared)
+                    .expect("a registration member is a function, which a barrier takes"),
+            );
         }
     }
     Ok(Knotted::of(Module::tie(writer, view, &members, content), 0))

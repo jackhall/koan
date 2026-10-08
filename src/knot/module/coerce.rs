@@ -26,8 +26,7 @@ use crate::scope::{IMPLICIT, ParameterBinding};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Members, Parametric, Record as TypeRecord,
-    SchemaDraft, TypeNode, TypeRegistry, display_name, fits_application, satisfied_by,
-    substitute_parameters,
+    SchemaDraft, TypeNode, TypeRegistry, display_name, satisfied_by, substitute_parameters,
 };
 use crate::values::{Dict, List, Record, SealRefused, Tagged, Value, satisfies};
 
@@ -155,20 +154,41 @@ impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
     }
 }
 
+/// `declared` read as a type of a value: a type where it holds no variable, a scheme as it is.
+fn concrete(
+    types: &TypeRegistry<'_>,
+    declared: DeclaredType<Parametric>,
+) -> Option<DeclaredType<KType>> {
+    match declared {
+        DeclaredType::Type(kt) => types.concrete(kt).map(DeclaredType::Type),
+        DeclaredType::Scheme(scheme) => Some(DeclaredType::Scheme(scheme)),
+    }
+}
+
 /// `value`, which the source module holds at `declared` read under `cx.from`, rebuilt at
-/// `declared` read under `cx.to`.
+/// `declared` read under `cx.to`: carried as it is where both sides read it alike — a slot over the
+/// member's own `FOR ALL` group among them — and refused where they differ over such a group.
 pub fn coerce<'graph, 'cell>(
     cx: &Coercion<'_, 'cell, '_, '_>,
     value: KValue<'graph, 'cell>,
     declared: DeclaredType<Parametric>,
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
-    let (src, dst) = (cx.source_side(declared), cx.view_side(declared));
+    let (types, scratch) = (cx.types, cx.scratch);
+    let (src, dst) = (
+        substitute_parameters(types, scratch, declared, cx.from),
+        substitute_parameters(types, scratch, declared, cx.to),
+    );
     // The two sides agree, so the member already has the type the view declares: the whole of
     // `:!`, and every slot of `:|` that names no unpinned parameter.
     if src == dst {
         return Ok(value);
     }
     let unsupported = CoercionRefused::Unsupported(declared);
+    // A side still naming a variable — a slot over a member's own `FOR ALL` group — has no type
+    // to rebuild the value at.
+    let (Some(src), Some(dst)) = (concrete(types, src), concrete(types, dst)) else {
+        return Err(unsupported);
+    };
     let node = match declared {
         DeclaredType::Type(declared) => cx.types.node(declared),
         DeclaredType::Scheme(scheme) => cx.types.scheme_node(scheme),
@@ -281,7 +301,7 @@ pub fn coerce<'graph, 'cell>(
             let member = hiding.or(plain).ok_or(CoercionRefused::NoUnionMember)?;
             coerce(cx, value, member)
         }
-        TypeNode::KFunction { .. } => {
+        TypeNode::KFunction { .. } | TypeNode::ExpressionShape { .. } => {
             let Value::Knotted(member) = value else {
                 return Err(CoercionRefused::NotAFunction);
             };
@@ -303,7 +323,7 @@ pub fn coerce<'graph, 'cell>(
         // The nested signature's own unpinned parameters keep what *fits* solves them to either
         // side. An application naming none of the enclosing parameters never reaches here — its
         // two sides agree and the comparison above carried the module already.
-        TypeNode::SignatureApply { signature, .. } => {
+        TypeNode::SignatureApply { .. } => {
             let Value::Knotted(member) = value else {
                 return Err(CoercionRefused::NotAModule);
             };
@@ -313,23 +333,11 @@ pub fn coerce<'graph, 'cell>(
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
-            let (
-                TypeNode::SignatureApply {
-                    pins: from_pins, ..
-                },
-                TypeNode::SignatureApply { pins: to_pins, .. },
-            ) = (cx.types.node(src), cx.types.node(dst))
-            else {
+            let TypeNode::SignatureApply { pins: to_pins, .. } = cx.types.node(dst) else {
                 return Err(unsupported);
             };
-            let Some(schema) = crate::elaborate::schema_of(signature, cx.types) else {
-                return Err(unsupported);
-            };
-            let mut pins = BumpVec::with_capacity_in(from_pins.len(), cx.scratch);
-            pins.extend(from_pins.iter());
-            let from = fits_application(cx.types, cx.scratch, module.ktype(), signature, &pins)
+            let (schema, from, _) = view::fitted(module.ktype(), src, cx.types, cx.scratch)
                 .map_err(|_| CoercionRefused::Nested)?;
-            let from = view::solved(cx.types, cx.scratch, from);
             let to = Members::from_pairs(
                 cx.scratch,
                 from.iter().map(|(name, solved)| {
@@ -384,26 +392,6 @@ fn across<'a, 'cell, 'run, 'x>(
     }
 }
 
-/// `value` at the type `declared`, a slot of a barrier's declared type, read under `cx`: carried
-/// as it is where both sides read it alike — a slot over the member's own `FOR ALL` group among
-/// them — and coerced otherwise.
-fn crossed<'graph, 'cell>(
-    cx: &Coercion<'_, 'cell, '_, '_>,
-    value: KValue<'graph, 'cell>,
-    declared: Parametric,
-) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
-    let (types, scratch) = (cx.types, cx.scratch);
-    let src = substitute_parameters(types, scratch, declared, cx.from);
-    let dst = substitute_parameters(types, scratch, declared, cx.to);
-    if src == dst {
-        return Ok(value);
-    }
-    if types.concrete(src).is_none() || types.concrete(dst).is_none() {
-        return Err(CoercionRefused::Unsupported(declared.into()));
-    }
-    coerce(cx, value, declared.into())
-}
-
 /// `arguments`, the record a call through the barrier `barrier` was handed at the view's types,
 /// coerced inwards to the types the function behind it takes: a function member's parameters by
 /// name, or a keyworded member's slots under the names `parameters` binds them to, packed into
@@ -429,12 +417,12 @@ pub fn inward<'graph, 'cell>(
     match (declared_of(types, scratch, barrier.declared()), parameters) {
         (Declared::Function { params, .. }, _) => {
             for (name, declared) in params.iter() {
-                fields.push((name, crossed(&cx, field(name)?, declared)?));
+                fields.push((name, coerce(&cx, field(name)?, declared.into())?));
             }
         }
         (Declared::Shape { slots, .. }, ParameterBinding::Named(names)) => {
             for (name, declared) in names.iter().zip(slots.iter()) {
-                fields.push((*name, crossed(&cx, field(*name)?, *declared)?));
+                fields.push((*name, coerce(&cx, field(*name)?, (*declared).into())?));
             }
         }
         (Declared::Shape { slots, .. }, ParameterBinding::Operands) => {
@@ -444,7 +432,7 @@ pub fn inward<'graph, 'cell>(
             let mut operands = BumpVec::with_capacity_in(slots.len(), scratch);
             for (at, declared) in slots.iter().enumerate() {
                 let operand = surface.child(at, types, scratch).value();
-                operands.push(crossed(&cx, operand, *declared)?);
+                operands.push(coerce(&cx, operand, (*declared).into())?);
             }
             let list = List::new(writer, operands.iter().copied(), types, scratch);
             fields.push((name, Value::List(list)));
@@ -466,7 +454,7 @@ pub fn outward<'graph, 'cell>(
     let ret = match declared_of(types, scratch, barrier.declared()) {
         Declared::Function { ret, .. } | Declared::Shape { ret, .. } => ret,
     };
-    crossed(&cx, value, ret)
+    coerce(&cx, value, ret.into())
 }
 
 /// The slot types and return of a barrier's declared type: a function type's parameters by name,
