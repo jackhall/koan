@@ -59,7 +59,7 @@ pub use equality::Incomparable;
 pub use link::Link;
 pub use list::List;
 pub use record::Record;
-pub use surface::{Seen, Surface};
+pub use surface::{Seen, Surface, retyped_to, under, unknown};
 pub use tagged::Tagged;
 pub use type_value::TypeValue;
 pub use weight::Weight;

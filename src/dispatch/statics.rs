@@ -113,7 +113,10 @@ use crate::type_lattice::{
     judge_by_class, meet, quantifier_bounds, read_through, scheme_bound_above, scheme_return,
     scheme_slots, select_by_class, shape_return, shape_slots, solving_slots,
 };
-use crate::values::{ConstructionRefused, Value, construction, dict_type, list_type, record_type};
+use crate::values::{
+    ConstructionRefused, Value, construction, dict_type, list_type, record_type, retyped_to, under,
+    unknown,
+};
 
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
@@ -144,27 +147,6 @@ pub(super) fn statics<'graph>(
     visited
 }
 
-/// A static type under `upper` and bounded below by nothing — exact where `upper` is `Number`,
-/// `Str`, `Bool` or `Null`, since no value carries a type strictly under one.
-pub(super) fn under(upper: Parametric) -> Interval {
-    let leaf = [KType::NUMBER, KType::STR, KType::BOOL, KType::NULL]
-        .into_iter()
-        .any(|leaf| upper == leaf.into());
-    if leaf {
-        Interval::point(upper)
-    } else {
-        Interval {
-            lower: KType::NEVER.into(),
-            upper,
-        }
-    }
-}
-
-/// `[Never, Any]`: what the load cannot bound.
-pub(super) fn unknown() -> Interval {
-    under(KType::ANY.into())
-}
-
 #[cfg(test)]
 thread_local! {
     /// Whether the pass leaves every keyworded use whole and refuses none: what the narrowing law
@@ -190,21 +172,6 @@ pub(super) fn unnarrowed<R>(load: impl FnOnce() -> R) -> R {
 
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
 type Bound = DeclaredType<Interval>;
-
-/// The static type of a value retyped to `declared` (an ascription's, a parameter's, a frame's
-/// return): exactly `declared` where every value satisfying it is retyped to it — a list, dict or
-/// record type, a family or its application, a newtype or a union's variant — and at most
-/// `declared` otherwise; a union keeps each variant's own type.
-pub(super) fn retyped_to(types: &TypeRegistry<'_>, declared: Parametric) -> Interval {
-    match types.node(declared) {
-        TypeNode::List { .. }
-        | TypeNode::Dict { .. }
-        | TypeNode::Record { .. }
-        | TypeNode::ConstructorApply { .. }
-        | TypeNode::SetMember { .. } => Interval::point(declared),
-        _ => under(declared),
-    }
-}
 
 /// Where a coordinate lands, its captures followed to their sources.
 #[derive(Clone, Copy)]

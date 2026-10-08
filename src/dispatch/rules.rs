@@ -24,10 +24,9 @@ use crate::type_lattice::{
     TypeRegistry, bound_above, fits, member, read_through, shape_return, shape_slots,
     substitute_parameters,
 };
-use crate::values::record_type;
+use crate::values::{record_type, retyped_to, under, unknown};
 
 use super::builtins::Native;
-use super::statics::{retyped_to, under, unknown};
 
 /// What a rule reads of one slot of a call.
 #[derive(Clone, Copy)]
