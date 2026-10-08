@@ -198,7 +198,7 @@ src/
 │   ├── link.rs           Link — a value word or an edge into the holder's own knot: a data node's cell, a closure binding
 │   ├── circular.rs       Circular / Resolved / CodeView — a knot's data node over link cells, what a member holds as `values` reads it, and a data node's run listing and rebuild for its knot's copy
 │   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule, and representation, the type a tagged payload is read at
-│   ├── surface.rs        Seen / Surface — the one door every read of a container or tagged value goes through: a value beside the type a read sees it at, opened to show only what that type names; Value::retyped
+│   ├── surface.rs        Seen / Surface — the one door every read of a container or tagged value goes through: a value beside the type a read sees it at, opened to show only what that type names; Value::retyped, and the load's static type of a retyped value
 │   ├── crossing.rs       cross / cross_here over the placement doors, cross_view and copy_severed — the doors a copy comes through, the second for a value inside a copied operand of another family — the deep copy, and the crossing verdict
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
 │   ├── equality.rs       Value::equals — structural equality, each side at the type it is seen at, containers gated on related seen types, a bisimulation over knot members — a function by its identity and captures, a quote by its syntax and bindings — Incomparable when a module or a barrier is reached
@@ -210,6 +210,7 @@ src/
 │   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names, Union.Tag
 │   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the expression shape its body sits in, with a registration's ranked shape and parameter binding
 │   ├── channel.rs        type_channel — the load pass: every type binder, type expression, callable and registration — a USING block's surfaced key included — typed where the program loads, closed, rigid or unknown, into the shape's write-once cells
+│   ├── members.rs        a signature's members: layout order, and the one lookup of where a member sits and what it is declared at, shared by the type reader, dispatch and the module layout
 │   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the load pass's reader
 ├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable, and the field a USING source names
 ├── knot/
@@ -220,9 +221,9 @@ src/
 │   ├── module.rs         Module — a module node and everything that reads one by name
 │   ├── module/
 │   │   ├── birth.rs          a module binder's activation and its tie once the body has bound every slot
-│   │   ├── view.rs           the view door: what m :! Sig and m :| Sig build, its carriers keyed on content
+│   │   ├── view.rs           the view door: which ascriptions are views, what m :! Sig and m :| Sig build, its carriers keyed on content
 │   │   ├── coerce.rs         members born coerced across an opaque view's barrier, and a call's crossing of one inwards and outwards
-│   │   ├── layout.rs         layout order: where a member sits in a module, and the functions a module offers at a key
+│   │   ├── layout.rs         the readers of a module value: a named member at its layout index, the registrations, and the functions a module offers at a key
 │   │   └── surface.rs        entering a USING … SCOPE block: each surfaced name bound to its member, each surfaced key to the module's functions there
 │   ├── tie.rs            tie — a component of value binders staged into scratch, memos derived and constructions checked, then laid down as one knot
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
@@ -234,7 +235,7 @@ src/
 │   └── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
 ├── program.rs        pub mod program — a loaded program as one owning value and the body runner that performs it, over elaborate, knot, memory, parse, scheduler, scope, symbols, type_lattice and values
 ├── program/
-│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table, evaluator and shape check the layer above supplies; Output, Outcome, Contract, error values; Evaluated, LoadError
+│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table, evaluator and shape check the layer above supplies; Output, Outcome, Contract and whether a callee's return keeps it, error values; Evaluated, LoadError
 │   ├── bundle.rs         KBundle — koan's step bundle: the covariant KBirth (Program / Call / Eval / Evaluate / Block / Inspect), the parked KState, and the sites a parked runner keeps in scratch
 │   ├── body.rs           run — the body runner, the one step that performs a body's units at the top level, in every frame and in a block, ending a frame under its contract or tailing its last statement; call and placement_of, the derived placement bit; block; eval and CodeRefused, the door that runs a quote's code
 │   └── substrate.rs      CellSubstrate — program storage, the registry's bump and the interner as self_cell's owner, and Running — the graph, its root, the registry and the Program record at 'graph, with run and inspect, reached through a closure per call
@@ -242,9 +243,9 @@ src/
 └── dispatch/
     ├── builtins.rs       the builtin table — the lattice's types, Error and every overload as a builtin node — and the natives the overloads run
     ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
-    ├── select.rs         admission and selection over a candidate list, a keyworded call's argument record, and whether a call keeps a contract
+    ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — and a keyworded call's argument record
     ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
-    ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription and EVAL checks
+    ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription, view and EVAL checks
     └── errors.rs         the messages of the error values dispatch raises
 ```
 

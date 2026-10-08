@@ -46,7 +46,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [A compact type node table](rewrite/compact-type-node-table.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Families as parameters](rewrite/families-as-parameters.md)
-- [One judgment, one function](rewrite/one-judgment-one-function.md)
 - [Path types](rewrite/path-types.md)
 - [A record per slot](rewrite/per-slot-records.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)

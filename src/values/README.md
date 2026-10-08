@@ -208,7 +208,12 @@ the members of its own kind that it lies under — a list, dict or record node
 for a container, a node naming its constructor for a tagged value — and keeps
 its own type where there is none, so a list ascribed `Any` stays as precise as
 it was. The target depends on the value and the type alone, never on member
-order. A plain value takes the target as its handle over the same shared runs.
+order. Which types re-stamp a value at themselves — a list, dict or record type
+for a container of that kind, a nominal type or a family's application for a
+tagged value under its constructor — is one predicate in
+[surface.rs](surface.rs), and the load's static types of a retyped value
+(`retyped_to`) and of one at most a type (`under`, `unknown`) live beside it and
+read it, so the load calls a retype exact exactly where the run makes it so. A plain value takes the target as its handle over the same shared runs.
 A knot's data node, whose memo its knot cannot restamp, is laid down as a plain
 value of its kind over its cells, each edge resolved to the sibling it names
 and a dict's keys or a record's names shared: O(width) per retype, and the

@@ -317,7 +317,10 @@ wait on it: it **tails** into the evaluator, a `Shares` successor in the frame's
 own place, handing it the contract, and the evaluation owes the frame's caller
 the value. An evaluation whose selected call's declared return satisfies the
 contract tails again, into the callee's frame, so a tail recursion N deep holds
-a constant number of cells; any other value is held to the contract where the
+a constant number of cells. Whether it does is one answer,
+[`Contract::kept_by`](record.rs), for a keyworded call at its solved group and
+for a call by name, where only an unquantified callee keeps the contract, since
+its frame has not yet solved; any other value is held to the contract where the
 evaluation finishes. The hop hands the frame it reaches the contract it owes,
 and the caller asked for the outermost callee's return: that frame's value is
 checked against its own callee's return, which a miss names, and retyped to the

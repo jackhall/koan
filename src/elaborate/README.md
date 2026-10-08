@@ -85,9 +85,12 @@ registry's own doors:
   `Outer.inner.x`, `Shape.Circle.r`;
 - `m.Carrier` and `outer.inner.Carrier`, where the owner is a value name
   holding a module or a chain of value members rooted at one, are the module's
-  type member: read off its carried signature where it runs, a nested module's
-  value slot being its own signature, and unknown at load. A signature that
-  declares no such member is `NoSuchMember`;
+  type member: read where it runs off its carried signature, each step the
+  member that step's signature declares, its application's pins substituted
+  ([a signature's members](#a-signatures-members)), as `LET i = outer.inner`
+  then `i.Carrier` reads it; unknown at load. A signature that declares no such
+  member, or names a head parameter its application leaves unpinned, is
+  `NoSuchMember`;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
   by the parameter names the family declares — every parameter named once and no
   name it does not declare — and `Number AS Wrap` is the same application spelled
@@ -205,6 +208,28 @@ Every slot is bound: the caller runs the body to completion and only then
 ties the binder ([the tie](../knot/README.md#the-tie)), so the self-signature
 is a type and never a refusal. The handle is interned like any other, so two modules binding the same
 members in either order are one handle.
+
+## A signature's members
+
+[`members`](members.rs) answers where a member sits in a module of a signature
+and what the signature declares it at — the one lookup the type reader above,
+dispatch's [builtin rules and static types](../dispatch/README.md#static-types)
+and the [module layout](../knot/module/README.md#layout-order) share. It lives
+here because `elaborate` sits below `knot` and the reader needs it. Its order:
+
+> **Value members, sorted by name; then type members, sorted by name**, a
+> signature's head parameters and manifest members merged into one run; then a
+> body-born module's registrations, in slot order.
+
+`schema_member` gives a named member's index beside its declared type, so the
+signature alone places a member, and nothing assumes a body's or a `USING`
+block's slot order matches. `signature_member` reads a member of every module
+under a type — a signature or an application of one, read through a rigid
+variable's bound, each pin substituted, and naming the first head parameter the
+application leaves unpinned; a union's value member is the join of its members'.
+A signature names a keyworded member by its shape, never by a slot, so the
+registrations are the tail past every named member. The sort is by interned
+symbol, not by the text of a name.
 
 ## Declarations
 

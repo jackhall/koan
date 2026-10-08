@@ -152,10 +152,15 @@ under `EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Str`, `PAIR a WITH b`
 over parameters `a :(Number | Str)` and `b :(Number | Str)` binds `Elt` to
 `Number | Str` at every run, so it is *always*.
 
-Debug builds check the rule on every run: a finished value's carried type lies
-within its node's static type, a call the load decided runs what selection
-over the full candidate list would, and each argument a call binds carries a
-type under its slot at the solution.
+**One judgment, one function.** Where the load and the run make the same
+judgment — which survivor a call runs, whether a retype makes a type exact,
+whether an argument's lower end lies outside a slot, whether an ascription is a
+view — both call one function, so the two cannot drift and no check holds two
+copies equal. Debug builds check the rule itself on every run: a finished
+value's carried type lies within its node's static type, at both ends, and each
+argument a call binds carries a type under its slot at the solution. A property
+law holds a narrowed call to selection over the full candidate list
+([testing](../src/dispatch/README.md#testing)).
 
 ## In the literature
 

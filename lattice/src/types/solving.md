@@ -207,7 +207,9 @@ and each one an earlier class did not admit read as its bound. It reads two
 shape handles and a class, so the registry records it in the verdict table (`Relation::ClassAtLeast`) the first time a pair meets.
 [`select_by_class`](ranking.rs) eliminates over a candidate list class by
 class: every candidate another strictly beats at a class drops out, and a
-class that orders neither of two leaves both to the next. `shape_specificity`
+class that orders neither of two leaves both to the next. The strict win is
+`outranks` — at least as specific, and not the other way — which a caller
+eliminating ahead of the list reads too. `shape_specificity`
 is the same comparison between two shapes.
 
 The classes order **judging**, too. [`judge_by_class`](ranking.rs) gives a
@@ -217,8 +219,9 @@ interval, class by class, beside each variable's interval:
 - *never* — some slot, each variable an earlier class solved read at its
   greatest instance and every lexical variable left read at its ends from
   above, meets its argument's upper end at `Never`, or does not lie above its
-  argument's lower end read below its rigid variables: every type a call
-  carries lies above that end, so the slot admits none; or an **exact class** —
+  argument's lower end read below its rigid variables (`lower_end_outside`, the
+  one test a caller holding a need or a carried type reads too): every type a
+  call carries lies above that end, so the slot admits none; or an **exact class** —
   one every slot of which that names a variable of its own has an exact
   argument, and names only earlier variables solved to a point, and whose
   static solve over those slots is reproducible — where that solve fails,

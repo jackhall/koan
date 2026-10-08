@@ -1093,7 +1093,10 @@ found by searching its statement, on the error path only
 
 Each renders with the names a user needs spelled through the symbol interner,
 and an inadmissible part's slot type through the type registry's renderer —
-`:(LIST OF Declaration)` for a signature's members.
+`:(LIST OF Declaration)` for a signature's members. A refused selection and a
+refused view are worded by `selection_refused` and `view_refused`
+([shape.rs](shape.rs)), which [dispatch](../dispatch/README.md#errors)'s run
+faults call too, so the load and the run say one thing.
 
 ## Memory
 

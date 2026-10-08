@@ -46,15 +46,18 @@ never the parse — as one of:
 - a `FN`, born through the [lambda door](../knot/README.md#a-lambda), so a
   callable no binder names is born where it is evaluated, with the captures it
   reads there — a `FN FOR ALL` the load instantiated born as its instance;
-- an **ascription** `<value> :! <Type>` or `<module> :| <Sig>`: the operand, evaluated, checked against
+- an **ascription** `<value> :! <Type>` or `<module> :| <Sig>`, its operator read
+  with the node, so the load reads it as the run does: the operand, evaluated, checked against
   the type its type part denotes — read as a type expression leaf's is — unless
   the load [settled](#static-types) it, and
   [retyped](../values/README.md#the-type-memo-and-satisfies) to it, so what
   follows dispatches on the ascribed type: after
   `LET Loose = :((LIST OF Any) | Null)`, `[1] :! Loose` carries `LIST OF Any`.
   A value that does not satisfy the type is a fault. A module operand ascribed a
-  signature, or any operand under `:|`, goes through the
-  [view door](../knot/module/README.md#the-view-door) instead, which builds the
+  signature type under `:!`, or any operand under `:|`, goes through the
+  [view door](../knot/module/README.md#the-view-door) instead
+  ([`view::views`](../knot/module/view.rs), the one predicate the load reads
+  too), which builds the
   view or refuses: `:|` over a value that is no module, a type naming no one
   application of a signature, a module that does not fit it, or a member that
   cannot take the view's type is a fault;
@@ -131,7 +134,10 @@ lies within theirs; handed no names, its return lies around its return over
 any; and over its declared slots, its
 return lies under its declared return. A return whose upper end is `Never` lies
 within every interval, and a rule over an argument whose lower end lies outside
-its need returns `Never`.
+its need returns `Never`. "Outside" is the judge's own lower-end test, the
+lattice's `lower_end_outside`, and the rule names what the argument lacks from
+the names it narrowed the need by: the first field, in the order written, a
+record lacks, or the member a module read names.
 
 **A shadowable builtin is derived, not listed.** A builtin whose operands are
 all `Any` — `==` and `PRINT` — admits every argument, so any user overload
@@ -159,6 +165,10 @@ label's the code kind of its name. [`select`](select.rs) then:
    wins, and otherwise the call is an **ambiguity** error, whichever scopes the
    survivors were declared in — no scope shadows another's overload. No
    admitting candidate is a **no-overload** error naming the arguments' types.
+   That tie rule is one function, [`winner`](select.rs), which the load's
+   selection ends in too, and both refusals are worded by one formatter,
+   [`selection_refused`](../scope/shape.rs), so a load refusal and a run fault
+   read alike.
 
 A typed argument a candidate does not admit is a non-match that falls through to
 the others, never a bind-time error. The candidate list is fixed per site, and
@@ -169,7 +179,9 @@ the arguments' [static types](#static-types): *never*, *always* or *maybe*. A
 *never* candidate can never admit what the call passes, and is dropped; a use
 left with none refuses the load, as a statically typed language refuses it. A
 *maybe* candidate an *always* one strictly outranks at the first class, both
-closed, is dropped too: whenever it admits, elimination drops it at that class.
+closed, is dropped too: whenever it admits, elimination drops it at that class
+([`never_runs`](select.rs), which reads the lattice's `outranks`, the strict
+win `select_by_class` eliminates by).
 A use left with no *maybe* candidate is ranked there when it holds one
 candidate or every one is closed. Its winner is selected, and the call runs it
 without admitting or ranking ([`chosen`](select.rs)), a quantified candidate
@@ -269,11 +281,18 @@ fixed:
   load knows every member exactly — each value binder at a closed point or a
   closed scheme, each type binder and registration closed — and at most
   `Module` otherwise. Its body runs inline, so it is typed where its binder is;
-- an ascription of a module to a signature is a view: exactly the view's
-  signature under `:!` over an exact operand, and at most the ascribed
-  signature otherwise. An exact operand whose signature can never fit the
-  ascribed one refuses the load, which the meet test cannot say, since
-  signatures meet to a set and never to `Never`;
+- an ascription is a view where the run builds one, by the run's own
+  predicate read over the operand's upper end and the type: `:|` always, and
+  `:!` where both are signature types. A view refuses the load only where every
+  run's view door faults: an operand that can never be a module
+  (`ShapeError::NotAModule`, `Number is no module to ascribe` for `1 :| Any`),
+  a closed type that is no one application of a signature
+  (`ShapeError::NotASignature`, for `m :| Any` or `m :! (A & B)`), and an exact
+  operand whose signature can never fit the ascribed one, which the meet test
+  cannot say, since signatures meet to a set and never to `Never`. It is
+  exactly the view's signature under `:!` over an exact operand, and at most
+  the ascribed type otherwise. Every `:!` of a non-signature type is held to
+  its type as above;
 - a member read `m.f` is the member's type in its operand's upper end, a
   signature or an application of one, each pin substituted: at most the
   member's declared type, a type member's kind where its type is concrete, and
@@ -310,7 +329,15 @@ fixed:
 
 "At most" leaves the lower end at `Never`. A static type whose upper end is
 `Number`, `Str`, `Bool` or `Null` is exact, since no value carries a type
-strictly under one.
+strictly under one. "Where the retype makes it so" is one predicate, read by the
+load's `retyped_to` and by the retype itself
+([the type memo](../values/README.md#the-type-memo-and-satisfies)), so a type
+the load calls exact is the one the run stamps.
+
+Every refusal for a value that "can never satisfy" a type — a return, an
+ascription, an annotation, an `EVAL`'s code or operand, a view's operand, an
+instance site's other argument — is one test, `never_satisfies`: both read through
+their bounds, they meet at `Never`.
 
 A static type's ends are
 [parametric](../../lattice/src/types/identity.md#typed-handles), since they may hold
@@ -536,9 +563,10 @@ selected; several survivors with no builtin among them refuse the load
 (`ShapeError::Ambiguous`):
 
 ```text
-ambiguous call of PICK _: 2 overloads admit (Number) and none ranks first
+ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks first
 ```
 
+An instance argument is listed at its scheme, since no instance of it is made.
 The cell records the candidate selected, or each candidate kept beside its
 verdict.
 
@@ -645,11 +673,14 @@ call by name is blind to the order its record's fields are written in.
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
 Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running
-it reports it, as it reports the type channel's. Debug builds check both halves
-on every run: a finished value's carried type lies within its node's static
-type, a call that dropped, selected or took a candidate as admitted runs
-what selection over the full list would, and each argument a call binds
-carries a type under its slot or parameter at the solution.
+it reports it, as it reports the type channel's. Debug builds check the load's
+verdicts on every run: a finished value's carried type lies within its node's
+static type — under its upper end read above its variables, and over its lower
+end read below them, by the judge's own `lower_end_outside` — and each argument
+a call binds carries a type under its slot or parameter at the solution. Where
+the load and the run make one judgment they call one function, so no net holds
+two copies equal; the [narrowing law](#testing) holds a narrowed call to
+selection over the full list.
 
 ## Tails under a contract
 
@@ -657,7 +688,7 @@ An evaluation a frame [tails into](../program/README.md#frames-contracts-and-tai
 owes the frame's [`Contract`](../program/record.rs). When it selects a
 registration whose declared return, substituted by the call's solution,
 satisfies the contract — or calls an unquantified function by name whose return
-does — it hands its cell to the callee's frame by a tail rather than spawning
+does, the one answer [`Contract::kept_by`](../program/record.rs) gives both — it hands its cell to the callee's frame by a tail rather than spawning
 it, handing the frame the contract it owes, so a keyworded self-call in tail
 position holds a constant number of cells however deep it recurses, and a chain
 of tail hops returns at the outermost declared return. Any other value it
@@ -693,8 +724,8 @@ dispatch decides:
 
 | Situation | Message |
 |---|---|
-| no admitting candidate | `no overload of _ + _ admits (Str, Number)` |
-| an ambiguity | `ambiguous call of PICK _: 2 overloads admit (Number) and none ranks first` |
+| no admitting candidate | ``no overload of `_ + _` admits (Str, Number)`` |
+| an ambiguity | ``ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks first`` |
 | a missing field | `:{x :Number y :Str} has no field z` |
 | a missing union member | `:(Some \| None) has no member Many` |
 | an incomparable `==` | `<T> and <U> cannot be compared` |
@@ -718,12 +749,16 @@ arguments, an argument a call by name does not fit
 group, a callee that is no function, a type expression that does not
 elaborate, and an `EVAL`'s refusal.
 
-A no-overload miss, an ambiguity, a return miss, an ascription miss, an `EVAL`
-of what is never code or an `EVAL` whose code can never meet its return the load
-can already see is no fault: it refuses the load, located at `path:line:col`
-([static types](#static-types)).
+A no-overload miss, an ambiguity, a return miss, an ascription miss, a view of
+what is never a module or at what is no signature, an `EVAL` of what is never
+code or an `EVAL` whose code can never meet its return the load can already see
+is no fault: it refuses the load, located at `path:line:col`
+([static types](#static-types)). A refused selection and a refused view are
+worded by one formatter each, `selection_refused` and `view_refused` in
+[`scope`](../scope/shape.rs), for the load's refusal and the run's fault alike.
 The run meets only those whose static types are too wide to tell — an argument
-read out of a record field, say, whose static type is `Any`.
+read out of a record field, say, whose static type is `Any`, or a type a run
+binds.
 
 ## Catching
 
@@ -862,15 +897,20 @@ laws that a call by name of a one-class registration runs as its keyworded call
 and is blind to its record's field order; [lexical](tests/lexical.rs) — the law that a
 lexical variable reads the same through any context, a site naming one by a
 type run inside drawn functions, closures, hoisting blocks, modules and a
-quote's code and without them; [generate](tests/generate.rs) holds the types,
+quote's code and without them; [retypes](tests/retypes.rs) — the law that a
+value retyped to a drawn type, a dict or a nominal type among them, lies within
+the static type the load gives it at each retype site: an ascription, an
+annotation, a parameter, an `EVAL` and a registration's return, the
+evaluator's debug net its oracle; [generate](tests/generate.rs) holds the types,
 values and programs these laws and `rules` draw;
 [surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
 through a newtype or a family seeing only what the carried type names, one node
 seen at two types, a widened literal's element, and `FROM` sharing its record's
 runs; [modules](tests/modules.rs) — each ascription operator, a member read
 by name, through a chain and by a quoted label, a type member read through a
-module name, a module binder exactly the signature the run ties, the load
-refusals and the run faults, a quantified member instantiated where it is
+module name and through a view's nested member, a module binder exactly the
+signature the run ties, the load refusals — a view every run's door refuses
+among them — and the run faults, a quantified member instantiated where it is
 wanted and one over an unpinned parameter read only at a call's head, `USING`
 blocks opening names and spreading every overload at a key, calls through a
 barrier both ways — two of them on the [Miri slate](../../observe/miri_slate.md) —
