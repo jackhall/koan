@@ -121,7 +121,7 @@ use crate::values::{
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
 use super::one_name;
-use super::rules::{self, Given};
+use super::rules::{self, Given, Lacks};
 use super::select;
 
 /// Give every value expression and value binder of `root`, and of every shape nested in it, a
@@ -2456,7 +2456,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
 
         let mut judged = BumpVec::with_capacity_in(list.candidates.len(), scratch);
-        // The first argument a builtin's need dropped a candidate over, beside that need.
+        // The first argument a builtin's need dropped a candidate over, beside what it lacks.
         let mut dropped = None;
         // The last refusal of an instance argument a candidate was dropped over.
         let mut refused = None;
@@ -2502,9 +2502,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if let Some(builtin) = builtin.filter(|_| verdict != Verdict::Never) {
                 let native = Native::of(builtin.id());
                 let typed = rules::typed(native, builtin.ktype(), given_here, types, scratch);
-                if let Some(slot) = typed.dropped {
+                if let Some((slot, lacks)) = typed.dropped {
                     verdict = Verdict::Never;
-                    dropped = dropped.or(Some((arguments[slot].lower, typed.needs[slot])));
+                    dropped = dropped.or(Some((arguments[slot].lower, lacks)));
                 }
                 ruled = Some(typed.returns);
             }
@@ -2551,7 +2551,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     },
                 });
             }
-            let missing = dropped.and_then(|(lower, need)| self.missing(lower, need, node.source));
+            // What the first dropped argument lacks, its lower end named through its bounds.
+            let missing = dropped.and_then(|(lower, lacks)| {
+                let (of, at) = (bound_above(types, scratch, lower), node.source);
+                Some(match lacks? {
+                    Lacks::Field(field) => ShapeError::NoField { of, field, at },
+                    Lacks::Member(member) => ShapeError::NoMember { of, member, at },
+                })
+            });
             return Err(missing.unwrap_or_else(|| ShapeError::NoAdmittingCandidate {
                 key: list.elements,
                 arguments: uppers(),
@@ -2722,36 +2729,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             retyped_to(self.types, returned)
         } else {
             under(returned)
-        }
-    }
-
-    /// Where a builtin's need `need` dropped a candidate over an argument whose lower end is
-    /// `lower`, the refusal in the native's own words: a record lacking the first field the need
-    /// names, or a module's signature lacking the member a read needs — that end read through its
-    /// bounds.
-    fn missing(&self, lower: Parametric, need: KType, at: SourceRef) -> Option<ShapeError<'graph>> {
-        let (types, scratch) = (self.types, self.scratch);
-        let of = bound_above(types, scratch, lower);
-        match (types.node(lower), types.node(need)) {
-            (TypeNode::Record { fields: has }, TypeNode::Record { fields: needs }) => {
-                let field = needs.keys().find(|name| has.get(name.symbol()).is_none())?;
-                Some(ShapeError::NoField { of, field, at })
-            }
-            (TypeNode::Signature { .. }, TypeNode::Signature { schema, .. }) => {
-                let member = (schema
-                    .value_slots
-                    .iter()
-                    .map(|(name, _)| BinderSymbol::Value(*name)))
-                .chain(
-                    schema
-                        .parameters
-                        .iter()
-                        .map(|(name, _)| BinderSymbol::Type(*name)),
-                )
-                .next()?;
-                Some(ShapeError::NoMember { of, member, at })
-            }
-            _ => None,
         }
     }
 

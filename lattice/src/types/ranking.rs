@@ -310,15 +310,8 @@ pub(super) fn judge_by_class<'s>(
                 ),
             );
             let upper = bound_above(types, scratch, arguments[slot].upper);
-            let lower = read_through(
-                types,
-                scratch,
-                arguments[slot].lower,
-                Side::Below,
-                &mut |_, node| Some(Variable::of(node)?.interval().raw()),
-            );
             if meet_through_variables(types, scratch, greatest, upper) == Handle::NEVER
-                || !fits(types, scratch, lower, greatest)
+                || lower_end_outside(types, scratch, arguments[slot].lower, greatest)
             {
                 return Judged {
                     verdict: Verdict::Never,
@@ -467,6 +460,20 @@ pub(super) fn admits_by_class<'run>(
     )
     .is_ok()
         && collector.solve(types).is_ok()
+}
+
+/// Whether an argument whose static lower end is `lower`, read below its variables, lies outside
+/// `slot`: every type the run can carry there lies outside it too, so the candidate never admits.
+pub(super) fn lower_end_outside(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    lower: Handle,
+    slot: Handle,
+) -> bool {
+    let lower = read_through(types, scratch, lower, Side::Below, &mut |_, node| {
+        Some(Variable::of(node)?.interval().raw())
+    });
+    !fits(types, scratch, lower, slot)
 }
 
 /// Whether `a` strictly outranks `b` at `class`: at least as specific there, and `b` not at least

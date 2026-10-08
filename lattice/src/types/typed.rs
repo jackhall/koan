@@ -160,6 +160,17 @@ pub fn class_at_least(
     ranking::class_at_least(types, scratch, a.raw(), b.raw(), class)
 }
 
+/// Whether `argument`'s lower end, read below its variables as [`judge_by_class`] reads it, lies
+/// outside `slot`: every type the run can carry there lies outside it too.
+pub fn lower_end_outside(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    argument: Interval<Parametric>,
+    slot: impl Into<DeclaredType<Parametric>>,
+) -> bool {
+    ranking::lower_end_outside(types, scratch, argument.lower.raw(), slot.into().raw())
+}
+
 /// Whether `a` strictly outranks `b` at `class`, as [`select_by_class`] eliminates by.
 pub fn outranks(
     types: &TypeRegistry<'_>,

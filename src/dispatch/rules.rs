@@ -4,7 +4,8 @@
 //!
 //! The rule types a call at the load. [`statics`](super::statics) hands it each slot's static type
 //! and what the slot holds as written, types a builtin's call at [`typed`]'s return, and drops a
-//! candidate an argument's lower end lies outside a need of. The run reads no rule: each native
+//! candidate an argument's lower end lies outside a need of — the judge's own test,
+//! [`lower_end_outside`] — naming the field or member the argument lacks ([`Lacks`]). The run reads no rule: each native
 //! reads its operands through [the door](crate::values::Surface), so its value carries its rule's
 //! exact return, which the evaluator checks against the static type in debug builds. `FROM` and
 //! `ATTR` over a record have rules of their own; every other native takes its declared slots as its
@@ -20,8 +21,8 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Members, Parametric, SchemaDraft, Side, SigOrigin, TypeNode,
-    TypeRegistry, bound_above, fits, member, read_through, shape_return, shape_slots,
+    DeclaredType, Interval, KType, Members, Parametric, SchemaDraft, SigOrigin, TypeNode,
+    TypeRegistry, bound_above, lower_end_outside, member, shape_return, shape_slots,
     substitute_parameters,
 };
 use crate::values::{record_type, retyped_to, under, unknown};
@@ -38,37 +39,49 @@ pub(super) struct Given<'x> {
     pub names: Option<&'x [BinderSymbol]>,
 }
 
+/// What an argument whose lower end a need dropped lacks, in the native's own words.
+#[derive(Clone, Copy)]
+pub(super) enum Lacks {
+    /// A record lacking a field the call reads.
+    Field(BinderSymbol),
+    /// A module's signature lacking the member the call reads.
+    Member(BinderSymbol),
+}
+
 /// What a rule gives one call.
-pub(super) struct Typed<'x> {
-    /// The type each slot's argument needs, slot for slot.
-    pub needs: BumpVec<'x, KType>,
-    /// The first slot whose argument's lower end lies outside its need.
-    pub dropped: Option<usize>,
+pub(super) struct Typed {
+    /// The first slot whose argument's lower end lies outside its need, beside what it lacks
+    /// where the rule narrowed that need by a name.
+    pub dropped: Option<(usize, Option<Lacks>)>,
     /// The call's return: `Never` where a slot is dropped.
     pub returns: Interval,
 }
 
-/// The needs and the return of `native`'s call, its overload declared as the shape `declared`,
-/// over `given`: the load's entry point.
-pub(super) fn typed<'x>(
+/// The first argument a need of `native`'s call drops and the call's return, its overload declared
+/// as the shape `declared`, over `given`: the load's entry point.
+pub(super) fn typed(
     native: Native,
     declared: KType,
     given: &[Given<'_>],
     types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'x>,
-) -> Typed<'x> {
+    scratch: BumpAllocator<'_>,
+) -> Typed {
     let needs = needs(native, declared, given, types, scratch);
     let dropped = (given.iter().zip(needs.iter()))
-        .position(|(given, need)| outside(types, scratch, given.typed, *need));
+        .position(|(given, need)| {
+            lower_end_outside(
+                types,
+                scratch,
+                given.typed,
+                bound_above(types, scratch, (*need).into()),
+            )
+        })
+        .map(|slot| (slot, lacks(native, given, slot, types)));
     let returns = match dropped {
         Some(_) => Interval::point(KType::NEVER.into()),
         None => returns(native, declared, given, types, scratch),
     };
-    Typed {
-        needs,
-        dropped,
-        returns,
-    }
+    Typed { dropped, returns }
 }
 
 /// The return of `native`'s call over `given`, with no need checked.
@@ -129,27 +142,27 @@ fn returns(
     }
 }
 
-/// Whether `argument`'s lower end, read below its rigid variables as a candidate's judgement reads
-/// it, lies outside `needed`: every type the run can carry there lies outside it too.
-fn outside(
+/// What the argument at `slot` of `native`'s call lacks, where a need the rule narrowed by the
+/// names the call reads dropped it: the first name, in the order written, a record lower end lacks,
+/// or the one member a module read names. `None` where the rule narrowed nothing there.
+fn lacks(
+    native: Native,
+    given: &[Given<'_>],
+    slot: usize,
     types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    argument: Interval,
-    needed: KType,
-) -> bool {
-    let lower = read_through(
-        types,
-        scratch,
-        argument.lower,
-        Side::Below,
-        &mut |variable| Some(variable.interval().into()),
-    );
-    !fits(
-        types,
-        scratch,
-        lower,
-        bound_above(types, scratch, needed.into()),
-    )
+) -> Option<Lacks> {
+    let names = named(given, native)?;
+    match (native, slot, types.node(given[slot].typed.lower)) {
+        (Native::Project, 1, TypeNode::Record { fields })
+        | (Native::Field, 0, TypeNode::Record { fields }) => (names.iter())
+            .find(|name| fields.get(name.symbol()).is_none())
+            .map(|name| Lacks::Field(*name)),
+        (Native::ModuleMember, 0, TypeNode::Signature { .. }) => match names {
+            [name @ (BinderSymbol::Value(_) | BinderSymbol::Type(_))] => Some(Lacks::Member(*name)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The type each slot of `native`'s call needs: its declared slot, narrowed by a rule of its own

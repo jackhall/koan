@@ -55,7 +55,7 @@ use crate::type_lattice::{
     DeclaredType, KType, TypeNode, Verdict, satisfied_by, substitute_levels,
 };
 #[cfg(debug_assertions)]
-use crate::type_lattice::{Side, bound_above, fits, read_through};
+use crate::type_lattice::{bound_above, lower_end_outside};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
@@ -801,20 +801,13 @@ fn carried_under_static<'graph, 'here>(
     let types = at.program.types();
     let scratch = Bump::new();
     let carried = value.ktype();
-    let lower = read_through(
-        types,
-        &scratch,
-        expected.lower,
-        Side::Below,
-        &mut |variable| Some(variable.interval().into()),
-    );
     debug_assert!(
         satisfied_by(
             types,
             &scratch,
             bound_above(types, &scratch, expected.upper),
             carried
-        ) && fits(types, &scratch, lower, carried),
+        ) && !lower_end_outside(types, &scratch, expected, carried),
         "the carried type lies within the load-time static type"
     );
 }
