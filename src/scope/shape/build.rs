@@ -2807,9 +2807,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// fills a keyworded hole; or one its `OVER` list names.
     fn unlisted(&self, level: usize, name: BinderSymbol, read: Coordinate) -> Option<BinderSymbol> {
         let landed = self.landing(level - 1, read);
-        if let Some((0, _)) = landed
-            && self.chain[0].kind == ShapeKind::Program
-        {
+        if landed.is_some_and(|(level, _)| self.is_top_level(level)) {
             return None;
         }
         if self.opens(level - 1, read) {
@@ -2839,6 +2837,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BinderSymbol::Key(key) => (!lists_key(key)).then_some(name),
             name => (!listed.contains(&Listed::Name(name))).then_some(name),
         }
+    }
+
+    /// Whether the draft at `level` is the program's own top level, where a binding is bound once
+    /// per program.
+    fn is_top_level(&self, level: usize) -> bool {
+        level == 0 && self.chain[0].kind == ShapeKind::Program
     }
 
     /// The draft and target a coordinate read in the draft at `level` lands at, each capture
@@ -2924,8 +2928,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             statement: 0,
             class: MentionClass::Eager,
         };
-        let top =
-            |builder: &Self, at: usize| at == 0 && builder.chain[0].kind == ShapeKind::Program;
         for entry in over.listed.unwrap_or(&[]) {
             match *entry {
                 // One the body reads is captured already, under whatever mark it reads it through.
@@ -2940,7 +2942,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         continue;
                     }
                     match self.bound_outside(level, name) {
-                        Some((at, slot)) if top(self, at) => {
+                        Some((at, slot)) if self.is_top_level(at) => {
                             self.chain[level].listed_top.push(TopLevel::Root(slot));
                         }
                         Some(_) => {
@@ -2977,7 +2979,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     }
                     for name in found.iter().copied() {
                         match self.bound_outside(level, name) {
-                            Some((at, slot)) if top(self, at) => {
+                            Some((at, slot)) if self.is_top_level(at) => {
                                 self.chain[level].listed_top.push(TopLevel::Root(slot));
                             }
                             _ => {

@@ -98,9 +98,7 @@ impl<'graph> Builder<'graph, '_, '_> {
     /// The top-level slot a landing is, where it lands at the program's own draft.
     fn top_slot(&self, landed: Option<(usize, Target)>) -> Option<Slot> {
         match landed {
-            Some((0, Target::Local(slot))) if self.chain[0].kind == ShapeKind::Program => {
-                Some(slot)
-            }
+            Some((level, Target::Local(slot))) if self.is_top_level(level) => Some(slot),
             _ => None,
         }
     }
