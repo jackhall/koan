@@ -544,8 +544,10 @@ elaborated — and the pass fills it, once, where the program loads:
 
 A cell holds `Unknown`, a closed value, or a rigid value beside the
 `Variable`s — a variable's level and the coordinate its value is
-read at — that the run substitutes. The vocabulary lives here, beside the shape
-that holds it: `Static`, `Variable`, and the callable-typing records the
+read at — that the run substitutes. The born-instance cell holds a
+`StaticSolution`, closed or rigid, or nothing: it has no unknown arm. The
+vocabulary lives here, beside the shape that holds it: `Static`,
+`StaticSolution`, `Variable`, and the callable-typing records the
 elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
 `Elaboration`, so a shape error can carry an elaboration's refusal. A reader
 holding the shape reads its cell by site or slot: the evaluator, the body runner,

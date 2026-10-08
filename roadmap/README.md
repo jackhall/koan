@@ -42,7 +42,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Matching](conditionals/matching.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
-- [Classify once, on the type that owns the fact](rewrite/classify-once-on-the-owner.md)
 - [A compact type node table](rewrite/compact-type-node-table.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Families as parameters](rewrite/families-as-parameters.md)
