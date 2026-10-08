@@ -71,7 +71,7 @@ fn a_tagged_value_takes_the_application_it_lies_under() {
 }
 
 /// A module ascribed a type that is no signature is held to it as any value is; `:|` takes only a
-/// signature.
+/// signature, refused at load where the type is closed.
 #[test]
 fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
     assert_eq!(
@@ -80,7 +80,14 @@ fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
     );
     assert_eq!(
         run("MODULE m = (LET x = 1)\nPRINT (m :| Any)"),
-        "error: Any is no signature"
+        "load: <test>:2:7: Any is no signature"
+    );
+    // A type the load cannot read faults at run.
+    assert_eq!(
+        run("MODULE m = (LET x = 1)\n\
+             EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
+             PRINT (VIEW 1)"),
+        "error: Number is no signature"
     );
 }
 

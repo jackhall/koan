@@ -64,6 +64,38 @@ pub enum Unascribable<'run, 'x> {
     },
 }
 
+/// Whether `ktype` is a signature type — a signature, an application or a meet of them — which
+/// only a module carries or satisfies.
+pub fn is_signature_type(types: &TypeRegistry<'_>, ktype: KType) -> bool {
+    matches!(
+        types.node(ktype),
+        TypeNode::Signature { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. }
+    )
+}
+
+/// Whether the view door takes `ascribed`: one application of a signature, or the signature.
+pub fn takes(types: &TypeRegistry<'_>, ascribed: KType) -> bool {
+    matches!(
+        types.node(ascribed),
+        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
+    )
+}
+
+/// Whether an ascription by `mode` at `ascribed` of an operand of type `operand` views it — builds
+/// the module seen through a signature — rather than holding it to a type: `:|` always does, `:!`
+/// where both are signature types. The run reads it over the carried type; the load over the
+/// static upper end, both types read through their bounds.
+pub fn views(types: &TypeRegistry<'_>, mode: Ascription, operand: KType, ascribed: KType) -> bool {
+    match mode {
+        Ascription::Opaque => true,
+        Ascription::Transparent => {
+            is_signature_type(types, operand) && is_signature_type(types, ascribed)
+        }
+    }
+}
+
 /// `source` seen as `signature`, as a module of its own. A refusal writes nothing but what a
 /// partial coercion walk had already laid down, which nothing names.
 pub fn ascribe<'graph, 'cell, 'run, 'x>(
@@ -127,9 +159,11 @@ pub(super) fn fitted<'run, 'x>(
     ),
     Unascribable<'run, 'x>,
 > {
+    if !takes(types, signature) {
+        return Err(Unascribable::NotASignature(signature));
+    }
     let mut pins = BumpVec::new_in(scratch);
     let declared = match types.node(signature) {
-        TypeNode::Signature { .. } => signature,
         TypeNode::SignatureApply {
             signature,
             pins: pinned,
@@ -137,7 +171,7 @@ pub(super) fn fitted<'run, 'x>(
             pins.extend(pinned.iter());
             signature
         }
-        _ => return Err(Unascribable::NotASignature(signature)),
+        _ => signature,
     };
     let sig = crate::elaborate::schema_of(declared, types)
         .ok_or(Unascribable::NotASignature(signature))?;

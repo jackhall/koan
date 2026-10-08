@@ -1296,6 +1296,10 @@ pub enum ShapeError<'graph> {
     },
     /// An `EVAL` whose operand's static type can never be code.
     NotCode { value: KType, at: SourceRef },
+    /// A view ascription whose operand's static type can never be a module.
+    NotAModule { value: KType, at: SourceRef },
+    /// A view ascription at a type the view door never takes: no one application of a signature.
+    NotASignature { ascribed: KType, at: SourceRef },
     /// An `EVAL` of traced code whose static type can never satisfy the type the `EVAL` declares.
     EvalNeverSatisfied {
         code: KType,
@@ -1400,6 +1404,8 @@ impl ShapeError<'_> {
             | ShapeError::AnnotationNeverSatisfied { at, .. }
             | ShapeError::CallNeverSatisfied { at, .. }
             | ShapeError::NotCode { at, .. }
+            | ShapeError::NotAModule { at, .. }
+            | ShapeError::NotASignature { at, .. }
             | ShapeError::EvalNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
             | ShapeError::RepeatedGuard { at, .. } => *at,
@@ -1675,6 +1681,16 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 "{} can never be called with {}",
                 display_name(*callee, self.types, self.symbols),
                 display_name(*arguments, self.types, self.symbols)
+            ),
+            ShapeError::NotAModule { value, .. } => write!(
+                f,
+                "{} is no module to ascribe",
+                display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::NotASignature { ascribed, .. } => write!(
+                f,
+                "{} is no signature",
+                display_name(*ascribed, self.types, self.symbols)
             ),
             ShapeError::NotCode { value, .. } => write!(
                 f,

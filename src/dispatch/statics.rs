@@ -57,9 +57,11 @@
 //!
 //! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
 //! binder is exactly the signature the run ties where every member is exact
-//! ([`module_signature`]), else at most `Module`. An ascription of a module to a signature is a
-//! view: refused where an exact operand can never fit it, exactly the view's signature under `:!`
-//! over an exact operand, and at most the signature otherwise. A member read `m.f` is typed by its
+//! ([`module_signature`]), else at most `Module`. An ascription is a view where the run builds one
+//! (`:|` always, `:!` of a signature type to one; [`view::views`]): refused where every run's view
+//! door refuses it — an operand that can never be a module, a closed type that is no one
+//! application of a signature — or where an exact operand can never fit it; exactly the view's
+//! signature under `:!` over an exact operand, and at most the type otherwise. A member read `m.f` is typed by its
 //! [rule](super::rules), which reads the member off the operand's signature, and refused where a
 //! signature its lower end is lacks the member. A `USING … SCOPE` body is typed as a block, each
 //! surfaced name at the member read it names; a key it surfaces is a spread typed by the one head
@@ -94,7 +96,7 @@
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::elaborate::{SignatureMember, module_signature, signature_member};
-use crate::knot::module::view::transparent_view_type;
+use crate::knot::module::view::{self, Ascription, transparent_view_type};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
@@ -1551,9 +1553,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// `<value> :! <Type>`: its type, exactly where the retype makes it so ([`retyped_to`]). Where
-    /// the operand's static upper end lies under the type the ascription is settled, and the run
-    /// checks nothing; where the two meet at `Never` the load is refused.
+    /// `<value> :! <Type>` or `<module> :| <Sig>`: a view where the run builds one
+    /// ([`view::views`], read over the operand's static upper end and the type, through their
+    /// bounds), else the value held to its type ([`held`](Self::held)): that type, exactly where
+    /// the retype makes it so ([`retyped_to`]), settled where the operand's static upper end lies
+    /// under it, and refused where the two meet at `Never`.
     fn ascribe(
         &mut self,
         level: usize,
@@ -1562,12 +1566,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let [operand, _, ascribed] = node.parts else {
             unreachable!("an ascription has an operand, its keyword and a type")
         };
+        let (types, scratch) = (self.types, self.scratch);
+        let mode = match node.cache().builtin_shape().map(|shape| shape.id) {
+            Some(BuiltinShapeId::AscribeOpaque) => Ascription::Opaque,
+            _ => Ascription::Transparent,
+        };
         let declared = self.declared(level, &ascribed.value);
         let typed = self.part_at(level, &operand.value, declared)?;
-        if let Some(declared) = declared
-            && let Some(viewed) = self.viewed(level, node, typed, declared)
-        {
-            return viewed;
+        let operand = bound_above(types, scratch, typed.upper);
+        let bounded = declared.map_or(KType::ANY, |declared| bound_above(types, scratch, declared));
+        if view::views(types, mode, operand, bounded) {
+            return self.viewed(level, node, typed, declared);
         }
         let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
         held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
@@ -1577,31 +1586,54 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         })
     }
 
-    /// `<module> :! <Sig>` or `<module> :| <Sig>`, the ascription `node` of the shape at `level`
-    /// whose operand's static type `typed` is a signature type, as is `declared`: a view, which the
-    /// run builds where the module fits. Refused where the operand is exactly a signature that does
-    /// not fit `declared` — signatures meet to a set, never to `Never`, so the meet test cannot say
-    /// so. A transparent view of an exact operand is exactly the signature the view door lays down;
-    /// any other is at most `declared`. `None` where either type is no signature type.
+    /// The view ascription `node` of the shape at `level`, its operand's static type `typed` and
+    /// its type `declared` where the load knows it, refused only where every run faults:
+    ///
+    /// | The load sees | Typed |
+    /// |---|---|
+    /// | an operand that never arrives | `Never` |
+    /// | an operand that can never be a module | refused: no module |
+    /// | no type | unknown |
+    /// | a closed type the view door never takes | refused: no signature |
+    /// | an operand or a type a run may not view | at most the type |
+    /// | an exact operand that never fits the type | refused |
+    /// | an exact operand under `:!`, a closed type | exactly the view's signature |
+    /// | otherwise | at most the type |
+    ///
+    /// Signatures meet to a set, never to `Never`, so only an exact operand can be refused for not
+    /// fitting. Settled where the operand's upper end fits the type.
     fn viewed(
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
         typed: Interval,
-        declared: Parametric,
-    ) -> Option<Result<Interval, ShapeError<'graph>>> {
+        declared: Option<Parametric>,
+    ) -> Result<Interval, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
-        let signature = |handle: KType| {
-            matches!(
-                types.node(handle),
-                TypeNode::Signature { .. }
-                    | TypeNode::SignatureApply { .. }
-                    | TypeNode::SignatureMeet { .. }
-            )
+        if typed.upper == KType::NEVER.into() {
+            return Ok(Interval::point(KType::NEVER.into()));
+        }
+        if let Some((value, _)) =
+            never_satisfies(types, scratch, typed.upper, KType::EMPTY_SIGNATURE.into())
+        {
+            return Err(ShapeError::NotAModule {
+                value,
+                at: node.source,
+            });
+        }
+        let Some(declared) = declared else {
+            return Ok(unknown());
         };
         let ascribed = bound_above(types, scratch, declared);
-        if !signature(ascribed) || !signature(bound_above(types, scratch, typed.upper)) {
-            return None;
+        if types.concrete(declared).is_some() && !view::takes(types, ascribed) {
+            return Err(ShapeError::NotASignature {
+                ascribed,
+                at: node.source,
+            });
+        }
+        let operand = bound_above(types, scratch, typed.upper);
+        if !view::is_signature_type(types, operand) || !view::is_signature_type(types, ascribed) {
+            return Ok(under(declared));
         }
         if fits(types, scratch, typed.upper, declared) {
             self.chain[level].settled.push(Site::of_node(node));
@@ -1611,14 +1643,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             .then(|| types.concrete(typed.upper))
             .flatten()
         else {
-            return Some(Ok(under(declared)));
+            return Ok(under(declared));
         };
         if !fits(types, scratch, exact, declared) {
-            return Some(Err(ShapeError::AscriptionNeverSatisfied {
+            return Err(ShapeError::AscriptionNeverSatisfied {
                 value: exact,
                 ascribed,
                 at: node.source,
-            }));
+            });
         }
         let opaque = node.cache().builtin_shape().map(|shape| shape.id)
             == Some(BuiltinShapeId::AscribeOpaque);
@@ -1626,10 +1658,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             .concrete(declared)
             .filter(|_| !opaque)
             .and_then(|declared| transparent_view_type(exact, declared, types, scratch));
-        Some(Ok(view.map_or_else(
-            || under(declared),
-            |view| Interval::point(view.into()),
-        )))
+        Ok(view.map_or_else(|| under(declared), |view| Interval::point(view.into())))
     }
 
     /// `LET <name> <type> = <value>`, the binder at `member` of the shape at `level`, whose value

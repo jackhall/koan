@@ -303,16 +303,13 @@ fn ascribe<'graph, 'here>(
         Some(BuiltinShapeId::AscribeOpaque) => Ascription::Opaque,
         _ => Ascription::Transparent,
     };
-    let signature = matches!(
-        types.node(ascribed),
-        TypeNode::Signature { .. }
-            | TypeNode::SignatureApply { .. }
-            | TypeNode::SignatureMeet { .. }
-    );
-    if let Some(module) = value
-        .as_module()
-        .filter(|_| signature || mode == Ascription::Opaque)
-    {
+    if view::views(types, mode, value.concrete_ktype(), ascribed) {
+        let Some(module) = value.as_module() else {
+            let raised = Raised::NotAModule {
+                value: value.concrete_ktype(),
+            };
+            return finish(step, at, raised.raise(program, writer));
+        };
         let raised = match view::ascribe(writer, module, ascribed, mode, types, &scratch) {
             Ok(view) => return finish(step, at, Value::Knotted(view)),
             Err(Unascribable::Unsatisfied(_)) => Raised::Unascribable {
@@ -325,12 +322,6 @@ fn ascribe<'graph, 'here>(
                 refused,
             },
             Err(Unascribable::NotAModule) => unreachable!("the operand is a module"),
-        };
-        return finish(step, at, raised.raise(program, writer));
-    }
-    if mode == Ascription::Opaque {
-        let raised = Raised::NotAModule {
-            value: value.concrete_ktype(),
         };
         return finish(step, at, raised.raise(program, writer));
     }

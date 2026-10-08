@@ -98,6 +98,23 @@ fn a_type_path_through_a_view_reads_the_member_a_stepwise_read_does() {
     );
 }
 
+/// A view the view door refuses at every run refuses the load: an operand that can never be a
+/// module, and a type that is no one application of a signature.
+#[test]
+fn a_view_every_run_refuses_refuses_the_load() {
+    assert_eq!(
+        run("PRINT (1 :| Any)"),
+        "load: <test>:1:7: Number is no module to ascribe"
+    );
+    assert_eq!(
+        run("SIG Aa = #[(VAL x :Number)]\n\
+             SIG Bb = #[(VAL y :Number)]\n\
+             MODULE m = ((LET x = 1) (LET y = 2))\n\
+             PRINT (m :! (Aa & Bb))"),
+        "load: <test>:4:7: SIG (y: Number) & SIG (x: Number) is no signature"
+    );
+}
+
 #[test]
 fn a_missing_member_and_an_ascription_that_can_never_hold_refuse_the_load() {
     assert_eq!(
@@ -140,8 +157,11 @@ fn what_the_load_cannot_see_faults_at_run() {
         )),
         "error: member pick is quantified, and no type was known to instantiate it at"
     );
+    // A value the load cannot see is no module faults where the view door refuses it.
     assert_eq!(
-        run("PRINT (1 :| Any)"),
+        run(&format!(
+            "{hide}SIG Shape = #[(VAL x :Number)]\nLET y = (HIDE 1)\nPRINT (y :| Shape)"
+        )),
         "error: Number is no module to ascribe"
     );
 }
