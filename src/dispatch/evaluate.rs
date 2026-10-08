@@ -41,9 +41,7 @@ use crate::memory::{Bump, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{
-    CallKind, Evaluated, KBirth, KBundle, KState, Program, block, surfaced_block,
-};
+use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, block, surfaced_block};
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
@@ -51,11 +49,9 @@ use crate::scope::{
     BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site, Static, StaticType,
 };
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{
-    DeclaredType, KType, TypeNode, Verdict, satisfied_by, substitute_levels,
-};
+use crate::type_lattice::{KType, Verdict, substitute_levels};
 #[cfg(debug_assertions)]
-use crate::type_lattice::{bound_above, lower_end_outside};
+use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
@@ -79,8 +75,8 @@ pub(super) enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
     Block(&'graph BodyShape<'graph>),
     Lambda(&'graph KExpression<'graph>),
-    /// `<value> :! <Type>`, or `<module> :| <Sig>`.
-    Ascribe(&'graph KExpression<'graph>),
+    /// `<value> :! <Type>`, or `<module> :| <Sig>`, beside which operator it is.
+    Ascribe(&'graph KExpression<'graph>, Ascription),
     /// `EVAL <code> -> <Type>`.
     Eval(&'graph KExpression<'graph>),
     /// `USING <module> SCOPE <body>`.
@@ -157,7 +153,7 @@ pub(super) fn evaluate<'graph>(
             finish(step, &at, value)
         }
         Form::Declaration => finish(step, &at, Value::Null),
-        Form::Ascribe(node) => ascribe(step, &at, node, stage),
+        Form::Ascribe(node, mode) => ascribe(step, &at, node, mode, stage),
         Form::Eval(node) => evaluated(step, &at, node, stage),
         Form::Using(node) => using(step, &at, node, stage),
         Form::Call(node, list) => call(step, &at, node, list, stage),
@@ -209,9 +205,10 @@ pub(super) fn of_node<'graph>(
         Some(BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda) => {
             return Form::Lambda(node);
         }
-        Some(BuiltinShapeId::AscribeTransparent | BuiltinShapeId::AscribeOpaque) => {
-            return Form::Ascribe(node);
+        Some(BuiltinShapeId::AscribeTransparent) => {
+            return Form::Ascribe(node, Ascription::Transparent);
         }
+        Some(BuiltinShapeId::AscribeOpaque) => return Form::Ascribe(node, Ascription::Opaque),
         Some(BuiltinShapeId::Eval) => return Form::Eval(node),
         Some(BuiltinShapeId::UsingScope) => return Form::Using(node),
         Some(BuiltinShapeId::BucketDeclaration) => return Form::Declaration,
@@ -275,6 +272,7 @@ fn ascribe<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_>,
     at: &Evaluation<'graph, 'here>,
     node: &'graph KExpression<'graph>,
+    mode: Ascription,
     stage: u32,
 ) -> Action<'graph, KBundle> {
     let program = at.program;
@@ -298,10 +296,6 @@ fn ascribe<'graph, 'here>(
             let error = program.error(writer, refused.display(program.symbols(), types));
             return finish(step, at, error);
         }
-    };
-    let mode = match node.cache().builtin_shape().map(|shape| shape.id) {
-        Some(BuiltinShapeId::AscribeOpaque) => Ascription::Opaque,
-        _ => Ascription::Transparent,
     };
     if view::views(types, mode, value.concrete_ktype(), ascribed) {
         let Some(module) = value.as_module() else {
@@ -611,7 +605,7 @@ fn call<'graph, 'here>(
             let barrier = callee.as_callable().and_then(Knotted::coerced).is_some();
             if let Some(contract) = at.contract
                 && !barrier
-                && select::keeps(types, registered.shape, solution, contract)
+                && contract.kept_by(types, registered.shape, Some(solution))
             {
                 let request = call(Some(contract));
                 return step.tail(request.placement, request.work);
@@ -735,33 +729,14 @@ fn apply<'graph, 'here>(
         )
     };
     if let Some(contract) = at.contract
-        && returns_within(program, head, contract.returns)
+        && (head.as_callable().and_then(Knotted::function))
+            .is_some_and(|function| contract.kept_by(program.types(), function.ktype(), None))
     {
         let request = call(Some(contract));
         return step.tail(request.placement, request.work);
     }
     let asked = step.spawn(call(None));
     park(step, at, asked, FINISHING)
-}
-
-/// Whether `callee` is an unquantified function whose declared return satisfies `returns`.
-fn returns_within(
-    program: &Program<'_>,
-    callee: KValue<'_, '_>,
-    returns: crate::type_lattice::KType,
-) -> bool {
-    let Some(function) = callee.as_callable().and_then(Knotted::function) else {
-        return false;
-    };
-    let DeclaredType::Type(ktype) = function.ktype() else {
-        return false;
-    };
-    match program.types().node(ktype) {
-        TypeNode::KFunction { ret, .. } => {
-            satisfied_by(program.types(), &Bump::new(), returns, ret)
-        }
-        _ => false,
-    }
 }
 
 /// Check that `value`, unless it is an error value, carries a type within its node's static type:

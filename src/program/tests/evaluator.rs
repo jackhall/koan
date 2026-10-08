@@ -30,7 +30,7 @@ use crate::scheduler::{
 };
 use crate::scope::{Builtins, CaptureSlot, Offer, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{DeclaredType, KType, TypeNode, TypeRegistry, satisfied_by};
+use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Circular, Knotted as _, Link, List, Record, TypeValue, Value};
 
 thread_local! {
@@ -434,7 +434,9 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 )
             };
             if let Some(contract) = contract
-                && keeps(program, callee, contract)
+                && (callee.as_callable().and_then(Knotted::function)).is_some_and(|function| {
+                    contract.kept_by(program.types(), function.ktype(), None)
+                })
             {
                 let request = request(Some(contract));
                 return step.tail(request.placement, request.work);
@@ -495,23 +497,6 @@ fn parameter(callee: KValue<'_, '_>) -> Option<crate::symbols::BinderSymbol> {
         .map(|slot| shape.slot_name(Slot(slot as u32)))
         .filter(|name| matches!(name, crate::symbols::BinderSymbol::Value(_)))
         .find(|name| shape.slot(*name).map(|(_, at)| at) == Some(Position::PARAMETER))
-}
-
-/// Whether `callee`, unquantified, declares a return that satisfies `contract` — so a call of it
-/// can be the contract's tail.
-fn keeps(program: &Program<'_>, callee: KValue<'_, '_>, contract: Contract) -> bool {
-    let Some(function) = callee.as_callable().and_then(Knotted::function) else {
-        return false;
-    };
-    let DeclaredType::Type(ktype) = function.ktype() else {
-        return false;
-    };
-    match program.types().node(ktype) {
-        TypeNode::KFunction { ret, .. } => {
-            satisfied_by(program.types(), &Bump::new(), contract.returns, ret)
-        }
-        _ => false,
-    }
 }
 
 /// `value` held to `contract`, when the evaluation was born under one.

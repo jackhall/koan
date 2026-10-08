@@ -17,7 +17,10 @@ use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
 use crate::scope::{BodyShape, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry, display_name};
+use crate::type_lattice::{
+    DeclaredType, KType, Parametric, TypeNode, TypeRegistry, display_name, satisfied_by,
+    substitute_quantified,
+};
 use crate::values::{Record, Tagged, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle};
@@ -82,6 +85,34 @@ pub struct Contract {
     /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
     /// that frame's caller asked for it.
     pub retype: KType,
+}
+
+impl Contract {
+    /// Whether a call of a callable of type `callee` — a function type or an expression shape —
+    /// returns a type satisfying this contract, its group solved to `solution`, so the evaluation
+    /// owing the contract can hop to the callee's frame. With no solution, as a call by name has
+    /// before its frame solves, a quantified callee keeps nothing. The one answer for every call.
+    pub fn kept_by(
+        self,
+        types: &TypeRegistry<'_>,
+        callee: DeclaredType<KType>,
+        solution: Option<&[KType]>,
+    ) -> bool {
+        let scratch = Bump::new();
+        let (node, solution) = match (callee, solution) {
+            (DeclaredType::Type(callee), _) => (types.node(Parametric::from(callee)), &[][..]),
+            (DeclaredType::Scheme(scheme), Some(solution)) => (types.scheme_node(scheme), solution),
+            (DeclaredType::Scheme(_), None) => return false,
+        };
+        let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) = node else {
+            return false;
+        };
+        // A run-time solution is concrete, and a scheme holds only its own group's variables.
+        let ret = substitute_quantified(types, &scratch, ret, solution);
+        types
+            .concrete(ret)
+            .is_some_and(|ret| satisfied_by(types, &scratch, self.returns, ret))
+    }
 }
 
 /// How a call reached its callee. A keyworded call's arguments were admitted by the selection that

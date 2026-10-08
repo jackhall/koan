@@ -9,7 +9,7 @@ use crate::knot::module::coerce::CoercionRefused;
 use crate::memory::Writer;
 use crate::parse::{KExpression, KeyElement};
 use crate::program::Program;
-use crate::scope::selection_refused;
+use crate::scope::{ViewRefused, selection_refused, view_refused};
 use crate::symbols::{KeySymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeRegistry, display_name};
 use crate::values::KeyRejected;
@@ -137,8 +137,15 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_> {
             Raised::Incomparable { left, right } => {
                 write!(f, "{} and {} cannot be compared", ktype(left), ktype(right))
             }
-            Raised::NotAModule { value } => write!(f, "{} is no module to ascribe", ktype(value)),
-            Raised::NotASignature { ascribed } => write!(f, "{} is no signature", ktype(ascribed)),
+            Raised::NotAModule { value } => {
+                view_refused(f, ViewRefused::NotAModule(value), self.symbols, self.types)
+            }
+            Raised::NotASignature { ascribed } => view_refused(
+                f,
+                ViewRefused::NotASignature(ascribed),
+                self.symbols,
+                self.types,
+            ),
             Raised::Coercion { name, refused } => write!(
                 f,
                 "member {} cannot take its view's type: {}",

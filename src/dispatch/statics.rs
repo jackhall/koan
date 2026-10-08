@@ -1477,7 +1477,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 None => unknown(),
             },
             Form::Declaration => Interval::point(KType::NULL.into()),
-            Form::Ascribe(node) => self.ascribe(level, node)?,
+            Form::Ascribe(node, mode) => self.ascribe(level, node, mode)?,
             Form::Eval(node) => self.eval(level, node)?,
             Form::Using(node) => self.using(level, node)?,
             Form::Call(node, list) => match self.member_scheme(level, node) {
@@ -1562,21 +1562,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
+        mode: Ascription,
     ) -> Result<Interval, ShapeError<'graph>> {
         let [operand, _, ascribed] = node.parts else {
             unreachable!("an ascription has an operand, its keyword and a type")
         };
         let (types, scratch) = (self.types, self.scratch);
-        let mode = match node.cache().builtin_shape().map(|shape| shape.id) {
-            Some(BuiltinShapeId::AscribeOpaque) => Ascription::Opaque,
-            _ => Ascription::Transparent,
-        };
         let declared = self.declared(level, &ascribed.value);
         let typed = self.part_at(level, &operand.value, declared)?;
         let operand = bound_above(types, scratch, typed.upper);
         let bounded = declared.map_or(KType::ANY, |declared| bound_above(types, scratch, declared));
         if view::views(types, mode, operand, bounded) {
-            return self.viewed(level, node, typed, declared);
+            return self.viewed(level, node, mode, typed, declared);
         }
         let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
         held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
@@ -1606,6 +1603,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
+        mode: Ascription,
         typed: Interval,
         declared: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'graph>> {
@@ -1652,11 +1650,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 at: node.source,
             });
         }
-        let opaque = node.cache().builtin_shape().map(|shape| shape.id)
-            == Some(BuiltinShapeId::AscribeOpaque);
         let view = types
             .concrete(declared)
-            .filter(|_| !opaque)
+            .filter(|_| mode == Ascription::Transparent)
             .and_then(|declared| transparent_view_type(exact, declared, types, scratch));
         Ok(view.map_or_else(|| under(declared), |view| Interval::point(view.into())))
     }

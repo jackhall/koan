@@ -22,14 +22,12 @@
 use crate::knot::module::layout;
 use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpVec, Writer};
-use crate::program::Contract;
 use crate::scope::{Candidate, Coordinate, IMPLICIT};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, outranks, satisfied_by,
-    scheme_return, scheme_slots, select_by_class, shape_return, shape_slots, solving_slots,
-    substitute_quantified,
+    scheme_slots, select_by_class, shape_slots, solving_slots, substitute_quantified,
 };
 use crate::values::{List, Record, TypeValue, Value};
 
@@ -321,27 +319,4 @@ pub(super) fn arguments<'graph, 'here>(
         fields.push((BinderSymbol::Type(name), Value::Type(solved)));
     }
     Value::Record(Record::new(writer, &fields, types, scratch))
-}
-
-/// Whether a call of the function registered at `shape`, its group solved to `solution`, returns a
-/// type satisfying `contract` — so the evaluation owing the contract can hop to its frame. A call
-/// through a barrier never hops, which its caller checks.
-pub(super) fn keeps(
-    types: &TypeRegistry<'_>,
-    shape: DeclaredType<KType>,
-    solution: &[KType],
-    contract: Contract,
-) -> bool {
-    let scratch = Bump::new();
-    let returns = match shape {
-        DeclaredType::Type(shape) => shape_return(shape, types),
-        // A run-time solution is concrete, and a scheme holds only its own group's variables.
-        DeclaredType::Scheme(scheme) => scheme_return(scheme, types).map(|returns| {
-            let returns = substitute_quantified(types, &scratch, returns, solution);
-            types
-                .concrete(returns)
-                .expect("a run-time scheme holds only its own group's variables")
-        }),
-    };
-    returns.is_some_and(|returns| satisfied_by(types, &scratch, contract.returns, returns))
 }

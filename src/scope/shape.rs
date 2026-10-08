@@ -1682,15 +1682,14 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 display_name(*callee, self.types, self.symbols),
                 display_name(*arguments, self.types, self.symbols)
             ),
-            ShapeError::NotAModule { value, .. } => write!(
+            ShapeError::NotAModule { value, .. } => {
+                view_refused(f, ViewRefused::NotAModule(*value), self.symbols, self.types)
+            }
+            ShapeError::NotASignature { ascribed, .. } => view_refused(
                 f,
-                "{} is no module to ascribe",
-                display_name(*value, self.types, self.symbols)
-            ),
-            ShapeError::NotASignature { ascribed, .. } => write!(
-                f,
-                "{} is no signature",
-                display_name(*ascribed, self.types, self.symbols)
+                ViewRefused::NotASignature(*ascribed),
+                self.symbols,
+                self.types,
             ),
             ShapeError::NotCode { value, .. } => write!(
                 f,
@@ -1746,6 +1745,40 @@ pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
     match ambiguous {
         None => Ok(()),
         Some(_) => f.write_str(" and none ranks first"),
+    }
+}
+
+/// Why the view door refuses an ascription, whatever the operand's or the type's other faults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewRefused {
+    /// The operand, of this type, is no module.
+    NotAModule(KType),
+    /// The type ascribed is no one application of a signature.
+    NotASignature(KType),
+}
+
+/// A refused view worded, for the load's refusal and the run's fault alike.
+pub fn view_refused(
+    f: &mut fmt::Formatter<'_>,
+    refused: ViewRefused,
+    symbols: &SymbolInterner,
+    types: &TypeRegistry<'_>,
+) -> fmt::Result {
+    match refused {
+        ViewRefused::NotAModule(value) => {
+            write!(
+                f,
+                "{} is no module to ascribe",
+                display_name(value, types, symbols)
+            )
+        }
+        ViewRefused::NotASignature(ascribed) => {
+            write!(
+                f,
+                "{} is no signature",
+                display_name(ascribed, types, symbols)
+            )
+        }
     }
 }
 

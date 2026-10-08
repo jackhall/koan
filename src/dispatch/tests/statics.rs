@@ -7,7 +7,7 @@ use crate::program::{CellSubstrate, Program};
 use crate::scope::{BodyShape, Narrowing, ShapeKind, Site, Slot, Static};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, Verdict, class_at_least, display_name,
+    DeclaredType, Interval, KType, Parametric, Verdict, display_name, outranks,
 };
 
 use super::{Koan, output, run};
@@ -554,8 +554,7 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
         let (crates, boxes) = (pick(true), pick(false));
         let scratch = Bump::new();
         let (crates, boxes) = (crates.into(), boxes.into());
-        assert!(class_at_least(program.types(), &scratch, crates, boxes, 0));
-        assert!(!class_at_least(program.types(), &scratch, boxes, crates, 0));
+        assert!(outranks(program.types(), &scratch, crates, boxes, 0));
     });
     let module = "MODULE crate = (\
                   (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x])) (LET size = 1))\n";
