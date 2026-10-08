@@ -9,8 +9,8 @@
 //!
 //! The signature alone places a named member ([`schema_member`]): a body-born module's tie and a
 //! `USING` block place each member by name through it, so `m.f` is an index, not a search, and
-//! nothing assumes a body's or a block's slot order matches. A signature names a keyworded member by
-//! its shape, never by a slot, so the registration run is the tail past every named member: a
+//! nothing assumes a body's or a block's slot order matches. A signature names a keyworded member
+//! by its shape, never by a slot, so the registration run is the tail past every named member: a
 //! body-born module's registrations in slot order, or each overload a view carries for its
 //! signature's keyworded members, in the signature's order.
 //!

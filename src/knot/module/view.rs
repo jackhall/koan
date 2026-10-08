@@ -16,8 +16,9 @@
 //! [coerced](super::coerce) to the carriers. A pinned parameter keeps its pin either way.
 //!
 //! A view carries a keyworded member too: past its named members, each overload the source offers
-//! at the member's key that the member read under the source's bindings admits, [coerced](super::coerce::coerce)
-//! as any member is — behind a barrier where the view reads the member otherwise.
+//! at the member's key that the member read under the source's bindings admits,
+//! [coerced](super::coerce::coerce) as any member is — behind a barrier where the view reads the
+//! member otherwise.
 //!
 //! No carrier is made at a *nested* boundary. A slot declared at an application whose pins name
 //! the outer signature's parameters is re-viewed against it read under the outer view's bindings,

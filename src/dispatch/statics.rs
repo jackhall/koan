@@ -56,12 +56,12 @@
 //! Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running it reports it.
 //!
 //! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
-//! binder is exactly the signature the run ties where every member is exact
-//! ([`module_signature`]), else at most `Module`. An ascription is a view where the run builds one
-//! (`:|` always, `:!` of a signature type to one; [`view::views`]): refused where every run's view
-//! door refuses it — an operand that can never be a module, a closed type that is no one
-//! application of a signature — or where an exact operand can never fit it; exactly the view's
-//! signature under `:!` over an exact operand, and at most the type otherwise. A member read `m.f` is typed by its
+//! binder is exactly the signature the run ties where every member is exact ([`module_signature`]),
+//! else at most `Module`. An ascription is a view where the run builds one (`:|` always, `:!` of a
+//! signature type to one; [`view::views`]): refused where every run's view door refuses it — an
+//! operand that can never be a module, a closed type that is no one application of a signature — or
+//! where an exact operand can never fit it; exactly the view's signature under `:!` over an exact
+//! operand, and at most the type otherwise. A member read `m.f` is typed by its
 //! [rule](super::rules), which reads the member off the operand's signature, and refused where a
 //! signature its lower end is lacks the member. A `USING … SCOPE` body is typed as a block, each
 //! surfaced name at the member read it names; a key it surfaces is a spread typed by the one head

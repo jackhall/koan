@@ -5,11 +5,11 @@
 //! The rule types a call at the load. [`statics`](super::statics) hands it each slot's static type
 //! and what the slot holds as written, types a builtin's call at [`typed`]'s return, and drops a
 //! candidate an argument's lower end lies outside a need of — the judge's own test,
-//! [`lower_end_outside`] — naming the field or member the argument lacks ([`Lacks`]). The run reads no rule: each native
-//! reads its operands through [the door](crate::values::Surface), so its value carries its rule's
-//! exact return, which the evaluator checks against the static type in debug builds. `FROM` and
-//! `ATTR` over a record have rules of their own; every other native takes its declared slots as its
-//! needs and a return at most its declared one.
+//! [`lower_end_outside`] — naming the field or member the argument lacks ([`Lacks`]). The run reads
+//! no rule: each native reads its operands through [the door](crate::values::Surface), so its value
+//! carries its rule's exact return, which the evaluator checks against the static type in debug
+//! builds. `FROM` and `ATTR` over a record have rules of their own; every other native takes its
+//! declared slots as its needs and a return at most its declared one.
 //!
 //! Every rule obeys a law, which `tests::rules` checks for every builtin: over argument intervals
 //! within others, its return lies within theirs; handed no names, its return lies around its return
