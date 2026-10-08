@@ -5,6 +5,7 @@
 
 use crate::memory::Edge;
 
+use super::digest::{ContentDigest, Digests, edge};
 use super::{Knotted, Nothing, Value, Weight};
 
 /// A value word, or an edge into the holder's own knot.
@@ -46,6 +47,24 @@ impl<'cell, X: Knotted> Link<'cell, X> {
             Link::Edge(_) => Weight::ZERO,
         };
         Weight::flat::<Self>().plus(referent)
+    }
+
+    /// The link's digest: a value's own, through `memo`, or an edge's index, since the edge names a
+    /// sibling its knot's digest covers.
+    pub fn digest(&self, memo: &mut Digests<'_, '_, X>) -> ContentDigest {
+        match self {
+            Link::Value(value) => value.digest_in(memo),
+            Link::Edge(at) => edge(*at),
+        }
+    }
+
+    /// The link's digest inside its knot's, a value's finished digest taken from `parts`: an edge
+    /// by its index. A knot [holds](super::Knotted::held) the value, and the walk digests it.
+    pub fn digest_from(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
+        match self {
+            Link::Value(_) => parts(),
+            Link::Edge(at) => edge(*at),
+        }
     }
 
     /// The part of [`weight`](Self::weight) past the link word.

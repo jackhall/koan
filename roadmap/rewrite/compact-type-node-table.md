@@ -5,8 +5,9 @@ its largest variants: `Signature` (a `SigSchema` is 88 B), `SetMember` and
 `ExpressionShape`. The variants a
 program mints most often (`List`, `Dict`, `Record`, `KFunction`, `Union`) need
 48 B or less. The [registry](../../lattice/src/types/registry.rs)'s node table
-stores an `Entry` beside each key: the node plus its `quantified` and `rigid`
-flags, which pad it to 128 B, so each bucket is 144 B. The table is a hashbrown map
+stores an `Entry` beside each key: the node plus its four probe flags
+(`quantified`, `rigid`, `parametric`, `carrier`), which pad it to 128 B, so each
+bucket is 144 B. The table is a hashbrown map
 in [program storage](../../src/program/README.md) that doubles when full. The
 bump can't take the old table back, so after each doubling the previous bucket
 array sits dead until the program ends. A registry of 16k mixed types, measured
@@ -23,7 +24,7 @@ table ahead of the program it serves.
   the digest of every type is unchanged.
 - One program interned twice, into two registries, yields the same digests,
   pinned by a test.
-- The `quantified` and `rigid` flags are a one-byte `Flags` field in each
+- The four probe flags are a one-byte `Flags` field in each
   non-leaf variant, read through one `TypeNode::flags` door that answers
   `Flags::NONE` for a leaf. `Entry` does not exist, and a node table bucket is
   64 B.
@@ -44,10 +45,12 @@ table ahead of the program it serves.
 
 **Directions.**
 
-- *`Parameter` — open.* [Modules](modules.md) keys an opaque carrier on
-  content rather than on the nonce a `:|` mint in
-  [`knot/module/view.rs`](../../src/knot/module/view.rs) carries, so what
-  `Parameter` holds in the nonce's place follows from that item's carrier key.
+- *`Carrier` — open.* An opaque view's carrier holds a 16 B `ContentKey` the
+  [view door](../../src/knot/module/view.rs) computes, beside its 16 B name and
+  its 16 B met bound, so the three do not fit 48 B inline with a tag. Options:
+  move the key behind one `&'run` reference laid on an intern miss, which costs
+  a hop only where a carrier is digested or compared; or the met bound, which
+  only a signature's fit reads.
 - *The layouts of `Signature` and `SetMember` — decided.*
   Each has room for a `u16` at offset 2, a `u32` at offset 4, one thin
   reference at offset 8 and two 16 B fields:

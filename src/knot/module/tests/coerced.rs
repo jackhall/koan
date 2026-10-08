@@ -1,7 +1,7 @@
 //! The barrier node: a function member behind an opaque view, and what crossing it does.
 //!
-//! [modules](../../../../roadmap/rewrite/modules.md) teaches a call to go through the barrier; this
-//! item only lays the node down, so these pin what it holds and what `values` sees through it.
+//! These pin what the node holds and what `values` sees through it; a call through the barrier is
+//! dispatch's module suite.
 //! Copying one is `copy::a_copied_barrier_outlives_its_home`, on the Miri slate.
 
 use crate::memory::{CellGraph, ReleaseAbsorption};

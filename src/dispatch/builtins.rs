@@ -16,13 +16,15 @@
 //! tagged value through [the door](crate::values::Surface), so what it returns already carries the
 //! type its [type rule](super::rules) gives: `ATTR` restamps the field at the type its record's type
 //! names, through each tagged layer at its representation, and `FROM` restamps the record at the
-//! fields it names.
+//! fields it names. `ATTR` over a module reads the member at its layout index, a quantified one
+//! made into the instance the load solved at the read.
 
 use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
-use crate::knot::{KBuiltins, KValue, UsingRefused, builtin, using};
+use crate::knot::module::layout;
+use crate::knot::{KBuiltins, KValue, UsingRefused, builtin, instance, using};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
-use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, ShapeElement};
-use crate::scope::Builtins;
+use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
+use crate::scope::{Builtins, InstanceRead, Site};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, KType, TypeNode, TypeRegistry, builtin_types, meet,
@@ -229,11 +231,12 @@ pub(super) fn table<'graph>(
     Builtins::new(writer, scratch, &[], &names, &overloads)
 }
 
-/// Run `native` over the operands its overload admitted, for a call evaluated through `at`,
-/// building in `writer`'s region and taking transients from `scratch`.
+/// Run `native` over the operands its overload admitted, for the call `node` evaluated through
+/// `at`, building in `writer`'s region and taking transients from `scratch`.
 pub(super) fn run<'graph, 'here>(
     native: Native,
     at: &Evaluation<'graph, 'here>,
+    node: &'graph KExpression<'graph>,
     writer: Writer<'here>,
     operands: &[Operand<'graph, 'here>],
     scratch: &Bump,
@@ -310,7 +313,39 @@ pub(super) fn run<'graph, 'here>(
                 });
             type_value(met)
         }
-        Native::ModuleMember => raise(Raised::ModuleMember),
+        Native::ModuleMember => {
+            let module = value(0)
+                .as_module()
+                .expect("a module slot admits modules alone");
+            let name = label(operands[1]);
+            let Some(member) = layout::member(module, name, types, scratch) else {
+                return raise(Raised::NoMember {
+                    of: value(0).concrete_ktype(),
+                    member: name.symbol(),
+                });
+            };
+            // A quantified member is read at the instance the load solved at this site, or as it
+            // is at a call's head.
+            match at.view.shape().instance_at(Site::of_node(node)) {
+                Some(InstanceRead::AsIs) => member,
+                // A quantified member behind a barrier names a carrier, which the load refuses to
+                // instantiate at.
+                Some(InstanceRead::Solved(solution)) => {
+                    match member.as_callable().filter(|f| f.function().is_some()) {
+                        Some(function) => Value::Knotted(instance(
+                            writer, function, solution, &at.view, types, scratch,
+                        )),
+                        None => raise(Raised::BarrierInstance {
+                            name: name.symbol(),
+                        }),
+                    }
+                }
+                None if member.ktype().as_type().is_none() => raise(Raised::QuantifiedMember {
+                    name: name.symbol(),
+                }),
+                None => member,
+            }
+        }
         Native::Field => {
             let (record, name) = (value(0), label(operands[1]).symbol());
             // A type's field is the type its record declares the field with, as `:(Point.y)` reads.

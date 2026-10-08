@@ -23,6 +23,8 @@ use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Seen};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
@@ -45,6 +47,26 @@ impl Knotted for Probe {
 
     fn weight(&self) -> Weight {
         Weight::ZERO
+    }
+
+    /// A probe holds no value: every probe is a member of one empty knot, told apart by its index.
+    fn held<'a>(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+    }
+
+    fn digest_held(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
+        DigestHasher::new(Tag::Knot).finished()
     }
 
     fn sibling(&self, edge: Edge) -> Self {
@@ -280,6 +302,15 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             E::NoAdmittingCandidate { key, arguments, at }
         }
         E::NoField { of, field, .. } => E::NoField { of, field, at },
+        E::NoMember { of, member, .. } => E::NoMember { of, member, at },
+        E::Unlisted { name, .. } => E::Unlisted { name, at },
+        E::UnpinnedMember {
+            member, parameter, ..
+        } => E::UnpinnedMember {
+            member,
+            parameter,
+            at,
+        },
         E::Ambiguous {
             key,
             arguments,
@@ -316,6 +347,8 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             at,
         },
         E::NotCode { value, .. } => E::NotCode { value, at },
+        E::NotAModule { value, .. } => E::NotAModule { value, at },
+        E::NotASignature { ascribed, .. } => E::NotASignature { ascribed, at },
         E::EvalNeverSatisfied { code, returns, .. } => E::EvalNeverSatisfied { code, returns, at },
         E::Type { error, .. } => E::Type { error, at },
         E::RepeatedGuard { guard, .. } => E::RepeatedGuard {

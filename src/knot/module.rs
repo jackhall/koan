@@ -1,8 +1,12 @@
 //! Modules as values: the node a module is, the views `:|` and `:!` build, the coercion that
 //! births a view's members, and the binding a `USING … SCOPE` block enters on.
 //!
-//! A module's node holds its self-signature, its members in layout order and its knot weight —
-//! never an activation, since a view has no body to activate. A module is always a one-node knot:
+//! A module's node holds its self-signature, its members in layout order, its knot weight and its
+//! content — never an activation, since a view has no body to activate. Its content is what it is,
+//! not what it holds: a body-born module's code over what it captures, and a view's operator and
+//! application over its source. [`ModuleContent`] owns that recipe, and an opaque view's carriers
+//! are keyed on it. It is the one content computed where the node is born, since a module keeps no
+//! captures to digest later. A module is always a one-node knot:
 //! a mention reached from a module binder's root is eager whatever body it sits in. [`birth`] is
 //! where a body-born one comes from, [`Module::tie`] the one private-field door a body-born module
 //! and a view both go through, so there is one representation and one copy.
@@ -15,14 +19,13 @@
 //! A **view** narrows: [`view::ascribe`] checks the source satisfies the signature, keeps only what
 //! the signature names, and lays a module node of its own down through the same door. Under `:!`
 //! the view's types are the source's, so every member is carried verbatim. Under `:|` each abstract
-//! member is minted afresh per application, and every member is born **coerced** to the mint: data
-//! is re-tagged through the admission barrier, containers are rebuilt cell by cell, a nested module
-//! is re-viewed, and a function is wrapped in a [`Coerced`] barrier node a call will later go
-//! through.
+//! member is hidden behind a carrier keyed on content, and every member is born **coerced** to it:
+//! data is re-tagged through the admission barrier, containers are rebuilt cell by cell, a nested
+//! module is re-viewed, and a function is wrapped in a [`Coerced`] barrier node a call will later
+//! go through.
 //!
-//! What this layer does *not* do is evaluate anything: `m :| Sig`, `m.f`, a `USING` expression and
-//! a call through a barrier are all [modules](../../roadmap/rewrite/modules.md)' work. Here are the
-//! doors those will drive.
+//! What this layer does *not* do is evaluate anything: dispatch evaluates
+//! `m :| Sig`, `m :! Sig` and `m.f` through the doors here.
 //!
 //! This module names its [knot vocabulary](crate::knot) through the facade and never its sibling
 //! [`function`](super::function).
@@ -41,8 +44,9 @@ mod tests;
 pub use birth::{body_activation, tie_member};
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
-use crate::type_lattice::{DeclaredType, KType, Parametric};
-use crate::values::{Knotted as _, Weight};
+use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Knotted as _, Seen, Value, Weight};
 
 use super::{KValue, Knotted, Node};
 
@@ -53,6 +57,9 @@ pub struct Module<'graph, 'cell> {
     members: &'cell [KValue<'graph, 'cell>],
     /// What rebuilding the whole knot this node sits in writes, the same on every node.
     knot_weight: Weight,
+    /// What the module is: its knot digests over it. It sits beside the node, as a barrier does, so
+    /// the module arm keeps the node's width.
+    content: &'cell ModuleContent,
 }
 
 impl Clone for Module<'_, '_> {
@@ -64,27 +71,34 @@ impl Clone for Module<'_, '_> {
 impl Copy for Module<'_, '_> {}
 
 impl<'graph, 'cell> Module<'graph, 'cell> {
-    /// A module over `members`, already in layout order under `ktype`, laid down as a one-node knot
-    /// in `writer`'s region. The one private-field constructor the tie and the view door share; the
-    /// module is node `0`.
+    /// A module over `members`, already in layout order under `ktype`, whose content is `content`,
+    /// laid down as a one-node knot in `writer`'s region. The one private-field constructor the tie
+    /// and the view door share; the module is node `0`.
     ///
     /// A member that is itself a knot member carries its whole knot's weight, since a crossing
-    /// rebuilds that knot whole.
+    /// rebuilds that knot whole; the content beside the node weighs in too. The content is what the
+    /// module is — a body's code over what it captures, or a view's operator and application over
+    /// its source — never its members, which that content determines.
     pub fn tie(
         writer: Writer<'cell>,
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
+        content: ModuleContent,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         let knot_weight = members.iter().fold(
-            Weight::flat::<usize>().plus(Weight::flat::<Node<'graph, 'cell>>()),
+            Weight::flat::<usize>()
+                .plus(Weight::flat::<Node<'graph, 'cell>>())
+                .plus(Weight::flat::<ModuleContent>()),
             |weight, member| weight.plus(member.weight()),
         );
         let members = collect(writer, members.iter().copied());
+        let content = resident(writer, content);
         KnotPlan::new(1).tie(writer, |_| {
             Node::Module(Module {
                 ktype,
                 members,
                 knot_weight,
+                content,
             })
         })
     }
@@ -103,22 +117,89 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         self.knot_weight
     }
 
-    /// This module over `members` rebuilt at another region lifetime — the copy's arm. The
-    /// signature and the knot weight are facts about the members, which the copy preserves.
-    pub(super) fn rebuilt<'to>(&self, members: &'to [KValue<'graph, 'to>]) -> Module<'graph, 'to> {
+    /// What the module is, computed where it was born.
+    pub fn content(&self) -> ModuleContent {
+        *self.content
+    }
+
+    /// This module over `members` rebuilt in `writer`'s region — the copy's arm. The signature, the
+    /// knot weight and the content are facts about the members, which the copy preserves.
+    pub(super) fn rebuilt<'to>(
+        &self,
+        writer: Writer<'to>,
+        members: &'to [KValue<'graph, 'to>],
+    ) -> Module<'graph, 'to> {
         Module {
             ktype: self.ktype,
             members,
             knot_weight: self.knot_weight,
+            content: resident(writer, *self.content),
         }
+    }
+}
+
+/// What a module is, as its knot digests it: a body-born module's code over what it captures, or a
+/// view's operator and application over its source. Its constructors are the one recipe for either,
+/// and an opaque view's carriers are keyed on its bits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ModuleContent(ContentDigest);
+
+/// Which door a view came through, a part of its content.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Operator {
+    /// `:!`.
+    Transparent,
+    /// `:|`.
+    Opaque,
+    /// The re-view a nested module takes at an opaque boundary.
+    Reviewed,
+}
+
+impl ModuleContent {
+    /// A body-born module's content: its body's `code` digest, then each capture the code digest
+    /// does not name, beside its slot, as [`composed`](super::composed) yields them.
+    pub fn body(code: ContentDigest, captures: &[(usize, ContentDigest)]) -> ModuleContent {
+        let mut hasher = DigestHasher::new(Tag::Module);
+        hasher.digest(code);
+        for (index, capture) in captures.iter().copied() {
+            hasher.count(index).digest(capture);
+        }
+        ModuleContent(hasher.finished())
+    }
+
+    /// A view's content: its `operator` and the `application` it was built at, over its `source`'s
+    /// digest.
+    pub fn view(operator: Operator, application: KType, source: ContentDigest) -> ModuleContent {
+        let operator = match operator {
+            Operator::Transparent => Tag::Transparent,
+            Operator::Opaque => Tag::Opaque,
+            Operator::Reviewed => Tag::Reviewed,
+        };
+        ModuleContent(
+            DigestHasher::new(Tag::View)
+                .tag(operator)
+                .feed(application)
+                .digest(source)
+                .finished(),
+        )
+    }
+
+    /// The key an opaque view's carriers are made under: its own content, so two views of equal
+    /// content share their carriers.
+    pub fn carrier_key(&self) -> ContentKey {
+        ContentKey(self.0.bits())
+    }
+
+    /// The digest the module's knot reads as its node's content.
+    pub(super) fn digest(self) -> ContentDigest {
+        self.0
     }
 }
 
 /// A function member behind an opaque view's barrier: what one knot node points at.
 ///
-/// A call goes through the barrier — coercing its arguments inwards and its return outwards —
-/// before `underlying` runs; that is [modules](../../roadmap/rewrite/modules.md)' work, not this
-/// item's, which only gives the barrier somewhere to live.
+/// A call goes through the barrier before `underlying` runs: its arguments cross
+/// [`inward`](coerce::inward) and its return [`outward`](coerce::outward).
 pub struct Coerced<'graph, 'cell> {
     underlying: Knotted<'graph, 'cell>,
     ktype: DeclaredType<KType>,
@@ -207,9 +288,28 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         self.knot_weight
     }
 
+    /// The value the node's content covers: the function member it stands before.
+    pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
+    where
+        'cell: 'a,
+    {
+        out(Seen::of(Value::Knotted(self.underlying)));
+    }
+
+    /// The node's content: what stands before its function, its digest answered by `parts`, at
+    /// the types the two sides read.
+    pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
+        DigestHasher::new(Tag::Barrier)
+            .digest(parts())
+            .feed(self.ktype)
+            .feed(self.declared)
+            .feed(self.from)
+            .feed(self.to)
+            .finished()
+    }
+
     /// This barrier over `underlying` rebuilt at another region lifetime — the copy's arm. The
-    /// types and the knot weight are facts about what sits behind the barrier, which the copy
-    /// preserves.
+    /// types and the knot weight ride over.
     pub(super) fn rebuilt<'to>(&self, underlying: Knotted<'graph, 'to>) -> Coerced<'graph, 'to> {
         Coerced {
             underlying,

@@ -34,15 +34,17 @@ use std::fmt;
 
 use crate::elaborate::{denoted, type_declarations};
 use crate::knot::body_activation;
+use crate::knot::module::coerce::{self, CoercionRefused};
+use crate::knot::module::surface::surface;
 use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Untieable, tie};
-use crate::memory::{Bump, BumpVec, resident};
+use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::Static;
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
+use crate::scope::{ParameterBinding, Static};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, KType, Parametric, TypeNode, TypeRegistry, Variance, admits_with,
@@ -68,6 +70,8 @@ pub struct Runner<'graph, 'cell> {
     level: Level,
     /// What a called frame or an `EVAL`'s owes; `None` everywhere else.
     contract: Option<Contract>,
+    /// The outermost barrier a frame was called through, which its value crosses outwards.
+    barrier: Option<Knotted<'graph, 'cell>>,
     stage: Stage,
 }
 
@@ -149,9 +153,10 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             contributed,
             owed,
         }) => match frame(&step, program, callee, arguments, kind, contributed, owed) {
-            Ok((activation, contract)) => {
-                Runner::at(program, activation, Level::Frame, Some(contract))
-            }
+            Ok((activation, contract, barrier)) => Runner {
+                barrier,
+                ..Runner::at(program, activation, Level::Frame, Some(contract))
+            },
             Err(message) => {
                 let error = program.error(step.writer(), message);
                 return step.finish(error, program.types());
@@ -170,10 +175,22 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             program,
             shape,
             enclosing,
+            module,
         }) => {
             let writer = step.writer();
             let enclosing = resident(writer, enclosing);
             let activation = resident(writer, KActivation::of_block(writer, shape, enclosing));
+            // A `USING` body's parameters are the module's surfaced names, which its shape and the
+            // module cannot disagree on: a refusal is an invariant break.
+            if let Some(module) = module {
+                let (types, bump) = (program.types(), Bump::new());
+                let surfaced = module
+                    .as_module()
+                    .map(|module| surface(writer, module, activation, types, &bump));
+                if !matches!(surfaced, Some(Ok(()))) {
+                    return step.failed(StepError::Refused);
+                }
+            }
             Runner::at(program, activation, Level::Block, None)
         }
         KState::Runner(mut runner) => match woken(&mut step, &mut runner, scratch) {
@@ -203,12 +220,10 @@ pub fn call<'graph, 'here>(
     let returns = callee
         .as_callable()
         .and_then(Knotted::function)
-        .and_then(
-            |function| match function_node(program.types(), function.ktype()) {
-                TypeNode::KFunction { ret, .. } => Some(ret),
-                _ => None,
-            },
-        );
+        .and_then(|function| match function.ktype().node(program.types()) {
+            TypeNode::KFunction { ret, .. } => Some(ret),
+            _ => None,
+        });
     Request {
         placement: returns.map_or(Placement::Shares, placement_of),
         use_,
@@ -234,6 +249,19 @@ pub fn block<'graph, 'here>(
     enclosing: KActivationView<'graph, 'here>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
+    surfaced_block(program, shape, enclosing, None, use_)
+}
+
+/// What an evaluator asks for to run `shape`, a `USING … SCOPE` body, inside `enclosing`, its
+/// parameters bound to what `module` surfaces: [`block`]'s request, the block entered on the
+/// module.
+pub fn surfaced_block<'graph, 'here>(
+    program: &'graph Program<'graph>,
+    shape: &'graph BodyShape<'graph>,
+    enclosing: KActivationView<'graph, 'here>,
+    module: Option<KValue<'graph, 'here>>,
+    use_: Use,
+) -> Request<'graph, 'here, KBundle> {
     debug_assert_eq!(shape.kind(), ShapeKind::Block);
     Request {
         placement: Placement::Shares,
@@ -244,6 +272,7 @@ pub fn block<'graph, 'here>(
                 program,
                 shape,
                 enclosing,
+                module,
             },
         },
     }
@@ -368,18 +397,6 @@ pub fn placement_of(returns: impl Into<Parametric>) -> Placement {
     }
 }
 
-/// A function's type's node, its positions read as the function's group may: a scheme's read its
-/// own variables.
-fn function_node<'run>(
-    types: &TypeRegistry<'run>,
-    ktype: DeclaredType<KType>,
-) -> TypeNode<'run, Parametric> {
-    match ktype {
-        DeclaredType::Type(ktype) => types.node(Parametric::from(ktype)),
-        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
-    }
-}
-
 /// Why a callee's position read under its solution is concrete: a function is born with no
 /// variable outside its own group, and a run-time solution is concrete.
 const SOLVED: &str = "a run-time callee holds only its own group's variables";
@@ -399,6 +416,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
             outer: None,
             level,
             contract,
+            barrier: None,
             stage: Stage::Next,
         }
     }
@@ -418,9 +436,11 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     }
 
     /// Whether `unit` is a frame's last, a statement binding nothing whose value is the frame's —
-    /// which the runner hands to the evaluator by a tail rather than waiting on.
+    /// which the runner hands to the evaluator by a tail rather than waiting on. A frame called
+    /// through a barrier never tails: its value crosses the barrier where the frame ends.
     fn tails(&self, unit: Unit) -> bool {
         self.level == Level::Frame
+            && self.barrier.is_none()
             && self.yields(unit)
             && self.unit as usize + 1 == self.shape().units().len()
             && matches!(unit.work, UnitWork::Statement(_))
@@ -474,6 +494,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 /// in symbol order, and its carried type where there is none — beside the contract the frame ends
 /// under. The error value's message when the callee is no function, the arguments do not name its
 /// parameters exactly, an argument does not fit its parameter, or the group has no solution.
+#[allow(clippy::type_complexity)]
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     program: &'graph Program<'graph>,
@@ -482,10 +503,39 @@ fn frame<'graph, 'here>(
     kind: CallKind,
     contributed: &[Option<KType>],
     owed: Option<Contract>,
-) -> Result<(&'here KActivation<'graph, 'here>, Contract), &'here str> {
+) -> Result<
+    (
+        &'here KActivation<'graph, 'here>,
+        Contract,
+        Option<Knotted<'graph, 'here>>,
+    ),
+    &'here str,
+> {
     let types = program.types();
     let writer = step.writer();
     let name = |handle| display_name(handle, types, program.symbols());
+    // A barrier stands before the function a call runs: the arguments cross each one inwards, and
+    // the function behind them is called by name, admitting and solving as a call by name does.
+    let barrier = callee
+        .as_callable()
+        .filter(|member| member.coerced().is_some());
+    let (callee, arguments, kind, contributed) = match barrier {
+        Some(outermost) => {
+            let crossed = crossed_in(writer, program, outermost, arguments).map_err(|refusal| {
+                rendered(
+                    writer,
+                    format_args!(
+                        "{} cannot be called with {}: {}",
+                        name(callee.ktype()),
+                        name(arguments.ktype()),
+                        refusal.display(types, program.symbols())
+                    ),
+                )
+            })?;
+            (crossed.0, crossed.1, CallKind::ByName, &[][..])
+        }
+        None => (callee, arguments, kind, contributed),
+    };
     let Some((member, function)) = callee
         .as_callable()
         .and_then(|member| Some((member, member.function()?)))
@@ -533,7 +583,7 @@ fn frame<'graph, 'here>(
         bounds,
         params,
         ret,
-    } = function_node(types, function.ktype())
+    } = function.ktype().node(types)
     else {
         unreachable!("a function's type is a function type")
     };
@@ -697,7 +747,63 @@ fn frame<'graph, 'here>(
         returns,
         retype: owed.map_or(returns, |outer| outer.retype),
     };
-    Ok((activation, contract))
+    Ok((activation, contract, barrier))
+}
+
+/// `arguments`, handed to a call through the barrier `outermost`, crossed inwards through it and
+/// every barrier stacked behind it: the function behind them all, beside the record it takes.
+fn crossed_in<'graph, 'here>(
+    writer: Writer<'here>,
+    program: &'graph Program<'graph>,
+    outermost: Knotted<'graph, 'here>,
+    arguments: KValue<'graph, 'here>,
+) -> Result<(KValue<'graph, 'here>, KValue<'graph, 'here>), CoercionRefused> {
+    let (types, bump) = (program.types(), Bump::new());
+    // A keyworded member's slots bind the names the function behind every barrier registers.
+    let innermost = outermost.behind_barriers();
+    let parameters = innermost
+        .function()
+        .and_then(|function| function.registered())
+        .map_or(ParameterBinding::Named(&[]), |registered| {
+            registered.parameters
+        });
+    let mut arguments = arguments;
+    for barrier in outermost.barriers() {
+        arguments = coerce::inward(writer, barrier, arguments, parameters, types, &bump)?;
+    }
+    Ok((Value::Knotted(innermost), arguments))
+}
+
+/// `value`, what the function behind the barrier `outermost` returned, crossed outwards through
+/// every barrier stacked there, innermost first. A refusal is an error value.
+fn crossed_out<'graph, 'here>(
+    writer: Writer<'here>,
+    program: &'graph Program<'graph>,
+    outermost: Knotted<'graph, 'here>,
+    value: KValue<'graph, 'here>,
+) -> KValue<'graph, 'here> {
+    if program.message(&value).is_some() {
+        return value;
+    }
+    let (types, bump) = (program.types(), Bump::new());
+    let mut stacked = BumpVec::new_in(&bump);
+    for barrier in outermost.barriers() {
+        stacked.push(barrier);
+    }
+    let mut value = value;
+    for barrier in stacked.iter().rev() {
+        value = match coerce::outward(writer, barrier, value, types, &bump) {
+            Ok(value) => value,
+            Err(refusal) => {
+                let refusal = refusal.display(types, program.symbols());
+                return program.error(
+                    writer,
+                    format_args!("a value returned through a view cannot take its type: {refusal}"),
+                );
+            }
+        };
+    }
+    value
 }
 
 /// An `EVAL`'s frame: the code's activation over a closure run assembled in its shape's capture
@@ -1167,6 +1273,10 @@ fn ended<'graph, 'here>(
         (Level::Frame | Level::Block, None) => step.finish(value, runner.program.types()),
         (Level::Frame | Level::Block, Some(contract)) => {
             let value = runner.program.fulfilled(step.writer(), value, contract);
+            let value = match runner.barrier {
+                Some(barrier) => crossed_out(step.writer(), runner.program, barrier, value),
+                None => value,
+            };
             step.finish(value, runner.program.types())
         }
     }

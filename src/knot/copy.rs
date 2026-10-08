@@ -2,9 +2,9 @@
 //!
 //! Every node of the source knot is rebuilt in index order, so an edge means the same node in the
 //! copy and is carried verbatim; each closure binding's value, each data node's value cell and each
-//! module member is the finished copy the crossing hands back, and the types, body shapes and knot
-//! weight ride over. A builtin's node points into program storage, so it is carried as-is. The
-//! copied member is the one at the source's own index.
+//! module member is the finished copy the crossing hands back, and the types, body shapes, knot
+//! weight and a module's content ride over. A builtin's node points into program storage, so it is
+//! carried as-is. The copied member is the one at the source's own index.
 //!
 //! [`held`](values::KnottedFamily::held) lists the values a rebuild asks for, in the order it asks,
 //! so each arm below sits beside its rebuild's twin. The crossing copies those values over its own
@@ -68,7 +68,7 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                 Node::Module(module) => {
                     let source = module.members();
                     let members = writer.fill(source.len(), |at| copy(&source[at]));
-                    Node::Module(module.rebuilt(members))
+                    Node::Module(module.rebuilt(writer, members))
                 }
                 Node::Coerced(coerced) => {
                     let underlying = match copy(&Value::Knotted(coerced.underlying())) {

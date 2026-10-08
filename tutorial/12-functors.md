@@ -19,7 +19,7 @@ SIG Ordered = #[(VAL compare :Number)]
 MODULE int_order = (LET compare = 7)
 LET int_order_view = (int_order :! Ordered)
 EXPR #(MAKESET elem :Ordered) -> Module = #(
-  MODULE built =
+  MODULE built OVER #[elem] =
     LET sample = (elem.compare)
 )
 LET number_set = (MAKESET int_order_view)
@@ -31,7 +31,9 @@ PRINT number_set.sample
 ```
 
 `MAKESET` takes any module satisfying `Ordered` and builds a module around it,
-reading the argument's members with `.` just like any module. A signature slot is
+reading the argument's members with `.` just like any module. `OVER #[elem]`
+lists what the module reads from the function around it — here, the parameter
+`elem` — as [below](#what-a-module-captures) explains. A signature slot is
 **structural**: any module whose own members satisfy `Ordered` is admitted, so
 `(MAKESET int_order)` on the raw module works too — ascription (`:!` / `:|`) is a
 way to *narrow* what the argument exposes, never a prerequisite for passing it.
@@ -54,7 +56,7 @@ alongside the keyworded one:
 ```koan
 SIG Ordered = #[(VAL compare :Number)]
 MODULE int_order = (LET compare = 7)
-LET make_set = FN EXPR #(MAKESET elem :Ordered) -> Module = #(MODULE built = (LET sample = (elem.compare)))
+LET make_set = FN EXPR #(MAKESET elem :Ordered) -> Module = #(MODULE built OVER #[elem] = (LET sample = (elem.compare)))
 LET a = (MAKESET int_order)
 LET b = (make_set {elem = int_order})
 PRINT a.sample
@@ -76,56 +78,137 @@ LET MakeSet = FN EXPR #(MAKESET elem :Ordered) -> Module = #(MODULE built = (LET
 ```
 
 ```text
-error: shape error: LET binder `MakeSet` is Type-classified but the bound value is a function (a value); rebind under a value-classified identifier instead (snake_case, e.g. `make_set`)
+error: <input>:2:5: `CombinedExpression` takes Identifier as its part 1
 ```
 
-## Modules in type position: `TYPE OF`
+## What a module captures
 
-A module is a value, so a module name never names a type on its own — `x :int_order`
-is not even valid syntax. To reach a module's *type*, ask for it: `TYPE OF <value>`
-yields the type a value reports for itself, and a module reports its **signature** —
-the interface its members add up to.
+A module built at the top level reads any top-level name. A module built inside
+a function lists, after its name, every name it reads from the function around
+it, as `OVER #[<names>]`. Reading one it does not list is refused before the
+program runs:
 
-Write it in a slot to admit any module with that interface, or in a return type to
-say "returns a module with this argument's interface", resolved per call:
+```koan
+EXPR #(SCALED factor :Number) -> Module = #(
+  MODULE scale =
+    LET apply = (FN :{x :Number} -> Number = #(x * factor))
+)
+LET triple = (SCALED 3)
+```
+
+```text
+error: <input>:1:44: `factor` is read from outside this module; list it under its `OVER`, as `OVER #[factor]`
+```
+
+```koan
+EXPR #(SCALED factor :Number) -> Module = #(
+  MODULE scale OVER #[factor] =
+    LET apply = (FN :{x :Number} -> Number = #(x * factor))
+)
+LET triple = (SCALED 3)
+PRINT (triple.apply {x = 5})
+```
+
+```text
+15
+```
+
+A name read by a function nested in the module counts, as `factor` does here. A
+keyworded definition is listed by its key, written as its use is, with `_` in
+each slot; what that definition itself reads needs no listing:
+
+```koan
+EXPR #(SCALED factor :Number) -> Module = #(
+  (EXPR #(SCALE x :Number) -> Number = #(x * factor))
+  MODULE scale OVER #[(SCALE _)] =
+    LET ten = (SCALE 10)
+)
+LET triple = (SCALED 3)
+PRINT triple.ten
+```
+
+```text
+30
+```
+
+Without the list, the program is refused, and the message names the key:
+
+```koan
+EXPR #(SCALED factor :Number) -> Module = #(
+  (EXPR #(SCALE x :Number) -> Number = #(x * factor))
+  MODULE scale =
+    LET ten = (SCALE 10)
+)
+LET triple = (SCALED 3)
+```
+
+```text
+error: <input>:3:3: `SCALE _` is read from outside this module; list it under its `OVER`, as `OVER #[(SCALE _)]`
+```
+
+Why the list? A module is its code and what it captures, so two modules built
+from the same code over the same captured values are the same module, with the
+same types. That is why two applications of a functor to modules with the same
+content build modules with the same types. The list shows what a module
+captures where the module is written. A `GROUP` body lists what it reads from
+around it the same way, after the group's name.
+
+## Modules in type position
+
+A module is a value, so a module name never names a type on its own. A module's
+type is a **signature**, and a signature is written wherever a type is: in a
+slot, to admit any module with that interface, and in a return type, to promise
+one:
 
 ```koan
 SIG Ordered = #[(VAL compare :Number)]
 MODULE int_order = (LET compare = 7)
-EXPR #(MAKESET elem :Ordered) -> Module = #(
+EXPR #(MAKESET elem :Ordered) -> Ordered = #(
   MODULE built =
     LET compare = 3
 )
 LET number_set = (MAKESET int_order)
-EXPR #(ECHO elem :Ordered) -> :(TYPE OF elem) = #(elem)
+EXPR #(ECHO elem :Ordered) -> Ordered = #(elem)
 LET same = (ECHO number_set)
 PRINT same.compare
-PRINT (ECHO int_order)
 ```
 
 ```text
 3
-int_order
 ```
 
-`ECHO` returns whichever module it was handed, and the returned module stays live
-after the call — `same.compare` reads `3` out of the module `MAKESET` built. The
-slot is **structural**: `m :(TYPE OF int_order)` admits any module whose members
-satisfy `int_order`'s, the same test a signature slot runs. A dotted head projects
-a single member instead of naming the whole interface: `-> elem.Carrier` as a return
-type resolves to the argument module's `Carrier` type member.
+`ECHO` returns whichever module it was handed, and the returned module stays
+live after the call: `same.compare` reads `3` out of the module `MAKESET`
+built. Both slots are structural, as above.
 
-`TYPE OF` is not module-specific — it reads any value's type, so `TYPE OF 5` is
-`Number`. Naming a value directly where a type belongs is an error, and the message
-points at the spelling above:
+A **type member** of a module is read through the module's name, as a value
+member is: `:(view.Carrier)` is the type `view` holds for `Carrier`, a type the
+signature leaves for each module to choose
+([below](#signatures-over-a-type-sig--for-all-and-with)). Under an opaque view
+that type is hidden, so only the view's own values have it, and a plain number
+does not:
 
 ```koan
-SIG Ordered = #[(VAL compare :Number)]
-EXPR #(ECHO elem :Ordered) -> elem = #(elem)
+SIG Ordered FOR ALL #[Carrier] = #[(VAL compare :Carrier)]
+MODULE ints = (LET compare = 5)
+LET view = (ints :| Ordered)
+LET kept :(view.Carrier) = view.compare
+PRINT kept
 ```
 
 ```text
-error: shape error: a return-type slot names a type, but `elem` is a value. For the type of a value — a module-valued parameter, say — write `-> :(TYPE OF elem)`
+Carrier(5)
+```
+
+```koan
+SIG Ordered FOR ALL #[Carrier] = #[(VAL compare :Carrier)]
+MODULE ints = (LET compare = 5)
+LET view = (ints :| Ordered)
+LET kept :(view.Carrier) = 5
+```
+
+```text
+error: Number does not satisfy its annotation Carrier
 ```
 
 ## Signatures over a type: `SIG … FOR ALL` and `WITH`
@@ -442,11 +525,39 @@ LET counter = (ints :| Counter)
 ```
 
 A module fits `Counter` only when its `Carrier` works out to a type under
-`Number`; one whose `zero` is a string is refused. The opaque view still hides
-*which* type `Carrier` is, but not its bound: `counter.zero` is admitted by a
-`:Number` slot and compares equal to `0`. With `FOR ALL #[Carrier]`, the view
-would hide even that `zero` is an ordinary value. A `NEWTYPE` constructor's
-parameters take no bound.
+`Number`, so one whose `zero` is a string is refused:
+
+```koan
+SIG Counter FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]
+MODULE words = (LET zero = "none")
+LET counter = (words :| Counter)
+```
+
+```text
+error: <input>:3:15: this value is SIG (zero: Str), which can never satisfy its ascription SIG FOR ALL #{Carrier: Number} (zero: Carrier)
+```
+
+That is all the bound does. An opaque view hides the bound along with the
+type, so code using `counter` sees `counter.zero` as opaque: no `:Number` slot
+and no arithmetic takes it, and it equals only another value of the same
+`Carrier`:
+
+```koan
+SIG Counter FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]
+MODULE ints = (
+  (LET Carrier = Number)
+  (LET zero = 0)
+)
+LET counter = (ints :| Counter)
+PRINT (counter.zero + 1)
+```
+
+```text
+error: no overload of `_ + _` admits (Carrier, Number)
+```
+
+Only the module's own functions, reached through the view, work with the
+number inside. A `NEWTYPE` constructor's parameters take no bound.
 
 ## Both at once: `&`
 

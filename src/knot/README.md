@@ -67,8 +67,8 @@ activation. This module closes it:
   node holds a [`Circular`](../values/circular.rs) — a list, dict, record or
   tagged resident whose cells are links — and the same knot weight. A `Module`
   node holds its self-signature, its members in
-  [layout order](module/README.md#layout-order) and the same knot weight —
-  not an activation, since a view has no body to activate and a shape built per
+  [layout order](module/README.md#layout-order), the same knot weight and,
+  beside the node, its content digest — not an activation, since a view has no body to activate and a shape built per
   application would grow program storage without bound. A `Coerced` node is a
   **barrier** over a function member of an opaque view
   ([members are born coerced](module/README.md#members-are-born-coerced)):
@@ -373,7 +373,8 @@ the types, body and code shapes, quote bodies and knot weight carried over. The
 copied member is the one at the source's own index. A copy never shares a node
 with its source, so a copied knot outlives the region it was copied from.
 
-A module's member that is itself a knot member brings its whole knot with it,
+A module's content digest rides over with it, since the copy keeps every
+member. A module's member that is itself a knot member brings its whole knot with it,
 and one placement copies each knot once, so two members of one foreign knot
 arrive as members of one copy of it and still capture each other. A barrier's
 underlying function goes the same way, as the value word a member holding it
@@ -407,6 +408,34 @@ state and never print. A quote renders as its body as written, marks included,
 and never what a name binds. A module renders as its signature's name, and a
 barrier as the function type a caller sees. A data node compares as a bisimulation and
 renders with `@n` labels where a cycle closes, both in `values`.
+
+## Content
+
+A member's [content digest](../values/README.md#content-digests) is computed
+on demand: its knot's, beside its index there. A knot digests its node count
+and each node's content in index order, an edge to a sibling hashed as its
+index, so values that reach one another digest as the one knot they are tied
+into and a copy digests as its source. The member lists the values its knot
+holds (`held`) and hashes the knot over their digests (`digest_held`); `values`
+walks the listed values on its own stack, so a chain of knots never nests a
+call per knot. A node's content is what it is:
+
+- a **function**: its body's [code digest](../scope/README.md#resolution), the
+  solution it is an instance at, and the digest of each capture the code digest
+  does not name — every one but a read of the program's top level, and every
+  type capture;
+- a **module**: the content computed where it was born
+  ([birth](module/README.md#birth)) — a body-born module's code over its
+  captures, a view's operator and application over its source;
+- a **barrier**: the digest of the function it stands before, the type a caller
+  sees, the declared type and both substitutions;
+- a **code** node: its quote's code digest, its carried type, and each bound and
+  supplied name beside its value's digest;
+- a **data** node: read through [the door](../values/README.md#views) at its
+  memo — its memo, its kind and each part the memo shows, a value link by its
+  digest and an edge by its index.
+
+A builtin's member digests as its overload, its native and its shape.
 
 ## The import rule
 
@@ -500,8 +529,6 @@ bound run, one binding an edge to itself.
 
 ## Open work
 
-- [Module programs](../../roadmap/rewrite/modules.md) — a call through a
-  barrier node, which coerces its arguments inwards and its return outwards.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) —
   union-variant construction in a cycle, and a cycle through a family
   construction, which has no cut.

@@ -6,7 +6,7 @@
 //! region of its own, which doubles as its scratch.
 
 use crate::bump::Bump;
-use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 use crate::types::digest::{TypeDigest, node_digest, schema_content_digest};
 use crate::types::handle::{Handle, KType, Parametric, TypeHandle};
@@ -620,7 +620,7 @@ fn each_node_kind_lies_under_its_family_top() {
         under(types.quantified(0, KType::ANY_VALUE).raw()),
         [Handle::ANY_VALUE]
     );
-    let sealed = types.parameter(name, KType::ANY, None);
+    let sealed = types.parameter(name, KType::ANY);
     assert!(under(sealed).is_empty());
     // A union answers by its members, and a deferred return, whose return is unknown, by none.
     let mixed = types.union_of(region, &[KType::NUMBER.raw(), KType::PROPER_TYPE.raw()]);
@@ -844,26 +844,98 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     assert_eq!(meet(&types, region, number_or_str, elt_or_bool), elt);
 }
 
-/// No law: the generators rarely draw a carrier beside every member its bound spans. An opaque
-/// carrier is concrete, so the order reduces it like any concrete member, under the union of the
-/// rest as well as under one member.
+/// No law: no generator builds a module signature beside a bounded application of its own. A
+/// carrier meets a signature head parameter's bound through the bound its view's source met, and
+/// a `FOR ALL` bound not at all, since the order reads a carrier as under `Any` alone.
 #[test]
-fn a_carrier_under_the_rest_of_a_union_is_dropped() {
+fn a_carrier_meets_a_head_parameter_s_bound_through_the_bound_its_source_met() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
-    let carrier = types.carrier(name, number_or_str, crate::bump::ScopeId::from_raw(1, 1));
+    let under_number = types.carrier(name, KType::NUMBER, crate::types::ContentKey(1));
+    let under_either = types.carrier(name, number_or_str, crate::types::ContentKey(2));
+    let solve = |mut collector: Collector<'_, KType>, carrier: KType| {
+        collector.pin(0, KType::NUMBER, carrier);
+        collector.solve(&types).map(|solution| solution.to_vec())
+    };
     assert_eq!(
-        types.union_of(region, &[carrier, KType::NUMBER, KType::STR]),
-        number_or_str
+        solve(
+            Collector::heads(region, &[KType::NUMBER], &[]),
+            under_number
+        ),
+        Ok(vec![under_number])
     );
-    assert_eq!(
-        typed::join(&types, region, carrier, number_or_str),
-        number_or_str
+    assert!(
+        solve(
+            Collector::heads(region, &[KType::NUMBER], &[]),
+            under_either
+        )
+        .is_err()
     );
+    assert!(solve(Collector::new(region, &[KType::NUMBER]), under_number).is_err());
+    assert!(!is_subtype_of(
+        &types,
+        region,
+        under_number.raw(),
+        KType::NUMBER.raw()
+    ));
+}
+
+/// No law: no generator bounds a head parameter by a function type. Checked against a head
+/// parameter's bound, a carrier reads as its met bound only at a covariant position: a view offering
+/// `k :(FN (x :Carrier) -> Null)` accepts only sealed values, so it does not fit
+/// `SIG FOR ALL #{Wanted: (FN (x :Number) -> Null)} = #[(VAL k :Wanted)]`, and neither does a
+/// signature offering it over its own unpinned `Carrier`. Offering `k :(LIST OF Carrier)`, each fits
+/// the same signature over `LIST OF Number`.
+#[test]
+fn a_carrier_at_a_contravariant_position_does_not_meet_the_bound_it_hides() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
+    let wanted = TypeSymbol::declared("Wanted", &symbols).expect("a Type token");
+    let k = ValueSymbol::declared("k", &symbols).expect("a value token");
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let taking = |kt: Handle| types.function_type(region, &[(x, kt)], KType::NULL.raw());
+    let carrier = types.carrier(name, KType::NUMBER, crate::types::ContentKey(1));
+    let parameter = types.head_parameter(name, KType::NUMBER);
+    // A view's signature over `k` at `wrap(Carrier)`, and a declared one over its own `Carrier`.
+    let view = |wrap: &dyn Fn(Handle) -> Handle| {
+        let mut draft = SchemaDraft::new(region);
+        draft.insert_manifest(name, carrier);
+        draft.insert_value_slot(k, types.declared(wrap(carrier.raw())));
+        types.signature(region, draft)
+    };
+    let declared = |wrap: &dyn Fn(Handle) -> Handle| {
+        let mut draft = SchemaDraft::new(region);
+        draft.origin = SigOrigin::Declared;
+        draft.insert_parameter(name, parameter);
+        draft.insert_value_slot(k, types.declared(wrap(parameter.raw())));
+        types.signature(region, draft)
+    };
+    let asked = |bound: KType| {
+        let parameter = types.head_parameter(wanted, bound);
+        let mut draft = SchemaDraft::new(region);
+        draft.origin = SigOrigin::Declared;
+        draft.insert_parameter(wanted, parameter);
+        draft.insert_value_slot(k, types.declared(parameter.raw()));
+        types.signature(region, draft)
+    };
+    let fits =
+        |offered: KType, asked: KType| typed::sig_fits(&types, region, offered, asked).is_ok();
+
+    let contravariant = asked(types.function_type(region, &[(x, KType::NUMBER)], KType::NULL));
+    assert!(!fits(view(&taking), contravariant));
+    assert!(!fits(declared(&taking), contravariant));
+
+    let list = |kt: Handle| types.list(kt);
+    let covariant = asked(types.list(KType::NUMBER));
+    assert!(fits(view(&list), covariant));
+    assert!(fits(declared(&list), covariant));
 }
 
 /// No law: the unifier's carried-variable rule is covered by a property, but the solution it
@@ -877,7 +949,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Held", &symbols).expect("a Type token");
     let list_of_number = types.list(KType::NUMBER);
-    let carried = types.parameter(name, list_of_number, None);
+    let carried = types.parameter(name, list_of_number);
     let declared = types.list(types.quantified(0, KType::ANY).raw());
     let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
     assert_eq!(
@@ -929,7 +1001,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     // A bound spanning two declared members is admitted member by member: `Held` bounded by
     // `LIST OF Number | Str` fills `LIST OF X | Str`, though neither member alone takes it.
     let spanning_bound = types.union_of(region, &[list_of_number, KType::STR]);
-    let spanning = types.parameter(name, spanning_bound, None);
+    let spanning = types.parameter(name, spanning_bound);
     let either = types.union_of(region, &[declared, KType::STR.raw()]);
     let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
     assert_eq!(

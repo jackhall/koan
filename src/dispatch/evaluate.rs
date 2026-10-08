@@ -9,13 +9,17 @@
 //!   [block door](crate::program::block) with its last statement's value its own;
 //! - a `FN`, born through the [lambda door](crate::knot::lambda);
 //! - an **ascription** `<value> :! <Type>`: its operand checked against the type, unless the load
-//!   settled it, and retyped to it; a module operand is an error until modules arrive;
+//!   settled it, and retyped to it; a module operand, under `:!` or `:|`, is seen as its signature
+//!   through the view door;
 //! - an **`EVAL`** `<code> -> <Type>`: its code run in a frame that owes the declared type, as a
 //!   called frame owes its return;
+//! - a **`USING … SCOPE`**: its body run as a block entered on the module, each surfaced name bound
+//!   to the member it names and each surfaced key to the module's functions there;
 //! - a bucket declaration, which is `Null`;
 //! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks
 //!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
-//!   native, or a registration's function in a frame;
+//!   native, or a registration's function in a frame; a member read `ATTR <operand> <label>` with
+//!   its label bare is one, which the load reads as a possible instance site;
 //! - an **application** `(head argument)`: a construction when the head is a type, and otherwise a
 //!   call by name of the head over the argument record.
 //!
@@ -27,29 +31,29 @@
 //! where it is finished.
 //!
 //! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
-//! as it evaluates. Debug builds check both halves of that agreement: a finished value's carried type
-//! lies under its node's static type, and a narrowed or selected call runs what selection over the
-//! full list would.
+//! as it evaluates. Debug builds check that a finished value's carried type lies within its node's
+//! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
+//! selection.
 
 use crate::elaborate::denoted;
+use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{KValue, Knotted, instance, lambda, quote, refused_construction};
 use crate::memory::{Bump, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, Program, block};
+use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, block, surfaced_block};
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site, Static, StaticType,
+    BodyShape, Candidate, CandidateList, InstanceRead, Narrowing, Offer, ShapeKind, Site, Static,
+    StaticType,
 };
 use crate::symbols::BinderSymbol;
+use crate::type_lattice::{KType, Verdict, substitute_levels};
 #[cfg(debug_assertions)]
-use crate::type_lattice::bound_above;
-use crate::type_lattice::{
-    DeclaredType, KType, TypeNode, Verdict, satisfied_by, substitute_levels,
-};
+use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
@@ -71,14 +75,25 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch> =
 /// What a node is to the evaluator.
 pub(super) enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
+    /// A name: an identifier, a type name or a marked name, read through its mention.
+    Name(&'graph ExpressionPart<'graph>),
     Block(&'graph BodyShape<'graph>),
     Lambda(&'graph KExpression<'graph>),
-    /// `<value> :! <Type>`.
-    Ascribe(&'graph KExpression<'graph>),
+    /// `<value> :! <Type>`, or `<module> :| <Sig>`, beside which operator it is.
+    Ascribe(&'graph KExpression<'graph>, Ascription),
     /// `EVAL <code> -> <Type>`.
     Eval(&'graph KExpression<'graph>),
+    /// `USING <module> SCOPE <body>`.
+    Using(&'graph KExpression<'graph>),
     Declaration,
     Call(&'graph KExpression<'graph>, &'graph CandidateList<'graph>),
+    /// `ATTR <operand> <label>` with its label written bare: a member read.
+    Member {
+        node: &'graph KExpression<'graph>,
+        list: &'graph CandidateList<'graph>,
+        operand: &'graph ExpressionPart<'graph>,
+        label: BinderSymbol,
+    },
     /// `(<head> <argument>)`: a call by name, or a construction.
     Apply(&'graph KExpression<'graph>),
     Unevaluable(&'graph KExpression<'graph>),
@@ -131,6 +146,7 @@ pub(super) fn evaluate<'graph>(
     }
     match form(view.shape(), node) {
         Form::Leaf(part) => leaf(step, &at, part, stage),
+        Form::Name(part) => read(step, &at, part),
         Form::Block(shape) => {
             let mut step = step;
             let asked = step.spawn(block(program, shape, view, Use::Forwards));
@@ -149,9 +165,12 @@ pub(super) fn evaluate<'graph>(
             finish(step, &at, value)
         }
         Form::Declaration => finish(step, &at, Value::Null),
-        Form::Ascribe(node) => ascribe(step, &at, node, stage),
+        Form::Ascribe(node, mode) => ascribe(step, &at, node, mode, stage),
         Form::Eval(node) => evaluated(step, &at, node, stage),
-        Form::Call(node, list) => call(step, &at, node, list, stage),
+        Form::Using(node) => using(step, &at, node, stage),
+        Form::Call(node, list) | Form::Member { node, list, .. } => {
+            call(step, &at, node, list, stage)
+        }
         Form::Apply(node) => {
             let [head, argument] = node.parts else {
                 unreachable!("an application is a head and its argument")
@@ -187,6 +206,7 @@ pub(super) fn of_part<'graph>(
         },
         // A mark says where the use it wraps resolved, which the candidate list already holds.
         ExpressionPart::MarkedUse(_, node) => of_node(shape, node.reference()),
+        part if part.is_name() => Form::Name(part),
         part => Form::Leaf(part),
     }
 }
@@ -195,17 +215,35 @@ pub(super) fn of_node<'graph>(
     shape: &'graph BodyShape<'graph>,
     node: &'graph KExpression<'graph>,
 ) -> Form<'graph> {
-    let builtin = node.cache().builtin_shape().map(|builtin| builtin.id);
+    let builtin_shape = node.cache().builtin_shape();
+    let builtin = builtin_shape.map(|builtin| builtin.id);
     match builtin {
         Some(BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda) => {
             return Form::Lambda(node);
         }
-        Some(BuiltinShapeId::AscribeTransparent) => return Form::Ascribe(node),
+        Some(BuiltinShapeId::AscribeTransparent) => {
+            return Form::Ascribe(node, Ascription::Transparent);
+        }
+        Some(BuiltinShapeId::AscribeOpaque) => return Form::Ascribe(node, Ascription::Opaque),
         Some(BuiltinShapeId::Eval) => return Form::Eval(node),
+        Some(BuiltinShapeId::UsingScope) => return Form::Using(node),
         Some(BuiltinShapeId::BucketDeclaration) => return Form::Declaration,
         _ => {}
     }
     if let Some(list) = shape.candidates(Site::of_node(node)) {
+        if let Some(attribute) =
+            builtin_shape.filter(|builtin| builtin.id == BuiltinShapeId::Attribute)
+            && let [_, operand, _] = node.parts
+            && let Some(label) = (attribute.roles().zip(node.parts))
+                .find_map(|(role, part)| role.label_reads(&part.value))
+        {
+            return Form::Member {
+                node,
+                list,
+                operand: &operand.value,
+                label,
+            };
+        }
         return Form::Call(node, list);
     }
     if builtin.is_some() {
@@ -230,14 +268,7 @@ fn leaf<'graph, 'here>(
     let types = program.types();
     let scratch = Bump::new();
     match part {
-        ExpressionPart::Literal(_)
-        | ExpressionPart::Identifier(_)
-        | ExpressionPart::Type(_)
-        | ExpressionPart::MarkedName(..)
-        | ExpressionPart::QuotedExpression(_) => match in_place(&step, at, part, &scratch) {
-            Some(value) => finish(step, at, value),
-            None => step.failed(StepError::Refused),
-        },
+        ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => read(step, at, part),
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
             let value = match denoted(part, &at.view, types, &scratch) {
@@ -252,15 +283,31 @@ fn leaf<'graph, 'here>(
         ExpressionPart::Keyword(_)
         | ExpressionPart::Expression(_)
         | ExpressionPart::MarkedUse(..) => step.failed(StepError::Refused),
+        _ => unreachable!("a name is a `Form::Name`, read by `read`"),
+    }
+}
+
+/// A part read in place ([`in_place`]) as this evaluation's value: a literal, a name or a quote.
+fn read<'graph, 'here>(
+    step: Taking<'_, 'graph, '_, 'here, '_>,
+    at: &Evaluation<'graph, 'here>,
+    part: &'graph ExpressionPart<'graph>,
+) -> Action<'graph, KBundle> {
+    match in_place(&step, at, part, &Bump::new()) {
+        Some(value) => finish(step, at, value),
+        None => step.failed(StepError::Refused),
     }
 }
 
 /// `<value> :! <Type>`: the operand checked against the type — where the load did not settle it —
-/// and retyped to it. A module's view arrives with modules.
+/// and retyped to it. A module operand ascribed a signature, or under `:|`, is seen as it through
+/// the [view door](crate::knot::module::view), which checks it fits; `:|` over anything else
+/// raises.
 fn ascribe<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_>,
     at: &Evaluation<'graph, 'here>,
     node: &'graph KExpression<'graph>,
+    mode: Ascription,
     stage: u32,
 ) -> Action<'graph, KBundle> {
     let program = at.program;
@@ -278,9 +325,6 @@ fn ascribe<'graph, 'here>(
         unreachable!("an ascription's operand is evaluated")
     };
     let writer = step.writer();
-    if value.as_module().is_some() {
-        return finish(step, at, Raised::ModuleAscription.raise(program, writer));
-    }
     let ascribed = match denoted(&ascribed.value, &at.view, types, &scratch) {
         Ok(ascribed) => ascribed,
         Err(refused) => {
@@ -288,6 +332,28 @@ fn ascribe<'graph, 'here>(
             return finish(step, at, error);
         }
     };
+    if view::views(types, mode, value.concrete_ktype(), ascribed) {
+        let Some(module) = value.as_module() else {
+            let raised = Raised::NotAModule {
+                value: value.concrete_ktype(),
+            };
+            return finish(step, at, raised.raise(program, writer));
+        };
+        let raised = match view::ascribe(writer, module, ascribed, mode, types, &scratch) {
+            Ok(view) => return finish(step, at, Value::Knotted(view)),
+            Err(Unascribable::Unsatisfied(_)) => Raised::Unascribable {
+                value: value.concrete_ktype(),
+                ascribed,
+            },
+            Err(Unascribable::NotASignature(ascribed)) => Raised::NotASignature { ascribed },
+            Err(Unascribable::Coercion { name, refused }) => Raised::Coercion {
+                name: name.symbol(),
+                refused,
+            },
+            Err(Unascribable::NotAModule) => unreachable!("the operand is a module"),
+        };
+        return finish(step, at, raised.raise(program, writer));
+    }
     if at.view.shape().settled(Site::of_node(node)) {
         debug_assert!(
             satisfies(ascribed, &value, types, &scratch),
@@ -301,6 +367,43 @@ fn ascribe<'graph, 'here>(
         return finish(step, at, raised.raise(program, writer));
     }
     finish(step, at, value.retyped(writer, ascribed, types, &scratch))
+}
+
+/// `USING <module> SCOPE <body>`: the body run as a block whose parameters are bound to what the
+/// module surfaces, its last statement's value its own.
+fn using<'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_>,
+    at: &Evaluation<'graph, 'here>,
+    node: &'graph KExpression<'graph>,
+    stage: u32,
+) -> Action<'graph, KBundle> {
+    let program = at.program;
+    let scratch = Bump::new();
+    let [_, operand, _, _] = node.parts else {
+        unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
+    };
+    let wanted = [Wanted::Evaluated(&operand.value)];
+    let operands = match gathered(&mut step, at, &wanted, stage, &scratch) {
+        Gathered::Ready(operands) => operands,
+        other => return unready(step, at, other),
+    };
+    let [Operand::Value(module)] = operands[..] else {
+        unreachable!("a `USING`'s operand is evaluated")
+    };
+    // The shape surfaces only an operand it reads a module's declaration off.
+    if module.as_module().is_none() {
+        let raised = Raised::NotAModule {
+            value: module.concrete_ktype(),
+        };
+        let error = raised.raise(program, step.writer());
+        return finish(step, at, error);
+    }
+    let body = Site::of_body(node)
+        .and_then(|site| at.view.shape().nested(site))
+        .expect("a `USING … SCOPE` body is a block its shape holds");
+    let request = surfaced_block(program, body, at.view, Some(module), Use::Forwards);
+    let asked = step.spawn(request);
+    park(step, at, asked, FINISHING)
 }
 
 /// `EVAL <code> -> <Type>`: the code's shape checked for overlaps as a loaded program's is, then
@@ -444,7 +547,7 @@ fn container<'graph, 'here>(
         ExpressionPart::DictLiteral(_) => {
             let mut entries = BumpVec::with_capacity_in(values.len() / 2, &scratch);
             for pair in values.chunks(2) {
-                match Key::of(&pair[0], types, &scratch) {
+                match Key::of(&pair[0]) {
                     Ok(key) => entries.push((key, pair[1])),
                     Err(rejected) => {
                         let error = Raised::NotAKey { rejected }.raise(at.program, writer);
@@ -492,12 +595,11 @@ fn call<'graph, 'here>(
     let shape = at.view.shape();
     let contributed = contributed(at, shape.contributions(Site::of_node(node)), &scratch);
     let narrowing = shape.narrowing(Site::of_node(node));
-    let full = || {
-        let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
-        select::selected(at, maybe, &arguments, &contributed, &scratch)
-    };
     let selection = match narrowing {
-        Narrowing::Full => full(),
+        Narrowing::Full => {
+            let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
+            select::selected(at, maybe, &arguments, &contributed, &scratch)
+        }
         Narrowing::Kept(kept) => {
             select::selected(at, kept.iter().copied(), &arguments, &contributed, &scratch)
         }
@@ -505,17 +607,10 @@ fn call<'graph, 'here>(
             select::chosen(at, coordinate, &arguments, &contributed, &scratch)
         }
     };
-    #[cfg(debug_assertions)]
-    if !matches!(narrowing, Narrowing::Full) {
-        debug_assert!(
-            select::agree(&selection, &full()),
-            "static selection runs what full selection would"
-        );
-    }
     let raised = match selection {
         Selection::Builtin(builtin) => {
             let native = Native::of(builtin.id());
-            let value = builtins::run(native, at, writer, &operands, &scratch);
+            let value = builtins::run(native, at, node, writer, &operands, &scratch);
             return finish(step, at, value);
         }
         Selection::Function {
@@ -540,8 +635,12 @@ fn call<'graph, 'here>(
                     Use::Forwards,
                 )
             };
+            // A call through a barrier never tails: its value crosses the barrier where its
+            // frame ends.
+            let barrier = callee.as_callable().and_then(Knotted::coerced).is_some();
             if let Some(contract) = at.contract
-                && select::keeps(types, registered.shape, solution, contract)
+                && !barrier
+                && contract.kept_by(types, registered.shape, Some(solution))
             {
                 let request = call(Some(contract));
                 return step.tail(request.placement, request.work);
@@ -594,19 +693,16 @@ pub(super) fn slots<'x, 'graph>(
     scratch: &'x Bump,
 ) -> BumpVec<'x, Wanted<'graph>> {
     let mut wanted = BumpVec::with_capacity_in(node.parts.len(), scratch);
-    let bare = |part: &ExpressionPart<'_>| match part {
-        ExpressionPart::Identifier(name) => Some(BinderSymbol::Value(*name)),
-        ExpressionPart::Type(name) => Some(BinderSymbol::Type(*name)),
-        _ => None,
-    };
     match node.cache().builtin_shape() {
         Some(shape) => {
             for (role, part) in shape.roles().zip(node.parts) {
-                match (role, bare(&part.value)) {
-                    (Role::Keyword, _) => {}
-                    (Role::Field, Some(label)) => wanted.push(Wanted::Label(label)),
-                    _ => wanted.push(Wanted::Evaluated(&part.value)),
+                if role == Role::Keyword {
+                    continue;
                 }
+                wanted.push(match role.label_reads(&part.value) {
+                    Some(label) => Wanted::Label(label),
+                    None => Wanted::Evaluated(&part.value),
+                });
             }
         }
         None => wanted.extend(
@@ -665,7 +761,8 @@ fn apply<'graph, 'here>(
         )
     };
     if let Some(contract) = at.contract
-        && returns_within(program, head, contract.returns)
+        && (head.as_callable().and_then(Knotted::function))
+            .is_some_and(|function| contract.kept_by(program.types(), function.ktype(), None))
     {
         let request = call(Some(contract));
         return step.tail(request.placement, request.work);
@@ -674,27 +771,9 @@ fn apply<'graph, 'here>(
     park(step, at, asked, FINISHING)
 }
 
-/// Whether `callee` is an unquantified function whose declared return satisfies `returns`.
-fn returns_within(
-    program: &Program<'_>,
-    callee: KValue<'_, '_>,
-    returns: crate::type_lattice::KType,
-) -> bool {
-    let Some(function) = callee.as_callable().and_then(Knotted::function) else {
-        return false;
-    };
-    let DeclaredType::Type(ktype) = function.ktype() else {
-        return false;
-    };
-    match program.types().node(ktype) {
-        TypeNode::KFunction { ret, .. } => {
-            satisfied_by(program.types(), &Bump::new(), returns, ret)
-        }
-        _ => false,
-    }
-}
-
-/// Check that `value`, unless it is an error value, carries a type within its node's static type.
+/// Check that `value`, unless it is an error value, carries a type within its node's static type:
+/// under its upper end read above its variables, and over its lower end read below them, as a
+/// candidate's judgement reads an argument's.
 #[cfg(debug_assertions)]
 fn carried_under_static<'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
@@ -726,24 +805,18 @@ fn carried_under_static<'graph, 'here>(
             &scratch,
             bound_above(types, &scratch, expected.upper),
             carried
-        ) && (types
-            .concrete(expected.lower)
-            .is_none_or(|lower| types.holds_carrier(lower))
-            || satisfied_by(types, &scratch, carried, expected.lower)),
+        ) && !lower_end_outside(types, &scratch, expected, carried),
         "the carried type lies within the load-time static type"
     );
 }
 
 /// Whether `part` is read in place rather than asked for.
 fn read_in_place(part: &ExpressionPart<'_>) -> bool {
-    matches!(
-        part,
-        ExpressionPart::Literal(_)
-            | ExpressionPart::Identifier(_)
-            | ExpressionPart::Type(_)
-            | ExpressionPart::MarkedName(..)
-            | ExpressionPart::QuotedExpression(_)
-    )
+    part.is_name()
+        || matches!(
+            part,
+            ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_)
+        )
 }
 
 /// The value of a part read in place: a literal lowered, a name read through its mention — a
@@ -766,7 +839,7 @@ fn in_place<'graph, 'here>(
             let shape = at.view.shape();
             let mention = shape.mention(Site::of(part))?;
             let read = at.view.read(mention.coordinate);
-            let Some(solution) = shape.instance_at(Site::of(part)) else {
+            let Some(InstanceRead::Solved(solution)) = shape.instance_at(Site::of(part)) else {
                 return Some(read);
             };
             let Value::Knotted(member) = read else {

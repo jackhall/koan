@@ -263,94 +263,48 @@ fn circular_values_compare_as_a_bisimulation() {
     });
 }
 
+/// A seal is read through nowhere outside its view, whatever bound its source met: a sealed value
+/// equals neither its payload nor one sealed behind another carrier, and keys no dict.
 #[test]
-fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
-    use crate::memory::ScopeId;
+fn a_seal_is_read_through_nowhere_outside_its_view() {
+    use crate::type_lattice::ContentKey;
     use crate::values::KeyRejected;
     with_fixture(|fixture| {
         let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
         let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
-        // Each opaque ascription mints its own nonce, so two mints of one bound are two identities.
-        let mint = |bound| {
-            let nonce = ScopeId::next();
-            types.carrier(carrier, bound, nonce)
+        // Views of two contents key their carriers apart, so two carriers of one bound are two
+        // identities.
+        let keys = std::cell::Cell::new(0);
+        let carrier_under = |bound| {
+            keys.set(keys.get() + 1);
+            types.carrier(carrier, bound, ContentKey(keys.get()))
         };
         let number_or_str = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
-        let (by_number, by_number_again) = (mint(KType::NUMBER), mint(KType::NUMBER));
-        let (by_value, by_either) = (mint(KType::ANY_VALUE), mint(number_or_str));
-        let distance = fixture.newtype("Distance", KType::NUMBER);
+        let (by_number, by_number_again) =
+            (carrier_under(KType::NUMBER), carrier_under(KType::NUMBER));
+        let (by_value, by_either) = (
+            carrier_under(KType::ANY_VALUE),
+            carrier_under(number_or_str),
+        );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let five = Value::Number(5.0);
-            let sealed = |mint| {
-                let tagged = Tagged::seal(writer, five, mint, KType::NUMBER, types, scratch);
+            let sealed = |carrier| {
+                let tagged = Tagged::seal(writer, five, carrier, KType::NUMBER, types, scratch);
                 Value::Tagged(tagged.expect("5 satisfies its witness"))
             };
             let equal = |left: Value<'_>, right: Value<'_>| {
                 left.equals(&right, types, scratch).expect("no callable")
             };
-            assert!(equal(sealed(by_number), five));
-            assert!(equal(five, sealed(by_number)));
-            assert!(equal(sealed(by_number), sealed(by_number_again)));
-            let key = Key::of(&sealed(by_number), types, scratch).expect("a revealed number keys");
-            assert_eq!(key, Key::number(5.0).unwrap());
-            assert!(matches!(
-                key.value::<crate::values::Nothing>(),
-                Value::Number(5.0)
-            ));
-
-            // A bound that does not reveal the payload's kind keeps the seal.
-            for mint in [by_value, by_either] {
-                assert!(!equal(sealed(mint), five));
+            assert!(equal(sealed(by_number), sealed(by_number)));
+            assert!(!equal(sealed(by_number), sealed(by_number_again)));
+            for carrier in [by_number, by_value, by_either] {
+                assert!(!equal(sealed(carrier), five));
+                assert!(!equal(five, sealed(carrier)));
                 assert_eq!(
-                    Key::of(&sealed(mint), types, scratch),
-                    Err(KeyRejected::NotAScalar(mint))
+                    Key::of(&sealed(carrier)),
+                    Err(KeyRejected::NotAScalar(carrier))
                 );
-            }
-            // A newtype is no seal: it is nominal whatever it wraps.
-            let wrapped = Value::Tagged(Tagged::hold(writer, five, distance));
-            assert!(!equal(wrapped, five));
-        })
-    });
-}
-
-/// Every quote is one representation, so a seal bounded by any code kind reveals every quote it
-/// holds, whatever that quote's own kind; one bounded past `Code` keeps it.
-#[test]
-fn a_seal_bounded_by_a_code_kind_reveals_every_quote() {
-    use super::{Stand, quote};
-    use crate::memory::ScopeId;
-    use crate::values::Value as Holding;
-    with_fixture(|fixture| {
-        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
-        let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
-        let mint = |bound| {
-            let nonce = ScopeId::next();
-            types.carrier(carrier, bound, nonce)
-        };
-        let name = quote(fixture, "#(y)");
-        let call = quote(fixture, "#(f x)");
-        fixture.in_cell(pin, |context| {
-            let writer = context.writer();
-            let equal = |left: Holding<'_, Stand<'_>>, right: Holding<'_, Stand<'_>>| {
-                left.equals(&right, types, scratch).expect("no callable")
-            };
-            for node in [name, call] {
-                let quote = Holding::Knotted(Stand::Code(node));
-                let sealed = |bound| {
-                    let tagged = crate::values::Tagged::seal(
-                        writer,
-                        quote,
-                        mint(bound),
-                        quote.concrete_ktype(),
-                        types,
-                        scratch,
-                    );
-                    Holding::Tagged(tagged.expect("the quote satisfies its witness"))
-                };
-                assert!(equal(sealed(KType::EXPRESSION), quote), "{quote:?}");
-                assert!(equal(sealed(KType::ANY_CODE), quote), "{quote:?}");
-                assert!(!equal(sealed(KType::ANY), quote), "{quote:?}");
             }
         })
     });

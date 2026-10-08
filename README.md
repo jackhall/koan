@@ -27,7 +27,7 @@ echo 'PRINT "hello"' | cargo run
 `PRINT` writes to standard output. A refused load, or an error the program does
 not catch, writes `error: <message>` to standard error and exits non-zero.
 
-The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; and the `#` / `$` quote and eval sigils. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; and the `#` / `$` quote and eval sigils. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; a body whose value does not fit it ends in an error value. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form, and a `FOR ALL #[<names>]` group before the parameters makes it quantified, which only a signature's `VAL` member may be), `:(EXPR #(<head>) -> Out)` (an expression shape — the keyword/slot run a keyworded definition registers for dispatch, optionally under a `FOR ALL #[<names>]` quantifier group inside a signature), `Value`, `Type`, `Code` and the kinds of code under it (`Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`), `Module`, `Signature`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -179,6 +179,8 @@ src/
 │   ├── shape/build.rs    the one shape builder: the claims pre-scan and group frames, the rewrite pre-pass, the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies, arms and quote values' code shapes, the components pass, and the units pass that orders a body's units
 │   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor and spanned at the source it was built from
 │   ├── shape/build/locate.rs   where an error found in a statement points — the part it is about, else the nearest spanned part or node — searched for on the error path only
+│   ├── shape/build/digest.rs   a body's code digest, its code as resolved: a top-level read named by its binding, a keyworded use by its candidates, nested bodies by their own digests
+│   ├── shape/build/surface.rs  what a USING … SCOPE operand surfaces: its names, its operator groups, and each keyworded head it declares under every key
 │   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
 │   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Registered / ParameterBinding and Elaboration, and the value channel's Statics and Narrowing
@@ -196,17 +198,19 @@ src/
 │   ├── link.rs           Link — a value word or an edge into the holder's own knot: a data node's cell, a closure binding
 │   ├── circular.rs       Circular / Resolved / CodeView — a knot's data node over link cells, what a member holds as `values` reads it, and a data node's run listing and rebuild for its knot's copy
 │   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule, and representation, the type a tagged payload is read at
-│   ├── surface.rs        Seen / Surface — the one door every read of a container or tagged value goes through: a value beside the type a read sees it at, opened to show only what that type names; Value::retyped
+│   ├── surface.rs        Seen / Surface — the one door every read of a container or tagged value goes through: a value beside the type a read sees it at, opened to show only what that type names; Value::retyped, and the load's static type of a retyped value
 │   ├── crossing.rs       cross / cross_here over the placement doors, cross_view and copy_severed — the doors a copy comes through, the second for a value inside a copied operand of another family — the deep copy, and the crossing verdict
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
 │   ├── equality.rs       Value::equals — structural equality, each side at the type it is seen at, containers gated on related seen types, a bisimulation over knot members — a function by its identity and captures, a quote by its syntax and bindings — Incomparable when a module or a barrier is reached
 │   ├── render.rs         Value::render — the surface PRINT writes, a mark pass then a write pass labelling where a cycle closes
+│   ├── digest.rs         ContentDigest / Digests — a value's content digest, computed on demand as a walk through the door over an explicit stack, one memo per demand: the hasher, its domain tags and the recipe
 │   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value
 ├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles where the program loads and, for what the load leaves unknown, through the activation they are read in
 ├── elaborate/
 │   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names, Union.Tag
 │   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the expression shape its body sits in, with a registration's ranked shape and parameter binding
-│   ├── channel.rs        type_channel — the load pass: every type binder, type expression, callable and registration — a USING block's surfaced head included — typed where the program loads, closed, rigid or unknown, into the shape's write-once cells
+│   ├── channel.rs        type_channel — the load pass: every type binder, type expression, callable and registration — a USING block's surfaced key included — typed where the program loads, closed, rigid or unknown, into the shape's write-once cells
+│   ├── members.rs        a signature's members: layout order, and the one lookup of where a member sits and what it is declared at, shared by the type reader, dispatch and the module layout
 │   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the load pass's reader
 ├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable, and the field a USING source names
 ├── knot/
@@ -217,10 +221,10 @@ src/
 │   ├── module.rs         Module — a module node and everything that reads one by name
 │   ├── module/
 │   │   ├── birth.rs          a module binder's activation and its tie once the body has bound every slot
-│   │   ├── view.rs           the view door: what m :! Sig and m :| Sig build
-│   │   ├── coerce.rs         members born coerced across an opaque view's barrier
-│   │   ├── layout.rs         layout order: where a member sits in a module
-│   │   └── surface.rs        entering a USING … SCOPE block: each surfaced name bound to its member
+│   │   ├── view.rs           the view door: which ascriptions are views, what m :! Sig and m :| Sig build, its carriers keyed on content
+│   │   ├── coerce.rs         members born coerced across an opaque view's barrier, and a call's crossing of one inwards and outwards
+│   │   ├── layout.rs         the readers of a module value: a named member at its layout index, the registrations, and the functions a module offers at a key
+│   │   └── surface.rs        entering a USING … SCOPE block: each surfaced name bound to its member, each surfaced key to the module's functions there
 │   ├── tie.rs            tie — a component of value binders staged into scratch, memos derived and constructions checked, then laid down as one knot
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
 ├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the ready stack, the drain protocol and delivery, over one step bundle the layer above supplies
@@ -231,7 +235,7 @@ src/
 │   └── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
 ├── program.rs        pub mod program — a loaded program as one owning value and the body runner that performs it, over elaborate, knot, memory, parse, scheduler, scope, symbols, type_lattice and values
 ├── program/
-│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table, evaluator and shape check the layer above supplies; Output, Outcome, Contract, error values; Evaluated, LoadError
+│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table, evaluator and shape check the layer above supplies; Output, Outcome, Contract and whether a callee's return keeps it, error values; Evaluated, LoadError
 │   ├── bundle.rs         KBundle — koan's step bundle: the covariant KBirth (Program / Call / Eval / Evaluate / Block / Inspect), the parked KState, and the sites a parked runner keeps in scratch
 │   ├── body.rs           run — the body runner, the one step that performs a body's units at the top level, in every frame and in a block, ending a frame under its contract or tailing its last statement; call and placement_of, the derived placement bit; block; eval and CodeRefused, the door that runs a quote's code
 │   └── substrate.rs      CellSubstrate — program storage, the registry's bump and the interner as self_cell's owner, and Running — the graph, its root, the registry and the Program record at 'graph, with run and inspect, reached through a closure per call
@@ -239,9 +243,9 @@ src/
 └── dispatch/
     ├── builtins.rs       the builtin table — the lattice's types, Error and every overload as a builtin node — and the natives the overloads run
     ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
-    ├── select.rs         admission and selection over a candidate list, a keyworded call's argument record, and whether a call keeps a contract
+    ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — and a keyworded call's argument record
     ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
-    ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription and EVAL checks
+    ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription, view and EVAL checks
     └── errors.rs         the messages of the error values dispatch raises
 ```
 
@@ -253,8 +257,7 @@ lattice/src/
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for this crate's test binary, the tally the heap-contract tests bracket, and the property-case share
 ├── bump.rs              pub mod bump — the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpBackedSet and bump_table / bump_set; the crate's only import of bumpalo / hashbrown / allocator_api2
 ├── bump/
-│   ├── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
-│   └── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
+│   └── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
 ├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
 ├── symbols/
 │   └── tests.rs            interning laws, including how a static_name! records
@@ -328,7 +331,7 @@ from that module's top-of-file comment. The kept modules carry theirs:
   class, tails under a contract, errors, and the overlap check.
 - [lattice/README.md](lattice/README.md) — the symbol vocabulary, the type
   lattice and the bump tier as one crate below koan, its import rule, the
-  component walk and `ScopeId`; with
+  component walk; with
   [lattice/src/symbols/README.md](lattice/src/symbols/README.md) for why a
   symbol's identity is a content digest, why the interner is not a lookup
   authority, and what a symbol's binding class buys, and

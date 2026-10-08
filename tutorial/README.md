@@ -59,7 +59,8 @@ Read them in order the first time through — each builds on the last.
     `USING`, and passing code to a function you wrote.
 11. [Modules](11-modules.md) — grouping bindings, signatures, and ascription.
 12. [Functors](12-functors.md) — module-returning functions: parameterizing a
-    module by another module, and signature specialization.
+    module by another module, what a module captures, and signature
+    specialization.
 
 A condensed [surface reference](reference.md) lists every form on one page once
 you know your way around.

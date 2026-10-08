@@ -5,7 +5,7 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     BodyShape, Builtins, CaptureSource, Coordinate, MentionClass, Position, ShapeError, ShapeKind,
-    Site, Slot, Target,
+    Site, Slot, Target, TopLevel,
 };
 use crate::symbols::BinderSymbol;
 
@@ -723,10 +723,9 @@ fn only_block<'graph>(shape: &BodyShape<'graph>) -> &'graph BodyShape<'graph> {
 /// The names `block` declares, spelled out.
 fn parameters_of(fixture: &Fixture<'_, '_>, block: &BodyShape<'_>) -> Vec<String> {
     (0..block.slots())
-        .map(|slot| {
-            let name = block.slot_name(Slot(slot as u32));
-            fixture.symbols.display(name.symbol()).to_string()
-        })
+        .map(|slot| block.slot_name(Slot(slot as u32)))
+        .filter(|name| !matches!(name, BinderSymbol::Registration(_)))
+        .map(|name| fixture.symbols.display(name.symbol()).to_string())
         .collect()
 }
 
@@ -1062,4 +1061,51 @@ fn a_body_s_value_binds_no_keyworded_quantified_function() {
             }
         });
     }
+}
+
+/// An `OVER` entry the body never reads is captured all the same, and a top-level one counts by
+/// its binding, which the run reads where it lives.
+#[test]
+fn an_over_entry_is_part_of_the_module_whether_or_not_it_is_read() {
+    let source = "LET top = 1\n\
+                  EXPR #(MK unread :Number) -> Any = #(MODULE m OVER #[unread top] = (LET x = 2))";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.unwrap_or_else(|error| {
+            panic!(
+                "the program shapes: {}",
+                error.display(fixture.symbols, fixture.types)
+            )
+        });
+        let (_, callable) = shape.nested_shapes()[0];
+        let (_, module) = callable.nested_shapes()[0];
+        assert_eq!(module.kind(), ShapeKind::Module);
+        let captured: Vec<BinderSymbol> = module.captures().iter().map(|c| c.name).collect();
+        assert_eq!(
+            captured,
+            vec![value(fixture, "unread")],
+            "only the outer entry is a capture"
+        );
+        let (top, _) = shape.slot(value(fixture, "top")).expect("`top` is bound");
+        assert_eq!(module.listed_top(), &[TopLevel::Root(top)]);
+    });
+}
+
+/// A body's code digest is its code as resolved: blind to where the body sits, and naming a read of
+/// the top level by the binding it reads.
+#[test]
+fn a_code_digest_is_blind_to_position_and_names_top_level_reads_by_binding() {
+    let source = "LET t = 1\nLET u = 1\n\
+                  LET f = (FN :{x :Any} -> Any = #(t))\n\
+                  LET pad = 2\n\
+                  LET g = (FN :{x :Any} -> Any = #(t))\n\
+                  LET h = (FN :{x :Any} -> Any = #(u))";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.expect("the program shapes");
+        let code = |name: &str| {
+            let (slot, _) = shape.slot(value(fixture, name)).expect("a binder");
+            shape.births(slot).expect("a callable").code_digest()
+        };
+        assert_eq!(code("f"), code("g"), "one text at two places");
+        assert_ne!(code("f"), code("h"), "two top-level bindings of one value");
+    });
 }

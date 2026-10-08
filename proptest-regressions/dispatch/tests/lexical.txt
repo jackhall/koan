@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 15cef2b0f8942df3e18efeb1c08d7a8c9124dbf498888b22a6c4aa39f9f3048f # shrinks to case = Lexical { wide: false, bound: (Number, "1"), over: Outer, instance: false, contexts: [Module] }
+cc 0dbb62b8f2636cc9fee8191bb8edca0a0dfd30bcef01993413d2292b93e58cd5 # shrinks to case = Lexical { wide: false, bound: (Number, "1"), over: Outer, instance: false, contexts: [Code, Module, Hoist] }

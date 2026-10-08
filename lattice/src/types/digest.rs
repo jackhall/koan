@@ -7,9 +7,9 @@
 //! so digest equality is type equality with no repair path.
 //!
 //! The digest is a pure function of type content, so two independently built types with the same
-//! content digest equal with no shared interner. Generativity is one explicit mechanism applied in
-//! two places: a minted [`ScopeId`] nonce folded into the content ahead of everything else,
-//! carried by a recursive-group window and by the carrier an opaque view mints.
+//! content digest equal with no shared interner. An opaque view's carrier is the one node keyed on
+//! something outside type content: a [`ContentKey`] the module layer computes, folded into the
+//! carrier's digest ahead of its name.
 //!
 //! **There is one recipe.** A node's digest is its tag byte, its own scalar payload, and its
 //! children's digests — which are already known, because children are handles. Nothing here walks
@@ -22,14 +22,14 @@
 //!
 //! **The hasher lives here and only here.** Every payload begins with a distinct domain tag byte
 //! so no two variants can share a digest, every text run is length-prefixed so concatenation is
-//! unambiguous, and every child digest / [`ScopeId`] / integer is fed little-endian.
+//! unambiguous, and every child digest / [`ContentKey`] / integer is fed little-endian.
 
-use crate::bump::{BumpAllocator, BumpVec, ScopeId};
+use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 
 use super::handle::{KType, TypeHandle};
 use super::kind::KKind;
-use super::node::{NodeSchema, TypeNode};
+use super::node::{ContentKey, NodeSchema, TypeNode};
 use super::schema::{SigOrigin, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
@@ -94,6 +94,7 @@ const TAG_LEXICAL: u8 = 0x2C;
 const TAG_PARAMETER: u8 = 0x2D;
 const TAG_SIGNATURE_APPLY: u8 = 0x2E;
 const TAG_SIGNATURE_MEET: u8 = 0x2F;
+const TAG_CARRIER: u8 = 0x30;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -137,8 +138,8 @@ impl DigestHasher {
         self
     }
 
-    fn scope_id(&mut self, id: ScopeId) -> &mut Self {
-        self.inner.update(&id.digest_bytes());
+    fn key(&mut self, key: ContentKey) -> &mut Self {
+        self.inner.update(&key.0.to_le_bytes());
         self
     }
 
@@ -199,7 +200,8 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::CodeNeeding { kind, names } => code_needing_digest(*kind, names),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
-        TypeNode::Parameter { name, bound, nonce } => parameter_digest(*name, *bound, *nonce),
+        TypeNode::Parameter { name, bound } => parameter_digest(*name, *bound),
+        TypeNode::Carrier { name, key, met } => carrier_digest(*name, *key, *met),
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(scratch, fields.raw()),
@@ -269,23 +271,22 @@ pub(super) fn sibling_digest(index: usize) -> TypeDigest {
     DigestHasher::new(TAG_SET_LOCAL).count(index).finish()
 }
 
-/// A named rigid variable's identity fields: the generativity `nonce` first, then the name and the
-/// variable's bound.
-pub(super) fn parameter_digest(
-    name: TypeSymbol,
-    bound: KType,
-    nonce: Option<ScopeId>,
-) -> TypeDigest {
-    let mut h = DigestHasher::new(TAG_PARAMETER);
-    match nonce {
-        Some(id) => {
-            h.byte(1).scope_id(id);
-        }
-        None => {
-            h.byte(0);
-        }
-    }
-    h.symbol(name.symbol()).digest(bound.digest()).finish()
+/// A head parameter's identity fields: its name, then its bound.
+pub(super) fn parameter_digest(name: TypeSymbol, bound: KType) -> TypeDigest {
+    DigestHasher::new(TAG_PARAMETER)
+        .symbol(name.symbol())
+        .digest(bound.digest())
+        .finish()
+}
+
+/// An opaque view's carrier: the key it is minted under first, then its name and the bound its
+/// view's source met.
+pub(super) fn carrier_digest(name: TypeSymbol, key: ContentKey, met: KType) -> TypeDigest {
+    DigestHasher::new(TAG_CARRIER)
+        .key(key)
+        .symbol(name.symbol())
+        .digest(met.digest())
+        .finish()
 }
 
 /// An application of a declared signature: the signature's digest, then its pins as an order-blind
@@ -589,25 +590,13 @@ pub(super) struct ComponentMember<'m> {
 ///
 /// `members` arrive in the component's canonical order — the numeric order of their name symbols —
 /// so two independently declared components with the same content present identically whatever
-/// order they were written in. A generative component folds its nonce first, so two applications
-/// never unify. Intra-component sibling references digest as bare relative indices, so computing a
-/// component's digest never recurses back into the component.
+/// order they were written in. Intra-component sibling references digest as bare relative indices,
+/// so computing a component's digest never recurses back into the component.
 ///
 /// A singleton component is byte-identical to the whole-declaration recipe it generalizes: count
 /// `1`, one member, its own self-reference relative index `0`.
-pub(super) fn component_digest(
-    generative_nonce: Option<ScopeId>,
-    members: &[ComponentMember<'_>],
-) -> TypeDigest {
+pub(super) fn component_digest(members: &[ComponentMember<'_>]) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_RECURSIVE_SET);
-    match generative_nonce {
-        Some(nonce) => {
-            h.byte(1).scope_id(nonce);
-        }
-        None => {
-            h.byte(0);
-        }
-    }
     h.count(members.len());
     for member in members {
         h.symbol(member.name.symbol()).byte(kkind_tag(member.kind));

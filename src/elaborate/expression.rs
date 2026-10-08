@@ -248,6 +248,56 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
         }
     }
 
+    /// `owner.label` at `site`, where `owner` is a value name holding a module, or a chain of value
+    /// members rooted at one, and `label` a type name: the module's manifest member, read off its
+    /// signature where it runs and unknown at load. `None` where `owner` names no module, which
+    /// leaves the projection to a type's own members.
+    fn module_member(
+        &self,
+        site: Site,
+        owner: &ExpressionPart<'graph>,
+        label: &ExpressionPart<'graph>,
+    ) -> Option<Result<Parametric, Elaboration>> {
+        let ExpressionPart::Type(name) = label else {
+            return None;
+        };
+        let mut chain = BumpVec::new_in(self.scratch);
+        let mut root = owner;
+        while let ExpressionPart::Expression(node) = root {
+            let node = node.reference();
+            let form = node.cache().builtin_shape()?;
+            let ([_, inner, step], BuiltinShapeId::Attribute) = (node.parts, form.id) else {
+                return None;
+            };
+            let ExpressionPart::Identifier(step) = step.value else {
+                return None;
+            };
+            chain.push(step);
+            root = &inner.value;
+        }
+        let ExpressionPart::Identifier(_) = root else {
+            return None;
+        };
+        chain.reverse();
+        let mention = self.reader.shape().mention(Site::of(root))?;
+        if self.reader.type_at(mention.coordinate) != TypeAt::NotAType {
+            return None;
+        }
+        let (read, owner) =
+            self.reader
+                .member_type(mention.coordinate, &chain, *name, self.types)?;
+        Some(match read {
+            TypeAt::Type(held) => Ok(held.into()),
+            TypeAt::Rigid(held) => Ok(held),
+            TypeAt::Unknown => Err(Elaboration::Unknown { site }),
+            TypeAt::NotAType => Err(Elaboration::NoSuchMember {
+                owner: owner.into(),
+                name: name.symbol(),
+                site,
+            }),
+        })
+    }
+
     /// `operands` elaborated, and refused `Unknown` at `site` when one read a lexical variable: the
     /// operands of a spelling whose value over a variable can differ from substituting first and
     /// elaborating after — a meet, a projection's owner, an application's head, a `NEEDING` kind —
@@ -344,6 +394,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                     self.shape(&group, part(4), part(6), groups)
                 }
                 BuiltinShapeId::Attribute => {
+                    if let Some(member) = self.module_member(site, part(1), part(2)) {
+                        return member.map(DeclaredType::Type);
+                    }
                     let owner = self.closed_operands(site, || self.part(part(1), groups))?;
                     let name = match part(2) {
                         ExpressionPart::Type(name) => name.symbol(),
@@ -526,7 +579,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             site: Site::of(part),
         };
         let bound = self.closed_operands(Site::of(part), || self.part(part, groups))?;
-        // An opaque carrier is concrete, but one as a bound waits on modules.
+        // An opaque carrier is concrete, but a variable's bound holds none.
         match self.types.concrete(bound) {
             Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => Ok(bound),
             _ => Err(refused),

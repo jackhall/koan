@@ -5,6 +5,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{FitsFailure, KType, TypeNode, sig_fits};
 use crate::values::{Value, satisfies};
 
+use super::super::layout;
 use super::super::view::{Ascription, Unascribable, ascribe};
 use super::{member, module, schema};
 
@@ -58,8 +59,63 @@ fn a_transparent_view_carries_what_the_signature_names_and_drops_the_rest() {
     });
 }
 
+/// `m`, a twin of equal content built apart, and a module of other content, each fitting `Ord`.
+const TWINS: &str = "\
+SIG Ord FOR ALL #[Carrier] = #[(VAL zero :Carrier)]
+MODULE m = (LET zero = 0)
+MODULE twin = (LET zero = 0)
+MODULE other = (LET zero = 1)";
+
 #[test]
-fn an_opaque_view_mints_a_fresh_carrier_per_application() {
+fn an_opaque_view_keys_its_carrier_on_content() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(TWINS);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let ord = declared(fixture, activation, "Ord");
+            let opaque = |name| {
+                let source = module(fixture, activation, name);
+                ascribe(writer, source, ord, Ascription::Opaque, types, scratch)
+                    .unwrap_or_else(|error| panic!("`{name}` satisfies `Ord`: {error:?}"))
+            };
+            let carrier = |view| match member(fixture, view, "Carrier", types, scratch) {
+                Value::Type(carrier) => carrier.handle(),
+                _ => panic!("`Carrier` is a type member"),
+            };
+            let (first, second) = (opaque("m"), opaque("m"));
+            let key = carrier(first);
+            assert!(
+                matches!(types.node(key), TypeNode::Carrier { .. }),
+                "an opaque view's carrier is keyed on content"
+            );
+            assert_ne!(key, KType::NUMBER);
+            assert_eq!(key, carrier(second), "two applications over one module");
+            assert_eq!(
+                first.module().expect("a module").ktype(),
+                second.module().expect("a module").ktype(),
+            );
+            assert_eq!(key, carrier(opaque("twin")), "two modules of equal content");
+            assert_ne!(
+                key,
+                carrier(opaque("other")),
+                "two modules of other content"
+            );
+
+            // The value member is sealed at the carrier, so it no longer reads as a number.
+            let zero = member(fixture, first, "zero", types, scratch);
+            assert_eq!(zero.concrete_ktype(), key);
+            assert!(
+                matches!(zero, Value::Tagged(_)),
+                "the member is behind the carrier, not a bare number"
+            );
+        })
+    });
+}
+
+#[test]
+fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
         let (types, scratch) = (fixture.types, fixture.scratch());
@@ -68,48 +124,30 @@ fn an_opaque_view_mints_a_fresh_carrier_per_application() {
             let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
-            let opaque = |()| {
-                ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
+            let view = |mode| {
+                ascribe(writer, m, ord, mode, types, scratch)
                     .unwrap_or_else(|error| panic!("`m` satisfies `Ord`: {error:?}"))
             };
-            let (first, second) = (opaque(()), opaque(()));
-
-            let Value::Type(carrier) = member(fixture, first, "Carrier", types, scratch) else {
+            let (opaque, transparent) = (view(Ascription::Opaque), view(Ascription::Transparent));
+            let content = opaque.module().expect("a view is a module").content();
+            let Value::Type(carrier) = member(fixture, opaque, "Carrier", types, scratch) else {
                 panic!("`Carrier` is a type member");
             };
-            let mint = carrier.handle();
-            assert!(
-                matches!(types.node(mint), TypeNode::Parameter { nonce: Some(_), .. }),
-                "an opaque view's carrier is a mint"
-            );
-            assert_ne!(mint, KType::NUMBER);
-
-            let Value::Type(other) = member(fixture, second, "Carrier", types, scratch) else {
-                panic!("`Carrier` is a type member");
-            };
+            assert!(matches!(
+                types.node(carrier.handle()),
+                TypeNode::Carrier { key, .. } if key == content.carrier_key()
+            ));
             assert_ne!(
-                mint,
-                other.handle(),
-                "two applications of one signature do not unify"
-            );
-            assert_ne!(
-                first.module().expect("a module").ktype(),
-                second.module().expect("a module").ktype(),
-            );
-
-            // The value member is sealed at the mint, so it no longer reads as a number.
-            let zero = member(fixture, first, "zero", types, scratch);
-            assert_eq!(zero.concrete_ktype(), mint);
-            assert!(
-                matches!(zero, Value::Tagged(_)),
-                "the member is behind the mint, not a bare number"
+                content,
+                transparent.module().expect("a view is a module").content(),
+                "the operator is part of a view's content"
             );
         })
     });
 }
 
 #[test]
-fn a_mint_carries_its_parameters_name_and_bound() {
+fn a_carrier_carries_its_parameters_name_and_bound() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
         let (types, scratch) = (fixture.types, fixture.scratch());
@@ -123,18 +161,14 @@ fn a_mint_carries_its_parameters_name_and_bound() {
             let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
                 panic!("`Carrier` is a type member");
             };
-            let TypeNode::Parameter { bound, nonce, name } = types.node(carrier.handle()) else {
-                panic!("an opaque view's carrier is a mint");
+            let TypeNode::Carrier { name, met, .. } = types.node(carrier.handle()) else {
+                panic!("an opaque view's carrier is a carrier node");
             };
-            assert!(
-                nonce.is_some(),
-                "a mint carries the nonce that makes it generative"
-            );
             assert_eq!(BinderSymbol::Type(name), fixture.name("Carrier"));
             assert_eq!(
-                bound,
+                met,
                 KType::ANY,
-                "the parameter declares no bound, so the mint is bounded by Any"
+                "the parameter declares no bound, so the carrier meets Any"
             );
         })
     });
@@ -226,11 +260,12 @@ fn a_view_copies_across_a_cell_like_any_module() {
     });
 }
 
+/// A carrier records the bound its source met, and the view still fits the bounded signature; but
+/// outside the view the bound reveals nothing, so what is sealed behind it lies under `Any` alone.
 #[test]
-fn a_bounded_member_bounds_its_mint_and_what_is_sealed_behind_it() {
+fn a_bounded_member_records_its_bound_and_reveals_it_nowhere() {
     let source = "\
 SIG Ord FOR ALL #{Carrier: Value} = #[(VAL zero :Carrier)]
-SIG Loose FOR ALL #[Carrier] = #[(VAL zero :Carrier)]
 SIG Counted FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]
 MODULE m = ((LET Carrier = Number) (LET zero = 0))
 MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
@@ -244,39 +279,30 @@ MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
                 module(fixture, activation, "m"),
                 module(fixture, activation, "s"),
             );
-            let ord = declared(fixture, activation, "Ord");
-            let view = ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
-                .unwrap_or_else(|error| panic!("`m` satisfies `Ord`: {error:?}"));
-            let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
-                panic!("`Carrier` is a type member");
-            };
-            assert!(matches!(
-                types.node(carrier.handle()),
-                TypeNode::Parameter {
-                    bound: KType::ANY_VALUE,
-                    ..
-                }
-            ));
-            let zero = member(fixture, view, "zero", types, scratch);
-            assert!(satisfies(KType::ANY_VALUE, &zero, types, scratch));
-            assert!(
-                sig_fits(
-                    types,
-                    scratch,
-                    view.module().expect("a module").ktype(),
-                    ord
-                )
-                .is_ok(),
-                "an opaque view of a bounded signature still fits it"
-            );
-
-            // Unbounded, the seal hides which family it holds.
-            let loose = declared(fixture, activation, "Loose");
-            let view = ascribe(writer, m, loose, Ascription::Opaque, types, scratch)
-                .unwrap_or_else(|error| panic!("`m` satisfies `Loose`: {error:?}"));
-            let zero = member(fixture, view, "zero", types, scratch);
-            assert!(!satisfies(KType::ANY_VALUE, &zero, types, scratch));
-
+            for (name, bound) in [("Ord", KType::ANY_VALUE), ("Counted", KType::NUMBER)] {
+                let sig = declared(fixture, activation, name);
+                let view = ascribe(writer, m, sig, Ascription::Opaque, types, scratch)
+                    .unwrap_or_else(|error| panic!("`m` satisfies `{name}`: {error:?}"));
+                let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
+                    panic!("`Carrier` is a type member");
+                };
+                assert!(matches!(
+                    types.node(carrier.handle()),
+                    TypeNode::Carrier { met: recorded, .. } if recorded == bound
+                ));
+                let zero = member(fixture, view, "zero", types, scratch);
+                assert!(!satisfies(bound, &zero, types, scratch), "{name}");
+                assert!(
+                    sig_fits(
+                        types,
+                        scratch,
+                        view.module().expect("a module").ktype(),
+                        sig
+                    )
+                    .is_ok(),
+                    "an opaque view of a bounded signature still fits it"
+                );
+            }
             let counted = declared(fixture, activation, "Counted");
             assert!(matches!(
                 ascribe(writer, s, counted, Ascription::Opaque, types, scratch),
@@ -311,6 +337,69 @@ fn an_opaque_view_keeps_a_pin() {
                 member(fixture, view, "zero", types, scratch),
                 Value::Number(zero) if zero == 0.0
             ));
+        })
+    });
+}
+
+/// `Boxes` declares one keyworded head; `two` offers two overloads at its key and one elsewhere.
+const KEYWORDED: &str = "\
+SIG Boxes = #[(EXPR #(BOX _ :Number) -> :(LIST OF Number))]
+SIG Stack FOR ALL #[Elt] = #[(EXPR #(PUSH _ :Elt) -> :(LIST OF Elt))]
+MODULE two = ((EXPR #(BOX x :Number) -> :(LIST OF Number) = #([x])) (EXPR #(BOX x :Str) -> :(LIST OF Str) = #([x])) (EXPR #(UNBOX x :Number) -> Number = #(x)))
+MODULE one = (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x]))";
+
+#[test]
+fn a_view_carries_each_overload_its_keyworded_members_admit() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(KEYWORDED);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let two = module(fixture, activation, "two");
+            let boxes = declared(fixture, activation, "Boxes");
+            let view = ascribe(writer, two, boxes, Ascription::Transparent, types, scratch)
+                .unwrap_or_else(|error| panic!("`two` satisfies `Boxes`: {error:?}"));
+            // `BOX _ :Str` is no overload the member admits, and `UNBOX` sits at another key.
+            let carried = layout::registrations(view, types, scratch);
+            assert_eq!(carried.len(), 1, "the one overload `Boxes` admits");
+            assert!(
+                carried[0]
+                    .as_callable()
+                    .and_then(|f| f.function())
+                    .is_some(),
+                "a member reading no parameter is carried as it is"
+            );
+            let node = view.module().expect("a view is a module");
+            assert_eq!(schema(node.ktype(), types).keyworded.len(), 1);
+            assert!(
+                sig_fits(types, scratch, node.ktype(), boxes).is_ok(),
+                "the view fits the signature it was ascribed to"
+            );
+        })
+    });
+}
+
+#[test]
+fn an_opaque_view_wraps_an_overload_over_a_carrier_in_a_barrier() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(KEYWORDED);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let one = module(fixture, activation, "one");
+            let stack = declared(fixture, activation, "Stack");
+            let view = ascribe(writer, one, stack, Ascription::Opaque, types, scratch)
+                .unwrap_or_else(|error| panic!("`one` satisfies `Stack`: {error:?}"));
+            let carried = layout::registrations(view, types, scratch);
+            assert_eq!(carried.len(), 1);
+            assert!(
+                carried[0].as_callable().and_then(|f| f.coerced()).is_some(),
+                "a head reading an unpinned parameter sits behind a barrier"
+            );
+            let node = view.module().expect("a view is a module");
+            assert!(sig_fits(types, scratch, node.ktype(), stack).is_ok());
         })
     });
 }

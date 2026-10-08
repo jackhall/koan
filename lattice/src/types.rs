@@ -2,8 +2,8 @@
 //!
 //! The node vocabulary, the interning registry, the identity recipe, the structural relations
 //! between types, and the unifier that solves a quantified position. Nothing else. It imports the
-//! classified symbol types from [`symbols`](crate::symbols), and [`ScopeId`](crate::bump::ScopeId)
-//! with the bump tier from [`bump`](crate::bump). No value, cell, AST, scope, working part or
+//! classified symbol types from [`symbols`](crate::symbols), with the bump tier from
+//! [`bump`](crate::bump). No value, cell, AST, scope, working part or
 //! execute-side type reaches it, since the crate depends on no koan code — the parser included,
 //! which is what keeps the two from naming each other. Everything that matches a type against
 //! something that is *not* a type — a value, a parser part, a declaration — lives with that thing
@@ -78,7 +78,7 @@ mod tests;
 pub use digest::TypeDigest;
 pub use handle::{DeclaredType, KType, Parametric, Scheme, TypeHandle, builtin_types};
 pub use kind::KKind;
-pub use node::{NodeSchema, TypeNode, Variable};
+pub use node::{ContentKey, NodeSchema, TypeNode, Variable};
 pub use operators::{FoldDirection, ReductionMode};
 pub use ranking::{Judged, Verdict};
 pub use record::Record;
@@ -98,11 +98,11 @@ pub use shape::{
 pub use sig_relations::{FitsFailure, InstanceFailure};
 pub use substitute::Side;
 pub use typed::{
-    Substitutable, admit_by_class, bound_above, class_at_least, erase_rigid, fits,
-    fits_application, instance_under, instantiate_quantified, is_subtype_of, join, join_iter,
-    judge_by_class, meet, quantifier_bounds, read_through, satisfied_by, scheme_bound_above,
-    select_by_class, shape_specificity, sig_fits, solving_slots, substitute_levels,
-    substitute_parameters, substitute_quantified, tied_members,
+    Substitutable, admit_by_class, bound_above, erase_rigid, fits, fits_application,
+    instance_under, instantiate_quantified, is_subtype_of, join, join_iter, judge_by_class,
+    lower_end_outside, meet, outranks, quantifier_bounds, read_through, satisfied_by,
+    scheme_bound_above, select_by_class, shape_specificity, sig_fits, solving_slots,
+    substitute_levels, substitute_parameters, substitute_quantified, tied_members,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;

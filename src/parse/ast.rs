@@ -167,6 +167,16 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
+    /// Whether this part is a name: an identifier, a type name, or a marked name.
+    pub fn is_name(&self) -> bool {
+        matches!(
+            self,
+            ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(_)
+                | ExpressionPart::MarkedName(..)
+        )
+    }
+
     /// Whether this part is `_` — as a dict's key, the dict's default.
     pub fn is_wildcard(&self) -> bool {
         matches!(self, ExpressionPart::Keyword(symbol) if *symbol == WILDCARD.symbol())

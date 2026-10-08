@@ -1,12 +1,13 @@
 # Effects
 
 Effects as monadic values labelled on a function's type, composite effects
-implemented by handlers, and a path through an application.
+implemented by handlers, and a module bound from an action as a leaf.
 
 **Problem.** The rewritten stack tracks no effect. A function's type says
 nothing of what its body performs, so the load cannot tell a pure application
-from an effectful one, and the [module design](../../design/modules.md) has no
-way to read `(MAKESET m).Set` as a path.
+from an effectful one, and the [module design](../../design/modules.md)
+unfolds every call: a functor that drew a fresh value would be read at load as
+building one content at every run.
 
 **Acceptance criteria.**
 
@@ -20,12 +21,11 @@ way to read `(MAKESET m).Set` as a path.
   network effects. A function whose row names `applog` names none of those.
 - A test handler for `applog` captures the lines a program logs, with no change
   to the program.
-- An application of a function to paths is a path where the module it returns
-  captures, through its `OVER` list, no value an effect produced:
-  `(MAKESET m).Set` written at two sites over one `m` is one type at load.
-- A functor that captures a value drawn from an effect builds a module of new
-  carriers at each run of that action, and one that only logs while it builds
-  gives the same carriers at each run.
+- A call whose function's row names an effect does not
+  [unfold](../../design/modules.md#a-call-unfolds), and a module bound by
+  running the action it builds is a leaf: a functor that captures a value drawn
+  from an effect builds a module of new carriers at each run of that action, and
+  one that only logs while it builds gives the same carriers at each run.
 
 **Directions.**
 
@@ -45,5 +45,7 @@ way to read `(MAKESET m).Set` as a path.
 
 - [Families as parameters](families-as-parameters.md) — a `Monad` signature
   over a family.
+- [Path types](path-types.md) — an effectful call stays folded only where
+  calls unfold.
 
 **Unblocks:** none — a leaf.

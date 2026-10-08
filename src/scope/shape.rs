@@ -56,14 +56,14 @@ use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, Typ
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
 };
-use crate::values::Knotted;
+use crate::values::{ContentDigest, Knotted};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::typed::{
-    Elaboration, Narrowing, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
-    Statics,
+    Elaboration, InstanceRead, Narrowing, Static, StaticCallable, StaticRegistered, StaticSolution,
+    StaticType, Statics,
 };
 
 mod build;
@@ -220,6 +220,22 @@ pub enum Which {
     Binary,
 }
 
+impl Which {
+    /// Which of a definition's `count` bucket keys the one at `index` is: a `UNARY OP` names two,
+    /// its unary key and then its binary key; every other definition names one.
+    pub fn of(count: usize, index: usize) -> Which {
+        debug_assert!(
+            index < count && count <= 2,
+            "a definition names one or two keys"
+        );
+        match (count == 2, index) {
+            (false, _) => Which::Only,
+            (true, 0) => Which::Unary,
+            (true, _) => Which::Binary,
+        }
+    }
+}
+
 /// One registration a body declares: a keyworded definition's function, bound at `slot`, under one
 /// of its bucket keys — or, in a `USING … SCOPE` block, a bodyless head its operand's signature
 /// declares.
@@ -234,22 +250,44 @@ pub struct Registration<'graph> {
     /// written order.
     pub classes: &'graph [u8],
     pub which: Which,
-    /// Where a surfaced head is written; `None` for a definition's registration.
-    pub surfaced: Option<&'graph SurfacedHead<'graph>>,
+    /// In a `USING … SCOPE` block, every head its operand declares at the key; `None` for a
+    /// definition's registration.
+    pub surfaced: Option<&'graph [SurfacedHead<'graph>]>,
 }
 
-/// A bodyless keyworded head a `USING … SCOPE` operand's signature declares, which the block holds
-/// as a registration of its own: a parameter of the registration channel, typed where the program
-/// loads and bound by nothing at run. Each place is named by how many shapes out from the block it
-/// lies, so the load pass reads it off the chain of shapes it keeps.
+/// A keyworded head a `USING … SCOPE` operand declares, which the block holds under its key as one
+/// registration parameter per key: typed where the program loads, and bound where the block runs
+/// to the list of the functions the module offers at the key. Each place is named by how many
+/// shapes out from the block it lies, so the load pass reads it off the chain of shapes it keeps.
 #[derive(Clone, Copy, Debug)]
-pub struct SurfacedHead<'graph> {
-    /// The head's statement in the signature's body.
-    pub head: &'graph KExpression<'graph>,
-    /// The `SIG` declaration's type binder: its shape's hops out, and its slot there.
-    pub signature: (u32, Slot),
-    /// The ascription naming the signature: its shape's hops out, and its type part's site there.
-    pub ascription: (u32, Site),
+pub enum SurfacedHead<'graph> {
+    /// A bodyless head the operand's signature declares.
+    Signature {
+        /// The head's statement in the signature's body.
+        head: &'graph KExpression<'graph>,
+        /// The `SIG` declaration's type binder: its shape's hops out, and its slot there.
+        signature: (u32, Slot),
+        /// The ascription naming the signature: its shape's hops out, and its type part's site
+        /// there.
+        ascription: (u32, Site),
+    },
+    /// A definition the operand's `MODULE` or `GROUP` body holds.
+    Body {
+        /// The definition's statement in the body.
+        definition: &'graph KExpression<'graph>,
+        /// The module's binder: its shape's hops out, and its slot there.
+        module: (u32, Slot),
+    },
+}
+
+impl SurfacedHead<'_> {
+    /// Where the head is written.
+    pub fn source(&self) -> SourceRef {
+        match self {
+            SurfacedHead::Signature { head, .. } => head.source,
+            SurfacedHead::Body { definition, .. } => definition.source,
+        }
+    }
 }
 
 /// A bucket declaration a body holds, `EXPR #(MOVE 2 TO 1)`: the ranking it gives its key, from
@@ -411,6 +449,17 @@ pub struct BodyShape<'graph> {
     components: &'graph [Component<'graph>],
     mentions: &'graph [Mention],
     captures: &'graph [CaptureSpec],
+    /// A `MODULE` or `GROUP` body's `OVER` list, where it writes one; `None` for every other body,
+    /// and for a module body written with none, which captures nothing from outside.
+    over: Option<&'graph [Listed<'graph>]>,
+    /// The top-level bindings a module body's `OVER` list names, sorted: part of its content
+    /// whether or not the body reads them.
+    listed_top: &'graph [TopLevel],
+    /// The body's code as resolved, digested where it was built.
+    code: ContentDigest,
+    /// Each capture's top-level slot, where it reads the program's top level, parallel to
+    /// `captures`.
+    top_captures: &'graph [Option<Slot>],
     nested: &'graph [(Site, &'graph BodyShape<'graph>)],
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
@@ -452,8 +501,8 @@ pub struct BodyShape<'graph> {
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
     group_levels: &'graph Cell<&'graph [Parametric]>,
     /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born;
-    /// `Unknown` where it is born quantified, and for every other kind.
-    born_instance: &'graph Cell<StaticSolution<'graph>>,
+    /// `None` where it is born quantified, and for every other kind.
+    born_instance: &'graph Cell<Option<StaticSolution<'graph>>>,
     /// Each lexical variable this body declares, by level, beside where its activation holds the
     /// type a run binds it to. Written once, by the type channel.
     declared_variables: &'graph Cell<&'graph [(usize, Target)]>,
@@ -465,6 +514,22 @@ pub struct BodyShape<'graph> {
     typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
     /// The value channel's static types and narrowings, fixed by the language's load pass.
     statics: &'graph Cell<Option<Statics<'graph>>>,
+}
+
+/// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
+/// with `_` in each slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listed<'graph> {
+    Name(BinderSymbol),
+    Key(&'graph [KeyElement]),
+}
+
+/// A top-level binding a module's `OVER` list names: a slot of the program's own shape, or a
+/// builtin. The run never reads one through a capture, so it is part of the module's content alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TopLevel {
+    Root(Slot),
+    Builtin(BuiltinIndex),
 }
 
 /// What an `EVAL` of a code parameter offers the code it runs for one name its `NEEDING` list
@@ -575,6 +640,30 @@ impl<'graph> BodyShape<'graph> {
     /// `EVAL` runs it.
     pub fn captures(&self) -> &'graph [CaptureSpec] {
         self.captures
+    }
+
+    /// A `MODULE` or `GROUP` body's `OVER` list, where it writes one.
+    pub fn over(&self) -> Option<&'graph [Listed<'graph>]> {
+        self.over
+    }
+
+    /// The top-level bindings a module body's `OVER` list names, sorted.
+    pub fn listed_top(&self) -> &'graph [TopLevel] {
+        self.listed_top
+    }
+
+    /// The body's code digest: its code as resolved, a read of the program's top level named by
+    /// the binding it reads ([build/digest.rs](shape/build/digest.rs)).
+    pub fn code_digest(&self) -> ContentDigest {
+        self.code
+    }
+
+    /// Whether capture `capture` reads the program's top level, which the run reads where it
+    /// lives: the code digest names it, so a closure's or a module's digest does not compose it.
+    pub fn composes(&self, capture: CaptureSlot) -> bool {
+        self.top_captures
+            .get(capture.index())
+            .is_none_or(|top| top.is_none())
     }
 
     pub fn components(&self) -> &'graph [Component<'graph>] {
@@ -774,18 +863,14 @@ impl<'graph> BodyShape<'graph> {
     /// its group at the type its value is wanted at: a literal written where a type fixes it, or
     /// the right-hand side of a binder whose declared type does.
     pub fn born_instance(&self) -> Option<StaticSolution<'graph>> {
-        match self.born_instance.get() {
-            Static::Unknown => None,
-            solution => Some(solution),
-        }
+        self.born_instance.get()
     }
 
     /// Written once, by the load pass.
     pub fn fix_born_instance(&self, solution: StaticSolution<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Callable);
-        debug_assert!(matches!(self.born_instance.get(), Static::Unknown));
-        debug_assert!(!matches!(solution, Static::Unknown));
-        self.born_instance.set(solution);
+        debug_assert!(self.born_instance.get().is_none());
+        self.born_instance.set(Some(solution));
     }
 
     /// Each lexical variable this body declares, by level, beside where its activation holds the
@@ -870,9 +955,8 @@ impl<'graph> BodyShape<'graph> {
             .is_some_and(|statics| statics.settled.binary_search(&site).is_ok())
     }
 
-    /// The solution the load instantiated the quantified function read at `site` at, where it read
-    /// one there.
-    pub fn instance_at(&self, site: Site) -> Option<StaticSolution<'graph>> {
+    /// What the load fixed where it read a quantified function at `site`, where it read one there.
+    pub fn instance_at(&self, site: Site) -> Option<InstanceRead<'graph>> {
         let instances = self.statics.get()?.instances;
         let index = instances.binary_search_by_key(&site, |(at, _)| *at).ok()?;
         Some(instances[index].1)
@@ -1156,10 +1240,11 @@ pub enum ShapeError<'graph> {
         builtin: KType,
         at: SourceRef,
     },
-    /// A keyworded use none of whose candidates can admit its arguments' static types.
+    /// A keyworded use none of whose candidates can admit its arguments' static types: each
+    /// argument's upper end, or an instance argument's scheme.
     NoAdmittingCandidate {
         key: &'graph [KeyElement],
-        arguments: &'graph [Parametric],
+        arguments: &'graph [DeclaredType<Parametric>],
         at: SourceRef,
     },
     /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
@@ -1169,11 +1254,28 @@ pub enum ShapeError<'graph> {
         field: BinderSymbol,
         at: SourceRef,
     },
+    /// A member read whose operand's static type `of`, a signature, names no member `member`.
+    NoMember {
+        of: KType,
+        member: BinderSymbol,
+        at: SourceRef,
+    },
+    /// A `MODULE` or `GROUP` body reading `name` from outside it — bound neither by the body nor by
+    /// a top-level statement — where its `OVER` list does not name it. A registration is named by
+    /// its key.
+    Unlisted { name: BinderSymbol, at: SourceRef },
+    /// A quantified member read anywhere but a call's head whose scheme names `parameter`, a head
+    /// parameter its module's signature leaves unpinned, which the load cannot name there.
+    UnpinnedMember {
+        member: BinderSymbol,
+        parameter: BinderSymbol,
+        at: SourceRef,
+    },
     /// A keyworded use every candidate of which always admits its arguments' static types, none of
     /// which ranks first, and no builtin among them.
     Ambiguous {
         key: &'graph [KeyElement],
-        arguments: &'graph [Parametric],
+        arguments: &'graph [DeclaredType<Parametric>],
         count: usize,
         at: SourceRef,
     },
@@ -1205,6 +1307,10 @@ pub enum ShapeError<'graph> {
     },
     /// An `EVAL` whose operand's static type can never be code.
     NotCode { value: KType, at: SourceRef },
+    /// A view ascription whose operand's static type can never be a module.
+    NotAModule { value: KType, at: SourceRef },
+    /// A view ascription at a type the view door never takes: no one application of a signature.
+    NotASignature { ascribed: KType, at: SourceRef },
     /// An `EVAL` of traced code whose static type can never satisfy the type the `EVAL` declares.
     EvalNeverSatisfied {
         code: KType,
@@ -1300,12 +1406,17 @@ impl ShapeError<'_> {
             | ShapeError::Overlaps { at, .. }
             | ShapeError::NoAdmittingCandidate { at, .. }
             | ShapeError::NoField { at, .. }
+            | ShapeError::NoMember { at, .. }
+            | ShapeError::Unlisted { at, .. }
+            | ShapeError::UnpinnedMember { at, .. }
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::AscriptionNeverSatisfied { at, .. }
             | ShapeError::AnnotationNeverSatisfied { at, .. }
             | ShapeError::CallNeverSatisfied { at, .. }
             | ShapeError::NotCode { at, .. }
+            | ShapeError::NotAModule { at, .. }
+            | ShapeError::NotASignature { at, .. }
             | ShapeError::EvalNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
             | ShapeError::RepeatedGuard { at, .. } => *at,
@@ -1509,8 +1620,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 self.key(key)
             ),
             ShapeError::NoAdmittingCandidate { key, arguments, .. } => {
-                write!(f, "no overload of `{}` admits ", self.key(key))?;
-                self.arguments(f, arguments)
+                selection_refused(f, key, arguments, None, self.symbols, self.types)
             }
             ShapeError::NoField { of, field, .. } => write!(
                 f,
@@ -1518,20 +1628,41 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 display_name(*of, self.types, self.symbols),
                 name(field)
             ),
+            ShapeError::NoMember { of, member, .. } => write!(
+                f,
+                "{} has no member {}",
+                display_name(*of, self.types, self.symbols),
+                name(member)
+            ),
+            ShapeError::Unlisted { name: read, .. } => {
+                // A key is listed as its use is written, in parentheses.
+                let listed = match read {
+                    BinderSymbol::Key(_) => format!("({})", name(read)),
+                    _ => name(read).to_string(),
+                };
+                write!(
+                    f,
+                    "`{}` is read from outside this module; list it under its `OVER`, as \
+                     `OVER #[{listed}]`",
+                    name(read)
+                )
+            }
+            ShapeError::UnpinnedMember {
+                member, parameter, ..
+            } => write!(
+                f,
+                "`{}` is quantified over `{}`, which the load cannot name here; call it, or \
+                 ascribe its module with `{}` pinned",
+                name(member),
+                name(parameter),
+                name(parameter)
+            ),
             ShapeError::Ambiguous {
                 key,
                 arguments,
                 count,
                 ..
-            } => {
-                write!(
-                    f,
-                    "ambiguous call of {}: {count} overloads admit ",
-                    self.key(key)
-                )?;
-                self.arguments(f, arguments)?;
-                f.write_str(" and none ranks first")
-            }
+            } => selection_refused(f, key, arguments, Some(*count), self.symbols, self.types),
             ShapeError::ReturnNeverSatisfied { body, returns, .. } => write!(
                 f,
                 "this body returns {}, which can never satisfy its declared return {}",
@@ -1562,6 +1693,15 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 display_name(*callee, self.types, self.symbols),
                 display_name(*arguments, self.types, self.symbols)
             ),
+            ShapeError::NotAModule { value, .. } => {
+                view_refused(f, ViewRefused::NotAModule(*value), self.symbols, self.types)
+            }
+            ShapeError::NotASignature { ascribed, .. } => view_refused(
+                f,
+                ViewRefused::NotASignature(*ascribed),
+                self.symbols,
+                self.types,
+            ),
             ShapeError::NotCode { value, .. } => write!(
                 f,
                 "this value is {}, which can never be code for `EVAL` to run",
@@ -1589,17 +1729,67 @@ impl ShapeErrorDisplay<'_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
     }
+}
 
-    /// `arguments` as a parenthesized, comma-separated list of types.
-    fn arguments(&self, f: &mut fmt::Formatter<'_>, arguments: &[Parametric]) -> fmt::Result {
-        f.write_str("(")?;
-        for (index, argument) in arguments.iter().enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{}", display_name(*argument, self.types, self.symbols))?;
+/// A refused selection at `key` worded — no overload admits `arguments`, or (`ambiguous`) that
+/// many admit and none ranks first — for the load's refusal and the run's fault alike.
+pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
+    f: &mut fmt::Formatter<'_>,
+    key: &[KeyElement],
+    arguments: &[A],
+    ambiguous: Option<usize>,
+    symbols: &SymbolInterner,
+    types: &TypeRegistry<'_>,
+) -> fmt::Result {
+    let key = spelled(key, symbols);
+    match ambiguous {
+        None => write!(f, "no overload of `{key}` admits (")?,
+        Some(count) => write!(f, "ambiguous call of `{key}`: {count} overloads admit (")?,
+    }
+    for (index, argument) in arguments.iter().enumerate() {
+        if index > 0 {
+            f.write_str(", ")?;
         }
-        f.write_str(")")
+        write!(f, "{}", display_name(*argument, types, symbols))?;
+    }
+    f.write_str(")")?;
+    match ambiguous {
+        None => Ok(()),
+        Some(_) => f.write_str(" and none ranks first"),
+    }
+}
+
+/// Why the view door refuses an ascription, whatever the operand's or the type's other faults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewRefused {
+    /// The operand, of this type, is no module.
+    NotAModule(KType),
+    /// The type ascribed is no one application of a signature.
+    NotASignature(KType),
+}
+
+/// A refused view worded, for the load's refusal and the run's fault alike.
+pub fn view_refused(
+    f: &mut fmt::Formatter<'_>,
+    refused: ViewRefused,
+    symbols: &SymbolInterner,
+    types: &TypeRegistry<'_>,
+) -> fmt::Result {
+    match refused {
+        ViewRefused::NotAModule(value) => {
+            write!(
+                f,
+                "{} is no module to ascribe",
+                display_name(value, types, symbols)
+            )
+        }
+        ViewRefused::NotASignature(ascribed) => {
+            write!(
+                f,
+                "{} is no signature",
+                display_name(ascribed, types, symbols)
+            )
+        }
     }
 }
 

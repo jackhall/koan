@@ -29,7 +29,7 @@ pub(super) fn module<'graph, 'cell>(
 
 /// The schema of the signature `handle` is.
 pub(super) fn schema<'run>(handle: KType, types: &TypeRegistry<'run>) -> SigSchema<'run> {
-    layout::schema_of(handle, types).expect("a signature handle")
+    crate::elaborate::schema_of(handle, types).expect("a signature handle")
 }
 
 /// The member of `view` named `name`, which must be there.

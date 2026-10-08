@@ -2,7 +2,7 @@
 //! types elaborates against — and [`seal_group`], the pure identity computation it reaches.
 //!
 //! A window is a held record, not registry state: it holds the group's announced member names, each
-//! member's owner and schema slot, the generativity nonce, and the declaring binders. Several can
+//! member's owner and schema slot, and the declaring binders. Several can
 //! be open at once, which a registry-hosted stack could not express. Nothing on a window is
 //! digestible; nothing on it survives the seal. Building a group's relative schemas from the AST is
 //! the elaborator's; the lattice only opens and seals the window.
@@ -47,7 +47,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use crate::bump::{BumpAllocator, BumpVec, ScopeId, strongly_connected_components};
+use crate::bump::{BumpAllocator, BumpVec, strongly_connected_components};
 use crate::symbols::{Symbol, TypeSymbol};
 
 use super::digest::{ComponentMember, TypeDigest, component_digest, member_ref_digest};
@@ -201,10 +201,6 @@ pub struct RecursiveGroupWindow<'w> {
     /// variants. The binder is not itself a member: it denotes the union of the members it owns.
     /// Fixed at construction: only the member list grows, by threaded discovery.
     binders: &'w [(TypeSymbol, &'w [usize])],
-    /// Set when opaque ascription mints this window, so its per-application nonce folds into the
-    /// minted member's component digest and two applications never unify. A generative window
-    /// always has exactly one member, so the nonce belongs unambiguously to its one component.
-    generative_nonce: Option<ScopeId>,
     /// What the seal minted. Empty while the window is open; set exactly once.
     sealed: Cell<Option<SealedGroup<'w>>>,
 }
@@ -279,7 +275,6 @@ impl<'w> RecursiveGroupWindow<'w> {
             host,
             members: RefCell::new(pending),
             binders: owned.leak(),
-            generative_nonce: None,
             sealed: Cell::new(None),
         }
     }
@@ -300,20 +295,6 @@ impl<'w> RecursiveGroupWindow<'w> {
         members.extend(tags.iter().map(|tag| (*tag, Some(binder), KKind::NewType)));
         let owned: &[usize] = host.alloc_slice_fill_iter(0..tags.len());
         Self::for_component(host, &members, &[(binder, owned)])
-    }
-
-    /// A generative window in `host`: opaque ascription's per-application mint, always one member.
-    /// `nonce` (the minted module's `scope_id`) folds into that member's component digest, so two
-    /// `:|` applications of one signature member over one representation stay distinct types.
-    pub fn generative(
-        host: BumpAllocator<'w>,
-        name: TypeSymbol,
-        kind: KKind,
-        nonce: ScopeId,
-    ) -> Self {
-        let mut window = Self::new(host, &[(name, kind)]);
-        window.generative_nonce = Some(nonce);
-        window
     }
 
     /// Index of the standalone member named `name`. Owned members — a `UNION`'s variants — never
@@ -471,35 +452,23 @@ impl<'w> RecursiveGroupWindow<'w> {
                     .expect("the window seals only once every member is filled"),
             }
         }));
-        let sealed = seal_group(
-            self.host,
-            &inputs,
-            self.binders,
-            self.generative_nonce,
-            types,
-            scratch,
-        );
+        let sealed = seal_group(self.host, &inputs, self.binders, types, scratch);
         self.sealed.set(Some(sealed));
         Some(sealed)
     }
 
     /// Seal a one-member window in `host` in place — the standalone declarators' path, where
-    /// announcement, fill and seal all happen at one site. `nonce` makes it a generative mint. The
-    /// member's own self-reference is `Sibling(0)`, so a self-recursive standalone type needs no
-    /// other setup.
+    /// announcement, fill and seal all happen at one site. The member's own self-reference is
+    /// `Sibling(0)`, so a self-recursive standalone type needs no other setup.
     pub fn seal_singleton(
         host: BumpAllocator<'w>,
         name: TypeSymbol,
         schema: RelativeSchema<'w>,
-        nonce: Option<ScopeId>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> KType {
         let kind = schema.kind();
-        let window = match nonce {
-            Some(nonce) => Self::generative(host, name, kind, nonce),
-            None => Self::new(host, &[(name, kind)]),
-        };
+        let window = Self::new(host, &[(name, kind)]);
         window
             .fill_member(0, schema, types, scratch)
             .and_then(|sealed| sealed.member(0))
@@ -530,7 +499,6 @@ pub(super) fn seal_group<'w>(
     host: BumpAllocator<'w>,
     members: &[SealMemberInput<'w>],
     binders: &[(TypeSymbol, &[usize])],
-    generative_nonce: Option<ScopeId>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> SealedGroup<'w> {
@@ -587,9 +555,7 @@ pub(super) fn seal_group<'w>(
                         .into_node_schema(),
                 });
             }
-            // A generative window has exactly one member, so its nonce belongs to the one
-            // component the loop ever visits.
-            component_digest(generative_nonce, &component_members)
+            component_digest(&component_members)
         };
 
         for (position, member) in order.iter().enumerate() {

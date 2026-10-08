@@ -29,6 +29,8 @@ cellgraph = { path = "cellgraph" }
 sexlex = { path = "sexlex" }
 # The symbol vocabulary, the type lattice over it, and the bump tier both rest on.
 lattice = { path = "lattice" }
+# A value's content digest, hashed as the lattice hashes a type's, at the lattice's version.
+blake3 = "1.8.5"
 # The one self-referential value: `CellSubstrate` owns program storage beside the graph that
 # borrows it. `self_cell` carries the `unsafe` that needs; koan writes none.
 self_cell = "1.3"

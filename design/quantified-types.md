@@ -56,7 +56,8 @@ other value, and every reader but a call's head takes `Value::concrete_ktype`.
 
 ## Where a quantified function is instantiated
 
-An **instance site** is a quantified function, a name bound to one or a
+An **instance site** is a quantified function, a name bound to one, a
+module's quantified member read through the module, `m.pick`, or a
 `FN FOR ALL` literal, written anywhere but the head of a call or a `MODULE` or
 `GROUP` body's binding. The load solves its group there from the type it is **wanted**
 at, and the value read there is the **instance**: a function stamped with the
@@ -79,6 +80,14 @@ block's or quote's body but its last statement, refuses the load, even where
 local generic helper binds it under the type it is used at,
 `LET inc :(FN :{x :Number} -> Number) = (FN FOR ALL …)`, or moves it into a
 module body, where it stays generic and each call solves its group.
+
+A member read `m.pick` is an instance site where the load sees that the
+member is quantified: its operand is a name, or a chain of member reads rooted
+at one, whose static type is a signature declaring the member with a scheme.
+A scheme naming a head parameter that signature leaves unpinned names a type
+the load cannot write, so such a read is refused anywhere but a call's head,
+where the run solves the call. A read the load cannot see into is no instance
+site, and faults at run where it reaches a scheme anywhere but a call's head.
 
 The solve is the least instance of the scheme under the wanted type
 ([`instance_under`](../lattice/src/types/relations.md#quantified-binders)). A
@@ -118,8 +127,12 @@ question, so the order stays a partial order by handle with schemes inside.
 | | offered side | asked side |
 |---|---|---|
 | a member's own `FOR ALL` variable | solved afresh for each member, as a call solves it | rigid |
-| an unpinned head parameter | one rigid unknown per application | one variable, solved and discarded |
+| an unpinned head parameter | one rigid unknown per application, opaque | one variable, solved and discarded |
 | a pinned head parameter | the pin | the pin |
+
+An offered head parameter's bound decides only which modules fit an asked
+one's bound, and reveals nothing else, as an opaque view's carrier does
+([relations](../lattice/src/types/relations.md#signature-types)).
 
 So a module defining `EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt)`
 fits `SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]`,
@@ -225,5 +238,5 @@ lattice, not an unknown type, so nothing here is checked by consistency.
 
 ## Open work
 
-- [Modules](../roadmap/rewrite/modules.md) — carriers keyed on content, path
-  types, and evaluating ascriptions and member reads.
+- [Path types](../roadmap/rewrite/path-types.md) — a quantified member over a
+  head parameter its signature leaves unpinned, instantiated through its path.

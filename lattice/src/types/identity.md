@@ -22,18 +22,18 @@ Three things follow, and each is load-bearing:
 - **Identity is interner-independent.** The digest is a pure function of
   content, so two independently built types with the same content are equal with
   no shared registry.
-- **Generativity is one explicit mechanism**, applied in two places: a minted
-  `ScopeId` nonce folded into the content ahead of everything else, carried by a
-  recursive-group window and by the carrier an opaque view mints for a head
-  parameter. Two opaque ascriptions of one signature never unify, and nothing
-  else in the vocabulary is generative. *Out of date for the carrier:* the
-  [module design](../../../design/modules.md) keys a carrier on content, not on a
-  nonce.
+- **Nothing in the vocabulary is generative.** The one node keyed on something
+  outside type content is an opaque view's carrier: a `Carrier` holding a
+  `ContentKey`, an identity the module layer computes from the view's own
+  content and the lattice never interprets, folded into the carrier's digest
+  ahead of its name and the bound it met. Two views of equal content therefore
+  share a carrier, and two of different content never unify
+  ([module design](../../../design/modules.md#carriers-and-paths)).
 
 The hasher lives in `digest.rs` and only there. Every payload begins with a
 distinct domain tag byte so no two variants can share a digest, every text run is
 length-prefixed so concatenation is unambiguous, and every child digest,
-`ScopeId` and integer is fed little-endian.
+`ContentKey` and integer is fed little-endian.
 
 ### Typed handles
 
@@ -81,9 +81,9 @@ The handle *is* the lookup key and the digest is already uniformly distributed,
 so the node map hashes it with an identity hasher and a lookup costs about what
 an array index would. Interning is insert-if-absent, so building the same content
 twice in a run yields one node and two equal handles. Beside each node the entry
-stores three flags computed off its children at intern — whether a free
-quantifier, whether any rigid variable, and whether anything parametric is
-reachable — so each probe is one table read. The probes are the lattice's own;
+stores four flags computed off its children at intern — whether a free
+quantifier, whether any rigid variable, whether anything parametric, and whether
+an opaque carrier is reachable — so each probe is one table read. The probes are the lattice's own;
 the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
 concreteness through `concrete`.
 

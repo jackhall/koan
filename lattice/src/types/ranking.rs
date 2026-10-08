@@ -303,22 +303,15 @@ pub(super) fn judge_by_class<'s>(
                     scratch,
                     walk.slots[slot],
                     Side::Above,
-                    &mut |variable| match variable {
+                    &mut |_, node| match Variable::of(node)? {
                         Variable::Quantified { index, bound } => Some(earlier(index, bound)),
-                        _ => Some(variable.interval().raw()),
+                        variable => Some(variable.interval().raw()),
                     },
                 ),
             );
             let upper = bound_above(types, scratch, arguments[slot].upper);
-            let lower = read_through(
-                types,
-                scratch,
-                arguments[slot].lower,
-                Side::Below,
-                &mut |variable| Some(variable.interval().raw()),
-            );
             if meet_through_variables(types, scratch, greatest, upper) == Handle::NEVER
-                || !fits(types, scratch, lower, greatest)
+                || lower_end_outside(types, scratch, arguments[slot].lower, greatest)
             {
                 return Judged {
                     verdict: Verdict::Never,
@@ -369,7 +362,7 @@ pub(super) fn judge_by_class<'s>(
                 scratch,
                 walk.slots[slot],
                 Side::Below,
-                &mut |variable| match variable {
+                &mut |_, node| match Variable::of(node)? {
                     Variable::Quantified { index, bound } if !own(index) => {
                         Some(earlier(index, bound))
                     }
@@ -469,6 +462,32 @@ pub(super) fn admits_by_class<'run>(
         && collector.solve(types).is_ok()
 }
 
+/// Whether an argument whose static lower end is `lower`, read below its variables, lies outside
+/// `slot`: every type the run can carry there lies outside it too, so the candidate never admits.
+pub(super) fn lower_end_outside(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    lower: Handle,
+    slot: Handle,
+) -> bool {
+    let lower = read_through(types, scratch, lower, Side::Below, &mut |_, node| {
+        Some(Variable::of(node)?.interval().raw())
+    });
+    !fits(types, scratch, lower, slot)
+}
+
+/// Whether `a` strictly outranks `b` at `class`: at least as specific there, and `b` not at least
+/// as specific as `a`. A survivor `a` outranks at a class eliminates `b` there.
+pub(super) fn outranks(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: Handle,
+    b: Handle,
+    class: u8,
+) -> bool {
+    class_at_least(types, scratch, a, b, class) && !class_at_least(types, scratch, b, a, class)
+}
+
 /// Whether `a` is at least as specific as `b` at `class`: `b`'s slots in that class admit `a`'s
 /// own, jointly, with each variable an earlier class admitted read at its reach interval
 /// ([`read_later`]) and each one an earlier class refused read as its bound. `a`'s variables are
@@ -519,9 +538,10 @@ pub(super) fn class_at_least(
 pub(super) const STAND_IN_LEVEL: usize = usize::MAX;
 
 /// What a variable an earlier class solved to `solution` reads as in a later one, over static
-/// types: `solution` itself where the reach interval converged or `solution` names a rigid variable
-/// of the other side — which stands for one unknown already — and otherwise a lexical variable
-/// between the interval's ends.
+/// types: `solution` itself where the reach interval converged, `solution` names a rigid variable
+/// of the other side — which stands for one unknown already — or it holds an opaque carrier, an
+/// atom no lexical variable's ends may hold; and otherwise a lexical variable between the
+/// interval's ends.
 fn read_later(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -530,7 +550,7 @@ fn read_later(
     reach: Interval<Handle>,
     solution: Handle,
 ) -> Handle {
-    if reach.is_exact() || types.contains_rigid(solution) {
+    if reach.is_exact() || types.contains_rigid(solution) || types.contains_carrier(solution) {
         return solution;
     }
     // Neither end holds a rigid variable: an end is the solution, a bound or `Never`, and the
@@ -561,10 +581,7 @@ pub(super) fn select_by_class<'s>(
         if survivors.len() <= 1 {
             break;
         }
-        let beats = |x: usize, y: usize| {
-            class_at_least(types, scratch, shapes[x], shapes[y], class)
-                && !class_at_least(types, scratch, shapes[y], shapes[x], class)
-        };
+        let beats = |x: usize, y: usize| outranks(types, scratch, shapes[x], shapes[y], class);
         let mut kept = BumpVec::with_capacity_in(survivors.len(), scratch);
         kept.extend(
             survivors

@@ -44,7 +44,7 @@ use super::lattice::{join_iter, meet_through_variables};
 use super::node::TypeNode;
 use super::order::fits;
 use super::registry::TypeRegistry;
-use super::substitute::bound_above;
+use super::substitute::{Side, bound_above, read_through};
 use super::verdicts::Relation;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
@@ -240,10 +240,15 @@ pub struct Collector<'s, T = Parametric> {
     /// Every contribution in arrival order — the cell it landed in and the bound that cell held
     /// before — so a [`rollback`](Self::rollback) pops exactly what a rejected attempt added.
     trail: BumpVec<'s, (usize, Variance, KType)>,
+    /// What each [pinned](Self::pin) variable is pinned to.
+    pins: BumpVec<'s, Option<Handle>>,
     /// Whether some admission read a rigid variable through its ends: `Admits::leaf`, the bound
     /// split in `Admits::set_wise`, or a false verdict over one. Never rolled back — a rejected
     /// union member that read one is a choice some binding makes otherwise.
     bound_read: bool,
+    /// Where the variables are a signature's head parameters ([`heads`](Self::heads)), the
+    /// offered signature's own unpinned parameters, each beside the bound it was declared under.
+    heads: Option<&'s [(Handle, KType)]>,
     takes: PhantomData<T>,
 }
 
@@ -259,6 +264,24 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
     /// arguments into. A variable no contribution reaches solves to its bound.
     pub fn new(scratch: BumpAllocator<'s>, bounds: &[KType]) -> Self {
         Self::over(scratch, bounds.iter().copied())
+    }
+
+    /// One empty cell per head parameter of a signature bounded by `bounds` — what a module's fit
+    /// collects into. A head parameter's bound decides which modules fit and reveals nothing to a
+    /// reader, so what stands for one opaquely lies under `Any` alone: a carrier, and each of
+    /// `offered`, the offered signature's own unpinned parameters. Checked against a bound here,
+    /// each reads as an interval from itself up to the bound it met — its view's source's, or its
+    /// declaration's — so it meets the bound through that one at a covariant position and stays
+    /// itself at a contravariant one. A `FOR ALL` bound, which its body reads, takes neither.
+    pub(super) fn heads(
+        scratch: BumpAllocator<'s>,
+        bounds: &[KType],
+        offered: &'s [(Handle, KType)],
+    ) -> Self {
+        Collector {
+            heads: Some(offered),
+            ..Self::new(scratch, bounds)
+        }
     }
 
     /// One empty cell per quantifier, each bounded by [`KType::NEVER`] until a contribution reaches
@@ -279,13 +302,17 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
         };
         let mut held = BumpVec::with_capacity_in(arity, scratch);
         held.extend(bounds);
+        let mut pins = BumpVec::with_capacity_in(arity, scratch);
+        pins.resize(arity, None);
         Collector {
             scratch,
             lower: cells(),
             upper: cells(),
             bounds: held,
             trail: BumpVec::new_in(scratch),
+            pins,
             bound_read: false,
+            heads: None,
             takes: PhantomData,
         }
     }
@@ -313,14 +340,22 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
         self.lower.truncate(mark.cells);
         self.upper.truncate(mark.cells);
         self.bounds.truncate(mark.cells);
+        self.pins.truncate(mark.cells);
     }
 
-    /// Pin the `index`-th variable to `to`, as though `to` had reached it at both polarities: every
-    /// later contribution must then lie on the right side of `to` for the variable to solve, and it
-    /// solves to `to`. How a class-by-class admission holds a variable an earlier class solved.
+    /// Pin the `index`-th variable to `to`, as though `to` had reached it at both polarities, and it
+    /// solves to `to`. A later contribution on the wrong side of `to` is refused where it arrives,
+    /// so a union whose walk reaches the variable chooses a member the pin allows. How a
+    /// class-by-class admission holds a variable an earlier class solved.
     pub fn pin(&mut self, index: usize, bound: KType, to: T) {
         self.contribute(index, bound, to.raw(), Variance::Co);
         self.contribute(index, bound, to.raw(), Variance::Contra);
+        self.pins[index] = Some(to.raw());
+    }
+
+    /// What the `index`-th variable is pinned to, if anything.
+    fn pinned(&self, index: usize) -> Option<Handle> {
+        self.pins.get(index).copied().flatten()
     }
 
     /// Record that `carried` reached the `index`-th variable at `variance`.
@@ -332,6 +367,7 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
             self.upper
                 .resize_with(index + 1, || BumpVec::new_in(scratch));
             self.bounds.resize(index + 1, KType::ANY);
+            self.pins.resize(index + 1, None);
         }
         let cell = match variance {
             Variance::Co => &mut self.lower[index],
@@ -427,14 +463,31 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
         }
         let joined = join_iter(types, scratch, lower.iter().copied());
         // Each ceiling on its own: a meet may land below the greatest lower bound.
-        match upper
+        if let Some(ceiling) = upper
             .iter()
             .copied()
-            .chain([bound])
             .find(|ceiling| !fits(types, scratch, joined, *ceiling))
         {
-            Some(ceiling) => Err((joined, ceiling)),
-            None => Ok(joined),
+            return Err((joined, ceiling));
+        }
+        // A head parameter's bound reads a carrier or an offered stand-in from above: its met bound
+        // where it is covariant, itself where it is contravariant.
+        let held = match self.heads {
+            Some(offered) => read_through(types, scratch, joined, Side::Above, &mut |at, node| {
+                let met = match *node {
+                    TypeNode::Carrier { met, .. } => met,
+                    _ => offered.iter().find(|(held, _)| *held == at)?.1,
+                };
+                Some(Interval {
+                    lower: at,
+                    upper: met.raw(),
+                })
+            }),
+            None => joined,
+        };
+        match fits(types, scratch, held, bound) {
+            true => Ok(joined),
+            false => Err((joined, bound)),
         }
     }
 }
@@ -730,7 +783,45 @@ impl<T: TypeHandle> Lockstep for Admits<'_, '_, T> {
         }
         match types.node(declared) {
             TypeNode::Quantified { index, bound } => {
+                // A pinned variable takes only what lies on the pin's side: below it at a covariant
+                // position, above it at a contravariant one.
+                if let Some(to) = self.collector.pinned(index)
+                    && !match v {
+                        Variance::Co => fits(types, scratch, carried, to),
+                        Variance::Contra => fits(types, scratch, to, carried),
+                    }
+                {
+                    self.collector.bound_read |=
+                        types.contains_rigid(carried) || types.contains_rigid(to);
+                    return Some(Err(UnifyFailure::Mismatch));
+                }
                 self.collector.contribute(index, bound, carried, v);
+                Some(Ok(()))
+            }
+            // Whatever a variable solves to, the type over it lies under `Any` and above `Never`:
+            // the order's own extremes, which no structural pairing reaches. Each free variable
+            // takes what a part-by-part pairing would give it: an extreme is `Never` in every
+            // covariant part and `Any` in every contravariant one, so it binds as a bare one does.
+            _ if carried
+                == match v {
+                    Variance::Co => Handle::NEVER,
+                    Variance::Contra => Handle::ANY,
+                } =>
+            {
+                visit_in(types, scratch, declared, v, &mut |_, node, context| {
+                    if node.binds_quantifiers() {
+                        return Visit::Skip;
+                    }
+                    if let TypeNode::Quantified { index, bound } = *node {
+                        let extreme = match context.variance() {
+                            Variance::Co => Handle::NEVER,
+                            Variance::Contra => Handle::ANY,
+                        };
+                        self.collector
+                            .contribute(index, bound, extreme, context.variance());
+                    }
+                    Visit::Descend
+                });
                 Some(Ok(()))
             }
             _ => None,

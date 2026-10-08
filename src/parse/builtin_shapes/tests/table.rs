@@ -37,15 +37,29 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::LetAnnotated, &[(1, B), (2, B)]),
     (BuiltinShapeId::TypeDeclaration, &[]),
     (BuiltinShapeId::Module, &[(1, B), (3, B)]),
+    (BuiltinShapeId::ModuleOver, &[(1, B), (3, C), (5, B)]),
     (BuiltinShapeId::GroupFoldLeft, &[(1, B), (5, B)]),
+    (BuiltinShapeId::GroupFoldLeftOver, &[(1, B), (3, C), (7, B)]),
     (BuiltinShapeId::GroupFoldRight, &[(1, B), (5, B)]),
+    (
+        BuiltinShapeId::GroupFoldRightOver,
+        &[(1, B), (3, C), (7, B)],
+    ),
     (
         BuiltinShapeId::GroupPairwiseFoldLeft,
         &[(1, B), (4, Q), (7, B)],
     ),
     (
+        BuiltinShapeId::GroupPairwiseFoldLeftOver,
+        &[(1, B), (3, C), (6, Q), (9, B)],
+    ),
+    (
         BuiltinShapeId::GroupPairwiseFoldRight,
         &[(1, B), (4, Q), (7, B)],
+    ),
+    (
+        BuiltinShapeId::GroupPairwiseFoldRightOver,
+        &[(1, B), (3, C), (6, Q), (9, B)],
     ),
     (BuiltinShapeId::Sig, &[(1, B), (3, C)]),
     (BuiltinShapeId::QuantifiedSig, &[(1, B), (4, C), (6, C)]),

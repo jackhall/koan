@@ -158,10 +158,7 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
         "load: <test>:2:7: :(Some | None) has no member Many",
         "a closed projection naming no member refuses the load"
     );
-    assert_eq!(
-        run("MODULE m = (LET x = 1)\nPRINT m.x"),
-        "error: reading a module's member arrives with modules"
-    );
+    assert_eq!(run("MODULE m = (LET x = 1)\nPRINT m.x"), "1");
 }
 
 #[test]
@@ -260,7 +257,7 @@ fn an_uncaught_error_ends_the_program_with_its_message() {
         run(
             "LET r = ({v = \"a\"} :! :{v :Any})\nPRINT \"before\"\nPRINT (1 + r.v)\nPRINT \"after\""
         ),
-        "before\nerror: no overload of _ + _ admits (Number, Str)"
+        "before\nerror: no overload of `_ + _` admits (Number, Str)"
     );
 }
 
@@ -270,13 +267,13 @@ fn every_evaluation_passes_an_error_it_receives_through_unchanged() {
         run("LET r = ({v = \"s\"} :! :{v :Any})\n\
              EXPR #(ONE x :Number) -> Number = #(x)\n\
              PRINT [1, (ONE (ONE r.v))]"),
-        "error: no overload of ONE _ admits (Str)"
+        "error: no overload of `ONE _` admits (Str)"
     );
     assert_eq!(
         run(
             "LET r = ({v = \"a\"} :! :{v :Any})\nEXPR #(DEEP) -> Number = #(1 + r.v)\nPRINT {n = (DEEP)}"
         ),
-        "error: no overload of _ + _ admits (Number, Str)",
+        "error: no overload of `_ + _` admits (Number, Str)",
         "through a frame's contract"
     );
 }
@@ -483,14 +480,15 @@ fn a_variable_used_once_is_solved_by_each_call() {
     assert_eq!(run(source), "Number\nStr");
 }
 
-/// A module's quantified member runs through a call: by name, written at a call's head, or wrapped
-/// in an unquantified `FN` that calls it. A body binding one where nothing fixes its group is
-/// refused where it is written, not when its value is read.
+/// A module's quantified member runs through a call: by name, written at a call's head — in
+/// parentheses or not — or wrapped in an unquantified `FN` that calls it. A body binding one where
+/// nothing fixes its group is refused where it is written, not when its value is read.
 #[test]
 fn a_quantified_function_runs_through_a_call() {
     let pick = "(LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
     let module = |rest: &str| format!("MODULE lib = ({pick} {rest})");
     assert_eq!(run(&module("(PRINT (pick {x = 1}))")), "1");
+    assert_eq!(run(&module("(PRINT ((pick) {x = 2}))")), "2");
     assert_eq!(
         run(
             "LET f = (FN :{} -> Any = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))))\n\
@@ -586,10 +584,10 @@ const BOXES: &str = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST 
 #[test]
 fn a_module_whose_member_is_as_general_fits_a_quantified_head() {
     assert_eq!(run(&format!("{BOXES}PRINT (TAKE poly)")), "fits");
-    // A `MODULE` binder is `[Never, Any]` at load, so the miss is the call's, at run.
+    // A `MODULE` binder is exactly its signature at load, so the miss refuses the load.
     assert_eq!(
         run(&format!("{BOXES}PRINT (TAKE mono)")),
-        "error: no overload of TAKE _ admits (SIG (#(BOX _ :Number) -> :(LIST OF Number)))"
+        "load: <test>:5:7: no overload of `TAKE _` admits (SIG (#(BOX _ :Number) -> :(LIST OF Number)))"
     );
 }
 
@@ -606,13 +604,13 @@ fn a_module_fits_each_application_its_overloads_answer() {
                   EXPR #(NUMBERS m :Numbers) -> Str = #(\"numbers\")\n\
                   EXPR #(STRINGS m :Strings) -> Str = #(\"strings\")\n\
                   EXPR #(BOTH m :(Numbers & Strings)) -> Str = #(\"both\")\n";
-    // A `MODULE` binder is `[Never, Any]` at load, so each miss is the call's, at run.
+    // A `MODULE` binder is exactly its signature at load, so each miss refuses the load.
     let fits = |call: &str| run(&format!("{source}PRINT ({call})"));
     assert_eq!(fits("ANY one"), "stack");
     assert_eq!(fits("NUMBERS one"), "numbers");
     assert_eq!(
         fits("STRINGS one"),
-        "error: no overload of STRINGS _ admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+        "load: <test>:10:7: no overload of `STRINGS _` admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
     );
     assert_eq!(fits("ANY two"), "stack");
     assert_eq!(fits("NUMBERS two"), "numbers");
@@ -620,7 +618,7 @@ fn a_module_fits_each_application_its_overloads_answer() {
     assert_eq!(fits("BOTH two"), "both");
     assert_eq!(
         fits("BOTH one"),
-        "error: no overload of BOTH _ admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+        "load: <test>:10:7: no overload of `BOTH _` admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
     );
 }
 
@@ -633,7 +631,7 @@ fn a_signature_prints_its_head_parameters_and_a_meet_its_applications() {
     assert_eq!(
         run(source),
         "SIG FOR ALL #{Size: Number} (size: Size)\n\
-         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Number}) & \
-         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Str})"
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Str}) & \
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Number})"
     );
 }

@@ -70,11 +70,24 @@ fn a_tagged_value_takes_the_application_it_lies_under() {
     assert_eq!(run(source), "number or str\nboxed");
 }
 
+/// A module ascribed a type that is no signature is held to it as any value is; `:|` takes only a
+/// signature, refused at load where the type is closed.
 #[test]
-fn a_module_ascription_arrives_with_modules() {
+fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
     assert_eq!(
-        run("MODULE m = (LET x = 1)\nPRINT (m :! Any)"),
-        "error: ascribing a module arrives with modules"
+        run("MODULE m = (LET x = 1)\nLET n = (m :! Any)\nPRINT n.x"),
+        "1"
+    );
+    assert_eq!(
+        run("MODULE m = (LET x = 1)\nPRINT (m :| Any)"),
+        "load: <test>:2:7: Any is no signature"
+    );
+    // A type the load cannot read faults at run.
+    assert_eq!(
+        run("MODULE m = (LET x = 1)\n\
+             EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
+             PRINT (VIEW 1)"),
+        "error: Number is no signature"
     );
 }
 

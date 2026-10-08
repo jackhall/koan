@@ -7,7 +7,7 @@ use crate::program::{CellSubstrate, Program};
 use crate::scope::{BodyShape, Narrowing, ShapeKind, Site, Slot, Static};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, Verdict, class_at_least, display_name,
+    DeclaredType, Interval, KType, Parametric, Verdict, display_name, outranks,
 };
 
 use super::{Koan, output, run};
@@ -205,7 +205,7 @@ fn a_capture_keeps_its_type_along_the_chain() {
     loaded(
         "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
          LET g = (FN :{} -> Any = #(\n    LET y = x\n    y\n  ))\n  \
-         MODULE inner = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Any = #(\n    LET z = x\n    z\n  )))\n  \
+         MODULE inner OVER #[x] = (LET h = (FN FOR ALL #[Tee] :{t :Tee} -> Any = #(\n    LET z = x\n    z\n  )))\n  \
          x\n)))",
         |program| {
             let f = body(program, module_body(program, "lib"), "f");
@@ -468,9 +468,11 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
             ":(LIST OF Number)"
         );
     });
+    // The key holds the module's own overloads, which may admit more than the head does.
     assert_eq!(
         run(&using("(Stack WITH {Elt = Number})", "PUSH \"s\"")),
-        "load: <test>:2:81: no overload of `PUSH _` admits (Str)"
+        "",
+        "a use the head alone never admits loads"
     );
     let open = using("Stack", "LET a = (PUSH 1)");
     using_block(&open, |program, block| {
@@ -496,7 +498,8 @@ fn a_surfaced_operator_head_is_typed_at_load() {
     });
     assert_eq!(
         run(&using("\"s\" <> 2")),
-        "load: <test>:2:55: no overload of `_ <> _` admits (Str, Number)"
+        "",
+        "the key holds the module's own overloads, which may admit more than the head"
     );
 }
 
@@ -551,8 +554,7 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
         let (crates, boxes) = (pick(true), pick(false));
         let scratch = Bump::new();
         let (crates, boxes) = (crates.into(), boxes.into());
-        assert!(class_at_least(program.types(), &scratch, crates, boxes, 0));
-        assert!(!class_at_least(program.types(), &scratch, boxes, crates, 0));
+        assert!(outranks(program.types(), &scratch, crates, boxes, 0));
     });
     let module = "MODULE crate = (\
                   (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x])) (LET size = 1))\n";

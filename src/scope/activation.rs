@@ -264,6 +264,12 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         self.callable
     }
 
+    /// The closure bindings this activation reads its captures through, its type captures after
+    /// its shape's.
+    pub fn closure(&self) -> &'cell ClosureBindings<'cell, XF::Closed<'cell>> {
+        self.closure
+    }
+
     /// Every slot in order and what it is bound to. An empty slot panics, exactly as
     /// [`read`](ActivationView::read) does: a body is read whole only once its every unit has run.
     pub fn slots(

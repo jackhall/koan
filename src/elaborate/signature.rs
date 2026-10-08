@@ -312,10 +312,7 @@ fn registered_shape<'x>(
     head: Head<'_, '_>,
     classes: &[u8],
 ) -> (GroupIntern<'x>, ParameterBinding<'x>) {
-    let node = match function {
-        DeclaredType::Type(function) => types.node(function),
-        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
-    };
+    let node = function.node(types);
     let TypeNode::KFunction {
         quantifiers,
         bounds,

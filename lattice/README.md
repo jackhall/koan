@@ -60,37 +60,15 @@ condenses a recursive group's members to digest them, and koan's
 [scope shape](../src/scope/README.md#visibility) condenses a body's bindings
 to find the components a knot can tie and the eager cycles it refuses.
 
-## `ScopeId`: identity independent of placement
-
-[`ScopeId`](src/bump/scope_id.rs) is the identity a per-declaration type
-carries for the scope that declared it. Pointer-derived identity couples
-equality to memory placement, so a relocated or freed scope would silently
-break dispatch on user-declared types. A counter-allocated newtype decouples
-identity from the pointer — which is exactly why the id lives with the storage
-tiers rather than with the lexical record it names: **what it buys is
-independence _from_ placement.**
-
-Layout is `(session, idx)`. `session` is minted once per process from
-entropy-derived randomness; `idx` comes from a global atomic counter. The pair
-gives within-session monotonic identity and a cross-session collision
-probability of 2⁻⁶⁴ — sufficient for non-adversarial use such as a
-compile-then-run split where one process serializes a scope graph and another
-loads and runs it.
-
-**The counter is an identity source, not a registry.** It only ever mints:
-nothing is looked up against it, no scope is reachable from an id, and the
-process-wide static holds no run state — so it is not the global runtime state
-koan otherwise keeps out. A second run in the same process continues the
-counter and is none the worse for it.
-
 ## The import rule
 
 - **The crate depends on no koan code.** Its manifest names none, so the edge
   holds by the build: a path into koan does not compile.
-- **No koan file names `bumpalo`, `hashbrown`, `allocator_api2` or `blake3`.**
-  They are this crate's dependencies, not koan's. Inside the crate,
-  [`bump.rs`](src/bump.rs) is the only file naming the first three; `blake3`
-  is the content digest under symbol and type identity.
+- **No koan file names `bumpalo`, `hashbrown` or `allocator_api2`.** They are
+  this crate's dependencies, not koan's. Inside the crate,
+  [`bump.rs`](src/bump.rs) is the only file naming them. `blake3` is the content
+  digest under symbol and type identity here, and koan depends on it in its own
+  right for a value's [content digest](../src/values/README.md#content-digests).
 - **No `unsafe` outside the test build.** The crate root carries
   `#![cfg_attr(not(test), forbid(unsafe_code))]`. The test build admits one
   site: [`src/tests.rs`](src/tests.rs) installs the counting global allocator

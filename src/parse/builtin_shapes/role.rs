@@ -6,6 +6,9 @@
 //! [`BUILTIN_SHAPES`](super::BUILTIN_SHAPES) element carries its own role, so a shape added to the
 //! table gives its parts roles where it is spelled.
 
+use crate::parse::ast::ExpressionPart;
+use crate::symbols::BinderSymbol;
+
 /// What one part of a builtin shape is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
@@ -30,6 +33,9 @@ pub enum Role {
     /// A `FOR ALL` group: a list of name quotes, or a dict of name quotes to bound quotes — type
     /// parameters the body declares.
     Quantifiers,
+    /// A `MODULE` or `GROUP` body's `OVER` list: a list of quotes, each a name or a key, read as
+    /// written and never as a mention.
+    Captures,
     /// A body that is its own body shape.
     Body(BodyKind),
     /// A dict of guard quotes to arm quotes, each arm a block shape.
@@ -63,26 +69,49 @@ pub enum Reading {
 }
 
 impl Role {
-    /// How the builder reads a part under this role — the one authority the builder, the operator
-    /// claims scan and the rewrite each ask, so no position list sits beside the table.
+    /// How the builder reads a part under this role — the one authority the builder and the
+    /// operator claims scan ask, so no position list sits beside the table.
     pub const fn reading(self) -> Reading {
         match self {
-            Role::Body(BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator)
-            | Role::Head
-            | Role::Data => Reading::Quote,
-            Role::Body(BodyKind::Module | BodyKind::Surfaced)
-            | Role::Definition(DefinitionKind::Plain)
+            Role::Body(kind) => {
+                if kind.is_callable() {
+                    Reading::Quote
+                } else {
+                    Reading::Bare
+                }
+            }
+            Role::Head | Role::Data => Reading::Quote,
+            Role::Definition(DefinitionKind::Plain)
             | Role::Name
             | Role::TypeExpression
             | Role::InPlace
             | Role::Keyword => Reading::Bare,
             Role::Branches(_)
             | Role::Quantifiers
+            | Role::Captures
             | Role::Definition(DefinitionKind::Union | DefinitionKind::Members) => {
                 Reading::Container
             }
             Role::Field => Reading::Label,
             Role::Argument | Role::Rhs | Role::Signature | Role::Unsupported => Reading::Evaluated,
+        }
+    }
+
+    /// Whether the part is a callable's body.
+    pub const fn is_callable(self) -> bool {
+        match self {
+            Role::Body(kind) => kind.is_callable(),
+            _ => false,
+        }
+    }
+
+    /// The label a part under this role is read as: a bare name under `Field`, the label itself.
+    /// `None` for every other part, which is evaluated.
+    pub fn label_reads(self, part: &ExpressionPart<'_>) -> Option<BinderSymbol> {
+        match (self, part) {
+            (Role::Field, ExpressionPart::Identifier(name)) => Some(BinderSymbol::Value(*name)),
+            (Role::Field, ExpressionPart::Type(name)) => Some(BinderSymbol::Type(*name)),
+            _ => None,
         }
     }
 }
@@ -100,6 +129,33 @@ pub enum BodyKind {
     Module,
     /// A `USING` body: a block whose parameters are the names its operand surfaces.
     Surfaced,
+}
+
+/// What a body slot opens: the kind of body shape the builder makes of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Opens {
+    /// A callable's body, whose mentions take the enclosing state's class.
+    Callable,
+    /// A module's body, an eager context.
+    Module,
+    /// A block, an eager context.
+    Block,
+}
+
+impl BodyKind {
+    /// What the body opens — the one place a body kind is classified.
+    pub const fn opens(self) -> Opens {
+        match self {
+            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => Opens::Callable,
+            BodyKind::Module => Opens::Module,
+            BodyKind::Surfaced => Opens::Block,
+        }
+    }
+
+    /// Whether the body is a callable's: a `FN` or `EXPR` body, or an operator's.
+    pub const fn is_callable(self) -> bool {
+        matches!(self.opens(), Opens::Callable)
+    }
 }
 
 /// What an arm's head is.

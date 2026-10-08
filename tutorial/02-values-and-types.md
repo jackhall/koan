@@ -127,9 +127,7 @@ A few rules are worth knowing early:
 - **Newtypes compare by identity.** A [newtype](08-newtypes.md) value is never
   equal to its bare representation, and two different newtypes with the same
   representation are unequal.
-- **Functions and modules can't be compared** — the comparison is an error. To
-  compare two modules by their interface, compare their types instead:
-  `(TYPE OF m1) == (TYPE OF m2)` (see [Modules](11-modules.md)).
+- **Functions and modules can't be compared** — the comparison is an error.
 
 ## Naming types
 

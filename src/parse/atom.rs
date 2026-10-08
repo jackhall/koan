@@ -151,11 +151,11 @@ pub(super) fn classify<'a>(
 }
 
 /// The one message every colon-in-a-value-position mistake reports, wherever the colon was
-/// written: an annotation names a type, and a value expression reaches its type through `TYPE OF`.
+/// written: an annotation names a type, and a value token names none.
 pub(super) fn not_a_type_name(got: char) -> String {
     format!(
         "':' must be followed by a type name (uppercase-leading) or `(`; got `{got}`. \
-         A value token names no type — for the type of a value, write `:(TYPE OF <value>)`"
+         A value token names no type"
     )
 }
 

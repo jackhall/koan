@@ -13,8 +13,8 @@
 
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
-/// Storage outside the graph: the bump arena, the vector, table and set shapes built over it, the
-/// component walk staged in it, and the position-independent `ScopeId`.
+/// Storage outside the graph: the bump arena, the vector, table and set shapes built over it, and
+/// the component walk staged in it.
 pub mod bump;
 /// Symbol identity: the classified newtypes every syntactic name travels as, the interner that
 /// turns one back into text, and the `static_name!` declaration over them.
@@ -25,6 +25,5 @@ pub mod symbols;
 #[cfg(test)]
 mod tests;
 /// The type lattice: the node vocabulary, the interning registry, the identity recipe, the
-/// relations between types and the unifier — a closed algebra over [`symbols`] and
-/// [`ScopeId`](bump::ScopeId).
+/// relations between types and the unifier — a closed algebra over [`symbols`].
 pub mod types;

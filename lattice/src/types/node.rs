@@ -1,6 +1,6 @@
 //! [`TypeNode`] — one interned type's content, the thing a [`Handle`] names.
 //!
-//! A node stores its variant tag, its scalar payload (names, [`ScopeId`]s, a signature's schema
+//! A node stores its variant tag, its scalar payload (names, [`ContentKey`]s, a signature's schema
 //! shape), and **handles to its child types** — never owned substructure. Every run a node holds —
 //! a union's members, a shape's elements, a record's fields, a schema's tables — is a slice in the
 //! run region, so a node is `Copy` and carries no drop glue. Nodes are immutable from the moment
@@ -18,7 +18,6 @@
 //!
 //! See [README.md](README.md) § The node vocabulary.
 
-use crate::bump::ScopeId;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::digest::TypeDigest;
@@ -29,6 +28,12 @@ use super::run::{Elements, Run};
 use super::schema::SigSchema;
 use super::shape::DeferredReturnSurface;
 use super::unify::Interval;
+
+/// An opaque identity a carrier is keyed on: what a module layer computes from an opaque view's
+/// own content — its operator and signature application over its source module's digest — and
+/// the lattice never interprets. Two carriers of one name and met bound under one key are one type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct ContentKey(pub u128);
 
 /// The content of one interned type, its children read as `H`. Every run is a `'run` slice under a
 /// view, so reading a node out of the registry copies its scalar payload and a few fat pointers,
@@ -91,9 +96,8 @@ pub enum TypeNode<'run, H = Handle> {
     /// Type-accepting argument slot, carrying the shallow [`KKind`] it admits — and the type a
     /// non-signature type value reports (`OfKind(ProperType)`).
     OfKind(KKind),
-    /// A **named rigid variable**: a signature's head parameter (no `nonce`), or the carrier an
-    /// opaque `:|` view mints for one (a `nonce` nothing else can name, so two opaque ascriptions
-    /// of one signature never unify). `bound` is what bounds it, [`KType::ANY`] unless declared.
+    /// A **named rigid variable**: a signature's head parameter. `bound` is what bounds it,
+    /// [`KType::ANY`] unless declared.
     ///
     /// Named where [`Self::Quantified`] is positional: a parameter is substituted by name within
     /// its own signature, and `WITH` pins it by name. The three rigid variables — this,
@@ -104,7 +108,22 @@ pub enum TypeNode<'run, H = Handle> {
     Parameter {
         name: TypeSymbol,
         bound: KType,
-        nonce: Option<ScopeId>,
+    },
+    /// The **carrier** an opaque `:|` view hides a head parameter `name` behind, keyed on content
+    /// the lattice never interprets (a [`ContentKey`]: two views of equal content share one
+    /// carrier, two of different content never unify). A value carries it, so it is concrete, and
+    /// the order treats it as an atom: under itself, a union holding it and `Any`; above itself
+    /// and `Never`.
+    ///
+    /// `met` is the bound the view's source met. Outside its view a carrier reveals none, and only
+    /// a signature's fit reads it, where a head parameter's bound is checked
+    /// ([`Collector::heads`](super::unify::Collector::heads)). It is payload, not a child.
+    ///
+    /// Every field is identity.
+    Carrier {
+        name: TypeSymbol,
+        key: ContentKey,
+        met: KType,
     },
     /// `List<element>`. Bare `List` lowers to `List<Any>`.
     List {
@@ -301,6 +320,7 @@ impl<'run, H> TypeNode<'run, H> {
             | TypeNode::OfKind(_)
             | TypeNode::CodeNeeding { .. }
             | TypeNode::Parameter { .. }
+            | TypeNode::Carrier { .. }
             | TypeNode::SetMember { .. }
             | TypeNode::Signature { .. }
             | TypeNode::List { .. }
@@ -355,12 +375,8 @@ pub enum Variable {
         lower: KType,
         bound: KType,
     },
-    /// A signature's head parameter, or with a `nonce` an opaque view's carrier.
-    Parameter {
-        name: TypeSymbol,
-        bound: KType,
-        nonce: Option<ScopeId>,
-    },
+    /// A signature's head parameter.
+    Parameter { name: TypeSymbol, bound: KType },
 }
 
 impl Variable {
@@ -379,9 +395,7 @@ impl Variable {
                 lower,
                 bound,
             },
-            TypeNode::Parameter { name, bound, nonce } => {
-                Variable::Parameter { name, bound, nonce }
-            }
+            TypeNode::Parameter { name, bound } => Variable::Parameter { name, bound },
             _ => return None,
         })
     }
@@ -441,9 +455,8 @@ impl<'run, H: TypeHandle> TypeNode<'run, H> {
             TypeNode::CodeNeeding { kind, names } => TypeNode::CodeNeeding { kind, names },
             TypeNode::Never => TypeNode::Never,
             TypeNode::OfKind(kind) => TypeNode::OfKind(kind),
-            TypeNode::Parameter { name, bound, nonce } => {
-                TypeNode::Parameter { name, bound, nonce }
-            }
+            TypeNode::Parameter { name, bound } => TypeNode::Parameter { name, bound },
+            TypeNode::Carrier { name, key, met } => TypeNode::Carrier { name, key, met },
             TypeNode::List { element } => TypeNode::List {
                 element: child(element),
             },

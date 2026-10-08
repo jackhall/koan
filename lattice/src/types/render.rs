@@ -210,7 +210,9 @@ fn write_name_in(
             }
             f.write_str("})")
         }
-        TypeNode::Parameter { name, .. } | TypeNode::Lexical { name, .. } => {
+        TypeNode::Parameter { name, .. }
+        | TypeNode::Carrier { name, .. }
+        | TypeNode::Lexical { name, .. } => {
             write!(f, "{}", display_symbol(name.symbol(), symbols))
         }
         // A sealed nominal member renders by its own member name — a bare newtype (`:Wrapper`) or a

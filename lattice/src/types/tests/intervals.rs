@@ -141,7 +141,7 @@ fn a_type_reads_through_intervals_by_variance() {
     let number_or_str = world.union(&[KType::NUMBER.raw(), KType::STR.raw()]);
     let f = world.function("y", elt, elt);
     let read = |side| {
-        read_through(&world.types, world.region, f, side, &mut |_| {
+        read_through(&world.types, world.region, f, side, &mut |_, _| {
             Some(Interval {
                 lower: KType::NUMBER.raw(),
                 upper: number_or_str,
@@ -281,16 +281,18 @@ mod reproducible {
         let elt = world.types.quantified(0, KType::ANY).raw();
         let (mut collector, _) = collect(&world, &[]);
         collector.pin(0, KType::ANY, KType::NUMBER.raw());
-        admits(
+        let admitted = admits(
             &world.types,
             world.region,
             elt,
             outer(&world, KType::ANY),
             Variance::Co,
             &mut collector,
-        )
-        .expect("a bare variable admits");
-        assert!(collector.solve(&world.types).is_err());
+        );
+        assert!(
+            admitted.is_err(),
+            "a pin refuses what does not lie under it"
+        );
         assert!(!collector.reproducible(&world.types));
     }
 

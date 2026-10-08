@@ -51,7 +51,7 @@ fn eval_runs_code_whose_dollar_names_bind_where_the_quote_is_written() {
         run(&format!(
             "{TWICE}EXPR #(LOUD x :Str) -> Any = #(PRINT x)\nTWICE (LOUD \"hi\")"
         )),
-        "hi\nerror: no overload of TWICE _ admits (Str)",
+        "hi\nerror: no overload of `TWICE _` admits (Str)",
         "the argument evaluated before the call is selected"
     );
 }
@@ -154,7 +154,7 @@ fn a_dollar_group_over_an_operator_run_marks_every_use_the_chain_builds() {
         run(&format!(
             "{less}LET q = #(x < y < z)\nPRINT (EVAL (q USING {words}) -> Any)"
         )),
-        "error: no overload of _ < _ admits (Str, Str)",
+        "error: no overload of `_ < _` admits (Str, Str)",
         "unmarked, the `<` uses see only the builtin"
     );
 }

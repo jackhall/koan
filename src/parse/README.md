@@ -207,7 +207,9 @@ or `CATCH` operand (`Role::InPlace`); as a **container** of quotes, for a part
 that names things as data — an arm set, a union's variants, a `FOR ALL` group, and a `SIG`
 body or the heads a bodyless `GROUP` declares (`DefinitionKind::Members`); or
 **evaluated**. `ATTR`'s label (`Role::Field`) is the one hybrid: a bare name is
-the label itself, and any other part is evaluated. The slot's type says what
+the label itself (`Role::label_reads`), and any other part is evaluated. A body slot's
+`BodyKind` says what the builder opens for it (`BodyKind::opens`): a callable's body, a module's
+or a block. The slot's type says what
 syntax fills it — a code kind, or a container of code kinds, for a part read as
 written, and a value type for one evaluated — and no slot keeps a part raw. A
 type expression and an in-place operand are the exceptions: they are bare, but

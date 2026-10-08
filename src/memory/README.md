@@ -13,7 +13,7 @@ index-edged group of values that refer to each other, and
 [`program`](program.rs) the program-text owner beside the graph.
 
 The bump tier — the arena outside any graph, the strongly-connected-component
-walk staged in it, and `ScopeId` — is [`lattice`](../../lattice/README.md#the-bump-tier)'s,
+walk staged in it — is [`lattice`](../../lattice/README.md#the-bump-tier)'s,
 since the type lattice's registry is built over it. `memory` re-exports it, so
 koan names every storage shape as `memory`'s.
 

@@ -313,6 +313,16 @@ impl<T> DeclaredType<T> {
     }
 }
 
+impl<T: Into<Parametric>> DeclaredType<T> {
+    /// The node this declares: a type's, or a scheme's, its positions read as [`Parametric`].
+    pub fn node<'run>(self, types: &TypeRegistry<'run>) -> TypeNode<'run, Parametric> {
+        match self {
+            DeclaredType::Type(declared) => types.node(declared.into()),
+            DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+        }
+    }
+}
+
 impl<T: TypeHandle> DeclaredType<T> {
     /// The raw handle either arm names — identity only, and the lattice's alone.
     pub(super) fn raw(self) -> Handle {
@@ -390,6 +400,7 @@ pub(super) fn leaf_name<H>(node: &TypeNode<'_, H>) -> Option<&'static StaticName
         TypeNode::OfKind(_)
         | TypeNode::CodeNeeding { .. }
         | TypeNode::Parameter { .. }
+        | TypeNode::Carrier { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Signature { .. }
         | TypeNode::List { .. }
@@ -487,6 +498,8 @@ fixed_handles! {
     TYPE_CODE = 0xc41b235d_9ca37012_2069fcb7_39c1082e;
     /// `List<Name>` — a `FOR ALL` group or `FROM`'s field list.
     LIST_OF_NAME = 0xe4ef6471_b3309818_6e9fe04f_0c66f18a;
+    /// `List<Expression>` — a `MODULE` or `GROUP` body's `OVER` list, each entry read as written.
+    LIST_OF_EXPRESSION = 0x032c551d_dc7157af_ef4bf417_a34e1910;
     /// `List<Declaration>` — a `SIG` body, or the heads a bodyless `GROUP` declares.
     LIST_OF_DECLARATION = 0xdaf2c481_09b90725_35f0053e_594b6591;
     /// `Dict<Name, Block>` — a `MATCH … OVER` or `TRY` arm set, each guard a label.
@@ -549,7 +562,9 @@ impl KType {
         }
         match node {
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(symbols)),
-            TypeNode::Parameter { name, .. } | TypeNode::SetMember { name, .. } => Some(name),
+            TypeNode::Parameter { name, .. }
+            | TypeNode::Carrier { name, .. }
+            | TypeNode::SetMember { name, .. } => Some(name),
             TypeNode::Signature { .. } => {
                 (self == KType::EMPTY_SIGNATURE).then(|| symbols.record(&MODULE_NAME))
             }

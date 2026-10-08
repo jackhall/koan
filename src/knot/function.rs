@@ -1,6 +1,8 @@
 //! A function as a knot node: its memoized type, the body shape it runs, the closure bindings a
 //! call reads its captures through, the shape a registration puts in its bucket, and the weight of
-//! the whole knot it sits in.
+//! the whole knot it sits in. Its content, which its knot's digest covers, is its body's code
+//! digest, its instance's solution, and the digest of each capture the code digest does not name
+//! ([`Function::content`]).
 //!
 //! Beside it, the staging a [tie](super::tie()) does for a function node. Everything a node needs
 //! is read into scratch with no writer in reach — its body shape, its type elaborated from the form
@@ -18,14 +20,15 @@ use crate::elaborate::callable_type;
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
-use crate::scope::{Static, StaticSolution, solutions};
+use crate::scope::{StaticSolution, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, instantiate_quantified, substitute_levels,
 };
-use crate::values::{Knotted as _, Link, Value, Weight};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Knotted as _, Link, Seen, Value, Weight};
 
-use super::{KActivationView, Knotted, Node, Untieable};
+use super::{KActivationView, Knotted, Node, Untieable, composed};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -146,6 +149,39 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
             closure,
             knot_weight: self.knot_weight,
         }
+    }
+}
+
+impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
+    /// The values the node's content covers, in the order [`content`](Self::content) asks for
+    /// their digests: each capture the code digest does not name that holds a value, not an edge.
+    pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
+    where
+        'cell: 'a,
+    {
+        composed(self.shape, self.closure.links(), |_, link| {
+            if let Link::Value(value) = link {
+                out(Seen::of(*value));
+            }
+        });
+    }
+
+    /// The node's content: its body's code digest, the solution it is an instance at, and the
+    /// digest of each capture the code digest does not name — every one but a read of the
+    /// program's top level, and every type capture — a value's answered by `parts`.
+    pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
+        let instance = self.instance().unwrap_or(&[]);
+        let mut hasher = DigestHasher::new(Tag::Function);
+        hasher
+            .digest(self.shape.code_digest())
+            .count(instance.len());
+        for solved in instance {
+            hasher.feed(solved);
+        }
+        composed(self.shape, self.closure.links(), |index, link| {
+            hasher.count(index).digest(link.digest_from(parts));
+        });
+        hasher.finished()
     }
 }
 
@@ -330,8 +366,8 @@ fn solved<'x>(
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
-        Static::Closed(solution) => scratch.alloc_slice_copy(solution),
-        Static::Rigid { value, variables } => {
+        StaticSolution::Closed(solution) => scratch.alloc_slice_copy(solution),
+        StaticSolution::Rigid { value, variables } => {
             let bindings = solutions(variables, activation, scratch).expect(BOUND);
             let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
             solved.extend(value.iter().map(|each| {
@@ -340,7 +376,6 @@ fn solved<'x>(
             }));
             solved.leak()
         }
-        Static::Unknown => unreachable!("the load fixes every instance's solution"),
     }
 }
 

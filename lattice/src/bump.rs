@@ -8,8 +8,7 @@
 //! Callers use bumpalo's own verbs (`alloc`, `alloc_slice_copy`, `alloc_slice_fill_iter`,
 //! `alloc_str`) through [`BumpAllocator`]; there is no door layer over them.
 //!
-//! [`strongly_connected_components`] is the index-graph walk staged here, and [`ScopeId`] the
-//! position-independent identity a resident carries.
+//! [`strongly_connected_components`] is the index-graph walk staged here.
 //!
 //! This is the crate's only import of `bumpalo`, `allocator_api2` and `hashbrown`.
 //!
@@ -20,10 +19,8 @@
 use std::hash::BuildHasher;
 
 mod components;
-mod scope_id;
 
 pub use components::strongly_connected_components;
-pub use scope_id::ScopeId;
 
 /// The arena the tier allocates from; its owner releases it whole.
 pub type Bump = bumpalo::Bump;

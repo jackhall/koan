@@ -4,12 +4,12 @@
 //! [`Relation`], and share one descent, [`Order`], which differs between them at its leaf alone.
 //! The **order** never solves: two signature types compare by their applications' pins (R-5). It
 //! is what every construction reads — a join, a meet, a union's or an overload set's subsumption —
-//! and it relates concrete types: its public door ([`typed`](super::typed)) takes `KType`s, where
-//! the rigid clause below sees only an opaque carrier. ***Fits*** solves: a quantified binder fits
-//! another when some instantiation of its group puts the instance under the other, and a module's
-//! signature fits a declared one when its members do. It contains the order, relates a variable by
-//! the rigid rule, and it is what every question reads — whether a value fills a slot, a return lies
-//! within its contract, a bound holds.
+//! and it relates concrete types: its public door ([`typed`](super::typed)) takes `KType`s, so no
+//! rigid variable reaches the rigid clause below through it. ***Fits*** solves: a quantified binder
+//! fits another when some instantiation of its group puts the instance under the other, and a
+//! module's signature fits a declared one when its members do. It contains the order, relates a
+//! variable by the rigid rule, and it is what every question reads — whether a value fills a slot,
+//! a return lies within its contract, a bound holds.
 //!
 //! There are no tie-break tiers: nothing ranks a token leaf against `Str`, a nominal slot against
 //! a kind slot, or a constrained slot against an unconstrained one. Those are not subtype facts,
@@ -49,7 +49,9 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   itself and whatever lies under its lower end, above it itself and everything above its bound,
 ///   a union included. The clauses agree because both ends are variable-free types.
 /// - A quantified shape or function type lies under only itself.
-/// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other.
+/// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other. An
+///   opaque carrier is an atom under no family top: it reveals no bound outside its view, so above
+///   it lie only itself, a union holding it and `Any`, and below it only itself and `Never`.
 /// - Every other pair is unrelated.
 pub(super) fn is_subtype_of(
     types: &TypeRegistry<'_>,
@@ -268,8 +270,9 @@ pub(super) fn code_needs<'run>(
 
 /// The family top `node` lies under by its own shape — `Value`, `Type` or `Code` — or `None` for a
 /// node whose family is decided elsewhere: the lattice's top and bottom, a union by its members, a
-/// type variable by its bound, and a deferred return by the return it defers. No arm is a wildcard,
-/// so a new variant does not compile until it is given a family.
+/// type variable by its bound, and a deferred return by the return it defers; or for an opaque
+/// carrier, which reveals no family outside its view. No arm is a wildcard, so a new variant does
+/// not compile until it is given a family.
 fn family_top(node: &TypeNode<'_>) -> Option<Handle> {
     match node {
         TypeNode::Number
@@ -309,6 +312,7 @@ fn family_top(node: &TypeNode<'_>) -> Option<Handle> {
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
         | TypeNode::Parameter { .. }
+        | TypeNode::Carrier { .. }
         | TypeNode::DeferredReturn(_) => None,
     }
 }

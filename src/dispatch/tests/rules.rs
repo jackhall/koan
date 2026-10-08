@@ -14,25 +14,27 @@ use crate::program::Program;
 use crate::scope::BuiltinIndex;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Interval, KType, Parametric, TypeNode, TypeRegistry, display_name, is_subtype_of, shape_return,
-    shape_slots,
+    Interval, KType, Parametric, SchemaDraft, TypeNode, TypeRegistry, display_name, is_subtype_of,
+    shape_return, shape_slots,
 };
 use crate::values::record_type;
 
 use super::super::builtins::Native;
 use super::super::rules::{Given, typed};
 use super::ascription::{WHICH, ends};
-use super::generate::{Desc, NAMES, chain};
+use super::generate::{Desc, NAMES, RETYPED_ONLY, chain};
 use super::run;
 use super::statics::{body, loaded};
 
 /// One slot as drawn: pinned at most its declared type in both intervals, or a chain `J.lower ≤
 /// I.lower ≤ I.upper ≤ J.upper`, a lower end the load never computes read as `Never`; and the
-/// names it holds.
+/// names it holds. Drawn as modules, each record the chain holds at its top is a module's
+/// signature over the record's fields, which orders as the records do.
 #[derive(Clone, Debug)]
 struct Slot {
     pinned: bool,
     chain: [Desc; 4],
+    modules: bool,
     names: Vec<u8>,
 }
 
@@ -40,14 +42,16 @@ fn slot() -> impl Strategy<Value = Slot> {
     (
         prop_oneof![2 => Just(false), 1 => Just(true)],
         chain(),
+        prop_oneof![3 => Just(false), 1 => Just(true)],
         prop_oneof![
             2 => prop::collection::vec(0..2u8, 1..2),
             1 => prop::collection::vec(0..3u8, 1..4),
         ],
     )
-        .prop_map(|(pinned, chain, names)| Slot {
+        .prop_map(|(pinned, chain, modules, names)| Slot {
             pinned,
             chain,
+            modules,
             names,
         })
 }
@@ -87,6 +91,35 @@ impl World<'_, '_> {
                 record_type(self.types, self.scratch, distinct.into_iter())
             }
             Desc::Union(a, b) => self.types.union_of(self.scratch, &[intern(a), intern(b)]),
+            Desc::Dict(_) | Desc::Boxed | Desc::Wrapped(_) | Desc::Maybe | Desc::MaybeSome => {
+                unreachable!("{RETYPED_ONLY}")
+            }
+        }
+    }
+
+    /// `desc` interned as [`intern`](Self::intern) does, each record at its top — itself, or a
+    /// union's member — a module's signature over the record's fields, or `Never` where the record
+    /// is.
+    fn module(&self, desc: &Desc, declared: KType) -> KType {
+        match desc {
+            // A record no value can hold is `Never`, and so is its module.
+            Desc::Record(_) if self.intern(desc, declared) == KType::NEVER => KType::NEVER,
+            Desc::Record(fields) => {
+                let mut draft = SchemaDraft::new(self.scratch);
+                // A name drawn twice keeps its first field, as a record's does.
+                for (index, field) in fields.iter().rev() {
+                    let BinderSymbol::Value(name) = self.name(*index) else {
+                        unreachable!("a drawn name is a value name")
+                    };
+                    draft.insert_value_slot(name, self.intern(field, declared));
+                }
+                self.types.signature(self.scratch, draft)
+            }
+            Desc::Union(a, b) => self.types.union_of(
+                self.scratch,
+                &[self.module(a, declared), self.module(b, declared)],
+            ),
+            desc => self.intern(desc, declared),
         }
     }
 
@@ -231,7 +264,10 @@ fn draw<'x>(world: &World<'x, '_>, slots: &[Slot], declared: &[KType]) -> Vec<Dr
             (Interval::within(*declared), Interval::within(*declared))
         } else {
             let [lowest, lower, upper, uppest] =
-                (slot.chain.each_ref()).map(|each| world.intern(each, *declared));
+                (slot.chain.each_ref()).map(|each| match slot.modules {
+                    true => world.module(each, *declared),
+                    false => world.intern(each, *declared),
+                });
             // Read as `Never`, `I`'s lower end takes `J`'s along, which must lie under it.
             let (lowest, lower) = match world.carried(lower) {
                 KType::NEVER => (KType::NEVER, KType::NEVER),

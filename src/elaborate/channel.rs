@@ -329,21 +329,71 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         })
     }
 
-    /// The bucket entry of `registration`, the surfaced head `head` of the block at chain level
-    /// `level`: the shape the head's `SIG` declares under the registration's key and ranking, each
-    /// head parameter read at the ascription's pin or, unpinned, at the block's own type parameter
-    /// of that name. `None` where the ascription is no closed signature or application of one, or
-    /// the signature does not type where it is declared. Nothing calls a surfaced head at run, so
-    /// its entry carries no quantifier map and binds no parameter.
+    /// The bucket entry of `registration`, a key of the block at chain level `level` its operand
+    /// declares the heads `heads` at: where it declares one, that head's shape, and otherwise
+    /// `None`, which the load leaves unknown. The function the key's list holds where the block
+    /// runs answers each call, so the entry carries no quantifier map and binds no parameter.
     fn surfaced(
         &self,
         level: usize,
         registration: &Registration<'graph>,
-        head: &SurfacedHead<'graph>,
+        heads: &[SurfacedHead<'graph>],
+        signatures: &mut Signatures<'p>,
+    ) -> Option<StaticRegistered<'graph>> {
+        match heads {
+            [
+                SurfacedHead::Signature {
+                    head,
+                    signature,
+                    ascription,
+                },
+            ] => self.signature_head(
+                level,
+                registration,
+                head,
+                *signature,
+                *ascription,
+                signatures,
+            ),
+            // A body's definition is typed where the body is: its closed shape is the entry.
+            [
+                SurfacedHead::Body {
+                    module: (hops, slot),
+                    ..
+                },
+            ] => {
+                let body = self.chain[level - *hops as usize].shape.births(*slot)?;
+                let mut at_key = body
+                    .registrations()
+                    .iter()
+                    .filter(|held| held.key == registration.key);
+                let (Some(held), None) = (at_key.next(), at_key.next()) else {
+                    return None;
+                };
+                match body.registered_type(held.slot) {
+                    Static::Closed(registered) => Some(Static::Closed(registered)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The bucket entry of `registration`, the surfaced signature head `head` of the block at chain
+    /// level `level`: the shape the head's `SIG` declares under the registration's key and ranking,
+    /// each head parameter read at the ascription's pin or, unpinned, at the block's own type
+    /// parameter of that name. `None` where the ascription is no closed signature or application
+    /// of one, or the signature does not type where it is declared.
+    fn signature_head(
+        &self,
+        level: usize,
+        registration: &Registration<'graph>,
+        head: &KExpression<'graph>,
+        (declared_hops, slot): (u32, Slot),
+        (hops, site): (u32, Site),
         signatures: &mut Signatures<'p>,
     ) -> Option<StaticRegistered<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
-        let (hops, site) = head.ascription;
         let ascribing = self.chain[level - hops as usize].shape;
         let Static::Closed(ascribed) = ascribing.typed_expression(site) else {
             return None;
@@ -360,8 +410,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             }
             _ => return None,
         };
-        let (hops, slot) = head.signature;
-        let declaring = (level - hops as usize, slot);
+        let declaring = (level - declared_hops as usize, slot);
         let index = match signatures.iter().position(|(held, _)| *held == declaring) {
             Some(index) => index,
             None => {
@@ -377,10 +426,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             *declared, signature,
             "an ascription names the signature its SIG declares"
         );
-        let written = Site::of(&head.head.parts[0].value);
+        let written = Site::of(&head.parts[0].value);
         let (_, _, shape) = heads
             .iter()
-            .find(|(site, which, _)| *site == written && *which == registration.which)?;
+            .find(|(site, which, _)| *site == written && *which == registration.which)
+            .expect("a signature's heads are keyed as its surfaced registrations are");
         let TypeNode::Signature { schema, .. } = types.node(signature) else {
             unreachable!("an application applies a signature");
         };
@@ -603,10 +653,7 @@ fn ranked(
     shape: DeclaredType<Parametric>,
     classes: &[u8],
 ) -> DeclaredType<Parametric> {
-    let node = match shape {
-        DeclaredType::Type(shape) => types.node(shape),
-        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
-    };
+    let node = shape.node(types);
     let TypeNode::ExpressionShape {
         quantifiers,
         bounds,

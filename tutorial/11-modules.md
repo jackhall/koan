@@ -51,7 +51,9 @@ PRINT outer.inner.value
 7
 ```
 
-Reading a member that doesn't exist is an error:
+Reading a member that doesn't exist is an error, reported before the program
+runs. The message names the module by its type, a
+[signature](#signatures):
 
 ```koan
 MODULE geometry = (LET pi = 3.14159)
@@ -59,7 +61,7 @@ geometry.tau
 ```
 
 ```text
-error: shape error: module `geometry` has no member `tau`
+error: <input>:2:1: SIG (pi: Number) has no member tau
 ```
 
 Naming a module with a capitalized token is an error: capitalized names are
@@ -70,7 +72,7 @@ MODULE Geometry = (LET pi = 3.14159)
 ```
 
 ```text
-error: shape error: module `Geometry` is named with a Type token, but a module is a value — the Type-token namespace names what can type a field. Name it snake_case, e.g. `geometry`
+error: <input>:1:8: `Module` takes Identifier as its part 1
 ```
 
 ## Signatures
@@ -144,7 +146,7 @@ plain :! HasLabel
 ```
 
 ```text
-error: shape error: module does not satisfy signature `SIG (label: Str)`: missing member `label`
+error: <input>:3:1: this value is SIG (other: Number), which can never satisfy its ascription SIG (label: Str)
 ```
 
 The result of an ascription is itself a module, so it binds under a lowercase

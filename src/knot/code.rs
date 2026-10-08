@@ -15,10 +15,9 @@ use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, res
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeySymbol};
-use crate::type_lattice::{
-    DeclaredType, DispatchTokenElement, KType, Parametric, TypeNode, TypeRegistry,
-};
-use crate::values::{CodeView, Link, List, Value, Weight};
+use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
 use super::{KActivationView, KValue, Knotted, Node};
 
@@ -73,6 +72,33 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
 
     pub fn knot_weight(&self) -> Weight {
         self.knot_weight
+    }
+
+    /// The values the node's content covers, in the order [`content`](Self::content) asks for
+    /// their digests: each binding that holds a value, not an edge, bound then supplied.
+    pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
+    where
+        'cell: 'a,
+    {
+        for (_, link) in self.bound.iter().chain(self.supplied) {
+            if let Link::Value(value) = link {
+                out(Seen::of(*value));
+            }
+        }
+    }
+
+    /// The node's content: its quote's code digest, its carried type, and each binding's name and
+    /// digest, bound then supplied, a value's answered by `parts`.
+    pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
+        let mut hasher = DigestHasher::new(Tag::Code);
+        hasher.digest(self.shape.code_digest()).feed(self.ktype);
+        for run in [self.bound, self.supplied] {
+            hasher.count(run.len());
+            for (name, link) in run {
+                hasher.feed(name).digest(link.digest_from(parts));
+            }
+        }
+        hasher.finished()
     }
 
     /// What `values` reads of this code.
@@ -323,9 +349,9 @@ pub fn using<'graph, 'cell>(
     Ok(one_node(writer, node.body(), shape, &bound, &supplied))
 }
 
-/// Push onto `found` each registration `source` holds whose registered shape's key is `key`. A
-/// function's key and ranking are read off its registered shape; a ranking other than the one
-/// `shape`'s own candidates at `key` carry is refused.
+/// Push onto `found` each function the module `source` offers at `key` — a registration, or an
+/// overload a view carries. A ranking other than the one `shape`'s own candidates at `key` carry
+/// is refused.
 fn keyed<'graph, 'cell>(
     shape: &BodyShape<'graph>,
     key: KeySymbol,
@@ -334,35 +360,26 @@ fn keyed<'graph, 'cell>(
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {
-    for member in super::registrations(source, types, scratch) {
-        let registered = member
-            .as_callable()
-            .and_then(Knotted::function)
-            .and_then(|function| function.registered_shape())
-            .expect("a registration member is the function born for it");
-        // Only the key and the ranking are read, which a scheme's node spells as a type's does.
-        let node = match registered {
-            DeclaredType::Type(shape) => types.node(Parametric::from(shape)),
-            DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
-        };
+    let Some(module) = source.as_module() else {
+        return Ok(());
+    };
+    for member in super::module::layout::functions_at(module, key, types, scratch) {
+        let registered = super::module::layout::registered_shape(member)
+            .expect("a registration member is a function");
+        // Only the ranking is read, which a scheme's node spells as a type's does.
+        let node = registered.node(types);
         let TypeNode::ExpressionShape {
             elements, classes, ..
         } = node
         else {
             unreachable!("a registered shape is an expression shape")
         };
-        let run = || {
-            elements.iter().map(|element| match element {
-                DispatchTokenElement::Keyword(keyword) => Some(keyword),
-                DispatchTokenElement::Slot(_) => None,
-            })
-        };
-        if KeySymbol::of(run()) != key {
-            continue;
-        }
         // The lattice stores written order as no classes; the shape spells every class out.
         let ranking = if classes.is_empty() {
-            let slots = run().filter(Option::is_none).count();
+            let slots = elements
+                .iter()
+                .filter(|element| matches!(element, DispatchTokenElement::Slot(_)))
+                .count();
             scratch.alloc_slice_fill_iter((0..slots).map(|class| class as u8))
         } else {
             classes
@@ -370,7 +387,7 @@ fn keyed<'graph, 'cell>(
         if !shape.ranks_alike(key, ranking) {
             return Err(UsingRefused::Ranking { key });
         }
-        found.push(*member);
+        found.push(member);
     }
     Ok(())
 }

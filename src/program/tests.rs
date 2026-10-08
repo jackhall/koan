@@ -114,6 +114,31 @@ pub(crate) fn weight_back(substrate: &mut CellSubstrate, name: &str) -> String {
     evaluator::recorded().concat()
 }
 
+/// The content digest of the top-level binding `name`, read as [`weight_back`] reads its weight.
+pub(crate) fn digest_back(substrate: &mut CellSubstrate, name: &str) -> String {
+    evaluator::reset();
+    WANTED.with(|wanted| *wanted.borrow_mut() = vec![name.to_string()]);
+    substrate.with(|running| {
+        running
+            .inspect(digesting)
+            .expect("the inspection runs to completion")
+    });
+    evaluator::recorded().concat()
+}
+
+/// [`weighing`]'s sibling: it records the wanted binding's content digest.
+fn digesting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+    let (step, state) = step.state();
+    let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
+        return step.failed(StepError::Refused);
+    };
+    let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
+    let scratch = Bump::new();
+    let digest = wanted(program, &view, &name).digest(program.types(), &scratch);
+    record(format!("{digest:?}"));
+    step.leave(birth)
+}
+
 /// [`typing`]'s sibling: it records the wanted binding's weight.
 fn weighing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();

@@ -5,10 +5,11 @@
 use std::fmt;
 
 use crate::knot::KValue;
+use crate::knot::module::coerce::CoercionRefused;
 use crate::memory::Writer;
 use crate::parse::{KExpression, KeyElement};
 use crate::program::Program;
-use crate::scope::spelled;
+use crate::scope::{ViewRefused, selection_refused, view_refused};
 use crate::symbols::{KeySymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeRegistry, display_name};
 use crate::values::KeyRejected;
@@ -40,11 +41,29 @@ pub(super) enum Raised<'a> {
         left: KType,
         right: KType,
     },
-    /// `ATTR` over a module, whose member read arrives with modules.
-    ModuleMember,
-    /// `:!` over a module, whose view arrives with modules.
-    ModuleAscription,
-    /// A value `:!` checks against a type it does not satisfy.
+    /// `:|` over a value that is no module.
+    NotAModule {
+        value: KType,
+    },
+    /// A module ascribed a type that names no one application of a signature.
+    NotASignature {
+        ascribed: KType,
+    },
+    /// A member an ascription's view could not take at the type the view declares for it.
+    Coercion {
+        name: Symbol,
+        refused: CoercionRefused,
+    },
+    /// A quantified member read where the load recorded no type to instantiate it at.
+    QuantifiedMember {
+        name: Symbol,
+    },
+    /// A quantified member behind a view's barrier, whose type names a carrier, read anywhere but
+    /// a call's head. The load refuses the read, so this stands behind it.
+    BarrierInstance {
+        name: Symbol,
+    },
+    /// A value `:!` checks against a type it does not satisfy, or a module its signature.
     Unascribable {
         value: KType,
         ascribed: KType,
@@ -94,34 +113,15 @@ struct RaisedDisplay<'a, 'x, 'run> {
 impl fmt::Display for RaisedDisplay<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ktype = |handle: KType| display_name(handle, self.types, self.symbols);
-        let arguments = |f: &mut fmt::Formatter<'_>, arguments: &[KType]| {
-            f.write_str("(")?;
-            for (index, argument) in arguments.iter().enumerate() {
-                if index > 0 {
-                    f.write_str(", ")?;
-                }
-                write!(f, "{}", ktype(*argument))?;
-            }
-            f.write_str(")")
-        };
         match self.raised {
-            Raised::NoOverload { key, arguments: of } => {
-                write!(f, "no overload of {} admits ", spelled(key, self.symbols))?;
-                arguments(f, of)
+            Raised::NoOverload { key, arguments } => {
+                selection_refused(f, key, arguments, None, self.symbols, self.types)
             }
             Raised::Ambiguous {
                 key,
-                arguments: of,
+                arguments,
                 count,
-            } => {
-                write!(
-                    f,
-                    "ambiguous call of {}: {count} overloads admit ",
-                    spelled(key, self.symbols)
-                )?;
-                arguments(f, of)?;
-                f.write_str(" and none ranks first")
-            }
+            } => selection_refused(f, key, arguments, Some(count), self.symbols, self.types),
             Raised::NoField { of, field } => write!(
                 f,
                 "{} has no field {}",
@@ -137,8 +137,31 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_> {
             Raised::Incomparable { left, right } => {
                 write!(f, "{} and {} cannot be compared", ktype(left), ktype(right))
             }
-            Raised::ModuleMember => f.write_str("reading a module's member arrives with modules"),
-            Raised::ModuleAscription => f.write_str("ascribing a module arrives with modules"),
+            Raised::NotAModule { value } => {
+                view_refused(f, ViewRefused::NotAModule(value), self.symbols, self.types)
+            }
+            Raised::NotASignature { ascribed } => view_refused(
+                f,
+                ViewRefused::NotASignature(ascribed),
+                self.symbols,
+                self.types,
+            ),
+            Raised::Coercion { name, refused } => write!(
+                f,
+                "member {} cannot take its view's type: {}",
+                self.symbols.display(name),
+                refused.display(self.types, self.symbols)
+            ),
+            Raised::QuantifiedMember { name } => write!(
+                f,
+                "member {} is quantified, and no type was known to instantiate it at",
+                self.symbols.display(name)
+            ),
+            Raised::BarrierInstance { name } => write!(
+                f,
+                "member {} is quantified behind its view's barrier, and is read only at a call's head",
+                self.symbols.display(name)
+            ),
             Raised::Unascribable { value, ascribed } => write!(
                 f,
                 "{} does not satisfy its ascription {}",

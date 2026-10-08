@@ -69,10 +69,7 @@ spelling, `#{Elt: Number}`, writes a bound per name and nothing else
 
 ## Dependencies
 
-**Requires:**
-
-- [Modules](modules.md) — a signature over a family is exercised only by a view
-  that runs.
+**Requires:** none — views run.
 
 **Unblocks:**
 

@@ -19,16 +19,15 @@
 //! its registration names for it — or packs every slot into `operands` — and carries each of its
 //! type parameters, by name, as the type the call solved it to.
 
+use crate::knot::module::layout;
 use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpVec, Writer};
-use crate::program::Contract;
 use crate::scope::{Candidate, Coordinate, IMPLICIT};
-use crate::scope::{ParameterBinding, Registered};
+use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, satisfied_by,
-    scheme_return, scheme_slots, select_by_class, shape_return, shape_slots, solving_slots,
-    substitute_quantified,
+    DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, outranks, satisfied_by,
+    scheme_slots, select_by_class, shape_slots, solving_slots, substitute_quantified,
 };
 use crate::values::{List, Record, TypeValue, Value};
 
@@ -113,18 +112,16 @@ pub(super) fn selected<'x, 'graph, 'here>(
             .map(|admitted| DeclaredType::<Parametric>::from(admitted.shape)),
     );
     let survivors = select_by_class(types, scratch, &shapes);
-    let builtin = |index: &usize| {
-        admitted[*index]
+    let builtin = |index: usize| {
+        admitted[index]
             .callee
             .as_callable()
             .and_then(Knotted::builtin)
+            .is_some()
     };
-    let chosen = match survivors[..] {
-        [only] => admitted[only],
-        _ => match survivors.iter().find_map(builtin) {
-            Some(builtin) => return Selection::Builtin(builtin),
-            None => return Selection::Ambiguous(survivors.len()),
-        },
+    let chosen = match winner(&survivors, builtin) {
+        Ok(index) => admitted[index],
+        Err(count) => return Selection::Ambiguous(count),
     };
     let member = chosen
         .callee
@@ -133,15 +130,60 @@ pub(super) fn selected<'x, 'graph, 'here>(
     if let Some(builtin) = member.builtin() {
         return Selection::Builtin(builtin);
     }
-    let registered = member
-        .function()
-        .and_then(|function| function.registered())
-        .expect("a candidate with a shape is a builtin or a registration's function");
     Selection::Function {
         callee: chosen.callee,
-        registered,
+        registered: registration(member)
+            .expect("a candidate with a shape is a builtin or a registration's function"),
         solution: chosen.solution,
     }
+}
+
+/// The candidate a call runs among `survivors` — the indices `select_by_class` kept — where
+/// `is_builtin` says which are builtins: the lone survivor, or else the first builtin among
+/// several; `Err` with the survivors' count where several survive and none is a builtin. The run's
+/// selection and the load's both end here.
+pub(super) fn winner(
+    survivors: &[usize],
+    is_builtin: impl Fn(usize) -> bool,
+) -> Result<usize, usize> {
+    match survivors {
+        [only] => Ok(*only),
+        _ => (survivors.iter().copied())
+            .find(|survivor| is_builtin(*survivor))
+            .ok_or(survivors.len()),
+    }
+}
+
+/// Whether a candidate that may admit, registered at `maybe`, never runs beside candidates that
+/// always admit, registered at `always`: one outranks it at the first class, and wherever it admits
+/// that one admits too and eliminates it there. Only the first class is safe: past it, a survivor
+/// that would eliminate it may itself be gone.
+pub(super) fn never_runs(
+    types: &TypeRegistry<'_>,
+    scratch: &Bump,
+    maybe: DeclaredType<Parametric>,
+    always: impl IntoIterator<Item = DeclaredType<Parametric>>,
+) -> bool {
+    (always.into_iter()).any(|always| outranks(types, scratch, always, maybe, 0))
+}
+
+/// What a keyworded call of `member` binds its arguments by: a registration's function's own
+/// registration, or — for a function behind a view's barriers — the shape the barrier shows its
+/// caller, its slots bound to the names the function behind it registers. A barrier's call is that
+/// function's by name, which solves its own group, so it binds no type parameter.
+fn registration<'here>(member: Knotted<'_, 'here>) -> Option<Registered<'here, KType>> {
+    let Some(barrier) = member.coerced() else {
+        return member.function()?.registered();
+    };
+    Some(Registered {
+        shape: barrier.ktype(),
+        quantifier_map: ShapeGroupMap::default(),
+        parameters: member
+            .behind_barriers()
+            .function()?
+            .registered()?
+            .parameters,
+    })
 }
 
 /// The candidate the load selected, read at `coordinate` through `at`'s view, for operands of the
@@ -162,9 +204,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
     if let Some(builtin) = member.builtin() {
         return Selection::Builtin(builtin);
     }
-    let registered = member
-        .function()
-        .and_then(|function| function.registered())
+    let registered = registration(member)
         .expect("a selected candidate is a builtin or a registration's function");
     let solution = if matches!(registered.shape, DeclaredType::Type(_)) {
         &[][..]
@@ -238,40 +278,13 @@ pub(super) fn carried_fit(
             .all(|(slot, argument)| satisfied_by(types, scratch, *slot, *argument))
 }
 
-/// Whether two selections run the same thing: one builtin, one function with one solution, or the
-/// same miss.
-#[cfg(debug_assertions)]
-pub(super) fn agree<'graph, 'here>(
-    a: &Selection<'_, 'graph, 'here>,
-    b: &Selection<'_, 'graph, 'here>,
-) -> bool {
-    match (a, b) {
-        (Selection::Builtin(a), Selection::Builtin(b)) => std::ptr::eq(*a, *b),
-        (
-            Selection::Function {
-                callee: a,
-                solution: x,
-                ..
-            },
-            Selection::Function {
-                callee: b,
-                solution: y,
-                ..
-            },
-        ) => a.as_callable() == b.as_callable() && x == y,
-        (Selection::NoOverload, Selection::NoOverload) => true,
-        (Selection::Ambiguous(a), Selection::Ambiguous(b)) => a == b,
-        _ => false,
-    }
-}
-
-/// The expression shape `candidate` is registered at: a builtin's, or a registration's function's.
-/// `None` for anything else a spread list holds.
+/// The expression shape `candidate` is registered at: a builtin's, a registration's function's, or
+/// the one a barrier shows its caller. `None` for anything else a spread list holds.
 fn registered_shape(candidate: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
     let member = candidate.as_callable()?;
     match member.builtin() {
         Some(builtin) => Some(builtin.ktype().into()),
-        None => member.function()?.registered_shape(),
+        None => layout::registered_shape(candidate),
     }
 }
 
@@ -306,26 +319,4 @@ pub(super) fn arguments<'graph, 'here>(
         fields.push((BinderSymbol::Type(name), Value::Type(solved)));
     }
     Value::Record(Record::new(writer, &fields, types, scratch))
-}
-
-/// Whether a call of the function registered at `shape`, its group solved to `solution`, returns a
-/// type satisfying `contract` — so the evaluation owing the contract can hop to its frame.
-pub(super) fn keeps(
-    types: &TypeRegistry<'_>,
-    shape: DeclaredType<KType>,
-    solution: &[KType],
-    contract: Contract,
-) -> bool {
-    let scratch = Bump::new();
-    let returns = match shape {
-        DeclaredType::Type(shape) => shape_return(shape, types),
-        // A run-time solution is concrete, and a scheme holds only its own group's variables.
-        DeclaredType::Scheme(scheme) => scheme_return(scheme, types).map(|returns| {
-            let returns = substitute_quantified(types, &scratch, returns, solution);
-            types
-                .concrete(returns)
-                .expect("a run-time scheme holds only its own group's variables")
-        }),
-    };
-    returns.is_some_and(|returns| satisfied_by(types, &scratch, contract.returns, returns))
 }

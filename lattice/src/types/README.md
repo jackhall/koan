@@ -57,7 +57,7 @@ breaks without it.
 ## The boundary, and why the build holds it
 
 The lattice names exactly two things outside itself: the classified symbol
-types from [`symbols`](../symbols/README.md), and `ScopeId`, the
+types from [`symbols`](../symbols/README.md), and the
 bump-allocation seam and the component walk from
 [the bump tier](../../README.md#the-bump-tier). No value, cell, AST, scope,
 working part or execute-side type reaches it — the

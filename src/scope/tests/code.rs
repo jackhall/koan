@@ -432,6 +432,25 @@ fn a_unions_payloads_are_type_expressions_and_its_tags_name_nothing() {
     );
 }
 
+/// A parameterized union declares its family parameters wherever it is written: at the top level,
+/// and as a member of a `SIG` body, which the elaborator refuses later.
+#[test]
+fn a_unions_family_parameters_are_declared_on_both_walks() {
+    for source in [
+        "UNION (Elem AS Tree) = #{Leaf: Elem}",
+        "SIG Sg = #[(UNION (Elem AS Tree) = #{Leaf: Elem})]",
+    ] {
+        shaped(source, |fixture, _, shape| {
+            let shape = shape.expect("the program shapes");
+            let elem = BinderSymbol::Type(type_name("Elem", fixture.symbols));
+            assert!(
+                shape.mentions().iter().all(|mention| mention.name != elem),
+                "{source}"
+            );
+        });
+    }
+}
+
 #[test]
 fn a_field_label_is_read_only_when_it_is_no_bare_name() {
     for (label, reads) in [("y", false), ("#(y)", false), ("(which)", true)] {

@@ -7,12 +7,14 @@ mod boundary;
 mod construction;
 mod crossing;
 mod depth;
+mod digest;
 mod equality;
 mod render;
 mod satisfaction;
 mod surface;
 mod working;
 
+use super::digest::{ContentDigest, DigestHasher, Tag};
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
     ReleaseAbsorption, StepContext, Verdict, Writer, covariant, program_storage, reattachable,
@@ -22,7 +24,7 @@ use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
 };
-use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Weight};
+use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Seen, Weight};
 
 /// A value holding no callable — what every suite here builds, spelled once so a literal arm
 /// needs no annotation. The containers and the working form follow it.
@@ -202,6 +204,28 @@ impl Knotted for Stand<'_> {
         Weight::ZERO
     }
 
+    /// A stand-in holds no value: its knot is its identity.
+    fn held<'a>(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+    }
+
+    fn digest_held(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
+        DigestHasher::new(Tag::Knot)
+            .feed(self.identity())
+            .finished()
+    }
+
     fn sibling(&self, _: Edge) -> Self {
         *self
     }
@@ -254,6 +278,38 @@ impl Knotted for Node<'_> {
 
     fn weight(&self) -> Weight {
         Weight::ZERO
+    }
+
+    /// Every value link of every node of the knot, nodes in index order, as the knot layer lists
+    /// a data node's.
+    fn held<'a>(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        out: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+        for node in self.0.knot().members() {
+            Circular::content_parts(Node(node), types, scratch, out);
+        }
+    }
+
+    /// The knot's node count and each node's content in index order, as the knot layer hashes a
+    /// knot.
+    fn digest_held(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        parts: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
+        let knot = self.0.knot();
+        let mut hasher = DigestHasher::new(Tag::Knot);
+        hasher.count(knot.len() as usize);
+        for node in knot.members() {
+            hasher.digest(Circular::content(Node(node), types, scratch, parts));
+        }
+        hasher.finished()
     }
 
     fn sibling(&self, edge: Edge) -> Self {
@@ -348,7 +404,6 @@ impl<'graph> Fixture<'_, 'graph> {
             scratch,
             TypeSymbol::declared(name, self.symbols).unwrap(),
             RelativeSchema::NewType(representation),
-            None,
             types,
             scratch,
         )
@@ -378,7 +433,6 @@ impl<'graph> Fixture<'_, 'graph> {
             self.scratch(),
             TypeSymbol::declared(name, self.symbols).unwrap(),
             schema,
-            None,
             self.types,
             self.scratch(),
         )
@@ -390,7 +444,6 @@ impl<'graph> Fixture<'_, 'graph> {
             self.scratch(),
             TypeSymbol::declared(name, self.symbols).unwrap(),
             RelativeSchema::NewType(representation),
-            None,
             self.types,
             self.scratch(),
         )

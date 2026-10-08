@@ -14,7 +14,10 @@ takes parametric types and schemes, and solves: a quantified binder fits
 another when some instantiation of its group puts the instance under the other,
 and a module's signature fits a declared one when its members do. It holds the
 **rigid rule**: a variable lies under its bound and everything above it, and
-above only itself, `Never` and its lower end. *Fits* contains the order and is
+above only itself, `Never` and its lower end. An opaque carrier is no
+variable but an atom: it reveals no bound outside its view, so above it lie
+only itself, a union holding it, and `Any`, and below it only itself and
+`Never`. *Fits* contains the order and is
 reflexive and transitive, but two handles may fit each other, so nothing is
 built from it. `satisfied_by` is *fits* read from a slot's side. Each relation
 records its verdict under its own `Relation`, by handle pair, so a caller
@@ -31,7 +34,9 @@ descent, the `Order` lockstep, which differs between them at its leaf alone, and
 a nested pair goes back through the entry point of the relation it was asked
 under. Every reader of either — the unifier's leaf, the specificity verdict,
 *fits*' value-slot rule — reaches it through `is_subtype_of` or `fits`, so there
-is no second descent to keep in step with this one.
+is no second descent to keep in step with this one. The unifier's own walk,
+over a declared type holding variables, keeps only the order's two extremes
+([solving](solving.md#the-unifier-collects-it-does-not-bind)).
 
 **An application lies under its family.** Two applications of one family are
 ordered argument by argument, covariantly, and an application lies strictly
@@ -58,9 +63,9 @@ concrete members among themselves by the order and keeps every parametric
 member beside them, even one whose bound lies under a concrete member:
 `Elt | Number | Str` stays three members with `Elt` bounded by `Number | Str`,
 and fits `Number | Str` both ways. `Any` absorbs a variable too, since that is
-the top's definition rather than the order. An opaque carrier is concrete, so
-the order reduces it like any member, under the union of the rest as well as
-under one member.
+the top's definition rather than the order. An opaque carrier is concrete, but
+it lies under no member but `Any`, so a union keeps it beside the members its
+source's bound would have covered: `Carrier | Number` stays two members.
 
 **The solver's meet** is private to the lattice. Where a solve meets two
 parametric types — a variable's least instance over its upper contributions
@@ -111,8 +116,26 @@ every member is checked under that solution. A variable is read by its side:
 | | offered side | asked side |
 |---|---|---|
 | a member's own `FOR ALL` variable | solved afresh for each member, as a call solves it | rigid |
-| an unpinned head parameter | one rigid unknown per application | one variable, solved and discarded |
+| an unpinned head parameter | one rigid unknown per application, bounded by `Any` | one variable, solved and discarded |
 | a pinned head parameter | the pin | the pin |
+
+A head parameter's bound decides which modules fit and reveals nothing to a
+reader, so what stands for one opaquely lies under `Any` alone: an opaque
+carrier, and the offered side's rigid unknown for its own unpinned parameter.
+Under `SIG Counter FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]`,
+`Counter` offers no `Number`, and does not fit `#[(VAL zero :Number)]`. The
+one place either reads a bound is the check of a solved head parameter against
+the asked one's bound ([`Collector::heads`](unify.rs)), and there each reads
+as an interval, from itself up to the bound it met — a carrier's its view's
+source's, an offered unknown's the one it was declared under — taken from
+above by variance: the met bound at a covariant position, the carrier or
+unknown itself at a contravariant one. So a view fits the signature it was
+ascribed to, `Counter` fits `SIG FOR ALL #{Width: Number} = #[(VAL zero :Width)]`,
+and a view offering `k :(FN (x :Carrier) -> Null)`, which accepts only sealed
+values, does not fit one asking `k` at a bound of `(FN (x :Number) -> Null)`. A
+`FOR ALL` bound, which its body reads, takes neither. Reading the bound
+anywhere else would break transitivity: a view of `Counter` fits `Counter`, but
+its carrier lies under no `Number`.
 
 For each asked keyworded member, one offered overload at its key contributes,
 each tried in turn: pooling a key's overloads would make *fits* not transitive.

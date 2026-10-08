@@ -11,10 +11,10 @@
 //! the table and every node with it, whole.
 //!
 //! A node is `Copy`: a read copies the entry out and releases the table borrow before the reader
-//! runs, so reads nest and a reader may intern. Beside each node the entry stores two flags
-//! computed off its children at intern — whether a free quantifier, whether any rigid variable, and
-//! whether any variable or quantified binder outside sealed content is reachable — so each probe is
-//! one table read.
+//! runs, so reads nest and a reader may intern. Beside each node the entry stores four flags
+//! computed off its children at intern — whether a free quantifier, whether any rigid variable,
+//! whether any variable or quantified binder outside sealed content, and whether an opaque carrier
+//! outside sealed content is reachable — so each probe is one table read.
 //!
 //! Verdicts are a fixed cache laid in the same region, described in [`verdicts`](super::verdicts).
 //! The registry therefore owns nothing on the global heap, and can itself rest in a bump.
@@ -27,13 +27,13 @@
 
 use std::cell::RefCell;
 
-use crate::bump::{BumpAllocator, BumpBackedMap, BumpVec, ScopeId, bump_table};
+use crate::bump::{BumpAllocator, BumpBackedMap, BumpVec, bump_table};
 use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 
 use super::digest::{self, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use super::kind::KKind;
-use super::node::{NodeSchema, TypeNode};
+use super::node::{ContentKey, NodeSchema, TypeNode};
 use super::order::{Dropped, is_subtype_of, unsubsumed};
 use super::record::{Record, map_fields};
 use super::run::{Elements, Run};
@@ -46,9 +46,9 @@ use super::signatures::canonical_applications;
 use super::substitute::substitute_quantified;
 use super::verdicts::{Relation, VERDICT_SLOTS, VerdictTable};
 use super::walk::Variance;
-use super::walk::unary::{Visit, children, visit_free_quantified};
+use super::walk::unary::{Visit, children, visit, visit_free_quantified};
 
-/// One interned node, and the three probe answers computed off its children when it was interned.
+/// One interned node, and the four probe answers computed off its children when it was interned.
 #[derive(Clone, Copy)]
 struct Entry<'run> {
     node: TypeNode<'run>,
@@ -58,8 +58,10 @@ struct Entry<'run> {
     rigid: bool,
     /// Whether the type is **parametric** rather than concrete: whether a free `Quantified`, a
     /// `Lexical`, a head `Parameter` or a quantified binder is reachable outside sealed content.
-    /// An opaque carrier is concrete, and so is everything inside a signature or a sealed member.
+    /// Everything inside a signature or a sealed member is concrete.
     parametric: bool,
+    /// Whether an opaque carrier is reachable outside sealed content.
+    carrier: bool,
 }
 
 impl<'run> Entry<'run> {
@@ -68,50 +70,49 @@ impl<'run> Entry<'run> {
     /// only such child is the handle of a group member mid-seal, which the seal's rebuilt schemas
     /// name before its own node is interned, and a sealed member is a leaf for every probe.
     fn over(node: TypeNode<'run>, nodes: &NodeTable<'run>) -> Self {
-        let (mut quantified, mut rigid, mut parametric) = (false, false, false);
+        let (mut quantified, mut rigid, mut parametric, mut carrier) = (false, false, false, false);
         children(&node, &mut |child, _| {
             if let Some(entry) = nodes.get(&child.digest()) {
                 quantified |= entry.quantified;
                 rigid |= entry.rigid;
                 parametric |= entry.parametric;
+                carrier |= entry.carrier;
             }
         });
+        let entry = Entry {
+            node,
+            quantified,
+            rigid,
+            parametric,
+            carrier,
+        };
         // A binder — a shape or a function carrying a group — binds its own variables, so
         // nothing under one is free here, and the binder itself is a quantified callable's type.
         if node.binds_quantifiers() {
             return Entry {
-                node,
                 quantified: false,
-                rigid,
                 parametric: true,
+                ..entry
             };
         }
         match node {
             TypeNode::Quantified { .. } => Entry {
-                node,
                 quantified: true,
                 rigid: true,
                 parametric: true,
+                ..entry
             },
-            TypeNode::Lexical { .. } | TypeNode::Parameter { nonce: None, .. } => Entry {
-                node,
-                quantified,
+            TypeNode::Lexical { .. } | TypeNode::Parameter { .. } => Entry {
                 rigid: true,
                 parametric: true,
+                ..entry
             },
             // An opaque carrier: a value carries it and dispatches on it, so it is concrete.
-            TypeNode::Parameter { nonce: Some(_), .. } => Entry {
-                node,
-                quantified,
-                rigid: true,
-                parametric,
+            TypeNode::Carrier { .. } => Entry {
+                carrier: true,
+                ..entry
             },
-            _ => Entry {
-                node,
-                quantified,
-                rigid,
-                parametric,
-            },
+            _ => entry,
         }
     }
 }
@@ -220,6 +221,7 @@ impl<'run> TypeRegistry<'run> {
             ],
         );
         self.list(Handle::NAME);
+        self.list(Handle::EXPRESSION);
         self.list(Handle::DECLARATION);
         self.dict(Handle::NAME, Handle::BLOCK);
         self.dict(Handle::NAME, type_code);
@@ -544,36 +546,42 @@ impl<'run> TypeRegistry<'run> {
     /// A signature's head parameter: a named variable its members read and `WITH` pins, bounded by
     /// `bound` — [`KType::ANY`] where the declaration constrains nothing.
     pub fn head_parameter(&self, name: TypeSymbol, bound: KType) -> Parametric {
-        wrap(self.parameter(name, bound, None))
+        wrap(self.parameter(name, bound))
     }
 
-    /// The opaque carrier a view mints for a head parameter, under `nonce`, which nothing else can
-    /// name, so two opaque ascriptions of one signature never unify. A value carries it and
-    /// dispatches on it, so it is concrete.
-    pub fn carrier(&self, name: TypeSymbol, bound: KType, nonce: ScopeId) -> KType {
-        wrap(self.parameter(name, bound, Some(nonce)))
+    /// The carrier an opaque view hides the head parameter `name` behind, keyed on `key`, the
+    /// content the view hides: two views of equal content share it, and two of different content
+    /// never unify. A value carries it and dispatches on it, so it is concrete, and the order reads
+    /// it as an atom under `Any` alone. It records `met`, the bound its source met, for a
+    /// signature's fit alone.
+    pub fn carrier(&self, name: TypeSymbol, met: KType, key: ContentKey) -> KType {
+        self.assert_bound(met);
+        wrap(
+            self.intern_digested(digest::carrier_digest(name, key, met), || {
+                TypeNode::Carrier { name, key, met }
+            }),
+        )
     }
 
-    /// A named rigid variable — a head parameter, or with `nonce` set a carrier.
-    pub(super) fn parameter(
-        &self,
-        name: TypeSymbol,
-        bound: KType,
-        nonce: Option<ScopeId>,
-    ) -> Handle {
+    /// Whether `kt` is an opaque view's carrier.
+    pub fn is_carrier(&self, kt: KType) -> bool {
+        matches!(self.node(kt.raw()), TypeNode::Carrier { .. })
+    }
+
+    /// A head parameter named `name`, bounded by `bound`.
+    pub(super) fn parameter(&self, name: TypeSymbol, bound: KType) -> Handle {
         self.assert_bound(bound);
-        self.intern_digested(digest::parameter_digest(name, bound, nonce), || {
-            TypeNode::Parameter { name, bound, nonce }
+        self.intern_digested(digest::parameter_digest(name, bound), || {
+            TypeNode::Parameter { name, bound }
         })
     }
 
-    /// A bound is concrete by its type. An opaque carrier is concrete too, but one as a variable's
-    /// bound waits on [modules](../../../roadmap/rewrite/modules.md) to re-key carriers, so the
-    /// elaborator refuses it; this checks that it did.
+    /// A bound is concrete by its type. An opaque carrier is concrete too, but a bound holds none:
+    /// the elaborator refuses one there, and this checks that it did.
     fn assert_bound(&self, bound: KType) {
         debug_assert!(
-            !self.contains_rigid(bound.raw()),
-            "a rigid variable's bound holds no opaque carrier",
+            !self.contains_carrier(bound.raw()),
+            "a bound holds no opaque carrier",
         );
     }
 
@@ -1082,7 +1090,6 @@ impl<'run> TypeRegistry<'run> {
             let keep = unsubsumed(self, scratch, &flat, Dropped::Below);
             let mut keep = keep.iter();
             flat.retain(|_| *keep.next().unwrap_or(&true));
-            self.drop_carriers_under_the_rest(scratch, &mut flat);
         }
         // The three family tops together hold every type, so their union is `Any` — and must be, or
         // a type variable bounded by `Any` would lie under `Any` but not under the union that equals it.
@@ -1097,40 +1104,6 @@ impl<'run> TypeRegistry<'run> {
             1 => flat[0],
             _ => self.intern_union_members(scratch, &flat),
         }
-    }
-
-    /// Drop from `flat` every opaque carrier whose bound lies under the union of the other
-    /// concrete members that are no rigid variable — a bound spanning several members, which the
-    /// pairwise pass cannot see. A carrier is concrete, so the order reduces it; a bound holds no
-    /// rigid variable, so no rigid member holds one up.
-    fn drop_carriers_under_the_rest(
-        &self,
-        scratch: BumpAllocator<'_>,
-        flat: &mut BumpVec<'_, Handle>,
-    ) {
-        let carrier_bound = |member: Handle| match self.node(member) {
-            TypeNode::Parameter {
-                bound,
-                nonce: Some(_),
-                ..
-            } if bound != KType::ANY => Some(bound.raw()),
-            _ => None,
-        };
-        if !flat.iter().any(|member| carrier_bound(*member).is_some()) {
-            return;
-        }
-        let mut rest = BumpVec::with_capacity_in(flat.len(), scratch);
-        rest.extend(flat.iter().copied().filter(|member| {
-            self.is_concrete(*member) && self.node(*member).rigid_bound().is_none()
-        }));
-        // With one such member the pairwise pass already decided.
-        if rest.len() < 2 {
-            return;
-        }
-        let rest = self.intern_union_members(scratch, &rest);
-        flat.retain(|member| {
-            carrier_bound(*member).is_none_or(|bound| !is_subtype_of(self, scratch, bound, rest))
-        });
     }
 
     /// Intern a union from members that are already flat and already an antichain — dedup by handle
@@ -1184,7 +1157,7 @@ impl<'run> TypeRegistry<'run> {
     /// order's two rigid clauses consistent, since below a rigid variable are only itself and
     /// `Never` while above it is everything above its bound — and a rigid bound would put a
     /// variable in both sets at once. A bound is a [`KType`], so it holds no variable; the doors
-    /// that mint a rigid variable assert it holds no opaque carrier either.
+    /// that take a bound assert it holds no opaque carrier either.
     pub(super) fn contains_rigid(&self, kt: Handle) -> bool {
         self.entry(kt).rigid
     }
@@ -1202,11 +1175,16 @@ impl<'run> TypeRegistry<'run> {
         self.is_concrete(kt.raw()).then(|| wrap(kt.raw()))
     }
 
-    /// Whether `kt` holds an opaque carrier outside sealed content — the one rigid variable a
-    /// concrete type may hold. A carrier as a variable's bound waits on
-    /// [modules](../../../roadmap/rewrite/modules.md), so the elaborator refuses one there.
+    /// Whether an opaque carrier is reachable from `kt` outside sealed content. Read off the flag
+    /// interning stored beside the node.
+    pub(super) fn contains_carrier(&self, kt: Handle) -> bool {
+        self.entry(kt).carrier
+    }
+
+    /// Whether `kt` holds an opaque carrier outside sealed content. A bound holds none, so the
+    /// elaborator refuses one there.
     pub fn holds_carrier(&self, kt: KType) -> bool {
-        self.contains_rigid(kt.raw())
+        self.contains_carrier(kt.raw())
     }
 
     /// Whether `kt` reads the `index`-th quantifier of the enclosing binder — what a definition asks
@@ -1225,6 +1203,26 @@ impl<'run> TypeRegistry<'run> {
                 } else {
                     Visit::Skip
                 }
+            })
+    }
+
+    /// Whether `kt` reads the head parameter `name`: a `Parameter` of that name, which
+    /// substituting `name` would replace. A signature is opaque, as it is there. What a member read
+    /// asks of each head parameter its application leaves unpinned; it builds nothing.
+    pub fn mentions_parameter(
+        &self,
+        scratch: BumpAllocator<'_>,
+        kt: DeclaredType<Parametric>,
+        name: TypeSymbol,
+    ) -> bool {
+        let kt = match kt {
+            DeclaredType::Type(kt) => kt.raw(),
+            DeclaredType::Scheme(scheme) => scheme.raw(),
+        };
+        self.contains_rigid(kt)
+            && visit(self, scratch, kt, &mut |_, node, _| match *node {
+                TypeNode::Parameter { name: found, .. } if found == name => Visit::Stop,
+                _ => Visit::Descend,
             })
     }
 

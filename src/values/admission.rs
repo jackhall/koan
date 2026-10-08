@@ -7,18 +7,19 @@
 //! contents. A raw part is checked by shape, since an unevaluated literal has no value yet;
 //! [`admits_part`] is also the one rule the shape builder's static check admits a written part by.
 //!
-//! [`unsealed`] is the one peel: a value sealed behind an opaque view read through each seal whose
-//! bound reveals the payload's kind.
+//! A value sealed behind an opaque view is read through nowhere outside the view: its carrier lies
+//! under `Any` alone, so only a slot naming the carrier takes it, and only the view's own functions,
+//! behind their barriers, see the payload.
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, DeclaredType, KKind, KType, NodeSchema, Parametric, TypeHandle, TypeNode,
-    TypeRegistry, Variance, admits_with, fits, satisfied_by, substitute_quantified,
+    TypeRegistry, Variance, admits_with, satisfied_by, substitute_quantified,
 };
 
-use super::{Knotted, Resolved, Value, WorkingPart};
+use super::{Knotted, Value, WorkingPart};
 
 /// Whether `slot` takes `value`: *fits* over the value's memoized type — a quantified callable's
 /// scheme fitting a function slot through an instance.
@@ -121,7 +122,7 @@ pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>
 
 /// The type a tagged value's payload is read at: its identity's representation — a newtype's, a
 /// family application's with its arguments substituted, a bare family's with each parameter at
-/// `Any`. `None` for an identity with none: an opaque view's mint, a family that constructs
+/// `Any`. `None` for an identity with none: an opaque view's carrier, a family that constructs
 /// nothing.
 pub fn representation(
     types: &TypeRegistry<'_>,
@@ -180,89 +181,38 @@ pub fn solves_identity(types: &TypeRegistry<'_>, head: KType) -> bool {
     )
 }
 
-/// What sealing a payload under an opaque mint refuses.
+/// What sealing a payload under an opaque view's carrier refuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SealRefused {
-    /// The identity is no per-application mint: no nonced `Parameter`.
-    NotAMint(KType),
+    /// The identity is no opaque view's carrier.
+    NotACarrier(KType),
     /// The payload's type does not satisfy what the source binds the member to.
-    Misfit { mint: KType, witness: KType },
+    Misfit { carrier: KType, witness: KType },
+    /// A value crossing a barrier inwards at a carrier is not sealed under it.
+    NotSealed { carrier: KType },
 }
 
-/// The identity a payload of type `payload` takes when sealed under `mint`, the per-application
-/// carrier an opaque ascription minted for a parameter the source binds to `witness`.
+/// The identity a payload of type `payload` takes when sealed under `carrier`, the carrier an
+/// opaque ascription hides a parameter the source binds to `witness` behind.
 ///
-/// The barrier's rule, beside [`construction`]: a mint records no representation for a
+/// The barrier's rule, beside [`construction`]: a carrier records no representation for a
 /// construction to check against, so what is checked is the source's own binding. Sealing happens
 /// where a view is built, never where a koan program writes a construction.
 pub fn sealing(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    mint: KType,
+    carrier: KType,
     witness: KType,
     payload: DeclaredType<KType>,
 ) -> Result<KType, SealRefused> {
-    if !is_mint(types, mint) {
-        return Err(SealRefused::NotAMint(mint));
+    if !types.is_carrier(carrier) {
+        return Err(SealRefused::NotACarrier(carrier));
     }
     if satisfied_by(types, scratch, witness, payload) {
-        Ok(mint)
+        Ok(carrier)
     } else {
-        Err(SealRefused::Misfit { mint, witness })
+        Err(SealRefused::Misfit { carrier, witness })
     }
-}
-
-/// Whether `ktype` is a per-application mint: a nonced head parameter.
-fn is_mint(types: &TypeRegistry<'_>, ktype: KType) -> bool {
-    matches!(
-        types.node(ktype),
-        TypeNode::Parameter { nonce: Some(_), .. }
-    )
-}
-
-/// `value` read through its seal where the seal's bound licenses it. An opaque view's seal is
-/// transparent exactly where the member's bound reveals the kind of value it holds — where the mint
-/// lies under its payload's kind. A seal bounded by `Value`, or by a union spanning kinds, stays.
-/// A seal re-tags rather than wraps ([`Tagged::seal`](super::Tagged::seal)), so there is one layer
-/// to read through. Equality and dict keys read a value through this.
-pub fn unsealed<'cell, X: Knotted>(
-    value: Value<'cell, X>,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> Value<'cell, X> {
-    let Value::Tagged(tagged) = value else {
-        return value;
-    };
-    let payload = *tagged.payload();
-    let revealed = is_mint(types, tagged.ktype())
-        && kind_of(&payload, types, scratch)
-            .is_some_and(|kind| fits(types, scratch, tagged.ktype(), kind));
-    if revealed { payload } else { value }
-}
-
-/// The top of `value`'s own kind — `Number` for a number, `LIST OF Any` for a list, the empty
-/// record for a record, `Code` for a quote's code, since every quote is one representation whatever
-/// its carried type — or `None` for every other knot member, which no seal reads through.
-fn kind_of<X: Knotted>(
-    value: &Value<'_, X>,
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> Option<KType> {
-    Some(match value {
-        Value::Number(_) => KType::NUMBER,
-        Value::Bool(_) => KType::BOOL,
-        Value::Null => KType::NULL,
-        Value::Str(_) => KType::STR,
-        Value::Type(_) => KType::ANY_TYPE,
-        Value::List(_) => KType::LIST_OF_ANY,
-        Value::Dict(_) => KType::DICT_ANY_ANY,
-        Value::Record(_) => types.record(scratch, &[]),
-        Value::Tagged(tagged) => tagged.ktype(),
-        Value::Knotted(member) => match member.resolve() {
-            Resolved::Code(_) => KType::ANY_CODE,
-            _ => return None,
-        },
-    })
 }
 
 /// The type dispatch matches a raw part on, and the one a diagnostic naming the slot renders. `None`
@@ -365,8 +315,8 @@ pub fn record_type<H: TypeHandle>(
 /// admits what any member admits; a family top admits what some concrete type of its family
 /// admits, as a union does; a code kind admits a part whose own code kind lies under it; a kind
 /// slot takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its
-/// bound takes. A function, nominal, signature, shape, constructor-application, deferred or sibling
-/// slot admits no raw part — only a resolved value.
+/// bound takes. A function, nominal, carrier, signature, shape, constructor-application, deferred
+/// or sibling slot admits no raw part — only a resolved value.
 pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
@@ -434,6 +384,7 @@ pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &TypeRegi
         TypeNode::KFunction { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Parameter { .. }
+        | TypeNode::Carrier { .. }
         | TypeNode::Signature { .. }
         | TypeNode::SignatureApply { .. }
         | TypeNode::SignatureMeet { .. }
