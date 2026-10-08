@@ -220,6 +220,22 @@ pub enum Which {
     Binary,
 }
 
+impl Which {
+    /// Which of a definition's `count` bucket keys the one at `index` is: a `UNARY OP` names two,
+    /// its unary key and then its binary key; every other definition names one.
+    pub fn of(count: usize, index: usize) -> Which {
+        debug_assert!(
+            index < count && count <= 2,
+            "a definition names one or two keys"
+        );
+        match (count == 2, index) {
+            (false, _) => Which::Only,
+            (true, 0) => Which::Unary,
+            (true, _) => Which::Binary,
+        }
+    }
+}
+
 /// One registration a body declares: a keyworded definition's function, bound at `slot`, under one
 /// of its bucket keys — or, in a `USING … SCOPE` block, a bodyless head its operand's signature
 /// declares.

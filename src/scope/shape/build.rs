@@ -1054,7 +1054,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             if !operator && ranked_head(spine) {
                 return Err(ShapeError::RankedDefinition { at: source });
             }
-            let unary = buckets.count() == 2;
             for (which, elements) in buckets.iter().enumerate() {
                 self.open_key(elements, source)?;
                 let key = KeyElement::key(elements.iter().copied());
@@ -1071,11 +1070,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     key,
                     elements,
                     classes,
-                    which: match (unary, which) {
-                        (false, _) => Which::Only,
-                        (true, 0) => Which::Unary,
-                        (true, _) => Which::Binary,
-                    },
+                    which: Which::of(buckets.count(), which),
                     surfaced: None,
                 });
             }

@@ -560,12 +560,17 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
                 if form.id == BuiltinShapeId::OperatorHeadReturning {
                     returning.push((quoted_operator(data).ok_or(unsupported)?, site));
                 }
-                match bridge {
-                    Some(bridge) => {
-                        heads.extend([(site, Which::Unary, shape), (site, Which::Binary, bridge)])
-                    }
-                    None => heads.push((site, Which::Only, shape)),
-                }
+                // A head's shapes, in the order its bucket keys are: a `UNARY OP`'s unary key, then
+                // its binary key.
+                let keyed = [Some(shape), bridge];
+                let count = keyed.iter().flatten().count();
+                heads.extend(
+                    keyed
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                        .map(|(index, shape)| (site, Which::of(count, index), shape)),
+                );
                 draft.push_keyworded(shape);
             }
             // A bodyless `GROUP` declares a chaining record, which the operator channel owns.

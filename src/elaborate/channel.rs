@@ -429,7 +429,8 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         let written = Site::of(&head.parts[0].value);
         let (_, _, shape) = heads
             .iter()
-            .find(|(site, which, _)| *site == written && *which == registration.which)?;
+            .find(|(site, which, _)| *site == written && *which == registration.which)
+            .expect("a signature's heads are keyed as its surfaced registrations are");
         let TypeNode::Signature { schema, .. } = types.node(signature) else {
             unreachable!("an application applies a signature");
         };

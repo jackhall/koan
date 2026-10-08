@@ -502,16 +502,11 @@ fn push_keys<'graph>(
     operator: bool,
     out: &mut Surfaced<'_, 'graph>,
 ) {
-    let unary = keys.count() == 2;
     for (which, elements) in keys.iter().enumerate() {
         out.heads.push(SurfacedKey {
             head,
             elements,
-            which: match (unary, which) {
-                (false, _) => Which::Only,
-                (true, 0) => Which::Unary,
-                (true, _) => Which::Binary,
-            },
+            which: Which::of(keys.count(), which),
             operator,
         });
     }
