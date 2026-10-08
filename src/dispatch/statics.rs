@@ -1736,14 +1736,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         // Code that never arrives returns nothing to check.
         if let Some(code) = self.traced(level, &operand.value)
             && code != KType::NEVER
+            && let Some((code, returns)) = never_satisfies(types, scratch, code.into(), declared)
         {
-            if let Some((code, returns)) = never_satisfies(types, scratch, code.into(), declared) {
-                return Err(ShapeError::EvalNeverSatisfied {
-                    code,
-                    returns,
-                    at: node.source,
-                });
-            }
+            return Err(ShapeError::EvalNeverSatisfied {
+                code,
+                returns,
+                at: node.source,
+            });
         }
         Ok(retyped_to(types, declared))
     }
