@@ -160,6 +160,17 @@ pub fn class_at_least(
     ranking::class_at_least(types, scratch, a.raw(), b.raw(), class)
 }
 
+/// Whether `a` strictly outranks `b` at `class`, as [`select_by_class`] eliminates by.
+pub fn outranks(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: DeclaredType<Parametric>,
+    b: DeclaredType<Parametric>,
+    class: u8,
+) -> bool {
+    ranking::outranks(types, scratch, a.raw(), b.raw(), class)
+}
+
 /// The survivors of the class-by-class elimination over `shapes`, as indices into `shapes`.
 pub fn select_by_class<'s>(
     types: &TypeRegistry<'_>,

@@ -27,7 +27,7 @@ use crate::scope::{Candidate, Coordinate, IMPLICIT};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, satisfied_by,
+    DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, outranks, satisfied_by,
     scheme_return, scheme_slots, select_by_class, shape_return, shape_slots, solving_slots,
     substitute_quantified,
 };
@@ -114,18 +114,16 @@ pub(super) fn selected<'x, 'graph, 'here>(
             .map(|admitted| DeclaredType::<Parametric>::from(admitted.shape)),
     );
     let survivors = select_by_class(types, scratch, &shapes);
-    let builtin = |index: &usize| {
-        admitted[*index]
+    let builtin = |index: usize| {
+        admitted[index]
             .callee
             .as_callable()
             .and_then(Knotted::builtin)
+            .is_some()
     };
-    let chosen = match survivors[..] {
-        [only] => admitted[only],
-        _ => match survivors.iter().find_map(builtin) {
-            Some(builtin) => return Selection::Builtin(builtin),
-            None => return Selection::Ambiguous(survivors.len()),
-        },
+    let chosen = match winner(&survivors, builtin) {
+        Ok(index) => admitted[index],
+        Err(count) => return Selection::Ambiguous(count),
     };
     let member = chosen
         .callee
@@ -140,6 +138,35 @@ pub(super) fn selected<'x, 'graph, 'here>(
             .expect("a candidate with a shape is a builtin or a registration's function"),
         solution: chosen.solution,
     }
+}
+
+/// The candidate a call runs among `survivors` — the indices `select_by_class` kept — where
+/// `is_builtin` says which are builtins: the lone survivor, or else the first builtin among
+/// several; `Err` with the survivors' count where several survive and none is a builtin. The run's
+/// selection and the load's both end here.
+pub(super) fn winner(
+    survivors: &[usize],
+    is_builtin: impl Fn(usize) -> bool,
+) -> Result<usize, usize> {
+    match survivors {
+        [only] => Ok(*only),
+        _ => (survivors.iter().copied())
+            .find(|survivor| is_builtin(*survivor))
+            .ok_or(survivors.len()),
+    }
+}
+
+/// Whether a candidate that may admit, registered at `maybe`, never runs beside candidates that
+/// always admit, registered at `always`: one outranks it at the first class, and wherever it admits
+/// that one admits too and eliminates it there. Only the first class is safe: past it, a survivor
+/// that would eliminate it may itself be gone.
+pub(super) fn never_runs(
+    types: &TypeRegistry<'_>,
+    scratch: &Bump,
+    maybe: DeclaredType<Parametric>,
+    always: impl IntoIterator<Item = DeclaredType<Parametric>>,
+) -> bool {
+    (always.into_iter()).any(|always| outranks(types, scratch, always, maybe, 0))
 }
 
 /// What a keyworded call of `member` binds its arguments by: a registration's function's own
@@ -251,33 +278,6 @@ pub(super) fn carried_fit(
             .iter()
             .zip(carried)
             .all(|(slot, argument)| satisfied_by(types, scratch, *slot, *argument))
-}
-
-/// Whether two selections run the same thing: one builtin, one function with one solution, or the
-/// same miss.
-#[cfg(debug_assertions)]
-pub(super) fn agree<'graph, 'here>(
-    a: &Selection<'_, 'graph, 'here>,
-    b: &Selection<'_, 'graph, 'here>,
-) -> bool {
-    match (a, b) {
-        (Selection::Builtin(a), Selection::Builtin(b)) => std::ptr::eq(*a, *b),
-        (
-            Selection::Function {
-                callee: a,
-                solution: x,
-                ..
-            },
-            Selection::Function {
-                callee: b,
-                solution: y,
-                ..
-            },
-        ) => a.as_callable() == b.as_callable() && x == y,
-        (Selection::NoOverload, Selection::NoOverload) => true,
-        (Selection::Ambiguous(a), Selection::Ambiguous(b)) => a == b,
-        _ => false,
-    }
 }
 
 /// The expression shape `candidate` is registered at: a builtin's, a registration's function's, or

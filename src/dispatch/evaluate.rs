@@ -30,9 +30,9 @@
 //! where it is finished.
 //!
 //! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
-//! as it evaluates. Debug builds check both halves of that agreement: a finished value's carried type
-//! lies under its node's static type, and a narrowed or selected call runs what selection over the
-//! full list would.
+//! as it evaluates. Debug builds check that a finished value's carried type lies within its node's
+//! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
+//! selection.
 
 use crate::elaborate::denoted;
 use crate::knot::module::view::{self, Ascription, Unascribable};
@@ -575,12 +575,11 @@ fn call<'graph, 'here>(
     let shape = at.view.shape();
     let contributed = contributed(at, shape.contributions(Site::of_node(node)), &scratch);
     let narrowing = shape.narrowing(Site::of_node(node));
-    let full = || {
-        let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
-        select::selected(at, maybe, &arguments, &contributed, &scratch)
-    };
     let selection = match narrowing {
-        Narrowing::Full => full(),
+        Narrowing::Full => {
+            let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
+            select::selected(at, maybe, &arguments, &contributed, &scratch)
+        }
         Narrowing::Kept(kept) => {
             select::selected(at, kept.iter().copied(), &arguments, &contributed, &scratch)
         }
@@ -588,13 +587,6 @@ fn call<'graph, 'here>(
             select::chosen(at, coordinate, &arguments, &contributed, &scratch)
         }
     };
-    #[cfg(debug_assertions)]
-    if !matches!(narrowing, Narrowing::Full) {
-        debug_assert!(
-            select::agree(&selection, &full()),
-            "static selection runs what full selection would"
-        );
-    }
     let raised = match selection {
         Selection::Builtin(builtin) => {
             let native = Native::of(builtin.id());

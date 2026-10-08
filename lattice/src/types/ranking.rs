@@ -469,6 +469,18 @@ pub(super) fn admits_by_class<'run>(
         && collector.solve(types).is_ok()
 }
 
+/// Whether `a` strictly outranks `b` at `class`: at least as specific there, and `b` not at least
+/// as specific as `a`. A survivor `a` outranks at a class eliminates `b` there.
+pub(super) fn outranks(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: Handle,
+    b: Handle,
+    class: u8,
+) -> bool {
+    class_at_least(types, scratch, a, b, class) && !class_at_least(types, scratch, b, a, class)
+}
+
 /// Whether `a` is at least as specific as `b` at `class`: `b`'s slots in that class admit `a`'s
 /// own, jointly, with each variable an earlier class admitted read at its reach interval
 /// ([`read_later`]) and each one an earlier class refused read as its bound. `a`'s variables are
@@ -562,10 +574,7 @@ pub(super) fn select_by_class<'s>(
         if survivors.len() <= 1 {
             break;
         }
-        let beats = |x: usize, y: usize| {
-            class_at_least(types, scratch, shapes[x], shapes[y], class)
-                && !class_at_least(types, scratch, shapes[y], shapes[x], class)
-        };
+        let beats = |x: usize, y: usize| outranks(types, scratch, shapes[x], shapes[y], class);
         let mut kept = BumpVec::with_capacity_in(survivors.len(), scratch);
         kept.extend(
             survivors

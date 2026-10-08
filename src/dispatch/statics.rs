@@ -109,9 +109,9 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KType, Parametric,
     Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above,
-    class_at_least, class_of, fits, instance_under, instantiate_quantified, intervals,
-    judge_by_class, meet, quantifier_bounds, read_through, scheme_bound_above, scheme_return,
-    scheme_slots, select_by_class, shape_return, shape_slots, solving_slots,
+    class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
+    quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
+    select_by_class, shape_return, shape_slots, solving_slots,
 };
 use crate::values::{
     ConstructionRefused, Value, construction, dict_type, list_type, record_type, retyped_to, under,
@@ -122,6 +122,7 @@ use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
 use super::one_name;
 use super::rules::{self, Given};
+use super::select;
 
 /// Give every value expression and value binder of `root`, and of every shape nested in it, a
 /// static type, and narrow every keyworded use's candidates; refuse a use no candidate can admit.
@@ -2546,28 +2547,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 at: node.source,
             }));
         }
-        // A *maybe* an *always* one strictly outranks at the first class never runs: wherever it
-        // admits, the *always* one does too, and beats it.
-        let beats = |a: DeclaredType<KType>, m: DeclaredType<KType>| {
-            let (a, m) = (a.into(), m.into());
-            class_at_least(types, scratch, a, m, 0) && !class_at_least(types, scratch, m, a, 0)
-        };
-        let outranked = |judgement: &Judgement<'_>| match judgement.known {
-            Known::Closed(m) if judgement.verdict == Verdict::Maybe => {
-                judged.iter().any(|other| match other.known {
-                    Known::Closed(a) if other.verdict == Verdict::Always => beats(a, m),
-                    _ => false,
-                })
-            }
-            _ => false,
+        // A *maybe* an *always* one strictly outranks at the first class never runs.
+        let always = || {
+            judged.iter().filter_map(|other| match other.known {
+                Known::Closed(always) if other.verdict == Verdict::Always => Some(always.into()),
+                _ => None,
+            })
         };
         let mut left = BumpVec::with_capacity_in(judged.len(), scratch);
-        left.extend(
-            judged
-                .iter()
-                .copied()
-                .filter(|judgement| !outranked(judgement)),
-        );
+        left.extend(judged.iter().copied().filter(|judgement| {
+            !matches!(judgement.known, Known::Closed(maybe)
+                if judgement.verdict == Verdict::Maybe
+                    && select::never_runs(types, scratch, maybe.into(), always()))
+        }));
         let judged = left;
 
         if judged
@@ -2587,20 +2579,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         _ => unreachable!("every candidate is closed"),
                     }));
                     let survivors = select_by_class(types, scratch, &shapes);
-                    let first = match survivors[..] {
-                        [only] => Some(only),
-                        _ => survivors
-                            .iter()
-                            .copied()
-                            .find(|survivor| self.builtin(judged[*survivor].candidate).is_some()),
-                    };
-                    match first {
-                        Some(survivor) => Some(judged[survivor]),
-                        None => {
+                    let builtin =
+                        |survivor: usize| self.builtin(judged[survivor].candidate).is_some();
+                    match select::winner(&survivors, builtin) {
+                        Ok(survivor) => Some(judged[survivor]),
+                        Err(count) => {
                             return Err(ShapeError::Ambiguous {
                                 key: list.elements,
                                 arguments: uppers(),
-                                count: survivors.len(),
+                                count,
                                 at: node.source,
                             });
                         }
