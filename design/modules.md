@@ -31,7 +31,8 @@ on demand, when a view asks for its source's, and composed from its parts'
 digests, as a type's digest is composed from its children's; one demand
 digests a part shared many times over once. A module is the exception: it
 keeps no captures to digest later, so its content is digested where it is
-built. Values that reach
+built. The digest covers what a value's type shows of it, as a copy of the
+value lays it down, so a copy keeps its digest. Values that reach
 one another — closures that call one another, a ring of containers a knot ties —
 digest as one strongly connected component, as a recursive type group does.
 Where a value sits in memory, which frame it was copied into, and the name a
@@ -82,8 +83,9 @@ listing one the body already reads changes nothing.
 
 An opaque ascription, `m :| Counter`, hides each head parameter the application
 leaves unpinned behind a **carrier**. A carrier is keyed on content — the
-ascribed module's, the signature application's and the parameter's name — and
-never on when or how often the ascription is evaluated. A transparent
+opaque view's own, which is its operator and signature application over the
+ascribed module's digest, under the parameter's name — and never on when or
+how often the ascription is evaluated. A transparent
 ascription, `m :! Counter`, shows what each parameter solves to.
 
 A carrier hides the parameter's bound too. Under

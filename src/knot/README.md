@@ -415,7 +415,10 @@ A member's [content digest](../values/README.md#content-digests) is computed
 on demand: its knot's, beside its index there. A knot digests its node count
 and each node's content in index order, an edge to a sibling hashed as its
 index, so values that reach one another digest as the one knot they are tied
-into and a copy digests as its source. A node's content is what it is:
+into and a copy digests as its source. The member lists the values its knot
+holds (`held`) and hashes the knot over their digests (`digest_held`); `values`
+walks the listed values on its own stack, so a chain of knots never nests a
+call per knot. A node's content is what it is:
 
 - a **function**: its body's [code digest](../scope/README.md#resolution), the
   solution it is an instance at, and the digest of each capture the code digest
@@ -428,7 +431,9 @@ into and a copy digests as its source. A node's content is what it is:
   sees, the declared type and both substitutions;
 - a **code** node: its quote's code digest, its carried type, and each bound and
   supplied name beside its value's digest;
-- a **data** node: its kind, its type and each link's digest.
+- a **data** node: read through [the door](../values/README.md#views) at its
+  memo — its memo, its kind and each part the memo shows, a value link by its
+  digest and an edge by its index.
 
 A builtin's member digests as its overload, its native and its shape.
 

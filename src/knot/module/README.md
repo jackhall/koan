@@ -36,9 +36,11 @@ A module's node also holds its **content**, the digest its knot's
 [digest](../../values/README.md#content-digests) covers it by. A body-born
 module's is its body's code digest over the digest of each capture the code
 digest does not name, a view's its operator and signature application over its
-source's digest. A module keeps no captures to digest later, so its content is
-computed where it is tied, and it sits behind a pointer so the node keeps its
-width.
+source's digest. `ModuleContent` ([module.rs](../module.rs)) owns that recipe
+— one constructor per kind, and `Module::tie` takes nothing else — so a
+module's content is computed one way wherever one is tied. A module keeps no
+captures to digest later, so its content is computed where it is tied, and it
+sits behind a pointer so the node keeps its width.
 
 ## Layout order
 
@@ -100,11 +102,11 @@ signature's head parameters:
   `SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]`, a source binding
   `zero` to `0` gives `Carrier` the type `Number`;
 - `to` — under `:!`, `from` itself; under `:|`, a **carrier per unpinned
-  parameter**, keyed on the source's content and the application. A carrier
-  records the declaration's bound, which only the signature's fit reads, so the
-  view fits what its source did; anywhere else it lies under `Any` alone, so a
-  member sealed under it is opaque outside the view whatever its bound. A pinned
-  parameter keeps its pin either way.
+  parameter**, keyed on the view's own content. A carrier records the
+  declaration's bound as the bound it met, which only the signature's fit reads,
+  so the view fits what its source did; anywhere else it lies under `Any` alone,
+  so a member sealed under it is opaque outside the view whatever its bound. A
+  pinned parameter keeps its pin either way.
 
 Everything after that is one body, [`build`](view.rs), so the two operators are
 not two paths that agree: `:!` is the case of `:|` where `to` is `from`, and
@@ -113,9 +115,10 @@ signature over modules of equal content therefore produce views with one
 carrier, over modules that differ views whose carriers do not unify, while `:!`
 is a relabelling.
 
-The carrier is a [`Parameter`](../../../lattice/src/types/vocabulary.md)
-keyed on a digest of the source's content and the application, and the
-parameter's name keeps two parameters of one view apart.
+The carrier is a [`Carrier` node](../../../lattice/src/types/vocabulary.md)
+keyed on the view's content — its operator and application over the source's
+digest, the one `ModuleContent` the view is tied with — and the parameter's
+name keeps two parameters of one view apart.
 
 The view carries a signature of its own — each head parameter a manifest member
 at what `to` gives it, every manifest member, value slot and keyworded member at

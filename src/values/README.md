@@ -30,9 +30,10 @@ closes it with a sixteen-byte `(knot, index)` member, so the word stays at 24
 bytes. `values` states what it asks of `X` as a trait pair
 ([values.rs](../values.rs)): per value, `Knotted` — a `Copy` type whose
 equality is node identity, with its memoized type handle, its knot's weight,
-the fellow member an edge of its own knot names, and what the node holds; per
-family, `KnottedFamily` — the member at each region lifetime, and the copy of
-its knot from one to another. The parameter defaults to the uninhabited
+the fellow member an edge of its own knot names, what the node holds, and the
+values its knot holds beside the knot's digest over theirs (`held` and
+`digest_held`); per family, `KnottedFamily` — the member at each region
+lifetime, and the copy of its knot from one to another. The parameter defaults to the uninhabited
 `Nothing`, whose family is `NoKnot`, so a value spelled without it holds no
 knot member and every arm that builds one is unreachable. Every container, the
 working expression, and every door and relation over them carry the same
@@ -405,39 +406,53 @@ their names' text.
 
 A value's **content digest** ([digest.rs](digest.rs)) identifies it for the
 life of the loaded program by what it holds, never by where it sits: two values
-of equal content digest alike wherever they were built, and a copy keeps its
-digest. It is what a [carrier](../knot/module/README.md#the-view-door) is keyed
-on, per the [module design](../../design/modules.md#a-module-is-its-content).
-A digest is the low 128 bits of a BLAKE3 hash over one recipe: a domain tag,
-the value's own scalar payload, then its parts' digests.
+of equal content digest alike wherever they were built. It is what a
+[carrier](../knot/module/README.md#the-view-door) is keyed on, per the
+[module design](../../design/modules.md#a-module-is-its-content). A digest is
+the low 128 bits of a BLAKE3 hash over one recipe: a domain tag, the value's
+own scalar payload, then its parts' digests.
+
+A value digests as what [the door](#views) shows of it at the type it is seen
+at, exactly as the [deep copy](#crossing) lays it down, so a copy digests as its
+source and a cell its type hides counts for nothing:
 
 - A scalar digests from its payload: a number from its bits, a bool, `null`, a
   string length-prefixed, a type value from its handle.
-- A list, dict, record or tagged value digests its kind, its carried type's
-  handle and its contents — a list its cells in order, a dict each key and cell
-  in key order, a record each field's name and cell in symbol order, so field
-  order is blind, and a tagged value its payload. A retype therefore changes
-  the digest.
-- A [knot member](../knot/README.md#what-a-knot-member-is) digests as its knot
-  beside its index there, the knot over each node's content in index order with
-  an edge to a sibling hashed as its index, so values that reach one another —
-  closures that call one another, a ring of containers — digest as the one knot
-  they are tied into.
+- A list, dict, record or tagged value, and a data node seen at a type other
+  than its memo, digests its kind, its seen type's handle and the contents the
+  door shows, each part at its type there — a list its elements in order, a
+  dict each key and cell in key order, a record each shown field's name and
+  cell in symbol order, so field order is blind, and a tagged value its payload
+  at its representation. The seen type is part of the recipe, so a retype
+  changes the digest even where it hides nothing.
+- A [knot member](../knot/README.md#what-a-knot-member-is) seen at its own memo
+  digests as its knot beside its index there: the knot over each node's content
+  in index order, a data node read through the door at its memo and an edge to
+  a sibling hashed as its index, so values that reach one another — closures
+  that call one another, a ring of containers — digest as the one knot they are
+  tied into. The layer above says what a node's content is: a member
+  [lists](../knot/README.md#content) the values its knot holds and hashes the
+  knot over their digests.
 
-The digest covers the carried type and every cell, hidden ones included, so two
-values no reader can tell apart may digest apart. That over-distinction is
-sound: keying two equal things apart costs only a key.
+Inside a knot each node is digested at its own memo, so a cell a tagged node's
+representation hides still counts there, as a copy of the knot keeps it. That
+over-distinction is sound: keying two equal things apart costs only a key.
 
 **A digest is computed on demand**, never stored on a value: only a view asks
 for one, so a value no view reaches never pays for it. A demand walks what the
-value reaches through one `Digests` memo, keyed by the address of the resident
-each part sits in, so a part shared many times over is digested once per
-demand. A module is the one value whose content is digested where it is born
-([birth](../knot/module/README.md#birth)), since it keeps no captures to digest
-later.
+value reaches through one `Digests` memo over the demand's scratch, keyed by
+the resident each part sits in and the type it is seen at — one node seen at
+two types shows two surfaces — and by its root for a knot, so a part shared
+many times over, and a knot met through any of its members, is digested once
+per demand. The walk runs over an explicit stack, as the copy does: a composite
+is a frame over the parts its surface shows and a knot member a frame over the
+values its knot holds, so neither a value's depth nor a chain of knots grows the
+call stack. A module is the one value whose content is digested where it is
+born ([birth](../knot/module/README.md#birth)), since it keeps no captures to
+digest later.
 
-The load computes the digest a literal lowers to without laying it down
-(`literal_digest`), which a property test holds equal to the lowered value's.
+A literal inside a body's [code digest](../scope/README.md#resolution) is
+hashed as syntax, not as the value it lowers to.
 
 ## Equality and rendering
 
@@ -581,8 +596,8 @@ rule and the seal ([tests/construction.rs](tests/construction.rs)), bisimilar an
 two members of one ring crossing as one copy of it, and a copy laying down only
 what each part's seen type shows ([tests/crossing.rs](tests/crossing.rs)), `satisfies` by a node's memo
 ([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
-hundred thousand deep rendered, compared and crossed on the default test
-thread ([tests/depth.rs](tests/depth.rs)). One test joins the koan
+hundred thousand deep rendered, compared, crossed and digested on the default
+test thread ([tests/depth.rs](tests/depth.rs)). One test joins the koan
 [Miri slate](../../observe/miri_slate.md): `a_copied_list_outlives_its_home`,
 the one path only `values` drives — a deep copy laying down strings, a list and
 a dict whose string keys are written inside its key run's `fill`, read after
@@ -590,9 +605,10 @@ the region it was copied from is released. The pinned and kept paths it would
 otherwise pair with are `cellgraph`'s own slate.
 
 The digest recipe is [tests/digest.rs](tests/digest.rs): equal content alike
-across cells, key order and field-order blindness, a retype and a hidden cell
-counting, a shared part digested once per demand, and a literal digesting as
-the value it lowers to.
+across cells, key order and field-order blindness, a retype changing the digest
+while a hidden cell counts for nothing, each of the copy's four narrowing paths
+digesting as its source, and a shared part digested once per demand; a chain of
+knots as deep as the chain of newtypes digests beside it.
 
 ## Open work
 

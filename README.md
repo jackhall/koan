@@ -203,8 +203,8 @@ src/
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
 │   ├── equality.rs       Value::equals — structural equality, each side at the type it is seen at, containers gated on related seen types, a bisimulation over knot members — a function by its identity and captures, a quote by its syntax and bindings — Incomparable when a module or a barrier is reached
 │   ├── render.rs         Value::render — the surface PRINT writes, a mark pass then a write pass labelling where a cycle closes
-│   ├── digest.rs         ContentDigest / Digests — a value's content digest, computed on demand through one memo per demand: the hasher, its domain tags and the recipe
-│   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value, and literal_digest, the digest of the value a literal lowers to
+│   ├── digest.rs         ContentDigest / Digests — a value's content digest, computed on demand as a walk through the door over an explicit stack, one memo per demand: the hasher, its domain tags and the recipe
+│   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value
 ├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles where the program loads and, for what the load leaves unknown, through the activation they are read in
 ├── elaborate/
 │   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names, Union.Tag

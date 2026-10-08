@@ -29,9 +29,9 @@ use super::schema::SigSchema;
 use super::shape::DeferredReturnSurface;
 use super::unify::Interval;
 
-/// An opaque identity a carrier is keyed on: what a module layer computes from the content an
-/// opaque view hides — its source module, its signature application — and the lattice never
-/// interprets. Two carriers of one name and met bound under one key are one type.
+/// An opaque identity a carrier is keyed on: what a module layer computes from an opaque view's
+/// own content — its operator and signature application over its source module's digest — and
+/// the lattice never interprets. Two carriers of one name and met bound under one key are one type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ContentKey(pub u128);
 

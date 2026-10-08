@@ -91,10 +91,11 @@ are two variables, and a call may solve one to `Number` and the other to
   beat each other in a cycle eliminate each other, and no candidate survives a
   call that all three admit.
 
-An opaque carrier is a concrete type whose bound the order never reads: it lies
-under itself, a union holding it and `Any` alone. Reading it through the bound
-its source met would put a sealed value under that bound outside its view, and
-reduce `Carrier | Number` to `Number`.
+An opaque carrier is an atom of the order, a concrete type and no variable: it
+lies under itself, a union holding it and `Any` alone, and above only itself
+and `Never`. Reading it through the bound its source met would put a sealed
+value under that bound outside its view, and reduce `Carrier | Number` to
+`Number`.
 
 **What enforces it.** `the_order_is_reflexive_and_bounded`,
 `the_order_is_antisymmetric`, `the_order_is_transitive` and
@@ -210,7 +211,12 @@ was declared first and drop the other's registration; a union canonicalized by
 fit `#[(VAL zero :Number)]`, while the view, whose carrier lies under `Any`
 alone, does not: a module passed as a `Counter` would reach a slot its own
 signature refuses. So a bound is read only where an asked head parameter's
-bound is checked, for a carrier and an offered unknown alike.
+bound is checked, for a carrier and an offered unknown alike — and there as
+the upper end of an interval, by variance. Were the carrier read as its bound
+at a contravariant position too, a view offering `k :(FN (x :Carrier) -> Null)`
+would fit a signature asking `k` at `(FN (x :Number) -> Null)`, and a caller
+holding it as that signature would pass a bare `5` to a function that accepts
+only values sealed under the view.
 
 **What enforces it.** `fits_is_reflexive`, `fits_is_transitive`,
 `fits_is_transitive_through_a_bounded_head_parameter`,

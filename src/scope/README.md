@@ -204,7 +204,9 @@ the module is outer, as anywhere.
 ([digest.rs](shape/build/digest.rs)), nested shapes first, into the content
 digest a closure's or a module's [content](../values/README.md#content-digests)
 composes: its kind, its parameter layout and each statement part by part. A
-keyword hashes its symbol and a literal its value's digest; a name hashes its
+keyword hashes its symbol and a literal its syntax — a scalar's payload, a
+container literal's parts, a record literal's fields in symbol order; a name
+hashes its
 resolution — a builtin by its index, a local slot by its hops and slot, a read
 of the program's top level by the binding it reads, any other capture by its
 hops and capture slot — and a keyworded use its key and each candidate's

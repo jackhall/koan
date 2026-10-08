@@ -14,9 +14,10 @@ takes parametric types and schemes, and solves: a quantified binder fits
 another when some instantiation of its group puts the instance under the other,
 and a module's signature fits a declared one when its members do. It holds the
 **rigid rule**: a variable lies under its bound and everything above it, and
-above only itself, `Never` and its lower end. An opaque carrier is the
-exception at its top: it reveals no bound outside its view, so above it lie
-only itself, a union holding it, and `Any`. *Fits* contains the order and is
+above only itself, `Never` and its lower end. An opaque carrier is no
+variable but an atom: it reveals no bound outside its view, so above it lie
+only itself, a union holding it, and `Any`, and below it only itself and
+`Never`. *Fits* contains the order and is
 reflexive and transitive, but two handles may fit each other, so nothing is
 built from it. `satisfied_by` is *fits* read from a slot's side. Each relation
 records its verdict under its own `Relation`, by handle pair, so a caller
@@ -124,13 +125,17 @@ carrier, and the offered side's rigid unknown for its own unpinned parameter.
 Under `SIG Counter FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]`,
 `Counter` offers no `Number`, and does not fit `#[(VAL zero :Number)]`. The
 one place either reads a bound is the check of a solved head parameter against
-the asked one's bound ([`Collector::heads`](unify.rs)): there a carrier reads
-as the bound its view's source met and an offered unknown as the bound it was
-declared under, so a view fits the signature it was ascribed to, and `Counter`
-fits `SIG FOR ALL #{Width: Number} = #[(VAL zero :Width)]`. A `FOR ALL` bound,
-which its body reads, takes neither. Reading the bound anywhere else would
-break transitivity: a view of `Counter` fits `Counter`, but its carrier lies
-under no `Number`.
+the asked one's bound ([`Collector::heads`](unify.rs)), and there each reads
+as an interval, from itself up to the bound it met — a carrier's its view's
+source's, an offered unknown's the one it was declared under — taken from
+above by variance: the met bound at a covariant position, the carrier or
+unknown itself at a contravariant one. So a view fits the signature it was
+ascribed to, `Counter` fits `SIG FOR ALL #{Width: Number} = #[(VAL zero :Width)]`,
+and a view offering `k :(FN (x :Carrier) -> Null)`, which accepts only sealed
+values, does not fit one asking `k` at a bound of `(FN (x :Number) -> Null)`. A
+`FOR ALL` bound, which its body reads, takes neither. Reading the bound
+anywhere else would break transitivity: a view of `Counter` fits `Counter`, but
+its carrier lies under no `Number`.
 
 For each asked keyworded member, one offered overload at its key contributes,
 each tried in turn: pooling a key's overloads would make *fits* not transitive.
