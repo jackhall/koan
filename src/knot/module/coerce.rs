@@ -180,11 +180,11 @@ pub fn coerce<'graph, 'cell>(
         // its one tagged layer, the barrier checking it is one and the value fits the source side —
         // a view, a view of a view, or a crossing inwards to a barrier stacked behind; where only
         // the source side is, a value sealed under it gives up its payload at the view's type.
-        TypeNode::Parameter { carrier: None, .. } => {
+        TypeNode::Parameter { .. } => {
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
-            if carrier(cx.types, dst) {
+            if cx.types.is_carrier(dst) {
                 return Tagged::seal(cx.writer, value, dst, src, cx.types, cx.scratch)
                     .map(Value::Tagged)
                     .map_err(CoercionRefused::Seal);
@@ -349,17 +349,6 @@ pub fn coerce<'graph, 'cell>(
         }
         _ => Err(unsupported),
     }
-}
-
-/// Whether `handle` is a carrier an opaque view hides a head parameter behind.
-fn carrier(types: &TypeRegistry<'_>, handle: KType) -> bool {
-    matches!(
-        types.node(handle),
-        TypeNode::Parameter {
-            carrier: Some(_),
-            ..
-        }
-    )
 }
 
 /// What the barrier `barrier` reads its declared type under: the source module's bindings and the

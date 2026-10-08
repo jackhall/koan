@@ -154,7 +154,6 @@ fn a_signature_declares_its_parameters_and_manifest_members() {
                     program.types.node(rigid),
                     TypeNode::Parameter {
                         bound: KType::ANY,
-                        carrier: None,
                         ..
                     }
                 ),

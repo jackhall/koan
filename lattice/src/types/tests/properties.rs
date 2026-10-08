@@ -46,9 +46,9 @@ use crate::types::{lattice, order};
 use super::generators::{
     Groups, Vocabulary, World, arb_any, arb_any_with, arb_argument_pair, arb_arguments,
     arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain, arb_function_type,
-    arb_instance_chain, arb_opaque, arb_ordered_pair, arb_over_head_parameter, arb_own_instance,
-    arb_rigid, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature, arb_signature_type,
-    arb_wanted_instance,
+    arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair, arb_over_head_parameter,
+    arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
+    arb_signature_type, arb_wanted_instance,
 };
 
 thread_local! {
@@ -245,7 +245,7 @@ proptest! {
     #[test]
     fn below_a_rigid_variable_fit_itself_and_what_fits_its_lower_end(
         a in one(),
-        b in arb_rigid(world()),
+        b in arb_lexical(world()),
         same in any::<bool>(),
     ) {
         let types = registry();
@@ -319,8 +319,10 @@ proptest! {
     #![proptest_config(binary())]
 
     /// The chains [`fits_is_transitive`] never draws: an opaque view's signature, a signature over
-    /// a head parameter bounded as its carrier's source was, and a signature over another bound or
-    /// a ground slot. A hidden bound read anywhere but a head's fit breaks the chain.
+    /// a head parameter bounded as its carrier's source was, and a signature over another bound, a
+    /// ground slot, or a parameter bounded by the slot's type, each slot holding the variable at a
+    /// covariant or a contravariant position. A hidden bound read anywhere but a head's fit, or read
+    /// there at a contravariant position, breaks the chain.
     #[test]
     fn fits_is_transitive_through_a_bounded_head_parameter(
         (a, b, c) in arb_bounded_head_chain(world()),
@@ -518,9 +520,9 @@ proptest! {
         prop_assert_eq!(types.intern(scratch, types.node(b)), b);
     }
 
-    /// The two probe flags interning stores beside a node answer what a walk over the type would:
-    /// a free quantifier reachable without crossing a shape's binder, and any rigid variable
-    /// reachable at all.
+    /// The probe flags interning stores beside a node answer what a walk over the type would: a free
+    /// quantifier reachable without crossing a shape's binder, any rigid variable reachable at all,
+    /// anything parametric, and an opaque carrier.
     #[test]
     fn the_probe_flags_are_their_walks(declared in one()) {
         let types = registry();
@@ -539,18 +541,24 @@ proptest! {
             | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
-        // A quantified binder is parametric itself, as is every variable but an opaque carrier;
-        // a signature and a sealed member are leaves to the walk.
+        // A quantified binder is parametric itself, as is every variable; a signature and a sealed
+        // member are leaves to the walk.
         let parametric = visit(&types, scratch, a, &mut |_, node, _| match node {
             _ if node.binds_quantifiers() => Visit::Stop,
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
-            | TypeNode::Parameter { carrier: None, .. } => Visit::Stop,
+            | TypeNode::Parameter { .. } => Visit::Stop,
+            _ => Visit::Descend,
+        });
+        // An opaque carrier is concrete, and no variable.
+        let carrier = visit(&types, scratch, a, &mut |_, node, _| match node {
+            TypeNode::Carrier { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
         prop_assert_eq!(types.contains_quantified(a), quantified);
         prop_assert_eq!(types.contains_rigid(a), rigid);
         prop_assert_eq!(types.is_concrete(a), !parametric);
+        prop_assert_eq!(types.contains_carrier(a), carrier);
         // The checked conversion agrees: a scheme is never concrete, and a type is where no
         // variable is reachable from it.
         let concrete = match declared {
@@ -627,8 +635,8 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let below = read_through(&types, scratch, a, Side::Below, &mut |variable| {
-            Some(variable.interval().raw())
+        let below = read_through(&types, scratch, a, Side::Below, &mut |_, node| {
+            Some(Variable::of(node)?.interval().raw())
         });
         let above = bound_above(&types, scratch, a);
         prop_assert!(order::fits(&types, scratch, below, above));
@@ -892,9 +900,15 @@ proptest! {
         prop_assert_eq!(admitted, order::satisfied_by(&types, scratch, a, b));
     }
 
+    /// A carrier is an atom: it lies under itself, a union holding it and `Any`, and above only
+    /// itself and `Never`, in the order and in *fits* alike.
     #[test]
-    fn a_carrier_lies_under_any_alone(a in concrete(), carrier in arb_opaque(world())) {
-        let (a, carrier) = (a.raw(), carrier.raw());
+    fn a_carrier_lies_under_any_alone(
+        a in concrete(),
+        b in one(),
+        carrier in arb_opaque(world()),
+    ) {
+        let (a, b, carrier) = (a.raw(), b.raw(), carrier.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -902,10 +916,13 @@ proptest! {
             || a == Handle::ANY
             || matches!(types.node(a), TypeNode::Union { members } if members.contains(&carrier));
         prop_assert_eq!(order::is_subtype_of(&types, scratch, carrier, a), holding);
+        let atom = |x: Handle| x == carrier || x == Handle::NEVER;
+        prop_assert_eq!(order::is_subtype_of(&types, scratch, a, carrier), atom(a));
+        prop_assert_eq!(order::fits(&types, scratch, b, carrier), atom(b));
     }
 
     #[test]
-    fn a_carried_variable_is_admitted_where_its_bound_is(a in one(), b in arb_rigid(world())) {
+    fn a_carried_variable_is_admitted_where_its_bound_is(a in one(), b in arb_lexical(world())) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
@@ -1116,7 +1133,7 @@ fn instance(
         scratch,
         kt,
         Side::Above,
-        &mut |variable| match variable {
+        &mut |_, node| match Variable::of(node)? {
             Variable::Lexical {
                 level,
                 lower,

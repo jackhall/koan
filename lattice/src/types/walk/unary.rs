@@ -257,6 +257,8 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(Handle, bool)) {
         | TypeNode::OfKind(_)
         | TypeNode::DeferredReturn(_)
         | TypeNode::Sibling(_)
+        // A carrier's met bound is payload, read by a signature's fit alone.
+        | TypeNode::Carrier { .. }
         | TypeNode::Signature { .. }
         | TypeNode::SetMember { .. } => {}
         TypeNode::List { element } => out(element, false),
@@ -366,7 +368,7 @@ fn reassemble(
         TypeNode::Lexical { level, name, .. } => types
             .lexical_between(scratch, level, name, wrap(new[0]), wrap(new[1]))
             .raw(),
-        TypeNode::Parameter { name, carrier, .. } => types.parameter(name, wrap(new[0]), carrier),
+        TypeNode::Parameter { name, .. } => types.parameter(name, wrap(new[0])),
         TypeNode::SignatureApply { signature, pins } => {
             let mut values = new.iter();
             let pins = map_fields(scratch, pins.raw(), |_| {

@@ -141,7 +141,7 @@ fn a_type_reads_through_intervals_by_variance() {
     let number_or_str = world.union(&[KType::NUMBER.raw(), KType::STR.raw()]);
     let f = world.function("y", elt, elt);
     let read = |side| {
-        read_through(&world.types, world.region, f, side, &mut |_| {
+        read_through(&world.types, world.region, f, side, &mut |_, _| {
             Some(Interval {
                 lower: KType::NUMBER.raw(),
                 upper: number_or_str,

@@ -345,7 +345,7 @@ struct Offered<'run, 's> {
     keyworded: BumpVec<'s, Handle>,
     operators: BumpVec<'s, DeclaredGroup<'run>>,
     /// Each unpinned parameter's stand-in, beside the bound it was declared under.
-    declared: BumpVec<'s, (Handle, KType)>,
+    declared: &'s [(Handle, KType)],
 }
 
 impl<'run, 's> Offered<'run, 's> {
@@ -355,8 +355,9 @@ impl<'run, 's> Offered<'run, 's> {
             values: BumpVec::new_in(scratch),
             keyworded: BumpVec::new_in(scratch),
             operators: BumpVec::new_in(scratch),
-            declared: BumpVec::new_in(scratch),
+            declared: &[],
         };
+        let mut declared = BumpVec::new_in(scratch);
         let set = applications(types, scratch, offered).expect("fits offers a signature type");
         for (k, application) in set.iter().enumerate() {
             let schema = schema_of(types, application.signature);
@@ -365,7 +366,7 @@ impl<'run, 's> Offered<'run, 's> {
                 let read = application.pin(name.symbol()).unwrap_or_else(|| {
                     let stand_in = types.lexical(OFFERED_LEVEL - k, *name, KType::ANY).raw();
                     let bound = parameter_bound(types, parameter.raw());
-                    pool.declared.push((stand_in, bound));
+                    declared.push((stand_in, bound));
                     stand_in
                 });
                 (*name, read)
@@ -389,6 +390,7 @@ impl<'run, 's> Offered<'run, 's> {
                 .extend(schema.keyworded.iter().map(|kt| read(kt.raw())));
             pool.operators.extend_from_slice(schema.operators);
         }
+        pool.declared = declared.leak();
         pool
     }
 
@@ -483,7 +485,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
                 .iter()
                 .map(|(_, parameter)| parameter_bound(types, *parameter)),
         );
-        let mut collector = Collector::heads(scratch, &bounds, &self.pool.declared);
+        let mut collector = Collector::heads(scratch, &bounds, self.pool.declared);
         // Manifest members and value slots involve no choice, so they contribute first.
         for (name, declared) in self.schema.manifest_members.iter().copied() {
             let Some(got) = self.pool.manifest(name) else {

@@ -94,6 +94,7 @@ const TAG_LEXICAL: u8 = 0x2C;
 const TAG_PARAMETER: u8 = 0x2D;
 const TAG_SIGNATURE_APPLY: u8 = 0x2E;
 const TAG_SIGNATURE_MEET: u8 = 0x2F;
+const TAG_CARRIER: u8 = 0x30;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -199,11 +200,8 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::CodeNeeding { kind, names } => code_needing_digest(*kind, names),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
-        TypeNode::Parameter {
-            name,
-            bound,
-            carrier,
-        } => parameter_digest(*name, *bound, *carrier),
+        TypeNode::Parameter { name, bound } => parameter_digest(*name, *bound),
+        TypeNode::Carrier { name, key, met } => carrier_digest(*name, *key, *met),
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(scratch, fields.raw()),
@@ -273,23 +271,22 @@ pub(super) fn sibling_digest(index: usize) -> TypeDigest {
     DigestHasher::new(TAG_SET_LOCAL).count(index).finish()
 }
 
-/// A named rigid variable's identity fields: a carrier's key first, then the name and the variable's
-/// bound.
-pub(super) fn parameter_digest(
-    name: TypeSymbol,
-    bound: KType,
-    carrier: Option<ContentKey>,
-) -> TypeDigest {
-    let mut h = DigestHasher::new(TAG_PARAMETER);
-    match carrier {
-        Some(key) => {
-            h.byte(1).key(key);
-        }
-        None => {
-            h.byte(0);
-        }
-    }
-    h.symbol(name.symbol()).digest(bound.digest()).finish()
+/// A head parameter's identity fields: its name, then its bound.
+pub(super) fn parameter_digest(name: TypeSymbol, bound: KType) -> TypeDigest {
+    DigestHasher::new(TAG_PARAMETER)
+        .symbol(name.symbol())
+        .digest(bound.digest())
+        .finish()
+}
+
+/// An opaque view's carrier: the key it is minted under first, then its name and the bound its
+/// view's source met.
+pub(super) fn carrier_digest(name: TypeSymbol, key: ContentKey, met: KType) -> TypeDigest {
+    DigestHasher::new(TAG_CARRIER)
+        .key(key)
+        .symbol(name.symbol())
+        .digest(met.digest())
+        .finish()
 }
 
 /// An application of a declared signature: the signature's digest, then its pins as an order-blind

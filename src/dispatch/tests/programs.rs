@@ -630,7 +630,7 @@ fn a_signature_prints_its_head_parameters_and_a_meet_its_applications() {
     assert_eq!(
         run(source),
         "SIG FOR ALL #{Size: Number} (size: Size)\n\
-         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Number}) & \
-         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Str})"
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Str}) & \
+         (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Number})"
     );
 }

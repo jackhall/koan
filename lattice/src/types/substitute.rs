@@ -118,7 +118,7 @@ pub(super) fn instantiate_quantified<B: TypeHandle>(
 }
 
 /// `kt` with every rigid variable reachable from it replaced by its bound — the
-/// variable-free type it constrains to.
+/// variable-free type it constrains to. An opaque carrier is concrete, so it is kept.
 ///
 /// A bound is itself variable-free, so one pass reaches a fixed point. What a caller minting a
 /// *bound* out of an arbitrary type runs it through, since the two doors that take one require it.
@@ -136,7 +136,8 @@ pub(super) fn erase_rigid(
 /// a `Parameter` — read as the extreme that puts the result above every instance within the
 /// variables' ends: its bound at a covariant position, its lower end at a contravariant one. The
 /// variable-free type a load-time type is compared through where the run may bind its variables to
-/// anything under their bounds. A signature is opaque, as [`TypeRegistry::contains_rigid`] reads it.
+/// anything under their bounds. A signature is opaque, as [`TypeRegistry::contains_rigid`] reads it,
+/// and an opaque carrier is concrete, so it is kept.
 ///
 /// [`erase_rigid`] reads a variable as its bound everywhere, which at a contravariant position puts
 /// the result *below* an instance whose variable is bound lower.
@@ -145,40 +146,9 @@ pub(super) fn bound_above(
     scratch: BumpAllocator<'_>,
     kt: Handle,
 ) -> Handle {
-    read_through(types, scratch, kt, Side::Above, &mut |variable| {
-        Some(variable.interval().raw())
+    read_through(types, scratch, kt, Side::Above, &mut |_, node| {
+        Some(Variable::of(node)?.interval().raw())
     })
-}
-
-/// `kt` with each opaque carrier read as the bound its view's source met, and each of `offered`
-/// as the bound beside it: what a signature's fit checks a head parameter's bound against
-/// ([`Collector::heads`](super::unify::Collector::heads)).
-pub(super) fn as_met(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    kt: Handle,
-    offered: &[(Handle, KType)],
-) -> Handle {
-    if !types.contains_rigid(kt) {
-        return kt;
-    }
-    rebuild(
-        types,
-        scratch,
-        kt,
-        CANONICAL,
-        &mut |at, node, _| match *node {
-            TypeNode::Parameter {
-                bound,
-                carrier: Some(_),
-                ..
-            } => Some(bound.raw()),
-            _ => offered
-                .iter()
-                .find(|(held, _)| *held == at)
-                .map(|(_, bound)| bound.raw()),
-        },
-    )
 }
 
 /// Which extreme a read through intervals takes.
@@ -193,28 +163,36 @@ pub enum Side {
 }
 
 /// `kt` read through intervals: each free variable — a `Quantified` under none of `kt`'s own
-/// binders, a lexical variable, a `Parameter` — that `interval` answers for replaced by the end
-/// `side` takes at its position; one it answers `None` for is kept. A signature is opaque.
+/// binders, a lexical variable, a `Parameter` — and each opaque carrier that `interval` answers for
+/// replaced by the end `side` takes at its position; one it answers `None` for is kept. A signature
+/// is opaque.
+///
+/// `interval` is handed the node and its handle, so a reader can answer with the handle itself as
+/// an end. A carrier is concrete, and only a signature's fit reads one so, as an interval up to the
+/// bound its view's source met ([`Collector::heads`](super::unify::Collector::heads)); every other
+/// reader answers `None` for it.
 pub(super) fn read_through(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     kt: Handle,
     side: Side,
-    interval: &mut impl FnMut(Variable) -> Option<Interval<Handle>>,
+    interval: &mut impl FnMut(Handle, &TypeNode<'_>) -> Option<Interval<Handle>>,
 ) -> Handle {
-    if !types.contains_rigid(kt) {
+    if !types.contains_rigid(kt) && !types.contains_carrier(kt) {
         return kt;
     }
-    rebuild(types, scratch, kt, CANONICAL, &mut |_, node, context| {
+    rebuild(types, scratch, kt, CANONICAL, &mut |at, node, context| {
         let free = match *node {
             TypeNode::Quantified { .. } => context.binder_depth() == 0,
-            TypeNode::Lexical { .. } | TypeNode::Parameter { .. } => true,
+            TypeNode::Lexical { .. } | TypeNode::Parameter { .. } | TypeNode::Carrier { .. } => {
+                true
+            }
             _ => false,
         };
         if !free {
             return None;
         }
-        let ends = interval(Variable::of(node)?)?;
+        let ends = interval(at, node)?;
         Some(match (side, context.variance()) {
             (Side::Above, Variance::Co) | (Side::Below, Variance::Contra) => ends.upper,
             _ => ends.lower,
@@ -231,9 +209,9 @@ pub(super) fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: Handle) ->
 /// `kt` with each head parameter `bindings` names replaced by its binding — how a signature's
 /// member types are read under a module's solution, a view's mints or an application's pins.
 ///
-/// A parameter is matched by name, and only a carrier-free one: a carrier `Parameter` is an opaque
-/// view's mint, which no declaration names. A `Signature` node is opaque — its own parameters are
-/// its own, and a declared signature is closed — so the walk reaches only an application's pins.
+/// A parameter is matched by name; an opaque view's carrier is a node of its own, which no
+/// declaration names. A `Signature` node is opaque — its own parameters are its own, and a declared
+/// signature is closed — so the walk reaches only an application's pins.
 pub(super) fn substitute_parameters<B: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -249,11 +227,7 @@ pub(super) fn substitute_parameters<B: TypeHandle>(
         kt,
         CANONICAL,
         &mut |_, node, _| match *node {
-            TypeNode::Parameter {
-                name,
-                carrier: None,
-                ..
-            } => member(bindings, name).map(TypeHandle::raw),
+            TypeNode::Parameter { name, .. } => member(bindings, name).map(TypeHandle::raw),
             _ => None,
         },
     )

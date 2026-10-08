@@ -31,7 +31,7 @@ use super::unify::Interval;
 
 /// An opaque identity a carrier is keyed on: what a module layer computes from the content an
 /// opaque view hides — its source module, its signature application — and the lattice never
-/// interprets. Two carriers of one name and bound under one key are one type.
+/// interprets. Two carriers of one name and met bound under one key are one type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ContentKey(pub u128);
 
@@ -96,10 +96,8 @@ pub enum TypeNode<'run, H = Handle> {
     /// Type-accepting argument slot, carrying the shallow [`KKind`] it admits — and the type a
     /// non-signature type value reports (`OfKind(ProperType)`).
     OfKind(KKind),
-    /// A **named rigid variable**: a signature's head parameter (no `carrier`), or the carrier an
-    /// opaque `:|` view hides one behind, keyed on content the lattice never interprets (a
-    /// [`ContentKey`]: two views of equal content share one carrier, two of different content
-    /// never unify). `bound` is what bounds it, [`KType::ANY`] unless declared.
+    /// A **named rigid variable**: a signature's head parameter. `bound` is what bounds it,
+    /// [`KType::ANY`] unless declared.
     ///
     /// Named where [`Self::Quantified`] is positional: a parameter is substituted by name within
     /// its own signature, and `WITH` pins it by name. The three rigid variables — this,
@@ -110,7 +108,22 @@ pub enum TypeNode<'run, H = Handle> {
     Parameter {
         name: TypeSymbol,
         bound: KType,
-        carrier: Option<ContentKey>,
+    },
+    /// The **carrier** an opaque `:|` view hides a head parameter `name` behind, keyed on content
+    /// the lattice never interprets (a [`ContentKey`]: two views of equal content share one
+    /// carrier, two of different content never unify). A value carries it, so it is concrete, and
+    /// the order treats it as an atom: under itself, a union holding it and `Any`; above itself
+    /// and `Never`.
+    ///
+    /// `met` is the bound the view's source met. Outside its view a carrier reveals none, and only
+    /// a signature's fit reads it, where a head parameter's bound is checked
+    /// ([`Collector::heads`](super::unify::Collector::heads)). It is payload, not a child.
+    ///
+    /// Every field is identity.
+    Carrier {
+        name: TypeSymbol,
+        key: ContentKey,
+        met: KType,
     },
     /// `List<element>`. Bare `List` lowers to `List<Any>`.
     List {
@@ -307,6 +320,7 @@ impl<'run, H> TypeNode<'run, H> {
             | TypeNode::OfKind(_)
             | TypeNode::CodeNeeding { .. }
             | TypeNode::Parameter { .. }
+            | TypeNode::Carrier { .. }
             | TypeNode::SetMember { .. }
             | TypeNode::Signature { .. }
             | TypeNode::List { .. }
@@ -361,14 +375,8 @@ pub enum Variable {
         lower: KType,
         bound: KType,
     },
-    /// A signature's head parameter, or with a `carrier` key an opaque view's carrier. A carrier's
-    /// `bound` is the one its view's source met, which only a signature's fit reads
-    /// ([`Collector::heads`](super::unify::Collector::heads)); as a variable it is bounded by `Any`.
-    Parameter {
-        name: TypeSymbol,
-        bound: KType,
-        carrier: Option<ContentKey>,
-    },
+    /// A signature's head parameter.
+    Parameter { name: TypeSymbol, bound: KType },
 }
 
 impl Variable {
@@ -387,25 +395,14 @@ impl Variable {
                 lower,
                 bound,
             },
-            TypeNode::Parameter {
-                name,
-                bound,
-                carrier,
-            } => Variable::Parameter {
-                name,
-                bound,
-                carrier,
-            },
+            TypeNode::Parameter { name, bound } => Variable::Parameter { name, bound },
             _ => return None,
         })
     }
 
-    /// The variable's bound. A carrier reveals none outside its view, so it lies under `Any` alone.
+    /// The variable's bound.
     pub fn bound(self) -> KType {
         match self {
-            Variable::Parameter {
-                carrier: Some(_), ..
-            } => KType::ANY,
             Variable::Quantified { bound, .. }
             | Variable::Lexical { bound, .. }
             | Variable::Parameter { bound, .. } => bound,
@@ -458,15 +455,8 @@ impl<'run, H: TypeHandle> TypeNode<'run, H> {
             TypeNode::CodeNeeding { kind, names } => TypeNode::CodeNeeding { kind, names },
             TypeNode::Never => TypeNode::Never,
             TypeNode::OfKind(kind) => TypeNode::OfKind(kind),
-            TypeNode::Parameter {
-                name,
-                bound,
-                carrier,
-            } => TypeNode::Parameter {
-                name,
-                bound,
-                carrier,
-            },
+            TypeNode::Parameter { name, bound } => TypeNode::Parameter { name, bound },
+            TypeNode::Carrier { name, key, met } => TypeNode::Carrier { name, key, met },
             TypeNode::List { element } => TypeNode::List {
                 element: child(element),
             },

@@ -10,7 +10,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::types::digest::node_digest;
 use crate::types::handle::{Handle, KType, TypeHandle, builtin_types};
 use crate::types::kind::KKind;
-use crate::types::node::{NodeSchema, TypeNode};
+use crate::types::node::{ContentKey, NodeSchema, TypeNode};
 use crate::types::record::Record;
 use crate::types::registry::TypeRegistry;
 use crate::types::render::display_name;
@@ -209,7 +209,11 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::Parameter {
             name,
             bound: KType::ANY,
-            carrier: None,
+        },
+        TypeNode::Carrier {
+            name,
+            key: ContentKey(0),
+            met: KType::ANY,
         },
         TypeNode::List {
             element: KType::NUMBER.raw(),
@@ -303,6 +307,7 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::Never => "Never",
             TypeNode::OfKind(_) => "OfKind",
             TypeNode::Parameter { .. } => "Parameter",
+            TypeNode::Carrier { .. } => "Carrier",
             TypeNode::List { .. } => "List",
             TypeNode::Dict { .. } => "Dict",
             TypeNode::Record { .. } => "Record",

@@ -87,13 +87,7 @@ fn an_opaque_view_keys_its_carrier_on_content() {
             let (first, second) = (opaque("m"), opaque("m"));
             let key = carrier(first);
             assert!(
-                matches!(
-                    types.node(key),
-                    TypeNode::Parameter {
-                        carrier: Some(_),
-                        ..
-                    }
-                ),
+                matches!(types.node(key), TypeNode::Carrier { .. }),
                 "an opaque view's carrier is keyed on content"
             );
             assert_ne!(key, KType::NUMBER);
@@ -141,7 +135,7 @@ fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
             };
             assert!(matches!(
                 types.node(carrier.handle()),
-                TypeNode::Parameter { carrier: Some(key), .. } if key == content.carrier_key()
+                TypeNode::Carrier { key, .. } if key == content.carrier_key()
             ));
             assert_ne!(
                 content,
@@ -167,20 +161,14 @@ fn a_carrier_carries_its_parameters_name_and_bound() {
             let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
                 panic!("`Carrier` is a type member");
             };
-            let TypeNode::Parameter {
-                bound,
-                carrier: key,
-                name,
-            } = types.node(carrier.handle())
-            else {
-                panic!("an opaque view's carrier is a parameter");
+            let TypeNode::Carrier { name, met, .. } = types.node(carrier.handle()) else {
+                panic!("an opaque view's carrier is a carrier node");
             };
-            assert!(key.is_some(), "a carrier is keyed on content");
             assert_eq!(BinderSymbol::Type(name), fixture.name("Carrier"));
             assert_eq!(
-                bound,
+                met,
                 KType::ANY,
-                "the parameter declares no bound, so the carrier is bounded by Any"
+                "the parameter declares no bound, so the carrier meets Any"
             );
         })
     });
@@ -300,7 +288,7 @@ MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
                 };
                 assert!(matches!(
                     types.node(carrier.handle()),
-                    TypeNode::Parameter { bound: recorded, .. } if recorded == bound
+                    TypeNode::Carrier { met: recorded, .. } if recorded == bound
                 ));
                 let zero = member(fixture, view, "zero", types, scratch);
                 assert!(!satisfies(bound, &zero, types, scratch), "{name}");

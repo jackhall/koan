@@ -44,7 +44,7 @@ use super::lattice::{join_iter, meet_through_variables};
 use super::node::TypeNode;
 use super::order::fits;
 use super::registry::TypeRegistry;
-use super::substitute::{as_met, bound_above};
+use super::substitute::{Side, bound_above, read_through};
 use super::verdicts::Relation;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
@@ -248,7 +248,7 @@ pub struct Collector<'s, T = Parametric> {
     bound_read: bool,
     /// Where the variables are a signature's head parameters ([`heads`](Self::heads)), the
     /// offered signature's own unpinned parameters, each beside the bound it was declared under.
-    heads: Option<BumpVec<'s, (Handle, KType)>>,
+    heads: Option<&'s [(Handle, KType)]>,
     takes: PhantomData<T>,
 }
 
@@ -269,18 +269,17 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
     /// One empty cell per head parameter of a signature bounded by `bounds` — what a module's fit
     /// collects into. A head parameter's bound decides which modules fit and reveals nothing to a
     /// reader, so what stands for one opaquely lies under `Any` alone: a carrier, and each of
-    /// `offered`, the offered signature's own unpinned parameters. Each still meets a bound here
-    /// where the bound it met — its view's source's, or its declaration's — lies under it. A
-    /// `FOR ALL` bound, which its body reads, takes neither.
+    /// `offered`, the offered signature's own unpinned parameters. Checked against a bound here,
+    /// each reads as an interval from itself up to the bound it met — its view's source's, or its
+    /// declaration's — so it meets the bound through that one at a covariant position and stays
+    /// itself at a contravariant one. A `FOR ALL` bound, which its body reads, takes neither.
     pub(super) fn heads(
         scratch: BumpAllocator<'s>,
         bounds: &[KType],
-        offered: &[(Handle, KType)],
+        offered: &'s [(Handle, KType)],
     ) -> Self {
-        let mut held = BumpVec::with_capacity_in(offered.len(), scratch);
-        held.extend_from_slice(offered);
         Collector {
-            heads: Some(held),
+            heads: Some(offered),
             ..Self::new(scratch, bounds)
         }
     }
@@ -471,8 +470,19 @@ impl<'s, T: TypeHandle> Collector<'s, T> {
         {
             return Err((joined, ceiling));
         }
-        let held = match &self.heads {
-            Some(offered) => as_met(types, scratch, joined, offered),
+        // A head parameter's bound reads a carrier or an offered stand-in from above: its met bound
+        // where it is covariant, itself where it is contravariant.
+        let held = match self.heads {
+            Some(offered) => read_through(types, scratch, joined, Side::Above, &mut |at, node| {
+                let met = match *node {
+                    TypeNode::Carrier { met, .. } => met,
+                    _ => offered.iter().find(|(held, _)| *held == at)?.1,
+                };
+                Some(Interval {
+                    lower: at,
+                    upper: met.raw(),
+                })
+            }),
             None => joined,
         };
         match fits(types, scratch, held, bound) {

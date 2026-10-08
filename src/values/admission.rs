@@ -184,7 +184,7 @@ pub fn solves_identity(types: &TypeRegistry<'_>, head: KType) -> bool {
 /// What sealing a payload under an opaque view's carrier refuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SealRefused {
-    /// The identity is no carrier: no `Parameter` keyed on content.
+    /// The identity is no opaque view's carrier.
     NotACarrier(KType),
     /// The payload's type does not satisfy what the source binds the member to.
     Misfit { carrier: KType, witness: KType },
@@ -205,7 +205,7 @@ pub fn sealing(
     witness: KType,
     payload: DeclaredType<KType>,
 ) -> Result<KType, SealRefused> {
-    if !is_carrier(types, carrier) {
+    if !types.is_carrier(carrier) {
         return Err(SealRefused::NotACarrier(carrier));
     }
     if satisfied_by(types, scratch, witness, payload) {
@@ -213,17 +213,6 @@ pub fn sealing(
     } else {
         Err(SealRefused::Misfit { carrier, witness })
     }
-}
-
-/// Whether `ktype` is a carrier: a head parameter keyed on content.
-fn is_carrier(types: &TypeRegistry<'_>, ktype: KType) -> bool {
-    matches!(
-        types.node(ktype),
-        TypeNode::Parameter {
-            carrier: Some(_),
-            ..
-        }
-    )
 }
 
 /// The type dispatch matches a raw part on, and the one a diagnostic naming the slot renders. `None`
@@ -326,8 +315,8 @@ pub fn record_type<H: TypeHandle>(
 /// admits what any member admits; a family top admits what some concrete type of its family
 /// admits, as a union does; a code kind admits a part whose own code kind lies under it; a kind
 /// slot takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its
-/// bound takes. A function, nominal, signature, shape, constructor-application, deferred or sibling
-/// slot admits no raw part — only a resolved value.
+/// bound takes. A function, nominal, carrier, signature, shape, constructor-application, deferred
+/// or sibling slot admits no raw part — only a resolved value.
 pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
@@ -395,6 +384,7 @@ pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &TypeRegi
         TypeNode::KFunction { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Parameter { .. }
+        | TypeNode::Carrier { .. }
         | TypeNode::Signature { .. }
         | TypeNode::SignatureApply { .. }
         | TypeNode::SignatureMeet { .. }

@@ -9,7 +9,7 @@
 //!
 //! Under `:!` they mean what *fits* solved them to, or what the application pins them to, so the
 //! view's members are the source's own words and the view is a relabelling. Under `:|` each
-//! unpinned one is hidden behind a **carrier keyed on content**: a [`Parameter`](TypeNode::Parameter)
+//! unpinned one is hidden behind a **carrier keyed on content**: a [`Carrier`](TypeNode::Carrier)
 //! keyed on the view's own [content](ModuleContent::carrier_key) — its operator and application
 //! over the source's digest — so two ascriptions of modules of equal content share their carriers
 //! and two of other content never unify, however often either runs. Every member is then born
@@ -250,7 +250,7 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
 }
 
 /// The view's bindings under `:|`: a carrier per head parameter of `sig` that `pins` leaves
-/// unpinned — a [`Parameter`](TypeNode::Parameter) keyed on `key`, under the parameter's name and
+/// unpinned — a [`Carrier`](TypeNode::Carrier) keyed on `key`, under the parameter's name, meeting
 /// the bound the declaration gives it — and each pinned one at what `from` holds for it, its pin.
 fn carriers<'x>(
     sig: &SigSchema<'_>,

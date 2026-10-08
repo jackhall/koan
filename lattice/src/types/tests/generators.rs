@@ -515,7 +515,7 @@ pub fn arb_over_head_parameter(world: World, depth: u32) -> BoxedStrategy<(TypeS
         .boxed()
 }
 
-/// An opaque carrier, named from the type alphabet, over a ground bound.
+/// An opaque carrier, named from the type alphabet, meeting a ground bound.
 pub fn arb_opaque(world: World) -> BoxedStrategy<KType> {
     (0..world.type_names.len(), 0..world.grounds().len())
         .prop_map(move |(name, bound)| {
@@ -525,15 +525,6 @@ pub fn arb_opaque(world: World) -> BoxedStrategy<KType> {
                 .carrier(world.type_names[name], bound, OPAQUE_KEY)
         })
         .boxed()
-}
-
-/// A rigid variable a generated type may be at its top: a lexical variable, or an opaque carrier.
-pub fn arb_rigid(world: World) -> BoxedStrategy<Parametric> {
-    prop_oneof![
-        2 => arb_lexical(world.clone()),
-        1 => arb_opaque(world).prop_map(Parametric::from),
-    ]
-    .boxed()
 }
 
 /// A lexical variable: one of two levels, named from the type alphabet, over a ground bound —
@@ -830,13 +821,14 @@ fn arb_function(
         .boxed()
 }
 
-/// A planted variable in one of three forms: itself (`form` 0), a list's element (1), or a
-/// function's parameter (2), which reaches the variable from above.
+/// A planted variable in one of four forms: itself (`form` 0), a list's element (1), a function's
+/// parameter (2), which reaches the variable from above, or a record's field (3).
 fn planted(world: &World, variable: Handle, form: u8) -> Handle {
     match form {
         0 => variable,
         1 => world.types.list(variable),
-        _ => function_of(world, variable),
+        2 => function_of(world, variable),
+        _ => with_scratch(|scratch| world.types.record(scratch, &[(world.binders[0], variable)])),
     }
 }
 
@@ -1656,7 +1648,7 @@ pub fn arb_fits_chain(
         .prop_map(move |((a, b, c), route)| {
             let types = &world.types;
             let name = world.type_names[0];
-            let bounds = |kt: KType| !types.contains_rigid(kt.raw());
+            let bounds = |kt: KType| !types.holds_carrier(kt);
             let (a, b) = match route {
                 1 if bounds(a) => (types.lexical(0, name, a).raw(), b.raw()),
                 2 if a != KType::NEVER && a != b && bounds(a) && bounds(b) => (
@@ -1677,41 +1669,47 @@ pub fn arb_fits_chain(
 /// A *fits* chain of signatures through a bounded head parameter, which [`arb_fits_chain`] never
 /// draws: an opaque view's signature, its slot at a carrier recorded under one ground; a signature
 /// over a head parameter bounded by that ground, its slot at the parameter; and a signature over a
-/// parameter bounded by another ground, or one whose slot is that ground itself. Not every step
-/// fits: a bound decides which modules fit and reveals nothing, so a bounded parameter fits no
-/// ground.
+/// parameter bounded by another ground, its slot at that parameter, or one whose slot is that
+/// ground, or one over a parameter bounded by that ground as the slots hold it, its slot the bare
+/// parameter. Each slot holds its carrier, parameter or ground at one [`planted`] position — bare,
+/// a list's element, a function's parameter or a record's field — so the last kind checks a head's
+/// bound at both variances. Not every step fits: a bound decides which modules fit and reveals
+/// nothing, so a bounded parameter fits no ground.
 pub fn arb_bounded_head_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> {
     let grounds = world.grounds().len();
-    (0..grounds, 0..grounds, any::<bool>())
-        .prop_map(move |(bound, target, over_a_parameter)| {
+    (0..grounds, 0..grounds, 0..3u8, 0..4u8)
+        .prop_map(move |(bound, target, last, form)| {
             let types = &world.types;
             let (name, slot) = (world.type_names[0], world.values[0]);
             let (bound, target) = (world.grounds()[bound], world.grounds()[target]);
+            let at = |kt: Handle| planted(&world, kt, form);
             with_scratch(|scratch| {
                 let signature = |parameter: Option<Parametric>, read: Handle| {
                     let mut draft = SchemaDraft::new(scratch);
-                    match parameter {
-                        Some(parameter) => {
-                            draft.insert_parameter(name, parameter);
-                            draft.origin = SigOrigin::Declared;
-                        }
-                        None => draft.origin = SigOrigin::Declared,
+                    if let Some(parameter) = parameter {
+                        draft.insert_parameter(name, parameter);
                     }
+                    draft.origin = SigOrigin::Declared;
                     draft.insert_value_slot(slot, world.declared(read));
                     draft
                 };
                 let carrier = types.carrier(name, bound, OPAQUE_KEY);
-                let mut view = signature(None, carrier.raw());
+                let mut view = signature(None, at(carrier.raw()));
                 view.insert_manifest(name, carrier);
                 view.origin = SigOrigin::Module;
                 let view = types.signature(scratch, view);
                 let over = |bound| {
                     let parameter = types.head_parameter(name, bound);
-                    types.signature(scratch, signature(Some(parameter), parameter.raw()))
+                    types.signature(scratch, signature(Some(parameter), at(parameter.raw())))
                 };
-                let last = match over_a_parameter {
-                    true => over(target),
-                    false => types.signature(scratch, signature(None, target.raw())),
+                let last = match last {
+                    0 => over(target),
+                    1 => types.signature(scratch, signature(None, at(target.raw()))),
+                    _ => {
+                        let parameter =
+                            types.head_parameter(name, world.concrete(at(target.raw())));
+                        types.signature(scratch, signature(Some(parameter), parameter.raw()))
+                    }
                 };
                 (view, over(bound), last)
             })

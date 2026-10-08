@@ -390,6 +390,7 @@ pub(super) fn leaf_name<H>(node: &TypeNode<'_, H>) -> Option<&'static StaticName
         TypeNode::OfKind(_)
         | TypeNode::CodeNeeding { .. }
         | TypeNode::Parameter { .. }
+        | TypeNode::Carrier { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Signature { .. }
         | TypeNode::List { .. }
@@ -551,7 +552,9 @@ impl KType {
         }
         match node {
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(symbols)),
-            TypeNode::Parameter { name, .. } | TypeNode::SetMember { name, .. } => Some(name),
+            TypeNode::Parameter { name, .. }
+            | TypeNode::Carrier { name, .. }
+            | TypeNode::SetMember { name, .. } => Some(name),
             TypeNode::Signature { .. } => {
                 (self == KType::EMPTY_SIGNATURE).then(|| symbols.record(&MODULE_NAME))
             }

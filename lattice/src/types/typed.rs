@@ -24,7 +24,7 @@ use super::substitute::{self, Side};
 use super::unify::Interval;
 
 /// Whether `a` is below `b` in the one order: reflexive, transitive and antisymmetric over concrete
-/// types. A rigid variable reaches the order only as an opaque carrier.
+/// types, which hold no rigid variable. An opaque carrier is an atom of the order.
 pub fn is_subtype_of(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -295,7 +295,7 @@ pub fn read_through(
         scratch,
         kt.raw(),
         side,
-        &mut |variable| interval(variable).map(Interval::raw),
+        &mut |_, node| interval(Variable::of(node)?).map(Interval::raw),
     ))
 }
 

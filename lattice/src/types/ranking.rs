@@ -303,9 +303,9 @@ pub(super) fn judge_by_class<'s>(
                     scratch,
                     walk.slots[slot],
                     Side::Above,
-                    &mut |variable| match variable {
+                    &mut |_, node| match Variable::of(node)? {
                         Variable::Quantified { index, bound } => Some(earlier(index, bound)),
-                        _ => Some(variable.interval().raw()),
+                        variable => Some(variable.interval().raw()),
                     },
                 ),
             );
@@ -315,7 +315,7 @@ pub(super) fn judge_by_class<'s>(
                 scratch,
                 arguments[slot].lower,
                 Side::Below,
-                &mut |variable| Some(variable.interval().raw()),
+                &mut |_, node| Some(Variable::of(node)?.interval().raw()),
             );
             if meet_through_variables(types, scratch, greatest, upper) == Handle::NEVER
                 || !fits(types, scratch, lower, greatest)
@@ -369,7 +369,7 @@ pub(super) fn judge_by_class<'s>(
                 scratch,
                 walk.slots[slot],
                 Side::Below,
-                &mut |variable| match variable {
+                &mut |_, node| match Variable::of(node)? {
                     Variable::Quantified { index, bound } if !own(index) => {
                         Some(earlier(index, bound))
                     }
