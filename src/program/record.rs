@@ -18,8 +18,7 @@ use crate::scheduler::{NativeStep, Work};
 use crate::scope::{BodyShape, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeNode, TypeRegistry, display_name, satisfied_by,
-    substitute_quantified,
+    DeclaredType, KType, TypeNode, TypeRegistry, display_name, satisfied_by, substitute_quantified,
 };
 use crate::values::{Record, Tagged, Value, satisfies};
 
@@ -99,11 +98,12 @@ impl Contract {
         solution: Option<&[KType]>,
     ) -> bool {
         let scratch = Bump::new();
-        let (node, solution) = match (callee, solution) {
-            (DeclaredType::Type(callee), _) => (types.node(Parametric::from(callee)), &[][..]),
-            (DeclaredType::Scheme(scheme), Some(solution)) => (types.scheme_node(scheme), solution),
+        let solution = match (callee, solution) {
+            (DeclaredType::Type(_), _) => &[][..],
+            (DeclaredType::Scheme(_), Some(solution)) => solution,
             (DeclaredType::Scheme(_), None) => return false,
         };
+        let node = callee.node(types);
         let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) = node else {
             return false;
         };

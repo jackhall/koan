@@ -653,10 +653,7 @@ fn ranked(
     shape: DeclaredType<Parametric>,
     classes: &[u8],
 ) -> DeclaredType<Parametric> {
-    let node = match shape {
-        DeclaredType::Type(shape) => types.node(shape),
-        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
-    };
+    let node = shape.node(types);
     let TypeNode::ExpressionShape {
         quantifiers,
         bounds,

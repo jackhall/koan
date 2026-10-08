@@ -189,10 +189,7 @@ pub fn coerce<'graph, 'cell>(
     let (Some(src), Some(dst)) = (concrete(types, src), concrete(types, dst)) else {
         return Err(unsupported);
     };
-    let node = match declared {
-        DeclaredType::Type(declared) => cx.types.node(declared),
-        DeclaredType::Scheme(scheme) => cx.types.scheme_node(scheme),
-    };
+    let node = declared.node(cx.types);
     // Only a function slot is a scheme, so every other arm's two sides are types.
     let (src_type, dst_type) = (src.as_type(), dst.as_type());
     match node {
@@ -476,10 +473,7 @@ fn declared_of<'run, 'x>(
     scratch: BumpAllocator<'x>,
     declared: DeclaredType<Parametric>,
 ) -> Declared<'run, 'x> {
-    let node = match declared {
-        DeclaredType::Type(declared) => types.node(declared),
-        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
-    };
+    let node = declared.node(types);
     match node {
         TypeNode::KFunction { params, ret, .. } => Declared::Function { params, ret },
         TypeNode::ExpressionShape { elements, ret, .. } => {

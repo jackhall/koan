@@ -171,7 +171,9 @@ impl<'a> ExpressionPart<'a> {
     pub fn is_name(&self) -> bool {
         matches!(
             self,
-            ExpressionPart::Identifier(_) | ExpressionPart::Type(_) | ExpressionPart::MarkedName(..)
+            ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(_)
+                | ExpressionPart::MarkedName(..)
         )
     }
 

@@ -313,6 +313,16 @@ impl<T> DeclaredType<T> {
     }
 }
 
+impl<T: Into<Parametric>> DeclaredType<T> {
+    /// The node this declares: a type's, or a scheme's, its positions read as [`Parametric`].
+    pub fn node<'run>(self, types: &TypeRegistry<'run>) -> TypeNode<'run, Parametric> {
+        match self {
+            DeclaredType::Type(declared) => types.node(declared.into()),
+            DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+        }
+    }
+}
+
 impl<T: TypeHandle> DeclaredType<T> {
     /// The raw handle either arm names — identity only, and the lattice's alone.
     pub(super) fn raw(self) -> Handle {

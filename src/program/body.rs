@@ -220,12 +220,10 @@ pub fn call<'graph, 'here>(
     let returns = callee
         .as_callable()
         .and_then(Knotted::function)
-        .and_then(
-            |function| match function_node(program.types(), function.ktype()) {
-                TypeNode::KFunction { ret, .. } => Some(ret),
-                _ => None,
-            },
-        );
+        .and_then(|function| match function.ktype().node(program.types()) {
+            TypeNode::KFunction { ret, .. } => Some(ret),
+            _ => None,
+        });
     Request {
         placement: returns.map_or(Placement::Shares, placement_of),
         use_,
@@ -396,18 +394,6 @@ pub fn placement_of(returns: impl Into<Parametric>) -> Placement {
         Placement::Fresh
     } else {
         Placement::Shares
-    }
-}
-
-/// A function's type's node, its positions read as the function's group may: a scheme's read its
-/// own variables.
-fn function_node<'run>(
-    types: &TypeRegistry<'run>,
-    ktype: DeclaredType<KType>,
-) -> TypeNode<'run, Parametric> {
-    match ktype {
-        DeclaredType::Type(ktype) => types.node(Parametric::from(ktype)),
-        DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
     }
 }
 
@@ -597,7 +583,7 @@ fn frame<'graph, 'here>(
         bounds,
         params,
         ret,
-    } = function_node(types, function.ktype())
+    } = function.ktype().node(types)
     else {
         unreachable!("a function's type is a function type")
     };

@@ -15,9 +15,7 @@ use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, res
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeySymbol};
-use crate::type_lattice::{
-    DeclaredType, DispatchTokenElement, KType, Parametric, TypeNode, TypeRegistry,
-};
+use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
@@ -369,10 +367,7 @@ fn keyed<'graph, 'cell>(
         let registered = super::module::layout::registered_shape(member)
             .expect("a registration member is a function");
         // Only the ranking is read, which a scheme's node spells as a type's does.
-        let node = match registered {
-            DeclaredType::Type(shape) => types.node(Parametric::from(shape)),
-            DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
-        };
+        let node = registered.node(types);
         let TypeNode::ExpressionShape {
             elements, classes, ..
         } = node
