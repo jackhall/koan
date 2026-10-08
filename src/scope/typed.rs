@@ -240,6 +240,15 @@ pub type StaticType<'graph> = Static<'graph, KType, Parametric>;
 /// parametric over the run's variables where it names a type a run binds.
 pub type StaticSolution<'graph> = Static<'graph, &'graph [KType], &'graph [Parametric]>;
 
+/// What the load fixed where a quantified function is read: the solution it instantiated it at,
+/// or — a member read at a call's head — that the run reads it as it is, and the call solves its
+/// group.
+#[derive(Clone, Copy, Debug)]
+pub enum InstanceRead<'graph> {
+    Solved(StaticSolution<'graph>),
+    AsIs,
+}
+
 /// What the load fixed for a callable's type.
 pub type StaticCallable<'graph> =
     Static<'graph, Callable<'graph, KType>, Callable<'graph, Parametric>>;
@@ -280,9 +289,10 @@ pub struct Statics<'graph> {
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does, sorted by site: the run checks nothing there.
     pub settled: &'graph [Site],
-    /// Each name read at an instance site, by site, sorted by site, beside the solution the load
-    /// instantiated its quantified function at, closed or over the run's variables.
-    pub instances: &'graph [(Site, StaticSolution<'graph>)],
+    /// Each site where the load read a quantified function, sorted by site, beside what it fixed
+    /// there: the solution it instantiated it at, closed or over the run's variables, or that the
+    /// run reads it as it is.
+    pub instances: &'graph [(Site, InstanceRead<'graph>)],
     /// Each keyworded use's contributions, parallel to the shape's candidate lists: per argument,
     /// the static type its solving slot is solved from — `Unknown` where the call reads the carried
     /// type. Empty for a use every argument of which does.

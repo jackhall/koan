@@ -78,7 +78,7 @@
 //! instance under it ([`instance_under`]). A member read of a quantified member is a site too,
 //! where its operand is a name or a chain of member reads rooted at one; one over a head parameter
 //! its signature leaves unpinned is refused there, and read only at a call's head, whose site the
-//! cell records with no solution. A quantified callee's other arguments solve its group
+//! instance table records as read as it is ([`InstanceRead::AsIs`]). A quantified callee's other arguments solve its group
 //! first, each read as the solve reads it — a contributing one exactly at its upper end — and the
 //! slot is read through that solve: a variable a class before the slot's solves is taken from that
 //! class's solving slots at their contributions, as the call solves it — class by class, each
@@ -103,8 +103,9 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate,
-    Listed, Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution,
-    StaticType, Statics, SurfacedHead, Target, UnitWork, Variable as Located, source_of,
+    InstanceRead, Listed, Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static,
+    StaticSolution, StaticType, Statics, SurfacedHead, Target, UnitWork, Variable as Located,
+    source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -228,8 +229,8 @@ struct Level<'p, 'graph> {
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does.
     settled: BumpVec<'p, Site>,
-    /// Each name read at an instance site, beside the solution its function is instantiated at.
-    instances: BumpVec<'p, (Site, StaticSolution<'graph>)>,
+    /// Each site where a quantified function is read, beside what the load fixed there.
+    instances: BumpVec<'p, (Site, InstanceRead<'graph>)>,
     /// Each keyworded use's contributions, parallel to the candidate lists.
     contributions: BumpVec<'p, &'graph [StaticType<'graph>]>,
     /// Each call by name's contributions, by its argument part's site: per parameter in symbol
@@ -1487,7 +1488,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         let solution = self.solution(level, solution, node.source);
                         self.chain[level]
                             .instances
-                            .push((Site::of_node(node), solution));
+                            .push((Site::of_node(node), InstanceRead::Solved(solution)));
                     }
                     typed
                 }
@@ -1523,7 +1524,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .and_then(|site| shape.nested(site))
                 .map(callable),
             // A member read at a call's head is read as it is, a quantified member by its scheme:
-            // its site is recorded with no solution, which the run reads as the head's mark.
+            // its site is recorded as read as it is, which the run reads as the head's mark.
             Form::Member {
                 node,
                 list,
@@ -1533,7 +1534,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 if !self.unfilled {
                     self.chain[level]
                         .instances
-                        .push((Site::of_node(node), Static::Unknown));
+                        .push((Site::of_node(node), InstanceRead::AsIs));
                 }
                 match self.member_scheme(level, operand, label) {
                     Some((scheme, None)) => Some(DeclaredType::Scheme(scheme)),
@@ -1812,7 +1813,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         let (typed, solution) = self.instantiate(scheme, wanted, at)?;
                         if !self.unfilled {
                             let solution = self.solution(level, solution, at);
-                            self.chain[level].instances.push((site, solution));
+                            self.chain[level]
+                                .instances
+                                .push((site, InstanceRead::Solved(solution)));
                         }
                         typed
                     }
@@ -2709,14 +2712,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return;
         }
         let solution = self.solution(level, solution, site.at);
+        let read = InstanceRead::Solved(solution);
         match site.instanced {
-            Instanced::Name(leaf) => self.chain[level].instances.push((Site::of(leaf), solution)),
+            Instanced::Name(leaf) => self.chain[level].instances.push((Site::of(leaf), read)),
             Instanced::Literal(body) => body.fix_born_instance(solution),
-            Instanced::Member(node) => {
-                self.chain[level]
-                    .instances
-                    .push((Site::of_node(node), solution));
-            }
+            Instanced::Member(node) => self.chain[level]
+                .instances
+                .push((Site::of_node(node), read)),
         }
     }
 

@@ -18,7 +18,8 @@
 //! - a bucket declaration, which is `Null`;
 //! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks
 //!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
-//!   native, or a registration's function in a frame;
+//!   native, or a registration's function in a frame; a member read `ATTR <operand> <label>` with
+//!   its label bare is one, which the load reads as a possible instance site;
 //! - an **application** `(head argument)`: a construction when the head is a type, and otherwise a
 //!   call by name of the head over the argument record.
 //!
@@ -46,7 +47,8 @@ use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, Narrowing, Offer, ShapeKind, Site, Static, StaticType,
+    BodyShape, Candidate, CandidateList, InstanceRead, Narrowing, Offer, ShapeKind, Site, Static,
+    StaticType,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Verdict, substitute_levels};
@@ -827,7 +829,7 @@ fn in_place<'graph, 'here>(
             let shape = at.view.shape();
             let mention = shape.mention(Site::of(part))?;
             let read = at.view.read(mention.coordinate);
-            let Some(solution) = shape.instance_at(Site::of(part)) else {
+            let Some(InstanceRead::Solved(solution)) = shape.instance_at(Site::of(part)) else {
                 return Some(read);
             };
             let Value::Knotted(member) = read else {

@@ -62,8 +62,8 @@ use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::typed::{
-    Elaboration, Narrowing, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
-    Statics,
+    Elaboration, InstanceRead, Narrowing, Static, StaticCallable, StaticRegistered, StaticSolution,
+    StaticType, Statics,
 };
 
 mod build;
@@ -959,9 +959,8 @@ impl<'graph> BodyShape<'graph> {
             .is_some_and(|statics| statics.settled.binary_search(&site).is_ok())
     }
 
-    /// The solution the load instantiated the quantified function read at `site` at, where it read
-    /// one there.
-    pub fn instance_at(&self, site: Site) -> Option<StaticSolution<'graph>> {
+    /// What the load fixed where it read a quantified function at `site`, where it read one there.
+    pub fn instance_at(&self, site: Site) -> Option<InstanceRead<'graph>> {
         let instances = self.statics.get()?.instances;
         let index = instances.binary_search_by_key(&site, |(at, _)| *at).ok()?;
         Some(instances[index].1)
