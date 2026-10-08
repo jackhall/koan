@@ -287,10 +287,11 @@ impl<'graph> Fixture<'_, 'graph> {
 
     /// The statement `slot`'s binder is declared at, if it is not a parameter.
     fn statement_of(&self, shape: &BodyShape<'graph>, slot: Slot) -> Option<usize> {
-        let (_, position) = shape
-            .slot(shape.slot_name(slot))
-            .expect("a member is declared");
-        position.0.checked_sub(1).map(|at| at as usize)
+        shape
+            .position_of(slot)
+            .0
+            .checked_sub(1)
+            .map(|at| at as usize)
     }
 }
 

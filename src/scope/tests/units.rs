@@ -42,7 +42,7 @@ fn order(shape: &BodyShape<'_>) -> Vec<u32> {
                 .members
                 .iter()
                 .map(|slot| {
-                    let (_, position) = shape.slot(shape.slot_name(*slot)).unwrap();
+                    let position = shape.position_of(*slot);
                     position.0 - 1
                 })
                 .min()

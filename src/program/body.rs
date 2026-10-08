@@ -675,7 +675,7 @@ fn frame<'graph, 'here>(
     let mut parameters = 0;
     for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
         let name = shape.slot_name(slot);
-        if shape.slot(name).map(|(_, at)| at) != Some(Position::PARAMETER) {
+        if shape.position_of(slot) != Position::PARAMETER {
             continue;
         }
         let value = match name {

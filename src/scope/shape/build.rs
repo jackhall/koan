@@ -30,10 +30,11 @@
 //! A keyworded node inside a type expression is a type the elaborator reads, not a use, so the walk
 //! counts the type expressions it is inside and resolves no candidates there.
 //!
-//! A callable body records the form node holding it, a binder whose right-hand side is a callable
-//! form at its root — or a combined form that is one, or a `MODULE`/`GROUP` binder — records the
-//! body it births, and a `LET` value binder records its right-hand side, so a component's tie reads
-//! each member's signature, body or data off the shape.
+//! A callable body records the form node holding it. Each binder's facts land in a per-slot draft
+//! record as the walk finds them — the body a binder whose right-hand side is a callable form at
+//! its root (or a combined form that is one, or a `MODULE`/`GROUP` binder) births, a `LET` binder's
+//! right-hand side and annotation, a type binder's declaration node — and the seal freezes it, so a
+//! component's tie reads each member's signature, body or data off the shape.
 //!
 //! A quote value's code is built here too, as a [`ShapeKind::Code`] draft entered where the quote
 //! is written ([`Builder::enter_code`]): under the builtin groups and the groups its code holds,
@@ -68,13 +69,14 @@ use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, TypeRegistry, den
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
+use super::super::keyed::Keyed;
 use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run,
 };
 use super::super::typed::Static;
 use super::{
-    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
+    Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
     Position, QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead,
     Target, TopLevel, TypeExpression, Unit, UnitWork, Which, resolve_here,
@@ -577,12 +579,8 @@ struct Draft<'graph, 'x> {
     units: BumpVec<'x, Unit>,
     /// Finished nested drafts, waiting on this draft's components to settle their captures.
     children: BumpVec<'x, (Site, Draft<'graph, 'x>)>,
-    /// `(binder, body)`: the binder's right-hand side births the callable whose body sits at `body`.
-    births: BumpVec<'x, (Slot, Site)>,
-    /// `(binder, rhs)`: a `LET` value binder's right-hand side part sits at `rhs`.
-    rhs: BumpVec<'x, (Slot, Site)>,
-    /// `(binder, node)`: a type binder's whole declaration node, in program storage.
-    declarations: BumpVec<'x, (Slot, &'graph KExpression<'graph>)>,
+    /// Each slot's binder as far as the walk has found it, by slot.
+    binders: BumpVec<'x, DraftBinder<'graph>>,
     /// Each type expression the load pass types on its own, as met.
     type_expressions: BumpVec<'x, Recorded<'graph>>,
     component_of: BumpVec<'x, ComponentIndex>,
@@ -634,6 +632,18 @@ struct Recorded<'graph> {
     part: &'graph ExpressionPart<'graph>,
     statement: u32,
     guard: Option<(Site, u32)>,
+}
+
+/// What the builder has found about one slot's binder so far; [`seal`](Builder::seal) freezes
+/// it into the shape's [`Binder`](super::Binder).
+#[derive(Clone, Copy, Default)]
+struct DraftBinder<'graph> {
+    /// The site of the body the binder's right-hand side births.
+    birth: Option<Site>,
+    rhs: Option<&'graph ExpressionPart<'graph>>,
+    annotation: Option<&'graph ExpressionPart<'graph>>,
+    /// A type binder's whole declaration node, in program storage.
+    declaration: Option<&'graph KExpression<'graph>>,
 }
 
 /// A component under construction: its run in [`Draft::members`].
@@ -706,8 +716,6 @@ struct Builder<'graph, 'x, 'e> {
     chain: BumpVec<'x, Draft<'graph, 'x>>,
     /// Each callable body's site beside the form node holding it, in program storage.
     forms: BumpBackedMap<'x, Site, &'graph KExpression<'graph>>,
-    /// Each recorded right-hand side's site beside the part, in program storage.
-    parts: BumpBackedMap<'x, Site, &'graph ExpressionPart<'graph>>,
     /// Type parameters of the forms enclosing the current walk path: never mentions.
     skip: BumpVec<'x, TypeSymbol>,
     /// Where the current draft's own entries in `skip` start; a nested body declares its enclosing
@@ -743,7 +751,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             marking: None,
             chain: BumpVec::new_in(scratch),
             forms: bump_table(scratch),
-            parts: bump_table(scratch),
             skip: BumpVec::new_in(scratch),
             skip_floor: 0,
             in_type: 0,
@@ -912,6 +919,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 statement_binders[statement as usize].push(Slot(slot as u32));
             }
         }
+        let slots = values.len() + types.len() + registrations.len();
+        let mut draft_binders = BumpVec::with_capacity_in(slots, scratch);
+        draft_binders.resize(slots, DraftBinder::default());
+        // Every binder a statement writes carries the statement's annotation, a registration's too.
+        for (statement, node) in nodes.iter().enumerate() {
+            if let Some(annotation) = annotation_of(node) {
+                for binder in statement_binders[statement].iter() {
+                    draft_binders[binder.index()].annotation = Some(annotation);
+                }
+            }
+        }
         Ok(Draft {
             kind,
             entered_at,
@@ -930,9 +948,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             reads: BumpVec::new_in(scratch),
             units: BumpVec::new_in(scratch),
             children: BumpVec::new_in(scratch),
-            births: BumpVec::new_in(scratch),
-            rhs: BumpVec::new_in(scratch),
-            declarations: BumpVec::new_in(scratch),
+            binders: draft_binders,
             type_expressions: BumpVec::new_in(scratch),
             nodes: BumpVec::new_in(scratch),
             frame: self.frame,
@@ -1409,11 +1425,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         if state == State::Root
             && let Some(binder) = draft.statement_binders[statement as usize].first()
             && draft.is_type_slot(binder)
-            && !draft.declarations.iter().any(|(held, _)| *held == binder)
+            && draft.binders[binder.index()].declaration.is_none()
         {
-            draft
-                .declarations
-                .push((binder, resident(self.brand.writer(), *node)));
+            draft.binders[binder.index()].declaration = Some(resident(self.brand.writer(), *node));
         }
 
         // A callable's parameters are declared before any part is read, so a type parameter a
@@ -1470,8 +1484,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     if state == State::Root
                         && let Some(binder) = draft.statement_binders[statement as usize].first()
                     {
-                        draft.rhs.push((binder, Site::of(part)));
-                        self.parts.insert(Site::of(part), part);
+                        debug_assert!(draft.binders[binder.index()].rhs.is_none());
+                        draft.binders[binder.index()].rhs = Some(part);
                         declares_type = draft.is_type_slot(binder);
                     }
                     // A type `LET`'s right-hand side is its declaration's definition, typed with
@@ -1495,7 +1509,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     self.typed(|builder| builder.walk_signature(level, statement, part))?
                 }
                 Role::Body(kind) => {
-                    self.enter_body(level, statement, node, part, kind, parameters, state)?
+                    self.enter_body(level, statement, node, form, part, kind, parameters, state)?
                 }
                 Role::Branches(heads) => {
                     self.enter_arms(level, statement, node, part, heads, state)?
@@ -1862,6 +1876,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         level: usize,
         statement: u32,
         node: &KExpression<'graph>,
+        form: &'static BuiltinShape,
         part: &ExpressionPart<'graph>,
         kind: BodyKind,
         signature_names: &[BinderSymbol],
@@ -1875,11 +1890,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         let Some(body) = written else {
             return Err(ShapeError::Malformed {
-                form: node
-                    .cache()
-                    .builtin_shape()
-                    .expect("a body role is a form's")
-                    .id,
+                form: form.id,
                 at: node.source,
             });
         };
@@ -1896,9 +1907,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             let draft = &mut self.chain[level];
             if state == State::Root {
                 let binders = draft.statement_binders[statement as usize];
-                draft
-                    .births
-                    .extend(binders.iter().map(|binder| (binder, site)));
+                for binder in binders.iter() {
+                    debug_assert!(draft.binders[binder.index()].birth.is_none());
+                    draft.binders[binder.index()].birth = Some(site);
+                }
             }
         }
         let (shape_kind, class) = match kind.opens() {
@@ -1924,15 +1936,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         // so an operator run of its members may be written inside it and nowhere else.
         let own;
         if kind == BodyKind::Module
-            && let Some(declared) =
-                groups::declared_group(node, self.scratch).map_err(|()| ShapeError::Malformed {
-                    form: node
-                        .cache()
-                        .builtin_shape()
-                        .expect("a body role is a form's")
-                        .id,
-                    at,
-                })?
+            && let Some(declared) = groups::declared_group(node, self.scratch)
+                .map_err(|()| ShapeError::Malformed { form: form.id, at })?
             && let Some(Claim::Group(record)) = self.claims.get(declared.members[0])
         {
             for member in record.members {
@@ -1949,10 +1954,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             held = &own;
         }
         let signature = if kind == BodyKind::Lambda {
-            let form = node
-                .cache()
-                .builtin_shape()
-                .expect("a body role is a form's");
             form.roles()
                 .zip(node.parts)
                 .find(|(role, _)| matches!(role, Role::Signature | Role::Head))
@@ -1970,7 +1971,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut paired = BumpVec::with_capacity_in(parameters.len(), self.scratch);
         paired.extend(parameters.iter().map(|name| (*name, at)));
         let over = match kind {
-            BodyKind::Module => Some(self.over(node)?),
+            BodyKind::Module => Some(self.over(node, form)?),
             _ => None,
         };
         let entry = Entry {
@@ -2747,13 +2748,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         })
     }
 
-    /// The capture contract of `node`, a `MODULE` or `GROUP` binder: its `OVER` list read entry by
-    /// entry — a name, or a key written with `_` in each slot — or `None` where it writes none.
-    fn over(&self, node: &KExpression<'graph>) -> Result<Over<'graph>, ShapeError<'graph>> {
-        let form = node
-            .cache()
-            .builtin_shape()
-            .expect("a body role is a form's");
+    /// The capture contract of `node`, a `MODULE` or `GROUP` binder of builtin shape `form`: its
+    /// `OVER` list read entry by entry — a name, or a key written with `_` in each slot — or `None`
+    /// where it writes none.
+    fn over(
+        &self,
+        node: &KExpression<'graph>,
+        form: &'static BuiltinShape,
+    ) -> Result<Over<'graph>, ShapeError<'graph>> {
         let malformed = ShapeError::Malformed {
             form: form.id,
             at: node.source,
@@ -3270,31 +3272,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             let form = self.forms.get(&site).copied();
             nested.push((site, self.seal(child, form)));
         }
-        nested.sort_unstable_by_key(|(site, _)| *site);
-        let mut births = BumpVec::with_capacity_in(draft.births.len(), self.scratch);
-        births.extend(draft.births.iter().map(|(binder, site)| {
-            let index = nested
-                .binary_search_by_key(site, |(nested, _)| *nested)
-                .expect("a birth's body is a nested shape");
-            (*binder, nested[index].1)
-        }));
-        births.sort_unstable_by_key(|(binder, _)| *binder);
-        let mut rhs = BumpVec::with_capacity_in(draft.rhs.len(), self.scratch);
-        rhs.extend(draft.rhs.iter().map(|(binder, site)| {
-            let part = self
-                .parts
-                .get(site)
-                .copied()
-                .expect("a recorded right-hand side is kept by site");
-            (*binder, part)
-        }));
-        rhs.sort_unstable_by_key(|(binder, _)| *binder);
-        let mut declarations = draft.declarations;
-        declarations.sort_unstable_by_key(|(binder, _)| *binder);
+        let nested = Keyed::sorted(writer, &mut nested);
         let mut mentions = draft.mentions;
-        mentions.sort_unstable_by_key(|mention| mention.site);
+        let mentions = Keyed::sorted(writer, &mut mentions);
         let mut offers = draft.offers;
-        offers.sort_unstable_by_key(|(site, _)| *site);
+        let offers = Keyed::sorted(writer, &mut offers);
         let channels = Channels::new(&draft.values, &draft.types, &draft.registrations);
         let mut registrations = BumpVec::with_capacity_in(draft.registered.len(), self.scratch);
         registrations.extend(draft.registered.iter().map(|entry| {
@@ -3311,13 +3293,34 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
         }));
         registrations.sort_unstable_by_key(|registration| registration.slot);
+        let registrations = collect(writer, registrations.iter().copied());
+        let base = draft.values.len() + draft.types.len();
+        debug_assert!(
+            (registrations.iter().enumerate()).all(|(at, held)| held.slot.index() == base + at),
+            "the registration channel is the run's last"
+        );
+        let binders = writer.fill(draft.binders.len(), |index| {
+            let found = draft.binders[index];
+            Binder {
+                birth: found.birth.map(|site| {
+                    let (_, body) = nested.get(site).expect("a birth's body is a nested shape");
+                    (site, *body)
+                }),
+                rhs: found.rhs,
+                annotation: found.annotation,
+                declaration: found.declaration,
+                registration: index.checked_sub(base).map(|at| &registrations[at]),
+                declared: Cell::new(Static::Unknown),
+                registered: Cell::new(Static::Unknown),
+            }
+        });
         let mut candidates = draft.candidates;
-        candidates.sort_unstable_by_key(|(site, _)| *site);
+        let candidates = Keyed::sorted(writer, &mut candidates);
         let mut required = draft.required;
         required.sort_unstable();
         let mut recorded = draft.type_expressions;
         recorded.sort_unstable_by_key(|recorded| Site::of(recorded.part));
-        let type_expressions = writer.fill(recorded.len(), |index| {
+        let type_expressions = Keyed::from_sorted(writer.fill(recorded.len(), |index| {
             let recorded = recorded[index];
             TypeExpression {
                 site: Site::of(recorded.part),
@@ -3326,7 +3329,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 guard: recorded.guard,
                 typed: Cell::new(Static::Unknown),
             }
-        });
+        }));
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -3349,35 +3352,30 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 entered_at: draft.entered_at,
                 component_of: collect(writer, draft.component_of.iter().copied()),
                 components: collect(writer, components.iter().copied()),
-                mentions: collect(writer, mentions.iter().copied()),
+                mentions,
                 captures: collect(writer, draft.captures.iter().copied()),
                 over: draft.over.and_then(|over| over.listed),
                 listed_top: collect(writer, draft.listed_top.iter().copied()),
                 code: draft.code,
                 top_captures: collect(writer, draft.top_captures.iter().copied()),
-                nested: collect(writer, nested.iter().copied()),
+                nested,
                 form,
-                births: collect(writer, births.iter().copied()),
-                rhs: collect(writer, rhs.iter().copied()),
-                declarations: collect(writer, declarations.iter().copied()),
-                declared: writer.fill(declarations.len(), |_| Cell::new(Static::Unknown)),
+                binders,
                 units: collect(writer, draft.units.iter().copied()),
                 arm: draft.arm,
                 code_type: draft.code_type,
-                refusal: draft.refusal,
-                offers: collect(writer, offers.iter().copied()),
-                registrations: collect(writer, registrations.iter().copied()),
+                refusal: resident_cell(writer, draft.refusal),
+                offers,
+                registrations,
                 rankings: collect(writer, draft.rankings.iter().copied()),
-                candidates: collect(writer, candidates.iter().copied()),
+                candidates,
                 required: collect(writer, required.iter().copied()),
                 type_expressions,
-                registered: writer.fill(registrations.len(), |_| Cell::new(Static::Unknown)),
                 callable: resident_cell(writer, Static::Unknown),
                 group_levels: resident_cell(writer, &[][..]),
                 born_instance: resident_cell(writer, None),
                 declared_variables: resident_cell(writer, &[][..]),
                 type_captures: resident_cell(writer, &[][..]),
-                typing_refusal: resident_cell(writer, None),
                 statics: resident_cell(writer, None),
             },
         )
@@ -3396,6 +3394,20 @@ fn types_with_its_binder(form: &BuiltinShape) -> bool {
                 Role::Signature | Role::Head | Role::Quantifiers | Role::Name | Role::Definition(_)
             ) || role.is_callable()
         })
+}
+
+/// The type part of `node`'s statement where it is a `LET <name> <type> = <value>`: what each
+/// binder the statement writes is annotated with.
+fn annotation_of<'graph>(node: &KExpression<'graph>) -> Option<&'graph ExpressionPart<'graph>> {
+    let spine = node.statement_spine();
+    let form = spine.cache().builtin_shape()?;
+    if form.id != BuiltinShapeId::LetAnnotated {
+        return None;
+    }
+    form.roles()
+        .zip(spine.parts)
+        .find(|(role, _)| *role == Role::TypeExpression)
+        .map(|(_, part)| &part.value)
 }
 
 /// One write-once cell laid down in program storage.

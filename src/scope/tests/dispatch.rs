@@ -131,10 +131,12 @@ fn a_registration_takes_a_slot_after_every_name() {
             shape.slot_name(registration.slot),
             BinderSymbol::Registration(_)
         ));
+        let name = shape.slot_name(registration.slot);
         assert_eq!(
-            shape.slot(shape.slot_name(registration.slot)),
+            shape.slot(name),
             Some((registration.slot, Position::statement(1)))
         );
+        assert_eq!(shape.position_of(registration.slot), Position::statement(1));
         assert_eq!(registration.key, fixture.symbols.key("GREET _").unwrap());
         assert_eq!(
             registration.elements,

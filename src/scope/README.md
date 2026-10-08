@@ -363,19 +363,34 @@ eager read at the binder's own position does not see that binder, so it is
 
 The shape hands the layer above each body's components — each with whether it
 is `deferred_only` and whether it is `cyclic`, holding more than one member or
-a member that reads itself — and the class of every mention, and four facts the
-layer above reads off a binder's slot: the callable body each binder births —
-`BodyShape::births`, set when the binder's right-hand side is a callable shape
-at its root, its shape is a combined one, or it is a `MODULE` or `GROUP` binder,
-whose module body carries no `form` — beside it `BodyShape::birth_site`, where
-that body sits in the binder's own node, which a caller that must ask for the
-body by site names it by — `BodyShape::form`, the builtin
-shape node a callable body sits in, where its signature is read,
-`BodyShape::rhs`, each `LET` binder's right-hand side part, where a data member
-is read, and `BodyShape::declarations`, each type binder's whole declaration
-node — a `NEWTYPE`, `UNION`, `SIG` or a `LET` of a type name — where the
-declaration door reads which declaration it is and where its declared part sits,
-off the node's own builtin shape. A caller ties a component of value binders
+a member that reads itself — and the class of every mention, and
+`BodyShape::form`, the builtin shape node a callable body sits in, where its
+signature is read. What the layer above reads off a binder is **one record per
+slot**, indexed by the slot, which the builder fills as its walk finds each fact
+and the seal freezes:
+
+- the callable body the binder births — `BodyShape::births`, set when the
+  binder's right-hand side is a callable shape at its root, its shape is a
+  combined one, or it is a `MODULE` or `GROUP` binder, whose module body carries
+  no `form` — beside `BodyShape::birth_site`, where that body sits in the
+  binder's own node, which a caller that must ask for the body by site names it
+  by;
+- `BodyShape::rhs`, a `LET` binder's right-hand side part, where a data member
+  is read, and `BodyShape::annotation`, the type part of the
+  `LET <name> <type> = <value>` writing it;
+- `BodyShape::declarations`, a type binder's whole declaration node — a
+  `NEWTYPE`, `UNION`, `SIG` or a `LET` of a type name — where the declaration
+  door reads which declaration it is and where its declared part sits, off the
+  node's own builtin shape;
+- `BodyShape::registration`, the registration bound at the slot;
+- the load-time cells of a type binder and a registration
+  ([below](#load-time-types)).
+
+The position a binder writes at is a read by slot too
+(`BodyShape::position_of`). Every other table a shape holds by site — mentions,
+nested shapes, candidate lists, `EVAL` offers and type expressions — is sparse
+over its key, so it is held sorted by site and searched in one place
+([`Keyed`](keyed.rs)). A caller ties a component of value binders
 when it is cyclic or every member births a callable or a module; a non-cyclic
 data binder is an ordinary value, and a component of type binders goes through
 [the elaborator's door](../elaborate/README.md#declarations). A component never
@@ -518,7 +533,8 @@ tied.
 
 A shape carries a **write-once cell** for every type fact
 [the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
-fixes before the program runs. The builder lays each cell down empty — `scope`
+fixes before the program runs. The builder lays each cell down empty, save a
+code shape's refusal (below) — `scope`
 sits below `elaborate`, and a shape seals before anything in it can be
 elaborated — and the pass fills it, once, where the program loads:
 
@@ -529,8 +545,8 @@ elaborated — and the pass fills it, once, where the program loads:
   with its arm set and written index. A callable's signature, a declaration's definition and a type
   `LET`'s right-hand side are not recorded: they are typed with their callable or
   binder, and a type nested in a recorded one is part of it;
-- each **type binder**, beside its declaration node;
-- each **registration**, its expression shape;
+- each **type binder**, and each **registration**'s expression shape, in the
+  binder's own slot record;
 - a callable body's own **callable type**, the lexical variable each name of
   its own `FOR ALL` group is in the body (`BodyShape::group_levels`), and the
   solution a `FN FOR ALL` the load instantiated is born at, closed or rigid
@@ -539,8 +555,9 @@ elaborated — and the pass fills it, once, where the program loads:
   its activation holds the bound type at (`BodyShape::declared_variables`),
   which the static pass reads to find where a use reads a variable, and the
   type captures that pass adds (`BodyShape::type_captures`);
-- a quote's code shape's **typing refusal**, which `BodyShape::refusal` reports
-  as it reports the code's own error.
+- a quote's code shape's **refusal**: one cell, holding the builder's refusal
+  where its code cannot be built, else the load pass's where the built code
+  does not type, which `BodyShape::refusal` reports when an `EVAL` runs it.
 
 A cell holds `Unknown`, a closed value, or a rigid value beside the
 `Variable`s — a variable's level and the coordinate its value is
@@ -556,22 +573,23 @@ a callable's birth and the overlap check.
 One more cell per shape holds the **value channel**: the `Statics` dispatch's
 [load pass](../dispatch/README.md#static-types) fixes once the type channel has —
 a static type, an interval, for each part the evaluator reads as a value (by
-site), each statement (by index) and each slot (by index), and one `Narrowing` per keyworded
-use, parallel to its candidate list: the one candidate selected, or each
-candidate kept beside its verdict, *always* or *maybe*; the site of each
+site) and each statement (by index); what the load fixed about each keyworded
+use, by the site of its node (`UseStatics`) — its `Narrowing`, the one
+candidate selected or each candidate kept beside its verdict, *always* or
+*maybe*, and its **contributions**, a static type per argument the call solves
+from, `Unknown` where it reads the carried type — with a use the load fixed
+nothing about left out, every candidate kept and every argument read as
+carried; the site of each
 **settled** `:!` or annotation, whose value's static type lies under its type,
 so the run checks nothing there; what the load fixed at each
 [instance site](../dispatch/README.md#static-types) — the solution it is
 instantiated at, closed or rigid, or, for a member read at a call's head, that
-the run reads it as it is (`InstanceRead`); each
-keyworded use's **contributions**, parallel to its candidate list, a static type
-per argument the call solves from, `Unknown` where it reads the carried type;
+the run reads it as it is (`InstanceRead`);
 and each call by name's contributions, by its argument's site, a static type
 per parameter of its callee in symbol order, `Unknown` where the frame reads the
 carried type. It lives here for the same reason the type channel's
-cells do, and the shape reads it by site (`value_type`, `narrowing`, `settled`,
-`instance_at`, `contributions`, `named_contributions`), statement
-index or slot; a shape the
+cells do, and the shape reads it by site (`value_type`, `use_statics`,
+`settled`, `instance_at`, `named_contributions`) or statement index; a shape the
 pass has not fixed — a quote's code it refused — has no static types, every
 candidate of every use in it is *maybe*, and no ascription in it is settled.
 

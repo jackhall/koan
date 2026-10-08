@@ -104,6 +104,40 @@ impl fmt::Display for CoercionRefusedDisplay<'_, '_> {
     }
 }
 
+/// One side of a coercion: what a signature's head parameters are bound to, interned as a
+/// signature declaring each binding a manifest member — the handle a barrier holds — beside
+/// those bindings as the interned node holds them.
+#[derive(Clone, Copy)]
+pub struct Substitution<'run> {
+    pub handle: KType,
+    pub bindings: Members<'run, TypeSymbol>,
+}
+
+impl<'run> Substitution<'run> {
+    /// `bindings`, interned.
+    pub fn interned(
+        bindings: Members<'_, TypeSymbol, KType>,
+        types: &TypeRegistry<'run>,
+        scratch: BumpAllocator<'_>,
+    ) -> Self {
+        let mut draft = SchemaDraft::new(scratch);
+        for (name, kt) in bindings.iter().copied() {
+            draft.insert_manifest(name, kt);
+        }
+        Substitution::of(types.signature(scratch, draft), types)
+    }
+
+    /// The substitution the interned `handle` holds.
+    pub fn of(handle: KType, types: &TypeRegistry<'run>) -> Self {
+        let schema =
+            crate::elaborate::schema_of(handle, types).expect("a substitution is a signature");
+        Substitution {
+            handle,
+            bindings: schema.manifest_members,
+        }
+    }
+}
+
 /// What a coercion reads: the region it writes into, the lattice, and the two substitutions a
 /// declared type is read under — the source module's bindings and the view's.
 pub struct Coercion<'a, 'cell, 'run, 'x> {
@@ -111,9 +145,9 @@ pub struct Coercion<'a, 'cell, 'run, 'x> {
     pub types: &'a TypeRegistry<'run>,
     pub scratch: BumpAllocator<'x>,
     /// What the source module binds the signature's head parameters to.
-    pub from: Members<'x, TypeSymbol, KType>,
+    pub from: Substitution<'run>,
     /// What the view binds them to: the carriers under `:|`, the source's own under `:!`.
-    pub to: Members<'x, TypeSymbol, KType>,
+    pub to: Substitution<'run>,
 }
 
 /// Why a member type read under a module's or a view's bindings is concrete: it reads only its
@@ -125,7 +159,7 @@ impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
     fn read(
         &self,
         declared: DeclaredType<Parametric>,
-        bindings: Members<'_, TypeSymbol, KType>,
+        bindings: Members<'_, TypeSymbol>,
     ) -> DeclaredType<KType> {
         match substitute_parameters(self.types, self.scratch, declared, bindings) {
             DeclaredType::Type(kt) => DeclaredType::Type(self.types.concrete(kt).expect(BOUND)),
@@ -135,22 +169,12 @@ impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
 
     /// `declared` read under the source module's bindings.
     pub(super) fn source_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
-        self.read(declared, self.from)
+        self.read(declared, self.from.bindings)
     }
 
     /// `declared` read under the view's bindings.
     pub(super) fn view_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
-        self.read(declared, self.to)
-    }
-
-    /// A `Signature` handle whose manifest members are `table` — what a barrier node holds, since
-    /// a node carries `Copy`, lifetime-free handles and not a borrowed table.
-    pub(super) fn sig_of(&self, table: Members<'_, TypeSymbol, KType>) -> KType {
-        let mut draft = SchemaDraft::new(self.scratch);
-        for (name, kt) in table.iter().copied() {
-            draft.insert_manifest(name, kt);
-        }
-        self.types.signature(self.scratch, draft)
+        self.read(declared, self.to.bindings)
     }
 }
 
@@ -175,8 +199,8 @@ pub fn coerce<'graph, 'cell>(
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
     let (types, scratch) = (cx.types, cx.scratch);
     let (src, dst) = (
-        substitute_parameters(types, scratch, declared, cx.from),
-        substitute_parameters(types, scratch, declared, cx.to),
+        substitute_parameters(types, scratch, declared, cx.from.bindings),
+        substitute_parameters(types, scratch, declared, cx.to.bindings),
     );
     // The two sides agree, so the member already has the type the view declares: the whole of
     // `:!`, and every slot of `:|` that names no unpinned parameter.
@@ -310,8 +334,8 @@ pub fn coerce<'graph, 'cell>(
                 member,
                 dst,
                 declared,
-                cx.sig_of(cx.from),
-                cx.sig_of(cx.to),
+                cx.from.handle,
+                cx.to.handle,
             );
             Ok(Value::Knotted(Knotted::of(knot, 0)))
         }
@@ -357,7 +381,7 @@ pub fn coerce<'graph, 'cell>(
 }
 
 /// What the barrier `barrier` reads its declared type under: the source module's bindings and the
-/// view's, out of the signature handles it holds — swapped for a value crossing it inwards.
+/// view's, read off the signature handles it holds — swapped for a value crossing it inwards.
 fn across<'a, 'cell, 'run, 'x>(
     writer: Writer<'cell>,
     barrier: &Coerced<'_, '_>,
@@ -365,20 +389,10 @@ fn across<'a, 'cell, 'run, 'x>(
     types: &'a TypeRegistry<'run>,
     scratch: BumpAllocator<'x>,
 ) -> Coercion<'a, 'cell, 'run, 'x> {
-    let bindings = |signature: KType| {
-        let schema =
-            crate::elaborate::schema_of(signature, types).expect("a barrier holds signatures");
-        Members::from_pairs(
-            scratch,
-            schema.manifest_members.iter().map(|(name, bound)| {
-                (
-                    *name,
-                    types.concrete(*bound).expect("a binding is concrete"),
-                )
-            }),
-        )
-    };
-    let (from, to) = (bindings(barrier.from()), bindings(barrier.to()));
+    let (from, to) = (
+        Substitution::of(barrier.from(), types),
+        Substitution::of(barrier.to(), types),
+    );
     let (from, to) = if inwards { (to, from) } else { (from, to) };
     Coercion {
         writer,

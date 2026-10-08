@@ -7,9 +7,10 @@
 //! ranking and the ranking each registration carries, each keyworded use's candidate list,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
 //! components of the body's bindings, the shapes nested in it by site, the form node a callable's
-//! body sits in, the callable body each binder births, each `LET` binder's right-hand side, and
-//! each type binder's declaration node, and the order its units run in. [`build`] is the one
-//! builder every kind goes through.
+//! body sits in, and the order its units run in. What it knows of each binder — the body it births,
+//! a `LET` binder's right-hand side and annotation, a type binder's declaration node, the
+//! registration bound there — is one record per slot. [`build`] is the one builder every kind goes
+//! through.
 //!
 //! A **registration** is a binder no text names: the slot a definition's function is bound to
 //! under its bucket key. A keyworded use reaches it by key, through a [`CandidateList`] fixed where
@@ -28,10 +29,11 @@
 //!
 //! A shape also carries a write-once cell for each type fact the elaborator's load pass fixes
 //! before the program runs — each [`TypeExpression`] it records, each type binder, each
-//! registration, a callable body's own type, and a code shape's typing refusal — laid down empty by
-//! the builder, since `scope` sits below `elaborate`. One more cell holds the value channel's
+//! registration, a callable body's own type — laid down empty by the builder, since `scope` sits
+//! below `elaborate`. A code shape's one refusal cell holds the builder's refusal, else the load
+//! pass's, written where the code does not type. One more cell holds the value channel's
 //! [`Statics`] — a static type per value expression and binder, and each keyworded use's
-//! [`Narrowing`] — which the language's load pass fixes. Two more record where a run reads a
+//! [`UseStatics`] — which the language's load pass fixes. Two more record where a run reads a
 //! lexical variable: each one the body declares, beside its slot or capture, and each **type
 //! capture** the static pass adds past the builder's captures, so a callable can read a type name
 //! its body never writes but a call in it solves from. See [README.md § Load-time
@@ -61,9 +63,10 @@ use crate::values::{ContentDigest, Knotted};
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
+use super::keyed::{Keyed, KeyedEntry};
 use super::typed::{
-    Elaboration, InstanceRead, Narrowing, Static, StaticCallable, StaticRegistered, StaticSolution,
-    StaticType, Statics,
+    Elaboration, InstanceRead, Static, StaticCallable, StaticRegistered, StaticSolution,
+    StaticType, Statics, UseStatics,
 };
 
 mod build;
@@ -199,6 +202,14 @@ impl Site {
     }
 }
 
+impl KeyedEntry for Site {
+    type Key = Site;
+
+    fn key(&self) -> Site {
+        *self
+    }
+}
+
 /// One identifier or type-name occurrence a body reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Mention {
@@ -209,6 +220,14 @@ pub struct Mention {
     pub at: Position,
     pub class: MentionClass,
     pub coordinate: Coordinate,
+}
+
+impl KeyedEntry for Mention {
+    type Key = Site;
+
+    fn key(&self) -> Site {
+        self.site
+    }
 }
 
 /// Which of a definition's bucket keys a registration is under: its only one, or for a `UNARY OP`,
@@ -428,6 +447,33 @@ impl<'graph> TypeExpression<'graph> {
     }
 }
 
+impl KeyedEntry for TypeExpression<'_> {
+    type Key = Site;
+
+    fn key(&self) -> Site {
+        self.site
+    }
+}
+
+/// What a body knows about one of its binders, at the binder's slot: each fact the builder found
+/// where the binder is written, and the load pass's write-once cells for it.
+struct Binder<'graph> {
+    /// The body the binder's right-hand side births, beside where that body sits in this shape.
+    birth: Option<(Site, &'graph BodyShape<'graph>)>,
+    /// A `LET` binder's right-hand side part.
+    rhs: Option<&'graph ExpressionPart<'graph>>,
+    /// The type part of the `LET <name> <type> = <value>` statement that writes the binder.
+    annotation: Option<&'graph ExpressionPart<'graph>>,
+    /// A type binder's whole declaration node.
+    declaration: Option<&'graph KExpression<'graph>>,
+    /// The registration bound here, in [`BodyShape::registrations`].
+    registration: Option<&'graph Registration<'graph>>,
+    /// A type binder's load-time type.
+    declared: Cell<StaticType<'graph>>,
+    /// A registration's load-time bucket entry.
+    registered: Cell<StaticRegistered<'graph>>,
+}
+
 /// One body's resolved lexical structure. See the module documentation.
 #[derive(Clone, Copy)]
 pub struct BodyShape<'graph> {
@@ -447,7 +493,7 @@ pub struct BodyShape<'graph> {
     entered_at: Position,
     component_of: &'graph [ComponentIndex],
     components: &'graph [Component<'graph>],
-    mentions: &'graph [Mention],
+    mentions: Keyed<'graph, Mention>,
     captures: &'graph [CaptureSpec],
     /// A `MODULE` or `GROUP` body's `OVER` list, where it writes one; `None` for every other body,
     /// and for a module body written with none, which captures nothing from outside.
@@ -460,15 +506,11 @@ pub struct BodyShape<'graph> {
     /// Each capture's top-level slot, where it reads the program's top level, parallel to
     /// `captures`.
     top_captures: &'graph [Option<Slot>],
-    nested: &'graph [(Site, &'graph BodyShape<'graph>)],
+    nested: Keyed<'graph, (Site, &'graph BodyShape<'graph>)>,
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
-    /// Each binder whose right-hand side births a callable or a module, beside that body, by slot.
-    births: &'graph [(Slot, &'graph BodyShape<'graph>)],
-    /// Each `LET` binder beside its right-hand side part, by slot.
-    rhs: &'graph [(Slot, &'graph ExpressionPart<'graph>)],
-    /// Each type binder beside the declaration node that binds it, by slot.
-    declarations: &'graph [(Slot, &'graph KExpression<'graph>)],
+    /// Each binder's record, by slot.
+    binders: &'graph [Binder<'graph>],
     /// The body's units in the order they are performed.
     units: &'graph [Unit],
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
@@ -476,26 +518,23 @@ pub struct BodyShape<'graph> {
     /// A code shape's carried type: its code kind needing its open `\` marks. `Code` for every
     /// other kind.
     code_type: KType,
-    /// Why a code shape's code cannot be built — reported when an `EVAL` runs it. A refused code
-    /// shape holds its `$` captures and nothing else.
-    refusal: Option<&'graph ShapeError<'graph>>,
+    /// Why a code shape's code cannot be built, or — once built — does not type: the builder's
+    /// refusal, else the load pass's. Reported when an `EVAL` runs it. A code shape the builder
+    /// refuses holds its `$` captures and nothing else.
+    refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
     /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
     /// needed name or key and what the `EVAL` offers for it.
-    offers: &'graph [(Site, &'graph [(BinderSymbol, Offer<'graph>)])],
+    offers: Keyed<'graph, (Site, &'graph [(BinderSymbol, Offer<'graph>)])>,
     /// Each registration this body declares, by slot.
     registrations: &'graph [Registration<'graph>],
     /// Each bucket declaration this body holds, in statement order.
     rankings: &'graph [Ranking<'graph>],
     /// Each keyworded use's candidates, by the use's node site.
-    candidates: &'graph [(Site, CandidateList<'graph>)],
+    candidates: Keyed<'graph, (Site, CandidateList<'graph>)>,
     /// A code shape's keyworded holes some use selects from alone, sorted.
     required: &'graph [KeySymbol],
     /// Each type expression this body records, by site.
-    type_expressions: &'graph [TypeExpression<'graph>],
-    /// Each type binder's load-time type, parallel to `declarations`.
-    declared: &'graph [Cell<StaticType<'graph>>],
-    /// Each registration's load-time bucket entry, parallel to `registrations`.
-    registered: &'graph [Cell<StaticRegistered<'graph>>],
+    type_expressions: Keyed<'graph, TypeExpression<'graph>>,
     /// A callable body's load-time type; `Unknown` for every other kind.
     callable: &'graph Cell<StaticCallable<'graph>>,
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
@@ -510,9 +549,8 @@ pub struct BodyShape<'graph> {
     /// activation its birth reads: closure slot `captures.len() + i`. Empty for every kind but a
     /// callable and a module.
     type_captures: &'graph Cell<&'graph [Coordinate]>,
-    /// Why a code shape's code does not type, where the load pass found a refusal in it.
-    typing_refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
-    /// The value channel's static types and narrowings, fixed by the language's load pass.
+    /// The value channel's static types and each keyworded use's statics, fixed by the language's
+    /// load pass.
     statics: &'graph Cell<Option<Statics<'graph>>>,
 }
 
@@ -554,6 +592,7 @@ pub struct Arm<'graph> {
 }
 
 const _: () = assert!(!std::mem::needs_drop::<BodyShape<'static>>());
+const _: () = assert!(!std::mem::needs_drop::<Binder<'static>>());
 
 impl<'graph> BodyShape<'graph> {
     /// The shape of a program's top-level statements.
@@ -619,18 +658,24 @@ impl<'graph> BodyShape<'graph> {
         self.names.name(slot.index())
     }
 
+    /// The position the binder at `slot` writes at.
+    pub fn position_of(&self, slot: Slot) -> Position {
+        self.names.get(slot.index())
+    }
+
+    fn binder(&self, slot: Slot) -> &'graph Binder<'graph> {
+        let binders: &'graph [Binder<'graph>] = self.binders;
+        &binders[slot.index()]
+    }
+
     /// Every mention, sorted by site.
     pub fn mentions(&self) -> &'graph [Mention] {
-        self.mentions
+        self.mentions.entries()
     }
 
     /// The mention recorded for the name part at `site`, if the part is one this shape reads.
     pub fn mention(&self, site: Site) -> Option<&'graph Mention> {
-        let index = self
-            .mentions
-            .binary_search_by_key(&site, |mention| mention.site)
-            .ok()?;
-        Some(&self.mentions[index])
+        self.mentions.get(site)
     }
 
     /// The capture layout, in closure-slot order. Empty for a program and a block.
@@ -688,16 +733,12 @@ impl<'graph> BodyShape<'graph> {
 
     /// The shape of the body or arm whose part sits at `site`.
     pub fn nested(&self, site: Site) -> Option<&'graph BodyShape<'graph>> {
-        let index = self
-            .nested
-            .binary_search_by_key(&site, |(nested, _)| *nested)
-            .ok()?;
-        Some(self.nested[index].1)
+        self.nested.get(site).map(|(_, body)| *body)
     }
 
     /// Every nested shape by site.
     pub fn nested_shapes(&self) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
-        self.nested
+        self.nested.entries()
     }
 
     /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.
@@ -718,46 +759,25 @@ impl<'graph> BodyShape<'graph> {
     /// [`form`](Self::form); `None` for a data binder, a parameter, and a body nested under
     /// anything else.
     pub fn births(&self, slot: Slot) -> Option<&'graph BodyShape<'graph>> {
-        let index = self
-            .births
-            .binary_search_by_key(&slot, |(binder, _)| *binder)
-            .ok()?;
-        Some(self.births[index].1)
+        self.binder(slot).birth.map(|(_, body)| body)
     }
 
     /// Where the body the binder at `slot` births sits in this shape's own node — what a caller
     /// that must ask for that body by site names it by.
     pub fn birth_site(&self, slot: Slot) -> Option<Site> {
-        let body = self.births(slot)?;
-        self.nested
-            .iter()
-            .find(|(_, nested)| std::ptr::eq(*nested, body))
-            .map(|(site, _)| *site)
+        self.binder(slot).birth.map(|(site, _)| site)
     }
 
     /// The right-hand side part of the `LET` binder at `slot`, the part a knot's data member is built
     /// from. `None` for a parameter, a type declaration and a module binder.
     pub fn rhs(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {
-        let index = self
-            .rhs
-            .binary_search_by_key(&slot, |(binder, _)| *binder)
-            .ok()?;
-        Some(self.rhs[index].1)
+        self.binder(slot).rhs
     }
 
     /// The type the value binder at `slot` is annotated with — the type part of the
     /// `LET <name> <type> = <value>` declaring it — or `None` for any other binder.
     pub fn annotation(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {
-        let statement = self.names.get(slot.index()).statement_index()?;
-        let node = self.body.get(statement)?.statement_spine();
-        let form = node.cache().builtin_shape()?;
-        if form.id != BuiltinShapeId::LetAnnotated {
-            return None;
-        }
-        form.roles()
-            .zip(node.parts)
-            .find(|(role, _)| *role == Role::TypeExpression)
-            .map(|(_, part)| &part.value)
+        self.binder(slot).annotation
     }
 
     /// The declaration node of the type binder at `slot` — a `NEWTYPE`, `UNION`, `SIG` or a `LET`
@@ -765,11 +785,7 @@ impl<'graph> BodyShape<'graph> {
     /// declared part sits off the node's builtin shape, as [`form`](Self::form) is where a
     /// callable's signature is read. `None` for a value binder and for a parameter.
     pub fn declarations(&self, slot: Slot) -> Option<&'graph KExpression<'graph>> {
-        let index = self
-            .declarations
-            .binary_search_by_key(&slot, |(binder, _)| *binder)
-            .ok()?;
-        Some(self.declarations[index].1)
+        self.binder(slot).declaration
     }
 
     /// A code shape's carried type — its code kind needing its open `\` marks — and `Code` for
@@ -781,36 +797,30 @@ impl<'graph> BodyShape<'graph> {
     /// Why this code shape's code cannot be built, or — once it is built — does not type, reported
     /// when an `EVAL` runs it.
     pub fn refusal(&self) -> Option<&'graph ShapeError<'graph>> {
-        self.refusal.or(self.typing_refusal.get())
+        self.refusal.get()
     }
 
     /// Every type expression this body records, sorted by site.
     pub fn type_expressions(&self) -> &'graph [TypeExpression<'graph>] {
-        self.type_expressions
+        self.type_expressions.entries()
     }
 
     /// What the load pass fixed for the type expression at `site`: `Unknown` where this body
     /// records none there.
     pub fn typed_expression(&self, site: Site) -> StaticType<'graph> {
         self.type_expressions
-            .binary_search_by_key(&site, |recorded| recorded.site)
-            .map_or(Static::Unknown, |index| {
-                self.type_expressions[index].typed()
-            })
+            .get(site)
+            .map_or(Static::Unknown, TypeExpression::typed)
     }
 
     /// What the load pass fixed for the type binder at `slot`.
     pub fn declared_type(&self, slot: Slot) -> StaticType<'graph> {
-        self.declarations
-            .binary_search_by_key(&slot, |(binder, _)| *binder)
-            .map_or(Static::Unknown, |index| self.declared[index].get())
+        self.binder(slot).declared.get()
     }
 
     /// What the load pass fixed for the registration at `slot`.
     pub fn registered_type(&self, slot: Slot) -> StaticRegistered<'graph> {
-        self.registrations
-            .binary_search_by_key(&slot, |registration| registration.slot)
-            .map_or(Static::Unknown, |index| self.registered[index].get())
+        self.binder(slot).registered.get()
     }
 
     /// What the load pass fixed for this callable body's type.
@@ -820,22 +830,24 @@ impl<'graph> BodyShape<'graph> {
 
     /// Written once, by the load pass.
     pub fn fix_declared(&self, slot: Slot, typed: StaticType<'graph>) {
-        let index = self
-            .declarations
-            .binary_search_by_key(&slot, |(binder, _)| *binder)
-            .expect("a type binder records its declaration node");
-        debug_assert!(matches!(self.declared[index].get(), Static::Unknown));
-        self.declared[index].set(typed);
+        let binder = self.binder(slot);
+        assert!(
+            binder.declaration.is_some(),
+            "a type binder records its declaration node"
+        );
+        debug_assert!(matches!(binder.declared.get(), Static::Unknown));
+        binder.declared.set(typed);
     }
 
     /// Written once, by the load pass.
     pub fn fix_registered(&self, slot: Slot, typed: StaticRegistered<'graph>) {
-        let index = self
-            .registrations
-            .binary_search_by_key(&slot, |registration| registration.slot)
-            .expect("a registration's slot is one this body declares");
-        debug_assert!(matches!(self.registered[index].get(), Static::Unknown));
-        self.registered[index].set(typed);
+        let binder = self.binder(slot);
+        assert!(
+            binder.registration.is_some(),
+            "a registration's slot is one this body declares"
+        );
+        debug_assert!(matches!(binder.registered.get(), Static::Unknown));
+        binder.registered.set(typed);
     }
 
     /// Written once, by the load pass.
@@ -908,8 +920,8 @@ impl<'graph> BodyShape<'graph> {
     /// Written once, by the load pass, on a code shape whose code does not type.
     pub fn refuse_typing(&self, refusal: &'graph ShapeError<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Code);
-        debug_assert!(self.typing_refusal.get().is_none());
-        self.typing_refusal.set(Some(refusal));
+        debug_assert!(self.refusal.get().is_none());
+        self.refusal.set(Some(refusal));
     }
 
     /// The value channel's load-time facts, once the language's load pass has fixed them.
@@ -919,9 +931,7 @@ impl<'graph> BodyShape<'graph> {
 
     /// The static type of the part at `site`, where the load pass typed one.
     pub fn value_type(&self, site: Site) -> Option<Interval> {
-        let parts = self.statics.get()?.parts;
-        let index = parts.binary_search_by_key(&site, |(at, _)| *at).ok()?;
-        Some(parts[index].1)
+        self.statics.get()?.parts.get(site).map(|(_, typed)| *typed)
     }
 
     /// The static type of statement `index` of [`body`](Self::body).
@@ -930,21 +940,18 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// The static type of the binder at `slot` — a quantified callable's binder its scheme.
+    #[cfg(test)]
     pub fn binder_type(&self, slot: Slot) -> Option<DeclaredType<Interval>> {
         self.statics.get()?.binders.get(slot.index()).copied()
     }
 
-    /// What the load fixed about the candidates of the keyworded use at `site`: `Full` where it
-    /// fixed nothing.
-    pub fn narrowing(&self, site: Site) -> Narrowing<'graph> {
-        let Some(statics) = self.statics.get() else {
-            return Narrowing::Full;
-        };
-        self.candidates
-            .binary_search_by_key(&site, |(use_site, _)| *use_site)
-            .ok()
-            .and_then(|index| statics.narrowings.get(index).copied())
-            .unwrap_or(Narrowing::Full)
+    /// What the load fixed about the keyworded use whose node sits at `site`: unfixed where it fixed
+    /// nothing, or has not run.
+    pub fn use_statics(&self, site: Site) -> UseStatics<'graph> {
+        self.statics
+            .get()
+            .and_then(|statics| statics.uses.get(site))
+            .map_or(UseStatics::UNFIXED, |(_, fixed)| *fixed)
     }
 
     /// Whether the load settled the ascription at `site`: its operand's static upper end lies under
@@ -952,55 +959,37 @@ impl<'graph> BodyShape<'graph> {
     pub fn settled(&self, site: Site) -> bool {
         self.statics
             .get()
-            .is_some_and(|statics| statics.settled.binary_search(&site).is_ok())
+            .is_some_and(|statics| statics.settled.get(site).is_some())
     }
 
     /// What the load fixed where it read a quantified function at `site`, where it read one there.
     pub fn instance_at(&self, site: Site) -> Option<InstanceRead<'graph>> {
-        let instances = self.statics.get()?.instances;
-        let index = instances.binary_search_by_key(&site, |(at, _)| *at).ok()?;
-        Some(instances[index].1)
-    }
-
-    /// What each argument of the keyworded use at `site` contributes to its candidates' solves:
-    /// empty where every argument contributes its carried type, or the load fixed nothing.
-    pub fn contributions(&self, site: Site) -> &'graph [StaticType<'graph>] {
-        let Some(statics) = self.statics.get() else {
-            return &[];
-        };
-        self.candidates
-            .binary_search_by_key(&site, |(use_site, _)| *use_site)
-            .ok()
-            .and_then(|index| statics.contributions.get(index).copied())
-            .unwrap_or(&[])
+        self.statics
+            .get()?
+            .instances
+            .get(site)
+            .map(|(_, read)| *read)
     }
 
     /// What each parameter of the call by name whose argument part sits at `site` is solved from,
     /// per parameter in symbol order: empty where every parameter reads its carried type.
     pub fn named_contributions(&self, site: Site) -> &'graph [StaticType<'graph>] {
-        let Some(statics) = self.statics.get() else {
-            return &[];
-        };
-        statics
-            .named
-            .binary_search_by_key(&site, |(at, _)| *at)
-            .map_or(&[], |index| statics.named[index].1)
+        self.statics
+            .get()
+            .and_then(|statics| statics.named.get(site))
+            .map_or(&[], |(_, recorded)| *recorded)
     }
 
     /// Written once, by the language's load pass.
     pub fn fix_statics(&self, statics: Statics<'graph>) {
         debug_assert!(self.statics.get().is_none());
-        debug_assert_eq!(statics.narrowings.len(), self.candidates.len());
-        debug_assert_eq!(statics.contributions.len(), self.candidates.len());
         self.statics.set(Some(statics));
     }
 
     /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each
     /// beside what it offers. Empty for an `EVAL` of anything but a parameter needing names.
     pub fn offers(&self, site: Site) -> &'graph [(BinderSymbol, Offer<'graph>)] {
-        self.offers
-            .binary_search_by_key(&site, |(offered, _)| *offered)
-            .map_or(&[], |index| self.offers[index].1)
+        self.offers.get(site).map_or(&[], |(_, offered)| *offered)
     }
 
     /// Every registration this body declares, by slot.
@@ -1010,11 +999,7 @@ impl<'graph> BodyShape<'graph> {
 
     /// The registration bound at `slot`, or `None` for a name's slot.
     pub fn registration(&self, slot: Slot) -> Option<&'graph Registration<'graph>> {
-        let index = self
-            .registrations
-            .binary_search_by_key(&slot, |registration| registration.slot)
-            .ok()?;
-        Some(&self.registrations[index])
+        self.binder(slot).registration
     }
 
     /// Every bucket declaration this body holds, in statement order.
@@ -1047,18 +1032,14 @@ impl<'graph> BodyShape<'graph> {
             .all(|(_, body)| body.kind == ShapeKind::Code || body.ranks_alike(key, classes))
     }
 
-    /// Every keyworded use's candidates, by the use's node site, sorted.
-    pub fn candidate_lists(&self) -> &'graph [(Site, CandidateList<'graph>)] {
+    /// Every keyworded use's candidates, by the use's node site.
+    pub fn candidate_lists(&self) -> Keyed<'graph, (Site, CandidateList<'graph>)> {
         self.candidates
     }
 
     /// The candidates of the keyworded use whose node sits at `site` ([`Site::of_node`]).
     pub fn candidates(&self, site: Site) -> Option<&'graph CandidateList<'graph>> {
-        let index = self
-            .candidates
-            .binary_search_by_key(&site, |(use_site, _)| *use_site)
-            .ok()?;
-        Some(&self.candidates[index].1)
+        self.candidates.get(site).map(|(_, list)| list)
     }
 }
 

@@ -36,7 +36,11 @@ pub(super) fn expressed<'graph>(
 
 /// The narrowing of the keyworded use written as the statement `index` of `shape`.
 fn statement(shape: &BodyShape<'_>, index: usize) -> String {
-    rendered(shape.narrowing(Site::of_node(&shape.body()[index])))
+    rendered(
+        shape
+            .use_statics(Site::of_node(&shape.body()[index]))
+            .narrowing,
+    )
 }
 
 /// The narrowing of the keyworded use written as the last statement of the body the `index`th
@@ -256,7 +260,7 @@ fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
             let code = code(wrapped);
             let greet = use_leading(program, &code.body()[0], "GREET").expect("a `GREET` use");
             assert_eq!(
-                rendered(code.narrowing(Site::of_node(greet))),
+                rendered(code.use_statics(Site::of_node(greet)).narrowing),
                 "full",
                 "`{source}`"
             );

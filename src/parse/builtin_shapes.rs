@@ -208,13 +208,21 @@ impl BuiltinShape {
     /// True for a bucket whose every slot is an operand dispatch evaluates or a label it reads —
     /// `ATTR`, `FROM` and `USING` over code. A use of one selects among the builtin
     /// overloads at its key, which the bucket being closed keeps the only ones.
-    pub fn dispatched(&self) -> bool {
-        self.roles()
-            .all(|role| matches!(role, Role::Keyword | Role::Argument | Role::Field))
+    pub const fn dispatched(&self) -> bool {
+        let mut index = 0;
+        while index < self.elements.len() {
+            if let ShapeElement::Slot { role, .. } = &self.elements[index]
+                && !matches!(role, Role::Argument | Role::Field)
+            {
+                return false;
+            }
+            index += 1;
+        }
+        true
     }
 
     /// How many typed overloads this bucket has.
-    pub fn overloads(&self) -> usize {
+    pub const fn overloads(&self) -> usize {
         self.returns.len()
     }
 }

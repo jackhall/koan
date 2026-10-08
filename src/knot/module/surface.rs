@@ -58,10 +58,9 @@ pub fn surface<'graph, 'cell>(
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
         let name = shape.slot_name(slot);
-        let (_, position) = shape.slot(name).expect("a slot's own name resolves to it");
         // A block declares locals of its own, and a local sorts in among the parameters rather
         // than after them, so a parameter is picked out by its declared position.
-        if position != Position::PARAMETER {
+        if shape.position_of(slot) != Position::PARAMETER {
             continue;
         }
         // A surfaced key holds every function the module offers at it.

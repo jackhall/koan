@@ -517,10 +517,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
 fn unit_of_statement(shape: &BodyShape<'_>, statement: u32) -> usize {
     let binder = (0..shape.slots())
         .map(|slot| Slot(slot as u32))
-        .find(|slot| {
-            shape.slot(shape.slot_name(*slot)).map(|(_, at)| at)
-                == Some(Position::statement(statement as usize))
-        });
+        .find(|slot| shape.position_of(*slot) == Position::statement(statement as usize));
     let work = match binder {
         Some(slot) => UnitWork::Component(shape.component_index(slot)),
         None => UnitWork::Statement(statement),
@@ -647,7 +644,22 @@ fn activate<'g, 'c>(
     // A local is found by name exactly at the positions that see it.
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
-        let (_, declared) = shape.slot(shape.slot_name(slot)).unwrap();
+        let declared = shape.position_of(slot);
+        let name = shape.slot_name(slot);
+        assert_eq!(
+            shape.slot(name),
+            Some((slot, declared)),
+            "a slot's name finds it at the position it writes at"
+        );
+        // A birth's site names its body among the nested shapes.
+        if let Some(body) = shape.births(slot) {
+            let site = shape.birth_site(slot).expect("a birth has a site");
+            assert!(
+                shape
+                    .nested(site)
+                    .is_some_and(|nested| std::ptr::eq(nested, body))
+            );
+        }
         for position in 0..=shape.end().0 {
             let at = Position(position);
             let local = Coordinate::Activation {
@@ -655,7 +667,7 @@ fn activate<'g, 'c>(
                 target: Target::Local(slot),
             };
             assert_eq!(
-                by_name(table, chain, shape.slot_name(slot), at) == Some(local),
+                by_name(table, chain, name, at) == Some(local),
                 at.sees(declared)
             );
         }

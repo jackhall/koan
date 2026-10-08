@@ -8,7 +8,7 @@ use crate::type_lattice::{ContentKey, KType, Members, TypeNode};
 use crate::values::tests::parts;
 use crate::values::{Knotted as _, Record, Resolved, Value};
 
-use super::super::coerce::{Coercion, CoercionRefused, coerce};
+use super::super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
 use super::super::view::{Ascription, Unascribable, ascribe};
 use super::{member, module};
 
@@ -310,8 +310,16 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
                 writer,
                 types,
                 scratch,
-                from: Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
-                to: Members::from_pairs(scratch, [(carrier, hidden)]),
+                from: Substitution::interned(
+                    Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
+                    types,
+                    scratch,
+                ),
+                to: Substitution::interned(
+                    Members::from_pairs(scratch, [(carrier, hidden)]),
+                    types,
+                    scratch,
+                ),
             };
 
             let held = member(fixture, m, "inner", types, scratch);
@@ -367,8 +375,16 @@ LET f = (FN :{} -> Number = #(1))";
                 writer,
                 types,
                 scratch,
-                from: Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
-                to: Members::from_pairs(scratch, [(carrier, hidden)]),
+                from: Substitution::interned(
+                    Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
+                    types,
+                    scratch,
+                ),
+                to: Substitution::interned(
+                    Members::from_pairs(scratch, [(carrier, hidden)]),
+                    types,
+                    scratch,
+                ),
             };
             let f = crate::knot::tests::callable(fixture, activation, "f");
             for value in [Value::Knotted(f), Value::Null] {

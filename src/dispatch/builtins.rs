@@ -99,6 +99,16 @@ impl Native {
     }
 }
 
+// Each native sits in `ALL` at its own discriminant, so `of` reads back the native an overload's
+// `id` was minted from.
+const _: () = {
+    let mut index = 0;
+    while index < Native::ALL.len() {
+        assert!(Native::ALL[index] as usize == index);
+        index += 1;
+    }
+};
+
 /// What a slot of an operator overload takes.
 #[derive(Clone, Copy)]
 enum Takes {
@@ -173,15 +183,36 @@ static OVERLOADS: &[Overload] = &[
     },
 ];
 
-/// The natives of a builtin expression shape's overloads, in overload order.
-fn natives_of(id: BuiltinShapeId) -> &'static [Native] {
+/// The natives of a builtin expression shape's overloads, in overload order; empty for a shape
+/// dispatch runs no overload of.
+const fn natives_of(id: BuiltinShapeId) -> &'static [Native] {
     match id {
         BuiltinShapeId::Attribute => &[Native::ModuleMember, Native::Field, Native::Variant],
         BuiltinShapeId::Projection => &[Native::Project],
         BuiltinShapeId::UsingCode => &[Native::Using, Native::Using],
-        other => unreachable!("dispatch runs no overload of {other:?}"),
+        _ => &[],
     }
 }
+
+// Each builtin expression shape dispatch runs names one native per overload, so `table`'s zip
+// drops none, and every other shape names none. No reserved shape is one dispatch runs.
+const _: () = {
+    let mut index = 0;
+    while index < BUILTIN_SHAPES.len() {
+        let shape = &BUILTIN_SHAPES[index];
+        let natives = natives_of(shape.id).len();
+        assert!(
+            natives
+                == if shape.dispatched() {
+                    shape.overloads()
+                } else {
+                    0
+                }
+        );
+        assert!(natives == 0 || !shape.reserved);
+        index += 1;
+    }
+};
 
 /// Lay the builtin table down in program storage, through `writer`.
 pub(super) fn table<'graph>(

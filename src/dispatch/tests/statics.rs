@@ -102,7 +102,7 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(program, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    rendered(shape.narrowing(Site::of_node(node.reference())))
+    rendered(shape.use_statics(Site::of_node(node.reference())).narrowing)
 }
 
 /// A narrowing, rendered: `full`, `selected`, or `kept` followed by each kept candidate's verdict.

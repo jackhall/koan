@@ -179,7 +179,8 @@ Where they differ, the arm is the declared type's:
 - a function type or an expression shape — a **barrier node**
   ([`Coerced`](../README.md#what-a-knot-member-is)) holding the
   function it stands before, the type a caller sees, the declared slot type and
-  the two substitutions as signature handles;
+  the two substitutions as signature handles, which `build` interns once per
+  view and a call through the barrier reads as the handles' manifest members;
 - an application whose pins name the enclosing signature's parameters — the
   member is **re-viewed** through the same `fitted` and `build`. No carrier is made at a
   nested boundary: the enclosing substitutions read the pins, so the nested

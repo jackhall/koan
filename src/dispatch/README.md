@@ -568,7 +568,10 @@ ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks first
 
 An instance argument is listed at its scheme, since no instance of it is made.
 The cell records the candidate selected, or each candidate kept beside its
-verdict.
+verdict, in one record per use beside the use's contributions (above), which
+the call reads by its node's site (`BodyShape::use_statics`); a use the load
+narrowed nothing at and recorded no contributions for has no record, and the
+call selects over its whole list from the carried types.
 
 **The return check.** A callable body whose static type — its last statement's
 — meets its declared return at `Never` refuses the load

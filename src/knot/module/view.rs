@@ -35,7 +35,7 @@ use crate::type_lattice::{
 };
 use crate::values::{TypeValue, Value};
 
-use super::coerce::{Coercion, CoercionRefused, coerce};
+use super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
 use super::{Module, ModuleContent, Operator, layout};
 
 /// Which operator is ascribing: `:!` keeps the source's types, `:|` hides them behind carriers. The
@@ -219,8 +219,8 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
         writer,
         types,
         scratch,
-        from,
-        to,
+        from: Substitution::interned(from, types, scratch),
+        to: Substitution::interned(to, types, scratch),
     };
     let view_schema = crate::elaborate::schema_of(view, types).expect("the view's own signature");
     let mut members: BumpVec<'x, KValue<'graph, 'cell>> = BumpVec::with_capacity_in(

@@ -9,7 +9,8 @@
 //! supplies, by level — which [`solutions`] reads through an activation for one substitution.
 //!
 //! The value channel's records live here too: the [`Statics`] the language's load pass fixes for a
-//! body, and the [`Narrowing`] of each keyworded use's candidates.
+//! body, and the [`UseStatics`] of each keyworded use: its candidates' [`Narrowing`] and its
+//! arguments' contributions.
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
@@ -23,6 +24,7 @@ use crate::type_lattice::{
 use crate::values::{KnottedFamily, Value};
 
 use super::activation::ActivationView;
+use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Site};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
@@ -279,38 +281,59 @@ pub enum Narrowing<'graph> {
     Selected(Coordinate),
 }
 
+/// What the load fixed about one keyworded use: which candidates a call selects among, and what
+/// each argument contributes to their solves.
+#[derive(Clone, Copy, Debug)]
+pub struct UseStatics<'graph> {
+    pub narrowing: Narrowing<'graph>,
+    /// Per argument, the static type its solving slot is solved from — `Unknown` where the call
+    /// reads the carried type. Empty for a use every argument of which does.
+    pub contributions: &'graph [StaticType<'graph>],
+}
+
+impl UseStatics<'_> {
+    /// A use the load fixed nothing about: every candidate kept, every argument read as carried.
+    pub const UNFIXED: Self = UseStatics {
+        narrowing: Narrowing::Full,
+        contributions: &[],
+    };
+
+    /// Whether the load fixed nothing about the use.
+    pub fn is_unfixed(&self) -> bool {
+        matches!(self.narrowing, Narrowing::Full) && self.contributions.is_empty()
+    }
+}
+
 /// The value channel's load-time facts for one body: a static type for every value expression and
-/// value binder — under which every type the run carries there lies — and each keyworded use's
-/// narrowing.
+/// statement — under which every type the run carries there lies — and each keyworded use's
+/// narrowing and contributions.
 #[derive(Clone, Copy, Debug)]
 pub struct Statics<'graph> {
     /// Each part the evaluator reads as a value, by site, sorted by site, beside its static type:
     /// an interval.
-    pub parts: &'graph [(Site, Interval<Parametric>)],
+    pub parts: Keyed<'graph, (Site, Interval<Parametric>)>,
     /// Each statement's static type, an interval, by index into the shape's body; at most `Any`
     /// for one that binds nothing typed.
     pub statements: &'graph [Interval<Parametric>],
     /// Each slot's static type, an interval, by index: a value binder's, a registration's function
     /// type, and for a type name the type of the type value it holds. A quantified callable's binder
-    /// is its scheme.
+    /// is its scheme. Read by tests alone.
+    #[cfg(test)]
     pub binders: &'graph [DeclaredType<Interval<Parametric>>],
-    /// Each keyworded use's narrowing, parallel to the shape's candidate lists.
-    pub narrowings: &'graph [Narrowing<'graph>],
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does, sorted by site: the run checks nothing there.
-    pub settled: &'graph [Site],
+    pub settled: Keyed<'graph, Site>,
     /// Each site where the load read a quantified function, sorted by site, beside what it fixed
     /// there: the solution it instantiated it at, closed or over the run's variables, or that the
     /// run reads it as it is.
-    pub instances: &'graph [(Site, InstanceRead<'graph>)],
-    /// Each keyworded use's contributions, parallel to the shape's candidate lists: per argument,
-    /// the static type its solving slot is solved from — `Unknown` where the call reads the carried
-    /// type. Empty for a use every argument of which does.
-    pub contributions: &'graph [&'graph [StaticType<'graph>]],
+    pub instances: Keyed<'graph, (Site, InstanceRead<'graph>)>,
+    /// Each keyworded use the load fixed something about, by its node's site, sorted by site: its
+    /// narrowing and its contributions. A use absent here is [`UseStatics::UNFIXED`].
+    pub uses: Keyed<'graph, (Site, UseStatics<'graph>)>,
     /// Each call by name's contributions, by its argument part's site, sorted by site: per
     /// parameter of its callee in symbol order, the static type that parameter is solved from —
     /// `Unknown` where the frame reads the carried type.
-    pub named: &'graph [(Site, &'graph [StaticType<'graph>])],
+    pub named: Keyed<'graph, (Site, &'graph [StaticType<'graph>])>,
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

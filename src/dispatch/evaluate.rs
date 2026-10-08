@@ -593,9 +593,9 @@ fn call<'graph, 'here>(
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
     let shape = at.view.shape();
-    let contributed = contributed(at, shape.contributions(Site::of_node(node)), &scratch);
-    let narrowing = shape.narrowing(Site::of_node(node));
-    let selection = match narrowing {
+    let fixed = shape.use_statics(Site::of_node(node));
+    let contributed = contributed(at, fixed.contributions, &scratch);
+    let selection = match fixed.narrowing {
         Narrowing::Full => {
             let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
             select::selected(at, maybe, &arguments, &contributed, &scratch)

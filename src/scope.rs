@@ -31,6 +31,7 @@ mod builtins;
 mod channels;
 mod closure;
 mod groups;
+mod keyed;
 mod shape;
 mod signature;
 mod typed;
@@ -45,6 +46,7 @@ pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
+pub use keyed::{Keyed, KeyedEntry};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
@@ -55,5 +57,5 @@ pub use shape::{
 pub use typed::{
     Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, InstanceRead, Narrowing,
     ParameterBinding, Registered, ShapeGroupMap, Static, StaticCallable, StaticRegistered,
-    StaticSolution, StaticType, Statics, Variable, solutions,
+    StaticSolution, StaticType, Statics, UseStatics, Variable, solutions,
 };

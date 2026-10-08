@@ -104,9 +104,9 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate,
-    InstanceRead, Listed, Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static,
-    StaticSolution, StaticType, Statics, SurfacedHead, Target, UnitWork, Variable as Located,
-    source_of,
+    InstanceRead, Keyed, Listed, Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static,
+    StaticSolution, StaticType, Statics, SurfacedHead, Target, UnitWork, UseStatics,
+    Variable as Located, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -226,14 +226,13 @@ struct Level<'p, 'graph> {
     parts: BumpVec<'p, (Site, Interval)>,
     statements: BumpVec<'p, Interval>,
     binders: BumpVec<'p, Bound>,
-    narrowings: BumpVec<'p, Narrowing<'graph>>,
+    /// What the pass fixed about each keyworded use, by index into the shape's candidate lists.
+    uses: BumpVec<'p, UseStatics<'graph>>,
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does.
     settled: BumpVec<'p, Site>,
     /// Each site where a quantified function is read, beside what the load fixed there.
     instances: BumpVec<'p, (Site, InstanceRead<'graph>)>,
-    /// Each keyworded use's contributions, parallel to the candidate lists.
-    contributions: BumpVec<'p, &'graph [StaticType<'graph>]>,
     /// Each call by name's contributions, by its argument part's site: per parameter in symbol
     /// order.
     named: BumpVec<'p, (Site, &'graph [StaticType<'graph>])>,
@@ -358,20 +357,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         statements.resize(shape.body().len(), unknown());
         let mut binders = BumpVec::with_capacity_in(shape.slots(), scratch);
         binders.resize(shape.slots(), DeclaredType::Type(unknown()));
-        let mut narrowings = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
-        narrowings.resize(shape.candidate_lists().len(), Narrowing::Full);
-        let mut contributions = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
-        contributions.resize(shape.candidate_lists().len(), &[][..]);
+        let mut uses = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
+        uses.resize(shape.candidate_lists().len(), UseStatics::UNFIXED);
         self.chain.push(Level {
             shape,
             roots_chain,
             parts: BumpVec::new_in(scratch),
             statements,
             binders,
-            narrowings,
+            uses,
             settled: BumpVec::new_in(scratch),
             instances: BumpVec::new_in(scratch),
-            contributions,
             named: BumpVec::new_in(scratch),
             type_captures: BumpVec::new_in(scratch),
         });
@@ -536,21 +532,24 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if self.unfilled {
             return;
         }
-        let writer = self.writer;
+        let (writer, scratch) = (self.writer, self.scratch);
         let at = &mut self.chain[level];
-        at.parts.sort_unstable_by_key(|(site, _)| *site);
-        at.settled.sort_unstable();
-        at.instances.sort_unstable_by_key(|(site, _)| *site);
-        at.named.sort_unstable_by_key(|(site, _)| *site);
+        let mut uses = BumpVec::new_in(scratch);
+        uses.extend(
+            (at.shape.candidate_lists().iter())
+                .zip(at.uses.iter())
+                .filter(|(_, fixed)| !fixed.is_unfixed())
+                .map(|((site, _), fixed)| (*site, *fixed)),
+        );
         at.shape.fix_statics(Statics {
-            parts: collect(writer, at.parts.iter().copied()),
+            parts: Keyed::sorted(writer, &mut at.parts),
             statements: collect(writer, at.statements.iter().copied()),
+            #[cfg(test)]
             binders: collect(writer, at.binders.iter().copied()),
-            narrowings: collect(writer, at.narrowings.iter().copied()),
-            settled: collect(writer, at.settled.iter().copied()),
-            instances: collect(writer, at.instances.iter().copied()),
-            contributions: collect(writer, at.contributions.iter().copied()),
-            named: collect(writer, at.named.iter().copied()),
+            uses: Keyed::sorted(writer, &mut uses),
+            settled: Keyed::sorted(writer, &mut at.settled),
+            instances: Keyed::sorted(writer, &mut at.instances),
+            named: Keyed::sorted(writer, &mut at.named),
         });
     }
 
@@ -705,7 +704,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn seeded(&self, level: usize, slot: Slot, surfacing: Option<Parametric>) -> Bound {
         let shape = self.chain[level].shape;
         if let (Some(upper), BinderSymbol::Value(_)) = (surfacing, shape.slot_name(slot))
-            && shape.slot(shape.slot_name(slot)).map(|(_, at)| at) == Some(Position::PARAMETER)
+            && shape.position_of(slot) == Position::PARAMETER
         {
             let name = shape.slot_name(slot);
             return match signature_member(self.types, self.scratch, upper, name) {
@@ -734,9 +733,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 _ => under(KType::ANY_TYPE.into()),
             });
         }
-        let is_parameter = shape
-            .slot(name)
-            .is_some_and(|(_, position)| position == Position::PARAMETER);
+        let is_parameter = shape.position_of(slot) == Position::PARAMETER;
         if shape.kind() != ShapeKind::Callable || !is_parameter {
             return DeclaredType::Type(unknown());
         }
@@ -848,8 +845,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// The index of the statement that binds `member` in the shape at `level`, where one does.
     fn statement_of(&self, level: usize, member: Slot) -> Option<usize> {
         let shape = self.chain[level].shape;
-        let written = shape.slot(shape.slot_name(member)).map(|(_, at)| at);
-        written.and_then(Position::statement_index)
+        shape.position_of(member).statement_index()
     }
 
     /// The type the statement at `index` of the shape at `level` is wanted at: a callable body's
@@ -1675,8 +1671,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let held = self.held(level, typed, annotation, Site::of(annotation));
         held.map_err(|(value, annotated)| {
             let shape = self.chain[level].shape;
-            let written = shape.slot(shape.slot_name(member)).map(|(_, at)| at);
-            let statement = written.and_then(Position::statement_index);
+            let statement = shape.position_of(member).statement_index();
             ShapeError::AnnotationNeverSatisfied {
                 value,
                 annotated,
@@ -2401,7 +2396,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Interval, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         let wanted = slots(node, scratch);
-        let mut arguments = BumpVec::with_capacity_in(wanted.len(), scratch);
         let mut given = BumpVec::with_capacity_in(wanted.len(), scratch);
         // Each argument that is an instance site is typed per candidate, at the slot it fills.
         let mut sites = BumpVec::new_in(scratch);
@@ -2418,7 +2412,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     scheme,
                     at,
                 });
-                arguments.push(unknown());
                 given.push(Given {
                     typed: unknown(),
                     names: None,
@@ -2441,13 +2434,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     names: written_names(part, scratch),
                 },
             };
-            arguments.push(each.typed);
             given.push(each);
         }
+        let arguments = typed_of(&given, scratch);
         let shape = self.chain[level].shape;
         let index = shape
             .candidate_lists()
-            .binary_search_by_key(&Site::of_node(node), |(site, _)| *site)
+            .position(Site::of_node(node))
             .expect("a keyworded use's candidate list is recorded at its node");
         // A use one of whose arguments never arrives never runs its call.
         if arguments
@@ -2508,25 +2501,23 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             let known = self.candidate(level, *candidate);
             // At this candidate, each instance argument is exactly the instance its slot makes.
-            let (mut here, mut given_here) = (&arguments[..], &given[..]);
+            let (mut here, mut given_here) = (arguments, &given[..]);
             let mut instances: &[Made<'_>] = &[];
             if !sites.is_empty() {
-                match self.instances(known.shape(), &sites, &arguments, &contributions) {
+                match self.instances(known.shape(), &sites, arguments, &contributions) {
                     Ok(made) => instances = made,
                     Err(error) => {
                         refused = error.or(refused);
                         continue;
                     }
                 }
-                let mut typed = BumpVec::with_capacity_in(arguments.len(), scratch);
-                typed.extend(arguments.iter().copied());
                 let mut read = BumpVec::with_capacity_in(given.len(), scratch);
                 read.extend(given.iter().copied());
                 for (site, (instance, _)) in sites.iter().zip(instances.iter()) {
-                    typed[site.position] = *instance;
                     read[site.position].typed = *instance;
                 }
-                (here, given_here) = (typed.leak(), read.leak());
+                given_here = read.leak();
+                here = typed_of(given_here, scratch);
             }
             let (mut verdict, intervals) = match known.shape() {
                 Some(registered) => {
@@ -2545,7 +2536,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let typed = rules::typed(native, builtin.ktype(), given_here, types, scratch);
                 if let Some((slot, lacks)) = typed.dropped {
                     verdict = Verdict::Never;
-                    dropped = dropped.or(Some((arguments[slot].lower, lacks)));
+                    dropped = dropped.or(Some((given_here[slot].typed.lower, lacks)));
                 }
                 ruled = Some(typed.returns);
             }
@@ -2573,7 +2564,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         if contributes && !self.unfilled {
-            self.chain[level].contributions[index] =
+            self.chain[level].uses[index].contributions =
                 collect(self.writer, contributions.iter().copied());
         }
         // The narrowing law's unnarrowed load: see `unnarrowed`.
@@ -2660,7 +2651,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     unreachable!("an always candidate is no spread");
                 };
                 self.made(level, node, list, &sites, &[chosen])?;
-                self.chain[level].narrowings[index] = Narrowing::Selected(coordinate);
+                self.chain[level].uses[index].narrowing = Narrowing::Selected(coordinate);
                 return Ok(self.candidate_return(chosen));
             }
         }
@@ -2675,7 +2666,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     .iter()
                     .map(|judgement| (judgement.candidate, judgement.verdict)),
             );
-            self.chain[level].narrowings[index] = Narrowing::Kept(kept);
+            self.chain[level].uses[index].narrowing = Narrowing::Kept(kept);
         }
         self.made(level, node, list, &sites, &judged)?;
         let mut returns = BumpVec::with_capacity_in(judged.len(), scratch);
@@ -2903,6 +2894,13 @@ fn written_names<'x>(
         part => names.push(quoted(part)?),
     }
     Some(names.leak())
+}
+
+/// Each argument's static type, read off what a call is given.
+fn typed_of<'p>(given: &[Given<'_>], scratch: BumpAllocator<'p>) -> &'p [Interval] {
+    let mut typed = BumpVec::with_capacity_in(given.len(), scratch);
+    typed.extend(given.iter().map(|each| each.typed));
+    typed.leak()
 }
 
 /// Whether the pass has typed `nested`, or need not: a quote's code the load refused is left.
