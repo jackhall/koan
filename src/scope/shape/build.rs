@@ -138,6 +138,25 @@ pub(super) fn program<'graph, X: Knotted>(
     Ok(builder.seal(draft, None))
 }
 
+/// The parameters a node declares before any of its parts is read: a signature's or an `EXPR`
+/// head's names, a `FOR ALL` group's, and a parameterized union's family parameters. One walk,
+/// shared by the statement walk and the definition walk.
+fn form_parameters(
+    form: &BuiltinShape,
+    node: &KExpression<'_>,
+    into: &mut BumpVec<'_, BinderSymbol>,
+) {
+    let union = form.id == BuiltinShapeId::Union;
+    for (role, part) in form.roles().zip(node.parts) {
+        match role {
+            Role::Signature | Role::Head => declare_parameters(&part.value, into),
+            Role::Quantifiers => declare_quantifiers(&part.value, into),
+            Role::Name if union => declare_family_parameters(&part.value, into),
+            _ => {}
+        }
+    }
+}
+
 /// The static check of a builtin node, before any part is walked: each part its role reads as
 /// written — as a quote, as bare syntax or as a container of quotes — is written as the reading
 /// says, and admits one of its slot's types by [`admits_part`], the one admission rule — a type
@@ -1405,24 +1424,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         // A callable's parameters are declared before any part is read, so a type parameter a
         // signature names is never taken for a mention of the enclosing shape. A parameterized
         // union's declarator declares the parameters its variants' payloads read.
-        let union = form.id == BuiltinShapeId::Union;
-        let declares = union
-            || form
-                .roles()
-                .any(|role| matches!(role, Role::Signature | Role::Head | Role::Quantifiers));
         let mut parameters = BumpVec::new_in(self.scratch);
-        if declares {
-            for (role, part) in form.roles().zip(node.parts) {
-                match role {
-                    Role::Signature | Role::Head => {
-                        declare_parameters(&part.value, &mut parameters)
-                    }
-                    Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
-                    Role::Name if union => declare_family_parameters(&part.value, &mut parameters),
-                    _ => {}
-                }
-            }
-        }
+        form_parameters(form, node, &mut parameters);
         let mark = self.skip.len();
         self.skip
             .extend(parameters.iter().filter_map(|name| match name {
@@ -1742,13 +1745,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         written_as_read(form, node, self.types)?;
         let mut parameters = BumpVec::new_in(self.scratch);
-        for (role, part) in form.roles().zip(node.parts) {
-            match role {
-                Role::Signature | Role::Head => declare_parameters(&part.value, &mut parameters),
-                Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
-                _ => {}
-            }
-        }
+        form_parameters(form, node, &mut parameters);
         let mark = self.skip.len();
         self.skip
             .extend(parameters.iter().filter_map(|name| match name {
