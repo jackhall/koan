@@ -98,10 +98,10 @@ pub use shape::{
 pub use sig_relations::{FitsFailure, InstanceFailure};
 pub use substitute::Side;
 pub use typed::{
-    Substitutable, admit_by_class, bound_above, class_at_least, erase_rigid, fits,
-    fits_application, instance_under, instantiate_quantified, is_subtype_of, join, join_iter,
-    judge_by_class, lower_end_outside, meet, outranks, quantifier_bounds, read_through,
-    satisfied_by, scheme_bound_above, select_by_class, shape_specificity, sig_fits, solving_slots,
+    Substitutable, admit_by_class, bound_above, erase_rigid, fits, fits_application,
+    instance_under, instantiate_quantified, is_subtype_of, join, join_iter, judge_by_class,
+    lower_end_outside, meet, outranks, quantifier_bounds, read_through, satisfied_by,
+    scheme_bound_above, select_by_class, shape_specificity, sig_fits, solving_slots,
     substitute_levels, substitute_parameters, substitute_quantified, tied_members,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
