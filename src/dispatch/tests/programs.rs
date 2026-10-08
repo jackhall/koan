@@ -481,8 +481,8 @@ fn a_variable_used_once_is_solved_by_each_call() {
 }
 
 /// A module's quantified member runs through a call: by name, written at a call's head — in
-/// parentheses or not — or wrapped in an unquantified `FN` that calls it. A body binding one where nothing fixes its group is
-/// refused where it is written, not when its value is read.
+/// parentheses or not — or wrapped in an unquantified `FN` that calls it. A body binding one where
+/// nothing fixes its group is refused where it is written, not when its value is read.
 #[test]
 fn a_quantified_function_runs_through_a_call() {
     let pick = "(LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";

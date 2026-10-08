@@ -78,11 +78,12 @@
 //! instance under it ([`instance_under`]). A member read of a quantified member is a site too,
 //! where its operand is a name or a chain of member reads rooted at one; one over a head parameter
 //! its signature leaves unpinned is refused there, and read only at a call's head, whose site the
-//! instance table records as read as it is ([`InstanceRead::AsIs`]). A quantified callee's other arguments solve its group
-//! first, each read as the solve reads it — a contributing one exactly at its upper end — and the
-//! slot is read through that solve: a variable a class before the slot's solves is taken from that
-//! class's solving slots at their contributions, as the call solves it — class by class, each
-//! pinned to what the classes before it solved — where a run reproduces the solve.
+//! instance table records as read as it is ([`InstanceRead::AsIs`]). A quantified callee's other
+//! arguments solve its group first, each read as the solve reads it — a contributing one exactly at
+//! its upper end — and the slot is read through that solve: a variable a class before the slot's
+//! solves is taken from that class's solving slots at their contributions, as the call solves it —
+//! class by class, each pinned to what the classes before it solved — where a run reproduces the
+//! solve.
 //! The candidates a use keeps must agree on each instance. A name's solution is recorded by its
 //! site and a literal's in its body's born-instance cell; a site the wanted type fixes nothing at
 //! refuses the load. A solution naming a lexical variable records where the site reads it, as a
@@ -652,14 +653,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let mut closed = BumpVec::with_capacity_in(solution.len(), self.scratch);
         closed.extend(solution.iter().map_while(|each| types.concrete(*each)));
         if closed.len() == solution.len() {
-            return Static::Closed(collect(self.writer, closed.iter().copied()));
+            return StaticSolution::Closed(collect(self.writer, closed.iter().copied()));
         }
         let variables = self.located(level, solution, at);
         assert!(
             !variables.is_empty(),
             "an instance's solution names no variable but its chain's lexical ones"
         );
-        Static::Rigid {
+        StaticSolution::Rigid {
             value: collect(self.writer, solution.iter().copied()),
             variables,
         }
@@ -997,9 +998,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The member read `ATTR <operand> <label>`, its label written bare, where it reads a quantified
-    /// member: the member's scheme, beside the unpinned head parameter it names, if it names one. The operand's static type is read without typing it — a name, or a chain of
-    /// member reads rooted at one ([`peeked`](Self::peeked)) — so a read the load cannot see into
-    /// is no instance site, and faults at run if it reads a scheme there.
+    /// member: the member's scheme, beside the unpinned head parameter it names, if it names one.
+    /// The operand's static type is read without typing it — a name, or a chain of member reads
+    /// rooted at one ([`peeked`](Self::peeked)) — so a read the load cannot see into is no
+    /// instance site, and faults at run if it reads a scheme there.
     fn member_scheme(
         &self,
         level: usize,
@@ -1455,7 +1457,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         Ok(match form {
-            Form::Leaf(part) | Form::Name(part) => self.leaf(level, part, wanted)?,
+            Form::Leaf(part) => self.leaf(level, part, wanted)?,
+            Form::Name(part) => self.name(level, part, wanted)?,
             Form::Block(nested) => self
                 .nested(level, nested, false, None)?
                 .unwrap_or_else(unknown),
@@ -1785,10 +1788,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// A leaf part wanted at `wanted`: a literal's type, a name's binder's, a quote's code type, a
-    /// type value's kind, or a container's over its parts, end by end. A name bound to a quantified
-    /// function is an instance site, recorded by its site; a container passes `wanted` on to its
-    /// parts only where it is that container's own type.
+    /// A leaf part other than a name ([`name`](Self::name)) wanted at `wanted`: a literal's type, a
+    /// quote's code type, a type value's kind, or a container's over its parts, end by end. A
+    /// container passes `wanted` on to its parts only where it is that container's own type.
     fn leaf(
         &mut self,
         level: usize,
@@ -1802,26 +1804,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             ExpressionPart::Literal(KLiteral::String(_)) => Interval::point(KType::STR.into()),
             ExpressionPart::Literal(KLiteral::Boolean(_)) => Interval::point(KType::BOOL.into()),
             ExpressionPart::Literal(KLiteral::Null) => Interval::point(KType::NULL.into()),
-            ExpressionPart::Identifier(_)
-            | ExpressionPart::Type(_)
-            | ExpressionPart::MarkedName(..) => match shape.mention(Site::of(part)) {
-                Some(mention) => match self.read_declared(level, mention.coordinate) {
-                    DeclaredType::Type(typed) => typed,
-                    DeclaredType::Scheme(scheme) => {
-                        let site = Site::of(part);
-                        let at = self.source(level, site);
-                        let (typed, solution) = self.instantiate(scheme, wanted, at)?;
-                        if !self.unfilled {
-                            let solution = self.solution(level, solution, at);
-                            self.chain[level]
-                                .instances
-                                .push((site, InstanceRead::Solved(solution)));
-                        }
-                        typed
-                    }
-                },
-                None => unknown(),
-            },
             ExpressionPart::QuotedExpression(_) => shape
                 .nested(Site::of(part))
                 .map_or_else(unknown, |code| Interval::point(code.code_type().into())),
@@ -1887,6 +1869,35 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             ExpressionPart::Keyword(_)
             | ExpressionPart::Expression(_)
             | ExpressionPart::MarkedUse(..) => unknown(),
+            _ => unreachable!("a name is a `Form::Name`, typed by `name`"),
+        })
+    }
+
+    /// The static type of the name `part`, wanted at `wanted`: its binder's, and a quantified
+    /// function's — an instance site — the instance `wanted` fixes, recorded by its site.
+    fn name(
+        &mut self,
+        level: usize,
+        part: &'graph ExpressionPart<'graph>,
+        wanted: Option<Parametric>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let site = Site::of(part);
+        let Some(mention) = self.chain[level].shape.mention(site) else {
+            return Ok(unknown());
+        };
+        Ok(match self.read_declared(level, mention.coordinate) {
+            DeclaredType::Type(typed) => typed,
+            DeclaredType::Scheme(scheme) => {
+                let at = self.source(level, site);
+                let (typed, solution) = self.instantiate(scheme, wanted, at)?;
+                if !self.unfilled {
+                    let solution = self.solution(level, solution, at);
+                    self.chain[level]
+                        .instances
+                        .push((site, InstanceRead::Solved(solution)));
+                }
+                typed
+            }
         })
     }
 

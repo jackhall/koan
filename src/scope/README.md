@@ -558,9 +558,10 @@ site), each statement (by index) and each slot (by index), and one `Narrowing` p
 use, parallel to its candidate list: the one candidate selected, or each
 candidate kept beside its verdict, *always* or *maybe*; the site of each
 **settled** `:!` or annotation, whose value's static type lies under its type,
-so the run checks nothing there; the solution each name read at an
-[instance site](../dispatch/README.md#static-types) is instantiated at, closed
-or rigid; each
+so the run checks nothing there; what the load fixed at each
+[instance site](../dispatch/README.md#static-types) — the solution it is
+instantiated at, closed or rigid, or, for a member read at a call's head, that
+the run reads it as it is (`InstanceRead`); each
 keyworded use's **contributions**, parallel to its candidate list, a static type
 per argument the call solves from, `Unknown` where it reads the carried type;
 and each call by name's contributions, by its argument's site, a static type

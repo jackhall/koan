@@ -237,8 +237,18 @@ pub enum Static<'graph, C, R = C> {
 pub type StaticType<'graph> = Static<'graph, KType, Parametric>;
 
 /// What the load fixed for an instance's solution, in group order: concrete where closed,
-/// parametric over the run's variables where it names a type a run binds.
-pub type StaticSolution<'graph> = Static<'graph, &'graph [KType], &'graph [Parametric]>;
+/// parametric over the run's variables where it names a type a run binds. Unlike [`Static`], it
+/// has no unknown arm: the load fixes every instance's solution.
+#[derive(Clone, Copy, Debug)]
+pub enum StaticSolution<'graph> {
+    /// The same at every run.
+    Closed(&'graph [KType]),
+    /// Over rigid variables the run supplies, each read at its coordinate.
+    Rigid {
+        value: &'graph [Parametric],
+        variables: &'graph [Variable],
+    },
+}
 
 /// What the load fixed where a quantified function is read: the solution it instantiated it at,
 /// or — a member read at a call's head — that the run reads it as it is, and the call solves its

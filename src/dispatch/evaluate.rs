@@ -145,7 +145,8 @@ pub(super) fn evaluate<'graph>(
         return finishing(step, &at);
     }
     match form(view.shape(), node) {
-        Form::Leaf(part) | Form::Name(part) => leaf(step, &at, part, stage),
+        Form::Leaf(part) => leaf(step, &at, part, stage),
+        Form::Name(part) => read(step, &at, part),
         Form::Block(shape) => {
             let mut step = step;
             let asked = step.spawn(block(program, shape, view, Use::Forwards));
@@ -214,7 +215,8 @@ pub(super) fn of_node<'graph>(
     shape: &'graph BodyShape<'graph>,
     node: &'graph KExpression<'graph>,
 ) -> Form<'graph> {
-    let builtin = node.cache().builtin_shape().map(|builtin| builtin.id);
+    let builtin_shape = node.cache().builtin_shape();
+    let builtin = builtin_shape.map(|builtin| builtin.id);
     match builtin {
         Some(BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda) => {
             return Form::Lambda(node);
@@ -229,9 +231,11 @@ pub(super) fn of_node<'graph>(
         _ => {}
     }
     if let Some(list) = shape.candidates(Site::of_node(node)) {
-        if builtin == Some(BuiltinShapeId::Attribute)
-            && let [_, operand, label] = node.parts
-            && let Some(label) = Role::Field.label_reads(&label.value)
+        if let Some(attribute) =
+            builtin_shape.filter(|builtin| builtin.id == BuiltinShapeId::Attribute)
+            && let [_, operand, _] = node.parts
+            && let Some(label) = (attribute.roles().zip(node.parts))
+                .find_map(|(role, part)| role.label_reads(&part.value))
         {
             return Form::Member {
                 node,
@@ -264,14 +268,7 @@ fn leaf<'graph, 'here>(
     let types = program.types();
     let scratch = Bump::new();
     match part {
-        ExpressionPart::Literal(_)
-        | ExpressionPart::Identifier(_)
-        | ExpressionPart::Type(_)
-        | ExpressionPart::MarkedName(..)
-        | ExpressionPart::QuotedExpression(_) => match in_place(&step, at, part, &scratch) {
-            Some(value) => finish(step, at, value),
-            None => step.failed(StepError::Refused),
-        },
+        ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => read(step, at, part),
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
             let value = match denoted(part, &at.view, types, &scratch) {
@@ -286,6 +283,19 @@ fn leaf<'graph, 'here>(
         ExpressionPart::Keyword(_)
         | ExpressionPart::Expression(_)
         | ExpressionPart::MarkedUse(..) => step.failed(StepError::Refused),
+        _ => unreachable!("a name is a `Form::Name`, read by `read`"),
+    }
+}
+
+/// A part read in place ([`in_place`]) as this evaluation's value: a literal, a name or a quote.
+fn read<'graph, 'here>(
+    step: Taking<'_, 'graph, '_, 'here, '_>,
+    at: &Evaluation<'graph, 'here>,
+    part: &'graph ExpressionPart<'graph>,
+) -> Action<'graph, KBundle> {
+    match in_place(&step, at, part, &Bump::new()) {
+        Some(value) => finish(step, at, value),
+        None => step.failed(StepError::Refused),
     }
 }
 

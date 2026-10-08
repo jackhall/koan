@@ -20,7 +20,7 @@ use crate::elaborate::callable_type;
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
-use crate::scope::{Static, StaticSolution, solutions};
+use crate::scope::{StaticSolution, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, instantiate_quantified, substitute_levels,
@@ -366,8 +366,8 @@ fn solved<'x>(
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
-        Static::Closed(solution) => scratch.alloc_slice_copy(solution),
-        Static::Rigid { value, variables } => {
+        StaticSolution::Closed(solution) => scratch.alloc_slice_copy(solution),
+        StaticSolution::Rigid { value, variables } => {
             let bindings = solutions(variables, activation, scratch).expect(BOUND);
             let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
             solved.extend(value.iter().map(|each| {
@@ -376,7 +376,6 @@ fn solved<'x>(
             }));
             solved.leak()
         }
-        Static::Unknown => unreachable!("the load fixes every instance's solution"),
     }
 }
 

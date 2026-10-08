@@ -141,7 +141,7 @@ pub(super) fn program<'graph, X: Knotted>(
 /// The parameters a node declares before any of its parts is read: a signature's or an `EXPR`
 /// head's names, a `FOR ALL` group's, and a parameterized union's family parameters. One walk,
 /// shared by the statement walk and the definition walk.
-fn form_parameters(
+fn declared_parameters(
     form: &BuiltinShape,
     node: &KExpression<'_>,
     into: &mut BumpVec<'_, BinderSymbol>,
@@ -1420,7 +1420,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         // signature names is never taken for a mention of the enclosing shape. A parameterized
         // union's declarator declares the parameters its variants' payloads read.
         let mut parameters = BumpVec::new_in(self.scratch);
-        form_parameters(form, node, &mut parameters);
+        declared_parameters(form, node, &mut parameters);
         let mark = self.skip.len();
         self.skip
             .extend(parameters.iter().filter_map(|name| match name {
@@ -1740,7 +1740,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         written_as_read(form, node, self.types)?;
         let mut parameters = BumpVec::new_in(self.scratch);
-        form_parameters(form, node, &mut parameters);
+        declared_parameters(form, node, &mut parameters);
         let mark = self.skip.len();
         self.skip
             .extend(parameters.iter().filter_map(|name| match name {
@@ -3376,7 +3376,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 registered: writer.fill(registrations.len(), |_| Cell::new(Static::Unknown)),
                 callable: resident_cell(writer, Static::Unknown),
                 group_levels: resident_cell(writer, &[][..]),
-                born_instance: resident_cell(writer, Static::Unknown),
+                born_instance: resident_cell(writer, None),
                 declared_variables: resident_cell(writer, &[][..]),
                 type_captures: resident_cell(writer, &[][..]),
                 typing_refusal: resident_cell(writer, None),

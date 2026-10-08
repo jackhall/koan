@@ -501,8 +501,8 @@ pub struct BodyShape<'graph> {
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
     group_levels: &'graph Cell<&'graph [Parametric]>,
     /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born;
-    /// `Unknown` where it is born quantified, and for every other kind.
-    born_instance: &'graph Cell<StaticSolution<'graph>>,
+    /// `None` where it is born quantified, and for every other kind.
+    born_instance: &'graph Cell<Option<StaticSolution<'graph>>>,
     /// Each lexical variable this body declares, by level, beside where its activation holds the
     /// type a run binds it to. Written once, by the type channel.
     declared_variables: &'graph Cell<&'graph [(usize, Target)]>,
@@ -863,18 +863,14 @@ impl<'graph> BodyShape<'graph> {
     /// its group at the type its value is wanted at: a literal written where a type fixes it, or
     /// the right-hand side of a binder whose declared type does.
     pub fn born_instance(&self) -> Option<StaticSolution<'graph>> {
-        match self.born_instance.get() {
-            Static::Unknown => None,
-            solution => Some(solution),
-        }
+        self.born_instance.get()
     }
 
     /// Written once, by the load pass.
     pub fn fix_born_instance(&self, solution: StaticSolution<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Callable);
-        debug_assert!(matches!(self.born_instance.get(), Static::Unknown));
-        debug_assert!(!matches!(solution, Static::Unknown));
-        self.born_instance.set(solution);
+        debug_assert!(self.born_instance.get().is_none());
+        self.born_instance.set(Some(solution));
     }
 
     /// Each lexical variable this body declares, by level, beside where its activation holds the
