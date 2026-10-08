@@ -221,7 +221,7 @@ PICK both
 ```
 
 ```text
-error: <input>:4:1: ambiguous call of PICK _: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
+error: <input>:4:1: ambiguous call of `PICK _`: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
 ```
 
 `#[<fields>] FROM <record>` resolves this by *projecting* a record to exactly the

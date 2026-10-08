@@ -45,7 +45,7 @@ fn a_keyworded_call_solves_a_group_class_by_class_and_a_call_by_name_jointly() {
         run(&format!(
             "{pair}{mixed}PRINT (PAIR [1, \"x\"] WITH [1])\nPRINT (PAIR [1] WITH (MIXED))"
         )),
-        "paired\nerror: no overload of PAIR _ WITH _ admits \
+        "paired\nerror: no overload of `PAIR _ WITH _` admits \
          (:(LIST OF Number), :(LIST OF :(Number | Str)))",
         "the first class fixes `Elt`, and the second must lie under it"
     );
@@ -102,7 +102,7 @@ fn a_variable_a_class_did_not_admit_reads_as_its_bound_later() {
 
 #[test]
 fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared() {
-    let expected = "error: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks \
+    let expected = "error: ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks \
                     first";
     assert_eq!(
         run("EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
@@ -131,7 +131,7 @@ fn a_certain_ambiguity_refuses_the_load() {
         run("EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
              EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
              PRINT (PICK 1)"),
-        "load: <test>:3:7: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks \
+        "load: <test>:3:7: ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks \
          first",
         "one scope"
     );
@@ -142,7 +142,7 @@ fn a_certain_ambiguity_refuses_the_load() {
              PICK 1\n\
              )\n\
              PRINT (INNER)"),
-        "load: <test>:4:3: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks \
+        "load: <test>:4:3: ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks \
          first",
         "no scope shadows another's overload"
     );
@@ -152,7 +152,7 @@ fn a_certain_ambiguity_refuses_the_load() {
 fn no_admitting_candidate_is_a_miss_naming_the_argument_types() {
     assert_eq!(
         run("LET r = ({v = \"a\"} :! :{v :Any})\nPRINT (r.v + 1)"),
-        "error: no overload of _ + _ admits (Str, Number)"
+        "error: no overload of `_ + _` admits (Str, Number)"
     );
     assert_eq!(
         run("PRINT (\"a\" + 1)"),
@@ -234,6 +234,6 @@ fn a_candidate_that_may_admit_still_solves_its_group_from_the_carried_types() {
                   PRINT (BOTH (EITHER) AND \"s\")";
     assert_eq!(
         run(source),
-        "error: no overload of BOTH _ AND _ admits (Number, Str)"
+        "error: no overload of `BOTH _ AND _` admits (Number, Str)"
     );
 }

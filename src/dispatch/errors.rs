@@ -9,7 +9,7 @@ use crate::knot::module::coerce::CoercionRefused;
 use crate::memory::Writer;
 use crate::parse::{KExpression, KeyElement};
 use crate::program::Program;
-use crate::scope::spelled;
+use crate::scope::selection_refused;
 use crate::symbols::{KeySymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeRegistry, display_name};
 use crate::values::KeyRejected;
@@ -113,34 +113,15 @@ struct RaisedDisplay<'a, 'x, 'run> {
 impl fmt::Display for RaisedDisplay<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ktype = |handle: KType| display_name(handle, self.types, self.symbols);
-        let arguments = |f: &mut fmt::Formatter<'_>, arguments: &[KType]| {
-            f.write_str("(")?;
-            for (index, argument) in arguments.iter().enumerate() {
-                if index > 0 {
-                    f.write_str(", ")?;
-                }
-                write!(f, "{}", ktype(*argument))?;
-            }
-            f.write_str(")")
-        };
         match self.raised {
-            Raised::NoOverload { key, arguments: of } => {
-                write!(f, "no overload of {} admits ", spelled(key, self.symbols))?;
-                arguments(f, of)
+            Raised::NoOverload { key, arguments } => {
+                selection_refused(f, key, arguments, None, self.symbols, self.types)
             }
             Raised::Ambiguous {
                 key,
-                arguments: of,
+                arguments,
                 count,
-            } => {
-                write!(
-                    f,
-                    "ambiguous call of {}: {count} overloads admit ",
-                    spelled(key, self.symbols)
-                )?;
-                arguments(f, of)?;
-                f.write_str(" and none ranks first")
-            }
+            } => selection_refused(f, key, arguments, Some(count), self.symbols, self.types),
             Raised::NoField { of, field } => write!(
                 f,
                 "{} has no field {}",

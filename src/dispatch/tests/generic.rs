@@ -388,7 +388,7 @@ fn several_always_candidates_one_rigid_are_ranked_at_the_call() {
     assert_eq!(last_in(source, "OUTER"), "kept always always");
     assert_eq!(
         run(&format!("{source}\nPRINT (OUTER 1)")),
-        "error: ambiguous call of INNER _: 2 overloads admit (Number) and none ranks first"
+        "error: ambiguous call of `INNER _`: 2 overloads admit (Number) and none ranks first"
     );
 }
 

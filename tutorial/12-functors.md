@@ -553,7 +553,7 @@ PRINT (counter.zero + 1)
 ```
 
 ```text
-error: no overload of _ + _ admits (Carrier, Number)
+error: no overload of `_ + _` admits (Carrier, Number)
 ```
 
 Only the module's own functions, reached through the view, work with the

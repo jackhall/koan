@@ -457,10 +457,11 @@ fn a_shared_variable_another_argument_leaves_open_is_refused() {
 fn other_arguments_that_never_fit_drop_the_candidate() {
     let pair = "EXPR FOR ALL #[Elt] #(PAIR f :(FN :{x :Elt} -> Elt) WITH y :(LIST OF Elt)) -> Elt = \
                 #(f {x = 1})\n";
-    // The quantified argument is listed as `Any`: no instance of it is made.
+    // The quantified argument is listed at its scheme: no instance of it is made.
     assert_eq!(
         run(&format!("{pair}{}", module("(PAIR pick WITH 1)"))),
-        "load: <test>:2:72: no overload of `PAIR _ WITH _` admits (Any, Number)"
+        "load: <test>:2:72: no overload of `PAIR _ WITH _` admits \
+         (:(FN FOR ALL #[Elt] :{x :Elt} -> Elt), Number)"
     );
 }
 

@@ -49,7 +49,7 @@ pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
     Position, QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead,
-    Target, TopLevel, TypeExpression, Unit, UnitWork, Which, source_of, spelled,
+    Target, TopLevel, TypeExpression, Unit, UnitWork, Which, selection_refused, source_of, spelled,
 };
 pub use typed::{
     Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, Narrowing, ParameterBinding,

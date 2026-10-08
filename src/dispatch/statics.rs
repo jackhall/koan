@@ -2442,7 +2442,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             .iter()
             .any(|contribution| !matches!(contribution, Static::Unknown));
 
-        let uppers = || collect(self.writer, arguments.iter().map(|argument| argument.upper));
+        // Each argument as a refusal lists it: its upper end, or an instance argument's scheme.
+        let uppers = || {
+            collect(
+                self.writer,
+                arguments.iter().enumerate().map(|(position, argument)| {
+                    match sites.iter().find(|site| site.position == position) {
+                        Some(site) => DeclaredType::Scheme(site.scheme),
+                        None => DeclaredType::Type(argument.upper),
+                    }
+                }),
+            )
+        };
 
         let mut judged = BumpVec::with_capacity_in(list.candidates.len(), scratch);
         // The first argument a builtin's need dropped a candidate over, beside that need.

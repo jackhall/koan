@@ -257,7 +257,7 @@ fn an_uncaught_error_ends_the_program_with_its_message() {
         run(
             "LET r = ({v = \"a\"} :! :{v :Any})\nPRINT \"before\"\nPRINT (1 + r.v)\nPRINT \"after\""
         ),
-        "before\nerror: no overload of _ + _ admits (Number, Str)"
+        "before\nerror: no overload of `_ + _` admits (Number, Str)"
     );
 }
 
@@ -267,13 +267,13 @@ fn every_evaluation_passes_an_error_it_receives_through_unchanged() {
         run("LET r = ({v = \"s\"} :! :{v :Any})\n\
              EXPR #(ONE x :Number) -> Number = #(x)\n\
              PRINT [1, (ONE (ONE r.v))]"),
-        "error: no overload of ONE _ admits (Str)"
+        "error: no overload of `ONE _` admits (Str)"
     );
     assert_eq!(
         run(
             "LET r = ({v = \"a\"} :! :{v :Any})\nEXPR #(DEEP) -> Number = #(1 + r.v)\nPRINT {n = (DEEP)}"
         ),
-        "error: no overload of _ + _ admits (Number, Str)",
+        "error: no overload of `_ + _` admits (Number, Str)",
         "through a frame's contract"
     );
 }

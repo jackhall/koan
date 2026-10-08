@@ -1229,10 +1229,11 @@ pub enum ShapeError<'graph> {
         builtin: KType,
         at: SourceRef,
     },
-    /// A keyworded use none of whose candidates can admit its arguments' static types.
+    /// A keyworded use none of whose candidates can admit its arguments' static types: each
+    /// argument's upper end, or an instance argument's scheme.
     NoAdmittingCandidate {
         key: &'graph [KeyElement],
-        arguments: &'graph [Parametric],
+        arguments: &'graph [DeclaredType<Parametric>],
         at: SourceRef,
     },
     /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
@@ -1263,7 +1264,7 @@ pub enum ShapeError<'graph> {
     /// which ranks first, and no builtin among them.
     Ambiguous {
         key: &'graph [KeyElement],
-        arguments: &'graph [Parametric],
+        arguments: &'graph [DeclaredType<Parametric>],
         count: usize,
         at: SourceRef,
     },
@@ -1602,8 +1603,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 self.key(key)
             ),
             ShapeError::NoAdmittingCandidate { key, arguments, .. } => {
-                write!(f, "no overload of `{}` admits ", self.key(key))?;
-                self.arguments(f, arguments)
+                selection_refused(f, key, arguments, None, self.symbols, self.types)
             }
             ShapeError::NoField { of, field, .. } => write!(
                 f,
@@ -1645,15 +1645,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 arguments,
                 count,
                 ..
-            } => {
-                write!(
-                    f,
-                    "ambiguous call of {}: {count} overloads admit ",
-                    self.key(key)
-                )?;
-                self.arguments(f, arguments)?;
-                f.write_str(" and none ranks first")
-            }
+            } => selection_refused(f, key, arguments, Some(*count), self.symbols, self.types),
             ShapeError::ReturnNeverSatisfied { body, returns, .. } => write!(
                 f,
                 "this body returns {}, which can never satisfy its declared return {}",
@@ -1711,17 +1703,33 @@ impl ShapeErrorDisplay<'_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
     }
+}
 
-    /// `arguments` as a parenthesized, comma-separated list of types.
-    fn arguments(&self, f: &mut fmt::Formatter<'_>, arguments: &[Parametric]) -> fmt::Result {
-        f.write_str("(")?;
-        for (index, argument) in arguments.iter().enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{}", display_name(*argument, self.types, self.symbols))?;
+/// A refused selection at `key` worded — no overload admits `arguments`, or (`ambiguous`) that
+/// many admit and none ranks first — for the load's refusal and the run's fault alike.
+pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
+    f: &mut fmt::Formatter<'_>,
+    key: &[KeyElement],
+    arguments: &[A],
+    ambiguous: Option<usize>,
+    symbols: &SymbolInterner,
+    types: &TypeRegistry<'_>,
+) -> fmt::Result {
+    let key = spelled(key, symbols);
+    match ambiguous {
+        None => write!(f, "no overload of `{key}` admits (")?,
+        Some(count) => write!(f, "ambiguous call of `{key}`: {count} overloads admit (")?,
+    }
+    for (index, argument) in arguments.iter().enumerate() {
+        if index > 0 {
+            f.write_str(", ")?;
         }
-        f.write_str(")")
+        write!(f, "{}", display_name(*argument, types, symbols))?;
+    }
+    f.write_str(")")?;
+    match ambiguous {
+        None => Ok(()),
+        Some(_) => f.write_str(" and none ranks first"),
     }
 }
 

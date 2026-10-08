@@ -273,7 +273,7 @@ fn a_using_block_spreads_every_overload_at_a_key() {
                      (EXPR #(PICK x :(Number | Bool)) -> Str = #(\"b\")))\n";
     assert_eq!(
         run(&format!("{ambiguous}PRINT (USING both SCOPE (PICK 1))")),
-        "error: ambiguous call of PICK _: 2 overloads admit (Number) and none ranks first"
+        "error: ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks first"
     );
 }
 
@@ -333,14 +333,14 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
              EXPR #(PASS p :Counter) -> Any = #(TAKE p)\n{program}"
         )
     };
-    let refused_plus = "error: no overload of _ + _ admits (Carrier, Number)";
-    let refused_take = "error: no overload of TAKE _ admits (SIG (Carrier: Carrier, zero: \
+    let refused_plus = "error: no overload of `_ + _` admits (Carrier, Number)";
+    let refused_take = "error: no overload of `TAKE _` admits (SIG (Carrier: Carrier, zero: \
                         Carrier, succ: :(FN :{x :Carrier} -> Carrier)))";
     for (program, printed) in [
         ("PRINT (c.zero + 1)", refused_plus),
         (
             "PRINT (SHOW c.zero)",
-            "error: no overload of SHOW _ admits (Carrier)",
+            "error: no overload of `SHOW _` admits (Carrier)",
         ),
         (
             "LET n :Number = c.zero\nPRINT n",
