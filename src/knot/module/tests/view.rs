@@ -121,6 +121,38 @@ fn an_opaque_view_keys_its_carrier_on_content() {
 }
 
 #[test]
+fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(PROGRAM);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let m = module(fixture, activation, "m");
+            let ord = declared(fixture, activation, "Ord");
+            let view = |mode| {
+                ascribe(writer, m, ord, mode, types, scratch)
+                    .unwrap_or_else(|error| panic!("`m` satisfies `Ord`: {error:?}"))
+            };
+            let (opaque, transparent) = (view(Ascription::Opaque), view(Ascription::Transparent));
+            let content = opaque.module().expect("a view is a module").content();
+            let Value::Type(carrier) = member(fixture, opaque, "Carrier", types, scratch) else {
+                panic!("`Carrier` is a type member");
+            };
+            assert!(matches!(
+                types.node(carrier.handle()),
+                TypeNode::Parameter { carrier: Some(key), .. } if key == content.carrier_key()
+            ));
+            assert_ne!(
+                content,
+                transparent.module().expect("a view is a module").content(),
+                "the operator is part of a view's content"
+            );
+        })
+    });
+}
+
+#[test]
 fn a_carrier_carries_its_parameters_name_and_bound() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);

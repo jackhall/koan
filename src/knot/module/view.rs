@@ -10,10 +10,10 @@
 //! Under `:!` they mean what *fits* solved them to, or what the application pins them to, so the
 //! view's members are the source's own words and the view is a relabelling. Under `:|` each
 //! unpinned one is hidden behind a **carrier keyed on content**: a [`Parameter`](TypeNode::Parameter)
-//! keyed on the source's digest and the signature application, so two ascriptions of modules of
-//! equal content share their carriers and two of other content never unify, however often either
-//! runs. Every member is then born [coerced](super::coerce) to the carriers. A pinned parameter
-//! keeps its pin either way.
+//! keyed on the view's own [content](ModuleContent::carrier_key) — its operator and application
+//! over the source's digest — so two ascriptions of modules of equal content share their carriers
+//! and two of other content never unify, however often either runs. Every member is then born
+//! [coerced](super::coerce) to the carriers. A pinned parameter keeps its pin either way.
 //!
 //! A view carries a keyworded member too: past its named members, each overload the source offers
 //! at the member's key that the member read under the source's bindings admits, behind a barrier
@@ -32,13 +32,13 @@ use crate::type_lattice::{
     ContentKey, FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
     TypeRegistry, fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
-use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{ContentDigest, TypeValue, Value};
+use crate::values::{TypeValue, Value};
 
 use super::coerce::{Coercion, CoercionRefused, coerce};
-use super::{Coerced, Module, layout};
+use super::{Coerced, Module, ModuleContent, Operator, layout};
 
-/// Which operator is ascribing: `:!` keeps the source's types, `:|` hides them behind carriers.
+/// Which operator is ascribing: `:!` keeps the source's types, `:|` hides them behind carriers. The
+/// two of the three [`Operator`]s a program writes; the third is a nested re-view's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ascription {
     /// `:|` — each unpinned head parameter is hidden behind a carrier, and every member is born coerced
@@ -76,33 +76,23 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
     let held = source.module().ok_or(Unascribable::NotAModule)?.ktype();
     let (sig, from, pins) = fitted(held, signature, types, scratch)?;
-    // A module's digest is its knot's over the content it was born with: no walk.
-    let digest = Value::Knotted(source).digest(types, scratch);
+    // A view is its operator and its application over its source. A module's digest is its knot's
+    // over the content it was born with: no walk.
+    let operator = match mode {
+        Ascription::Transparent => Operator::Transparent,
+        Ascription::Opaque => Operator::Opaque,
+    };
+    let source_digest = Value::Knotted(source).digest(types, scratch);
+    let content = ModuleContent::view(operator, signature, source_digest);
     let to = match mode {
         // Transparent: the parameters keep the source's bindings, so every slot type reads the
         // same either side and the coercion walk stops at its first comparison.
         Ascription::Transparent => from,
-        // A carrier is keyed on content: the source's and the application's. Two views of equal
-        // content share one, and the parameter's name keeps two of one view apart.
-        Ascription::Opaque => {
-            let key = DigestHasher::new(Tag::Carrier)
-                .digest(digest)
-                .feed(signature)
-                .finished();
-            carriers(&sig, from, &pins, ContentKey(key.bits()), types, scratch)
-        }
+        // A carrier is keyed on the view's content. Two views of equal content share one, and the
+        // parameter's name keeps two of one view apart.
+        Ascription::Opaque => carriers(&sig, from, &pins, content.carrier_key(), types, scratch),
     };
     let view = view_signature(&sig, to, types, scratch);
-    // A view is its operator and its application over its source.
-    let operator = match mode {
-        Ascription::Transparent => Tag::Transparent,
-        Ascription::Opaque => Tag::Opaque,
-    };
-    let content = DigestHasher::new(Tag::View)
-        .tag(operator)
-        .feed(signature)
-        .digest(digest)
-        .finished();
     build(writer, source, sig, view, from, to, content, types, scratch)
 }
 
@@ -195,7 +185,7 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     view: KType,
     from: Members<'x, TypeSymbol, KType>,
     to: Members<'x, TypeSymbol, KType>,
-    content: ContentDigest,
+    content: ModuleContent,
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {

@@ -29,10 +29,9 @@ use crate::type_lattice::{
     SchemaDraft, TypeNode, TypeRegistry, display_name, fits_application, satisfied_by,
     substitute_parameters,
 };
-use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{Dict, List, Record, SealRefused, Tagged, Value, satisfies};
 
-use super::{Coerced, view};
+use super::{Coerced, ModuleContent, Operator, view};
 
 /// Why a member could not take the view's type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -340,11 +339,8 @@ pub fn coerce<'graph, 'cell>(
             );
             let view = view::view_signature(&schema, to, cx.types, cx.scratch);
             // A nested view is the enclosing opaque one's, at the application its slot reads.
-            let content = DigestHasher::new(Tag::View)
-                .tag(Tag::Reviewed)
-                .feed(dst)
-                .digest(value.digest(cx.types, cx.scratch))
-                .finished();
+            let content =
+                ModuleContent::view(Operator::Reviewed, dst, value.digest(cx.types, cx.scratch));
             view::build(
                 cx.writer, member, schema, view, from, to, content, cx.types, cx.scratch,
             )

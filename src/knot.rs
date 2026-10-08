@@ -218,7 +218,7 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
             Node::Function(function) => function.content(parts),
             Node::Builtin(_) => unreachable!("a builtin digests as its overload"),
             Node::Data { .. } => Circular::content(self, types, scratch, parts),
-            Node::Module(module) => module.content(),
+            Node::Module(module) => module.content().digest(),
             Node::Coerced(coerced) => coerced.content(parts),
             Node::Code(code) => code.content(parts),
         }

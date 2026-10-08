@@ -4,8 +4,9 @@
 //! A module's node holds its self-signature, its members in layout order, its knot weight and its
 //! content — never an activation, since a view has no body to activate. Its content is what it is,
 //! not what it holds: a body-born module's code over what it captures, and a view's operator and
-//! application over its source. It is the one content computed where the node is born, since a
-//! module keeps no captures to digest later. A module is always a one-node knot:
+//! application over its source. [`ModuleContent`] owns that recipe, and an opaque view's carriers
+//! are keyed on it. It is the one content computed where the node is born, since a module keeps no
+//! captures to digest later. A module is always a one-node knot:
 //! a mention reached from a module binder's root is eager whatever body it sits in. [`birth`] is
 //! where a body-born one comes from, [`Module::tie`] the one private-field door a body-born module
 //! and a view both go through, so there is one representation and one copy.
@@ -43,7 +44,7 @@ mod tests;
 pub use birth::{body_activation, tie_member};
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
-use crate::type_lattice::{DeclaredType, KType, Parametric};
+use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{ContentDigest, Knotted as _, Seen, Value, Weight};
 
@@ -58,7 +59,7 @@ pub struct Module<'graph, 'cell> {
     knot_weight: Weight,
     /// What the module is: its knot digests over it. It sits beside the node, as a barrier does, so
     /// the module arm keeps the node's width.
-    content: &'cell ContentDigest,
+    content: &'cell ModuleContent,
 }
 
 impl Clone for Module<'_, '_> {
@@ -82,12 +83,12 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         writer: Writer<'cell>,
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
-        content: ContentDigest,
+        content: ModuleContent,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         let knot_weight = members.iter().fold(
             Weight::flat::<usize>()
                 .plus(Weight::flat::<Node<'graph, 'cell>>())
-                .plus(Weight::flat::<ContentDigest>()),
+                .plus(Weight::flat::<ModuleContent>()),
             |weight, member| weight.plus(member.weight()),
         );
         let members = collect(writer, members.iter().copied());
@@ -117,7 +118,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     }
 
     /// What the module is, computed where it was born.
-    pub fn content(&self) -> ContentDigest {
+    pub fn content(&self) -> ModuleContent {
         *self.content
     }
 
@@ -134,6 +135,64 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
             knot_weight: self.knot_weight,
             content: resident(writer, *self.content),
         }
+    }
+}
+
+/// What a module is, as its knot digests it: a body-born module's code over what it captures, or a
+/// view's operator and application over its source. Its constructors are the one recipe for either,
+/// and an opaque view's carriers are keyed on its bits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ModuleContent(ContentDigest);
+
+/// Which door a view came through, a part of its content.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Operator {
+    /// `:!`.
+    Transparent,
+    /// `:|`.
+    Opaque,
+    /// The re-view a nested module takes at an opaque boundary.
+    Reviewed,
+}
+
+impl ModuleContent {
+    /// A body-born module's content: its body's `code` digest, then each capture the code digest
+    /// does not name, beside its slot, as [`composed`](super::composed) yields them.
+    pub fn body(code: ContentDigest, captures: &[(usize, ContentDigest)]) -> ModuleContent {
+        let mut hasher = DigestHasher::new(Tag::Module);
+        hasher.digest(code);
+        for (index, capture) in captures.iter().copied() {
+            hasher.count(index).digest(capture);
+        }
+        ModuleContent(hasher.finished())
+    }
+
+    /// A view's content: its `operator` and the `application` it was built at, over its `source`'s
+    /// digest.
+    pub fn view(operator: Operator, application: KType, source: ContentDigest) -> ModuleContent {
+        let operator = match operator {
+            Operator::Transparent => Tag::Transparent,
+            Operator::Opaque => Tag::Opaque,
+            Operator::Reviewed => Tag::Reviewed,
+        };
+        ModuleContent(
+            DigestHasher::new(Tag::View)
+                .tag(operator)
+                .feed(application)
+                .digest(source)
+                .finished(),
+        )
+    }
+
+    /// The key an opaque view's carriers are made under: its own content, so two views of equal
+    /// content share their carriers.
+    pub fn carrier_key(&self) -> ContentKey {
+        ContentKey(self.0.bits())
+    }
+
+    /// The digest the module's knot reads as its node's content.
+    pub(super) fn digest(self) -> ContentDigest {
+        self.0
     }
 }
 

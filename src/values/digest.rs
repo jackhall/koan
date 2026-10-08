@@ -76,8 +76,6 @@ pub enum Tag {
     Tagged = 0x09,
     /// A run of digests: a container's contents.
     Contents = 0x0A,
-    /// An opaque view's carrier key: its source's digest and its application.
-    Carrier = 0x0B,
     /// A knot: its node count and each node's content in index order.
     Knot = 0x10,
     /// One member of a knot: the knot's digest and the member's index.
