@@ -172,9 +172,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                             self.rewrite_part(&part.value)?
                         }
                         // A bare label is the label itself; any other is evaluated.
-                        Role::Field => match part.value {
-                            ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => None,
-                            _ => self.rewrite_part(&part.value)?,
+                        Role::Field => match role.label_reads(&part.value) {
+                            Some(_) => None,
+                            None => self.rewrite_part(&part.value)?,
                         },
                         Role::Signature | Role::Head => self.rewrite_signature(&part.value)?,
                         Role::Branches(Heads::Types) => {

@@ -1452,10 +1452,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Role::Keyword | Role::Name | Role::Data | Role::Captures => {}
                 // A bare name is the label itself; any other label is evaluated.
                 Role::Field => {
-                    if !matches!(
-                        part,
-                        ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
-                    ) {
+                    if role.label_reads(part).is_none() {
                         self.walk_part(level, statement, part, State::Eager)?
                     }
                 }
@@ -1791,11 +1788,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     });
                 }
                 // A bare name is the label itself; any other label is evaluated.
-                Role::Field
-                    if matches!(
-                        part,
-                        ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
-                    ) => {}
+                Role::Field if role.label_reads(part).is_some() => {}
                 Role::Rhs
                 | Role::Argument
                 | Role::InPlace
@@ -1916,12 +1909,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .extend(binders.iter().map(|binder| (binder, site)));
             }
         }
-        let (shape_kind, class) = match kind {
-            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => {
-                (ShapeKind::Callable, state.constructor().class())
-            }
-            BodyKind::Module => (ShapeKind::Module, MentionClass::Eager),
-            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager),
+        let (shape_kind, class) = if kind.is_callable() {
+            (ShapeKind::Callable, state.constructor().class())
+        } else if kind == BodyKind::Module {
+            (ShapeKind::Module, MentionClass::Eager)
+        } else {
+            (ShapeKind::Block, MentionClass::Eager)
         };
         let operator = [
             BinderSymbol::Value(IMPLICIT.left.symbol()),
@@ -3408,13 +3401,8 @@ fn types_with_its_binder(form: &BuiltinShape) -> bool {
         && form.roles().any(|role| {
             matches!(
                 role,
-                Role::Signature
-                    | Role::Head
-                    | Role::Quantifiers
-                    | Role::Name
-                    | Role::Definition(_)
-                    | Role::Body(BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator)
-            )
+                Role::Signature | Role::Head | Role::Quantifiers | Role::Name | Role::Definition(_)
+            ) || role.is_callable()
         })
 }
 

@@ -6,6 +6,9 @@
 //! [`BUILTIN_SHAPES`](super::BUILTIN_SHAPES) element carries its own role, so a shape added to the
 //! table gives its parts roles where it is spelled.
 
+use crate::parse::ast::ExpressionPart;
+use crate::symbols::BinderSymbol;
+
 /// What one part of a builtin shape is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
@@ -66,15 +69,19 @@ pub enum Reading {
 }
 
 impl Role {
-    /// How the builder reads a part under this role — the one authority the builder, the operator
-    /// claims scan and the rewrite each ask, so no position list sits beside the table.
+    /// How the builder reads a part under this role — the one authority the builder and the
+    /// operator claims scan ask, so no position list sits beside the table.
     pub const fn reading(self) -> Reading {
         match self {
-            Role::Body(BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator)
-            | Role::Head
-            | Role::Data => Reading::Quote,
-            Role::Body(BodyKind::Module | BodyKind::Surfaced)
-            | Role::Definition(DefinitionKind::Plain)
+            Role::Body(kind) => {
+                if kind.is_callable() {
+                    Reading::Quote
+                } else {
+                    Reading::Bare
+                }
+            }
+            Role::Head | Role::Data => Reading::Quote,
+            Role::Definition(DefinitionKind::Plain)
             | Role::Name
             | Role::TypeExpression
             | Role::InPlace
@@ -87,6 +94,24 @@ impl Role {
             }
             Role::Field => Reading::Label,
             Role::Argument | Role::Rhs | Role::Signature | Role::Unsupported => Reading::Evaluated,
+        }
+    }
+
+    /// Whether the part is a callable's body.
+    pub const fn is_callable(self) -> bool {
+        match self {
+            Role::Body(kind) => kind.is_callable(),
+            _ => false,
+        }
+    }
+
+    /// The label a part under this role is read as: a bare name under `Field`, the label itself.
+    /// `None` for every other part, which is evaluated.
+    pub fn label_reads(self, part: &ExpressionPart<'_>) -> Option<BinderSymbol> {
+        match (self, part) {
+            (Role::Field, ExpressionPart::Identifier(name)) => Some(BinderSymbol::Value(*name)),
+            (Role::Field, ExpressionPart::Type(name)) => Some(BinderSymbol::Type(*name)),
+            _ => None,
         }
     }
 }
@@ -104,6 +129,16 @@ pub enum BodyKind {
     Module,
     /// A `USING` body: a block whose parameters are the names its operand surfaces.
     Surfaced,
+}
+
+impl BodyKind {
+    /// Whether the body is a callable's: a `FN` or `EXPR` body, or an operator's.
+    pub const fn is_callable(self) -> bool {
+        match self {
+            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => true,
+            BodyKind::Module | BodyKind::Surfaced => false,
+        }
+    }
 }
 
 /// What an arm's head is.

@@ -658,19 +658,16 @@ pub(super) fn slots<'x, 'graph>(
     scratch: &'x Bump,
 ) -> BumpVec<'x, Wanted<'graph>> {
     let mut wanted = BumpVec::with_capacity_in(node.parts.len(), scratch);
-    let bare = |part: &ExpressionPart<'_>| match part {
-        ExpressionPart::Identifier(name) => Some(BinderSymbol::Value(*name)),
-        ExpressionPart::Type(name) => Some(BinderSymbol::Type(*name)),
-        _ => None,
-    };
     match node.cache().builtin_shape() {
         Some(shape) => {
             for (role, part) in shape.roles().zip(node.parts) {
-                match (role, bare(&part.value)) {
-                    (Role::Keyword, _) => {}
-                    (Role::Field, Some(label)) => wanted.push(Wanted::Label(label)),
-                    _ => wanted.push(Wanted::Evaluated(&part.value)),
+                if role == Role::Keyword {
+                    continue;
                 }
+                wanted.push(match role.label_reads(&part.value) {
+                    Some(label) => Wanted::Label(label),
+                    None => Wanted::Evaluated(&part.value),
+                });
             }
         }
         None => wanted.extend(
