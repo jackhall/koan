@@ -30,7 +30,7 @@ use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    ContentKey, FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
+    ContentKey, FitsFailure, KKind, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
     TypeRegistry, fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
 use crate::values::{TypeValue, Value};
@@ -65,17 +65,6 @@ pub enum Unascribable<'run, 'x> {
     },
 }
 
-/// Whether `ktype` is a signature type — a signature, an application or a meet of them — which
-/// only a module carries or satisfies.
-pub fn is_signature_type(types: &TypeRegistry<'_>, ktype: KType) -> bool {
-    matches!(
-        types.node(ktype),
-        TypeNode::Signature { .. }
-            | TypeNode::SignatureApply { .. }
-            | TypeNode::SignatureMeet { .. }
-    )
-}
-
 /// Whether the view door takes `ascribed`: one application of a signature, or the signature.
 pub fn takes(types: &TypeRegistry<'_>, ascribed: KType) -> bool {
     matches!(
@@ -92,7 +81,8 @@ pub fn views(types: &TypeRegistry<'_>, mode: Ascription, operand: KType, ascribe
     match mode {
         Ascription::Opaque => true,
         Ascription::Transparent => {
-            is_signature_type(types, operand) && is_signature_type(types, ascribed)
+            operand.kind_of(types) == KKind::Signature
+                && ascribed.kind_of(types) == KKind::Signature
         }
     }
 }

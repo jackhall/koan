@@ -109,10 +109,10 @@ use crate::scope::{
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KType, Parametric,
-    Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with, bound_above,
-    class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
-    quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
+    Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KKind, KType,
+    Parametric, Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with,
+    bound_above, class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class,
+    meet, quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
     select_by_class, shape_return, shape_slots, solving_slots,
 };
 use crate::values::{
@@ -1630,7 +1630,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             });
         }
         let operand = bound_above(types, scratch, typed.upper);
-        if !view::is_signature_type(types, operand) || !view::is_signature_type(types, ascribed) {
+        if operand.kind_of(types) != KKind::Signature || ascribed.kind_of(types) != KKind::Signature
+        {
             return Ok(under(declared));
         }
         if fits(types, scratch, typed.upper, declared) {
