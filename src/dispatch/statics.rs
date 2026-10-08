@@ -961,11 +961,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Option<(Instanced<'graph>, Scheme, SourceRef)> {
         let shape = self.chain[level].shape;
         match of_part(shape, part) {
-            Form::Leaf(
-                leaf @ (ExpressionPart::Identifier(_)
-                | ExpressionPart::Type(_)
-                | ExpressionPart::MarkedName(..)),
-            ) => {
+            Form::Name(leaf) => {
                 let mention = shape.mention(Site::of(leaf))?;
                 match self.read_declared(level, mention.coordinate) {
                     DeclaredType::Scheme(scheme) => Some((
@@ -986,7 +982,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
             }
             // One naming a parameter the load cannot name is refused where it is typed.
-            Form::Call(node, _) => match self.member_scheme(level, node) {
+            Form::Member {
+                node,
+                operand,
+                label,
+                ..
+            } => match self.member_scheme(level, operand, label) {
                 Some((scheme, None)) => Some((Instanced::Member(node), scheme, node.source)),
                 _ => None,
             },
@@ -994,17 +995,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// The member read `node`, `ATTR <operand> <label>` with its label written, where it reads a
-    /// quantified member: the member's scheme, beside the unpinned head parameter it names, if it
-    /// names one. The operand's static type is read without typing it — a name, or a chain of
+    /// The member read `ATTR <operand> <label>`, its label written bare, where it reads a quantified
+    /// member: the member's scheme, beside the unpinned head parameter it names, if it names one. The operand's static type is read without typing it — a name, or a chain of
     /// member reads rooted at one ([`peeked`](Self::peeked)) — so a read the load cannot see into
     /// is no instance site, and faults at run if it reads a scheme there.
     fn member_scheme(
         &self,
         level: usize,
-        node: &'graph KExpression<'graph>,
+        operand: &'graph ExpressionPart<'graph>,
+        name: BinderSymbol,
     ) -> Option<(Scheme, Option<BinderSymbol>)> {
-        let (operand, name) = member_read(node)?;
         let upper = self.peeked(level, operand)?.upper;
         let member = signature_member(self.types, self.scratch, upper, name)?;
         let DeclaredType::Scheme(scheme) = member.declared else {
@@ -1019,18 +1019,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn peeked(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
         let shape = self.chain[level].shape;
         match of_part(shape, part) {
-            Form::Leaf(
-                leaf @ (ExpressionPart::Identifier(_)
-                | ExpressionPart::Type(_)
-                | ExpressionPart::MarkedName(..)),
-            ) => {
+            Form::Name(leaf) => {
                 let mention = shape.mention(Site::of(leaf))?;
                 self.read_declared(level, mention.coordinate).as_type()
             }
-            Form::Call(node, _) => {
-                let (operand, name) = member_read(node)?;
+            Form::Member { operand, label, .. } => {
                 let upper = self.peeked(level, operand)?.upper;
-                match signature_member(self.types, self.scratch, upper, name)? {
+                match signature_member(self.types, self.scratch, upper, label)? {
                     SignatureMember {
                         declared: DeclaredType::Type(declared),
                         unpinned: None,
@@ -1459,7 +1454,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         Ok(match form {
-            Form::Leaf(part) => self.leaf(level, part, wanted)?,
+            Form::Leaf(part) | Form::Name(part) => self.leaf(level, part, wanted)?,
             Form::Block(nested) => self
                 .nested(level, nested, false, None)?
                 .unwrap_or_else(unknown),
@@ -1480,7 +1475,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Form::Ascribe(node, mode) => self.ascribe(level, node, mode)?,
             Form::Eval(node) => self.eval(level, node)?,
             Form::Using(node) => self.using(level, node)?,
-            Form::Call(node, list) => match self.member_scheme(level, node) {
+            Form::Member {
+                node,
+                list,
+                operand,
+                label,
+            } => match self.member_scheme(level, operand, label) {
                 Some((scheme, None)) => {
                     let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
                     if !self.unfilled {
@@ -1492,15 +1492,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     typed
                 }
                 Some((_, Some(parameter))) => {
-                    let (_, name) = member_read(node).expect("a member read");
                     return Err(ShapeError::UnpinnedMember {
-                        member: name,
+                        member: label,
                         parameter,
                         at: node.source,
                     });
                 }
                 None => self.narrow(level, node, list)?,
             },
+            Form::Call(node, list) => self.narrow(level, node, list)?,
             Form::Apply(node) => self.apply(level, node)?,
             Form::Unevaluable(_) => unknown(),
         })
@@ -1516,25 +1516,26 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Bound, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         let read = match of_part(shape, head) {
-            Form::Leaf(
-                ExpressionPart::Identifier(_)
-                | ExpressionPart::Type(_)
-                | ExpressionPart::MarkedName(..),
-            ) => shape
-                .mention(Site::of(head))
+            Form::Name(name) => shape
+                .mention(Site::of(name))
                 .map(|mention| self.read_declared(level, mention.coordinate)),
             Form::Lambda(node) => Site::of_body(node)
                 .and_then(|site| shape.nested(site))
                 .map(callable),
             // A member read at a call's head is read as it is, a quantified member by its scheme:
             // its site is recorded with no solution, which the run reads as the head's mark.
-            Form::Call(node, list) if member_read(node).is_some() => {
+            Form::Member {
+                node,
+                list,
+                operand,
+                label,
+            } => {
                 if !self.unfilled {
                     self.chain[level]
                         .instances
                         .push((Site::of_node(node), Static::Unknown));
                 }
-                match self.member_scheme(level, node) {
+                match self.member_scheme(level, operand, label) {
                     Some((scheme, None)) => Some(DeclaredType::Scheme(scheme)),
                     // A scheme over a parameter the load cannot name: the run solves the call.
                     Some((_, Some(_))) => {
@@ -2889,24 +2890,6 @@ fn written_names<'x>(
         part => names.push(quoted(part)?),
     }
     Some(names.leak())
-}
-
-/// The operand and the written label of `node` where it is a member read, `ATTR <operand> <label>`.
-fn member_read<'graph>(
-    node: &'graph KExpression<'graph>,
-) -> Option<(&'graph ExpressionPart<'graph>, BinderSymbol)> {
-    if node.cache().builtin_shape()?.id != BuiltinShapeId::Attribute {
-        return None;
-    }
-    let [_, operand, label] = node.parts else {
-        return None;
-    };
-    let name = match label.value {
-        ExpressionPart::Identifier(name) => BinderSymbol::Value(name),
-        ExpressionPart::Type(name) => BinderSymbol::Type(name),
-        _ => return None,
-    };
-    Some((&operand.value, name))
 }
 
 /// Whether the pass has typed `nested`, or need not: a quote's code the load refused is left.

@@ -73,6 +73,8 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch> =
 /// What a node is to the evaluator.
 pub(super) enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
+    /// A name: an identifier, a type name or a marked name, read through its mention.
+    Name(&'graph ExpressionPart<'graph>),
     Block(&'graph BodyShape<'graph>),
     Lambda(&'graph KExpression<'graph>),
     /// `<value> :! <Type>`, or `<module> :| <Sig>`, beside which operator it is.
@@ -83,6 +85,13 @@ pub(super) enum Form<'graph> {
     Using(&'graph KExpression<'graph>),
     Declaration,
     Call(&'graph KExpression<'graph>, &'graph CandidateList<'graph>),
+    /// `ATTR <operand> <label>` with its label written bare: a member read.
+    Member {
+        node: &'graph KExpression<'graph>,
+        list: &'graph CandidateList<'graph>,
+        operand: &'graph ExpressionPart<'graph>,
+        label: BinderSymbol,
+    },
     /// `(<head> <argument>)`: a call by name, or a construction.
     Apply(&'graph KExpression<'graph>),
     Unevaluable(&'graph KExpression<'graph>),
@@ -134,7 +143,7 @@ pub(super) fn evaluate<'graph>(
         return finishing(step, &at);
     }
     match form(view.shape(), node) {
-        Form::Leaf(part) => leaf(step, &at, part, stage),
+        Form::Leaf(part) | Form::Name(part) => leaf(step, &at, part, stage),
         Form::Block(shape) => {
             let mut step = step;
             let asked = step.spawn(block(program, shape, view, Use::Forwards));
@@ -156,7 +165,9 @@ pub(super) fn evaluate<'graph>(
         Form::Ascribe(node, mode) => ascribe(step, &at, node, mode, stage),
         Form::Eval(node) => evaluated(step, &at, node, stage),
         Form::Using(node) => using(step, &at, node, stage),
-        Form::Call(node, list) => call(step, &at, node, list, stage),
+        Form::Call(node, list) | Form::Member { node, list, .. } => {
+            call(step, &at, node, list, stage)
+        }
         Form::Apply(node) => {
             let [head, argument] = node.parts else {
                 unreachable!("an application is a head and its argument")
@@ -192,6 +203,7 @@ pub(super) fn of_part<'graph>(
         },
         // A mark says where the use it wraps resolved, which the candidate list already holds.
         ExpressionPart::MarkedUse(_, node) => of_node(shape, node.reference()),
+        part if part.is_name() => Form::Name(part),
         part => Form::Leaf(part),
     }
 }
@@ -215,6 +227,17 @@ pub(super) fn of_node<'graph>(
         _ => {}
     }
     if let Some(list) = shape.candidates(Site::of_node(node)) {
+        if builtin == Some(BuiltinShapeId::Attribute)
+            && let [_, operand, label] = node.parts
+            && let Some(label) = Role::Field.label_reads(&label.value)
+        {
+            return Form::Member {
+                node,
+                list,
+                operand: &operand.value,
+                label,
+            };
+        }
         return Form::Call(node, list);
     }
     if builtin.is_some() {
@@ -777,14 +800,11 @@ fn carried_under_static<'graph, 'here>(
 
 /// Whether `part` is read in place rather than asked for.
 fn read_in_place(part: &ExpressionPart<'_>) -> bool {
-    matches!(
-        part,
-        ExpressionPart::Literal(_)
-            | ExpressionPart::Identifier(_)
-            | ExpressionPart::Type(_)
-            | ExpressionPart::MarkedName(..)
-            | ExpressionPart::QuotedExpression(_)
-    )
+    part.is_name()
+        || matches!(
+            part,
+            ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_)
+        )
 }
 
 /// The value of a part read in place: a literal lowered, a name read through its mention — a

@@ -480,14 +480,15 @@ fn a_variable_used_once_is_solved_by_each_call() {
     assert_eq!(run(source), "Number\nStr");
 }
 
-/// A module's quantified member runs through a call: by name, written at a call's head, or wrapped
-/// in an unquantified `FN` that calls it. A body binding one where nothing fixes its group is
+/// A module's quantified member runs through a call: by name, written at a call's head — in
+/// parentheses or not — or wrapped in an unquantified `FN` that calls it. A body binding one where nothing fixes its group is
 /// refused where it is written, not when its value is read.
 #[test]
 fn a_quantified_function_runs_through_a_call() {
     let pick = "(LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
     let module = |rest: &str| format!("MODULE lib = ({pick} {rest})");
     assert_eq!(run(&module("(PRINT (pick {x = 1}))")), "1");
+    assert_eq!(run(&module("(PRINT ((pick) {x = 2}))")), "2");
     assert_eq!(
         run(
             "LET f = (FN :{} -> Any = #(LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))))\n\
