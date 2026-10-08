@@ -79,7 +79,7 @@ use super::{
     Position, QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead,
     Target, TopLevel, TypeExpression, Unit, UnitWork, Which, resolve_here,
 };
-use crate::parse::{BodyKind, DefinitionKind, Heads, Reading, Role};
+use crate::parse::{BodyKind, DefinitionKind, Heads, Opens, Reading, Role};
 use std::cell::Cell;
 
 mod digest;
@@ -1901,12 +1901,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .extend(binders.iter().map(|binder| (binder, site)));
             }
         }
-        let (shape_kind, class) = if kind.is_callable() {
-            (ShapeKind::Callable, state.constructor().class())
-        } else if kind == BodyKind::Module {
-            (ShapeKind::Module, MentionClass::Eager)
-        } else {
-            (ShapeKind::Block, MentionClass::Eager)
+        let (shape_kind, class) = match kind.opens() {
+            Opens::Callable => (ShapeKind::Callable, state.constructor().class()),
+            Opens::Module => (ShapeKind::Module, MentionClass::Eager),
+            Opens::Block => (ShapeKind::Block, MentionClass::Eager),
         };
         let operator = [
             BinderSymbol::Value(IMPLICIT.left.symbol()),

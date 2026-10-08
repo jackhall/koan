@@ -52,7 +52,7 @@ pub use ast::{
 pub use builtin_shapes::binder::{
     BinderBucketFn, BinderNameFn, BinderSurface, BucketKeys, StoredBinderKey,
 };
-pub use builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
+pub use builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Opens, Reading, Role};
 pub use builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for,
 };

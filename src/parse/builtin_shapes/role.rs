@@ -131,13 +131,30 @@ pub enum BodyKind {
     Surfaced,
 }
 
+/// What a body slot opens: the kind of body shape the builder makes of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Opens {
+    /// A callable's body, whose mentions take the enclosing state's class.
+    Callable,
+    /// A module's body, an eager context.
+    Module,
+    /// A block, an eager context.
+    Block,
+}
+
 impl BodyKind {
+    /// What the body opens — the one place a body kind is classified.
+    pub const fn opens(self) -> Opens {
+        match self {
+            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => Opens::Callable,
+            BodyKind::Module => Opens::Module,
+            BodyKind::Surfaced => Opens::Block,
+        }
+    }
+
     /// Whether the body is a callable's: a `FN` or `EXPR` body, or an operator's.
     pub const fn is_callable(self) -> bool {
-        match self {
-            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => true,
-            BodyKind::Module | BodyKind::Surfaced => false,
-        }
+        matches!(self.opens(), Opens::Callable)
     }
 }
 
