@@ -74,6 +74,30 @@ fn a_type_member_is_read_through_a_module_name() {
     );
 }
 
+/// A type path through a view reads each member at the type the view's signature declares it: a
+/// nested module declared at an application reads its pinned head parameter, as `v.inner` then
+/// `.Elem` does.
+#[test]
+fn a_type_path_through_a_view_reads_the_member_a_stepwise_read_does() {
+    let program = |value: &str| {
+        format!(
+            "SIG Inner FOR ALL #[Elem] = #[(VAL zero :Elem)]\n\
+             SIG Outer = #[(VAL inner :(Inner WITH {{Elem = Str}}))]\n\
+             MODULE m = (MODULE inner = ((LET Elem = Str) (LET zero = \"z\")))\n\
+             LET v = (m :! Outer)\n\
+             LET y :(v.inner.Elem) = {value}\n\
+             PRINT y\n\
+             LET i = v.inner\n\
+             PRINT i.Elem"
+        )
+    };
+    assert_eq!(run(&program("\"s\"")), "s\nStr");
+    assert_eq!(
+        run(&program("1")),
+        "error: Number does not satisfy its annotation Str"
+    );
+}
+
 #[test]
 fn a_missing_member_and_an_ascription_that_can_never_hold_refuse_the_load() {
     assert_eq!(

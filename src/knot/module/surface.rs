@@ -3,8 +3,8 @@
 //! The shape builder read the surfaced names off the module's declaration where the `USING` was
 //! shaped, and laid them down as the block's **parameters** — so a mention of one resolves through
 //! the ordinary local read and a callable nested in the block captures it the ordinary way. What
-//! is left at run time is the binding, and layout order is what makes it an index: the `k`-th
-//! parameter of a channel is member `k` of that channel.
+//! is left at run time is the binding: each parameter is placed by name, at the index the module's
+//! signature gives that member ([`schema_member`]).
 //!
 //! A block declares locals of its own beside its parameters, and a local sorts in among them
 //! rather than after, so the parameters are picked out by declared position — `Position::PARAMETER`
@@ -12,6 +12,7 @@
 //! the list of the functions the module offers at it ([`layout::functions_at`]), which a use at
 //! the key spreads.
 
+use crate::elaborate::{member_count, schema_member, schema_of};
 use crate::knot::{KActivation, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::scope::{Position, ShapeKind, Slot};
@@ -32,7 +33,7 @@ pub enum Unsurfaceable {
     NotAModule,
     /// The block's parameters and the module's members do not line up.
     Count { expected: usize, found: usize },
-    /// The block surfaces a name the module does not hold, or holds elsewhere.
+    /// The block surfaces a name the module does not hold.
     Unnamed { name: BinderSymbol },
 }
 
@@ -48,12 +49,12 @@ pub fn surface<'graph, 'cell>(
 ) -> Result<(), Unsurfaceable> {
     debug_assert_eq!(block.shape().kind(), ShapeKind::Block);
     let node = module.module().ok_or(Unsurfaceable::NotAModule)?;
-    let schema = layout::schema_of(node.ktype(), types).expect("a module's type is its signature");
+    let schema = schema_of(node.ktype(), types).expect("a module's type is its signature");
     let shape = block.shape();
 
     // Staged first: a refusal binds nothing, so nothing is written until the whole walk agrees.
     let mut bindings = BumpVec::new_in(scratch);
-    let (mut values, mut kinds) = (0, 0);
+    let mut named = 0;
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
         let name = shape.slot_name(slot);
@@ -74,31 +75,16 @@ pub fn surface<'graph, 'cell>(
             bindings.push((slot, Value::List(list)));
             continue;
         }
-        // The `k`-th parameter of a channel is member `k` of that channel — the layout law, which
-        // is what makes surfacing an index rather than a lookup.
-        let index = match name {
-            BinderSymbol::Value(_) => {
-                values += 1;
-                values - 1
-            }
-            BinderSymbol::Type(_) => {
-                kinds += 1;
-                layout::value_count(&schema) + kinds - 1
-            }
-            BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
-                unreachable!("a parameter is a written name")
-            }
-        };
-        if layout::member_index(&schema, scratch, name) != Some(index) {
-            return Err(Unsurfaceable::Unnamed { name });
-        }
+        let (index, _) =
+            schema_member(&schema, scratch, name).ok_or(Unsurfaceable::Unnamed { name })?;
+        named += 1;
         bindings.push((slot, node.members()[index]));
     }
-    let held = layout::member_count(&schema, scratch);
-    if values + kinds != held {
+    let held = member_count(&schema, scratch);
+    if named != held {
         return Err(Unsurfaceable::Count {
             expected: held,
-            found: values + kinds,
+            found: named,
         });
     }
     for (slot, member) in bindings {

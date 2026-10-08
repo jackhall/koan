@@ -7,16 +7,17 @@
 //! binding holds, as a [`TypeAt`]. An activation answers a type or not one; the load-time reader
 //! may also answer a rigid variable standing for a type a run binds, or that it cannot know.
 
-use crate::memory::BumpAllocator;
+use crate::memory::{Bump, BumpAllocator};
 use crate::parse::ExpressionPart;
 use crate::scope::{Activation, ActivationView, BodyShape, Coordinate, Elaboration, Site};
-use crate::symbols::{TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeNode, TypeRegistry, member, substitute_levels,
+    DeclaredType, KType, Parametric, TypeNode, TypeRegistry, substitute_levels,
 };
 use crate::values::{KnottedFamily, Value};
 
 use super::expression::type_expression;
+use super::members::{SignatureMember, signature_member};
 
 /// What a reader answers for the binding at a coordinate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,29 +61,41 @@ pub trait Reads<'graph> {
     }
 }
 
-/// The manifest member `name` of a module whose signature is `signature`, reached through the value
-/// members `chain` names — a nested module's value slot is its own signature. `None` where
-/// `signature` is no module's; [`TypeAt::NotAType`] where a step names no such member.
-fn manifest_through(
+/// The type member `name` of a module of signature `signature`, reached through the value members
+/// `chain` names, each step's type read off the one before it ([`signature_member`]). `None` where
+/// `signature` is no signature type; [`TypeAt::NotAType`] where a step names no value member at a
+/// type, the last names no type member, or a member names a head parameter its application leaves
+/// unpinned.
+fn member_through(
     types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
     signature: KType,
     chain: &[ValueSymbol],
     name: TypeSymbol,
 ) -> Option<TypeAt> {
-    let TypeNode::Signature { schema, .. } = types.node(signature) else {
+    if !matches!(
+        types.node(signature),
+        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
+    ) {
         return None;
-    };
-    let Some((first, rest)) = chain.split_first() else {
-        let held = member(schema.manifest_members, name).and_then(|held| types.concrete(held));
-        return Some(held.map_or(TypeAt::NotAType, TypeAt::Type));
-    };
-    let inner = member(schema.value_slots, *first)
-        .and_then(DeclaredType::as_type)
-        .and_then(|inner| types.concrete(inner));
-    match inner {
-        Some(inner) => manifest_through(types, inner, rest, name).or(Some(TypeAt::NotAType)),
-        None => Some(TypeAt::NotAType),
     }
+    // A member read at a type, every head parameter it names pinned.
+    let read =
+        |of: KType, name: BinderSymbol| match signature_member(types, scratch, of.into(), name) {
+            Some(SignatureMember {
+                declared: DeclaredType::Type(declared),
+                unpinned: None,
+            }) => types.concrete(declared),
+            _ => None,
+        };
+    let mut held = signature;
+    for step in chain {
+        match read(held, BinderSymbol::Value(*step)) {
+            Some(inner) => held = inner,
+            None => return Some(TypeAt::NotAType),
+        }
+    }
+    Some(read(held, BinderSymbol::Type(name)).map_or(TypeAt::NotAType, TypeAt::Type))
 }
 
 impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph, '_, XF> {
@@ -107,7 +120,11 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         let held = self.read(at);
         held.as_module()?;
         let signature = held.concrete_ktype();
-        Some((manifest_through(types, signature, chain, name)?, signature))
+        let scratch = Bump::new();
+        Some((
+            member_through(types, &scratch, signature, chain, name)?,
+            signature,
+        ))
     }
 }
 

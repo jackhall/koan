@@ -93,7 +93,7 @@
 //!
 //! See [README.md § Static types](README.md#static-types).
 
-use crate::elaborate::module_signature;
+use crate::elaborate::{SignatureMember, module_signature, signature_member};
 use crate::knot::module::view::transparent_view_type;
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
@@ -704,12 +704,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             && shape.slot(shape.slot_name(slot)).map(|(_, at)| at) == Some(Position::PARAMETER)
         {
             let name = shape.slot_name(slot);
-            return match rules::member_of(self.types, self.scratch, upper, name) {
-                Some(rules::Member {
+            return match signature_member(self.types, self.scratch, upper, name) {
+                Some(SignatureMember {
                     declared: DeclaredType::Type(declared),
                     unpinned: None,
                 }) => DeclaredType::Type(under(declared)),
-                Some(rules::Member {
+                Some(SignatureMember {
                     declared: DeclaredType::Scheme(scheme),
                     unpinned: None,
                 }) => DeclaredType::Scheme(scheme),
@@ -1004,7 +1004,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Option<(Scheme, Option<BinderSymbol>)> {
         let (operand, name) = member_read(node)?;
         let upper = self.peeked(level, operand)?.upper;
-        let member = rules::member_of(self.types, self.scratch, upper, name)?;
+        let member = signature_member(self.types, self.scratch, upper, name)?;
         let DeclaredType::Scheme(scheme) = member.declared else {
             return None;
         };
@@ -1028,8 +1028,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Form::Call(node, _) => {
                 let (operand, name) = member_read(node)?;
                 let upper = self.peeked(level, operand)?.upper;
-                match rules::member_of(self.types, self.scratch, upper, name)? {
-                    rules::Member {
+                match signature_member(self.types, self.scratch, upper, name)? {
+                    SignatureMember {
                         declared: DeclaredType::Type(declared),
                         unpinned: None,
                     } => Some(under(declared)),

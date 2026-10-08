@@ -139,7 +139,8 @@ fn fitted<'run, 'x>(
         }
         _ => return Err(Unascribable::NotASignature(signature)),
     };
-    let sig = layout::schema_of(declared, types).ok_or(Unascribable::NotASignature(signature))?;
+    let sig = crate::elaborate::schema_of(declared, types)
+        .ok_or(Unascribable::NotASignature(signature))?;
     // The empty signature asks nothing, and every module fits it.
     let from = if sig.is_empty() {
         Members::EMPTY
@@ -196,9 +197,11 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
         from,
         to,
     };
-    let view_schema = layout::schema_of(view, types).expect("the view's own signature");
-    let mut members: BumpVec<'x, KValue<'graph, 'cell>> =
-        BumpVec::with_capacity_in(layout::member_count(&view_schema, scratch), scratch);
+    let view_schema = crate::elaborate::schema_of(view, types).expect("the view's own signature");
+    let mut members: BumpVec<'x, KValue<'graph, 'cell>> = BumpVec::with_capacity_in(
+        crate::elaborate::member_count(&view_schema, scratch),
+        scratch,
+    );
     // Value members first, in the signature's own order — which is layout order, since both
     // schemas' value tables hold the same names symbol-sorted.
     for (name, declared) in sig.value_slots.iter().copied() {
@@ -210,7 +213,10 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     }
     // Then the type members, at the handles the view's own schema fixed them to.
     // A view's signature is a module's: every type member is fixed to a concrete type.
-    for (_, handle) in layout::type_members(&view_schema, scratch).iter().copied() {
+    for (_, handle) in crate::elaborate::type_members(&view_schema, scratch)
+        .iter()
+        .copied()
+    {
         let handle = types
             .concrete(handle)
             .expect("a view's type members are bound");

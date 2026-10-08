@@ -1,15 +1,15 @@
-//! Entering a `USING … SCOPE` block, and the layout law the whole item rests on.
+//! Entering a `USING … SCOPE` block, and each member read by its name.
 
 use crate::knot::KActivation;
 use crate::knot::tests::{pin, with_fixture};
 use crate::memory::{Writer, resident};
 use crate::scope::{Activation, BodyShape, Coordinate, ShapeKind, Slot, Target};
-use crate::symbols::BinderSymbol;
+use crate::type_lattice::KType;
 use crate::values::Value;
 
 use super::super::layout;
 use super::super::surface::{Unsurfaceable, surface};
-use super::{module, schema};
+use super::module;
 
 /// The one block shape in `shape`'s tree — the body a `USING` surfaces into.
 fn only_block<'graph>(shape: &BodyShape<'graph>) -> &'graph BodyShape<'graph> {
@@ -154,17 +154,71 @@ USING m SCOPE (zero)";
     });
 }
 
-/// The law the design rests on: three readers agree on where a member sits, per channel, and none
-/// of them consults the others.
+/// What a test program binds a member to.
+#[derive(Clone, Copy, Debug)]
+enum Bound {
+    Number(f64),
+    Str(&'static str),
+    Type(KType),
+}
+
+/// Whether `value` is what `bound` names.
+fn holds(value: Value<'_, impl crate::values::Knotted>, bound: Bound) -> bool {
+    match (value, bound) {
+        (Value::Number(held), Bound::Number(number)) => held == number,
+        (Value::Type(held), Bound::Type(ktype)) => held.handle() == ktype,
+        (value, Bound::Str(text)) => value.as_str() == Some(text),
+        _ => false,
+    }
+}
+
+/// The signature alone places a member: the module's member and the block's parameter of each
+/// name hold the value the body bound under it, whatever order the body's or the block's slots
+/// run in.
 #[test]
-fn the_block_the_body_and_the_signature_agree_on_every_members_place() {
-    let programs = [
-        PROGRAM,
-        "MODULE m = ((LET aa = 1) (LET zz = 2) (NEWTYPE Aa = Number) (NEWTYPE Zz = Str))\n\
-         USING m SCOPE (aa zz Aa Zz)",
-        "MODULE m = ((LET only = 1))\nUSING m SCOPE (only)",
+fn every_member_is_read_by_its_name() {
+    use Bound::{Number, Str, Type};
+    let programs: [(&str, &[(&str, Bound)]); 4] = [
+        (
+            "MODULE m = ((LET zero = 0) (LET name = \"m\") (LET Dist = Number))\n\
+             USING m SCOPE (zero name Dist)",
+            &[
+                ("zero", Number(0.0)),
+                ("name", Str("m")),
+                ("Dist", Type(KType::NUMBER)),
+            ],
+        ),
+        (
+            "MODULE m = ((LET aa = 1) (LET zz = 2) (LET Aa = Number) (LET Zz = Str))\n\
+             USING m SCOPE (aa zz Aa Zz)",
+            &[
+                ("aa", Number(1.0)),
+                ("zz", Number(2.0)),
+                ("Aa", Type(KType::NUMBER)),
+                ("Zz", Type(KType::STR)),
+            ],
+        ),
+        (
+            "MODULE m = ((LET only = 1))\nUSING m SCOPE (only)",
+            &[("only", Number(1.0))],
+        ),
+        (
+            "MODULE m = ((LET alpha = 1) (LET beta = 2) (LET gamma = 3) (LET delta = 4) \
+             (LET Alpha = Number) (LET Beta = Str) (LET Gamma = Bool))\n\
+             USING m SCOPE (alpha beta gamma delta Alpha Beta Gamma)",
+            &[
+                ("alpha", Number(1.0)),
+                ("beta", Number(2.0)),
+                ("gamma", Number(3.0)),
+                ("delta", Number(4.0)),
+                ("Alpha", Type(KType::NUMBER)),
+                ("Beta", Type(KType::STR)),
+                ("Gamma", Type(KType::BOOL)),
+            ],
+        ),
     ];
-    for source in programs {
+    let mut reordered = false;
+    for (source, bound) in programs {
         with_fixture(|fixture| {
             let lines = fixture.parse(source);
             let (types, scratch) = (fixture.types, fixture.scratch());
@@ -172,56 +226,30 @@ fn the_block_the_body_and_the_signature_agree_on_every_members_place() {
                 let writer = context.writer();
                 let activation = fixture.run(writer, &lines, &[]);
                 let m = module(fixture, activation, "m");
-                let sig = schema(m.module().expect("a module").ktype(), types);
-                let body = activation
-                    .shape()
-                    .births(
-                        activation
-                            .shape()
-                            .slot(fixture.name("m"))
-                            .expect("`m` is declared")
-                            .0,
-                    )
-                    .expect("`m` births its body");
-                let block = only_block(activation.shape());
-
-                assert_eq!(body.slots(), layout::member_count(&sig, scratch));
-                assert_eq!(block.slots(), layout::member_count(&sig, scratch));
-                for index in 0..body.slots() {
-                    let name = body.slot_name(Slot(index as u32));
-                    assert_eq!(
-                        layout::member_index(&sig, scratch, name),
-                        Some(index),
-                        "`{source}`: the signature places `{name:?}` where the body does",
-                    );
-                    let (block_slot, _) = block.slot(name).expect("the block surfaces the name");
-                    assert_eq!(
-                        block_slot.index(),
-                        index,
-                        "`{source}`: the block places `{name:?}` where the body does",
+                let block = entered(writer, activation);
+                surface(writer, m, block, types, scratch)
+                    .expect("the block's parameters are `m`'s members");
+                for (text, bound) in bound {
+                    let name = fixture.name(text);
+                    let member = layout::member(m, name, types, scratch).expect("a member");
+                    assert!(holds(member, *bound), "`{source}`: `{text}` is {bound:?}");
+                    let (slot, _) = block.shape().slot(name).expect("a surfaced parameter");
+                    assert!(
+                        holds(block.read(local(slot)), *bound),
+                        "`{source}`: the block's `{text}` is {bound:?}"
                     );
                 }
-                // And the order really is by interned symbol, not by the text of the name: the
-                // value channel comes first and each channel is sorted by symbol.
-                assert!(channel_sorted(body));
+                // The names' symbol order is not their text order somewhere, so no reader can be
+                // leaning on a sort by text.
+                let symbols: Vec<_> = (bound.iter())
+                    .map(|(text, _)| fixture.name(text).symbol())
+                    .collect();
+                reordered |= !symbols.is_sorted() && !symbols.is_sorted_by(|a, b| a >= b);
             })
         });
     }
-}
-
-/// Whether `body`'s slots run value-channel-first with each channel symbol-sorted.
-fn channel_sorted(body: &BodyShape<'_>) -> bool {
-    let names: Vec<BinderSymbol> = (0..body.slots())
-        .map(|slot| body.slot_name(Slot(slot as u32)))
-        .collect();
-    let split = names
-        .iter()
-        .position(|name| matches!(name, BinderSymbol::Type(_)))
-        .unwrap_or(names.len());
-    let (values, types) = names.split_at(split);
-    values
-        .iter()
-        .all(|name| matches!(name, BinderSymbol::Value(_)))
-        && values.is_sorted_by_key(|name| name.symbol())
-        && types.is_sorted_by_key(|name| name.symbol())
+    assert!(
+        reordered,
+        "some program's names intern out of their written order"
+    );
 }

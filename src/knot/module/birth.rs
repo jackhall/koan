@@ -5,16 +5,17 @@
 //! until every slot is bound, and only then ties the binder: a module's type and weight are facts
 //! about the members its body binds, and a knot node is written once.
 //!
-//! **Layout order** is what makes the tie a read-out rather than a remap: a body shape lays its
-//! slots out exactly the way a signature's tables are sorted ([`layout`](super::layout)), so a
-//! body-born module's member run is its finished activation's slots read out in slot order.
+//! **Layout order**: the signature places each member ([`elaborate`'s members](crate::elaborate)),
+//! so the tie places each named slot by its name, at the index the module's own signature gives
+//! it, and lays the registrations after them in slot order. Nothing assumes the body's slot order.
 
-use crate::elaborate::self_signature;
+use crate::elaborate::{member_count, schema_member, schema_of, self_signature};
 use crate::knot::{
     Eager, KActivation, KActivationView, Knotted, Node, Supplied, Untieable, composed,
 };
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
 use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::TypeRegistry;
 use crate::values::digest::Digests;
 
@@ -41,7 +42,8 @@ pub fn body_activation<'graph, 'cell>(
     Activation::of_module(writer, body, closure, enclosing.builtins())
 }
 
-/// Tie the lone module member of `component`: the caller's supplied body, read out in slot order.
+/// Tie the lone module member of `component`: the caller's supplied body, each slot placed where
+/// the module's signature places its name.
 ///
 /// A module is alone in its component and shares nothing with the staging the
 /// [tie](crate::knot::tie()) does for the other member kinds, so it ties on its own path.
@@ -85,8 +87,27 @@ pub fn tie_member<'graph, 'cell, 'x>(
         keyworded.push(member);
     }
     let ktype = self_signature(body, &keyworded, types, scratch);
+    // The signature places each named slot by its name; the registrations follow in slot order.
+    let schema = schema_of(ktype, types).expect("a module's type is its signature");
+    let mut placed = BumpVec::with_capacity_in(member_count(&schema, scratch), scratch);
+    placed.resize(member_count(&schema, scratch), None);
+    let mut registrations = BumpVec::with_capacity_in(keyworded.len(), scratch);
+    for (slot, value) in body.slots() {
+        match body.shape().slot_name(slot) {
+            BinderSymbol::Registration(_) => registrations.push(value),
+            name => {
+                let (index, _) = schema_member(&schema, scratch, name)
+                    .expect("a module's signature names every slot its body binds");
+                placed[index] = Some(value);
+            }
+        }
+    }
     let mut members = BumpVec::with_capacity_in(body.shape().slots(), scratch);
-    members.extend(body.slots().map(|(_, value)| value));
+    members.extend(
+        (placed.into_iter())
+            .map(|value| value.expect("a module's body binds every member its signature names")),
+    );
+    members.extend(registrations);
     // A body-born module is its code over what it captures, digested now: the module keeps no
     // captures to digest later.
     let mut memo = Digests::new(types, scratch);

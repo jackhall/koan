@@ -18,12 +18,12 @@
 //!
 //! See [README.md § The builtin table](README.md#the-builtin-table).
 
+use crate::elaborate::{SignatureMember, signature_member};
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::symbols::{BinderSymbol, TypeSymbol};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Members, Parametric, SchemaDraft, SigOrigin, TypeNode,
-    TypeRegistry, bound_above, lower_end_outside, member, shape_return, shape_slots,
-    substitute_parameters,
+    DeclaredType, Interval, KType, Parametric, SchemaDraft, SigOrigin, TypeNode, TypeRegistry,
+    bound_above, lower_end_outside, shape_return, shape_slots,
 };
 use crate::values::{record_type, retyped_to, under, unknown};
 
@@ -111,8 +111,8 @@ fn returns(
             Interval::point(KType::NEVER.into())
         }
         (Native::ModuleMember, Some([name])) => {
-            match member_of(types, scratch, given[0].typed.upper, *name) {
-                Some(Member {
+            match signature_member(types, scratch, given[0].typed.upper, *name) {
+                Some(SignatureMember {
                     declared: DeclaredType::Type(declared),
                     unpinned: None,
                 }) => match name {
@@ -225,77 +225,6 @@ fn named<'x>(given: &[Given<'x>], native: Native) -> Option<&'x [BinderSymbol]> 
         Native::Field | Native::ModuleMember => given[1].names,
         _ => None,
     }
-}
-
-/// A member a signature declares, as a read of it sees it.
-#[derive(Clone, Copy)]
-pub(super) struct Member {
-    /// Its declared type — a type member's own type, a value slot's type or scheme — each pin of
-    /// the application substituted.
-    pub declared: DeclaredType<Parametric>,
-    /// The first head parameter it names that the application leaves unpinned, which stands for a
-    /// different type at each module the read may reach.
-    pub unpinned: Option<TypeSymbol>,
-}
-
-/// The member `name` of every module under `upper`, a signature or an application of one read
-/// through a rigid variable's bound — a union's value member joined over its members: `None` where
-/// `upper` is no such type, or declares no such member.
-pub(super) fn member_of(
-    types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-    upper: Parametric,
-    name: BinderSymbol,
-) -> Option<Member> {
-    let upper = bound_above(types, scratch, upper);
-    let (declared, pinned) = match types.node(upper) {
-        TypeNode::Signature { .. } => (upper, None),
-        TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
-        // A union's value member is the join of its members', where each declares it at a type.
-        TypeNode::Union { members } if matches!(name, BinderSymbol::Value(_)) => {
-            let mut joined = BumpVec::with_capacity_in(members.len(), scratch);
-            for each in members.iter() {
-                match member_of(types, scratch, each.into(), name)? {
-                    Member {
-                        declared: DeclaredType::Type(declared),
-                        unpinned: None,
-                    } => joined.push(declared),
-                    _ => return None,
-                }
-            }
-            return Some(Member {
-                declared: DeclaredType::Type(types.union_of(scratch, &joined)),
-                unpinned: None,
-            });
-        }
-        _ => return None,
-    };
-    let TypeNode::Signature { schema, .. } = types.node(declared) else {
-        return None;
-    };
-    let read: DeclaredType<Parametric> = match name {
-        BinderSymbol::Value(value) => member(schema.value_slots, value)?,
-        BinderSymbol::Type(held) => member(schema.manifest_members, held)
-            .or_else(|| member(schema.parameters, held))?
-            .into(),
-        BinderSymbol::Registration(_) | BinderSymbol::Key(_) => return None,
-    };
-    let mut pins = BumpVec::new_in(scratch);
-    let mut open = BumpVec::new_in(scratch);
-    for (parameter, _) in schema.parameters.iter() {
-        match pinned.and_then(|pins| pins.get(BinderSymbol::Type(*parameter).symbol())) {
-            Some(pin) => pins.push((*parameter, pin)),
-            None => open.push(*parameter),
-        }
-    }
-    let read = substitute_parameters(types, scratch, read, Members::from_table(pins));
-    let unpinned = open
-        .into_iter()
-        .find(|parameter| types.mentions_parameter(scratch, read, *parameter));
-    Some(Member {
-        declared: read,
-        unpinned,
-    })
 }
 
 /// `names`, each once, in the order first listed.

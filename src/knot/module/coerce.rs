@@ -322,7 +322,7 @@ pub fn coerce<'graph, 'cell>(
             else {
                 return Err(unsupported);
             };
-            let Some(schema) = super::layout::schema_of(signature, cx.types) else {
+            let Some(schema) = crate::elaborate::schema_of(signature, cx.types) else {
                 return Err(unsupported);
             };
             let mut pins = BumpVec::with_capacity_in(from_pins.len(), cx.scratch);
@@ -362,7 +362,7 @@ fn across<'a, 'cell, 'run, 'x>(
 ) -> Coercion<'a, 'cell, 'run, 'x> {
     let bindings = |signature: KType| {
         let schema =
-            super::layout::schema_of(signature, types).expect("a barrier holds signatures");
+            crate::elaborate::schema_of(signature, types).expect("a barrier holds signatures");
         Members::from_pairs(
             scratch,
             schema.manifest_members.iter().map(|(name, bound)| {
