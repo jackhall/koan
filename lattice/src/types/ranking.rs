@@ -519,9 +519,10 @@ pub(super) fn class_at_least(
 pub(super) const STAND_IN_LEVEL: usize = usize::MAX;
 
 /// What a variable an earlier class solved to `solution` reads as in a later one, over static
-/// types: `solution` itself where the reach interval converged or `solution` names a rigid variable
-/// of the other side — which stands for one unknown already — and otherwise a lexical variable
-/// between the interval's ends.
+/// types: `solution` itself where the reach interval converged, `solution` names a rigid variable
+/// of the other side — which stands for one unknown already — or it holds an opaque carrier, an
+/// atom no lexical variable's ends may hold; and otherwise a lexical variable between the
+/// interval's ends.
 fn read_later(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -530,7 +531,7 @@ fn read_later(
     reach: Interval<Handle>,
     solution: Handle,
 ) -> Handle {
-    if reach.is_exact() || types.contains_rigid(solution) {
+    if reach.is_exact() || types.contains_rigid(solution) || types.contains_carrier(solution) {
         return solution;
     }
     // Neither end holds a rigid variable: an end is the solution, a bound or `Never`, and the
