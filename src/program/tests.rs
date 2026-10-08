@@ -133,7 +133,9 @@ fn digesting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
         return step.failed(StepError::Refused);
     };
     let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
-    record(format!("{:?}", wanted(program, &view, &name).digest()));
+    let scratch = Bump::new();
+    let digest = wanted(program, &view, &name).digest(program.types(), &scratch);
+    record(format!("{digest:?}"));
     step.leave(birth)
 }
 

@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::digest::{ContentDigest, Digests, Tag, composite};
 use super::{
     ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Value, Weight,
     construction, sealing,
@@ -46,11 +45,6 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
     ) -> &'cell Tagged<'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
         Self::from_payload(writer, payload, identity, weight)
-    }
-
-    /// The tagged value's content digest: its identity and its payload's, through `memo`.
-    pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
-        composite(Tag::Tagged, self.ktype, self.payload.digest_in(memo))
     }
 
     /// A member sealed behind an opaque view's barrier: [`sealing`] checks the identity is a

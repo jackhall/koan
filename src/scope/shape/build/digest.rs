@@ -6,7 +6,11 @@
 //! body hashed in place by its own code digest, so a body's digest never depends on where it sits
 //! in the program:
 //!
-//! - a keyword hashes its symbol, and a literal its value's [content digest](crate::values::digest);
+//! - a keyword hashes its symbol;
+//! - a literal hashes as syntax, which is its value: a scalar its payload under its kind's tag — a
+//!   number's bits, a bool, `null`, a string length-prefixed — and a container literal its parts
+//!   under a group tag with their count, a record literal's fields in symbol order, so field order
+//!   is blind, and a dict literal's pairs as written;
 //! - a name hashes its resolution: a builtin by its index, a read landing at the program's top
 //!   level by that binding's slot, a local by its hops and slot, and any other capture by its hops
 //!   and capture slot; a name written where it is declared hashes its symbol;
@@ -25,9 +29,8 @@
 //! ([`BodyShape::composed_captures`](super::super::BodyShape::composed_captures)).
 
 use crate::memory::BumpVec;
-use crate::parse::{ExpressionPart, KExpression, Mark};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, Mark};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::literal_digest;
 
 use super::super::{
     Candidate, CaptureSource, Coordinate, Position, ShapeKind, Site, Slot, Target, TopLevel,
@@ -172,16 +175,7 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
                 hasher.tag(Tag::Mark).feed(mark_tag(*mark));
                 self.node(hasher, node.reference());
             }
-            ExpressionPart::Literal(_)
-            | ExpressionPart::ListLiteral(_)
-            | ExpressionPart::DictLiteral(_)
-            | ExpressionPart::RecordLiteral(_)
-                if let Some(digest) =
-                    literal_digest(part, self.builder.types, self.builder.scratch) =>
-            {
-                hasher.digest(digest);
-            }
-            ExpressionPart::Literal(_) => unreachable!("a literal lowers"),
+            ExpressionPart::Literal(literal) => scalar(hasher, literal),
             ExpressionPart::ListLiteral(items) => {
                 hasher
                     .tag(Tag::Group)
@@ -206,7 +200,10 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
                     .tag(Tag::Group)
                     .feed(part_tag(part))
                     .count(fields.len());
-                for (name, value) in fields.iter() {
+                let mut sorted = BumpVec::with_capacity_in(fields.len(), self.builder.scratch);
+                sorted.extend_from_slice(fields);
+                sorted.sort_unstable_by_key(|(name, _)| name.symbol());
+                for (name, value) in sorted.iter() {
                     hasher.feed(name);
                     self.part(hasher, value);
                 }
@@ -258,6 +255,16 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
             Target::Capture(capture) => hasher.tag(Tag::Capture).feed(hops).feed(capture.0),
         };
     }
+}
+
+/// A scalar literal as syntax: its kind's tag, then its payload.
+fn scalar(hasher: &mut DigestHasher, literal: &KLiteral<'_>) {
+    match literal {
+        KLiteral::Number(number) => hasher.tag(Tag::Number).feed(number.to_bits()),
+        KLiteral::String(text) => hasher.tag(Tag::Str).text(text.as_bytes()),
+        KLiteral::Boolean(flag) => hasher.tag(Tag::Bool).feed(flag),
+        KLiteral::Null => hasher.tag(Tag::Null),
+    };
 }
 
 /// A shape kind's place in the digest.

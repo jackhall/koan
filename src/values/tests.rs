@@ -14,7 +14,7 @@ mod satisfaction;
 mod surface;
 mod working;
 
-use super::digest::{ContentDigest, DigestHasher, Digests, Tag};
+use super::digest::{ContentDigest, DigestHasher, Tag};
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
     ReleaseAbsorption, StepContext, Verdict, Writer, covariant, program_storage, reattachable,
@@ -24,7 +24,7 @@ use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
 };
-use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Weight};
+use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Seen, Weight};
 
 /// A value holding no callable — what every suite here builds, spelled once so a literal arm
 /// needs no annotation. The containers and the working form follow it.
@@ -204,8 +204,24 @@ impl Knotted for Stand<'_> {
         Weight::ZERO
     }
 
-    fn digest(&self, _: &mut Digests) -> ContentDigest {
-        DigestHasher::new(Tag::Member)
+    /// A stand-in holds no value: its knot is its identity.
+    fn held<'a>(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+    }
+
+    fn digest_held(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
+        DigestHasher::new(Tag::Knot)
             .feed(self.identity())
             .finished()
     }
@@ -264,12 +280,36 @@ impl Knotted for Node<'_> {
         Weight::ZERO
     }
 
-    /// The node's own content beside its index: the test knot digests no siblings.
-    fn digest(&self, memo: &mut Digests) -> ContentDigest {
-        DigestHasher::new(Tag::Member)
-            .digest(self.0.payload().content(memo))
-            .count(self.0.index().index() as usize)
-            .finished()
+    /// Every value link of every node of the knot, nodes in index order, as the knot layer lists
+    /// a data node's.
+    fn held<'a>(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        out: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+        for node in self.0.knot().members() {
+            Circular::content_parts(Node(node), types, scratch, out);
+        }
+    }
+
+    /// The knot's node count and each node's content in index order, as the knot layer hashes a
+    /// knot.
+    fn digest_held(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        parts: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
+        let knot = self.0.knot();
+        let mut hasher = DigestHasher::new(Tag::Knot);
+        hasher.count(knot.len() as usize);
+        for node in knot.members() {
+            hasher.digest(Circular::content(Node(node), types, scratch, parts));
+        }
+        hasher.finished()
     }
 
     fn sibling(&self, edge: Edge) -> Self {

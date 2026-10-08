@@ -44,8 +44,8 @@ pub use birth::{body_activation, tie_member};
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
 use crate::type_lattice::{DeclaredType, KType, Parametric};
-use crate::values::digest::{DigestHasher, Digests, Tag};
-use crate::values::{ContentDigest, Knotted as _, Weight};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Knotted as _, Seen, Value, Weight};
 
 use super::{KValue, Knotted, Node};
 
@@ -229,11 +229,19 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         self.knot_weight
     }
 
-    /// The node's content, through `memo`: what stands before its function, at the types the two
-    /// sides read.
-    pub(super) fn content(&self, memo: &mut Digests) -> ContentDigest {
+    /// The value the node's content covers: the function member it stands before.
+    pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
+    where
+        'cell: 'a,
+    {
+        out(Seen::of(Value::Knotted(self.underlying)));
+    }
+
+    /// The node's content: what stands before its function, its digest answered by `parts`, at
+    /// the types the two sides read.
+    pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
         DigestHasher::new(Tag::Barrier)
-            .digest(self.underlying.digest(memo))
+            .digest(parts())
             .feed(self.ktype)
             .feed(self.declared)
             .feed(self.from)

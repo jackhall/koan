@@ -9,10 +9,10 @@
 //!
 //! [`Surface`] is a container or tagged value opened at the type it is seen at, plain or a knot's
 //! data node: a record shows only the fields its seen type names, and every part it hands back is
-//! seen at its type there. Equality, rendering, the mark pass and the deep copy walk it; a reader
-//! that hands a part on as a value of its own [restamps](Seen::restamped) it.
+//! seen at its type there. Equality, rendering, the mark pass, the deep copy and the content digest
+//! walk it; a reader that hands a part on as a value of its own [restamps](Seen::restamped) it.
 
-use crate::memory::{BumpAllocator, BumpVec, Writer};
+use crate::memory::{BumpAllocator, BumpVec, Edge, Writer};
 use crate::symbols::Symbol;
 use crate::type_lattice::{DeclaredType, KType, TypeNode, TypeRegistry, fits, meet, satisfied_by};
 
@@ -269,10 +269,10 @@ pub(super) enum Parts<'x, 'a, X> {
         names: &'a [Symbol],
         cells: Cells<'a, X>,
     },
-    /// `representation` is `None` for an identity with none, whose payload is seen at its own
-    /// memo.
+    /// `payload` is a run of one; `representation` is `None` for an identity with none, whose
+    /// payload is seen at its own memo.
     Tagged {
-        payload: Value<'a, X>,
+        payload: Cells<'a, X>,
         representation: Option<KType>,
     },
 }
@@ -327,11 +327,25 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
                 debug_assert_eq!(at, 0, "a tagged value holds one payload");
                 match representation {
                     Some(representation) => {
-                        Seen::of(payload).seen_at(representation, types, scratch)
+                        Seen::of(payload.get(0)).seen_at(representation, types, scratch)
                     }
-                    None => Seen::of(payload),
+                    None => Seen::of(payload.get(0)),
                 }
             }
+        }
+    }
+
+    /// The edge the part at `at` is, when it is a data node's link naming a sibling of its own knot
+    /// rather than a value word.
+    pub(super) fn edge(&self, at: usize) -> Option<Edge> {
+        match self.parts {
+            Parts::List { cells, .. } | Parts::Dict { cells, .. } => cells.edge(at),
+            Parts::Record {
+                fields,
+                names,
+                cells,
+            } => cells.edge(held_at(names, fields[at].0)),
+            Parts::Tagged { payload, .. } => payload.edge(0),
         }
     }
 
@@ -389,6 +403,17 @@ impl<'a, X: Knotted> Cells<'a, X> {
             Cells::Linked(cells, holder) => cells[at].resolve(holder),
         }
     }
+
+    /// The edge the cell at `at` holds, if it holds one.
+    fn edge(self, at: usize) -> Option<Edge> {
+        match self {
+            Cells::Linked(cells, _) => match cells[at] {
+                Link::Edge(edge) => Some(edge),
+                Link::Value(_) => None,
+            },
+            Cells::Plain(_) => None,
+        }
+    }
 }
 
 /// A container or tagged value's runs, before a type opens them.
@@ -396,7 +421,7 @@ enum Raw<'a, X> {
     List(Cells<'a, X>),
     Dict(&'a [Key<'a>], Cells<'a, X>),
     Record(&'a [Symbol], Cells<'a, X>),
-    Tagged(Value<'a, X>),
+    Tagged(Cells<'a, X>),
 }
 
 /// `value`'s runs, beside the data node it is when it is one. `None` for a scalar, a string, a
@@ -406,7 +431,7 @@ fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X
         Value::List(list) => Raw::List(Cells::Plain(list.cells())),
         Value::Dict(dict) => Raw::Dict(dict.keys(), Cells::Plain(dict.cells())),
         Value::Record(record) => Raw::Record(record.names(), Cells::Plain(record.cells())),
-        Value::Tagged(tagged) => Raw::Tagged(*tagged.payload()),
+        Value::Tagged(tagged) => Raw::Tagged(Cells::Plain(std::slice::from_ref(tagged.payload()))),
         Value::Knotted(member) => {
             let Resolved::Circular(node) = member.resolve() else {
                 return None;
@@ -417,7 +442,10 @@ fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X
                 Circular::Record(record) => {
                     Raw::Record(record.names(), Cells::Linked(record.cells(), member))
                 }
-                Circular::Tagged(tagged) => Raw::Tagged(tagged.payload().resolve(member)),
+                Circular::Tagged(tagged) => Raw::Tagged(Cells::Linked(
+                    std::slice::from_ref(tagged.payload()),
+                    member,
+                )),
             };
             return Some((Some(member), linked));
         }

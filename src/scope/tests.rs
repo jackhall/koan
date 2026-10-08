@@ -24,7 +24,7 @@ use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{ContentDigest, Digests};
+use crate::values::{ContentDigest, Seen};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
@@ -49,10 +49,24 @@ impl Knotted for Probe {
         Weight::ZERO
     }
 
-    fn digest(&self, _: &mut Digests) -> ContentDigest {
-        DigestHasher::new(Tag::Member)
-            .count(self.0 as usize)
-            .finished()
+    /// A probe holds no value: every probe is a member of one empty knot, told apart by its index.
+    fn held<'a>(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+    }
+
+    fn digest_held(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
+        DigestHasher::new(Tag::Knot).finished()
     }
 
     fn sibling(&self, edge: Edge) -> Self {

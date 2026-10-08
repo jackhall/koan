@@ -17,9 +17,9 @@
 //! knot member holds of program storage sits inside the member. [`cross`] moves a value between
 //! regions over the substrate's placement doors, rebuilding it under a copy, and [`verdict`] is the
 //! copy-or-pin policy a graph is built with. Every read of a container or tagged value — equality,
-//! rendering, the deep copy, a field read — goes through one door, [`Seen`] and [`Surface`], which
-//! shows only what the value's type names. [`working`] is the scheduler's per-dispatch copy of an
-//! expression, built in the executing cell's region.
+//! rendering, the deep copy, the content digest, a field read — goes through one door, [`Seen`] and
+//! [`Surface`], which shows only what the value's type names. [`working`] is the scheduler's
+//! per-dispatch copy of an expression, built in the executing cell's region.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::parse`, `crate::source` and `crate::type_lattice`, and nothing else in the crate;
@@ -58,7 +58,6 @@ pub use digest::{ContentDigest, Digests};
 pub use equality::Incomparable;
 pub use link::Link;
 pub use list::List;
-pub use lower::literal_digest;
 pub use record::Record;
 pub use surface::{Seen, Surface};
 pub use tagged::Tagged;
@@ -69,8 +68,8 @@ pub use working::{WorkingExpression, WorkingPart};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
-use crate::memory::{DropFree, Edge, Ready, Writer, covariant, reattachable};
-use crate::type_lattice::{DeclaredType, KType};
+use crate::memory::{BumpAllocator, DropFree, Edge, Ready, Writer, covariant, reattachable};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
 
 /// What `values` asks of a knot member at one region lifetime — a function or a data node of a
 /// knot: its memoized type, what rebuilding its knot at a destination writes, the fellow member an
@@ -85,8 +84,28 @@ pub trait Knotted: Copy + Eq + Hash {
     /// holding it.
     fn weight(&self) -> Weight;
 
-    /// The member's content digest, through `memo`: its knot's, beside its index there.
-    fn digest(&self, memo: &mut Digests) -> ContentDigest;
+    /// Every value this member's knot holds that its digest covers, each seen at the type the knot
+    /// reads it at, handed to `out` in the order [`digest_held`](Self::digest_held) asks for their
+    /// digests. An edge between siblings is no held value: the knot hashes its index.
+    fn held<'a>(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        out: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a;
+
+    /// This member's knot's digest, `parts` answering each value [`held`](Self::held) listed with
+    /// its finished digest, in `held`'s order. `values` asks only where the member is seen at its
+    /// own type, walks the held values on its own stack, memoizes the knot at its root and digests
+    /// the member beside its index there; a data node seen at another type is digested as the plain
+    /// value of its kind the door shows.
+    fn digest_held(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        parts: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest;
 
     /// The member `edge` names among this one's own siblings.
     fn sibling(&self, edge: Edge) -> Self;
@@ -154,7 +173,23 @@ impl Knotted for Nothing {
         match *self {}
     }
 
-    fn digest(&self, _: &mut Digests) -> ContentDigest {
+    fn held<'a>(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+        match *self {}
+    }
+
+    fn digest_held(
+        &self,
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
         match *self {}
     }
 
@@ -280,29 +315,15 @@ impl<'cell, X: Knotted> Value<'cell, X> {
         Weight::flat::<Self>().plus(self.referent_weight())
     }
 
-    /// The value's content digest ([`digest`]), computed now: a scalar's from its payload, a
-    /// composite's from its type and its contents, a knot member's its knot's.
-    pub fn digest(&self) -> ContentDigest {
-        self.digest_in(&mut Digests::default())
+    /// The value's content digest ([`digest`]), computed now, as one demand over `scratch`: what
+    /// the door shows of it at its own memo, as a copy lays it down.
+    pub fn digest(&self, types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>) -> ContentDigest {
+        self.digest_in(&mut Digests::new(types, scratch))
     }
 
     /// [`digest`](Self::digest) inside a demand already walking, through its `memo`.
-    pub fn digest_in(&self, memo: &mut Digests) -> ContentDigest {
-        use digest::{DigestHasher, Tag};
-        match self {
-            Value::Number(number) => DigestHasher::new(Tag::Number)
-                .feed(number.to_bits())
-                .finished(),
-            Value::Bool(flag) => DigestHasher::new(Tag::Bool).feed(flag).finished(),
-            Value::Null => DigestHasher::new(Tag::Null).finished(),
-            Value::Str(text) => DigestHasher::new(Tag::Str).text(text.as_bytes()).finished(),
-            Value::Type(value) => DigestHasher::new(Tag::Type).feed(value.handle()).finished(),
-            Value::List(list) => list.digest(memo),
-            Value::Dict(dict) => dict.digest(memo),
-            Value::Record(record) => record.digest(memo),
-            Value::Tagged(tagged) => tagged.digest(memo),
-            Value::Knotted(member) => member.digest(memo),
-        }
+    pub fn digest_in(&self, memo: &mut Digests<'_, '_, X>) -> ContentDigest {
+        memo.seen(Seen::of(*self))
     }
 
     /// The part of [`weight`](Self::weight) past the word — what a holder that stores the word

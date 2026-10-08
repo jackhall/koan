@@ -4,27 +4,45 @@
 //! A [`ContentDigest`] is the low 128 bits of a BLAKE3 hash. The recipe is one rule throughout: a
 //! digest is a domain [`Tag`], then the value's own scalar payload, then its parts' digests.
 //!
-//! A digest is computed on demand and never stored on a value: only a view asks for one, so a value
-//! no module captures never pays for it. A demand walks what the value reaches, through one
-//! [`Digests`] memo, so a part shared many times over is digested once per demand.
+//! A value digests as what [the door](super::surface) shows of it at the type it is seen at,
+//! exactly as the [deep copy](super::crossing) lays it down, so a copy digests as its source and a
+//! cell its type hides counts for nothing:
 //!
 //! - A scalar digests from its payload: a number from its bits, a bool, `null`, a string
 //!   length-prefixed, a type value from its handle's bits.
-//! - A list, dict, record and tagged value digest as its kind's tag, its type's handle and its
-//!   **contents** — a list its cells' digests in order, a dict each key's digest then each cell's,
-//!   in key order, a record each field's name and cell digest in symbol order, so field order is
-//!   blind, and a tagged value its payload's.
-//! - A knot member's digest is its knot's, beside its index there: a knot digests its node count
-//!   and each node's content in index order, an edge to a sibling hashed as its index, so values
-//!   that reach one another — closures that call one another, a ring of containers — digest as the
-//!   one knot they are tied into.
+//! - A list, dict, record and tagged value, and a data node seen at a type other than its memo,
+//!   digest as its kind's tag, its seen type's handle and its **contents**: each part the door
+//!   shows, at its type there — a list its elements in order, a dict each key's digest then each
+//!   cell's, in key order, a record each shown field's name and cell in symbol order, so field
+//!   order is blind, and a tagged value its payload at its representation.
+//! - A knot member seen at its own memo digests as its knot's, beside its index there: a knot
+//!   digests its node count and each node's content in index order — a data node read through the
+//!   door at its memo, an edge to a sibling hashed as its index — so values that reach one another
+//!   digest as the one knot they are tied into. Its layer decides what a node's content is: the
+//!   member [lists](super::Knotted::held) the values its knot holds and
+//!   [hashes](super::Knotted::digest_held) the knot over their digests.
 //!
-//! The digest covers the carried type and every cell, hidden ones included, so two values no reader
-//! can tell apart may digest apart. That over-distinction is sound: a digest keys what is equal by
+//! The seen type is part of the recipe, so a retype changes the digest. Inside a knot each node is
+//! digested at its own memo, so a cell a tagged node's representation hides still counts there, as
+//! a copy of the knot keeps it. That over-distinction is sound: a digest keys what is equal by
 //! content, and keying two equal things apart costs only a key.
+//!
+//! A digest is computed on demand and never stored on a value: only a view asks for one, so a value
+//! no module captures never pays for it. A demand walks what the value reaches through one
+//! [`Digests`] memo over the demand's scratch, so a part shared many times over, and a knot met
+//! through any of its members, is digested once per demand. The walk runs over an explicit stack,
+//! as the copy does: a composite is a frame over the parts its surface shows, and a knot member a
+//! frame over the values its knot holds, so neither a value's depth nor a chain of knots grows the
+//! call stack.
 
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Edge, bump_table};
+use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
+
+use super::circular::{Circular, Resolved};
+use super::surface::Parts;
+use super::{Knotted, Nothing, Seen, Surface, Value};
 
 /// A value's content identity: the low 128 bits of a BLAKE3 hash of its content, held as bytes so a
 /// node storing one keeps a word's alignment.
@@ -42,7 +60,8 @@ impl ContentDigest {
 }
 
 /// The domain tag every digest begins with, one per digestible shape, so no two shapes share a
-/// digest even with identical payloads. Never reorder or reuse one.
+/// digest even with identical payloads. Never reorder or reuse one. The scalar tags also open a
+/// scalar literal inside a body's code digest, which hashes a literal as syntax.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Tag {
@@ -168,7 +187,7 @@ impl Hasher for DigestHasher {
 }
 
 /// The contents a run of part digests makes: their count, then each in order.
-pub fn contents(parts: impl ExactSizeIterator<Item = ContentDigest>) -> ContentDigest {
+fn contents(parts: impl ExactSizeIterator<Item = ContentDigest>) -> ContentDigest {
     let mut hasher = DigestHasher::new(Tag::Contents);
     hasher.count(parts.len());
     for part in parts {
@@ -177,40 +196,303 @@ pub fn contents(parts: impl ExactSizeIterator<Item = ContentDigest>) -> ContentD
     hasher.finished()
 }
 
-/// A composite's digest: its kind's tag, its type's handle, and its stored contents.
-pub fn composite(
-    tag: Tag,
-    ktype: crate::type_lattice::KType,
-    contents: ContentDigest,
-) -> ContentDigest {
+/// A composite's digest: its kind's tag, its seen type's handle, and the contents it shows there.
+fn composite(tag: Tag, ktype: KType, contents: ContentDigest) -> ContentDigest {
     DigestHasher::new(tag)
         .feed(ktype)
         .digest(contents)
         .finished()
 }
 
-/// One demand's memo: the digest of each part a walk has already met, keyed by the shape it
-/// digests as and the address of the resident it sits in. Nothing a walk reads is freed or moved
-/// while it runs, so an address names one part of a shape for the walk's life, and the shape
-/// keeps two kinds of resident that could share an address apart.
-#[derive(Default)]
-pub struct Digests(HashMap<(u8, usize), ContentDigest>);
+/// One demand's memo, beside the registry its walk reads types in and the scratch it stages over:
+/// the digest of each composite a walk has already met, keyed by the shape it digests as, the
+/// address of the resident it sits in, and the type it is seen at, since one node seen at two types
+/// shows two surfaces; and the digest of each knot it has met, keyed by the knot's root member.
+/// Nothing a walk reads is freed or moved while it runs, so an address names one part of a shape
+/// for the walk's life, and the shape keeps two kinds of resident that could share an address
+/// apart.
+pub struct Digests<'a, 'run, X> {
+    types: &'a TypeRegistry<'run>,
+    scratch: BumpAllocator<'a>,
+    composites: BumpBackedMap<'a, MemoKey, ContentDigest>,
+    knots: BumpBackedMap<'a, X, ContentDigest>,
+}
 
-impl Digests {
-    /// The digest of the part resident at `at`, digested as `tag`: `compute`'s answer, the first
-    /// time this demand meets it.
-    pub fn memo<T>(
-        &mut self,
-        tag: Tag,
-        at: &T,
-        compute: impl FnOnce(&mut Digests) -> ContentDigest,
-    ) -> ContentDigest {
-        let key = (tag as u8, std::ptr::from_ref(at).addr());
-        if let Some(digest) = self.0.get(&key) {
-            return *digest;
+/// What a composite's memo entry is keyed on: the shape's tag, the resident's address, the seen
+/// type.
+type MemoKey = (u8, usize, DeclaredType<KType>);
+
+/// One pending frame of a digest walk: how many of its parts have been started, and where its
+/// finished parts begin on the walk's `done` stack.
+#[derive(Clone, Copy)]
+enum Frame<'x, 'cell, X> {
+    /// A list, dict, record or tagged value, or a data node seen at a type other than its memo,
+    /// opened at the type it is seen at, beside its memo key.
+    Composite {
+        surface: Surface<'x, 'cell, X>,
+        key: MemoKey,
+        next: usize,
+        base: usize,
+    },
+    /// A knot member seen at its own memo whose knot this demand has not digested: the values its
+    /// knot holds sit on the walk's `held` stack from `held` to `end`.
+    Knot {
+        member: X,
+        held: usize,
+        end: usize,
+        next: usize,
+        base: usize,
+    },
+}
+
+/// One walk's stacks: its pending frames, the finished digests of their parts, and the values each
+/// pending knot holds, as its member listed them.
+struct Stacks<'a, 'cell, X> {
+    frames: BumpVec<'a, Frame<'a, 'cell, X>>,
+    done: BumpVec<'a, ContentDigest>,
+    held: BumpVec<'a, Seen<'cell, X>>,
+}
+
+impl<'a, 'run, X: Knotted> Digests<'a, 'run, X> {
+    /// A demand's memo, reading types in `types` and staging its walks and its tables over
+    /// `scratch`.
+    pub fn new(types: &'a TypeRegistry<'run>, scratch: BumpAllocator<'a>) -> Self {
+        Digests {
+            types,
+            scratch,
+            composites: bump_table(scratch),
+            knots: bump_table(scratch),
         }
-        let digest = compute(self);
-        self.0.insert(key, digest);
-        digest
+    }
+
+    /// The digest of `top`, read through the door at the type it is seen at. A composite is a
+    /// frame over the parts its surface shows, and a knot member seen at its own memo a frame over
+    /// the values its knot [holds](Knotted::held), so neither a value's depth nor a chain of knots
+    /// grows the call stack.
+    pub(super) fn seen<'cell>(&mut self, top: Seen<'cell, X>) -> ContentDigest
+    where
+        X: 'cell,
+    {
+        let mut stacks = Stacks {
+            frames: BumpVec::new_in(self.scratch),
+            done: BumpVec::new_in(self.scratch),
+            held: BumpVec::new_in(self.scratch),
+        };
+        if let Some(leaf) = self.start(top, &mut stacks) {
+            return leaf;
+        }
+        while let Some(&frame) = stacks.frames.last() {
+            match self.next_part(frame, &stacks) {
+                Some(part) => {
+                    if let Some(Frame::Composite { next, .. } | Frame::Knot { next, .. }) =
+                        stacks.frames.last_mut()
+                    {
+                        *next += 1;
+                    }
+                    if let Some(leaf) = self.start(part, &mut stacks) {
+                        stacks.done.push(leaf);
+                    }
+                }
+                None => {
+                    stacks.frames.pop();
+                    let finished = self.finish(frame, &mut stacks);
+                    if stacks.frames.is_empty() {
+                        return finished;
+                    }
+                    stacks.done.push(finished);
+                }
+            }
+        }
+        unreachable!("a started composite or knot pushes a frame")
+    }
+
+    /// Begin digesting `seen`: a leaf, or a composite or knot this demand already digested, is
+    /// finished at once; any other composite or knot member pushes its frame. A data node seen at a
+    /// type other than its memo digests as the plain value of its kind a copy lays down, so it
+    /// pushes a composite frame, not its knot's.
+    fn start<'cell>(
+        &mut self,
+        seen: Seen<'cell, X>,
+        stacks: &mut Stacks<'a, 'cell, X>,
+    ) -> Option<ContentDigest>
+    where
+        X: 'cell,
+    {
+        let base = stacks.done.len();
+        let value = seen.value();
+        match value {
+            Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => {}
+            Value::Knotted(member) if member.ktype() != seen.ktype() => {}
+            Value::Knotted(member) => {
+                if let Some(knot) = self.knots.get(&member.root()) {
+                    return Some(beside_index(*knot, member));
+                }
+                let held = stacks.held.len();
+                member.held(self.types, self.scratch, &mut |part| stacks.held.push(part));
+                stacks.frames.push(Frame::Knot {
+                    member,
+                    held,
+                    end: stacks.held.len(),
+                    next: 0,
+                    base,
+                });
+                return None;
+            }
+            leaf => return Some(scalar(leaf)),
+        }
+        let (tag, address) = resident(value);
+        let key = (tag as u8, address, seen.ktype());
+        if let Some(digest) = self.composites.get(&key) {
+            return Some(*digest);
+        }
+        let surface = seen
+            .surface(self.types, self.scratch)
+            .expect("a container, a tagged value or a data node opens");
+        stacks.frames.push(Frame::Composite {
+            surface,
+            key,
+            next: 0,
+            base,
+        });
+        None
+    }
+
+    /// The next part `frame` has not started, if any.
+    fn next_part<'cell>(
+        &self,
+        frame: Frame<'a, 'cell, X>,
+        stacks: &Stacks<'a, 'cell, X>,
+    ) -> Option<Seen<'cell, X>>
+    where
+        X: 'cell,
+    {
+        match frame {
+            Frame::Composite { surface, next, .. } => {
+                (next < surface.len()).then(|| surface.child(next, self.types, self.scratch))
+            }
+            Frame::Knot {
+                held, end, next, ..
+            } => (held + next < end).then(|| stacks.held[held + next]),
+        }
+    }
+
+    /// `frame`'s digest over its finished parts, memoized, and its parts popped: a composite's
+    /// kind, seen type and contents; a knot member's knot, from its member's
+    /// [`digest_held`](Knotted::digest_held), beside its index there.
+    fn finish<'cell>(
+        &mut self,
+        frame: Frame<'a, 'cell, X>,
+        stacks: &mut Stacks<'a, 'cell, X>,
+    ) -> ContentDigest
+    where
+        X: 'cell,
+    {
+        let (base, finished) = match frame {
+            Frame::Composite {
+                surface, key, base, ..
+            } => {
+                let digest = composed(&surface, &stacks.done[base..]);
+                self.composites.insert(key, digest);
+                (base, digest)
+            }
+            Frame::Knot {
+                member, held, base, ..
+            } => {
+                let mut parts = stacks.done[base..].iter().copied();
+                let knot = member.digest_held(self.types, self.scratch, &mut || {
+                    parts
+                        .next()
+                        .expect("digest_held asks for each held value once")
+                });
+                debug_assert!(
+                    parts.next().is_none(),
+                    "digest_held asks for every held value"
+                );
+                self.knots.insert(member.root(), knot);
+                stacks.held.truncate(held);
+                (base, beside_index(knot, member))
+            }
+        };
+        stacks.done.truncate(base);
+        finished
+    }
+}
+
+/// A composite's digest over its finished `parts`: its kind, its seen type and its contents.
+fn composed<X: Knotted>(surface: &Surface<'_, '_, X>, parts: &[ContentDigest]) -> ContentDigest {
+    let (tag, contents) = match surface.parts() {
+        Parts::List { .. } => (Tag::List, contents(parts.iter().copied())),
+        Parts::Dict { .. } => {
+            let mut hasher = DigestHasher::new(Tag::Contents);
+            hasher.count(parts.len());
+            for (at, part) in parts.iter().enumerate() {
+                hasher
+                    .digest(scalar(surface.key(at).value::<Nothing>()))
+                    .digest(*part);
+            }
+            (Tag::Dict, hasher.finished())
+        }
+        Parts::Record { .. } => {
+            let mut hasher = DigestHasher::new(Tag::Contents);
+            hasher.count(parts.len());
+            for (at, part) in parts.iter().enumerate() {
+                hasher.feed(surface.name(at)).digest(*part);
+            }
+            (Tag::Record, hasher.finished())
+        }
+        Parts::Tagged { .. } => (Tag::Tagged, parts[0]),
+    };
+    composite(tag, surface.ktype(), contents)
+}
+
+/// A knot member's digest: its knot's, beside its index there.
+fn beside_index<X: Knotted>(knot: ContentDigest, member: X) -> ContentDigest {
+    DigestHasher::new(Tag::Member)
+        .digest(knot)
+        .count(member.index().index() as usize)
+        .finished()
+}
+
+/// An edge's digest inside its knot's: its index, since it names a sibling the knot's digest
+/// covers.
+pub fn edge(edge: Edge) -> ContentDigest {
+    DigestHasher::new(Tag::Edge)
+        .count(edge.index() as usize)
+        .finished()
+}
+
+/// A leaf's digest, from its payload. Only a scalar, a string or a type value is one.
+pub(super) fn scalar<X>(value: Value<'_, X>) -> ContentDigest {
+    match value {
+        Value::Number(number) => DigestHasher::new(Tag::Number)
+            .feed(number.to_bits())
+            .finished(),
+        Value::Bool(flag) => DigestHasher::new(Tag::Bool).feed(flag).finished(),
+        Value::Null => DigestHasher::new(Tag::Null).finished(),
+        Value::Str(text) => DigestHasher::new(Tag::Str).text(text.as_bytes()).finished(),
+        Value::Type(value) => DigestHasher::new(Tag::Type).feed(value.handle()).finished(),
+        _ => unreachable!("a composite or a knot member is no leaf"),
+    }
+}
+
+/// The kind's tag and the address of the resident `value` opens as: a plain composite's own, or
+/// its data node's.
+fn resident<X: Knotted>(value: Value<'_, X>) -> (Tag, usize) {
+    fn at<T>(resident: &T) -> usize {
+        std::ptr::from_ref(resident).addr()
+    }
+    match value {
+        Value::List(list) => (Tag::List, at(list)),
+        Value::Dict(dict) => (Tag::Dict, at(dict)),
+        Value::Record(record) => (Tag::Record, at(record)),
+        Value::Tagged(tagged) => (Tag::Tagged, at(tagged)),
+        Value::Knotted(member) => match member.resolve() {
+            Resolved::Circular(Circular::List(list)) => (Tag::List, at(list)),
+            Resolved::Circular(Circular::Dict(dict)) => (Tag::Dict, at(dict)),
+            Resolved::Circular(Circular::Record(record)) => (Tag::Record, at(record)),
+            Resolved::Circular(Circular::Tagged(tagged)) => (Tag::Tagged, at(tagged)),
+            _ => unreachable!("only a data node opens"),
+        },
+        _ => unreachable!("a leaf opens no resident"),
     }
 }

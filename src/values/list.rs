@@ -7,7 +7,6 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::digest::{ContentDigest, Digests, Tag, composite, contents};
 use super::{Knotted, Link, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
@@ -67,14 +66,6 @@ impl<'cell, X: Knotted> List<'cell, X> {
             weight.plus(cell.weight())
         });
         Self::from_run(writer, cells, ktype, weight)
-    }
-
-    /// The list's content digest: its type and its cells', through `memo`.
-    pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
-        memo.memo(Tag::List, self, |memo| {
-            let cells = contents(self.cells.iter().map(|cell| cell.digest_in(memo)));
-            composite(Tag::List, self.ktype, cells)
-        })
     }
 }
 

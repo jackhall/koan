@@ -32,8 +32,8 @@ use crate::type_lattice::{
     ContentKey, FitsFailure, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
     TypeRegistry, fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
-use crate::values::digest::{DigestHasher, Digests, Tag};
-use crate::values::{ContentDigest, Knotted as _, TypeValue, Value};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, TypeValue, Value};
 
 use super::coerce::{Coercion, CoercionRefused, coerce};
 use super::{Coerced, Module, layout};
@@ -77,7 +77,7 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
     let held = source.module().ok_or(Unascribable::NotAModule)?.ktype();
     let (sig, from, pins) = fitted(held, signature, types, scratch)?;
     // A module's digest is its knot's over the content it was born with: no walk.
-    let digest = source.digest(&mut Digests::default());
+    let digest = Value::Knotted(source).digest(types, scratch);
     let to = match mode {
         // Transparent: the parameters keep the source's bindings, so every slot type reads the
         // same either side and the coercion walk stops at its first comparison.

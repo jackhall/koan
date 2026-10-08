@@ -7,7 +7,6 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::digest::{ContentDigest, DigestHasher, Digests, Tag, composite};
 use super::{Knotted, Link, Nothing, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
@@ -59,19 +58,6 @@ impl<'cell, X: Knotted> Record<'cell, X> {
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
         Self::from_runs(writer, names, cells, ktype, weight)
-    }
-
-    /// The record's content digest: its type and each field's name and cell, in symbol order, so
-    /// field order is blind, through `memo`.
-    pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
-        memo.memo(Tag::Record, self, |memo| {
-            let mut hasher = DigestHasher::new(Tag::Contents);
-            hasher.count(self.names.len());
-            for (name, cell) in self.names.iter().zip(self.cells) {
-                hasher.feed(name).digest(cell.digest_in(memo));
-            }
-            composite(Tag::Record, self.ktype, hasher.finished())
-        })
     }
 }
 

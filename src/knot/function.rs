@@ -25,8 +25,8 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeRegistry, instantiate_quantified, substitute_levels,
 };
-use crate::values::digest::{DigestHasher, Digests, Tag};
-use crate::values::{ContentDigest, Knotted as _, Link, Value, Weight};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{ContentDigest, Knotted as _, Link, Seen, Value, Weight};
 
 use super::{KActivationView, Knotted, Node, Untieable, composed};
 
@@ -153,10 +153,23 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 }
 
 impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
-    /// The node's content, through `memo`: its body's code digest, the solution it is an instance
-    /// at, and the digest of each capture the code digest does not name — every one but a read of
-    /// the program's top level, and every type capture.
-    pub(super) fn content(&self, memo: &mut Digests) -> ContentDigest {
+    /// The values the node's content covers, in the order [`content`](Self::content) asks for
+    /// their digests: each capture the code digest does not name that holds a value, not an edge.
+    pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
+    where
+        'cell: 'a,
+    {
+        composed(self.shape, self.closure.links(), |_, link| {
+            if let Link::Value(value) = link {
+                out(Seen::of(*value));
+            }
+        });
+    }
+
+    /// The node's content: its body's code digest, the solution it is an instance at, and the
+    /// digest of each capture the code digest does not name — every one but a read of the
+    /// program's top level, and every type capture — a value's answered by `parts`.
+    pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
         let instance = self.instance().unwrap_or(&[]);
         let mut hasher = DigestHasher::new(Tag::Function);
         hasher
@@ -165,7 +178,9 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
         for solved in instance {
             hasher.feed(solved);
         }
-        composed(&mut hasher, self.shape, self.closure.links(), memo);
+        composed(self.shape, self.closure.links(), |index, link| {
+            hasher.count(index).digest(link.digest_from(parts));
+        });
         hasher.finished()
     }
 }

@@ -18,8 +18,8 @@ use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Parametric, TypeNode, TypeRegistry,
 };
-use crate::values::digest::{DigestHasher, Digests, Tag};
-use crate::values::{CodeView, ContentDigest, Link, List, Value, Weight};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
 use super::{KActivationView, KValue, Knotted, Node};
 
@@ -76,15 +76,28 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         self.knot_weight
     }
 
-    /// The node's content, through `memo`: its quote's code digest, its carried type, and each
-    /// binding's name and digest, bound then supplied.
-    pub(super) fn content(&self, memo: &mut Digests) -> ContentDigest {
+    /// The values the node's content covers, in the order [`content`](Self::content) asks for
+    /// their digests: each binding that holds a value, not an edge, bound then supplied.
+    pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
+    where
+        'cell: 'a,
+    {
+        for (_, link) in self.bound.iter().chain(self.supplied) {
+            if let Link::Value(value) = link {
+                out(Seen::of(*value));
+            }
+        }
+    }
+
+    /// The node's content: its quote's code digest, its carried type, and each binding's name and
+    /// digest, bound then supplied, a value's answered by `parts`.
+    pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
         let mut hasher = DigestHasher::new(Tag::Code);
         hasher.digest(self.shape.code_digest()).feed(self.ktype);
         for run in [self.bound, self.supplied] {
             hasher.count(run.len());
             for (name, link) in run {
-                hasher.feed(name).digest(link.digest(memo));
+                hasher.feed(name).digest(link.digest_from(parts));
             }
         }
         hasher.finished()

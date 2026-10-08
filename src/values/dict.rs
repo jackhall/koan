@@ -8,7 +8,6 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::digest::{ContentDigest, DigestHasher, Digests, Tag, composite};
 use super::{Knotted, Link, Nothing, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
@@ -191,21 +190,6 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
         Self::from_runs(writer, keys, cells, ktype, weight)
-    }
-
-    /// The dict's content digest: its type and each entry's key and cell, in key order, through
-    /// `memo`.
-    pub fn digest(&self, memo: &mut Digests) -> ContentDigest {
-        memo.memo(Tag::Dict, self, |memo| {
-            let mut hasher = DigestHasher::new(Tag::Contents);
-            hasher.count(self.keys.len());
-            for (key, cell) in self.keys.iter().zip(self.cells) {
-                hasher
-                    .digest(key.value::<X>().digest_in(memo))
-                    .digest(cell.digest_in(memo));
-            }
-            composite(Tag::Dict, self.ktype, hasher.finished())
-        })
     }
 }
 

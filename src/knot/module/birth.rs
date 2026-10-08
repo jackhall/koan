@@ -91,12 +91,9 @@ pub fn tie_member<'graph, 'cell, 'x>(
     // captures to digest later.
     let mut content = DigestHasher::new(Tag::Module);
     content.digest(body.shape().code_digest());
-    let mut memo = Digests::default();
-    composed(
-        &mut content,
-        body.shape(),
-        body.closure().links(),
-        &mut memo,
-    );
+    let mut memo = Digests::new(types, scratch);
+    composed(body.shape(), body.closure().links(), |index, link| {
+        content.count(index).digest(link.digest(&mut memo));
+    });
     Ok(Module::tie(writer, ktype, &members, content.finished()))
 }

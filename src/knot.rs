@@ -22,7 +22,8 @@
 //! and each edge carried verbatim, priced by the knot's memoized weight under the ordinary verdict.
 //! A member's content digest is computed on demand: its knot's, over each node's content with an
 //! edge to a sibling by its index, beside its index there — so values that reach one another
-//! digest as one knot.
+//! digest as one knot. A member lists the values its knot holds and hashes the knot over their
+//! digests; `values` walks them on its own stack, so a chain of knots never nests a call per knot.
 //! A function compares by its shape's address — one per `FN` written, so a copy keeps it — and its
 //! captures, a builtin by its record's address, a quote by its code and bindings, and a module or a
 //! barrier is
@@ -67,9 +68,9 @@ use crate::scope::Elaboration;
 use crate::scope::{Activation, ActivationView, BodyShape, Builtins, CaptureSlot, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, TypeRegistry, display_name};
-use crate::values::digest::{DigestHasher, Digests, Tag};
+use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
-    self, Circular, ConstructionRefused, ContentDigest, KeyRejected, Link, Resolved, Value,
+    self, Circular, ConstructionRefused, ContentDigest, KeyRejected, Resolved, Seen, Value,
     ValueCarrier, ValueFamily, Weight,
 };
 
@@ -98,33 +99,13 @@ pub enum Node<'graph, 'cell> {
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
 
-/// Feed `hasher` the digest of each capture of `links`, a closure of `shape`, that its code digest
-/// does not name — every one but a read of the program's top level, and every type capture — beside
-/// its slot, through `memo`: what a closure's or a module's content composes over its code.
-fn composed(
-    hasher: &mut DigestHasher,
-    shape: &BodyShape<'_>,
-    links: &[Link<'_, Knotted<'_, '_>>],
-    memo: &mut Digests,
-) {
+/// Hand `each` every capture of `links`, a closure of `shape`, that its code digest does not name
+/// — every one but a read of the program's top level, and every type capture — beside its slot:
+/// what a closure's or a module's content composes over its code.
+fn composed<L>(shape: &BodyShape<'_>, links: &[L], mut each: impl FnMut(usize, &L)) {
     for (index, link) in links.iter().enumerate() {
         if shape.composes(CaptureSlot(index as u32)) {
-            hasher.count(index).digest(link.digest(memo));
-        }
-    }
-}
-
-impl Node<'_, '_> {
-    /// The node's content inside its knot's digest, through `memo`. A builtin's node is a knot of
-    /// its own and digests as its overload, never through here.
-    fn content(&self, memo: &mut Digests) -> ContentDigest {
-        match self {
-            Node::Function(function) => function.content(memo),
-            Node::Builtin(_) => unreachable!("a builtin digests as its overload"),
-            Node::Data { circular, .. } => circular.content(memo),
-            Node::Module(module) => module.content(),
-            Node::Coerced(coerced) => coerced.content(memo),
-            Node::Code(code) => code.content(memo),
+            each(index, link);
         }
     }
 }
@@ -202,6 +183,46 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
             .last()
             .map_or(self, |barrier| barrier.underlying())
     }
+
+    /// Every value this node holds that its content covers, in the order
+    /// [`content`](Self::content) asks for their digests. A builtin's node is a knot of its own and
+    /// digests as its overload, never through here.
+    fn content_parts<'a>(
+        self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        out: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+        match self.node() {
+            Node::Function(function) => function.content_parts(out),
+            Node::Builtin(_) => unreachable!("a builtin digests as its overload"),
+            Node::Data { .. } => Circular::content_parts(self, types, scratch, out),
+            Node::Module(_) => {}
+            Node::Coerced(coerced) => coerced.content_parts(out),
+            Node::Code(code) => code.content_parts(out),
+        }
+    }
+
+    /// The node's content inside its knot's digest, `parts` answering each value
+    /// [`content_parts`](Self::content_parts) listed with its digest: a data node's read through
+    /// the door at its memo.
+    fn content(
+        self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        parts: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
+        match self.node() {
+            Node::Function(function) => function.content(parts),
+            Node::Builtin(_) => unreachable!("a builtin digests as its overload"),
+            Node::Data { .. } => Circular::content(self, types, scratch, parts),
+            Node::Module(module) => module.content(),
+            Node::Coerced(coerced) => coerced.content(parts),
+            Node::Code(code) => code.content(parts),
+        }
+    }
 }
 
 impl fmt::Debug for Knotted<'_, '_> {
@@ -236,11 +257,34 @@ impl values::Knotted for Knotted<'_, '_> {
         }
     }
 
-    /// A builtin's digest is its overload's — its native and its shape — and every other member's
-    /// is its knot's beside its index: a [`Tag::Knot`] over its node count and each node's content
-    /// in index order, an edge to a sibling hashed as its index, so values that reach one another
-    /// digest as the one knot they are tied into.
-    fn digest(&self, memo: &mut Digests) -> ContentDigest {
+    /// Every value each node of the knot holds that its content covers, nodes in index order. A
+    /// builtin holds none.
+    fn held<'a>(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        out: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
+        Self: 'a,
+    {
+        if self.builtin().is_some() {
+            return;
+        }
+        for member in self.0.knot().members() {
+            Knotted(member).content_parts(types, scratch, out);
+        }
+    }
+
+    /// A builtin's knot is its overload — its native and its shape — and every other knot is a
+    /// [`Tag::Knot`] over its node count and each node's content in index order, an edge to a
+    /// sibling hashed as its index, so values that reach one another digest as the one knot they
+    /// are tied into.
+    fn digest_held(
+        &self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        parts: &mut dyn FnMut() -> ContentDigest,
+    ) -> ContentDigest {
         if let Node::Builtin(builtin) = self.node() {
             return DigestHasher::new(Tag::Builtin)
                 .feed(builtin.id())
@@ -248,19 +292,12 @@ impl values::Knotted for Knotted<'_, '_> {
                 .finished();
         }
         let knot = self.0.knot();
-        let root = knot.members().next().expect("a knot holds a node");
-        let digest = memo.memo(Tag::Knot, root.payload(), |memo| {
-            let mut hasher = DigestHasher::new(Tag::Knot);
-            hasher.count(knot.len() as usize);
-            for member in knot.members() {
-                hasher.digest(member.payload().content(memo));
-            }
-            hasher.finished()
-        });
-        DigestHasher::new(Tag::Member)
-            .digest(digest)
-            .count(self.0.index().index() as usize)
-            .finished()
+        let mut hasher = DigestHasher::new(Tag::Knot);
+        hasher.count(knot.len() as usize);
+        for member in knot.members() {
+            hasher.digest(Knotted(member).content(types, scratch, parts));
+        }
+        hasher.finished()
     }
 
     fn sibling(&self, edge: Edge) -> Self {
