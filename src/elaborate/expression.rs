@@ -898,12 +898,11 @@ pub fn declared_field(
     let mut peeled = BumpVec::new_in(scratch);
     let mut layer = owner;
     loop {
-        match types.node(layer) {
-            TypeNode::Record { fields } => return fields.get(name),
-            TypeNode::SetMember {
-                schema: NodeSchema::NewType(repr),
-                ..
-            } if !peeled.contains(&repr) => {
+        if let TypeNode::Record { fields } = types.node(layer) {
+            return fields.get(name);
+        }
+        match types.member_schema(layer) {
+            Some(NodeSchema::NewType(repr)) if !peeled.contains(&repr) => {
                 peeled.push(layer);
                 layer = repr;
             }

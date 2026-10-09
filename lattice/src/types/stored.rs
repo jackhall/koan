@@ -8,9 +8,8 @@
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
 //! intern miss: a carrier's key and name, a lexical variable's name, a signature's schema, a
-//! deferred return's surface, and a sealed member's component digest and schema, the schema in a
-//! slot its seal sets. A lexical level and a
-//! member's index are stored narrowed to `u32`. A shape stores each slot's priority class in that
+//! deferred return's surface, and a sealed member's [`Component`]. A lexical level and a member's
+//! index are stored narrowed to `u32`. A shape stores each slot's priority class in that
 //! slot's element, where the view reads its ranking. A reader that needs only inline fields, such
 //! as [`kind_of`](super::handle::KType::kind_of), matches the stored content and skips the hop.
 //!
@@ -26,17 +25,17 @@
 //!
 //! See [README.md](README.md) § The node vocabulary.
 
-use std::cell::Cell;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use crate::bump::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
+use super::component::Component;
 use super::digest::TypeDigest;
 use super::handle::{DeclaredType, Handle, Naming, Parametric, wrap};
 use super::kind::KKind;
-use super::node::{ContentKey, Group, NodeSchema, TypeNode};
+use super::node::{ContentKey, Group, TypeNode};
 use super::record::Record;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
@@ -182,57 +181,9 @@ pub(super) enum Content<'run> {
     SetMember {
         kind: KKind,
         index: u32,
-        body: &'run MemberBody<'run>,
+        component: &'run Component<'run>,
         name: TypeSymbol,
     },
-}
-
-/// What a sealed member carries out of line: the digest of its component, which only a re-digest
-/// of the node reads, and its schema's slot. Nominally `pub` so the sealed reading trait can name
-/// it.
-pub struct MemberBody<'run> {
-    pub(super) scc_digest: TypeDigest,
-    pub(super) schema: SchemaSlot<'run>,
-}
-
-const _: () = assert!(!std::mem::needs_drop::<MemberBody<'static>>());
-
-/// A sealed member's schema. The seal lays the slot empty when it interns the member and sets it
-/// once, after it has rewritten the schema absolute: the schema names types over the member, which
-/// can only be interned once the member is. Only a typed view reads a slot, and a typed handle to a
-/// member reaches koan only from a finished seal; the lattice's own view carries the slot and never
-/// reads it. Nothing sets one twice. Nominally `pub` so the sealed reading trait can name it.
-pub struct SchemaSlot<'run>(Cell<Option<NodeSchema<'run>>>);
-
-impl<'run> SchemaSlot<'run> {
-    /// A slot the seal sets once the schema is absolute.
-    pub(super) fn empty() -> Self {
-        SchemaSlot(Cell::new(None))
-    }
-
-    /// A slot holding `schema` from the start: a test's hand-built member.
-    #[cfg(test)]
-    pub(super) fn filled(schema: NodeSchema<'run>) -> Self {
-        SchemaSlot(Cell::new(Some(schema)))
-    }
-
-    /// Whether the seal has set the schema.
-    pub(super) fn is_set(&self) -> bool {
-        self.0.get().is_some()
-    }
-
-    /// The schema the seal set.
-    pub(super) fn get(&self) -> NodeSchema<'run> {
-        self.0
-            .get()
-            .expect("a sealed member's schema is set by its seal before anything reads it")
-    }
-
-    /// Set the schema, once.
-    pub(super) fn set(&self, schema: NodeSchema<'run>) {
-        debug_assert!(!self.is_set(), "a member's schema is set once");
-        self.0.set(Some(schema));
-    }
 }
 
 /// A node named by reference: what the table holds, what a node names its children by, and what
@@ -399,14 +350,13 @@ impl<'run> StoredNode<'run> {
             Content::SetMember {
                 kind,
                 index,
-                body,
+                component,
                 name,
             } => TypeNode::SetMember {
-                scc_digest: body.scc_digest,
+                component,
                 index: index as usize,
                 name,
                 kind,
-                schema: C::read_schema(body),
             },
         }
     }
@@ -596,15 +546,14 @@ impl<'run> Content<'run> {
             TypeNode::DeferredReturn(surface) => Content::DeferredReturn(bump.alloc(surface)),
             TypeNode::Sibling(index) => Content::Sibling(index),
             TypeNode::SetMember {
+                component,
                 index,
                 name,
                 kind,
-                schema,
-                ..
             } => Content::SetMember {
                 kind,
                 index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
-                body: schema,
+                component,
                 name,
             },
         }

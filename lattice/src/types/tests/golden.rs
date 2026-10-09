@@ -7,7 +7,8 @@
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
-use crate::types::digest::node_digest;
+use crate::types::component::Component;
+use crate::types::digest::{ComponentMember, node_digest};
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, builtin_types};
 use crate::types::kind::KKind;
 use crate::types::node::{ContentKey, Group, NodeSchema, TypeNode};
@@ -18,7 +19,7 @@ use crate::types::run::{Elements, Run};
 use crate::types::schema::{SchemaDraft, SigOrigin, SigSchema};
 use crate::types::shape::DispatchTokenElement::{Keyword, Slot};
 use crate::types::shape::{Classes, DeferredReturnSurface, StoredElement};
-use crate::types::stored::{Linked, MemberBody, SchemaSlot};
+use crate::types::stored::Linked;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
 #[test]
@@ -192,10 +193,17 @@ fn every_node_kind_has_its_own_tag() {
     let arguments = &*region.alloc_slice_copy(&[(field, node(KType::STR))]);
     let elements = &*region.alloc_slice_copy(&[StoredElement::Keyword(keyword)]);
     let members = &*region.alloc_slice_copy(&[node(KType::NUMBER), node(KType::STR)]);
-    let member = &*region.alloc(MemberBody {
-        scc_digest: node_digest(region, &TypeNode::<Handle>::Number),
-        schema: SchemaSlot::filled(NodeSchema::NewType(KType::NUMBER)),
-    });
+    let component_members = &*region.alloc_slice_copy(&[ComponentMember {
+        name,
+        kind: KKind::NewType,
+        schema: NodeSchema::NewType(KType::NUMBER),
+    }]);
+    let component = Component::tie(
+        region,
+        node_digest(region, &TypeNode::<Handle>::Number),
+        component_members,
+        |_| component_members,
+    );
     let body = types.function_type(region, fields, node(KType::NUMBER));
     // One representative per node kind, whose digests the distinctness assertion below reads. The
     // exhaustive match after the list is what makes a new variant a compile error here.
@@ -288,11 +296,10 @@ fn every_node_kind_has_its_own_tag() {
             names: &needed,
         },
         TypeNode::SetMember {
-            scc_digest: member.scc_digest,
+            component,
             index: 0,
             name,
             kind: KKind::NewType,
-            schema: member,
         },
     ];
     // The exhaustiveness half: `variant_name` matches every variant, so a new one fails to compile

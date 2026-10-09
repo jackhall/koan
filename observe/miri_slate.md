@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-
+lattice/src/types/component.rs: 1
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's own
@@ -10,8 +10,9 @@ Each test is a minimal-shape driver of one region-substrate discipline; the
 slate passes when Miri reports zero process-exit leaks and zero UB across the
 whole list. It runs on the default build: `python3 tools/miri.py`.
 
-`src/` carries no `unsafe` of its own, and `lattice` forbids it outside its test build. Every
-`unsafe` these tests reach lives in
+`src/` carries no `unsafe` of its own. `lattice` denies it outside its test build but for one
+read, the lifetime-erased member table of a sealed component, whose group below pins it. Every
+other `unsafe` these tests reach lives in
 `cellgraph` — `Writer::fill`, the reattach seam, the region release — pinned
 library-side by [cellgraph/observe/miri_slate.md](../cellgraph/observe/miri_slate.md),
 or in `bumpalo`'s allocator under `lattice`'s bump tier. `Writer::thin_run`, under
@@ -19,8 +20,8 @@ or in `bumpalo`'s allocator under `lattice`'s bump tier. `Writer::thin_run`, und
 `ThinRun` handle, with no layout or retype of its own. What this slate pins is
 the *safe* koan code that drives them: a bump-hosted table, write-once slots laid
 down in a cell's region and read through a covariant view, a scratch arena shared with the
-registry it serves, and a knot re-tied at a crossing's destination. Each anchor file is therefore whitelisted below, and the
-fingerprint block stays empty.
+registry it serves, and a knot re-tied at a crossing's destination. Each such anchor file is therefore whitelisted below; the
+fingerprint block records the lattice's one site.
 
 Command of record and triage workflow live in
 [.claude/skills/miri/SKILL.md](../.claude/skills/miri/SKILL.md).
@@ -100,6 +101,14 @@ buffers live in a scratch region the caller hands it.
 - `the_table_is_laid_once_and_never_grows`
   the verdict table laid in the registry's bump on its first record, and a hundred keys through
   one two-slot bucket, every slot written back in place.
+
+**Tied component** ([lattice/src/types/component.rs](../lattice/src/types/component.rs)) — a
+sealed component laid in the registry's region over its relative member table, repointed once at
+the absolute table its seal rewrote, and read through a lifetime-erased slice pointer.
+
+- `a_seal_keys_each_component_as_it_would_alone`
+  two components sealed in one group, each re-sealed alone onto its existing nodes, and every
+  member's absolute schema read back through its component's table, the cyclic edge included.
 
 **Program-region AST** ([src/parse/ast/program.rs](../src/parse/ast/program.rs)) — every name
 and every parts run the parser produces is written into program storage through the doors here, and
@@ -261,9 +270,9 @@ in a tenant's storage and crossed into the callee's birth.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-09: 371s — 31 tests, 0 leaks, 0 UB
 - 2026-10-04: 398s — 28 tests, 0 leaks, 0 UB
 - 2026-10-02: 264s — 27 tests, 0 leaks, 0 UB
 - 2026-09-30: 307s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 293s — 26 tests, 0 leaks, 0 UB
-- 2026-09-28: 231s — 26 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

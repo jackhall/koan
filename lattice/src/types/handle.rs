@@ -30,9 +30,9 @@ use crate::symbols::{StaticName, TypeSymbol};
 
 use super::digest::TypeDigest;
 use super::kind::KKind;
-use super::node::{Group, NodeSchema, TypeNode};
+use super::node::{Group, TypeNode};
 use super::registry::TypeRegistry;
-use super::stored::{Content, Linked, MemberBody};
+use super::stored::{Content, Linked};
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
 /// Identity only — every relation and door outside the lattice takes a typed handle.
@@ -74,7 +74,7 @@ pub enum DeclaredType<T> {
 pub(super) mod sealed {
     use super::super::digest::TypeDigest;
     use super::super::registry::TypeRegistry;
-    use super::super::stored::{Linked, MemberBody};
+    use super::super::stored::Linked;
 
     /// Wrapping a raw handle into a typed one: the lattice's alone, so a typed handle's promise is
     /// the lattice's to keep.
@@ -85,16 +85,12 @@ pub(super) mod sealed {
     /// How a node's types are named to the code that reads or builds it: by handle outside the
     /// lattice, by reference inside. A view reads each child as `Self`, each concrete field — a
     /// bound, a lower end, a code kind, a carrier's met bound, an application's signature — as
-    /// `Self::Bound`, and a sealed member's schema as `Self::Schema`: the schema itself through a
-    /// handle, the member's body — the slot that holds it — through a reference, which no walk or
-    /// relation reads. A door takes its operands as `Self` and reaches each one's node through
+    /// `Self::Bound`. A door takes its operands as `Self` and reaches each one's node through
     /// `linked`. Implemented for every typed handle and for [`Linked`], and nothing else.
     pub trait Naming<'run>: Copy {
         type Bound: Naming<'run>;
-        type Schema: Copy;
         fn read(node: Linked<'run>) -> Self;
         fn read_bound(node: Linked<'run>) -> Self::Bound;
-        fn read_schema(body: &'run MemberBody<'run>) -> Self::Schema;
         fn digest(self) -> TypeDigest;
         fn linked(self, types: &TypeRegistry<'run>) -> Linked<'run>;
     }
@@ -159,7 +155,6 @@ impl sealed::Wrap for Scheme {
 /// from one looks its node up.
 impl<'run, H: TypeHandle> Naming<'run> for H {
     type Bound = KType;
-    type Schema = NodeSchema<'run>;
 
     fn read(node: Linked<'run>) -> Self {
         wrap(node.handle())
@@ -167,10 +162,6 @@ impl<'run, H: TypeHandle> Naming<'run> for H {
 
     fn read_bound(node: Linked<'run>) -> KType {
         wrap(node.handle())
-    }
-
-    fn read_schema(body: &'run MemberBody<'run>) -> NodeSchema<'run> {
-        body.schema.get()
     }
 
     fn digest(self) -> TypeDigest {
@@ -185,7 +176,6 @@ impl<'run, H: TypeHandle> Naming<'run> for H {
 /// A reference names a node directly: every read and every build is the identity.
 impl<'run> Naming<'run> for Linked<'run> {
     type Bound = Self;
-    type Schema = &'run MemberBody<'run>;
 
     fn read(node: Linked<'run>) -> Self {
         node
@@ -193,10 +183,6 @@ impl<'run> Naming<'run> for Linked<'run> {
 
     fn read_bound(node: Linked<'run>) -> Self {
         node
-    }
-
-    fn read_schema(body: &'run MemberBody<'run>) -> &'run MemberBody<'run> {
-        body
     }
 
     fn digest(self) -> TypeDigest {

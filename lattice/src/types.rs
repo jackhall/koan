@@ -49,6 +49,7 @@
 //!
 //! See [types/README.md](types/README.md).
 
+mod component;
 mod digest;
 mod handle;
 mod kind;

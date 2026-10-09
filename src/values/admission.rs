@@ -68,11 +68,8 @@ pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>
     head: KType,
     payload: T,
 ) -> Result<T, ConstructionRefused<T>> {
-    match types.node(head) {
-        TypeNode::SetMember {
-            schema: NodeSchema::NewType(representation),
-            ..
-        } => {
+    match types.member_schema(head) {
+        Some(NodeSchema::NewType(representation)) => {
             if satisfied_by(types, scratch, representation, payload) {
                 Ok(head.into())
             } else {
@@ -83,14 +80,10 @@ pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>
                 })
             }
         }
-        TypeNode::SetMember {
-            schema:
-                NodeSchema::TypeConstructor {
-                    representation: Some(representation),
-                    param_names,
-                },
-            ..
-        } => {
+        Some(NodeSchema::TypeConstructor {
+            representation: Some(representation),
+            param_names,
+        }) => {
             // What the payload solves the parameters to is a `T`, as the payload is.
             let mut collector = Collector::<T>::least(types, scratch, param_names.len());
             let solved = admits_with(
@@ -129,25 +122,20 @@ pub fn representation(
     scratch: BumpAllocator<'_>,
     identity: KType,
 ) -> Option<KType> {
+    if let Some(NodeSchema::NewType(representation)) = types.member_schema(identity) {
+        return Some(representation);
+    }
     let (family, arguments) = match types.node(identity) {
-        TypeNode::SetMember {
-            schema: NodeSchema::NewType(representation),
-            ..
-        } => return Some(representation),
         TypeNode::ConstructorApply {
             constructor,
             arguments,
         } => (constructor, Some(arguments)),
         _ => (identity, None),
     };
-    let TypeNode::SetMember {
-        schema:
-            NodeSchema::TypeConstructor {
-                representation: Some(representation),
-                param_names,
-            },
-        ..
-    } = types.node(family)
+    let Some(NodeSchema::TypeConstructor {
+        representation: Some(representation),
+        param_names,
+    }) = types.member_schema(family)
     else {
         return None;
     };
@@ -170,14 +158,11 @@ const FAMILY: &str = "a family's representation reads only its own parameters";
 /// constructs nothing, which the check then refuses. The tie reads the latter two as a cut.
 pub fn solves_identity(types: &TypeRegistry<'_>, head: KType) -> bool {
     matches!(
-        types.node(head),
-        TypeNode::SetMember {
-            schema: NodeSchema::TypeConstructor {
-                representation: Some(_),
-                ..
-            },
+        types.member_schema(head),
+        Some(NodeSchema::TypeConstructor {
+            representation: Some(_),
             ..
-        }
+        })
     )
 }
 

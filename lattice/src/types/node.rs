@@ -4,9 +4,8 @@
 //! shape), and **references to its child types' nodes** — never owned substructure. Every run a
 //! node holds — a union's members, a shape's elements, a record's fields, a schema's tables — is a
 //! slice in the run region, so a view is `Copy` and carries no drop glue. Nodes are immutable from
-//! the moment they are interned, but for a sealed member's schema slot, which its seal sets once;
-//! the registry that owns them is insert-only for the life of a run, so a handle stays
-//! dereferenceable as long as its registry lives.
+//! the moment they are interned, and the registry that owns them is insert-only for the life of a
+//! run, so a handle stays dereferenceable as long as its registry lives.
 //!
 //! A `TypeNode` is the read view of a node: every field by value, its children read as `H`.
 //! Outside the lattice `H` is a handle — read through a [`KType`], a node's children are concrete,
@@ -24,6 +23,7 @@
 
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
+use super::component::Component;
 use super::digest::TypeDigest;
 use super::handle::{Handle, KType, Naming, Parametric, TypeHandle};
 use super::kind::KKind;
@@ -276,24 +276,23 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// A relative sibling reference inside a pre-seal recursive-group window: the sibling's bare
     /// index, meaningful only against the ambient window. Ordinary registry content, and the
     /// order relates it as an atom with the same profile as the member it will become — which is
-    /// what lets a relative schema's unions canonicalize before their members exist. It never
-    /// appears in a sealed schema.
+    /// what lets a relative schema's unions canonicalize before their members exist. A sealed
+    /// [`Component`] holds its schemas in this relative form only while it is tied; an absolute
+    /// schema never holds one.
     Sibling(usize),
     /// One sealed member of a recursive group. Identity is its strongly-connected component's
     /// digest plus its index in that component's canonical order — the numeric order of the
     /// members' name symbols — so two independently built components with the same content intern
     /// to the same nodes.
     ///
-    /// `name`, `kind` and `schema` are excluded from the digest because `scc_digest` was computed
-    /// over them — a handle determines them.
+    /// `name`, `kind` and the schema are excluded from the digest because the component's digest
+    /// was computed over them — a handle determines them. The schema is read absolute through
+    /// [`TypeRegistry::member_schema`](super::registry::TypeRegistry::member_schema).
     SetMember {
-        scc_digest: TypeDigest,
+        component: &'run Component<'run>,
         index: usize,
         name: TypeSymbol,
         kind: KKind,
-        /// The schema through a handle; through a reference, the member's body, whose slot its seal
-        /// sets.
-        schema: H::Schema,
     },
 }
 

@@ -27,7 +27,6 @@ use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
 use super::handle::{DeclaredType, KType, Parametric};
-use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
 use super::operators::ReductionMode;
 use super::order::{Dropped, unsubsumed};
@@ -324,12 +323,8 @@ pub fn constructor_param_names<'run>(
     kt: KType,
     types: &TypeRegistry<'run>,
 ) -> Option<&'run [TypeSymbol]> {
-    match types.node(kt) {
-        TypeNode::SetMember {
-            kind: KKind::TypeConstructor,
-            schema: NodeSchema::TypeConstructor { param_names, .. },
-            ..
-        } => Some(param_names),
-        _ => None,
+    match types.member_schema(kt)? {
+        NodeSchema::TypeConstructor { param_names, .. } => Some(param_names),
+        NodeSchema::NewType(_) => None,
     }
 }

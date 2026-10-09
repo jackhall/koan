@@ -314,7 +314,7 @@ pub(super) fn sig_fits<'run: 's, 's>(
 /// `offered` fitted against the one application of `signature` with `pins`, and what that solves
 /// each of `signature`'s head parameters to: the pins, then the solution for each unpinned one.
 /// What the view door reads as the source's bindings.
-pub(super) fn fits_application<'run: 's, 's>(
+pub(super) fn fits_application<'run, 's>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
     offered: Linked<'run>,
@@ -421,7 +421,7 @@ impl<'run, 's> Offered<'run, 's> {
 }
 
 /// [`fits_application`] over an application already in hand.
-fn fits_one<'run: 's, 's>(
+fn fits_one<'run, 's>(
     types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
     offered: Linked<'run>,

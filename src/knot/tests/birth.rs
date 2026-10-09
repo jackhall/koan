@@ -7,7 +7,7 @@ use crate::parse::ExpressionPart;
 use crate::scope::{CaptureSlot, Coordinate, Site, Target};
 use crate::scope::{Elaboration, ParameterBinding};
 use crate::symbols::{BinderSymbol, KeywordSymbol};
-use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema, TypeNode};
+use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema};
 use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
@@ -737,10 +737,7 @@ fn a_type_declaration_is_declared_rather_than_tied() {
             let activation = fixture.run(writer, &lines, &[]);
             let ring = declared(fixture, activation, "Ring");
             let next = fixture.name("next");
-            let TypeNode::SetMember {
-                schema: NodeSchema::NewType(representation),
-                ..
-            } = fixture.types.node(ring)
+            let Some(NodeSchema::NewType(representation)) = fixture.types.member_schema(ring)
             else {
                 panic!("a NEWTYPE binds a newtype member");
             };

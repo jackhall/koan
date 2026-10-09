@@ -32,11 +32,13 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::hash::BuildHasher;
 
 use crate::bump::{BumpAllocator, BumpHashTable, BumpVec, bump_hash_table};
-use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 
-use super::digest::{self, TypeDigest, schema_content_digest};
+use super::component::Component;
+use super::digest::{self, ComponentMember, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, TypeHandle, wrap};
 use super::kind::KKind;
 use super::node::{ContentKey, Group, NodeSchema, TypeNode};
@@ -51,8 +53,8 @@ use super::shape::{
     DeferredReturnSurface, DispatchTokenElement, StoredElement, class_of, written_order,
 };
 use super::signatures::canonical_applications;
-use super::stored::{Content, Flags, Linked, MemberBody, SchemaSlot, StoredNode};
-use super::substitute::substitute_quantified;
+use super::stored::{Content, Flags, Linked, StoredNode};
+use super::substitute::{rewrite_siblings, substitute_quantified};
 use super::verdicts::{Relation, VERDICT_SLOTS, VerdictTable};
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_free_quantified};
@@ -61,9 +63,9 @@ use super::walk::unary::{Visit, children, visit, visit_free_quantified};
 /// its own digest, so the table holds no second copy of it.
 type NodeTable<'run> = BumpHashTable<'run, Linked<'run>>;
 
-/// The table's hash of `digest`: its low word. A digest is already uniformly distributed.
+/// The table's hash of `digest`: the identity hash every digest-keyed map runs.
 fn slot_hash(digest: TypeDigest) -> u64 {
-    digest.0 as u64
+    IdentityBuildHasher::default().hash_one(digest.0)
 }
 
 /// What a scheme door produced: its declared type — a scheme for a non-empty group — and how the
@@ -660,41 +662,61 @@ impl<'run> TypeRegistry<'run> {
         self.intern_digested(digest::sibling_digest(index), || TypeNode::Sibling(index))
     }
 
-    /// One sealed member of a recursive group, its schema slot empty. Built only by the seal, which
-    /// interns a component's members before any type over them and then sets each one's schema
-    /// ([`seal_schema`](Self::seal_schema)). The member's handle is its component digest and
-    /// index, so this is the one source of a member's handle.
-    pub(super) fn set_member(
+    /// One sealed component's members, interned in its canonical order: `members` as the
+    /// component digest read them, their schemas relative. A component an earlier seal laid keeps
+    /// its nodes. Otherwise the component is laid and tied ([`Component::tie`]): its members are
+    /// interned, then each schema is rewritten absolute against them, staged in `scratch`.
+    pub(super) fn seal_component<'s>(
         &self,
-        scc_digest: TypeDigest,
-        index: usize,
-        name: TypeSymbol,
-        kind: KKind,
-    ) -> Linked<'run> {
-        self.intern_laid(digest::member_ref_digest(scc_digest, index), || {
-            Content::SetMember {
-                kind,
-                index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
-                body: self.bump.alloc(MemberBody {
-                    scc_digest,
-                    schema: SchemaSlot::empty(),
-                }),
-                name,
+        scratch: BumpAllocator<'s>,
+        digest: TypeDigest,
+        members: &[ComponentMember<'_>],
+    ) -> BumpVec<'s, Linked<'run>> {
+        let sealed = self.stored(digest::member_ref_digest(digest, 0));
+        let component = match sealed.map(StoredNode::content) {
+            Some(Content::SetMember { component, .. }) => component,
+            _ => {
+                let relative = self
+                    .bump
+                    .alloc_slice_fill_iter(members.iter().map(|member| ComponentMember {
+                        schema: self.rehome_schema(member.schema),
+                        ..*member
+                    }));
+                Component::tie(self.bump, digest, relative, |component| {
+                    let nodes = self.member_nodes(scratch, component);
+                    let resolve = |sibling: usize| nodes[sibling];
+                    self.bump
+                        .alloc_slice_fill_iter(relative.iter().map(|member| ComponentMember {
+                            schema: self.absolute_schema(scratch, member.schema, &resolve),
+                            ..*member
+                        }))
+                })
             }
-        })
+        };
+        self.member_nodes(scratch, component)
     }
 
-    /// Set `member`'s schema, copying it into the region; the seal may hand one staged in scratch.
-    /// A member already interned by an earlier seal of the same component keeps the schema that
-    /// seal gave it, which is the same content.
-    pub(super) fn seal_schema(&self, member: Linked<'run>, schema: NodeSchema<'_>) {
-        let Content::SetMember { body, .. } = member.content() else {
-            unreachable!("a sealed member is a SetMember node")
-        };
-        if body.schema.is_set() {
-            return;
+    /// Every member of a sealed `component`, each its one node, in canonical order.
+    fn member_nodes<'s>(
+        &self,
+        scratch: BumpAllocator<'s>,
+        component: &'run Component<'run>,
+    ) -> BumpVec<'s, Linked<'run>> {
+        let count = component.members().len();
+        let mut nodes = BumpVec::with_capacity_in(count, scratch);
+        for index in 0..count {
+            nodes.push(
+                self.intern_laid(digest::member_ref_digest(component.digest, index), || {
+                    member_content(component, index)
+                }),
+            );
         }
-        body.schema.set(match schema {
+        nodes
+    }
+
+    /// A schema with its parameter names copied into the region.
+    fn rehome_schema(&self, schema: NodeSchema<'_>) -> NodeSchema<'run> {
+        match schema {
             NodeSchema::NewType(repr) => NodeSchema::NewType(repr),
             NodeSchema::TypeConstructor {
                 representation,
@@ -703,7 +725,39 @@ impl<'run> TypeRegistry<'run> {
                 representation,
                 param_names: self.rehome(param_names),
             },
-        });
+        }
+    }
+
+    /// A relative `schema` made absolute: each sibling reference read as the member `resolve`
+    /// names, re-interned through the canonical doors.
+    fn absolute_schema(
+        &self,
+        scratch: BumpAllocator<'_>,
+        schema: NodeSchema<'run>,
+        resolve: &impl Fn(usize) -> Linked<'run>,
+    ) -> NodeSchema<'run> {
+        let rewrite =
+            |relative: Handle| rewrite_siblings(self, scratch, self.enter(relative), resolve);
+        match schema {
+            NodeSchema::NewType(repr) => NodeSchema::NewType(KType::read(rewrite(repr.raw()))),
+            NodeSchema::TypeConstructor {
+                representation,
+                param_names,
+            } => NodeSchema::TypeConstructor {
+                representation: representation.map(|kt| Parametric::read(rewrite(kt.raw()))),
+                param_names,
+            },
+        }
+    }
+
+    /// `member`'s schema, absolute; `None` for a type that is not a sealed member.
+    pub fn member_schema(&self, member: impl TypeHandle) -> Option<NodeSchema<'run>> {
+        match self.enter(member.raw()).content() {
+            Content::SetMember {
+                index, component, ..
+            } => Some(component.members()[index as usize].schema),
+            _ => None,
+        }
     }
 
     /// A module-signature type over `draft`, in canonical form — the one door a schema enters the
@@ -1298,5 +1352,16 @@ impl Default for Occurrences {
             contravariant: 0,
             first: usize::MAX,
         }
+    }
+}
+
+/// Member `index` of `component` as stored content.
+fn member_content<'run>(component: &'run Component<'run>, index: usize) -> Content<'run> {
+    let member = component.members()[index];
+    Content::SetMember {
+        kind: member.kind,
+        index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
+        component,
+        name: member.name,
     }
 }

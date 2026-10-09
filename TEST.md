@@ -211,7 +211,8 @@ retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
 has, including a fill writing into the same region); what koan's slate pins is
 `knot`'s copy of a knot, whose node run is filled while closure runs and data
 node residents are written into the same region. `src/` carries no `unsafe` at all, and
-`lattice` forbids it outside its test build (`forbid(unsafe_code)`) — koan's only
+`lattice` denies it outside its test build (`deny(unsafe_code)`) but for the read behind a sealed
+component's member table, which the slate's tied-component group pins. Beyond that, koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
 outside the tree the slate audit censuses (`tools/observe_tests.py` walks `src/`

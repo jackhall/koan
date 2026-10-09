@@ -12,7 +12,7 @@ use super::raw::RawRegistry;
 use super::raw::lattice::{join, meet_through_variables as meet};
 use super::raw::order::{fits, is_subtype_of};
 use super::raw::unify::admits;
-use crate::types::digest::{TypeDigest, node_digest, schema_content_digest};
+use crate::types::digest::{ComponentMember, TypeDigest, node_digest, schema_content_digest};
 use crate::types::handle::{Handle, KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;
 use crate::types::node::{NodeSchema, TypeNode};
@@ -562,9 +562,12 @@ fn each_node_kind_lies_under_its_family_top() {
         Handle::EMPTY_SIGNATURE,
         {
             let scc_digest = node_digest(region, &TypeNode::<Handle>::Number);
-            let member = types.set_member(scc_digest, 0, name, KKind::NewType);
-            types.seal_schema(member, NodeSchema::NewType(KType::NUMBER));
-            member.handle()
+            let member = ComponentMember {
+                name,
+                kind: KKind::NewType,
+                schema: NodeSchema::NewType(KType::NUMBER),
+            };
+            types.seal_component(region, scc_digest, &[member])[0].handle()
         },
         types.sibling(0).raw(),
         Handle::ANY_VALUE,

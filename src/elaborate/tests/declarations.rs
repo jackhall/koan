@@ -14,12 +14,8 @@ use crate::scope::Elaboration;
 
 /// The representation a newtype member wraps.
 fn representation(program: &Program<'_, '_, '_>, handle: KType) -> KType {
-    match program.types.node(handle) {
-        TypeNode::SetMember {
-            kind: KKind::NewType,
-            schema: NodeSchema::NewType(repr),
-            ..
-        } => repr,
+    match program.types.member_schema(handle) {
+        Some(NodeSchema::NewType(repr)) => repr,
         _ => panic!("the handle is a newtype member"),
     }
 }

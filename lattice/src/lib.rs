@@ -7,11 +7,12 @@
 //! scope — is nameable here.
 //!
 //! **Imports.** No koan file names `bumpalo`, `hashbrown`, `allocator_api2` or `blake3`: they are
-//! this crate's dependencies, not koan's. Outside its test build the crate holds no `unsafe`.
+//! this crate's dependencies, not koan's. Outside its test build the crate's one `unsafe` is the read behind a sealed component's member
+//! table ([`types`]' `component` module), which ties the region's one cycle.
 //!
 //! See [README.md](../README.md).
 
-#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(not(test), deny(unsafe_code))]
 
 /// Storage outside the graph: the bump arena, the vector, table and set shapes built over it, and
 /// the component walk staged in it.

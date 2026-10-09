@@ -10,13 +10,13 @@
 //! **A window lives in the frame of the node that declares the group.** That node opens the window
 //! and closes it, so the window's member and binder lists, its members' relative schemas and what
 //! the seal minted are all bumped into that frame's region, the `'w` a window is built over — never
-//! the run region and never the heap. The seal writes the sealed member nodes, and the absolute
-//! types their schemas name, into the run registry; its own working buffers stage in the scratch it
-//! is handed.
+//! the run region and never the heap. The seal writes the sealed member nodes and their component
+//! into the run registry; its own working buffers stage in the scratch it is handed.
 //!
 //! Inside the window a reference to a co-declared member is a [`TypeNode::Sibling`] handle: a bare
 //! relative index, ordinary interned content, meaningful only against the window that minted it.
-//! The seal rewrites every one of them to an absolute member handle.
+//! The seal rewrites a cross-component one to the referent's member handle; one into the member's
+//! own component stays relative in the sealed component, and a read of the schema rewrites it.
 //!
 //! # Member identity is the computed component
 //!
@@ -35,23 +35,24 @@
 //! - Adding an unreferenced member to a group perturbs nobody else's identity.
 //! - A non-recursive member declared inside a group unifies with its standalone twin.
 //!
-//! # Members before the types over them
+//! # A component is tied once, its schemas absolute
 //!
-//! A member's schema names types over the member — its own cyclic edges, its siblings' — so the
-//! seal interns one component at a time, in that order: once a component's digest is known, its
-//! members are interned, each behind an empty schema slot, and only then is each of their schemas
-//! rewritten absolute and set on its slot. Every member a schema names then exists: its own
-//! component's, and every upstream component's, sealed earlier. The lattice's own view of a member
-//! never reads its slot, so a member whose slot is still empty relates as any other.
+//! A member's schema names types over the member — its own cyclic edges, its siblings' — while the
+//! member must reach its schema. The seal hands each component to
+//! [`Component::tie`](super::component::Component::tie) as its digest
+//! read it: every member's name, kind and schema, with each reference into the component still a
+//! relative `Sibling`. The members are interned against it, each schema is rewritten absolute
+//! against them, and the component is repointed at the absolute table, which
+//! [`TypeRegistry::member_schema`] reads.
 //!
-//! # Unions across the seal
+//! # Unions across the rewrite
 //!
 //! A relative schema builds its unions through the ordinary canonicalizing door while it still
 //! holds `Sibling` handles. That is exact: the order relates a `Sibling` as an atom with the same
 //! profile as the sealed member it stands for, and distinct indices name distinct members, so a
-//! union canonical before the seal is canonical after it. The rewrite re-interns each union through
-//! the same door, over member nodes that exist, and the rename `Sibling(i) ↦ member_i` preserves
-//! every subsumption verdict, so the union is the one the relative schema held.
+//! union canonical in relative form is canonical absolute. The rewrite re-interns each union
+//! through the same door, and the rename `Sibling(i) ↦ member_i` preserves every subsumption
+//! verdict, so the union is the one the relative schema held.
 //!
 //! See [README.md](README.md) § Recursive groups: identity is the SCC, not the declaration.
 
@@ -141,7 +142,7 @@ impl<'w> RelativeSchema<'w> {
         }
     }
 
-    /// The absolute twin, once every handle in `self` is already absolute.
+    /// The same schema as a [`NodeSchema`]: the shape a component digests and stores.
     fn into_node_schema(self) -> NodeSchema<'w> {
         match self {
             RelativeSchema::NewType(repr) => NodeSchema::NewType(repr),
@@ -548,7 +549,7 @@ pub(super) fn seal_group<'w, 'run>(
         // Re-encode each member's schema for the fold: an intra-component reference becomes a
         // relative index into *this component's* canonical order, a cross-component one folds
         // the referent's already-finished handle as ordinary external content.
-        let digest = {
+        let (digest, component_members) = {
             let resolve = |sibling: usize| match order.iter().position(|m| *m == sibling) {
                 Some(position) => types.sibling_node(position),
                 None => handles[sibling].expect(
@@ -566,31 +567,13 @@ pub(super) fn seal_group<'w, 'run>(
                         .into_node_schema(),
                 });
             }
-            component_digest(&component_members)
+            (component_digest(&component_members), component_members)
         };
 
-        // This component's members, each behind an empty schema slot, before any schema over them.
-        for (position, member) in order.iter().enumerate() {
-            handles[*member] = Some(types.set_member(
-                digest,
-                position,
-                members[*member].name,
-                members[*member].kind,
-            ));
-        }
-        // Every member this component's schemas name now exists — its own, and every upstream
-        // component's, sealed earlier — so each schema is rewritten absolute, cyclic edges
-        // included, and set on its slot. A union over the siblings canonicalizes through the
-        // ordinary door.
-        let absolute = |sibling: usize| {
-            handles[sibling].expect("a schema names only its own component and upstream ones")
-        };
-        for member in order.iter() {
-            let schema = members[*member]
-                .schema
-                .map_handles(types, scratch, &absolute)
-                .into_node_schema();
-            types.seal_schema(absolute(*member), schema);
+        // The seal ties the component: members first, then their schemas rewritten absolute.
+        let nodes = types.seal_component(scratch, digest, &component_members);
+        for (member, node) in order.iter().zip(nodes) {
+            handles[*member] = Some(node);
         }
     }
 

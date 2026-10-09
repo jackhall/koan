@@ -248,8 +248,8 @@ pub(super) fn node_digest<'run, C: Naming<'run>>(
         TypeNode::SignatureMeet { members } => signature_meet_digest(members.raw()),
         TypeNode::Sibling(index) => sibling_digest(*index),
         TypeNode::SetMember {
-            scc_digest, index, ..
-        } => member_ref_digest(*scc_digest, *index),
+            component, index, ..
+        } => member_ref_digest(component.digest, *index),
     }
 }
 
@@ -591,6 +591,7 @@ fn feed_record<'run, H: Naming<'run>>(
 /// sibling handle already re-encoded — intra-component references as a relative
 /// [`TypeNode::Sibling`] into the component's own canonical order, cross-component references as
 /// the referent's finished member handle.
+#[derive(Clone, Copy)]
 pub(super) struct ComponentMember<'m> {
     pub name: TypeSymbol,
     pub kind: KKind,

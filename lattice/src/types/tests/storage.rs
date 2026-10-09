@@ -7,7 +7,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::types::handle::{KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;
-use crate::types::node::{NodeSchema, TypeNode};
+use crate::types::node::NodeSchema;
 use crate::types::registry::TypeRegistry;
 use crate::types::shape::DispatchTokenElement;
 use crate::types::typed::{fits, is_subtype_of, join, substitute_quantified};
@@ -140,10 +140,10 @@ fn nodes_compare_by_digest_across_registries() {
 }
 
 /// A seal over two components joined by an edge — `Wrapper` over `List<Other>`, `Other` over
-/// itself — lays `Other` before the type naming it, and each member keys the handle its part
-/// sealed alone keys.
+/// itself — keys each member as its component sealed alone keys it, and each member's schema reads
+/// absolute.
 #[test]
-fn a_seal_lays_each_component_before_the_types_over_it() {
+fn a_seal_keys_each_component_as_it_would_alone() {
     let symbols = SymbolInterner::new();
     let [wrapper, other] = ["Wrapper", "Other"]
         .map(|name| TypeSymbol::declared(name, &symbols).expect("a Type token"));
@@ -174,11 +174,7 @@ fn a_seal_lays_each_component_before_the_types_over_it() {
 
     // Each member's schema names the sealed members, cyclic edge included.
     for member in [sealed_wrapper, sealed_other] {
-        let TypeNode::SetMember {
-            schema: NodeSchema::NewType(representation),
-            ..
-        } = types.node(member)
-        else {
+        let Some(NodeSchema::NewType(representation)) = types.member_schema(member) else {
             unreachable!("a sealed newtype is a member with a newtype's schema")
         };
         assert_eq!(representation, types.list(sealed_other));

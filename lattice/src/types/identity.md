@@ -106,7 +106,7 @@ node and never consults a table. A shape's element keeps its slot's priority
 class, a `u16`, beside the slot's reference. A field no hot path reads sits
 behind one reference laid on an intern miss: a carrier's key and name, a
 lexical variable's name, a signature's schema, a deferred return's surface, and
-a sealed member's component digest and schema.
+a sealed member's component.
 [`TypeRegistry::node`](registry.rs) reads a stored node back as a `TypeNode`,
 every field by value and each child as a handle, so no reader outside the
 lattice sees this layout.
@@ -230,18 +230,22 @@ The consequences are the point:
 A relative schema builds its unions through the ordinary canonicalizing door
 while it still holds `Sibling` handles, and that is exact: the order relates a
 `Sibling` as an atom with the same profile as the sealed member it stands for, and
-distinct indices name distinct members, so a union canonical before the seal is
-canonical after it.
+distinct indices name distinct members, so a union canonical in relative form
+is canonical absolute.
 
 A member's schema names types over the member — its own cyclic edges, its
-siblings' — so the seal interns one component at a time, in that order: once a
-component's digest is known, it interns the component's members, each behind
-an empty schema slot, and only then rewrites each member's schema absolute and
-sets it on the slot, once. Every member a schema names exists by then: its own
-component's, and every upstream component's, sealed earlier. The rewrite
-re-interns each union through the same canonicalizing door, over member nodes
-that exist, and the rename `Sibling(i) ↦ member_i` preserves every subsumption
-verdict, so the union is the one the relative schema held. The lattice's own
-walks and relations never read a member's slot, so a member whose slot is still
-empty relates as any other; only a typed read of a member, which koan makes
-after the seal returns, reads its schema.
+siblings' — while the member must reach its schema: the region's one cycle.
+[`Component::tie`](component.rs) closes it. The seal lays each component once,
+in the region, as its digest read it: every member's name, kind and schema, with
+each reference into the component still a relative `Sibling` and each
+cross-component one the referent's member handle. Every member node shares that
+component, so the seal interns the members first, then rewrites each schema
+absolute, re-interning each union through the same canonicalizing door, and
+repoints the component at the absolute table. The rename `Sibling(i) ↦ member_i`
+preserves every subsumption verdict, so the union is the one the relative schema
+held. Every reader after the seal reads the absolute schema with one field read,
+[`TypeRegistry::member_schema`](registry.rs). The table sits behind a cell that
+erases its lifetime, so nodes stay covariant; its read is the crate's one
+`unsafe`, sound because `tie` alone writes it, once, before the component is
+returned. The lattice's own walks and
+relations never read a member's schema; only koan does, through that read.
