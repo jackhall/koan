@@ -2,9 +2,9 @@
 //! scratch a caller passes. A bump here has no reach and no cell; it is released whole when its
 //! owner drops.
 //!
-//! The tier is a collections arena — growable vectors and a hash table and hash set over `&Bump` as an
-//! [`Allocator`](allocator_api2::alloc::Allocator) — which a cell's `Writer` has no verbs for, so
-//! it does not pretend to be a region.
+//! The tier is a collections arena — growable vectors, a hash map, a bare hash table and a hash set
+//! over `&Bump` as an [`Allocator`](allocator_api2::alloc::Allocator) — which a cell's `Writer`
+//! has no verbs for, so it does not pretend to be a region.
 //! Callers use bumpalo's own verbs (`alloc`, `alloc_slice_copy`, `alloc_slice_fill_iter`,
 //! `alloc_str`) through [`BumpAllocator`]; there is no door layer over them.
 //!
@@ -36,6 +36,10 @@ pub type BumpVec<'a, T> = allocator_api2::vec::Vec<T, BumpAllocator<'a>>;
 pub type BumpBackedMap<'a, K, V, S = hashbrown::DefaultHashBuilder> =
     hashbrown::HashMap<K, V, S, BumpAllocator<'a>>;
 
+/// A hash table of bare entries whose buckets live in a bump: the caller hashes each entry and
+/// finds one by comparing what it holds. Built through `bump_hash_table`.
+pub type BumpHashTable<'a, T> = hashbrown::HashTable<T, BumpAllocator<'a>>;
+
 /// A hash set whose buckets live in a bump. Built through `bump_set`.
 pub type BumpBackedSet<'a, T, S = hashbrown::DefaultHashBuilder> =
     hashbrown::HashSet<T, S, BumpAllocator<'a>>;
@@ -54,6 +58,18 @@ pub fn bump_table<'a, K, V, S: BuildHasher + Default>(
         )
     };
     hashbrown::HashMap::with_hasher_in(S::default(), bump)
+}
+
+/// Build a hash table over `bump`, proving at compile time that its entries carry no drop glue,
+/// as [`bump_table`] does.
+pub fn bump_hash_table<'a, T>(bump: BumpAllocator<'a>) -> BumpHashTable<'a, T> {
+    const {
+        assert!(
+            !std::mem::needs_drop::<T>(),
+            "a bump-backed table's entries must carry no drop glue: the bump runs no destructor",
+        )
+    };
+    hashbrown::HashTable::new_in(bump)
 }
 
 /// Build a set over `bump`, proving at compile time that its members carry no drop glue, as

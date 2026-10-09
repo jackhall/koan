@@ -1,22 +1,22 @@
 //! The run's type registry: the single owner of every type's content, plus the table of relation
 //! verdicts ([`verdicts`](super::verdicts)).
 //!
-//! Content lives in `nodes`, a hash map built over the run region the registry is constructed
-//! over ([`TypeRegistry::in_region`]): its bucket array and every node's slices are bumped into that
-//! region. A [`Handle`] handle *is* the digest of its node, so the handle is also its own lookup
-//! key, and the digest is already a uniformly distributed hash — the map hashes it with
-//! `IdentityHasher`, making a lookup cost about what an array index would. Interning is
-//! insert-if-absent, so building the same content twice in a run yields one node and two equal
-//! handles. Nothing ever leaves the map and nothing in it carries drop glue, so the region releases
-//! the table and every node with it, whole.
+//! Each node is a [`StoredNode`](super::stored::StoredNode) laid alone in the run region the
+//! registry is constructed over ([`TypeRegistry::in_region`]), holding its own digest beside its
+//! content. `nodes` is a hash table of references to those nodes, its bucket array in the same
+//! region. A [`Handle`] *is* the digest of its node, and the digest is already a uniformly
+//! distributed hash, so the table hashes a digest by its low word and finds a node by comparing
+//! against the digest the node holds — it stores no second copy. Interning is insert-if-absent,
+//! so building the same content twice in a run yields one node and two equal handles. Nothing ever
+//! leaves the table and nothing in it carries drop glue, so the region releases the table and
+//! every node with it, whole.
 //!
-//! The table stores each node as a [`StoredNode`](super::stored::StoredNode), and
-//! [`TypeRegistry::node`] reads one back as a [`TypeNode`] view. A stored node is `Copy`: a read
-//! copies it out and releases the table borrow before the reader runs, so reads nest and a reader
-//! may intern. A stored node carries four flags computed off its children at intern — whether a
-//! free quantifier, whether any rigid variable, whether any variable or scheme outside sealed
-//! content, and whether an opaque carrier outside sealed content is reachable — so each probe is
-//! one table read.
+//! [`TypeRegistry::node`] reads a stored node back as a [`TypeNode`] view. A read takes a
+//! reference into the region and releases the table borrow before the reader runs, so reads nest
+//! and a reader may intern. A stored node carries four flags computed off its children at intern
+//! — whether a free quantifier, whether any rigid variable, whether any variable or scheme outside
+//! sealed content, and whether an opaque carrier outside sealed content is reachable — so each
+//! probe is one read of the node.
 //!
 //! Verdicts are a fixed cache laid in the same region, described in [`verdicts`](super::verdicts).
 //! The registry therefore owns nothing on the global heap, and can itself rest in a bump.
@@ -29,8 +29,8 @@
 
 use std::cell::RefCell;
 
-use crate::bump::{BumpAllocator, BumpBackedMap, BumpVec, bump_table};
-use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
+use crate::bump::{BumpAllocator, BumpHashTable, BumpVec, bump_hash_table};
+use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 
 use super::digest::{self, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
@@ -47,14 +47,20 @@ use super::shape::{
     DeferredReturnSurface, DispatchTokenElement, StoredElement, class_of, written_order,
 };
 use super::signatures::canonical_applications;
-use super::stored::{Flags, StoredNode};
+use super::stored::{Content, Flags, Linked, StoredNode};
 use super::substitute::substitute_quantified;
 use super::verdicts::{Relation, VERDICT_SLOTS, VerdictTable};
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_free_quantified};
 
-/// The node table: keyed by digest under the identity hasher, bucket array in the run region.
-type NodeTable<'run> = BumpBackedMap<'run, TypeDigest, StoredNode<'run>, IdentityBuildHasher>;
+/// The node table: a reference to each stored node, bucket array in the run region. A node holds
+/// its own digest, so the table holds no second copy of it.
+type NodeTable<'run> = BumpHashTable<'run, Linked<'run>>;
+
+/// The table's hash of `digest`: its low word. A digest is already uniformly distributed.
+fn slot_hash(digest: TypeDigest) -> u64 {
+    digest.0 as u64
+}
 
 /// What a scheme door produced: its declared type — a scheme for a non-empty group — and how the
 /// caller's declaration-order quantifier indices map onto the interned group's order.
@@ -67,8 +73,8 @@ pub struct GroupIntern<'s> {
 }
 
 /// The store of type content and relation verdicts. Interior mutability in independent cells: a
-/// read of `nodes` copies its node out and releases the cell before the reader runs, so reads
-/// nest freely and a reader may intern, while a verdict slot is copied in and out whole.
+/// read of `nodes` takes a reference to its node and releases the cell before the reader runs, so
+/// reads nest freely and a reader may intern, while a verdict slot is copied in and out whole.
 pub struct TypeRegistry<'run> {
     /// The run region's bump: every node slice an intern miss keeps is copied in here.
     bump: BumpAllocator<'run>,
@@ -94,8 +100,8 @@ impl<'run> TypeRegistry<'run> {
     /// Every interned type's digest, in no particular order. `each` runs while the table is read, so
     /// it may not intern. Tests read it, koan's among them, as they read `node_count`.
     pub fn each_digest(&self, mut each: impl FnMut(TypeDigest)) {
-        for digest in self.nodes.borrow().keys() {
-            each(*digest);
+        for node in self.nodes.borrow().iter() {
+            each(node.digest());
         }
     }
 
@@ -109,7 +115,7 @@ impl<'run> TypeRegistry<'run> {
     fn with_verdict_slots(bump: BumpAllocator<'run>, verdict_slots: usize) -> Self {
         let registry = Self {
             bump,
-            nodes: RefCell::new(bump_table(bump)),
+            nodes: RefCell::new(bump_hash_table(bump)),
             verdicts: VerdictTable::with_slots(verdict_slots),
         };
         registry.seed_constants();
@@ -209,14 +215,17 @@ impl<'run> TypeRegistry<'run> {
         if self.stored(digest).is_none() {
             let node = build();
             let folded = self.flags_over(&node);
-            let stored = StoredNode::lay(node, folded, self.bump);
+            let content = Content::lay(node, folded, self.bump);
             debug_assert_eq!(
-                stored.flags(),
-                stored.flags() | folded,
+                content.flags(),
+                content.flags() | folded,
                 "a node's flags hold its children's",
             );
-            let previous = self.nodes.borrow_mut().insert(digest, stored);
-            debug_assert!(previous.is_none(), "`build` interns nothing");
+            debug_assert!(self.stored(digest).is_none(), "`build` interns nothing");
+            let node = self.bump.alloc(StoredNode::new(digest, content));
+            self.nodes
+                .borrow_mut()
+                .insert_unique(slot_hash(digest), node, |node| slot_hash(node.digest()));
         }
         Handle::from_digest(digest)
     }
@@ -225,7 +234,7 @@ impl<'run> TypeRegistry<'run> {
     /// interned first. A child not in the table reads as no flags, which is exact: the only such
     /// child is the handle of a group member mid-seal, which the seal's rebuilt schemas name before
     /// its own node is interned, and a sealed member is a leaf for every probe. A variable's or a
-    /// carrier's own flags are [`StoredNode::flags`]'s constants.
+    /// carrier's own flags are [`Content::flags`]'s constants.
     fn flags_over(&self, node: &TypeNode<'run>) -> Flags {
         let mut folded = Flags::NONE;
         children(node, &mut |child, _| {
@@ -268,14 +277,14 @@ impl<'run> TypeRegistry<'run> {
     /// The content `handle` names, by value, its children read as `handle`'s children: a concrete
     /// type's are concrete, a parametric type's parametric.
     ///
-    /// The node is copied out of the table and the `RefCell` borrow ends before the caller reads
-    /// it. That is what lets a reader intern, and what makes reads nest freely. The node's slices
-    /// live in the region, so a reader may hand one back as `&'run`.
+    /// The node lives in the region, and the `RefCell` borrow ends before the caller reads it. That
+    /// is what lets a reader intern, and what makes reads nest freely. The node's slices live in
+    /// the region too, so a reader may hand one back as `&'run`.
     ///
     /// A miss is a bug, not a state: a handle is only ever produced by an interning door, and the
     /// table is insert-only.
     pub fn node<H: TypeHandle>(&self, handle: H) -> TypeNode<'run, H::Child> {
-        self.raw_node(handle.raw()).view()
+        self.enter(handle.raw()).view()
     }
 
     /// `handle`'s own quantifier group and the type under it: a scheme's group and body, or the
@@ -291,16 +300,15 @@ impl<'run> TypeRegistry<'run> {
     /// What `handle` is declared as: a [`Scheme`](super::handle::Scheme) where it names a scheme node, and a
     /// [`Parametric`] otherwise.
     pub(super) fn declared(&self, handle: Handle) -> DeclaredType<Parametric> {
-        if self.raw_node(handle).view::<Handle>().binds_quantifiers() {
+        if self.enter(handle).view::<Handle>().binds_quantifiers() {
             DeclaredType::Scheme(wrap(handle))
         } else {
             DeclaredType::Type(wrap(handle))
         }
     }
 
-    /// The node stored under `handle`, as the table stores it. A miss panics, as
-    /// [`node`](Self::node)'s does.
-    pub(super) fn raw_node(&self, handle: Handle) -> StoredNode<'run> {
+    /// The node stored under `handle`, by reference. A miss panics, as [`node`](Self::node)'s does.
+    pub(super) fn enter(&self, handle: Handle) -> Linked<'run> {
         let digest = handle.digest();
         match self.stored(digest) {
             Some(stored) => stored,
@@ -308,25 +316,31 @@ impl<'run> TypeRegistry<'run> {
         }
     }
 
-    /// The node stored under `digest`, copied out, or `None`. The table borrow ends before the
-    /// caller reads it.
-    fn stored(&self, digest: TypeDigest) -> Option<StoredNode<'run>> {
-        self.nodes.borrow().get(&digest).copied()
+    /// The node stored under `digest`, or `None`: found by hashing the digest and comparing
+    /// against the digest each candidate node holds. The table borrow ends before the caller reads
+    /// the node.
+    fn stored(&self, digest: TypeDigest) -> Option<Linked<'run>> {
+        self.nodes
+            .borrow()
+            .find(slot_hash(digest), |node| node.digest() == digest)
+            .copied()
     }
 
     /// Whether `handle` names a union. The construction lane's first probe, so it answers from the
     /// node's shape alone and never reads out the member list.
     pub fn is_union<H: TypeHandle>(&self, handle: H) -> bool {
         matches!(
-            self.stored(handle.raw().digest()),
-            Some(StoredNode::Union { .. })
+            self.stored(handle.raw().digest()).map(StoredNode::content),
+            Some(Content::Union { .. })
         )
     }
 
     /// The `union` member named `name`, whatever schema it declares. `name` probes by bare symbol
     /// bits: the token arrives from a reference site with no class attached.
     pub fn union_member_named(&self, union: KType, name: Symbol) -> Option<KType> {
-        let Some(StoredNode::Union { members, .. }) = self.stored(union.digest()) else {
+        let Some(Content::Union { members, .. }) =
+            self.stored(union.digest()).map(StoredNode::content)
+        else {
             return None;
         };
         members
@@ -334,8 +348,8 @@ impl<'run> TypeRegistry<'run> {
             .copied()
             .find(|m| {
                 matches!(
-                    self.stored(m.digest()),
-                    Some(StoredNode::SetMember {
+                    self.stored(m.digest()).map(StoredNode::content),
+                    Some(Content::SetMember {
                         name: member_name, ..
                     }) if member_name.symbol() == name
                 )
@@ -1006,8 +1020,8 @@ impl<'run> TypeRegistry<'run> {
     pub fn union_of<H: TypeHandle>(&self, scratch: BumpAllocator<'_>, members: &[H]) -> H {
         let width: usize = members
             .iter()
-            .map(|member| match self.raw_node(member.raw()) {
-                StoredNode::Union { members: inner, .. } => inner.len(),
+            .map(|member| match self.enter(member.raw()).content() {
+                Content::Union { members: inner, .. } => inner.len(),
                 _ => 1,
             })
             .sum();
@@ -1018,8 +1032,8 @@ impl<'run> TypeRegistry<'run> {
             }
         };
         for member in members {
-            match self.raw_node(member.raw()) {
-                StoredNode::Union { members: inner, .. } => {
+            match self.enter(member.raw()).content() {
+                Content::Union { members: inner, .. } => {
                     for nested in inner.iter() {
                         push_unique(*nested, &mut flat);
                     }
@@ -1100,7 +1114,7 @@ impl<'run> TypeRegistry<'run> {
     /// probe that lets a slot type with nothing to solve answer the relations in one
     /// step instead of walking under a unifier. Read off the flags interning stored in the node.
     pub(super) fn contains_quantified(&self, kt: Handle) -> bool {
-        self.raw_node(kt).flags().holds(Flags::QUANTIFIED)
+        self.enter(kt).flags().holds(Flags::QUANTIFIED)
     }
 
     /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable from
@@ -1112,13 +1126,13 @@ impl<'run> TypeRegistry<'run> {
     /// variable in both sets at once. A bound is a [`KType`], so it holds no variable; the doors
     /// that take a bound assert it holds no opaque carrier either.
     pub(super) fn contains_rigid(&self, kt: Handle) -> bool {
-        self.raw_node(kt).flags().holds(Flags::RIGID)
+        self.enter(kt).flags().holds(Flags::RIGID)
     }
 
     /// Whether `kt` is concrete: no free `Quantified`, `Lexical`, head `Parameter` or scheme is
     /// reachable outside sealed content. Read off the flags interning stored in the node.
     pub(super) fn is_concrete(&self, kt: Handle) -> bool {
-        !self.raw_node(kt).flags().holds(Flags::PARAMETRIC)
+        !self.enter(kt).flags().holds(Flags::PARAMETRIC)
     }
 
     /// `kt` as a [`KType`] where it is concrete — the one checked conversion from a parametric type.
@@ -1130,7 +1144,7 @@ impl<'run> TypeRegistry<'run> {
     /// Whether an opaque carrier is reachable from `kt` outside sealed content. Read off the flag
     /// interning stored in the node.
     pub(super) fn contains_carrier(&self, kt: Handle) -> bool {
-        self.raw_node(kt).flags().holds(Flags::CARRIER)
+        self.enter(kt).flags().holds(Flags::CARRIER)
     }
 
     /// Whether `kt` holds an opaque carrier outside sealed content. A bound holds none, so the

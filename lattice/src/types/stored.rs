@@ -1,19 +1,20 @@
-//! [`StoredNode`] — one interned type as the registry's table stores it.
+//! [`StoredNode`] — one interned type as the registry's table stores it: its digest beside its
+//! [`Content`]. Each node is laid alone in the region, and the table holds a reference to it.
 //!
 //! The table stores a node apart from the [`TypeNode`] a reader sees, so storage can pack what a
 //! view spells out. Each variant whose probe answers its children decide carries a [`Flags`] byte:
-//! the four answers, folded at intern so each probe is one table read. Every other variant's
-//! answers are a constant of its kind, which [`StoredNode::flags`] answers.
+//! the four answers, folded at intern so each probe is one read of the node. Every other
+//! variant's answers are a constant of its kind, which [`Content::flags`] answers.
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
 //! intern miss: a carrier's key, a lexical variable's name, a signature's schema and a sealed
 //! member's schema. A lexical level and a member's index are stored narrowed to `u32`. A shape
-//! stores each slot's priority class in that slot's element, where the view reads its ranking. A reader
-//! that needs only inline fields, such as
-//! [`kind_of`](super::handle::KType::kind_of), matches the stored node and skips the hop.
+//! stores each slot's priority class in that slot's element, where the view reads its ranking. A
+//! reader that needs only inline fields, such as [`kind_of`](super::handle::KType::kind_of),
+//! matches the stored content and skips the hop.
 //!
-//! Two conversions connect the two shapes, each one exhaustive match: [`StoredNode::lay`] lays a
-//! view as a stored node on an intern miss, and [`StoredNode::view`] reads a stored node back as a
+//! Two conversions connect the two shapes, each one exhaustive match: [`Content::lay`] lays a
+//! view as stored content on an intern miss, and [`Content::view`] reads stored content back as a
 //! view, its children rewrapped as the handle the reader named it by. Every other reader goes
 //! through [`TypeRegistry::node`](super::registry::TypeRegistry::node) and never sees this layout.
 //!
@@ -67,10 +68,10 @@ impl std::ops::BitOr for Flags {
     }
 }
 
-/// One interned node as the table stores it: [`TypeNode`]'s variants in its order, children raw,
-/// and a [`Flags`] byte in each variant whose children decide its probe answers.
+/// A stored node's content: [`TypeNode`]'s variants in its order, children raw, and a [`Flags`]
+/// byte in each variant whose children decide its probe answers.
 #[derive(Clone, Copy)]
-pub(super) enum StoredNode<'run> {
+pub(super) enum Content<'run> {
     Number,
     Str,
     Bool,
@@ -176,49 +177,88 @@ pub(super) enum StoredNode<'run> {
     },
 }
 
-// A stored node fills 48 B, so a slot with its 16 B key fills one cache line, and the region
-// releases it without running anything.
-const _: () = assert!(std::mem::size_of::<StoredNode<'static>>() == 48);
+/// A node named by reference: what the table holds, and what every walk and relation inside the
+/// lattice reads.
+pub(super) type Linked<'run> = &'run StoredNode<'run>;
+
+/// One interned node as the table stores it: its digest, then its content. Laid alone in the
+/// registry's region on an intern miss, so a reference to it lives as long as the region.
+pub(super) struct StoredNode<'run> {
+    digest: TypeDigest,
+    content: Content<'run>,
+}
+
+// A node fills 64 B — its digest and 48 B of content — and the region releases it without running
+// anything.
+const _: () = assert!(std::mem::size_of::<Content<'static>>() == 48);
+const _: () = assert!(std::mem::size_of::<StoredNode<'static>>() == 64);
 const _: () = assert!(std::mem::align_of::<StoredNode<'static>>() == 16);
 const _: () = assert!(!std::mem::needs_drop::<StoredNode<'static>>());
 
 impl<'run> StoredNode<'run> {
+    /// `content` under `digest`, ready to lay in the region.
+    pub(super) fn new(digest: TypeDigest, content: Content<'run>) -> Self {
+        StoredNode { digest, content }
+    }
+
+    /// The digest the node is interned under.
+    pub(super) fn digest(&self) -> TypeDigest {
+        self.digest
+    }
+
+    /// The node's content, by value.
+    pub(super) fn content(&self) -> Content<'run> {
+        self.content
+    }
+
+    /// The node's probe answers.
+    pub(super) fn flags(&self) -> Flags {
+        self.content.flags()
+    }
+
+    /// The node read back as a view, its children read as `C`.
+    pub(super) fn view<C: TypeHandle>(&self) -> TypeNode<'run, C> {
+        self.content.view()
+    }
+}
+
+impl<'run> Content<'run> {
     /// `node` as the table stores it, carrying `flags` where its variant does. Its slices already
     /// live in the region.
     pub(super) fn lay(node: TypeNode<'run>, flags: Flags, bump: BumpAllocator<'run>) -> Self {
         match node {
-            TypeNode::Number => StoredNode::Number,
-            TypeNode::Str => StoredNode::Str,
-            TypeNode::Bool => StoredNode::Bool,
-            TypeNode::Null => StoredNode::Null,
-            TypeNode::Identifier => StoredNode::Identifier,
-            TypeNode::Symbol => StoredNode::Symbol,
-            TypeNode::TypeNameToken => StoredNode::TypeNameToken,
-            TypeNode::Expression => StoredNode::Expression,
-            TypeNode::SigiledTypeExpr => StoredNode::SigiledTypeExpr,
-            TypeNode::RecordType => StoredNode::RecordType,
-            TypeNode::Literal => StoredNode::Literal,
-            TypeNode::Block => StoredNode::Block,
-            TypeNode::Declaration => StoredNode::Declaration,
-            TypeNode::Binder => StoredNode::Binder,
-            TypeNode::Name => StoredNode::Name,
-            TypeNode::Keyword => StoredNode::Keyword,
-            TypeNode::Any => StoredNode::Any,
-            TypeNode::AnyValue => StoredNode::AnyValue,
-            TypeNode::AnyCode => StoredNode::AnyCode,
-            TypeNode::CodeNeeding { kind, names } => StoredNode::CodeNeeding { kind, names },
-            TypeNode::Never => StoredNode::Never,
-            TypeNode::OfKind(kind) => StoredNode::OfKind(kind),
-            TypeNode::Parameter { name, bound } => StoredNode::Parameter { name, bound },
-            TypeNode::Carrier { name, key, met } => StoredNode::Carrier {
+            TypeNode::Number => Content::Number,
+            TypeNode::Str => Content::Str,
+            TypeNode::Bool => Content::Bool,
+            TypeNode::Null => Content::Null,
+            TypeNode::Identifier => Content::Identifier,
+            TypeNode::Symbol => Content::Symbol,
+            TypeNode::TypeNameToken => Content::TypeNameToken,
+            TypeNode::Expression => Content::Expression,
+            TypeNode::SigiledTypeExpr => Content::SigiledTypeExpr,
+            TypeNode::RecordType => Content::RecordType,
+            TypeNode::Literal => Content::Literal,
+            TypeNode::Block => Content::Block,
+            TypeNode::Declaration => Content::Declaration,
+            TypeNode::Binder => Content::Binder,
+            TypeNode::Name => Content::Name,
+            TypeNode::Keyword => Content::Keyword,
+            TypeNode::Any => Content::Any,
+            TypeNode::AnyValue => Content::AnyValue,
+            TypeNode::AnyCode => Content::AnyCode,
+            TypeNode::CodeNeeding { kind, names } => Content::CodeNeeding { kind, names },
+            TypeNode::Never => Content::Never,
+            TypeNode::OfKind(kind) => Content::OfKind(kind),
+            TypeNode::Parameter { name, bound } => Content::Parameter { name, bound },
+            TypeNode::Carrier { name, key, met } => Content::Carrier {
                 key: bump.alloc(key),
                 name,
                 met,
             },
-            TypeNode::List { element } => StoredNode::List { flags, element },
-            TypeNode::Dict { key, value } => StoredNode::Dict { flags, key, value },
-            TypeNode::Record { fields } => StoredNode::Record { flags, fields },
-            TypeNode::KFunction { params, ret } => StoredNode::KFunction { flags, params, ret },
+            TypeNode::List { element } => Content::List { flags, element },
+            TypeNode::Dict { key, value } => Content::Dict { flags, key, value },
+            TypeNode::Record { fields } => Content::Record { flags, fields },
+            TypeNode::KFunction { params, ret } => Content::KFunction { flags, params, ret },
             TypeNode::ExpressionShape {
                 elements,
                 classes,
@@ -228,30 +268,30 @@ impl<'run> StoredNode<'run> {
                     classes == elements.classes(),
                     "a shape's classes ride its elements"
                 );
-                StoredNode::ExpressionShape {
+                Content::ExpressionShape {
                     flags,
                     elements,
                     ret,
                 }
             }
-            TypeNode::Scheme { group, body } => StoredNode::Scheme { flags, group, body },
-            TypeNode::Quantified { index, bound } => StoredNode::Quantified { index, bound },
+            TypeNode::Scheme { group, body } => Content::Scheme { flags, group, body },
+            TypeNode::Quantified { index, bound } => Content::Quantified { index, bound },
             TypeNode::Lexical {
                 level,
                 name,
                 lower,
                 bound,
-            } => StoredNode::Lexical {
+            } => Content::Lexical {
                 level: u32::try_from(level).expect("a lexical level fits u32"),
                 name: bump.alloc(name),
                 lower,
                 bound,
             },
-            TypeNode::Union { members } => StoredNode::Union { flags, members },
+            TypeNode::Union { members } => Content::Union { flags, members },
             TypeNode::ConstructorApply {
                 constructor,
                 arguments,
-            } => StoredNode::ConstructorApply {
+            } => Content::ConstructorApply {
                 flags,
                 constructor,
                 arguments,
@@ -259,25 +299,25 @@ impl<'run> StoredNode<'run> {
             TypeNode::Signature {
                 schema,
                 schema_digest,
-            } => StoredNode::Signature {
+            } => Content::Signature {
                 schema: bump.alloc(schema),
                 schema_digest,
             },
-            TypeNode::SignatureApply { signature, pins } => StoredNode::SignatureApply {
+            TypeNode::SignatureApply { signature, pins } => Content::SignatureApply {
                 flags,
                 signature,
                 pins,
             },
-            TypeNode::SignatureMeet { members } => StoredNode::SignatureMeet { flags, members },
-            TypeNode::DeferredReturn(surface) => StoredNode::DeferredReturn(surface),
-            TypeNode::Sibling(index) => StoredNode::Sibling(index),
+            TypeNode::SignatureMeet { members } => Content::SignatureMeet { flags, members },
+            TypeNode::DeferredReturn(surface) => Content::DeferredReturn(surface),
+            TypeNode::Sibling(index) => Content::Sibling(index),
             TypeNode::SetMember {
                 scc_digest,
                 index,
                 name,
                 kind,
                 schema,
-            } => StoredNode::SetMember {
+            } => Content::SetMember {
                 kind,
                 index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
                 schema: bump.alloc(schema),
@@ -294,59 +334,59 @@ impl<'run> StoredNode<'run> {
     pub(super) fn view<C: TypeHandle>(self) -> TypeNode<'run, C> {
         let child = |h: Handle| wrap::<C>(h);
         match self {
-            StoredNode::Number => TypeNode::Number,
-            StoredNode::Str => TypeNode::Str,
-            StoredNode::Bool => TypeNode::Bool,
-            StoredNode::Null => TypeNode::Null,
-            StoredNode::Identifier => TypeNode::Identifier,
-            StoredNode::Symbol => TypeNode::Symbol,
-            StoredNode::TypeNameToken => TypeNode::TypeNameToken,
-            StoredNode::Expression => TypeNode::Expression,
-            StoredNode::SigiledTypeExpr => TypeNode::SigiledTypeExpr,
-            StoredNode::RecordType => TypeNode::RecordType,
-            StoredNode::Literal => TypeNode::Literal,
-            StoredNode::Block => TypeNode::Block,
-            StoredNode::Declaration => TypeNode::Declaration,
-            StoredNode::Binder => TypeNode::Binder,
-            StoredNode::Name => TypeNode::Name,
-            StoredNode::Keyword => TypeNode::Keyword,
-            StoredNode::Any => TypeNode::Any,
-            StoredNode::AnyValue => TypeNode::AnyValue,
-            StoredNode::AnyCode => TypeNode::AnyCode,
-            StoredNode::CodeNeeding { kind, names } => TypeNode::CodeNeeding { kind, names },
-            StoredNode::Never => TypeNode::Never,
-            StoredNode::OfKind(kind) => TypeNode::OfKind(kind),
-            StoredNode::Parameter { name, bound } => TypeNode::Parameter { name, bound },
-            StoredNode::Carrier { key, name, met } => TypeNode::Carrier {
+            Content::Number => TypeNode::Number,
+            Content::Str => TypeNode::Str,
+            Content::Bool => TypeNode::Bool,
+            Content::Null => TypeNode::Null,
+            Content::Identifier => TypeNode::Identifier,
+            Content::Symbol => TypeNode::Symbol,
+            Content::TypeNameToken => TypeNode::TypeNameToken,
+            Content::Expression => TypeNode::Expression,
+            Content::SigiledTypeExpr => TypeNode::SigiledTypeExpr,
+            Content::RecordType => TypeNode::RecordType,
+            Content::Literal => TypeNode::Literal,
+            Content::Block => TypeNode::Block,
+            Content::Declaration => TypeNode::Declaration,
+            Content::Binder => TypeNode::Binder,
+            Content::Name => TypeNode::Name,
+            Content::Keyword => TypeNode::Keyword,
+            Content::Any => TypeNode::Any,
+            Content::AnyValue => TypeNode::AnyValue,
+            Content::AnyCode => TypeNode::AnyCode,
+            Content::CodeNeeding { kind, names } => TypeNode::CodeNeeding { kind, names },
+            Content::Never => TypeNode::Never,
+            Content::OfKind(kind) => TypeNode::OfKind(kind),
+            Content::Parameter { name, bound } => TypeNode::Parameter { name, bound },
+            Content::Carrier { key, name, met } => TypeNode::Carrier {
                 name,
                 key: *key,
                 met,
             },
-            StoredNode::List { element, .. } => TypeNode::List {
+            Content::List { element, .. } => TypeNode::List {
                 element: child(element),
             },
-            StoredNode::Dict { key, value, .. } => TypeNode::Dict {
+            Content::Dict { key, value, .. } => TypeNode::Dict {
                 key: child(key),
                 value: child(value),
             },
-            StoredNode::Record { fields, .. } => TypeNode::Record {
+            Content::Record { fields, .. } => TypeNode::Record {
                 fields: Record::over(fields.raw()),
             },
-            StoredNode::KFunction { params, ret, .. } => TypeNode::KFunction {
+            Content::KFunction { params, ret, .. } => TypeNode::KFunction {
                 params: Record::over(params.raw()),
                 ret: child(ret),
             },
-            StoredNode::ExpressionShape { elements, ret, .. } => TypeNode::ExpressionShape {
+            Content::ExpressionShape { elements, ret, .. } => TypeNode::ExpressionShape {
                 elements: Elements::over(elements.raw()),
                 classes: elements.classes(),
                 ret: child(ret),
             },
-            StoredNode::Scheme { group, body, .. } => TypeNode::Scheme {
+            Content::Scheme { group, body, .. } => TypeNode::Scheme {
                 group,
                 body: child(body),
             },
-            StoredNode::Quantified { index, bound } => TypeNode::Quantified { index, bound },
-            StoredNode::Lexical {
+            Content::Quantified { index, bound } => TypeNode::Quantified { index, bound },
+            Content::Lexical {
                 level,
                 name,
                 lower,
@@ -357,10 +397,10 @@ impl<'run> StoredNode<'run> {
                 lower,
                 bound,
             },
-            StoredNode::Union { members, .. } => TypeNode::Union {
+            Content::Union { members, .. } => TypeNode::Union {
                 members: Run::over(members.raw()),
             },
-            StoredNode::ConstructorApply {
+            Content::ConstructorApply {
                 constructor,
                 arguments,
                 ..
@@ -368,25 +408,25 @@ impl<'run> StoredNode<'run> {
                 constructor: child(constructor),
                 arguments: Record::over(arguments.raw()),
             },
-            StoredNode::Signature {
+            Content::Signature {
                 schema,
                 schema_digest,
             } => TypeNode::Signature {
                 schema: *schema,
                 schema_digest,
             },
-            StoredNode::SignatureApply {
+            Content::SignatureApply {
                 signature, pins, ..
             } => TypeNode::SignatureApply {
                 signature,
                 pins: Record::over(pins.raw()),
             },
-            StoredNode::SignatureMeet { members, .. } => TypeNode::SignatureMeet {
+            Content::SignatureMeet { members, .. } => TypeNode::SignatureMeet {
                 members: Run::over(members.raw()),
             },
-            StoredNode::DeferredReturn(surface) => TypeNode::DeferredReturn(surface),
-            StoredNode::Sibling(index) => TypeNode::Sibling(index),
-            StoredNode::SetMember {
+            Content::DeferredReturn(surface) => TypeNode::DeferredReturn(surface),
+            Content::Sibling(index) => TypeNode::Sibling(index),
+            Content::SetMember {
                 kind,
                 index,
                 schema,
@@ -407,49 +447,47 @@ impl<'run> StoredNode<'run> {
     /// because its bound and lower end are concrete and carrier-free.
     pub(super) fn flags(&self) -> Flags {
         match *self {
-            StoredNode::List { flags, .. }
-            | StoredNode::Dict { flags, .. }
-            | StoredNode::Record { flags, .. }
-            | StoredNode::KFunction { flags, .. }
-            | StoredNode::ExpressionShape { flags, .. }
-            | StoredNode::Scheme { flags, .. }
-            | StoredNode::Union { flags, .. }
-            | StoredNode::ConstructorApply { flags, .. }
-            | StoredNode::SignatureApply { flags, .. }
-            | StoredNode::SignatureMeet { flags, .. } => flags,
-            StoredNode::Quantified { .. } => Flags::QUANTIFIED | Flags::RIGID | Flags::PARAMETRIC,
-            StoredNode::Lexical { .. } | StoredNode::Parameter { .. } => {
-                Flags::RIGID | Flags::PARAMETRIC
-            }
+            Content::List { flags, .. }
+            | Content::Dict { flags, .. }
+            | Content::Record { flags, .. }
+            | Content::KFunction { flags, .. }
+            | Content::ExpressionShape { flags, .. }
+            | Content::Scheme { flags, .. }
+            | Content::Union { flags, .. }
+            | Content::ConstructorApply { flags, .. }
+            | Content::SignatureApply { flags, .. }
+            | Content::SignatureMeet { flags, .. } => flags,
+            Content::Quantified { .. } => Flags::QUANTIFIED | Flags::RIGID | Flags::PARAMETRIC,
+            Content::Lexical { .. } | Content::Parameter { .. } => Flags::RIGID | Flags::PARAMETRIC,
             // An opaque carrier: a value carries it and dispatches on it, so it is concrete.
-            StoredNode::Carrier { .. } => Flags::CARRIER,
+            Content::Carrier { .. } => Flags::CARRIER,
             // Sealed content and leaves: every walk treats them as leaves.
-            StoredNode::Number
-            | StoredNode::Str
-            | StoredNode::Bool
-            | StoredNode::Null
-            | StoredNode::Identifier
-            | StoredNode::Symbol
-            | StoredNode::TypeNameToken
-            | StoredNode::Expression
-            | StoredNode::SigiledTypeExpr
-            | StoredNode::RecordType
-            | StoredNode::Literal
-            | StoredNode::Block
-            | StoredNode::Declaration
-            | StoredNode::Binder
-            | StoredNode::Name
-            | StoredNode::Keyword
-            | StoredNode::Any
-            | StoredNode::AnyValue
-            | StoredNode::AnyCode
-            | StoredNode::CodeNeeding { .. }
-            | StoredNode::Never
-            | StoredNode::OfKind(_)
-            | StoredNode::Signature { .. }
-            | StoredNode::DeferredReturn(_)
-            | StoredNode::Sibling(_)
-            | StoredNode::SetMember { .. } => Flags::NONE,
+            Content::Number
+            | Content::Str
+            | Content::Bool
+            | Content::Null
+            | Content::Identifier
+            | Content::Symbol
+            | Content::TypeNameToken
+            | Content::Expression
+            | Content::SigiledTypeExpr
+            | Content::RecordType
+            | Content::Literal
+            | Content::Block
+            | Content::Declaration
+            | Content::Binder
+            | Content::Name
+            | Content::Keyword
+            | Content::Any
+            | Content::AnyValue
+            | Content::AnyCode
+            | Content::CodeNeeding { .. }
+            | Content::Never
+            | Content::OfKind(_)
+            | Content::Signature { .. }
+            | Content::DeferredReturn(_)
+            | Content::Sibling(_)
+            | Content::SetMember { .. } => Flags::NONE,
         }
     }
 }

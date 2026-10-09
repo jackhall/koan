@@ -30,7 +30,7 @@ use super::digest::TypeDigest;
 use super::kind::KKind;
 use super::node::{Group, TypeNode};
 use super::registry::TypeRegistry;
-use super::stored::StoredNode;
+use super::stored::Content;
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
 /// Identity only — every relation and door outside the lattice takes a typed handle.
@@ -612,12 +612,12 @@ impl KType {
     ///
     /// Reads the stored node, so a nominal's kind costs no hop to its out-of-line schema.
     pub fn kind_of(self, types: &TypeRegistry<'_>) -> KKind {
-        match types.raw_node(self.raw()) {
-            StoredNode::Signature { .. }
-            | StoredNode::SignatureApply { .. }
-            | StoredNode::SignatureMeet { .. } => KKind::Signature,
-            StoredNode::SetMember { kind, .. } => kind,
-            StoredNode::ConstructorApply { constructor, .. } => {
+        match types.enter(self.raw()).content() {
+            Content::Signature { .. }
+            | Content::SignatureApply { .. }
+            | Content::SignatureMeet { .. } => KKind::Signature,
+            Content::SetMember { kind, .. } => kind,
+            Content::ConstructorApply { constructor, .. } => {
                 wrap::<KType>(constructor).kind_of(types)
             }
             _ => KKind::ProperType,
