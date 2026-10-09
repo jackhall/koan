@@ -366,11 +366,10 @@ fn keyed<'graph, 'cell>(
     for member in super::module::layout::functions_at(module, key, types, scratch) {
         let registered = super::module::layout::registered_shape(member)
             .expect("a registration member is a function");
-        // Only the ranking is read, which a scheme's node spells as a type's does.
-        let node = registered.node(types);
+        // Only the ranking is read, which a scheme's body spells as a type's does.
         let TypeNode::ExpressionShape {
             elements, classes, ..
-        } = node
+        } = registered.view(types).body
         else {
             unreachable!("a registered shape is an expression shape")
         };

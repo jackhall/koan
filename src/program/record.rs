@@ -103,8 +103,9 @@ impl Contract {
             (DeclaredType::Scheme(_), Some(solution)) => solution,
             (DeclaredType::Scheme(_), None) => return false,
         };
-        let node = callee.node(types);
-        let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) = node else {
+        let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) =
+            callee.view(types).body
+        else {
             return false;
         };
         // A run-time solution is concrete, and a scheme holds only its own group's variables.

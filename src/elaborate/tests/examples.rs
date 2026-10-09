@@ -449,7 +449,7 @@ fn with_value(
 /// Each variable's bound in `scheme`'s own group, sorted, so a canonical order the test does not
 /// pin reads the same either way.
 fn sorted_bounds(types: &TypeRegistry<'_>, scheme: Scheme) -> Vec<KType> {
-    let mut bounds = crate::type_lattice::quantifier_bounds(types, scheme).to_vec();
+    let mut bounds = scheme.group(types).bounds.to_vec();
     bounds.sort();
     bounds
 }
@@ -509,13 +509,12 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
             "`Held` is named first; `Unused`, named by no position, comes after"
         );
         assert_eq!(
-            crate::type_lattice::quantifier_bounds(
-                types,
-                which
-                    .ktype
-                    .as_scheme()
-                    .expect("a `FOR ALL` callable is a scheme")
-            ),
+            which
+                .ktype
+                .as_scheme()
+                .expect("a `FOR ALL` callable is a scheme")
+                .group(types)
+                .bounds,
             &[KType::ANY, KType::ANY_VALUE]
         );
     });

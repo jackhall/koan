@@ -1,4 +1,4 @@
-//! Substitution: of a binder's own variables, of lexical levels, of a signature's head parameters,
+//! Substitution: of a scheme's own variables, of lexical levels, of a signature's head parameters,
 //! and of the reads that replace a variable by one of its ends.
 //!
 //! Every walk here is a [`unary`](super::walk::unary) instance: a leaf rule plus the union door.
@@ -13,10 +13,8 @@ use crate::symbols::TypeSymbol;
 
 use super::handle::{Handle, KType, TypeHandle};
 use super::node::{TypeNode, Variable};
-use super::record::map_fields;
 use super::registry::TypeRegistry;
 use super::schema::{Members, member};
-use super::shape::map_slots;
 use super::unify::Interval;
 use super::walk::Variance;
 use super::walk::unary::{Rebuild, UnionDoor, Visit, rebuild, visit};
@@ -29,9 +27,8 @@ const CANONICAL: Rebuild = Rebuild {
 /// Rewrite every **free** `Quantified(i)` inside `kt` to `bindings[i]` — the per-call substitution
 /// a solved call applies to a shape's return.
 ///
-/// A **nested** binder — a shape, or a function type carrying a group — rebinds the indices with
-/// its own group, exactly as it shadows them in the relations, so a variable under one is not free
-/// and is left alone.
+/// A **nested** scheme rebinds the indices with its own group, exactly as it shadows them in the
+/// relations, so a variable under one is not free and is left alone.
 pub(super) fn substitute_quantified<B: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -79,42 +76,21 @@ pub(super) fn substitute_levels<B: TypeHandle>(
     )
 }
 
-/// `kt` at a solved call. A **binder** — a shape, or a function type carrying a group — owns the
-/// variables, so instantiating one opens it: each position and the return, read on its own, has
-/// the binder's variables free, and substitutes through `bindings`; the result is interned with no
-/// group, the callable this call has as against the one the declaration wrote. Every other type
-/// carries no binder of its own and substitutes in place.
+/// `kt` at a solved call. A scheme's body has the scheme's variables free, so instantiating a
+/// scheme substitutes its body through `bindings` and answers the callable with no group — the
+/// callable this call has, as against the one the declaration wrote. Any other type substitutes in
+/// place.
 ///
-/// `bindings` are in the binder's **group** order — a caller holding declaration-order bindings
-/// translates them through the map [`shape_type`](TypeRegistry::shape_type) or
-/// [`function_type`](TypeRegistry::function_type) handed back.
+/// `bindings` are in the scheme's **group** order — a caller holding declaration-order bindings
+/// translates them through the map [`function_scheme`](TypeRegistry::function_scheme) or
+/// [`shape_scheme`](TypeRegistry::shape_scheme) handed back.
 pub(super) fn instantiate_quantified<B: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     kt: Handle,
     bindings: &[B],
 ) -> Handle {
-    if quantifier_bounds(types, kt).is_empty() {
-        return substitute_quantified(types, scratch, kt, bindings);
-    }
-    let open = |position: Handle| substitute_quantified(types, scratch, position, bindings);
-    match types.node(kt) {
-        TypeNode::KFunction { params, ret, .. } => {
-            types.function_type(scratch, &map_fields(scratch, params.raw(), open), open(ret))
-        }
-        TypeNode::ExpressionShape {
-            elements,
-            classes,
-            ret,
-            ..
-        } => types.shape_type(
-            scratch,
-            &map_slots(scratch, elements.raw(), open),
-            classes,
-            open(ret),
-        ),
-        _ => unreachable!("only a binder carries a group"),
-    }
+    substitute_quantified(types, scratch, types.split(kt).1, bindings)
 }
 
 /// `kt` with every rigid variable reachable from it replaced by its bound — the
@@ -198,12 +174,6 @@ pub(super) fn read_through(
             _ => ends.lower,
         })
     })
-}
-
-/// The bound of each variable of `kt`'s own quantifier group, in group order,
-/// as the binder node stores it. Empty for anything that binds no group.
-pub(super) fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: Handle) -> &'run [KType] {
-    types.node(kt).group().map_or(&[], |(_, bounds)| bounds)
 }
 
 /// `kt` with each head parameter `bindings` names replaced by its binding — how a signature's

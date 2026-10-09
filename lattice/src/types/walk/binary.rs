@@ -5,8 +5,8 @@
 //! a leaf verdict, a set-wise rule for unions, and a structural combine that reads the width
 //! verdict generically. The order, the meet and the unifier's collector are the three.
 //!
-//! Two signatures, and two callables of which one is quantified, reach the leaf verdict rather
-//! than a child pairing, because their relations are schema-level and instantiation-level doors.
+//! Two signatures, and a pair holding a scheme, reach the leaf verdict rather than a child
+//! pairing, because their relations are schema-level and instantiation-level doors.
 //!
 //! Every pairing's buffers are built in the scratch allocator the walk is handed.
 
@@ -218,6 +218,8 @@ fn pairing<'n>(
         return Pairing::SetWise;
     }
     match (*a, *b) {
+        // A scheme relates by instantiation, which is a leaf door: its body never pairs as a child.
+        (TypeNode::Scheme { .. }, _) | (_, TypeNode::Scheme { .. }) => Pairing::Leaf,
         (TypeNode::List { element: x }, TypeNode::List { element: y }) => {
             positional(scratch, [(x, y, v)].into_iter(), Assembly::List)
         }
@@ -233,23 +235,14 @@ fn pairing<'n>(
         }
         (
             TypeNode::KFunction {
-                quantifiers: xq,
                 params: xp,
                 ret: xr,
-                ..
             },
             TypeNode::KFunction {
-                quantifiers: yq,
                 params: yp,
                 ret: yr,
-                ..
             },
         ) => {
-            // A quantified function relates to another by instantiation, which is a leaf door,
-            // not a child pairing — as a quantified shape does.
-            if !xq.is_empty() || !yq.is_empty() {
-                return Pairing::Leaf;
-            }
             let mut paired = by_name(
                 scratch,
                 xp,
@@ -266,23 +259,18 @@ fn pairing<'n>(
         }
         (
             TypeNode::ExpressionShape {
-                quantifiers: xq,
                 elements: xe,
                 classes: xc,
                 ret: xr,
-                ..
             },
             TypeNode::ExpressionShape {
-                quantifiers: yq,
                 elements: ye,
                 classes: yc,
                 ret: yr,
-                ..
             },
         ) => {
-            // A quantified shape relates to another by instantiation, which is a leaf door, not a
-            // child pairing; two rankings of one key are two buckets' orders, which relate not at all.
-            if !xq.is_empty() || !yq.is_empty() || xe.len() != ye.len() || xc != yc {
+            // Two rankings of one key are two buckets' orders, which relate not at all.
+            if xe.len() != ye.len() || xc != yc {
                 return Pairing::Leaf;
             }
             let mut pairs = BumpVec::with_capacity_in(xe.len() + 1, scratch);

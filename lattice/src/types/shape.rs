@@ -11,7 +11,7 @@ use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use super::handle::{Handle, KType, Parametric, Scheme, TypeHandle, wrap};
-use super::node::TypeNode;
+use super::node::{Group, TypeNode};
 use super::registry::TypeRegistry;
 
 /// One position of an expression shape: a fixed token as its [`KeywordSymbol`], or an argument
@@ -67,24 +67,28 @@ pub(super) struct Shape<'run> {
 }
 
 impl<'run> Shape<'run> {
-    /// `kt`'s shape parts, or `None` for anything that is not a shape.
+    /// `kt`'s shape parts, read through a scheme to its body, or `None` for anything that is not a
+    /// shape or a shape scheme. A plain shape's group is empty.
     pub(super) fn of(types: &TypeRegistry<'run>, kt: Handle) -> Option<Self> {
-        match types.node(kt) {
-            TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
-                elements,
-                classes,
-                ret,
-            } => Some(Shape {
-                quantifiers,
-                bounds,
-                elements: elements.raw(),
-                classes,
-                ret,
-            }),
-            _ => None,
-        }
+        let (group, body) = match types.node(kt) {
+            TypeNode::Scheme { group, body } => (*group, types.node(body)),
+            node => (Group::EMPTY, node),
+        };
+        let TypeNode::ExpressionShape {
+            elements,
+            classes,
+            ret,
+        } = body
+        else {
+            return None;
+        };
+        Some(Shape {
+            quantifiers: group.names,
+            bounds: group.bounds,
+            elements: elements.raw(),
+            classes,
+            ret,
+        })
     }
 
     /// The slot types, in slot order.
@@ -110,7 +114,7 @@ impl<'run> Shape<'run> {
             .map(|class| u8::try_from(class).expect("a shape has fewer than 256 classes"))
     }
 
-    /// The bound of the `index`-th variable of the shape's own group.
+    /// The bound of the `index`-th variable of the shape's scheme group.
     pub(super) fn bound(self, index: usize) -> KType {
         self.bounds.get(index).copied().unwrap_or(KType::ANY)
     }
@@ -123,10 +127,7 @@ impl<'run> Shape<'run> {
 /// only ever has to be compared, so no consumer materializes one and the pairwise readers
 /// allocate nothing at all.
 pub(super) fn keys_equal(left: Handle, right: Handle, types: &TypeRegistry<'_>) -> bool {
-    elements_key_equal(
-        shape_elements(&types.node(left)),
-        shape_elements(&types.node(right)),
-    )
+    elements_key_equal(shape_elements(types, left), shape_elements(types, right))
 }
 
 /// [`keys_equal`] over two element runs already in hand.
@@ -142,22 +143,20 @@ pub(super) fn elements_key_equal(
         })
 }
 
-/// A shape node's element sequence; empty for a node that is not a shape, which no schema member
-/// ever is. The one place the "not a shape reads as the empty key" convention lives.
-pub(super) fn shape_elements<'run, H>(node: &TypeNode<'run, H>) -> &'run [DispatchTokenElement] {
-    match node {
-        TypeNode::ExpressionShape { elements, .. } => elements.raw(),
-        _ => &[],
-    }
+/// A shape's element sequence, read through a scheme; empty for anything that is not a shape,
+/// which no schema member ever is. The one place the "not a shape reads as the empty key"
+/// convention lives.
+pub(super) fn shape_elements<'run>(
+    types: &TypeRegistry<'run>,
+    kt: Handle,
+) -> &'run [DispatchTokenElement] {
+    Shape::of(types, kt).map_or(&[], |shape| shape.elements)
 }
 
-/// A shape's ranking — each slot's dense priority class, empty for written order — or empty for
-/// anything that is not a shape.
+/// A shape's ranking — each slot's dense priority class, empty for written order — read through a
+/// scheme, or empty for anything that is not a shape.
 pub(super) fn shape_classes<'run>(kt: Handle, types: &TypeRegistry<'run>) -> &'run [u8] {
-    match types.node(kt) {
-        TypeNode::ExpressionShape { classes, .. } => classes,
-        _ => &[],
-    }
+    Shape::of(types, kt).map_or(&[], |shape| shape.classes)
 }
 
 /// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
@@ -167,7 +166,7 @@ pub fn shape_slots<'run, H: TypeHandle>(
     kt: H,
     types: &TypeRegistry<'run>,
 ) -> impl Iterator<Item = H::Child> + use<'run, H> {
-    slots_of(shape_elements(&types.node(kt.raw())))
+    slots_of(shape_elements(types, kt.raw()))
 }
 
 /// A scheme's argument-position types, in order, each of which may read the scheme's own group.
@@ -175,7 +174,7 @@ pub fn scheme_slots<'run>(
     scheme: Scheme,
     types: &TypeRegistry<'run>,
 ) -> impl Iterator<Item = Parametric> + use<'run> {
-    slots_of(shape_elements(&types.node(scheme.raw())))
+    slots_of(shape_elements(types, scheme.raw()))
 }
 
 /// The slot types of an element run, read as `C`.
@@ -190,18 +189,12 @@ fn slots_of<C: TypeHandle>(
 
 /// A shape's return type, or `None` for anything that is not a shape.
 pub fn shape_return<H: TypeHandle>(kt: H, types: &TypeRegistry<'_>) -> Option<H::Child> {
-    match types.node(kt) {
-        TypeNode::ExpressionShape { ret, .. } => Some(ret),
-        _ => None,
-    }
+    Shape::of(types, kt.raw()).map(|shape| wrap(shape.ret))
 }
 
 /// A scheme's return type, which may read the scheme's own group; `None` for a function scheme.
 pub fn scheme_return(scheme: Scheme, types: &TypeRegistry<'_>) -> Option<Parametric> {
-    match types.scheme_node(scheme) {
-        TypeNode::ExpressionShape { ret, .. } => Some(ret),
-        _ => None,
-    }
+    Shape::of(types, scheme.raw()).map(|shape| wrap(shape.ret))
 }
 
 /// A confined FN `ret` slot whose source return is deferred to per-call elaboration — `-> er` or

@@ -26,6 +26,8 @@ use crate::types::unify::{Collector, UnifyFailure, admits};
 use crate::types::verdicts::Relation;
 use crate::types::walk::Variance;
 
+use super::RawSchemes;
+
 /// No law: a handle that names no interned node is a bug in whoever minted it, not a value the
 /// algebra relates. The panic is the contract.
 #[test]
@@ -81,7 +83,7 @@ fn a_twice_used_variable_takes_the_join() {
     let element = types.quantified(0, KType::ANY).raw();
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let shape = types
-        .shape_group(
+        .shape_scheme_raw(
             region,
             &[name],
             &[KType::ANY],
@@ -204,7 +206,7 @@ fn fits_closes_through_a_joined_instance() {
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let takes = |group: &[TypeSymbol], first: Handle, second: Handle| {
         types
-            .function_group(
+            .function_scheme_raw(
                 region,
                 group,
                 &[KType::ANY][..group.len()],
@@ -271,7 +273,7 @@ fn a_binder_keeps_every_variable_it_declares() {
     let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
     let head = |names: &[TypeSymbol], bounds: &[KType], slot: Handle, ret: Handle| {
         types
-            .shape_group(
+            .shape_scheme_raw(
                 region,
                 names,
                 bounds,
@@ -294,17 +296,7 @@ fn a_binder_keeps_every_variable_it_declares() {
         in_slot,
         head(&[], &[], KType::NUMBER.raw(), KType::NULL.raw())
     );
-    let renamed = head(
-        &[other],
-        &[KType::NUMBER],
-        types.quantified(0, KType::NUMBER).raw(),
-        KType::NULL.raw(),
-    );
-    assert_eq!(in_slot, renamed, "the names are render-only");
-    let TypeNode::ExpressionShape { bounds, .. } = types.node(in_slot) else {
-        panic!("the shape door interned something else");
-    };
-    assert_eq!(bounds, &[KType::NUMBER]);
+    assert_eq!(types.split(in_slot).0.bounds, &[KType::NUMBER]);
     let in_return = head(
         &[elt],
         &[KType::NUMBER],
@@ -359,7 +351,7 @@ fn a_shape_with_no_group_is_transparent() {
             run.push(DispatchTokenElement::Keyword(keyword));
             run.push(DispatchTokenElement::Slot(*slot));
         }
-        types.shape_group(
+        types.shape_scheme_raw(
             region,
             names,
             &vec![KType::ANY; names.len()],
@@ -457,11 +449,11 @@ fn width_runs_the_way_each_arm_declares() {
     assert!(!is_subtype_of(&types, region, many, few));
 }
 
-/// No law: a quantified function's identity is a claim about worked spellings — which renamings
-/// and which written orders collapse to one handle — and a generated pair almost never spells two
-/// of them.
+/// No law: which written orders of a quantified function's fields collapse to one handle is a claim
+/// about worked spellings, and a generated pair almost never spells two of them. The renaming half
+/// is a law of its own ([`a_scheme_is_one_handle_whatever_its_names`](super::properties)).
 #[test]
-fn a_quantified_function_interns_by_shape_whatever_its_names() {
+fn a_quantified_function_interns_whatever_its_field_order() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
@@ -469,20 +461,18 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
-    let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
     let variable = types.quantified(0, KType::ANY).raw();
 
-    // `FN FOR ALL (Elt) :{x :Elt} -> Elt` under either spelling, and with the fields in either
-    // written order, is one handle: the names are render-only and the record is order-blind.
+    // `FN FOR ALL (Elt) :{x :Elt y :Str} -> Elt` with the fields in either written order is one
+    // handle: the record is order-blind.
     let identity = |group, param| {
         types
-            .function_group(region, group, &[KType::ANY], &[(x, param)], param)
+            .function_scheme_raw(region, group, &[KType::ANY], &[(x, param)], param)
             .0
     };
-    let (as_elt, as_other) = ([elt], [other]);
-    assert_eq!(identity(&as_elt, variable), identity(&as_other, variable));
+    let as_elt = [elt];
     let forward = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY],
@@ -491,7 +481,7 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         )
         .0;
     let reversed = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY],
@@ -519,7 +509,7 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         quantified_identity
     ));
     let to_any = types
-        .function_group(region, &[elt], &[KType::ANY], &[(x, variable)], Handle::ANY)
+        .function_scheme_raw(region, &[elt], &[KType::ANY], &[(x, variable)], Handle::ANY)
         .0;
     assert!(fits(&types, region, quantified_identity, to_any));
     assert!(!is_subtype_of(&types, region, quantified_identity, to_any));
@@ -559,8 +549,6 @@ fn each_node_kind_lies_under_its_family_top() {
         types.intern(
             region,
             TypeNode::ExpressionShape {
-                quantifiers: &[],
-                bounds: &[],
                 elements: Elements::over(&elements),
                 classes: &[],
                 ret: KType::NUMBER.raw(),
@@ -975,7 +963,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let z = BinderSymbol::declared("z", &symbols).expect("a bindable token");
     let x_name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let each_list = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[x_name],
             &[KType::ANY],
@@ -990,7 +978,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     );
     let bounded = types.quantified(0, list_of_number).raw();
     let each_bounded = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[name],
             &[list_of_number],
@@ -1070,7 +1058,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     let value_bounded = types.quantified(0, KType::ANY_VALUE).raw();
     let free = types.quantified(1, KType::ANY).raw();
     let pair = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt, key],
             &[KType::ANY_VALUE, KType::ANY],
@@ -1084,7 +1072,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
         ":(FN FOR ALL #{Key: Any, Elt: Value} :{a :Elt b :Key} -> :(MAP Elt -> Key))"
     );
     let alone = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY_VALUE],
@@ -1097,7 +1085,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let union_bounded = types.quantified(0, number_or_str).raw();
     let spanning = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[number_or_str],
@@ -1137,7 +1125,7 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
     );
 
     let closed = types
-        .function_group(region, &[tee], &[KType::ANY], &[(y, elt)], elt)
+        .function_scheme_raw(region, &[tee], &[KType::ANY], &[(y, elt)], elt)
         .0;
     assert_eq!(above(closed), closed);
     let list_of_number = types.list(KType::NUMBER.raw());
@@ -1296,7 +1284,7 @@ fn the_order_never_solves_and_fits_does() {
         types.quantified(1, KType::ANY).raw(),
     );
     let same = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY],
@@ -1305,7 +1293,7 @@ fn the_order_never_solves_and_fits_does() {
         )
         .0;
     let either = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[left, right],
             &[KType::ANY, KType::ANY],

@@ -75,10 +75,9 @@ pub fn registered_shape(member: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
 }
 
 /// The bucket key of the expression shape `shape`: its keywords in place, each slot erased. A
-/// scheme's node spells its keys as a type's does.
+/// scheme's body spells its keys as a type's does.
 pub fn key_of(shape: DeclaredType<impl Into<Parametric>>, types: &TypeRegistry<'_>) -> KeySymbol {
-    let node = shape.node(types);
-    let TypeNode::ExpressionShape { elements, .. } = node else {
+    let TypeNode::ExpressionShape { elements, .. } = shape.view(types).body else {
         unreachable!("a registered shape is an expression shape")
     };
     KeySymbol::of(elements.iter().map(|element| match element {

@@ -73,10 +73,8 @@ pub(super) fn admits_function(
     declared: Handle,
     candidate: Handle,
 ) -> bool {
-    let TypeNode::KFunction { bounds, .. } = types.node(declared) else {
-        return false;
-    };
-    let mut collector = Collector::<Handle>::new(scratch, bounds);
+    let ((group, declared), (_, candidate)) = (types.split(declared), types.split(candidate));
+    let mut collector = Collector::<Handle>::new(scratch, group.bounds);
     collect_function(types, scratch, declared, candidate, &mut collector)
         && collector.solve(types).is_ok()
 }
@@ -150,23 +148,25 @@ pub(super) fn instance_under<'s, T: TypeHandle>(
     scheme: Handle,
     wanted: Handle,
 ) -> Result<BumpVec<'s, T>, InstanceFailure<'s>> {
-    let TypeNode::KFunction { bounds, .. } = types.node(scheme) else {
-        unreachable!("an instance is taken of a function scheme")
-    };
-    debug_assert!(!bounds.is_empty(), "a scheme binds a group");
+    let (group, body) = types.split(scheme);
+    debug_assert!(!group.bounds.is_empty(), "a scheme binds a group");
+    debug_assert!(
+        matches!(types.node(body), TypeNode::KFunction { .. }),
+        "an instance is taken of a function scheme"
+    );
     debug_assert!(
         matches!(types.node(wanted), TypeNode::KFunction { .. }),
         "an instance is wanted at a function type"
     );
-    let mut collector = Collector::<T>::new(scratch, bounds);
-    if !collect_function(types, scratch, scheme, wanted, &mut collector) {
+    let mut collector = Collector::<T>::new(scratch, group.bounds);
+    if !collect_function(types, scratch, body, wanted, &mut collector) {
         return Err(InstanceFailure::NoInstance);
     }
     let solution = collector
         .solve(types)
         .map_err(|_| InstanceFailure::NoInstance)?;
     let mut unfixed = BumpVec::new_in(scratch);
-    unfixed.extend((0..bounds.len()).filter(|index| !collector.reached(*index)));
+    unfixed.extend((0..group.bounds.len()).filter(|index| !collector.reached(*index)));
     if unfixed.is_empty() {
         Ok(solution)
     } else {
@@ -665,21 +665,19 @@ fn contribute(
     true
 }
 
-/// `kt` with its own group, where it binds one, opened to the class walks' stand-ins: a rigid
-/// lexical variable per variable, named and bounded as declared. A shape keeps its node — its
-/// positions are paired by hand — and a function type loses its group.
+/// `kt` with its own group, where it is a scheme, opened to the class walks' stand-ins: a rigid
+/// lexical variable per variable, named and bounded as declared. A scheme opens to its body.
 fn open_to_stand_ins(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle) -> Handle {
-    let Some((names, bounds)) = types.node(kt).group() else {
-        return kt;
-    };
-    if names.is_empty() {
+    let group = types.split(kt).0;
+    if group.names.is_empty() {
         return kt;
     }
-    let mut stand_ins = BumpVec::with_capacity_in(names.len(), scratch);
+    let mut stand_ins = BumpVec::with_capacity_in(group.names.len(), scratch);
     stand_ins.extend(
-        names
+        group
+            .names
             .iter()
-            .zip(bounds)
+            .zip(group.bounds)
             .map(|(name, bound)| types.lexical(STAND_IN_LEVEL, *name, *bound).raw()),
     );
     instantiate_quantified(types, scratch, kt, &stand_ins)

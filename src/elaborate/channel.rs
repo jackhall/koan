@@ -653,21 +653,21 @@ fn ranked(
     shape: DeclaredType<Parametric>,
     classes: &[u8],
 ) -> DeclaredType<Parametric> {
-    let node = shape.node(types);
-    let TypeNode::ExpressionShape {
-        quantifiers,
-        bounds,
-        elements,
-        ret,
-        ..
-    } = node
-    else {
+    let view = shape.view(types);
+    let TypeNode::ExpressionShape { elements, ret, .. } = view.body else {
         unreachable!("a head declares an expression shape");
     };
     let mut written = BumpVec::with_capacity_in(elements.len(), scratch);
     written.extend(elements.iter());
     types
-        .shape_scheme(scratch, quantifiers, bounds, &written, classes, ret)
+        .shape_scheme(
+            scratch,
+            view.group.names,
+            view.group.bounds,
+            &written,
+            classes,
+            ret,
+        )
         .handle
 }
 
@@ -781,10 +781,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         base: usize,
     ) -> Own<'graph> {
         let bounds = match ktype {
-            DeclaredType::Scheme(scheme) => match self.types.scheme_node(scheme) {
-                TypeNode::KFunction { bounds, .. } => bounds,
-                _ => unreachable!("a callable's type is a function type"),
-            },
+            DeclaredType::Scheme(scheme) => scheme.group(self.types).bounds,
             // An empty group binds nothing.
             DeclaredType::Type(_) => &[],
         };

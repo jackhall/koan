@@ -238,9 +238,8 @@ pub fn substitute_quantified<B: TypeHandle>(
     ))
 }
 
-/// `scheme` at a solved call: opened, each position and the return substituted through
-/// `bindings`, in the scheme's group order. The opened callable binds no group, so it is a
-/// [`Parametric`] — concrete where every binding is.
+/// `scheme` at a solved call: its body, substituted through `bindings`, in the scheme's group
+/// order. The body binds no group, so it is a [`Parametric`] — concrete where every binding is.
 pub fn instantiate_quantified<B: TypeHandle>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -308,11 +307,6 @@ pub fn read_through(
         side,
         &mut |_, node| interval(Variable::of(node)?).map(Interval::raw),
     ))
-}
-
-/// The bound of each variable of `scheme`'s group, in group order.
-pub fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, scheme: Scheme) -> &'run [KType] {
-    substitute::quantifier_bounds(types, scheme.raw())
 }
 
 /// What a substitution of lexical levels or head parameters keeps the kind of: a type that may

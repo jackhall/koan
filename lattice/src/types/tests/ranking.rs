@@ -38,6 +38,8 @@ enum Part<'a> {
 }
 use Part::{Kw, Slot};
 
+use super::RawSchemes;
+
 /// A registry, an interner and a region, and the door that interns a head over them.
 struct World<'r> {
     region: BumpAllocator<'r>,
@@ -88,7 +90,7 @@ impl<'r> World<'r> {
             })
             .collect();
         self.types
-            .shape_group(self.region, &names, &bounds, &elements, classes, ret)
+            .shape_scheme_raw(self.region, &names, &bounds, &elements, classes, ret)
             .0
     }
 

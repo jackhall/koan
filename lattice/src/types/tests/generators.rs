@@ -41,11 +41,13 @@ use crate::types::registry::TypeRegistry;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::shape_slots;
 use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes};
-use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet, quantifier_bounds};
+use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet};
 use crate::types::walk::Variance;
 use crate::types::walk::unary::{Visit, visit};
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 use crate::types::{lattice, substitute};
+
+use super::RawSchemes;
 
 /// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
 fn leaked_arena() -> BumpAllocator<'static> {
@@ -723,7 +725,7 @@ fn arb_shape_over(
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_group(scratch, &names, &bounds, &run, classes, ret)
+                            .shape_scheme_raw(scratch, &names, &bounds, &run, classes, ret)
                             .0
                     })
                 })
@@ -813,7 +815,7 @@ fn arb_function(
                     with_scratch(|scratch| {
                         world
                             .types
-                            .function_group(scratch, &names, &bounds, &params, ret)
+                            .function_scheme_raw(scratch, &names, &bounds, &params, ret)
                             .0
                     })
                 })
@@ -1114,13 +1116,19 @@ pub fn arb_argument_pair(
             let (
                 TypeNode::ExpressionShape { classes, .. },
                 TypeNode::ExpressionShape { elements, ret, .. },
-            ) = (types.node(a), types.node(unrelated))
+            ) = (
+                types.node(types.split(a).1),
+                types.node(types.split(unrelated).1),
+            )
             else {
                 unreachable!("a drawn shape is one");
             };
             let b = with_scratch(|scratch| {
                 let bind = |lexical: bool| -> Vec<Handle> {
-                    substitute::quantifier_bounds(types, a)
+                    types
+                        .split(a)
+                        .0
+                        .bounds
                         .iter()
                         .zip(&picks)
                         .enumerate()
@@ -1157,7 +1165,7 @@ pub fn arb_argument_pair(
                         keyword => *keyword,
                     })
                     .collect();
-                types.shape_group(scratch, &[], &[], &run, classes, ret).0
+                types.shape_type(scratch, &run, classes, ret)
             });
             (world.declared(a), world.declared(b))
         })
@@ -1188,8 +1196,7 @@ pub fn arb_shape_below(
                 elements,
                 classes,
                 ret,
-                ..
-            } = world.types.node(b)
+            } = world.types.node(world.types.split(b).1)
             else {
                 unreachable!("a drawn shape is one");
             };
@@ -1213,10 +1220,7 @@ pub fn arb_shape_below(
                     Some(index) => meet(&world.types, scratch, world.concrete(ret), pool[index]),
                     None => world.concrete(ret),
                 };
-                world
-                    .types
-                    .shape_group(scratch, &[], &[], &run, classes, ret.raw())
-                    .0
+                world.types.shape_type(scratch, &run, classes, ret.raw())
             });
             (world.declared(a), world.declared(b))
         })
@@ -1289,7 +1293,9 @@ pub fn arb_own_instance(
         .prop_map(move |(scheme, picks, widening)| {
             with_scratch(|scratch| {
                 let types = &world.types;
-                let bindings: Vec<Handle> = quantifier_bounds(types, scheme)
+                let bindings: Vec<Handle> = scheme
+                    .group(types)
+                    .bounds
                     .iter()
                     .zip(&picks)
                     .enumerate()
@@ -1472,12 +1478,7 @@ fn step(
             types.constructor_apply(scratch, world.concrete(constructor), &arguments)
         }
         // A parameter is contravariant and the return, the last position, covariant.
-        TypeNode::KFunction {
-            quantifiers: &[],
-            params,
-            ret,
-            ..
-        } => {
+        TypeNode::KFunction { params, ret } => {
             let mut params = params.raw().to_vec();
             let chosen = index % (params.len() + 1);
             if chosen == params.len() {
@@ -1488,11 +1489,9 @@ fn step(
         }
         // A monomorphic shape's slot is contravariant and its return, the last position, covariant.
         TypeNode::ExpressionShape {
-            quantifiers: &[],
             elements,
             classes,
             ret,
-            ..
         } => {
             let slots = elements
                 .iter()
@@ -1501,9 +1500,7 @@ fn step(
             let chosen = index % (slots + 1);
             if chosen == slots {
                 let ret = at(ret, Variance::Co);
-                return types
-                    .shape_group(scratch, &[], &[], &elements[..], classes, ret)
-                    .0;
+                return types.shape_type(scratch, &elements[..], classes, ret);
             }
             let mut seen = 0;
             let run: Vec<DispatchTokenElement> = elements
@@ -1521,7 +1518,7 @@ fn step(
                     keyword => *keyword,
                 })
                 .collect();
-            types.shape_group(scratch, &[], &[], &run, classes, ret).0
+            types.shape_type(scratch, &run, classes, ret)
         }
         _ => beside(index),
     }
@@ -1559,24 +1556,12 @@ fn step_width(
             types.record(scratch, &drop(fields.raw()))
         }
         (TypeNode::Record { fields }, Way::Down) => types.record(scratch, &gain(fields.raw())?),
-        (
-            TypeNode::KFunction {
-                quantifiers: &[],
-                params,
-                ret,
-                ..
-            },
-            Way::Up,
-        ) => types.function_type(scratch, &gain(params.raw())?, ret),
-        (
-            TypeNode::KFunction {
-                quantifiers: &[],
-                params,
-                ret,
-                ..
-            },
-            Way::Down,
-        ) if params.raw().len() >= 2 => types.function_type(scratch, &drop(params.raw()), ret),
+        (TypeNode::KFunction { params, ret }, Way::Up) => {
+            types.function_type(scratch, &gain(params.raw())?, ret)
+        }
+        (TypeNode::KFunction { params, ret }, Way::Down) if params.raw().len() >= 2 => {
+            types.function_type(scratch, &drop(params.raw()), ret)
+        }
         (TypeNode::SignatureApply { signature, pins }, Way::Up) => {
             types.signature_apply(scratch, signature, &drop(pins.raw()))
         }
@@ -1779,7 +1764,7 @@ pub fn arb_instance_chain(
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_group(
+                            .shape_scheme_raw(
                                 scratch,
                                 quantifiers,
                                 &[KType::ANY][..quantifiers.len()],
@@ -1796,7 +1781,7 @@ pub fn arb_instance_chain(
                         }
                         world
                             .types
-                            .function_group(
+                            .function_scheme_raw(
                                 scratch,
                                 quantifiers,
                                 &[KType::ANY][..quantifiers.len()],

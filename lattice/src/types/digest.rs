@@ -95,6 +95,7 @@ const TAG_PARAMETER: u8 = 0x2D;
 const TAG_SIGNATURE_APPLY: u8 = 0x2E;
 const TAG_SIGNATURE_MEET: u8 = 0x2F;
 const TAG_CARRIER: u8 = 0x30;
+const TAG_SCHEME: u8 = 0x31;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -205,19 +206,13 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(scratch, fields.raw()),
-        TypeNode::KFunction {
-            bounds,
-            params,
-            ret,
-            ..
-        } => function_digest(scratch, bounds, params.raw(), ret.digest()),
+        TypeNode::KFunction { params, ret } => function_digest(scratch, params.raw(), ret.digest()),
         TypeNode::ExpressionShape {
-            bounds,
             elements,
             classes,
             ret,
-            ..
-        } => shape_digest(bounds, elements, classes, ret.digest()),
+        } => shape_digest(elements, classes, ret.digest()),
+        TypeNode::Scheme { group, body } => scheme_digest(group.bounds, body.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
         TypeNode::Lexical {
             level,
@@ -350,41 +345,27 @@ pub(super) fn record_digest<H: TypeHandle>(
     h.finish()
 }
 
-/// A function type `(params) -> ret`, its quantifier **arity** first — never the names, since
-/// alpha-variants are one type, and unconditionally, as a shape's is — then each variable's bound
-/// in group order. A variable no position names carries its bound nowhere else.
+/// A function type `(params) -> ret`.
 pub(super) fn function_digest<H: TypeHandle>(
     scratch: BumpAllocator<'_>,
-    bounds: &[KType],
     params: &[(BinderSymbol, H)],
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_KFUNCTION);
-    h.count(bounds.len());
-    for bound in bounds {
-        h.digest(bound.digest());
-    }
     feed_record(&mut h, scratch, params);
     h.digest(ret).finish()
 }
 
-/// An expression shape: its quantifier **arity** (never the names — alpha-variants are one type)
-/// and each variable's bound in group order, then its element run in order, each element a
-/// keyword's symbol bits behind a `1` byte or a slot type's digest behind a `0`, then the return. Order is identity here where a `KFunction`'s
-/// parameter record is order-blind: a shape's argument positions are what dispatch reads. A
-/// variable no position names carries its bound nowhere but here.
-///
+/// An expression shape: its element run in order, each element a keyword's symbol bits behind a
+/// `1` byte or a slot type's digest behind a `0`, then the return. Order is identity here where a
+/// `KFunction`'s parameter record is order-blind: a shape's argument positions are what dispatch
+/// reads.
 pub(super) fn shape_digest<H: TypeHandle>(
-    bounds: &[KType],
     elements: &[DispatchTokenElement<H>],
     classes: &[u8],
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
-    h.count(bounds.len());
-    for bound in bounds {
-        h.digest(bound.digest());
-    }
     h.count(elements.len());
     for element in elements {
         match element {
@@ -400,8 +381,20 @@ pub(super) fn shape_digest<H: TypeHandle>(
     h.digest(ret).finish()
 }
 
-/// A positional rigid variable: its index in the enclosing shape's quantifier group, then the
-/// variable's bound. The bound is identity — two shapes differing only in a variable's bound
+/// A scheme: its group's arity and each variable's bound in group order — never the names, so
+/// alpha-variants are one type — then its body's digest. A variable no position names carries its
+/// bound nowhere but here.
+pub(super) fn scheme_digest(bounds: &[KType], body: TypeDigest) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_SCHEME);
+    h.count(bounds.len());
+    for bound in bounds {
+        h.digest(bound.digest());
+    }
+    h.digest(body).finish()
+}
+
+/// A positional rigid variable: its index in the enclosing scheme's quantifier group, then the
+/// variable's bound. The bound is identity — two schemes differing only in a variable's bound
 /// admit different arguments.
 pub(super) fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
     DigestHasher::new(TAG_QUANTIFIED)

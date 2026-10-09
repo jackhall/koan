@@ -191,19 +191,22 @@ impl Lockstep for Order {
                 applications_under(&lower, &upper)
             };
         }
+        // A pair holding a scheme fits by instantiation, body against body, and never across
+        // kinds. In the order a scheme lies under only itself, which the caller's equality guard
+        // already answered. A pair it does not settle can still meet a family top below.
+        if matches!(na, TypeNode::Scheme { .. }) || matches!(nb, TypeNode::Scheme { .. }) {
+            match (types.node(types.split(a).1), types.node(types.split(b).1)) {
+                (TypeNode::KFunction { .. }, TypeNode::KFunction { .. }) => {
+                    return solves && admits_function(types, scratch, a, b);
+                }
+                (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
+                    return solves && admits_shape(types, scratch, a, b);
+                }
+                _ => {}
+            }
+        }
         match (na, nb) {
             (TypeNode::OfKind(x), TypeNode::OfKind(y)) => y.admits(x),
-            // A quantified shape fits another when some instantiation of its group puts every
-            // slot and the return under the other's, with the other's rigid. In the order it lies
-            // under only itself, which the caller's equality guard already answered.
-            (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
-                solves && admits_shape(types, scratch, a, b)
-            }
-            // The same clause for a pair of function types, related name by name. Only a pair
-            // where one quantifies reaches here — two monomorphic ones pair structurally.
-            (TypeNode::KFunction { .. }, TypeNode::KFunction { .. }) => {
-                solves && admits_function(types, scratch, a, b)
-            }
             // An application lies under the family it applies: a bare family stands for every
             // application of it. A pre-seal sibling has the profile of the member it becomes.
             (
@@ -284,6 +287,7 @@ fn family_top(node: &TypeNode<'_>) -> Option<Handle> {
         | TypeNode::Record { .. }
         | TypeNode::KFunction { .. }
         | TypeNode::ExpressionShape { .. }
+        | TypeNode::Scheme { .. }
         | TypeNode::ConstructorApply { .. }
         | TypeNode::Signature { .. }
         | TypeNode::SignatureApply { .. }

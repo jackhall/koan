@@ -312,14 +312,8 @@ fn registered_shape<'x>(
     head: Head<'_, '_>,
     classes: &[u8],
 ) -> (GroupIntern<'x>, ParameterBinding<'x>) {
-    let node = function.node(types);
-    let TypeNode::KFunction {
-        quantifiers,
-        bounds,
-        params,
-        ret,
-    } = node
-    else {
+    let view = function.view(types);
+    let TypeNode::KFunction { params, ret } = view.body else {
         unreachable!("a definition is typed by its function type")
     };
     let slot = |name: Symbol| {
@@ -378,6 +372,13 @@ fn registered_shape<'x>(
             ParameterBinding::Operands
         }
     };
-    let shape = types.shape_scheme(scratch, quantifiers, bounds, &elements, classes, ret);
+    let shape = types.shape_scheme(
+        scratch,
+        view.group.names,
+        view.group.bounds,
+        &elements,
+        classes,
+        ret,
+    );
     (shape, parameters)
 }

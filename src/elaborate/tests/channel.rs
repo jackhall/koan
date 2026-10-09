@@ -306,7 +306,10 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
         };
         assert_eq!(levels, [0]);
         let scheme = value.ktype.as_scheme().expect("`g` is quantified");
-        let TypeNode::KFunction { params, .. } = program.types.scheme_node(scheme) else {
+        let TypeNode::KFunction { params, .. } = DeclaredType::<Parametric>::from(scheme)
+            .view(program.types)
+            .body
+        else {
             panic!("a function type")
         };
         assert!(

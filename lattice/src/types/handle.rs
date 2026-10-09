@@ -28,7 +28,7 @@ use crate::symbols::{StaticName, TypeSymbol};
 
 use super::digest::TypeDigest;
 use super::kind::KKind;
-use super::node::TypeNode;
+use super::node::{Group, TypeNode};
 use super::registry::TypeRegistry;
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
@@ -53,10 +53,10 @@ pub struct KType(Handle);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Parametric(Handle);
 
-/// A quantified callable's type: a function type or an expression shape over a non-empty
-/// `FOR ALL` group. The only parametric type a value carries and a call instantiates; its
-/// positions read through [`TypeRegistry::scheme_node`](super::registry::TypeRegistry::scheme_node)
-/// as [`Parametric`].
+/// A quantified callable's type: a [`TypeNode::Scheme`] node, a non-empty `FOR ALL` group over a
+/// function type or an expression shape. The only parametric type a value carries and a call
+/// instantiates. Read its group through [`Scheme::group`], and its body through
+/// [`DeclaredType::view`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Scheme(Handle);
 
@@ -313,12 +313,44 @@ impl<T> DeclaredType<T> {
     }
 }
 
+impl Scheme {
+    /// The scheme's group and its body. A `Scheme` is only ever wrapped by the scheme doors, over
+    /// the scheme node they interned.
+    fn parts<'run>(self, types: &TypeRegistry<'run>) -> (&'run Group<'run>, Parametric) {
+        let TypeNode::Scheme { group, body } = types.node(self.0) else {
+            unreachable!("a scheme names a scheme node: only the scheme doors wrap one")
+        };
+        (group, wrap(body))
+    }
+
+    /// The scheme's quantifier group, in group order, read without its body.
+    pub fn group<'run>(self, types: &TypeRegistry<'run>) -> Group<'run> {
+        *self.parts(types).0
+    }
+}
+
+/// A declared type read whole: the group it binds (empty for a type) and the node under that
+/// group, its positions read as [`Parametric`]. A scheme's body is a function type or a shape.
+#[derive(Clone, Copy)]
+pub struct DeclaredView<'run> {
+    pub group: Group<'run>,
+    pub body: TypeNode<'run, Parametric>,
+}
+
 impl<T: Into<Parametric>> DeclaredType<T> {
-    /// The node this declares: a type's, or a scheme's, its positions read as [`Parametric`].
-    pub fn node<'run>(self, types: &TypeRegistry<'run>) -> TypeNode<'run, Parametric> {
-        match self {
-            DeclaredType::Type(declared) => types.node(declared.into()),
-            DeclaredType::Scheme(scheme) => types.scheme_node(scheme),
+    /// This declaration read whole: a scheme's group and its body's node, or a type's own node
+    /// under the empty group.
+    pub fn view<'run>(self, types: &TypeRegistry<'run>) -> DeclaredView<'run> {
+        let (group, body) = match self {
+            DeclaredType::Type(declared) => (Group::EMPTY, declared.into()),
+            DeclaredType::Scheme(scheme) => {
+                let (group, body) = scheme.parts(types);
+                (*group, body)
+            }
+        };
+        DeclaredView {
+            group,
+            body: types.node(body),
         }
     }
 }
@@ -408,6 +440,7 @@ pub(super) fn leaf_name<H>(node: &TypeNode<'_, H>) -> Option<&'static StaticName
         | TypeNode::Record { .. }
         | TypeNode::KFunction { .. }
         | TypeNode::ExpressionShape { .. }
+        | TypeNode::Scheme { .. }
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
         | TypeNode::DeferredReturn(_)

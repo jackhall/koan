@@ -29,8 +29,7 @@ use crate::types::sig_relations::InstanceFailure;
 use crate::types::sig_relations::{admits_shape, shape_specificity, sig_fits};
 use crate::types::signatures::{applications, applications_under, is_signature_type};
 use crate::types::substitute::{
-    Side, bound_above, quantifier_bounds, read_through, substitute_parameters,
-    substitute_quantified,
+    Side, bound_above, read_through, substitute_parameters, substitute_quantified,
 };
 use crate::types::typed::{
     fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
@@ -423,7 +422,7 @@ proptest! {
             "a run binds every lexical variable"
         );
         prop_assert!(order::fits(&types, scratch, run_made, run_wanted));
-        for (entry, bound) in run_solution.iter().zip(quantifier_bounds(&types, scheme.raw())) {
+        for (entry, bound) in run_solution.iter().zip(types.split(scheme.raw()).0.bounds) {
             prop_assert!(order::fits(&types, scratch, *entry, bound.raw()));
         }
         prop_assert_eq!(
@@ -648,24 +647,30 @@ proptest! {
 proptest! {
     #![proptest_config(strict())]
 
-    /// Re-interning a shape through its door with the group it already carries returns the very
-    /// handle: the group order is idempotent.
+    /// Re-minting a shape through its scheme door with the group it already carries returns the
+    /// very handle: the group order is idempotent.
     #[test]
     fn interning_a_shapes_own_content_is_a_fixed_point(a in shape()) {
-        let a = a.raw();
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
+        let view = a.view(&types);
         if let TypeNode::ExpressionShape {
-            quantifiers,
-            bounds,
             elements,
             classes,
             ret,
-        } = types.node(a)
+        } = view.body
         {
-            let again = types.shape_group(scratch, quantifiers, bounds, &elements[..], classes, ret);
-            prop_assert_eq!(again.0, a);
+            let elements: Vec<_> = elements.iter().collect();
+            let again = types.shape_scheme(
+                scratch,
+                view.group.names,
+                view.group.bounds,
+                &elements,
+                classes,
+                ret,
+            );
+            prop_assert_eq!(again.handle, a);
         }
     }
 
@@ -676,7 +681,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let stored = quantifier_bounds(&types, a);
+        let stored = types.split(a).0.bounds;
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
         visit(&types, scratch, a, &mut |_, node, context| match *node {
             TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
@@ -697,20 +702,53 @@ proptest! {
     /// The function twin of [`interning_a_shapes_own_content_is_a_fixed_point`].
     #[test]
     fn interning_a_functions_own_content_is_a_fixed_point(a in function()) {
-        let a = a.raw();
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if let TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            params,
-            ret,
-        } = types.node(a)
-        {
-            let again = types.function_group(scratch, quantifiers, bounds, params.raw(), ret);
-            prop_assert_eq!(again.0, a);
+        let view = a.view(&types);
+        if let TypeNode::KFunction { params, ret } = view.body {
+            let params: Vec<_> = params.iter().collect();
+            let again =
+                types.function_scheme(scratch, view.group.names, view.group.bounds, &params, ret);
+            prop_assert_eq!(again.handle, a);
         }
+    }
+
+    /// One type, one handle: a scheme's quantifier names are render-only, so re-minting it through
+    /// its door under fresh names returns the very handle.
+    #[test]
+    fn a_scheme_is_one_handle_whatever_its_names(a in prop_oneof![shape(), function()]) {
+        if a.as_scheme().is_none() {
+            return Ok(());
+        }
+        let world = world();
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let view = a.view(&types);
+        // Outside the drawn alphabet, so every name changes.
+        let renamed: Vec<TypeSymbol> = (0..view.group.names.len())
+            .map(|index| {
+                TypeSymbol::declared(&format!("Renamed{index}"), &world.symbols)
+                    .expect("a Type token")
+            })
+            .collect();
+        let again = match view.body {
+            TypeNode::KFunction { params, ret } => {
+                let params: Vec<_> = params.iter().collect();
+                types.function_scheme(scratch, &renamed, view.group.bounds, &params, ret)
+            }
+            TypeNode::ExpressionShape {
+                elements,
+                classes,
+                ret,
+            } => {
+                let elements: Vec<_> = elements.iter().collect();
+                types.shape_scheme(scratch, &renamed, view.group.bounds, &elements, classes, ret)
+            }
+            _ => unreachable!("a scheme's body is a function type or a shape"),
+        };
+        prop_assert_eq!(again.handle, a);
     }
 
     /// The function twin of [`a_shape_stores_the_bounds_its_occurrences_carry`].
@@ -720,7 +758,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let stored = quantifier_bounds(&types, a);
+        let stored = types.split(a).0.bounds;
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
         visit(&types, scratch, a, &mut |_, node, context| match *node {
             TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
@@ -863,7 +901,7 @@ fn admits_tuple(
     shape: Handle,
     arguments: &[KType],
 ) -> bool {
-    let mut collector = Collector::<Handle>::new(scratch, quantifier_bounds(types, shape));
+    let mut collector = Collector::<Handle>::new(scratch, types.split(shape).0.bounds);
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
         if admits(
             types,
@@ -959,7 +997,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let bounds = quantifier_bounds(&types, a);
+        let bounds = types.split(a).0.bounds;
         for slot in shape_slots(a, &types) {
             for (carried, variance) in [(Handle::NEVER, Variance::Co), (Handle::ANY, Variance::Contra)] {
                 let mut collector = Collector::<Handle>::new(scratch, bounds);
@@ -990,7 +1028,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let bounds = quantifier_bounds(&types, a);
+        let bounds = types.split(a).0.bounds;
         prop_assert!(!bounds.is_empty(), "the candidate binds a group");
         let slots: Vec<Handle> = shape_slots(a, &types).collect();
         let arguments: Vec<Handle> = shape_slots(b, &types).collect();
@@ -1174,7 +1212,7 @@ fn static_and_carried(
     // Each slot at its group's bounds: the instance a call reaches when every variable takes its
     // bound.
     let at_bounds = |shape: Handle| -> Vec<Handle> {
-        let bounds = quantifier_bounds(types, shape);
+        let bounds = types.split(shape).0.bounds;
         shape_slots(shape, types)
             .map(|slot| substitute_quantified(types, scratch, slot, bounds))
             .collect()
@@ -1261,7 +1299,7 @@ fn collect_jointly<'s>(
     shape: Handle,
     arguments: &[Handle],
 ) -> (Option<BumpVec<'s, Handle>>, Collector<'s, Handle>) {
-    let mut collector = Collector::<Handle>::new(scratch, quantifier_bounds(types, shape));
+    let mut collector = Collector::<Handle>::new(scratch, types.split(shape).0.bounds);
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
         if admits(
             types,
@@ -1310,7 +1348,7 @@ proptest! {
             &types,
             scratch,
             &slots,
-            quantifier_bounds(&types, a),
+            types.split(a).0.bounds,
             &statics,
             all_exact,
         );

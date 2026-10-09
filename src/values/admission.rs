@@ -382,6 +382,7 @@ pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &TypeRegi
             .iter()
             .any(|member| admits_part(member, part, types)),
         TypeNode::KFunction { .. }
+        | TypeNode::Scheme { .. }
         | TypeNode::SetMember { .. }
         | TypeNode::Parameter { .. }
         | TypeNode::Carrier { .. }

@@ -35,6 +35,23 @@ use super::unify::Interval;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ContentKey(pub u128);
 
+/// A scheme's quantifier group: each variable's name and bound, in group order — the order the
+/// scheme door numbered them in. The names are render-only; the arity and the bounds are identity.
+/// Laid in the region when its scheme is first interned.
+#[derive(Clone, Copy, Debug)]
+pub struct Group<'run> {
+    pub names: &'run [TypeSymbol],
+    pub bounds: &'run [KType],
+}
+
+impl Group<'_> {
+    /// The group a type that is not a scheme binds: none.
+    pub const EMPTY: Group<'static> = Group {
+        names: &[],
+        bounds: &[],
+    };
+}
+
 /// The content of one interned type, its children read as `H`. Every run is a `'run` slice under a
 /// view, so reading a node out of the registry copies its scalar payload and a few fat pointers,
 /// never a type subtree.
@@ -143,42 +160,24 @@ pub enum TypeNode<'run, H = Handle> {
     /// A function type `(params) -> ret`. koan has no positional call syntax, so a
     /// function-typed slot records the names a caller must use to invoke what it receives.
     ///
-    /// A non-empty `quantifiers` makes it a **binder** of its own, exactly as an
-    /// [`Self::ExpressionShape`] is: the group keeps every variable it declares, its names are
-    /// render-only, and the digest feeds the arity and the bounds. An empty one binds nothing and is
-    /// transparent — an unquantified
-    /// function type written inside a quantified head keeps reading that head's variables.
+    /// A function type binds nothing: a `Quantified` inside it reads the enclosing
+    /// [`Self::Scheme`]'s group, so a function type written inside a quantified head keeps reading
+    /// that head's variables.
     KFunction {
-        /// The type parameters this function binds, in `Quantified` index order. Render-only, as
-        /// a shape's are.
-        quantifiers: &'run [TypeSymbol],
-        /// Each quantifier's bound, in the same order.
-        bounds: &'run [KType],
         params: Record<'run, H>,
         ret: H,
     },
     /// An **expression shape** — the type of a keyworded, positional definition reached by
-    /// dispatch: the interleaved element sequence a call must spell, the type parameters the
-    /// shape binds ahead of it, and the return type.
+    /// dispatch: the interleaved element sequence a call must spell, and the return type.
     ///
     /// Distinct from [`Self::KFunction`] as a matter of representation: a lambda takes a record of
     /// named arguments and is reached by name, a shape is reached by its keyword/argument sequence
     /// and its argument *positions* are load-bearing, which a canonically ordered params record
     /// erases. So no shape is ever equal to, satisfies, or is satisfied by a lambda type.
     ///
-    /// Argument **names** are binder-side only and are absent here. Quantifier names are
-    /// render-only too: the digest feeds the arity and the bounds, so alpha-variants intern once and
-    /// `quantifiers` holds whichever spelling was interned first. A variable no position names
-    /// carries its bound in `bounds` alone.
-    ///
-    /// A non-empty `quantifiers` makes it a binder, as it does a [`Self::KFunction`]. An empty one
-    /// binds nothing and is transparent: a free `Quantified` inside reads the enclosing group.
+    /// Argument **names** are binder-side only and are absent here. A shape binds nothing: a
+    /// `Quantified` inside it reads the enclosing [`Self::Scheme`]'s group.
     ExpressionShape {
-        /// The type parameters this shape binds, in `Quantified` index order. Render-only:
-        /// the arity is identity, the names are not.
-        quantifiers: &'run [TypeSymbol],
-        /// Each quantifier's bound, in the same order.
-        bounds: &'run [KType],
         /// The call shape: fixed keywords interleaved with the argument positions' declared types.
         elements: Elements<'run, H>,
         /// Each slot's priority class, in slot order, dense from 0 — the ranking a dispatch admits
@@ -187,10 +186,21 @@ pub enum TypeNode<'run, H = Handle> {
         classes: &'run [u8],
         ret: H,
     },
-    /// A **rigid variable bound by the enclosing binder** — a [`Self::ExpressionShape`], or a
-    /// [`Self::KFunction`] carrying a group: the `index`-th member of that group, bounded by
-    /// `bound`. Positional rather than named, so two binders alpha-equivalent under a renaming of
-    /// their parameters intern to one node.
+    /// A **scheme** — a quantified callable's type, and the one binder: `group` binds the free
+    /// `Quantified` positions of `body`, a [`Self::KFunction`] or a [`Self::ExpressionShape`]. The
+    /// body's node says which. The group is non-empty: the two scheme doors answer the plain body
+    /// for an empty one. The digest feeds the group's arity and bounds and the body's digest, never
+    /// the names, so alpha-variants intern once and `group` holds whichever spelling was interned
+    /// first. Build through
+    /// [`TypeRegistry::function_scheme`](super::registry::TypeRegistry::function_scheme) or
+    /// [`TypeRegistry::shape_scheme`](super::registry::TypeRegistry::shape_scheme).
+    Scheme {
+        group: &'run Group<'run>,
+        body: H,
+    },
+    /// A **rigid variable bound by the enclosing [`Self::Scheme`]**: the `index`-th member of its
+    /// group, bounded by `bound`. Positional rather than named, so two schemes alpha-equivalent
+    /// under a renaming of their parameters intern to one node.
     Quantified {
         index: usize,
         bound: KType,
@@ -281,20 +291,10 @@ pub enum TypeNode<'run, H = Handle> {
 }
 
 impl<'run, H> TypeNode<'run, H> {
-    /// The quantifier group a binder variant carries — a shape's or a function type's names and
-    /// bounds, empty where it binds none — or `None` for every other node.
-    pub fn group(&self) -> Option<(&'run [TypeSymbol], &'run [KType])> {
+    /// The quantifier group a scheme binds, or `None` for every other node.
+    pub fn group(&self) -> Option<&'run Group<'run>> {
         match self {
-            TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
-                ..
-            }
-            | TypeNode::KFunction {
-                quantifiers,
-                bounds,
-                ..
-            } => Some((quantifiers, bounds)),
+            TypeNode::Scheme { group, .. } => Some(group),
             // No wildcard: a new binder variant must say so here, or every walk reads its own
             // variables as free.
             TypeNode::Number
@@ -326,6 +326,8 @@ impl<'run, H> TypeNode<'run, H> {
             | TypeNode::List { .. }
             | TypeNode::Dict { .. }
             | TypeNode::Record { .. }
+            | TypeNode::KFunction { .. }
+            | TypeNode::ExpressionShape { .. }
             | TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
             | TypeNode::DeferredReturn(_)
@@ -337,12 +339,10 @@ impl<'run, H> TypeNode<'run, H> {
         }
     }
 
-    /// Whether this node binds a quantifier group of its own: a shape or a function only when it
-    /// carries one. An empty group binds nothing, so a `Quantified` under it reads the enclosing
-    /// group. This is what every walk asks before stepping into a child, so a `Quantified` under it
-    /// reads against the right group.
+    /// Whether this node binds a quantifier group: a scheme, and nothing else. Every walk asks this
+    /// before stepping into a child, so a `Quantified` under it reads against the right group.
     pub fn binds_quantifiers(&self) -> bool {
-        self.group().is_some_and(|(names, _)| !names.is_empty())
+        self.group().is_some()
     }
 
     /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or a
@@ -467,29 +467,22 @@ impl<'run, H: TypeHandle> TypeNode<'run, H> {
             TypeNode::Record { fields } => TypeNode::Record {
                 fields: Record::over(fields.raw()),
             },
-            TypeNode::KFunction {
-                quantifiers,
-                bounds,
-                params,
-                ret,
-            } => TypeNode::KFunction {
-                quantifiers,
-                bounds,
+            TypeNode::KFunction { params, ret } => TypeNode::KFunction {
                 params: Record::over(params.raw()),
                 ret: child(ret),
             },
             TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
                 elements,
                 classes,
                 ret,
             } => TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
                 elements: Elements::over(elements.raw()),
                 classes,
                 ret: child(ret),
+            },
+            TypeNode::Scheme { group, body } => TypeNode::Scheme {
+                group,
+                body: child(body),
             },
             TypeNode::Quantified { index, bound } => TypeNode::Quantified { index, bound },
             TypeNode::Lexical {

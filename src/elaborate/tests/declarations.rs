@@ -6,7 +6,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, FoldDirection, KKind, KType, NodeSchema, Parametric,
     ReductionMode, SigOrigin, SigSchema, TypeNode, TypeRegistry, display_name, member,
-    quantifier_bounds, shape_return, shape_slots,
+    shape_return, shape_slots,
 };
 
 use super::{Held, Program, brought, declared, with_program};
@@ -848,7 +848,7 @@ fn a_bounded_quantifier_carries_its_bound() {
             let (types, scratch) = (program.types, program.scratch);
             let bounds = |kt: DeclaredType<Parametric>| {
                 let scheme = kt.as_scheme().expect("a quantified member is a scheme");
-                let mut bounds = quantifier_bounds(types, scheme).to_vec();
+                let mut bounds = scheme.group(types).bounds.to_vec();
                 bounds.sort();
                 bounds
             };

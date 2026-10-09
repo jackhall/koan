@@ -220,10 +220,12 @@ pub fn call<'graph, 'here>(
     let returns = callee
         .as_callable()
         .and_then(Knotted::function)
-        .and_then(|function| match function.ktype().node(program.types()) {
-            TypeNode::KFunction { ret, .. } => Some(ret),
-            _ => None,
-        });
+        .and_then(
+            |function| match function.ktype().view(program.types()).body {
+                TypeNode::KFunction { ret, .. } => Some(ret),
+                _ => None,
+            },
+        );
     Request {
         placement: returns.map_or(Placement::Shares, placement_of),
         use_,
@@ -578,13 +580,8 @@ fn frame<'graph, 'here>(
     arguments.as_record().ok_or_else(misnamed)?;
     let shape = function.shape();
     let quantified = matches!(function.ktype(), DeclaredType::Scheme(_));
-    let TypeNode::KFunction {
-        quantifiers,
-        bounds,
-        params,
-        ret,
-    } = function.ktype().node(types)
-    else {
+    let view = function.ktype().view(types);
+    let TypeNode::KFunction { params, ret } = view.body else {
         unreachable!("a function's type is a function type")
     };
     // `Bump::new` claims no chunk until something is put in it, so a callee with no group pays
@@ -614,8 +611,8 @@ fn frame<'graph, 'here>(
     );
     match kind {
         CallKind::Keyworded if quantified => {
-            let mut solved = BumpVec::with_capacity_in(quantifiers.len(), scratch);
-            solved.resize(quantifiers.len(), KType::NEVER);
+            let mut solved = BumpVec::with_capacity_in(view.group.names.len(), scratch);
+            solved.resize(view.group.names.len(), KType::NEVER);
             for (name, index) in function.quantifier_map().iter() {
                 solved[index] = carried(name).ok_or_else(misnamed)?;
             }
@@ -623,7 +620,7 @@ fn frame<'graph, 'here>(
         }
         CallKind::Keyworded => {}
         CallKind::ByName => {
-            let mut collector = Collector::<KType>::new(scratch, bounds);
+            let mut collector = Collector::<KType>::new(scratch, view.group.bounds);
             // The load laid the parameters of the callee it saw out in symbol order, and records
             // contributions only where its argument names no field but those: a record as long as
             // both that list and this callee's parameters, naming each (read below), names the

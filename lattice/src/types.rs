@@ -12,8 +12,8 @@
 //! # The relations
 //!
 //! [`is_subtype_of`] is one reflexive partial order over concrete types ([`KType`]), memoized
-//! through the registry's verdict edges, which never solves; every construction reads it. [`fits`] contains it and solves — a quantified
-//! binder fits another through an instance, a module's signature fits a declared one through its
+//! through the registry's verdict edges, which never solves; every construction reads it. [`fits`] contains it and solves — a scheme fits
+//! another through an instance, a module's signature fits a declared one through its
 //! members — and every question reads it, [`satisfied_by`] from a slot's side. [`join`] is the least upper bound — the larger operand when the two are ordered,
 //! their canonical union otherwise — and [`meet`] the greatest lower bound. [`admits_with`] walks a
 //! declared type against a carried one and collects what would solve the quantified positions;
@@ -76,9 +76,11 @@ mod window;
 mod tests;
 
 pub use digest::TypeDigest;
-pub use handle::{DeclaredType, KType, Parametric, Scheme, TypeHandle, builtin_types};
+pub use handle::{
+    DeclaredType, DeclaredView, KType, Parametric, Scheme, TypeHandle, builtin_types,
+};
 pub use kind::KKind;
-pub use node::{ContentKey, NodeSchema, TypeNode, Variable};
+pub use node::{ContentKey, Group, NodeSchema, TypeNode, Variable};
 pub use operators::{FoldDirection, ReductionMode};
 pub use ranking::{Judged, Verdict};
 pub use record::Record;
@@ -100,9 +102,9 @@ pub use substitute::Side;
 pub use typed::{
     Substitutable, admit_by_class, bound_above, erase_rigid, fits, fits_application,
     instance_under, instantiate_quantified, is_subtype_of, join, join_iter, judge_by_class,
-    lower_end_outside, meet, outranks, quantifier_bounds, read_through, satisfied_by,
-    scheme_bound_above, select_by_class, shape_specificity, sig_fits, solving_slots,
-    substitute_levels, substitute_parameters, substitute_quantified, tied_members,
+    lower_end_outside, meet, outranks, read_through, satisfied_by, scheme_bound_above,
+    select_by_class, shape_specificity, sig_fits, solving_slots, substitute_levels,
+    substitute_parameters, substitute_quantified, tied_members,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use walk::Variance;

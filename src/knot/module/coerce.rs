@@ -213,7 +213,7 @@ pub fn coerce<'graph, 'cell>(
     let (Some(src), Some(dst)) = (concrete(types, src), concrete(types, dst)) else {
         return Err(unsupported);
     };
-    let node = declared.node(cx.types);
+    let node = declared.view(cx.types).body;
     // Only a function slot is a scheme, so every other arm's two sides are types.
     let (src_type, dst_type) = (src.as_type(), dst.as_type());
     match node {
@@ -487,9 +487,8 @@ fn declared_of<'run, 'x>(
     scratch: BumpAllocator<'x>,
     declared: DeclaredType<Parametric>,
 ) -> Declared<'run, 'x> {
-    let node = declared.node(types);
-    match node {
-        TypeNode::KFunction { params, ret, .. } => Declared::Function { params, ret },
+    match declared.view(types).body {
+        TypeNode::KFunction { params, ret } => Declared::Function { params, ret },
         TypeNode::ExpressionShape { elements, ret, .. } => {
             let mut slots = BumpVec::new_in(scratch);
             slots.extend(elements.iter().filter_map(|element| match element {

@@ -114,8 +114,8 @@ use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KKind, KType,
     Parametric, Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with,
     bound_above, class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class,
-    meet, quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
-    select_by_class, shape_return, shape_slots, solving_slots,
+    meet, read_through, scheme_bound_above, scheme_return, scheme_slots, select_by_class,
+    shape_return, shape_slots, solving_slots,
 };
 use crate::values::{
     ConstructionRefused, Value, construction, dict_type, list_type, record_type, retyped_to, under,
@@ -763,7 +763,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             DeclaredType::Type(ktype) => Some(ktype),
             DeclaredType::Scheme(scheme) => {
                 debug_assert_eq!(
-                    crate::type_lattice::quantifier_bounds(self.types, scheme).len(),
+                    scheme.group(self.types).bounds.len(),
                     shape.group_levels().len(),
                     "the type channel numbered the callable's own group"
                 );
@@ -906,9 +906,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         at: SourceRef,
     ) -> Result<Made<'p>, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
-        let TypeNode::KFunction { quantifiers, .. } = types.scheme_node(scheme) else {
-            unreachable!("a scheme is a function type over a group")
-        };
+        let quantifiers = scheme.group(types).names;
         let Some(wanted) =
             wanted.filter(|wanted| matches!(types.node(*wanted), TypeNode::KFunction { .. }))
         else {
@@ -1170,8 +1168,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         let mut slots = BumpVec::new_in(scratch);
         slots.extend(scheme_slots(scheme, types));
-        let bounds = quantifier_bounds(types, scheme);
-        let TypeNode::ExpressionShape { classes, .. } = types.scheme_node(scheme) else {
+        let bounds = scheme.group(types).bounds;
+        let TypeNode::ExpressionShape { classes, .. } = shape.view(types).body else {
             unreachable!("a candidate's shape is an expression shape")
         };
         let class = |slot: usize| class_of(classes, slot);
@@ -1319,11 +1317,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             DeclaredType::Scheme(scheme) => {
                 slots.extend(scheme_slots(scheme, types));
-                let quantifiers = match types.scheme_node(scheme) {
-                    TypeNode::ExpressionShape { quantifiers, .. } => quantifiers,
-                    _ => &[],
-                };
-                (quantifier_bounds(types, scheme), quantifiers)
+                let group = scheme.group(types);
+                (group.bounds, group.names)
             }
         };
         let read = self.solved_from(shape, arguments, contributions);
@@ -1368,11 +1363,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         at: SourceRef,
     ) -> ShapeError<'graph> {
         let (types, scratch) = (self.types, self.scratch);
-        let TypeNode::KFunction { quantifiers, .. } = types.scheme_node(scheme) else {
-            unreachable!("a scheme is a function type over a group")
-        };
         ShapeError::Unfixed {
-            variables: quantifiers,
+            variables: scheme.group(types).names,
             wanted: wanted.map(|wanted| bound_above(types, scratch, wanted)),
             at,
         }
@@ -2029,25 +2021,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// the load knows of no function there.
     fn callee(&self, head: Bound) -> Option<Callee<'p>> {
         let (types, scratch) = (self.types, self.scratch);
-        let (node, function, exact) = match head {
-            DeclaredType::Type(interval) => (
-                types.node(interval.upper),
-                DeclaredType::Type(interval.upper),
-                interval.is_exact(),
-            ),
-            DeclaredType::Scheme(scheme) => (
-                types.scheme_node(scheme),
-                DeclaredType::Scheme(scheme),
-                true,
-            ),
+        let (function, exact) = match head {
+            DeclaredType::Type(interval) => {
+                (DeclaredType::Type(interval.upper), interval.is_exact())
+            }
+            DeclaredType::Scheme(scheme) => (DeclaredType::Scheme(scheme), true),
         };
-        let TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            params,
-            ret,
-        } = node
-        else {
+        let view = function.view(types);
+        let TypeNode::KFunction { params, ret } = view.body else {
             return None;
         };
         let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
@@ -2063,7 +2044,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         // The shape's group may be numbered otherwise than the callee's, and nothing reads one
         // through the other: the shape is judged and returns through its own group, and the frame
         // solves the callee's.
-        let shape = types.shape_scheme(scratch, quantifiers, bounds, &elements, classes, ret);
+        let shape = types.shape_scheme(
+            scratch,
+            view.group.names,
+            view.group.bounds,
+            &elements,
+            classes,
+            ret,
+        );
         let wanted = match function {
             DeclaredType::Type(_) => Some(record_type(types, scratch, params.iter())),
             DeclaredType::Scheme(_) => None,
@@ -2073,7 +2061,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             shape: shape.handle,
             names: scratch.alloc_slice_fill_iter(sorted.iter().map(|(name, _)| *name)),
             wanted,
-            exact: exact && (function.as_type().is_none() || bounds.is_empty()),
+            exact,
         })
     }
 

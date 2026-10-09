@@ -10,7 +10,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::types::digest::node_digest;
 use crate::types::handle::{Handle, KType, TypeHandle, builtin_types};
 use crate::types::kind::KKind;
-use crate::types::node::{ContentKey, NodeSchema, TypeNode};
+use crate::types::node::{ContentKey, Group, NodeSchema, TypeNode};
 use crate::types::record::Record;
 use crate::types::registry::TypeRegistry;
 use crate::types::render::display_name;
@@ -179,9 +179,15 @@ fn every_node_kind_has_its_own_tag() {
     let elements = [DispatchTokenElement::Keyword(keyword)];
     let members = [KType::NUMBER.raw(), KType::STR.raw()];
     let needed = [field];
+    let (group_names, group_bounds) = ([name], [KType::ANY]);
+    let group = Group {
+        names: &group_names,
+        bounds: &group_bounds,
+    };
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
+    let body = types.function_type(region, &fields, KType::NUMBER.raw());
     // One representative per node kind, whose digests the distinctness assertion below reads. The
     // exhaustive match after the list is what makes a new variant a compile error here.
     let representatives: Vec<TypeNode<'_>> = vec![
@@ -226,17 +232,17 @@ fn every_node_kind_has_its_own_tag() {
             fields: Record::over(&fields),
         },
         TypeNode::KFunction {
-            quantifiers: &[],
-            bounds: &[],
             params: Record::over(&fields),
             ret: KType::NUMBER.raw(),
         },
         TypeNode::ExpressionShape {
-            quantifiers: &[],
-            bounds: &[],
             elements: Elements::over(&elements),
             classes: &[],
             ret: KType::NUMBER.raw(),
+        },
+        TypeNode::Scheme {
+            group: &group,
+            body,
         },
         TypeNode::Quantified {
             index: 0,
@@ -313,6 +319,7 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::Record { .. } => "Record",
             TypeNode::KFunction { .. } => "KFunction",
             TypeNode::ExpressionShape { .. } => "ExpressionShape",
+            TypeNode::Scheme { .. } => "Scheme",
             TypeNode::Quantified { .. } => "Quantified",
             TypeNode::Lexical { .. } => "Lexical",
             TypeNode::Union { .. } => "Union",

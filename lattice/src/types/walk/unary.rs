@@ -5,7 +5,7 @@
 //! same order. Every structural recursion over one type is [`visit`] or [`rebuild`] over that
 //! pair, so a new compound variant is a compile error in exactly two matches here.
 //! [`visit_free_quantified`] is [`visit`] narrowed to the free `Quantified` positions, the probe
-//! every binder check shares.
+//! every scheme check shares.
 //!
 //! A signature's members and a sealed member's schema are closed content: neither walk reaches
 //! inside one.
@@ -64,9 +64,9 @@ impl Context {
         }
     }
 
-    /// Binders — expression shapes, and function types carrying a group — on the path from the
-    /// root to here, the root included: `0` means a [`TypeNode::Quantified`] seen here is
-    /// **free**, `1` that it is bound by the root binder's own group.
+    /// Schemes on the path from the root to here, the root included: `0` means a
+    /// [`TypeNode::Quantified`] seen here is **free**, `1` that it is bound by the root scheme's own
+    /// group.
     pub fn binder_depth(&self) -> usize {
         self.binder_depth
     }
@@ -103,8 +103,8 @@ pub fn visit_in<'run>(
     visit_at(types, scratch, root, &mut context, at)
 }
 
-/// [`visit_in`] over the **free** `Quantified` positions of `root` alone: a nested binder's group
-/// is skipped whole, every other node is descended, and each free variable's index is handed to
+/// [`visit_in`] over the **free** `Quantified` positions of `root` alone: a nested scheme is
+/// skipped whole, every other node is descended, and each free variable's index is handed to
 /// `at` with its context. Returns whether `at` stopped the walk.
 pub fn visit_free_quantified<'run>(
     types: &TypeRegistry<'run>,
@@ -267,7 +267,7 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(Handle, bool)) {
             out(value, false);
         }
         TypeNode::Record { fields } => fields.values().for_each(|kt| out(kt, false)),
-        TypeNode::KFunction { params, ret, .. } => {
+        TypeNode::KFunction { params, ret } => {
             params.values().for_each(|kt| out(kt, true));
             out(ret, false);
         }
@@ -279,6 +279,8 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(Handle, bool)) {
             }
             out(ret, false);
         }
+        // The body's own node flips its parameters and slots.
+        TypeNode::Scheme { body, .. } => out(body, false),
         TypeNode::Union { members } => members.iter().for_each(|m| out(*m, false)),
         // A bound is concrete, and a rebuild that reaches inside one keeps it concrete: no rule
         // here finds a variable in a bound to replace.
@@ -322,35 +324,29 @@ fn reassemble(
             });
             types.record(scratch, &fields)
         }
-        TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            params,
-            ..
-        } => {
+        TypeNode::KFunction { params, .. } => {
             let (values, ret) = new.split_at(params.len());
             let mut values = values.iter();
             let params = map_fields(scratch, params.raw(), |_| {
                 *values.next().expect("one replacement per parameter")
             });
-            types
-                .function_group(scratch, quantifiers, bounds, &params, ret[0])
-                .0
+            types.function_type(scratch, &params, ret[0])
         }
         TypeNode::ExpressionShape {
-            quantifiers,
-            bounds,
-            elements,
-            classes,
-            ..
+            elements, classes, ..
         } => {
             let mut slots = new.iter();
             let rebuilt = map_slots(scratch, elements.raw(), |_| {
                 *slots.next().expect("one replacement per slot position")
             });
             let ret = *slots.next().expect("the return follows the slots");
+            types.shape_type(scratch, &rebuilt, classes, ret)
+        }
+        // The rebuilt body still reads the group in its old order, which the door renumbers: a
+        // rebuild that drops a variable's first occurrence moves it.
+        TypeNode::Scheme { group, .. } => {
             types
-                .shape_group(scratch, quantifiers, bounds, &rebuilt, classes, ret)
+                .bind_group(scratch, group.names, group.bounds, new[0])
                 .0
         }
         TypeNode::Union { .. } => match cfg.union {

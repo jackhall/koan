@@ -13,6 +13,8 @@ use crate::types::substitute::{bound_above, substitute_levels, substitute_quanti
 use crate::types::unify::{Collector, admits};
 use crate::types::walk::Variance;
 
+use super::RawSchemes;
+
 /// A registry, an interner and a region.
 struct World<'r> {
     region: BumpAllocator<'r>,
@@ -47,7 +49,7 @@ impl<'r> World<'r> {
         let names: Vec<TypeSymbol> = group.iter().map(|text| self.name(text)).collect();
         let bounds = vec![KType::ANY; names.len()];
         self.types
-            .function_group(
+            .function_scheme_raw(
                 self.region,
                 &names,
                 &bounds,

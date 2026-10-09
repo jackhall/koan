@@ -14,7 +14,7 @@ use crate::symbols::{
 };
 
 use super::handle::{DeclaredType, Handle, KType, MODULE_NAME, Parametric, TypeHandle, leaf_name};
-use super::node::TypeNode;
+use super::node::{Group, TypeNode};
 use super::operators::{FoldDirection, ReductionMode};
 use super::record::Record;
 use super::registry::TypeRegistry;
@@ -139,35 +139,18 @@ fn write_name_in(
             write_param_record(f, *fields, types, symbols, binder)?;
             f.write_str("}")
         }
-        // `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`, and without the group where it binds none — the
-        // group writer emits its own trailing space and nothing at all for an empty group, so the
-        // monomorphic surface is unchanged. Params and return read against the function's own
-        // group where it has one, and against the enclosing binder's where it has none.
-        TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            params,
-            ret,
-        } => {
-            let inner = if quantifiers.is_empty() {
-                binder
-            } else {
-                quantifiers
-            };
-            f.write_str(":(FN ")?;
-            write_quantifier_group(f, quantifiers, bounds, types, symbols)?;
-            f.write_str(":{")?;
-            write_param_record(f, *params, types, symbols, inner)?;
-            f.write_str("} -> ")?;
-            write_name_in(*ret, f, types, symbols, inner)?;
-            f.write_str(")")
+        TypeNode::KFunction { params, ret } => {
+            write_function(f, Group::EMPTY, *params, *ret, types, symbols, binder)
         }
-        TypeNode::ExpressionShape { .. } => {
-            f.write_str(":(EXPR ")?;
-            let shape = Shape::of(types, kt).expect("the ExpressionShape arm");
-            write_shape_surface(f, shape, types, symbols, binder)?;
-            f.write_str(")")
-        }
+        // A scheme spells its group inside its body's own surface.
+        TypeNode::Scheme { group, body } => match types.node(*body) {
+            TypeNode::KFunction { params, ret } => {
+                write_function(f, **group, params, ret, types, symbols, binder)
+            }
+            TypeNode::ExpressionShape { .. } => write_shape(f, kt, types, symbols, binder),
+            _ => unreachable!("a scheme's body is a function type or a shape"),
+        },
+        TypeNode::ExpressionShape { .. } => write_shape(f, kt, types, symbols, binder),
         // A quantified position renders as the name its enclosing binder bound it to. The
         // placeholder is diagnostic-only: a bare leaf outside a binder is unreachable from any
         // spelling, since the only doors that mint one are the two canonicalizing interns.
@@ -306,6 +289,47 @@ pub(super) fn display_handle<'r, 'run>(
     }
 }
 
+/// `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`, and without the group where `group` is empty — the
+/// group writer emits its own trailing space and nothing at all for an empty group, so the
+/// monomorphic surface is unchanged. Params and return read against the scheme's own group where
+/// it has one, and against the enclosing `binder` where it has none.
+fn write_function(
+    f: &mut std::fmt::Formatter<'_>,
+    group: Group<'_>,
+    params: Record<'_>,
+    ret: Handle,
+    types: &TypeRegistry<'_>,
+    symbols: &SymbolInterner,
+    binder: &[TypeSymbol],
+) -> std::fmt::Result {
+    let inner = if group.names.is_empty() {
+        binder
+    } else {
+        group.names
+    };
+    f.write_str(":(FN ")?;
+    write_quantifier_group(f, group.names, group.bounds, types, symbols)?;
+    f.write_str(":{")?;
+    write_param_record(f, params, types, symbols, inner)?;
+    f.write_str("} -> ")?;
+    write_name_in(ret, f, types, symbols, inner)?;
+    f.write_str(")")
+}
+
+/// `:(EXPR …)` — a shape's type surface, or a shape scheme's, read through [`Shape::of`].
+fn write_shape(
+    f: &mut std::fmt::Formatter<'_>,
+    kt: Handle,
+    types: &TypeRegistry<'_>,
+    symbols: &SymbolInterner,
+    binder: &[TypeSymbol],
+) -> std::fmt::Result {
+    f.write_str(":(EXPR ")?;
+    let shape = Shape::of(types, kt).expect("a shape or a shape scheme");
+    write_shape_surface(f, shape, types, symbols, binder)?;
+    f.write_str(")")
+}
+
 /// Whether this type's surface opens with the type sigil `:` — the predicate a parameter position
 /// consults to decide whether to prefix one of its own, without inspecting rendered text.
 pub(super) fn surface_opens_sigil(kt: Handle, types: &TypeRegistry<'_>) -> bool {
@@ -315,6 +339,7 @@ pub(super) fn surface_opens_sigil(kt: Handle, types: &TypeRegistry<'_>) -> bool 
         | TypeNode::Record { .. }
         | TypeNode::KFunction { .. }
         | TypeNode::ExpressionShape { .. }
+        | TypeNode::Scheme { .. }
         | TypeNode::Union { .. }
         | TypeNode::ConstructorApply { .. } => true,
         TypeNode::DeferredReturn(surface) => surface.opens_sigil(),
@@ -351,8 +376,8 @@ fn write_param_record(
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.
 ///
-/// The group's bounds are read as the shape node stores them, one per quantifier. Slots and return
-/// read against the shape's own group where it has one, and against the enclosing `binder`'s where
+/// The group's bounds are read as the scheme stores them, one per quantifier. Slots and return
+/// read against the scheme's own group where it has one, and against the enclosing `binder`'s where
 /// it has none, as a function type's do.
 fn write_shape_surface(
     f: &mut std::fmt::Formatter<'_>,
@@ -373,7 +398,7 @@ fn write_shape_surface(
     write_name_in(shape.ret, f, types, symbols, inner)
 }
 
-/// `FOR ALL #[<names>] ` — the quantifier group a binder's surface opens with, or nothing at all
+/// `FOR ALL #[<names>] ` — the quantifier group a scheme's surface opens with, or nothing at all
 /// when it quantifies over nothing. A group where some variable's bound is not `Any` is a dict of
 /// each name to its bound, `FOR ALL #{Elt: Number, Key: Any} `. The trailing space is the group's,
 /// so the head that follows spells the same either way.

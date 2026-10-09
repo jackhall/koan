@@ -31,17 +31,17 @@ use crate::bump::{BumpAllocator, BumpBackedMap, BumpVec, bump_table};
 use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 
 use super::digest::{self, TypeDigest, schema_content_digest};
-use super::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
+use super::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use super::kind::KKind;
-use super::node::{ContentKey, NodeSchema, TypeNode};
+use super::node::{ContentKey, Group, NodeSchema, TypeNode};
 use super::order::{Dropped, is_subtype_of, unsubsumed};
-use super::record::{Record, map_fields};
+use super::record::Record;
 use super::run::{Elements, Run};
 use super::schema::{
     DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, canonical_groups,
     canonical_overloads, member,
 };
-use super::shape::{DeferredReturnSurface, DispatchTokenElement, map_slots, written_order};
+use super::shape::{DeferredReturnSurface, DispatchTokenElement, written_order};
 use super::signatures::canonical_applications;
 use super::substitute::substitute_quantified;
 use super::verdicts::{Relation, VERDICT_SLOTS, VerdictTable};
@@ -52,7 +52,7 @@ use super::walk::unary::{Visit, children, visit, visit_free_quantified};
 #[derive(Clone, Copy)]
 struct Entry<'run> {
     node: TypeNode<'run>,
-    /// Whether a `Quantified` position is reachable without crossing a shape's own binder.
+    /// Whether a `Quantified` position is reachable without crossing a scheme.
     quantified: bool,
     /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable.
     rigid: bool,
@@ -86,8 +86,8 @@ impl<'run> Entry<'run> {
             parametric,
             carrier,
         };
-        // A binder — a shape or a function carrying a group — binds its own variables, so
-        // nothing under one is free here, and the binder itself is a quantified callable's type.
+        // A scheme binds its own variables, so nothing under one is free here, and the scheme
+        // itself is a quantified callable's type.
         if node.binds_quantifiers() {
             return Entry {
                 quantified: false,
@@ -120,9 +120,8 @@ impl<'run> Entry<'run> {
 /// The node table: keyed by digest under the identity hasher, bucket array in the run region.
 type NodeTable<'run> = BumpBackedMap<'run, TypeDigest, Entry<'run>, IdentityBuildHasher>;
 
-/// What interning a binder produced — a shape or a function type: its declared type, a scheme for
-/// a non-empty group, and how the caller's declaration-order quantifier indices map onto the
-/// interned group's order.
+/// What a scheme door produced: its declared type — a scheme for a non-empty group — and how the
+/// caller's declaration-order quantifier indices map onto the interned group's order.
 #[derive(Clone, Copy, Debug)]
 pub struct GroupIntern<'s> {
     pub handle: DeclaredType<Parametric>,
@@ -306,14 +305,18 @@ impl<'run> TypeRegistry<'run> {
         self.entry(handle.raw()).node.view()
     }
 
-    /// A scheme's node — a binder over a non-empty group — its positions read as [`Parametric`],
-    /// since each may read the group's own variables.
-    pub fn scheme_node(&self, scheme: Scheme) -> TypeNode<'run, Parametric> {
-        self.entry(scheme.raw()).node.view()
+    /// `handle`'s own quantifier group and the type under it: a scheme's group and body, or the
+    /// empty group over `handle` itself. How the lattice's raw-handle relations read a callable
+    /// whose handle may name a scheme.
+    pub(super) fn split(&self, handle: Handle) -> (Group<'run>, Handle) {
+        match self.node(handle) {
+            TypeNode::Scheme { group, body } => (*group, body),
+            _ => (Group::EMPTY, handle),
+        }
     }
 
-    /// What `handle` is declared as: a [`Scheme`] where it names a binder over a non-empty group,
-    /// and a [`Parametric`] otherwise.
+    /// What `handle` is declared as: a [`Scheme`](super::handle::Scheme) where it names a scheme node, and a
+    /// [`Parametric`] otherwise.
     pub(super) fn declared(&self, handle: Handle) -> DeclaredType<Parametric> {
         if self.entry(handle).node.binds_quantifiers() {
             DeclaredType::Scheme(wrap(handle))
@@ -426,19 +429,20 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// The function type `(params) -> ret`, binding no group: a variable inside reads the enclosing
-    /// binder's group.
+    /// scheme's group.
     pub fn function_type<H: TypeHandle>(
         &self,
         scratch: BumpAllocator<'_>,
         params: &[(BinderSymbol, H)],
         ret: H,
     ) -> H {
-        wrap(self.intern_function(scratch, &[], &[], params, ret.raw()))
+        wrap(self.intern_function(scratch, params, ret.raw()))
     }
 
     /// The one door that mints a quantified function type, its `FOR ALL` group (`quantifiers` and
-    /// their `bounds`, in declaration order) put in group order: a [`Scheme`], or the plain function
-    /// type where the group is empty.
+    /// their `bounds`, in declaration order) put in group order: it interns the plain function type,
+    /// then binds the group over it ([`bind_group`](Self::bind_group)). A [`Scheme`](super::handle::Scheme), or the plain
+    /// function type where the group is empty.
     pub fn function_scheme<'s>(
         &self,
         scratch: BumpAllocator<'s>,
@@ -447,67 +451,20 @@ impl<'run> TypeRegistry<'run> {
         params: &[(BinderSymbol, Parametric)],
         ret: Parametric,
     ) -> GroupIntern<'s> {
-        let (handle, quantifier_map) =
-            self.function_group(scratch, quantifiers, bounds, params, ret.raw());
-        GroupIntern {
-            handle: self.declared(handle),
-            quantifier_map,
-        }
+        let body = self.function_type(scratch, params, ret);
+        self.scheme(scratch, quantifiers, bounds, body.raw())
     }
 
-    /// A function type over a group in declaration order, put in group order.
-    ///
-    /// The order is [`shape_group`](Self::shape_group)'s, over the params record and the return
-    /// instead of over an element run: see [`intern_binder`](Self::intern_binder). The census walks the
-    /// params in **symbol-sorted key order**, because a record's identity is order-blind and the
-    /// numbering must be too; the stored record keeps declaration order for rendering. An empty
-    /// group interns straight away and binds nothing.
-    pub(super) fn function_group<'s, H: TypeHandle>(
-        &self,
-        scratch: BumpAllocator<'s>,
-        quantifiers: &[TypeSymbol],
-        bounds: &[KType],
-        params: &[(BinderSymbol, H)],
-        ret: Handle,
-    ) -> (Handle, &'s [usize]) {
-        debug_assert_eq!(quantifiers.len(), bounds.len(), "one bound per quantifier");
-        if quantifiers.is_empty() {
-            return (self.intern_function(scratch, &[], &[], params, ret), &[]);
-        }
-        let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
-        sorted.extend(params.iter().map(|(name, kt)| (*name, kt.raw())));
-        sorted.sort_by_key(|(name, _)| name.symbol());
-        self.intern_binder(
-            scratch,
-            quantifiers,
-            bounds,
-            sorted
-                .iter()
-                .map(|(_, kt)| (*kt, Variance::Contra))
-                .chain(std::iter::once((ret, Variance::Co))),
-            ret,
-            |names, bounds, open, ret| {
-                let params = map_fields(scratch, params, |kt| open(kt.raw()));
-                self.intern_function(scratch, names, bounds, &params, ret)
-            },
-        )
-    }
-
-    /// Intern a function type whose group is already in group order. Probe-first, as
-    /// [`intern_shape`](Self::intern_shape) is, so the params run and the group are copied into
-    /// the region only on a genuine miss.
+    /// Intern a function type. Probe-first, as [`intern_shape`](Self::intern_shape) is, so the
+    /// params run is copied into the region only on a genuine miss.
     fn intern_function<H: TypeHandle>(
         &self,
         scratch: BumpAllocator<'_>,
-        quantifiers: &[TypeSymbol],
-        bounds: &[KType],
         params: &[(BinderSymbol, H)],
         ret: Handle,
     ) -> Handle {
-        let digest = digest::function_digest(scratch, bounds, params, ret.digest());
+        let digest = digest::function_digest(scratch, params, ret.digest());
         self.intern_digested(digest, || TypeNode::KFunction {
-            quantifiers: self.rehome(quantifiers),
-            bounds: self.rehome(bounds),
             params: Record::over(self.rehome_fields(params)),
             ret,
         })
@@ -819,26 +776,34 @@ impl<'run> TypeRegistry<'run> {
     // --- Shapes ---
 
     /// The expression shape over `elements` returning `ret`, binding no group: a variable inside
-    /// reads the enclosing binder's group.
+    /// reads the enclosing scheme's group.
     ///
     /// `classes` is each slot's dense priority class, as [`dense_classes`](super::shape::dense_classes)
     /// normalizes a written ranking; empty for written order, and written order spelled out is
     /// stored empty, so the two spellings are one handle.
     pub fn shape_type<H: TypeHandle>(
         &self,
-        scratch: BumpAllocator<'_>,
+        _scratch: BumpAllocator<'_>,
         elements: &[DispatchTokenElement<H>],
         classes: &[u8],
         ret: H,
     ) -> H {
-        wrap(
-            self.shape_group(scratch, &[], &[], elements, classes, ret.raw())
-                .0,
-        )
+        debug_assert!(
+            classes.is_empty()
+                || classes.len()
+                    == elements
+                        .iter()
+                        .filter(|e| matches!(e, DispatchTokenElement::Slot(_)))
+                        .count(),
+            "a ranking names one class per slot",
+        );
+        let classes = if written_order(classes) { &[] } else { classes };
+        wrap(self.intern_shape(elements, classes, ret.raw()))
     }
 
     /// The one door that mints a quantified expression shape, its `FOR ALL` group (`quantifiers`
-    /// and their `bounds`, in declaration order) put in group order: a [`Scheme`], or the plain
+    /// and their `bounds`, in declaration order) put in group order: it interns the plain shape,
+    /// then binds the group over it ([`bind_group`](Self::bind_group)). A [`Scheme`](super::handle::Scheme), or the plain
     /// shape where the group is empty.
     pub fn shape_scheme<'s>(
         &self,
@@ -849,100 +814,103 @@ impl<'run> TypeRegistry<'run> {
         classes: &[u8],
         ret: Parametric,
     ) -> GroupIntern<'s> {
-        let (handle, quantifier_map) =
-            self.shape_group(scratch, quantifiers, bounds, elements, classes, ret.raw());
+        let body = self.shape_type(scratch, elements, classes, ret);
+        self.scheme(scratch, quantifiers, bounds, body.raw())
+    }
+
+    /// The declared type both scheme doors answer: [`bind_group`](Self::bind_group) over `body`.
+    fn scheme<'s>(
+        &self,
+        scratch: BumpAllocator<'s>,
+        quantifiers: &[TypeSymbol],
+        bounds: &[KType],
+        body: Handle,
+    ) -> GroupIntern<'s> {
+        let (handle, quantifier_map) = self.bind_group(scratch, quantifiers, bounds, body);
         GroupIntern {
             handle: self.declared(handle),
             quantifier_map,
         }
     }
 
-    /// An expression shape over a group in declaration order, put in group order — see
-    /// [`intern_binder`](Self::intern_binder), which is run here over each argument slot in element
-    /// order and then the return.
+    /// `body`, a function type or a shape whose free `Quantified` read `quantifiers` by declaration
+    /// index, bound under that group put in group order ([`group_order`](Self::group_order)): a
+    /// `Scheme` node, or `body` itself for an empty group. The two scheme doors' shared core, and
+    /// how a rebuilt scheme is put back together. The body is substituted into group order, and the
+    /// group is copied into the region only on a miss. The returned map takes a declaration index
+    /// to a group index.
     ///
     /// Argument names never reach here — they are binder-side — and the quantifier names are
-    /// render-only, so two shapes alpha-equivalent under a renaming intern to the node whichever
-    /// spelling built first. The returned map translates a caller's declaration-order bindings into
-    /// the interned group's order.
-    pub(super) fn shape_group<'s, H: TypeHandle>(
+    /// render-only, so two schemes alpha-equivalent under a renaming intern to the node whichever
+    /// spelling built first.
+    pub(super) fn bind_group<'s>(
         &self,
         scratch: BumpAllocator<'s>,
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
-        elements: &[DispatchTokenElement<H>],
-        classes: &[u8],
-        ret: Handle,
+        body: Handle,
     ) -> (Handle, &'s [usize]) {
-        debug_assert!(
-            classes.is_empty()
-                || classes.len()
-                    == elements
-                        .iter()
-                        .filter(|e| matches!(e, DispatchTokenElement::Slot(_)))
-                        .count(),
-            "a ranking names one class per slot",
-        );
         debug_assert_eq!(quantifiers.len(), bounds.len(), "one bound per quantifier");
-        let classes = if written_order(classes) { &[] } else { classes };
         if quantifiers.is_empty() {
-            return (self.intern_shape(&[], &[], elements, classes, ret), &[]);
+            return (body, &[]);
         }
-        self.intern_binder(
-            scratch,
-            quantifiers,
-            bounds,
-            elements
-                .iter()
-                .filter_map(|element| match element {
-                    DispatchTokenElement::Slot(kt) => Some((kt.raw(), Variance::Contra)),
-                    DispatchTokenElement::Keyword(_) => None,
-                })
-                .chain(std::iter::once((ret, Variance::Co))),
-            ret,
-            |names, bounds, open, ret| {
-                let elements = map_slots(scratch, elements, |kt| open(kt.raw()));
-                self.intern_shape(names, bounds, &elements, classes, ret)
-            },
-        )
+        let positions = self.binder_positions(scratch, body);
+        let group = self.group_order(scratch, quantifiers, bounds, positions.iter().copied());
+        let body = substitute_quantified(self, scratch, body, &group.bindings);
+        debug_assert!(
+            self.quantifier_indices_in_range(scratch, body, group.names.len()),
+            "every quantified position names an index of the scheme's own group",
+        );
+        let digest = digest::scheme_digest(&group.bounds, body.digest());
+        let handle = self.intern_digested(digest, || TypeNode::Scheme {
+            group: self.bump.alloc(Group {
+                names: self.rehome(&group.names),
+                bounds: self.rehome(&group.bounds),
+            }),
+            body,
+        });
+        (handle, group.quantifier_map)
     }
 
-    /// Intern a binder — a function type or a shape — over `quantifiers` and `bounds` in
-    /// declaration order, put in group order ([`group_order`](Self::group_order)). `positions` are
-    /// the type positions the binder binds, each with its polarity, walked for the census; `intern`
-    /// builds the node from the group in group order, reading each of its own positions through the
-    /// substitution it is handed, with the return already substituted.
-    fn intern_binder<'s>(
+    /// The positions a scheme's body binds, each with its polarity, in the order its group is
+    /// numbered over: a shape's slots in element order, or a function type's parameters in
+    /// symbol-sorted key order (a record's identity is order-blind, so the numbering must be too),
+    /// then the return.
+    fn binder_positions<'s>(
         &self,
         scratch: BumpAllocator<'s>,
-        quantifiers: &[TypeSymbol],
-        bounds: &[KType],
-        positions: impl Iterator<Item = (Handle, Variance)>,
-        ret: Handle,
-        intern: impl FnOnce(&[TypeSymbol], &[KType], &dyn Fn(Handle) -> Handle, Handle) -> Handle,
-    ) -> (Handle, &'s [usize]) {
-        debug_assert_eq!(quantifiers.len(), bounds.len(), "one bound per quantifier");
-        let group = self.group_order(scratch, quantifiers, bounds, positions);
-        let open = |kt: Handle| substitute_quantified(self, scratch, kt, &group.bindings);
-        let ret = open(ret);
-        debug_assert!(
-            self.quantifier_indices_in_range(scratch, ret, group.names.len()),
-            "every quantified position names an index of the binder's own group",
-        );
-        (
-            intern(&group.names, &group.bounds, &open, ret),
-            group.quantifier_map,
-        )
+        body: Handle,
+    ) -> BumpVec<'s, (Handle, Variance)> {
+        let mut positions = BumpVec::new_in(scratch);
+        let ret = match self.node(body) {
+            TypeNode::KFunction { params, ret } => {
+                let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
+                sorted.extend(params.iter());
+                sorted.sort_by_key(|(name, _)| name.symbol());
+                positions.extend(sorted.iter().map(|(_, kt)| (*kt, Variance::Contra)));
+                ret
+            }
+            TypeNode::ExpressionShape { elements, ret, .. } => {
+                positions.extend(elements.iter().filter_map(|element| match element {
+                    DispatchTokenElement::Slot(kt) => Some((*kt, Variance::Contra)),
+                    DispatchTokenElement::Keyword(_) => None,
+                }));
+                ret
+            }
+            _ => unreachable!("a scheme's body is a function type or a shape"),
+        };
+        positions.push((ret, Variance::Co));
+        positions
     }
 
-    /// Number a binder's variables over the `(type, variance)` positions it binds, walked in the
-    /// order given — the group order both interning doors share.
+    /// Number a scheme's variables over the `(type, variance)` positions it binds, walked in the
+    /// order given — the group order the scheme doors share.
     ///
     /// The variables some position names come first, by first occurrence in the walked order; then
     /// every variable no position names, in declaration order. No variable is dropped, so a call
     /// solves each one, and two alpha-variants intern to one handle. The caller substitutes its own
     /// positions through [`bindings`](GroupOrder::bindings) and interns the result —
-    /// [`intern_binder`](Self::intern_binder) is that caller.
+    /// [`bind_group`](Self::bind_group) is that caller.
     fn group_order<'s>(
         &self,
         scratch: BumpAllocator<'s>,
@@ -980,24 +948,19 @@ impl<'run> TypeRegistry<'run> {
         }
     }
 
-    /// Intern a shape whose group is already in group order.
+    /// Intern a shape.
     ///
     /// Probe-first: every definition mints its callable's shape, and re-running one definition —
     /// a lambda inside a loop body — mints a shape already interned. Taking the digest off the
-    /// borrowed run means the run and the quantifier group are copied into the region only on a
-    /// genuine miss.
+    /// borrowed run means the run is copied into the region only on a genuine miss.
     fn intern_shape<H: TypeHandle>(
         &self,
-        quantifiers: &[TypeSymbol],
-        bounds: &[KType],
         elements: &[DispatchTokenElement<H>],
         classes: &[u8],
         ret: Handle,
     ) -> Handle {
-        let handle = digest::shape_digest(bounds, elements, classes, ret.digest());
+        let handle = digest::shape_digest(elements, classes, ret.digest());
         self.intern_digested(handle, || TypeNode::ExpressionShape {
-            quantifiers: self.rehome(quantifiers),
-            bounds: self.rehome(bounds),
             elements: Elements::over(
                 self.bump
                     .alloc_slice_fill_iter(elements.iter().map(|element| element.raw())),
@@ -1007,8 +970,8 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
-    /// Count each variable's free contravariant occurrences across the positions a binder binds,
-    /// recording the visit order of its first occurrence. A nested binder's own group shadows this
+    /// Count each variable's free contravariant occurrences across the positions a scheme binds,
+    /// recording the visit order of its first occurrence. A nested scheme's own group shadows this
     /// one, so the census skips it.
     fn quantifier_census<'s>(
         &self,
