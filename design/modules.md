@@ -85,7 +85,10 @@ An opaque ascription, `m :| Counter`, hides each head parameter the application
 leaves unpinned behind a **carrier**. A carrier is keyed on content — the
 opaque view's own, which is its operator and signature application over the
 ascribed module's digest, under the parameter's name — and never on when or
-how often the ascription is evaluated. A transparent
+how often the ascription is evaluated. A carrier lives in the
+[branch](../lattice/src/types/identity.md#storage-a-root-and-its-branches) of
+the region its view is tied in, so a view minted at each hop of a loop is
+released with the hop. A transparent
 ascription, `m :! Counter`, shows what each parameter solves to.
 
 A carrier hides the parameter's bound too. Under
@@ -173,7 +176,7 @@ rule reads the two trees:
 | two carriers whose trees hold content at one position and differ there — a body's code, a view's operator or signature, a digest — or that name two parameters of one view | *never* one type |
 | otherwise | *maybe*, and the run compares carriers |
 
-A tree with no leaf is a **constant** tree: the load computes the digest the run
+A tree with no leaf is a **closed** tree: the load computes the digest the run
 keys the carrier on, so the load's type is the run's carrier. A tree with a leaf
 gives a rigid type the run binds to the carrier it computes, read from outside
 through its bound; it is a type of the load alone, and no value carries it. Both
@@ -200,3 +203,5 @@ equal content give two types; koan keys it on content, so they give one.
   load-time type, and a call unfolded.
 - [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.
+- [Type branches](../roadmap/rewrite/type-branches.md) — a carrier released
+  with the region its view is tied in.

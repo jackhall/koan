@@ -70,17 +70,31 @@ Inside the lattice every walk and relation runs over raw handles, and
 [typed.rs](typed.rs) wraps each relation for the rest of koan, saying where it
 wraps a result why the result keeps its handle's promise.
 
-## Storage: one region
+## Storage: a root and its branches
 
 A [`TypeRegistry`](registry.rs) is built over a bump its owner keeps for it,
 and every node it interns — with every slice a node holds — lives in that bump.
 Nothing the lattice owns carries drop glue, so the region releases the table and
 every node with it, whole.
 
+The registry is two tiers. The **root** holds every type the load builds, in
+program storage for the life of the program. A **branch** holds the types the
+run builds in one region: a small table in that region's bump, parent the root,
+created at the first intern and released with the region. A type the run
+builds lives in the region of the value it is laid down with, so a run-built
+type lives exactly as long as the values that carry it, and every handle a value
+carries resolves from the value's own region — in its branch or in the root.
+Each door interns into the branch of the region its writer allocates into: a
+`Shares` tenant into its host's, a result built into a home into the home's.
+How a value's types reach another region is the crossing's
+([crossing](../../../src/values/README.md#crossing)).
+
 The handle *is* the lookup key and the digest is already uniformly distributed,
-so the node map hashes it with an identity hasher and a lookup costs about what
-an array index would. Interning is insert-if-absent, so building the same content
-twice in a run yields one node and two equal handles. Beside each node the entry
+so each tier hashes it with an identity hasher and a lookup is at most two
+probes, each costing about what an array index would. Interning is
+insert-if-absent along the chain, so building the same content twice in a region
+yields one node and two equal handles. Identity is by digest, so two branches
+holding one content hold one handle and two copies. Beside each node the entry
 stores four flags computed off its children at intern — whether a free
 quantifier, whether any rigid variable, whether anything parametric, and whether
 an opaque carrier is reachable — so each probe is one table read. The probes are the lattice's own;
@@ -96,9 +110,12 @@ slot compares the whole key, so a collision costs a slot and never a wrong
 answer. A full bucket evicts the slot not touched last. The table is lossy by
 design: a verdict over a digest pair is a pure function — once computed it never
 changes — so **verdicts are never load-bearing**, and a forgotten one costs a
-re-walk, never a wrong answer. The registry therefore owns nothing on the global
-heap, and itself rests in a bump its owner keeps for it — in a loaded program,
-the [substrate's own](../../../src/program/README.md), released whole with the rest.
+re-walk, never a wrong answer. A verdict over a branch node outlives the branch
+harmlessly for the same reason: it is a fact about content, and holds for that
+content wherever it is interned again. The registry therefore owns nothing on
+the global heap, and itself rests in a bump its owner keeps for it — in a loaded
+program, the [substrate's own](../../../src/program/README.md), released whole
+with the rest.
 
 Every door that sorts, flattens or canonicalizes takes a **scratch allocator**
 from its caller and builds its transient buffers there, and every door computes

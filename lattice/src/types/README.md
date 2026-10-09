@@ -136,6 +136,10 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Open work
 
+- [Type branches](../../../roadmap/rewrite/type-branches.md) — the branch tier,
+  a run-built type released with the region of the values that carry it.
+- [A compact type node table](../../../roadmap/rewrite/compact-type-node-table.md)
+  — the 48 B node and the segmented table both tiers are built on.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.

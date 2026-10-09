@@ -145,7 +145,7 @@ their barriers, see the payload.
 
 A value borrows at one lifetime, `Value<'cell>`: what a writer laid down in a
 cell's region, following
-[cellgraph's contract](../../cellgraph/README.md#the-contract-three-embedder-types).
+[cellgraph's contract](../../cellgraph/README.md#the-contract-four-embedder-types).
 No arm holds program storage. A quote's body lives there, but a quote is a knot
 member, and what a member holds of program storage — a function's body shape, a
 quote's body and code shape — sits inside the member, at the lifetime the layer
@@ -309,6 +309,19 @@ plain value of its kind at that type, as a retype lays it down, its visible
 links resolved through it. The crossing doors therefore take the type registry
 the copy reads its types in, and the scheduler's step doors that cross a value
 take it from their callers.
+
+**A crossing carries types with the value.** A type the run builds lives in the
+branch of the region its value is laid down in
+([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)),
+and what a reader sees of a value is bounded only by the value: under `Any`, a
+union, a function type or a carrier a part keeps its own memo, so the types a
+value reaches are the closure over its parts' memos. A copied operand therefore
+re-interns each part's memo into the destination's branch as the copy lays the
+part down, and interns nothing for a part the seen type hides. A pinned operand
+is not walked, so the pin merges its home's whole branch into the destination's
+— a cost in the types the home minted, never in the value. A type value's
+payload is a handle, so its crossing re-interns the type it names as well as its
+memo.
 
 **The deep copy runs over an explicit stack**, in a bump of its own, since no
 step scratch reaches a birth's crossing; so a value of any depth copies without
@@ -626,3 +639,5 @@ knots as deep as the chain of newtypes digests beside it.
   the lazy transformations that run koan code.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — the lattice walks over a value's carried type, as deep as the value.
+- [Type branches](../../roadmap/rewrite/type-branches.md) — the copy's
+  per-part re-intern and the pin's branch merge.

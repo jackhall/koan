@@ -117,7 +117,12 @@ as surprises, not scheduled.
   constant number of cells ([tails](../../src/program/README.md#frames-contracts-and-tails)),
   but a hop placed `Shares` lays the next frame's activation and argument
   record down in the region of the cell it shares, which reclaims nothing until
-  that cell finishes, so the recursion's memory still grows with its depth.
+  that cell finishes, so the recursion's memory still grows with its depth — and
+  the types it builds with it ([type branches](type-branches.md)). The hints
+  already separate a result's home from the frame's region, so a hop could place
+  its activation and temporaries `Fresh`, recycled per hop, and build only what
+  it returns into the home; what is open is how a step tells result bytes from
+  temporaries before it finishes, which `Shares` sidesteps.
 - **A receipt run is laid down anew at every park.** A parked cell's receipt run
   is laid down fresh in its scratch habitat per registration
   ([the cell](../../cellgraph/README.md#the-cell)), so a runner that parks once
@@ -221,7 +226,7 @@ as surprises, not scheduled.
   verdict then leans toward pinning. A memoized weight cannot see sharing below
   it without a set of knots per composite.
 - **Whether a cell parks in two slots or one is worth a second look once koan
-  has steps.** [The substrate](../../cellgraph/README.md#the-contract-three-embedder-types)
+  has steps.** [The substrate](../../cellgraph/README.md#the-contract-four-embedder-types)
   keeps one slot per habitat, chosen before any production step parked state:
   the rule is visible in `StepSlots` — an empty scratch slot is what hands the
   bump back — at the price of every step splitting its state in two at each

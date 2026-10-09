@@ -40,7 +40,7 @@ than a generic `cellgraph` type.
     [collections arena](../../lattice/README.md#the-bump-tier)
     client — it grows tables as it interns. Resting there is sound because the
     registry owns nothing on the global heap — its
-    [verdict table](../../lattice/src/types/identity.md#storage-one-region) is a fixed
+    [verdict table](../../lattice/src/types/identity.md#storage-a-root-and-its-branches) is a fixed
     cache in the registry's own bump — so its destructor never needs to run.
   - the **program record**, [below](#the-program-record), in program storage.
   - what the top level **left at rest** when it last ran, for a later root work

@@ -8,8 +8,9 @@ continuation to run, and the holds that keep other cells alive on its behalf.
 
 The crate names no type from its embedders. The dependency direction is
 `koan` → `cellgraph`, compile-enforced, so a cell carries no embedder
-vocabulary: a continuation family enters as a type parameter and is stored
-erased. [koan](../README.md) is its embedder.
+vocabulary: a continuation family, and the header family each habitat keeps
+one of, enter as type parameters and are stored erased. [koan](../README.md) is
+its embedder.
 
 This README is the substrate's design. Two parts of it are large enough to
 carry their own:
@@ -95,7 +96,9 @@ Four absences are design statements rather than gaps:
   releases its chunks whole: every family a region hosts is `DropFree`. A
   region is a *bundle* — the bump it writes into, plus the bumps of everything
   absorbed into it. Inside a step the executing cell's own region is reachable
-  at its own brand, `'here`, distinct from the step's.
+  at its own brand, `'here`, distinct from the step's. Each region also carries
+  one [header slot](#the-contract-four-embedder-types), the embedder's value
+  about the region, which travels with it.
 
   One shape in a region is laid down for reading at a shorter brand: the
   **once-written run** ([src/once.rs](src/once.rs)), `Writer::once_run`, a run
@@ -119,7 +122,8 @@ Four absences are design statements rather than gaps:
   leaves nothing naming it. Two things at rest name it: the cell's **scratch
   state**, and the receipt run below. Either on the cell itself, or on any
   of its tenants, holds the reset off. A departing cell's scratch is dropped at
-  its disposal. A tenant's scratch is its host's.
+  its disposal. A tenant's scratch is its host's. The habitat has a header slot
+  of its own, cleared at every reset and no part of what holds one off.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
   **never calls**. It rests in a slot of its own, captured at `'here`, beside a
@@ -157,9 +161,9 @@ Four absences are design statements rather than gaps:
   and it is no relation at all. The structure and the discipline are
   [src/graph/README.md](src/graph/README.md).
 
-## The contract: three embedder types
+## The contract: four embedder types
 
-Everything an embedder knows that the substrate does not rides in one of three
+Everything an embedder knows that the substrate does not rides in one of four
 type parameters.
 
 **Continuation** — the work. A reattachable family
@@ -246,6 +250,54 @@ makes completeness a conjunction one run answers in a single read. An embedder
 constructs no slot and writes none: the slot type and the outstanding count are
 the substrate's.
 
+**Habitat header** — what the embedder keeps about a habitat half rather than a
+cell: a table of what a region holds, an index over its bytes
+([src/header.rs](src/header.rs)). The family, `H`, is the graph's last
+parameter, after the delivery bundle and the width, so a graph that names no
+header family is spelled as one that has none; it may be any reattachable
+family whose form is `Copy` —
+`HabitatHeader` is implemented for every such family, so an embedder declares
+one with `reattachable!` alone — and defaults to `NoHeader`, which keeps
+nothing. Each region and each scratch habitat holds one slot, an erased value
+in a `Cell` the substrate never reads, so a slot adds no drop glue. The region's
+slot travels with the region: a seal keeps it in the sealed cell, a splice or
+an absorb keeps the absorber's and discards the absorbed region's — an
+unwritten absorber taking the source over whole included — and a retire
+discards it; a [recycled region](#recycled-regions) starts with none. The
+scratch half's slot is cleared at every reset. `Storage` holds none.
+
+A step reaches its own halves' slots through **`Header`**, a door handed out
+beside the writer into the same half and, like it, invariant in that half's
+brand: `get` hands the header back at the brand and `get_or_lay` lays one where
+none is; nothing replaces or clears a laid header. `header` and `scratch_header`
+hand out the write home's two, and the builds of `alloc_into`, `alloc_here` and
+`deliver_scratch` each receive the header of the half they write beside its
+writer, both off one region borrow, so a writer and a header of different halves
+never meet in one call. The door sits beside the writer rather than inside it
+because a slot inside `Writer` would put `'graph` and the family on every writer
+an embedder names, and `Storage` could hold no slot at all: its `'graph` would
+be a borrow of itself. A door copies the erased value in and out and never lends
+a reference into the slot, which is why the slot is a `Cell` and not a
+`OnceCell`: a reference from `OnceCell::get_or_init` descends from a unique
+borrow, and a later interior write through `get` is undefined behaviour under
+tree borrows.
+
+A crossing operand carries its home's header as a **`HomeHeader`**, read-only,
+at the operand's brand ([The crossing verdict](#the-crossing-verdict)). Its one
+door, `read`, hands the header to a closure quantified over a brand `'h`
+outliving the operand's, so the closure can take anything out at the operand's
+brand and write nothing in but the header's own contents and `'graph` borrows. A
+view type would have to be covariant for a build to hold one safely, or a build
+could write a destination borrow into the home's header through it — and a
+header worth having, a growable table of `Cell` links, is invariant. After an
+absorption a value homed in the absorbed cell crosses with the absorber's
+header, so an embedder that wants a home's contents in the destination's header
+merges them as the value crosses; the substrate runs no merge hook inside a
+death verb.
+
+What each lifetime proves, and what rests on the proof, is
+[src/lifetimes.md](src/lifetimes.md); the paragraphs below say what each is.
+
 **Three brands per step, under the graph's lifetime.** `'step` is the step: a
 carrier branded to it was built or redeemed by this step's doors and dies with
 the step. `'here` is the executing cell's: invariant, quantified per `enter`,
@@ -253,8 +305,8 @@ with no outlives relation to `'step`, and naming storage the cell's hold set
 covers for the cell's whole life — its own region, or a region a pinned crossing
 into this cell minted into its holds. It is a real borrow, not a brand alone:
 the shared borrow of the graph's region table that `enter` holds for the whole
-step beside its exclusive borrow of everything else, so the step's own writer is
-a plain `&'here` and the verbs that move or drop a region cannot run under it. A
+step beside its exclusive borrow of everything else, so the step's own writer
+borrows at `'here` and the verbs that move or drop a region cannot run under it. A
 value built there is held as a plain `&'here` reference and needs no carrier,
 because its reach is the cell itself, which is alive for as long as the borrow;
 the three carrier states are for a value homed in another cell or crossing a
@@ -275,13 +327,14 @@ executing cell itself, the return of `enter`, and a write through a
 habitat's only door across a park is the cell's scratch state, whose family
 names each position at its own brand: an invariant `'here` structure
 (`&'here Table<'here>`) rides that slot unshortened and goes on into storage at
-the next wake, and only what the form holds at `'scratch` is confined. One limit
-follows from the brands themselves: the region's own writer is covariant, so its
-output used at `'scratch` is sound and useless — the bytes land in storage,
-stranded until the cell dies.
+the next wake, and only what the form holds at `'scratch` is confined. The
+region's own writer cannot stand in for the habitat's: `Writer` is invariant in
+its brand, so a writer at `'here` is never taken at `'scratch`, and a
+scratch-lived value is never laid in storage, where its bytes would be stranded
+until the cell dies.
 
-Both slots are re-anchored in `enter`, the one function that mints both brands
-and both writers, so the pairing of slot with brand is made and audited in one
+Both slots are re-anchored in `enter`, the one function that mints both brands,
+both writers and both header doors, so the pairing of slot with brand is made and audited in one
 place and the continuation doors are field moves.
 
 `'graph` outlives both. It is the lifetime of storage the embedder owns outside
@@ -337,7 +390,8 @@ on the read out, which re-anchors at the same `'cell`.
   `'here` and `'scratch` together (`scratch_state`); take a `Copy` writer onto
   its own region
   at `'here`, and one onto its scratch habitat at `'scratch`
-  (`scratch_writer`);
+  (`scratch_writer`), each beside the door onto that half's header (`header`,
+  `scratch_header`);
   allocate into any other live cell by handle (destination-homed placement),
   or into itself at `'here`; lift an own-region value to a carrier whose reach
   is the cell itself; mint a bare hold on another cell; read a carrier it
@@ -397,7 +451,9 @@ tail hop write into the chunk its predecessor just gave up. Every reclaim path
 retires through it — a slab reclaim, an unpledged tree disposal, a sealed
 cell's retirement, and the bump a splice leaves out of a bundle. Recycling is
 allocator-private: no verb names it and none of the birth and death verbs
-carries it in its signature.
+carries it in its signature. A recycled region starts with no header: a slot
+keeps its empty region for the next occupant only if nothing — no byte, no
+absorbed bump, no memo and no header — touched it.
 
 The list is bounded against recent demand, so a program's peak does not stay
 resident for the rest of its run. It holds at most `spare_proportion` times a
@@ -472,7 +528,9 @@ into one of its slots by handle, in one of two ways:
   the consumer's brand, so it can embed no borrow of the producer's and hand
   back nothing but what it wrote through the writer it was given — which is why
   there is no verdict, no mint and no price on this path, and why the producer
-  names no brand of the consumer's. What it carries is a fresh result the
+  names no brand of the consumer's. Beside the consumer's scratch writer the
+  build receives the door onto the consumer's scratch header, so a delivery can
+  lay the header its consumer reads. What it carries is a fresh result the
   consumer reads and cannot embed in storage: the value comes back at the
   consumer's `'scratch`, so it lasts for as long as that cell's scratch
   continuation names it and never past the cell. A build that allocates nothing
@@ -526,13 +584,28 @@ system enforces it:
   through the destination's writer. Severing is by lifetime and `'graph` is not
   a region's, so a `'graph` borrow inside a copied view embeds as it is.
 
-Both shapes reach the build closure as a `CrossedOperand`, `Pinned { view }`
-or `Copied { view }`, out of the scratch region, and neither outlives the call:
+Both shapes reach the build closure as a `CrossedOperand`,
+`Pinned { view, home }` or `Copied { view, home }`, beside the destination's
+writer and the door onto its header, out of the scratch region, and neither
+outlives the call:
 their brands are quantified over the call, so a caller has nowhere to put a view
 it kept. Only a placement mints one. Both arms are `#[non_exhaustive]`, so an
 embedder can match one (`CrossedOperand::Pinned { view, .. }`) but never build
 one, and an embedder's deep copy runs only on a view the verdict ruled a copy:
 every copy is one the graph priced.
+
+Each arm's `home` is the [`HomeHeader`](#the-contract-four-embedder-types) of
+the operand's home, at the view's own brand: its referents are of the kinds a
+value laid in the home holds, so they are kept on the grounds the view is. The
+header is read only from a region the operand's reach names — a slab home where
+the reach names it, a tree home where the reach names its root, and otherwise
+the one sealed cell a reach naming no slab cell names — because a carrier's home
+is not enough to go on: a redeem out of sealed storage names the redeemer as
+home, while the reach, which is all the placement mints, names the sealed cell
+alone. So an operand redeemed out of sealed storage crosses with the sealed
+region's header. An operand homed in the destination's own write home carries
+none, since the build has that header through its own door, and an alias of it
+at a longer brand would let a value laid at the build's brand be read past it.
 
 The verdict is skipped in exactly one case, and only because there is no choice
 to put: an operand homed in a tree cell crossing to a destination neither on
@@ -577,7 +650,8 @@ exactly one decision.
   merge performs, `Regions` — the table of every live cell's region, which a
   step holds shared for its whole length so that nothing can move or drop a bump
   under a writer into it, with the scratch bumps beside the regions and the
-  bounded spare list — `Writer` — the crate's one write surface, a verb per
+  bounded spare list, and the header slot of each habitat half — `Writer` —
+  the crate's one write surface, invariant in its brand, a verb per
   shape a region cannot be given: `fill`, `thin_run` and `text` where the width
   is settled before the first element — `thin_run` laying its run behind a
   length header so its `ThinRun` handle is one pointer wide — `run` and `prose` where only the producer settles it,
@@ -589,6 +663,10 @@ exactly one decision.
   `Written`, its one refusal.
 - [src/scratch.rs](src/scratch.rs) — the graph's one scratch region and the
   doors every verb's transients go through.
+- [src/header.rs](src/header.rs) — the habitat header: the `HabitatHeader`
+  bound and its `NoHeader` default, the slot type, the `Header` door onto one
+  of a step's own halves, and the read-only `HomeHeader` an operand crosses
+  with.
 - [src/carrier.rs](src/carrier.rs) — `Ready` and `Active`, the two carrier
   states that carry a lifetime beside `'graph`.
 - [src/dormant.rs](src/dormant.rs) — `Dormant`, the private key naming its
@@ -669,7 +747,7 @@ machinery and not the `alloc_into` within it.
 ## Open work
 
 - [roadmap/](roadmap/README.md) — the crate's own tree. The substrate's
-  build-out is complete; what is open is recorded there as unplanned gaps.
+  build-out is complete; what is open is recorded there.
 
 Docs that state the *boundary* between the substrate and an embedder stay with
 the embedder: what a scheduler adds above the cell is the embedder's design to

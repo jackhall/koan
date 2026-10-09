@@ -29,18 +29,22 @@ table ahead of the program it serves.
   `Flags::NONE` for a leaf. `Entry` does not exist, and a node table bucket is
   64 B.
 - Parsing a program yields a count of its type-expression positions, and
-  `CellSubstrate::load` sizes the node table from that count times a
-  multiplier.
-- The multiplier is measured: the design doc records the nodes-per-position
-  ratio observed over a named set of example programs, and the value chosen
-  from it.
-- The node table's structure is chosen by a benchmark over the 48 B node that
-  compares a presized hashbrown map with a segmented chained table. The
-  benchmark is kept in the repo, and the type lattice's design doc records
-  its build, hit, miss and dependent-lookup timings, bytes per entry and dead
-  bytes at 1k, 16k and 64k entries.
+  `CellSubstrate::load` sizes the root's node table from that count times a
+  multiplier, and the root never resizes.
+- The multiplier is measured: the design doc records the load-time
+  nodes-per-position ratio observed over a named set of example programs, and
+  the value chosen from it.
+- The segmented chained table's settings are chosen by a benchmark over the
+  48 B node against a presized hashbrown map. The benchmark is kept in the
+  repo, and the type lattice's design doc records its build, hit, miss and
+  dependent-lookup timings, bytes per entry and dead bytes at 1k, 16k and 64k
+  entries, and the cost of a two-tier lookup in each probe order
+  ([type branches](type-branches.md)).
 - A registry of 16k interned types, measured by a test that totals its bump,
   holds under 5 MB.
+- The node table grows by laying fixed runs — a head array and segments — and
+  asks its storage for nothing else, so a table can be laid in a cell's region
+  ([type branches](type-branches.md)).
 - The type lattice adds no `unsafe`.
 
 **Directions.**
@@ -78,13 +82,19 @@ table ahead of the program it serves.
   reference in the tag's slot at offset 8, so the variant is 48 B with no
   `unsafe`. Recommended: the second, since dispatch never takes the hop and only
   substitution and rendering of a generic shape do.
-- *The table structure — open.* A presized hashbrown map is fastest in the
-  spike, but still resizes when a program outgrows its estimate. A segmented
-  chained table never leaves a byte dead: growth adds a segment and relinks
-  each chain. With a 144 B entry, its dependent lookups ran about 30% slower
-  at 16k. Its settings are the presize, the load factor (0.75 measured best)
-  and head fingerprints (which help misses at scale only). Recommended: decide
-  once the benchmark has run on the 48 B node.
+- *The table structure — decided.* A segmented chained table, in the root and
+  in every [branch](type-branches.md). A hashbrown map resizes when a program
+  outgrows its estimate and strands the old buckets in a bump that takes
+  nothing back — the permanent root and a long-lived home region alike. A
+  segmented table never leaves a byte dead: growth adds a segment and relinks
+  each chain, and a segment is a unit a region's bump hands out, so a branch is
+  a small head array and one segment released with its region. With a 144 B
+  entry, its dependent lookups ran about 30% slower at 16k; the benchmark on the
+  48 B node sets its presize, load factor (0.75 measured best) and head
+  fingerprints, which help misses only — and with two tiers every lookup of a
+  root handle from a cell misses in the tier probed first.
+- *Presizing a branch — deferred* to [type branches](type-branches.md): a
+  constant, or a per-body tally taken as the parser's is.
 - *Where the type-expression count is taken — open.* The parser tallies each
   type-expression position as it lowers it and returns the count beside the
   statements, or `load` walks the parsed statements afterwards. Recommended:
@@ -97,4 +107,7 @@ needs dispatch.
 
 **Requires:** none.
 
-**Unblocks:** none — a leaf.
+**Unblocks:**
+
+- [Type branches](type-branches.md) — a branch is laid as this table in its
+  region.
