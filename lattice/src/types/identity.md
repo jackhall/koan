@@ -35,6 +35,12 @@ distinct domain tag byte so no two variants can share a digest, every text run i
 length-prefixed so concatenation is unambiguous, and every child digest,
 `ContentKey` and integer is fed little-endian.
 
+A scheme's digest is its tag, its group's arity and each variable's bound in
+group order, and its body's digest. The names are never fed, so two
+alpha-variants are one handle and the group holds whichever spelling was
+interned first. A function type's and a shape's digests take no group: a
+variable inside one is a `Quantified` child, digested by its index and bound.
+
 ### Typed handles
 
 A raw `Handle` is identity only. Every door and relation the rest of koan calls
@@ -43,13 +49,15 @@ the type may hold:
 
 - a [`KType`](handle.rs) is **concrete**: outside a sealed `Signature` or
   `SetMember` node it holds no free `Quantified`, no lexical variable, no head
-  `Parameter` and no quantified binder. An opaque carrier is concrete, since a
+  `Parameter` and no scheme. An opaque carrier is concrete, since a
   value carries it and dispatch reads it. Every value but a quantified callable
   carries one;
-- a `Parametric` may hold a variable, but no quantified binder;
-- a `Scheme` is a quantified callable's type: a function type or an expression
-  shape over a non-empty `FOR ALL` group. Its positions read, through
-  `TypeRegistry::scheme_node`, as `Parametric`;
+- a `Parametric` may hold a variable, but no scheme;
+- a `Scheme` is a quantified callable's type: a `Scheme` node, a non-empty
+  `FOR ALL` group over a function type or an expression shape. `Scheme::group`
+  reads its group alone, and `DeclaredType::view` reads a declared type whole —
+  its group, empty for a type, and its body's node, the positions read as
+  `Parametric`;
 - a `DeclaredType` is a type or a `Scheme` — what a callable, a registered
   shape, a signature member and a function value are typed by.
 
@@ -62,9 +70,9 @@ conversion, which reads a flag interning stored. Every door that builds a type
 from child types is generic over the handle, so it yields a `KType` from
 `KType` children and a `Parametric` from parametric ones. A `KType` asked of a
 parametric child is a compile error, which a `compile_fail` doctest on
-`TypeRegistry::list` pins. A quantified binder is minted only by
-`function_scheme` and `shape_scheme`, which answer a `DeclaredType`: the plain
-type where the group is empty.
+`TypeRegistry::list` pins. A scheme is minted only by `function_scheme` and
+`shape_scheme`, which intern the plain body and then bind the group over it,
+and answer a `DeclaredType`: the plain type where the group is empty.
 
 Inside the lattice every walk and relation runs over raw handles, and
 [typed.rs](typed.rs) wraps each relation for the rest of koan, saying where it

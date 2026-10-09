@@ -115,18 +115,20 @@ Ask first whether the walk is unary or binary, then whether it rebuilds.
   reads the arm's width verdict generically. The order — serving *fits* too —
   the solver's meet, which the public `meet` runs over concrete operands, and
   the unifier's collector are the three instances. Two signature
-  types, and two callables of which one is quantified, reach the leaf verdict
-  rather than a child pairing, because their relations are application-level and
-  instantiation-level doors.
+  types, and a pair holding a scheme, reach the leaf verdict rather than a
+  child pairing, because their relations are application-level and
+  instantiation-level doors. A union on either side is taken set-wise first,
+  so a scheme meets each member at the leaf.
 
 The context a unary rule is handed answers the two questions the arm table
-alone cannot: how many binders lie between the root and here — `binder_depth`,
-which counts shapes and quantified function types alike — and the variance of
-the current position.
+alone cannot: how many schemes lie between the root and here — `binder_depth`
+— and the variance of the current position. A scheme's one child is its body,
+at the scheme's own variance, and the body's node flips its own parameters and
+slots.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
-*between* children and inherits the quantifier binder from above, which neither
-driver expresses. It spells a type as a program writes it: a quantifier group
+*between* children and inherits the enclosing scheme's group from above, which
+neither driver expresses. It spells a type as a program writes it: a quantifier group
 as `FOR ALL #[Elt Key]`, or as a dict of each name to its bound,
 `FOR ALL #{Elt: Number, Key: Any}`, once any bound is not `Any`; a signature's
 head parameters as a bounded group, `SIG FOR ALL #{Elt: Any} (top: Elt)`, and an
@@ -138,8 +140,6 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 - [Type branches](../../../roadmap/rewrite/type-branches.md) — the branch tier,
   a run-built type released with the region of the values that carry it.
-- [A scheme node](../../../roadmap/rewrite/scheme-node.md) — one binder node
-  over a function or shape body, in place of a group on each callable.
 - [A compact type node table](../../../roadmap/rewrite/compact-type-node-table.md)
   — the 48 B node and the segmented table both tiers are built on.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)

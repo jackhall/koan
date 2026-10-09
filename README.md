@@ -264,12 +264,12 @@ lattice/src/
 │   └── tests.rs            interning laws, including how a static_name! records
 ├── types.rs             pub mod types — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols and the bump tier and nothing else
 └── types/
-    ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle; Variable, the view of the three variable nodes and their two ends
-    ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType; the pinned builtin constants, and the name/kind readings off one
+    ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle; the `Scheme` node, the one binder, and its `Group`; Variable, the view of the three variable nodes and their two ends
+    ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType, with DeclaredView, a declared type's group and body read whole; the pinned builtin constants, and the name/kind readings off one
     ├── run.rs            Run / Elements — typed views over a node's raw child runs
     ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
     ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-    ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags), the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the binder doors `shape_scheme` and `function_scheme` keeping every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
+    ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags), the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the scheme doors `shape_scheme` and `function_scheme`, which bind a group over a plain body and keep every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
     ├── verdicts.rs       VerdictTable — the fixed two-way cache of relation verdicts the registry lays in its region
     ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
     ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
@@ -284,7 +284,7 @@ lattice/src/
     ├── unify.rs          admits_with and the Collector: contributions solved to a pair of ends and bound at its least instance; the Interval a solve reports per variable
     ├── substitute.rs     the quantifier, level and head-parameter substitutions, instantiation and erasure, and a type read through intervals (bound_above among them)
     ├── signatures.rs     a signature type as a set of applications: the order between two sets and the meet the signature_meet door interns
-    ├── sig_relations.rs  sig_fits and fits_application — *fits* over signature types, solving each unpinned head parameter — with their failure record, the binder relations admits_shape and admits_function, and shape_specificity
+    ├── sig_relations.rs  sig_fits and fits_application — *fits* over signature types, solving each unpinned head parameter — with their failure record, the scheme relations admits_shape and admits_function, and shape_specificity
     ├── ranking.rs        priority classes — admit_by_class, the per-class verdict class_at_least the registry records, select_by_class, and judge_by_class's never/always/maybe over static types
     ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
     └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner

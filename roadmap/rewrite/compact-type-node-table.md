@@ -2,9 +2,9 @@
 
 **Problem.** A [`TypeNode`](../../lattice/src/types/node.rs) is 112 B, sized by
 its largest variants: `Signature` (a `SigSchema` is 88 B) and `SetMember` at
-111 B, `ExpressionShape` at 95 B, `KFunction` at 80 B, and `Carrier` and
-`Lexical` at 64 B. The variants a program mints most often (`List`, `Dict`,
-`Record`, `Union`) need 48 B or less. The
+111 B, and `ExpressionShape`, `Carrier` and `Lexical` at 64 B. The variants a
+program mints most often (`List`, `Dict`, `Record`, `KFunction`, `Union`) need
+48 B or less. The
 [registry](../../lattice/src/types/registry.rs)'s node table stores an `Entry`
 beside each key: the node plus its four probe flags (`quantified`, `rigid`,
 `parametric`, `carrier`), which pad it to 128 B, so each bucket is 144 B. The
@@ -55,8 +55,9 @@ and 49 KB of verdict table.
   bound }`. Rendering, the digest and dispatch's unresolved-level refusal read
   the name; every walk reads the two ends inline. Moving `lower` out instead
   would give a `Never` lower end two spellings.
-- *`KFunction` — decided* per [a scheme node](scheme-node.md):
-  `KFunction { flags, params, ret }`, with nothing out of line.
+- *`KFunction` — decided.* `KFunction { flags, params, ret }`, with nothing
+  out of line: a quantified callable's group lives in the `Scheme` node over
+  it ([the node vocabulary](../../lattice/src/types/vocabulary.md)).
 - *`ExpressionShape` — decided.* `ExpressionShape { flags, elements, ret }`.
   A shape element is 32 B with 15 spare bytes, so a slot's priority class rides
   in its element. The shape doors keep their `classes` argument and pack it,
@@ -96,10 +97,7 @@ and 49 KB of verdict table.
 
 ## Dependencies
 
-**Requires:**
-
-- [A scheme node](scheme-node.md) — the quantifier group leaves `KFunction` and
-  `ExpressionShape`.
+**Requires:** none.
 
 **Unblocks:**
 
