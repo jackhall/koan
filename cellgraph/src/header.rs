@@ -56,7 +56,7 @@ pub(crate) type HeaderSlot<'graph, H> = Cell<Option<Erased<'graph, H>>>;
 /// # reattachable!(Work => String);
 /// # struct Table;
 /// # reattachable!(Table => &'cell Cell<&'cell u32>);
-/// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+/// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
 /// #     CellGraph::new(1, |_| Verdict::Pin);
 /// # let cell = graph.create(None).unwrap();
 /// graph
@@ -77,7 +77,7 @@ pub(crate) type HeaderSlot<'graph, H> = Cell<Option<Erased<'graph, H>>>;
 /// # reattachable!(Work => String);
 /// # struct Table;
 /// # reattachable!(Table => &'cell Cell<&'cell u32>);
-/// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+/// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
 /// #     CellGraph::new(1, |_| Verdict::Pin);
 /// # let cell = graph.create(None).unwrap();
 /// graph

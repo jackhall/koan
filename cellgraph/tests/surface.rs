@@ -417,7 +417,7 @@ fn home_number<'b>(home: HomeHeader<'static, 'b, Table>) -> Option<&'b u32> {
 #[test]
 fn the_habitat_header_answers_from_outside_the_crate() {
     // A graph that names no header family keeps none.
-    let mut plain: CellGraph<'static, Work, NoScratch, NoDelivery, NoHeader> =
+    let mut plain: CellGraph<'static, Work, NoScratch, NoDelivery, 1, NoHeader> =
         CellGraph::new(1, weigh);
     let cell = plain.create(None).unwrap();
     let kept = plain
@@ -428,7 +428,7 @@ fn the_habitat_header_answers_from_outside_the_crate() {
         .unwrap();
     assert!(kept);
 
-    let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+    let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
         CellGraph::new(2, weigh);
     let home = graph.create(None).unwrap();
     let dest = graph.create(None).unwrap();

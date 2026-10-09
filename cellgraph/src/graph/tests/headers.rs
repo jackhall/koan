@@ -47,9 +47,9 @@ impl<'graph> Delivery<'graph> for Push {
     type Carrier = Number;
 }
 
-type Graph = CellGraph<'static, Owned, Held, Push, Marks>;
+type Graph = CellGraph<'static, Owned, Held, Push, 1, Marks>;
 type Context<'step, 'here, 'scratch> =
-    StepContext<'static, 'step, 'here, 'scratch, Owned, Held, Push, Marks>;
+    StepContext<'static, 'step, 'here, 'scratch, Owned, Held, Push, 1, Marks>;
 
 fn new_graph(cap: u32) -> Graph {
     CellGraph::new(cap, pin)

@@ -750,10 +750,10 @@ pub struct CellGraph<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph> = NoScratch,
     D: Delivery<'graph> = NoDelivery,
-    H: HabitatHeader<'graph> = NoHeader,
     const W: usize = 1,
+    H: HabitatHeader<'graph> = NoHeader,
 > {
-    cells: Cells<'graph, C, S, D, H, W>,
+    cells: Cells<'graph, C, S, D, W, H>,
     regions: Regions<'graph, H>,
     /// Invariant in `'graph`: a covariant graph lifetime could shorten to a step brand, and a
     /// borrow at it would stop meaning storage that outlives the graph.
@@ -767,8 +767,8 @@ struct Cells<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
-    H: HabitatHeader<'graph>,
     const W: usize,
+    H: HabitatHeader<'graph>,
 > {
     slots: Box<[SlabCell<'graph, C, S, D, W>]>,
     free: Vec<u32>,
@@ -849,9 +849,9 @@ impl<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
-    H: HabitatHeader<'graph>,
     const W: usize,
-> CellGraph<'graph, C, S, D, H, W>
+    H: HabitatHeader<'graph>,
+> CellGraph<'graph, C, S, D, W, H>
 {
     /// A slab of `cap` cells. The cap is fixed here and the graph never grows past it, and it is at
     /// or below `64 · W`, the slab width the graph's *type* fixes: every slab relation is a row of
@@ -947,7 +947,7 @@ impl<
     pub fn enter<R>(
         &mut self,
         cell: impl Into<CellHandle>,
-        step: impl FnOnce(&mut StepContext<'graph, '_, '_, '_, C, S, D, H, W>) -> R,
+        step: impl FnOnce(&mut StepContext<'graph, '_, '_, '_, C, S, D, W, H>) -> R,
     ) -> Result<R, EnterError> {
         let cell = cell.into();
         let home = self.cells.begin(cell)?;
@@ -1246,7 +1246,7 @@ impl<
 
     /// The scratch region off the graph and reset, under a guard that hands it back however the
     /// verb ends.
-    fn park(&mut self) -> Parked<'_, 'graph, C, S, D, H, W> {
+    fn park(&mut self) -> Parked<'_, 'graph, C, S, D, W, H> {
         let mut scratch = self.cells.take_scratch_owned();
         scratch.reset();
         Parked {
@@ -1262,9 +1262,9 @@ impl<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
-    H: HabitatHeader<'graph>,
     const W: usize,
-> Cells<'graph, C, S, D, H, W>
+    H: HabitatHeader<'graph>,
+> Cells<'graph, C, S, D, W, H>
 {
     fn new(cap: u32, verdict: impl FnMut(Prices) -> Verdict + 'static) -> Self {
         assert!(
@@ -3234,13 +3234,13 @@ pub struct StepContext<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph> = NoScratch,
     D: Delivery<'graph> = NoDelivery,
-    H: HabitatHeader<'graph> = NoHeader,
     const W: usize = 1,
+    H: HabitatHeader<'graph> = NoHeader,
 > where
     'graph: 'step + 'here,
     'here: 'scratch,
 {
-    cells: &'step mut Cells<'graph, C, S, D, H, W>,
+    cells: &'step mut Cells<'graph, C, S, D, W, H>,
     /// Every live cell's region, borrowed shared for the whole step — the borrow `'here` names.
     /// A placement's destination is minted and written through it, and nothing a step can reach
     /// takes it exclusively, which is what keeps every writer into it live to the step's end.
@@ -3283,8 +3283,8 @@ pub struct StepContext<
     _scratch: PhantomData<fn(&'scratch ()) -> &'scratch ()>,
 }
 
-impl<'graph, 'step, 'here, 'scratch, C, S, D, H, const W: usize>
-    StepContext<'graph, 'step, 'here, 'scratch, C, S, D, H, W>
+impl<'graph, 'step, 'here, 'scratch, C, S, D, const W: usize, H>
+    StepContext<'graph, 'step, 'here, 'scratch, C, S, D, W, H>
 where
     'graph: 'step + 'here,
     'here: 'scratch,
@@ -3405,7 +3405,7 @@ where
     /// struct Table;
     /// reattachable!(Table => &'cell Cell<&'cell u32>);
     ///
-    /// let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+    /// let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
     ///     CellGraph::new(1, |_| Verdict::Pin);
     /// let cell = graph.create(None).unwrap();
     /// graph
@@ -4354,7 +4354,7 @@ where
     /// # reattachable!(Work => String, Number => &'cell u32, Table => &'cell Cell<&'cell u32>);
     /// # covariant!(Number);
     /// # impl DropFree for Number {}
-    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
     /// #     CellGraph::new(1, |_| Verdict::Pin);
     /// # let cell = graph.create(None).unwrap();
     /// graph
@@ -4386,7 +4386,7 @@ where
     /// # reattachable!(Work => String, Number => &'cell u32, Table => &'cell Cell<&'cell u32>);
     /// # covariant!(Number);
     /// # impl DropFree for Number {}
-    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
     /// #     CellGraph::new(1, |_| Verdict::Pin);
     /// # let cell = graph.create(None).unwrap();
     /// graph
@@ -4639,6 +4639,7 @@ where
                 }
                 // The sealed cell's id alone: a hold on it keeps its aggregate alive transitively,
                 // and a mask naming no slab bit has nothing that can go stale under a later `keep`.
+                // `home_headers` relies on this shape to find the sealed storage's header.
                 (GraphReach::single_sealed(id), CellHome::Slab(executing))
             }
         };
@@ -4737,10 +4738,10 @@ struct Parked<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
-    H: HabitatHeader<'graph>,
     const W: usize,
+    H: HabitatHeader<'graph>,
 > {
-    cells: &'dispose mut Cells<'graph, C, S, D, H, W>,
+    cells: &'dispose mut Cells<'graph, C, S, D, W, H>,
     regions: &'dispose mut Regions<'graph, H>,
     scratch: Option<Scratch>,
 }
@@ -4750,14 +4751,14 @@ impl<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
-    H: HabitatHeader<'graph>,
     const W: usize,
-> Parked<'_, 'graph, C, S, D, H, W>
+    H: HabitatHeader<'graph>,
+> Parked<'_, 'graph, C, S, D, W, H>
 {
     /// Run one verb's body against the graph and the scratch region parked off it.
     fn run(
         &mut self,
-        body: impl FnOnce(&mut Cells<'graph, C, S, D, H, W>, &mut Regions<'graph, H>, &Scratch),
+        body: impl FnOnce(&mut Cells<'graph, C, S, D, W, H>, &mut Regions<'graph, H>, &Scratch),
     ) {
         let Parked {
             cells,
@@ -4776,17 +4777,17 @@ impl<
     C: Reattachable<'graph>,
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
-    H: HabitatHeader<'graph>,
     const W: usize,
-> Drop for Parked<'_, 'graph, C, S, D, H, W>
+    H: HabitatHeader<'graph>,
+> Drop for Parked<'_, 'graph, C, S, D, W, H>
 {
     fn drop(&mut self) {
         self.cells.scratch = self.scratch.take();
     }
 }
 
-impl<'graph, 'step, 'here, 'scratch, C, S, D, H, const W: usize> Drop
-    for StepContext<'graph, 'step, 'here, 'scratch, C, S, D, H, W>
+impl<'graph, 'step, 'here, 'scratch, C, S, D, const W: usize, H> Drop
+    for StepContext<'graph, 'step, 'here, 'scratch, C, S, D, W, H>
 where
     'graph: 'step + 'here,
     'here: 'scratch,
