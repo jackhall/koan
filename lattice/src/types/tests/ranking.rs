@@ -10,17 +10,19 @@
 use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
-use crate::types::handle::{Handle, KType, TypeHandle};
-use crate::types::node::TypeNode;
-use crate::types::order::fits;
-use crate::types::ranking::{
+use super::raw::RawRegistry;
+use super::raw::order::fits;
+use super::raw::ranking::{
     Verdict, admit_by_class, judge_by_class, select_by_class, solving_slots,
 };
+use super::raw::sig_relations::{shape_specificity, sig_fits};
+use crate::types::handle::{Handle, KType, TypeHandle};
+use crate::types::node::TypeNode;
 use crate::types::registry::TypeRegistry;
 use crate::types::render::display_handle;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::{DispatchTokenElement, RawRank, Specificity, dense_classes};
-use crate::types::sig_relations::{FitsFailure, shape_specificity, sig_fits};
+use crate::types::sig_relations::FitsFailure;
 use crate::types::typed;
 use crate::types::unify::Interval;
 

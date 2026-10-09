@@ -9,7 +9,9 @@
 //! structural descent exists to fall back to. Content lives in a
 //! [`TypeRegistry`](super::registry::TypeRegistry), keyed by the same digest, so any operation
 //! that needs a type's shape — rendering, kind classification, the relations — takes the registry
-//! and reads the [`TypeNode`].
+//! and reads the [`TypeNode`]. Inside the lattice a type is named by a reference to its node
+//! instead ([`Naming`]): a handle is looked up once, where it enters, and every walk and relation
+//! follows references from there.
 //!
 //! A typed handle wraps a `Handle` and adds nothing at run time; what it adds is a promise the
 //! compiler keeps. Only the lattice wraps a `Handle` into one ([`sealed::Wrap`]), so a `KType` is
@@ -28,9 +30,9 @@ use crate::symbols::{StaticName, TypeSymbol};
 
 use super::digest::TypeDigest;
 use super::kind::KKind;
-use super::node::{Group, TypeNode};
+use super::node::{Group, NodeSchema, TypeNode};
 use super::registry::TypeRegistry;
-use super::stored::Content;
+use super::stored::{Content, Linked, MemberBody};
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
 /// Identity only — every relation and door outside the lattice takes a typed handle.
@@ -70,12 +72,36 @@ pub enum DeclaredType<T> {
 }
 
 pub(super) mod sealed {
+    use super::super::digest::TypeDigest;
+    use super::super::registry::TypeRegistry;
+    use super::super::stored::{Linked, MemberBody};
+
     /// Wrapping a raw handle into a typed one: the lattice's alone, so a typed handle's promise is
     /// the lattice's to keep.
     pub trait Wrap: Copy {
         fn wrap(raw: super::Handle) -> Self;
     }
+
+    /// How a node's types are named to the code that reads or builds it: by handle outside the
+    /// lattice, by reference inside. A view reads each child as `Self`, each concrete field — a
+    /// bound, a lower end, a code kind, a carrier's met bound, an application's signature — as
+    /// `Self::Bound`, and a sealed member's schema as `Self::Schema`: the schema itself through a
+    /// handle, the member's body — the slot that holds it — through a reference, which no walk or
+    /// relation reads. A door
+    /// takes its operands as `Self` and reaches each one's node through `linked`. Implemented for
+    /// every typed handle and for [`Linked`], and nothing else.
+    pub trait Naming<'run>: Copy {
+        type Bound: Naming<'run>;
+        type Schema: Copy;
+        fn read(node: Linked<'run>) -> Self;
+        fn read_bound(node: Linked<'run>) -> Self::Bound;
+        fn read_schema(body: &'run MemberBody<'run>) -> Self::Schema;
+        fn digest(self) -> TypeDigest;
+        fn linked(self, types: &TypeRegistry<'run>) -> Linked<'run>;
+    }
 }
+
+pub(super) use sealed::Naming;
 
 /// A handle a node can be read through and a door can build from: its children come back as
 /// [`Child`](Self::Child) handles. Sealed — only the lattice wraps a raw handle.
@@ -127,6 +153,59 @@ impl sealed::Wrap for Parametric {
 impl sealed::Wrap for Scheme {
     fn wrap(raw: Handle) -> Self {
         Scheme(raw)
+    }
+}
+
+/// A typed handle names a node by its digest: reading one wraps the node's handle, and building
+/// from one looks its node up.
+impl<'run, H: TypeHandle> Naming<'run> for H {
+    type Bound = KType;
+    type Schema = NodeSchema<'run>;
+
+    fn read(node: Linked<'run>) -> Self {
+        wrap(node.handle())
+    }
+
+    fn read_bound(node: Linked<'run>) -> KType {
+        wrap(node.handle())
+    }
+
+    fn read_schema(body: &'run MemberBody<'run>) -> NodeSchema<'run> {
+        body.schema.get()
+    }
+
+    fn digest(self) -> TypeDigest {
+        self.raw().digest()
+    }
+
+    fn linked(self, types: &TypeRegistry<'run>) -> Linked<'run> {
+        types.enter(self.raw())
+    }
+}
+
+/// A reference names a node directly: every read and every build is the identity.
+impl<'run> Naming<'run> for Linked<'run> {
+    type Bound = Self;
+    type Schema = &'run MemberBody<'run>;
+
+    fn read(node: Linked<'run>) -> Self {
+        node
+    }
+
+    fn read_bound(node: Linked<'run>) -> Self {
+        node
+    }
+
+    fn read_schema(body: &'run MemberBody<'run>) -> &'run MemberBody<'run> {
+        body
+    }
+
+    fn digest(self) -> TypeDigest {
+        self.digest()
+    }
+
+    fn linked(self, _: &TypeRegistry<'run>) -> Self {
+        self
     }
 }
 
@@ -318,10 +397,10 @@ impl Scheme {
     /// The scheme's group and its body. A `Scheme` is only ever wrapped by the scheme doors, over
     /// the scheme node they interned.
     fn parts<'run>(self, types: &TypeRegistry<'run>) -> (&'run Group<'run>, Parametric) {
-        let TypeNode::Scheme { group, body } = types.node(self.0) else {
+        let TypeNode::Scheme { group, body } = types.enter(self.0).view_as::<Parametric>() else {
             unreachable!("a scheme names a scheme node: only the scheme doors wrap one")
         };
-        (group, wrap(body))
+        (group, body)
     }
 
     /// The scheme's quantifier group, in group order, read without its body.
@@ -408,7 +487,9 @@ static SIGNATURE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, 
 
 /// The fixed spelling of a singly-named builtin leaf, or `None` for every other node — the one
 /// table [`KType::name_symbol`] and [`render`](super::render) both read.
-pub(super) fn leaf_name<H>(node: &TypeNode<'_, H>) -> Option<&'static StaticName<TypeSymbol>> {
+pub(super) fn leaf_name<'run, H: Naming<'run>>(
+    node: &TypeNode<'run, H>,
+) -> Option<&'static StaticName<TypeSymbol>> {
     Some(match node {
         TypeNode::Number => &NUMBER_NAME,
         TypeNode::Str => &STR_NAME,
@@ -462,7 +543,7 @@ macro_rules! fixed_handles {
     };
 }
 
-/// The raw twin of each fixed handle the lattice's own code compares a raw handle against.
+/// The raw twin of each fixed handle the lattice's own code compares a node or a handle against.
 macro_rules! raw_twins {
     ($($name:ident),* $(,)?) => {
         impl Handle {
@@ -612,16 +693,20 @@ impl KType {
     ///
     /// Reads the stored node, so a nominal's kind costs no hop to its out-of-line schema.
     pub fn kind_of(self, types: &TypeRegistry<'_>) -> KKind {
-        match types.enter(self.raw()).content() {
-            Content::Signature { .. }
-            | Content::SignatureApply { .. }
-            | Content::SignatureMeet { .. } => KKind::Signature,
-            Content::SetMember { kind, .. } => kind,
-            Content::ConstructorApply { constructor, .. } => {
-                wrap::<KType>(constructor).kind_of(types)
-            }
-            _ => KKind::ProperType,
-        }
+        kind_of_node(types.enter(self.raw()))
+    }
+}
+
+/// [`KType::kind_of`] over a node in hand: an application's kind is its constructor's, read by
+/// reference.
+fn kind_of_node(node: Linked<'_>) -> KKind {
+    match node.content() {
+        Content::Signature { .. }
+        | Content::SignatureApply { .. }
+        | Content::SignatureMeet { .. } => KKind::Signature,
+        Content::SetMember { kind, .. } => kind,
+        Content::ConstructorApply { constructor, .. } => kind_of_node(constructor),
+        _ => KKind::ProperType,
     }
 }
 

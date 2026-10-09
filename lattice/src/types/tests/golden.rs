@@ -18,6 +18,7 @@ use crate::types::run::{Elements, Run};
 use crate::types::schema::{SchemaDraft, SigOrigin, SigSchema};
 use crate::types::shape::DispatchTokenElement::{Keyword, Slot};
 use crate::types::shape::{Classes, DeferredReturnSurface, StoredElement};
+use crate::types::stored::{Linked, MemberBody, SchemaSlot};
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
 #[test]
@@ -161,7 +162,7 @@ fn constants_match_freshly_interned_nodes() {
     // the intern that mints one rather than against a hand-built node; the signature door answers
     // the constant for an empty draft without interning.
     assert_eq!(
-        types.intern_schema(SigSchema::EMPTY),
+        types.intern_schema(SigSchema::EMPTY).handle(),
         Handle::EMPTY_SIGNATURE,
         "the pinned `KType::EMPTY_SIGNATURE` is not what its intern mints for an empty \
          schema",
@@ -174,12 +175,8 @@ fn every_node_kind_has_its_own_tag() {
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let field = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
-    // The representatives' runs, declared ahead of the registry so they outlive every node that is
-    // interned over them.
-    let fields = [(field, KType::NUMBER.raw())];
-    let arguments = [(field, KType::STR.raw())];
-    let elements = [StoredElement::Keyword(keyword)];
-    let members = [KType::NUMBER.raw(), KType::STR.raw()];
+    // The representatives' plain runs, declared ahead of the registry so they outlive every node
+    // that is interned over them.
     let needed = [field];
     let (group_names, group_bounds) = ([name], [KType::ANY]);
     let group = Group {
@@ -189,10 +186,20 @@ fn every_node_kind_has_its_own_tag() {
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let body = types.function_type(region, &fields, KType::NUMBER.raw());
+    // A node names its children by reference, so the runs over children are laid in the region.
+    let node = |kt: KType| types.enter(kt.raw());
+    let fields = &*region.alloc_slice_copy(&[(field, node(KType::NUMBER))]);
+    let arguments = &*region.alloc_slice_copy(&[(field, node(KType::STR))]);
+    let elements = &*region.alloc_slice_copy(&[StoredElement::Keyword(keyword)]);
+    let members = &*region.alloc_slice_copy(&[node(KType::NUMBER), node(KType::STR)]);
+    let member = &*region.alloc(MemberBody {
+        scc_digest: node_digest(region, &TypeNode::<Handle>::Number),
+        schema: SchemaSlot::filled(NodeSchema::NewType(KType::NUMBER)),
+    });
+    let body = types.function_type(region, fields, node(KType::NUMBER));
     // One representative per node kind, whose digests the distinctness assertion below reads. The
     // exhaustive match after the list is what makes a new variant a compile error here.
-    let representatives: Vec<TypeNode<'_>> = vec![
+    let representatives: Vec<TypeNode<'_, Linked<'_>>> = vec![
         TypeNode::Number,
         TypeNode::Str,
         TypeNode::Bool,
@@ -216,31 +223,31 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::OfKind(KKind::ProperType),
         TypeNode::Parameter {
             name,
-            bound: KType::ANY,
+            bound: types.any(),
         },
         TypeNode::Carrier {
             name,
             key: ContentKey(0),
-            met: KType::ANY,
+            met: types.any(),
         },
         TypeNode::List {
-            element: KType::NUMBER.raw(),
+            element: node(KType::NUMBER),
         },
         TypeNode::Dict {
-            key: KType::NUMBER.raw(),
-            value: KType::NUMBER.raw(),
+            key: node(KType::NUMBER),
+            value: node(KType::NUMBER),
         },
         TypeNode::Record {
-            fields: Record::over(&fields),
+            fields: Record::over(fields),
         },
         TypeNode::KFunction {
-            params: Record::over(&fields),
-            ret: KType::NUMBER.raw(),
+            params: Record::over(fields),
+            ret: node(KType::NUMBER),
         },
         TypeNode::ExpressionShape {
-            elements: Elements::over(&elements),
+            elements: Elements::over(elements),
             classes: Classes::EMPTY,
-            ret: KType::NUMBER.raw(),
+            ret: node(KType::NUMBER),
         },
         TypeNode::Scheme {
             group: &group,
@@ -248,44 +255,44 @@ fn every_node_kind_has_its_own_tag() {
         },
         TypeNode::Quantified {
             index: 0,
-            bound: KType::ANY,
+            bound: types.any(),
         },
         TypeNode::Lexical {
             level: 0,
             name,
-            lower: KType::NEVER,
-            bound: KType::ANY,
+            lower: types.never(),
+            bound: types.any(),
         },
         TypeNode::Union {
-            members: Run::over(&members),
+            members: Run::over(members),
         },
         TypeNode::ConstructorApply {
-            constructor: KType::NUMBER.raw(),
-            arguments: Record::over(&arguments),
+            constructor: node(KType::NUMBER),
+            arguments: Record::over(arguments),
         },
         TypeNode::Signature {
             schema: SigSchema::EMPTY,
-            schema_digest: node_digest(region, &TypeNode::Number),
+            schema_digest: node_digest(region, &TypeNode::<Handle>::Number),
         },
         TypeNode::SignatureApply {
-            signature: KType::NUMBER,
-            pins: Record::over(&arguments),
+            signature: node(KType::NUMBER),
+            pins: Record::over(arguments),
         },
         TypeNode::SignatureMeet {
-            members: Run::over(&members),
+            members: Run::over(members),
         },
         TypeNode::DeferredReturn(DeferredReturnSurface::Type(name)),
         TypeNode::Sibling(0),
         TypeNode::CodeNeeding {
-            kind: KType::EXPRESSION,
+            kind: node(KType::EXPRESSION),
             names: &needed,
         },
         TypeNode::SetMember {
-            scc_digest: node_digest(region, &TypeNode::Number),
+            scc_digest: member.scc_digest,
             index: 0,
             name,
             kind: KKind::NewType,
-            schema: NodeSchema::NewType(KType::NUMBER),
+            schema: member,
         },
     ];
     // The exhaustiveness half: `variant_name` matches every variant, so a new one fails to compile
@@ -306,9 +313,9 @@ fn every_node_kind_has_its_own_tag() {
         }
     }
     // Every representative is interned content, so the table can name each one back.
-    for node in representatives {
-        let handle = types.intern(region, node);
-        types.node(handle);
+    for representative in representatives {
+        let interned = types.intern(region, representative);
+        types.node(interned.handle());
     }
 }
 
@@ -576,7 +583,9 @@ fn scheme_handle(declared: DeclaredType<Parametric>) -> Handle {
 }
 
 /// The name of `node`'s variant: one exhaustive match, so a new variant is a compile error here.
-fn variant_name<H>(node: &TypeNode<'_, H>) -> &'static str {
+fn variant_name<'run, H: crate::types::handle::Naming<'run>>(
+    node: &TypeNode<'run, H>,
+) -> &'static str {
     match node {
         TypeNode::Number => "Number",
         TypeNode::Str => "Str",

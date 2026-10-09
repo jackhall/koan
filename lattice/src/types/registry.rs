@@ -3,17 +3,19 @@
 //!
 //! Each node is a [`StoredNode`](super::stored::StoredNode) laid alone in the run region the
 //! registry is constructed over ([`TypeRegistry::in_region`]), holding its own digest beside its
-//! content. `nodes` is a hash table of references to those nodes, its bucket array in the same
-//! region. A [`Handle`] *is* the digest of its node, and the digest is already a uniformly
+//! content and a reference to each child's node. `nodes` is a hash table of references to those
+//! nodes, its bucket array in the same region. A [`Handle`] *is* the digest of its node, and the digest is already a uniformly
 //! distributed hash, so the table hashes a digest by its low word and finds a node by comparing
 //! against the digest the node holds — it stores no second copy. Interning is insert-if-absent,
 //! so building the same content twice in a run yields one node and two equal handles. Nothing ever
 //! leaves the table and nothing in it carries drop glue, so the region releases the table and
 //! every node with it, whole.
 //!
-//! [`TypeRegistry::node`] reads a stored node back as a [`TypeNode`] view. A read takes a
-//! reference into the region and releases the table borrow before the reader runs, so reads nest
-//! and a reader may intern. A stored node carries four flags computed off its children at intern
+//! A handle is looked up once, where it enters the lattice ([`TypeRegistry::enter`]); every walk
+//! and relation inside follows references from there. `Never` and `Any` are laid before the
+//! registry is built and held on it, so producing either costs no lookup. [`TypeRegistry::node`]
+//! reads a stored node back as a [`TypeNode`] view. A read takes a reference into the region and
+//! releases the table borrow before the reader runs, so reads nest and a reader may intern. A stored node carries four flags computed off its children at intern
 //! — whether a free quantifier, whether any rigid variable, whether any variable or scheme outside
 //! sealed content, and whether an opaque carrier outside sealed content is reachable — so each
 //! probe is one read of the node.
@@ -27,13 +29,15 @@
 //!
 //! See [README.md](README.md) § Storage: one region.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 
 use crate::bump::{BumpAllocator, BumpHashTable, BumpVec, bump_hash_table};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 
 use super::digest::{self, TypeDigest, schema_content_digest};
-use super::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
+use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, TypeHandle, wrap};
 use super::kind::KKind;
 use super::node::{ContentKey, Group, NodeSchema, TypeNode};
 use super::order::{Dropped, is_subtype_of, unsubsumed};
@@ -80,6 +84,12 @@ pub struct TypeRegistry<'run> {
     bump: BumpAllocator<'run>,
     nodes: RefCell<NodeTable<'run>>,
     verdicts: VerdictTable<'run>,
+    /// The bottom and the top, held so producing either costs no lookup.
+    never: Linked<'run>,
+    any: Linked<'run>,
+    /// `test`-only: how many handles have been entered, so a test can count a walk's lookups.
+    #[cfg(test)]
+    lookups: Cell<usize>,
 }
 
 impl<'run> TypeRegistry<'run> {
@@ -113,13 +123,46 @@ impl<'run> TypeRegistry<'run> {
     }
 
     fn with_verdict_slots(bump: BumpAllocator<'run>, verdict_slots: usize) -> Self {
+        // `Never` and `Any` are laid before the registry exists, so it can hold them; the seed's
+        // own interns of the two then hit.
+        let mut nodes = bump_hash_table(bump);
+        let mut lay_leaf = |leaf: TypeNode<'run, Linked<'run>>| -> Linked<'run> {
+            let digest = digest::node_digest(bump, &leaf);
+            let node = bump.alloc(StoredNode::new(
+                digest,
+                Content::lay(leaf, Flags::NONE, bump),
+            ));
+            nodes.insert_unique(slot_hash(digest), &*node, |node| slot_hash(node.digest()));
+            node
+        };
+        let (never, any) = (lay_leaf(TypeNode::Never), lay_leaf(TypeNode::Any));
         let registry = Self {
             bump,
-            nodes: RefCell::new(bump_hash_table(bump)),
+            nodes: RefCell::new(nodes),
             verdicts: VerdictTable::with_slots(verdict_slots),
+            never,
+            any,
+            #[cfg(test)]
+            lookups: Cell::new(0),
         };
         registry.seed_constants();
         registry
+    }
+
+    /// The bottom's node.
+    pub(super) fn never(&self) -> Linked<'run> {
+        self.never
+    }
+
+    /// The top's node.
+    pub(super) fn any(&self) -> Linked<'run> {
+        self.any
+    }
+
+    /// `test`-only: how many handles have been entered into the lattice.
+    #[cfg(test)]
+    pub(super) fn lookups(&self) -> usize {
+        self.lookups.get()
     }
 
     /// Intern every constant node, so a fixed handle always resolves. The region is its own scratch
@@ -190,10 +233,14 @@ impl<'run> TypeRegistry<'run> {
 
     // --- Content: interning and node reads ---
 
-    /// Intern `node` and return its handle. Interning the same content twice yields one node and
-    /// two equal handles. The generic door: its slices are stored as handed in, so they must
-    /// already live at least as long as the region.
-    pub(super) fn intern(&self, scratch: BumpAllocator<'_>, node: TypeNode<'run>) -> Handle {
+    /// Intern `node` and return its node. Interning the same content twice yields one node. The
+    /// generic door: its slices are stored as handed in, so they must already live at least as
+    /// long as the region.
+    pub(super) fn intern(
+        &self,
+        scratch: BumpAllocator<'_>,
+        node: TypeNode<'run, Linked<'run>>,
+    ) -> Linked<'run> {
         self.intern_digested(digest::node_digest(scratch, &node), || node)
     }
 
@@ -210,8 +257,8 @@ impl<'run> TypeRegistry<'run> {
     fn intern_digested(
         &self,
         digest: TypeDigest,
-        build: impl FnOnce() -> TypeNode<'run>,
-    ) -> Handle {
+        build: impl FnOnce() -> TypeNode<'run, Linked<'run>>,
+    ) -> Linked<'run> {
         self.intern_laid(digest, || {
             let node = build();
             let folded = self.flags_over(&node);
@@ -226,31 +273,26 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// The insert-if-absent core under every intern: on a miss, `lay` builds the stored content,
-    /// and the node is laid alone in the region and entered in the table under `digest`.
-    fn intern_laid(&self, digest: TypeDigest, lay: impl FnOnce() -> Content<'run>) -> Handle {
-        if self.stored(digest).is_none() {
-            let content = lay();
-            debug_assert!(self.stored(digest).is_none(), "`lay` interns nothing");
-            let node = self.bump.alloc(StoredNode::new(digest, content));
-            self.nodes
-                .borrow_mut()
-                .insert_unique(slot_hash(digest), node, |node| slot_hash(node.digest()));
+    /// and the node is laid alone in the region and entered in the table under `digest`. Returns
+    /// the node found or laid.
+    fn intern_laid(&self, digest: TypeDigest, lay: impl FnOnce() -> Content<'run>) -> Linked<'run> {
+        if let Some(found) = self.stored(digest) {
+            return found;
         }
-        Handle::from_digest(digest)
+        let content = lay();
+        debug_assert!(self.stored(digest).is_none(), "`lay` interns nothing");
+        let node: Linked<'run> = self.bump.alloc(StoredNode::new(digest, content));
+        self.nodes
+            .borrow_mut()
+            .insert_unique(slot_hash(digest), node, |node| slot_hash(node.digest()));
+        node
     }
 
-    /// `node`'s flags folded from its children's own — one probe per child, since every child was
-    /// interned first. A child not in the table reads as no flags, which is exact: the only such
-    /// child is the handle of a group member mid-seal, which the seal's rebuilt schemas name before
-    /// its own node is interned, and a sealed member is a leaf for every probe. A variable's or a
-    /// carrier's own flags are [`Content::flags`]'s constants.
-    fn flags_over(&self, node: &TypeNode<'run>) -> Flags {
+    /// `node`'s flags folded from its children's own: each child is a node, interned first. A
+    /// variable's or a carrier's own flags are [`Content::flags`]'s constants.
+    fn flags_over(&self, node: &TypeNode<'run, Linked<'run>>) -> Flags {
         let mut folded = Flags::NONE;
-        children(node, &mut |child, _| {
-            if let Some(stored) = self.stored(child.digest()) {
-                folded = folded | stored.flags();
-            }
-        });
+        children(node, &mut |child, _| folded = folded | child.flags());
         // A scheme binds its own variables, so nothing under one is free here, and the scheme
         // itself is a quantified callable's type.
         if node.binds_quantifiers() {
@@ -270,16 +312,17 @@ impl<'run> TypeRegistry<'run> {
         }
     }
 
-    /// A caller's field run copied into the region raw.
-    fn rehome_fields<H: TypeHandle>(
+    /// A caller's field run copied into the region, each type by its node: the one lookup per
+    /// field an intern miss takes for a typed operand.
+    fn rehome_fields<H: Naming<'run>>(
         &self,
         fields: &[(BinderSymbol, H)],
-    ) -> &'run [(BinderSymbol, Handle)] {
+    ) -> &'run [(BinderSymbol, Linked<'run>)] {
         if fields.is_empty() {
             &[]
         } else {
             self.bump
-                .alloc_slice_fill_iter(fields.iter().map(|(name, kt)| (*name, kt.raw())))
+                .alloc_slice_fill_iter(fields.iter().map(|(name, kt)| (*name, kt.linked(self))))
         }
     }
 
@@ -293,31 +336,15 @@ impl<'run> TypeRegistry<'run> {
     /// A miss is a bug, not a state: a handle is only ever produced by an interning door, and the
     /// table is insert-only.
     pub fn node<H: TypeHandle>(&self, handle: H) -> TypeNode<'run, H::Child> {
-        self.enter(handle.raw()).view()
+        self.enter(handle.raw()).view_as()
     }
 
-    /// `handle`'s own quantifier group and the type under it: a scheme's group and body, or the
-    /// empty group over `handle` itself. How the lattice's raw-handle relations read a callable
-    /// whose handle may name a scheme.
-    pub(super) fn split(&self, handle: Handle) -> (Group<'run>, Handle) {
-        match self.node(handle) {
-            TypeNode::Scheme { group, body } => (*group, body),
-            _ => (Group::EMPTY, handle),
-        }
-    }
-
-    /// What `handle` is declared as: a [`Scheme`](super::handle::Scheme) where it names a scheme node, and a
-    /// [`Parametric`] otherwise.
-    pub(super) fn declared(&self, handle: Handle) -> DeclaredType<Parametric> {
-        if self.enter(handle).view::<Handle>().binds_quantifiers() {
-            DeclaredType::Scheme(wrap(handle))
-        } else {
-            DeclaredType::Type(wrap(handle))
-        }
-    }
-
-    /// The node stored under `handle`, by reference. A miss panics, as [`node`](Self::node)'s does.
+    /// The node stored under `handle`, by reference — the one lookup a handle takes into the
+    /// lattice, where it enters: every walk and relation inside follows references from there. A
+    /// miss panics, as [`node`](Self::node)'s does.
     pub(super) fn enter(&self, handle: Handle) -> Linked<'run> {
+        #[cfg(test)]
+        self.lookups.set(self.lookups.get() + 1);
         let digest = handle.digest();
         match self.stored(digest) {
             Some(stored) => stored,
@@ -338,32 +365,26 @@ impl<'run> TypeRegistry<'run> {
     /// Whether `handle` names a union. The construction lane's first probe, so it answers from the
     /// node's shape alone and never reads out the member list.
     pub fn is_union<H: TypeHandle>(&self, handle: H) -> bool {
-        matches!(
-            self.stored(handle.raw().digest()).map(StoredNode::content),
-            Some(Content::Union { .. })
-        )
+        matches!(self.enter(handle.raw()).content(), Content::Union { .. })
     }
 
     /// The `union` member named `name`, whatever schema it declares. `name` probes by bare symbol
     /// bits: the token arrives from a reference site with no class attached.
     pub fn union_member_named(&self, union: KType, name: Symbol) -> Option<KType> {
-        let Some(Content::Union { members, .. }) =
-            self.stored(union.digest()).map(StoredNode::content)
-        else {
+        let Content::Union { members, .. } = self.enter(union.raw()).content() else {
             return None;
         };
         members
             .iter()
-            .copied()
             .find(|m| {
                 matches!(
-                    self.stored(m.digest()).map(StoredNode::content),
-                    Some(Content::SetMember {
+                    m.content(),
+                    Content::SetMember {
                         name: member_name, ..
-                    }) if member_name.symbol() == name
+                    } if member_name.symbol() == name
                 )
             })
-            .map(wrap)
+            .map(|m| wrap(m.handle()))
     }
 
     // --- Composite construction ---
@@ -372,9 +393,10 @@ impl<'run> TypeRegistry<'run> {
     // parent's handle, so building a type is bottom-up interning and no site can construct a
     // composite the registry has not seen.
     //
-    // A door that builds a type from child types is generic over the handle its children are: a
-    // `KType` out of `KType` children, a `Parametric` out of parametric ones. A child holds no
-    // binder of the door's own, so the composite holds exactly the variables its children do.
+    // A door that builds a type from child types is generic over how its children are named: a
+    // `KType` out of `KType` children, a `Parametric` out of parametric ones, and inside the
+    // lattice a node out of nodes. A child holds no binder of the door's own, so the composite
+    // holds exactly the variables its children do.
 
     /// `List<element>`.
     ///
@@ -393,32 +415,33 @@ impl<'run> TypeRegistry<'run> {
     /// let variable = types.lexical(0, name, KType::ANY);
     /// let _list: KType = types.list(variable);
     /// ```
-    pub fn list<H: TypeHandle>(&self, element: H) -> H {
-        let element = element.raw();
-        wrap(
+    pub fn list<H: Naming<'run>>(&self, element: H) -> H {
+        H::read(
             self.intern_digested(digest::list_digest(element.digest()), || TypeNode::List {
-                element,
+                element: element.linked(self),
             }),
         )
     }
 
     /// `Dict<key, value>`.
-    pub fn dict<H: TypeHandle>(&self, key: H, value: H) -> H {
-        let (key, value) = (key.raw(), value.raw());
-        wrap(
+    pub fn dict<H: Naming<'run>>(&self, key: H, value: H) -> H {
+        H::read(
             self.intern_digested(digest::dict_digest(key.digest(), value.digest()), || {
-                TypeNode::Dict { key, value }
+                TypeNode::Dict {
+                    key: key.linked(self),
+                    value: value.linked(self),
+                }
             }),
         )
     }
 
     /// A structural record type over `fields`, in declaration order with unique names.
-    pub fn record<H: TypeHandle>(
+    pub fn record<H: Naming<'run>>(
         &self,
         scratch: BumpAllocator<'_>,
         fields: &[(BinderSymbol, H)],
     ) -> H {
-        wrap(
+        H::read(
             self.intern_digested(digest::record_digest(scratch, fields), || {
                 TypeNode::Record {
                     fields: Record::over(self.rehome_fields(fields)),
@@ -429,13 +452,13 @@ impl<'run> TypeRegistry<'run> {
 
     /// The function type `(params) -> ret`, binding no group: a variable inside reads the enclosing
     /// scheme's group.
-    pub fn function_type<H: TypeHandle>(
+    pub fn function_type<H: Naming<'run>>(
         &self,
         scratch: BumpAllocator<'_>,
         params: &[(BinderSymbol, H)],
         ret: H,
     ) -> H {
-        wrap(self.intern_function(scratch, params, ret.raw()))
+        H::read(self.intern_function(scratch, params, ret.linked(self)))
     }
 
     /// The one door that mints a quantified function type, its `FOR ALL` group (`quantifiers` and
@@ -450,18 +473,18 @@ impl<'run> TypeRegistry<'run> {
         params: &[(BinderSymbol, Parametric)],
         ret: Parametric,
     ) -> GroupIntern<'s> {
-        let body = self.function_type(scratch, params, ret);
-        self.scheme(scratch, quantifiers, bounds, body.raw())
+        let body = self.intern_function(scratch, params, ret.linked(self));
+        self.scheme(scratch, quantifiers, bounds, body)
     }
 
     /// Intern a function type. Probe-first, as [`intern_shape`](Self::intern_shape) is, so the
     /// params run is copied into the region only on a genuine miss.
-    fn intern_function<H: TypeHandle>(
+    fn intern_function<H: Naming<'run>>(
         &self,
         scratch: BumpAllocator<'_>,
         params: &[(BinderSymbol, H)],
-        ret: Handle,
-    ) -> Handle {
+        ret: Linked<'run>,
+    ) -> Linked<'run> {
         let digest = digest::function_digest(scratch, params, ret.digest());
         self.intern_digested(digest, || TypeNode::KFunction {
             params: Record::over(self.rehome_fields(params)),
@@ -473,7 +496,7 @@ impl<'run> TypeRegistry<'run> {
     /// as the surface it is shadowed by. An expression surface's text is copied into the region on
     /// a miss.
     pub fn deferred_return(&self, surface: DeferredReturnSurface<'_>) -> KType {
-        wrap(
+        KType::read(
             self.intern_digested(digest::deferred_return_digest(surface), || {
                 TypeNode::DeferredReturn(match surface {
                     DeferredReturnSurface::Type(name) => DeferredReturnSurface::Type(name),
@@ -486,15 +509,15 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// Application of a higher-kinded type constructor to the parameter-name-keyed `arguments`.
-    pub fn constructor_apply<H: TypeHandle>(
+    pub fn constructor_apply<H: Naming<'run>>(
         &self,
         scratch: BumpAllocator<'_>,
-        constructor: KType,
+        constructor: H::Bound,
         arguments: &[(BinderSymbol, H)],
     ) -> H {
         let digest = digest::constructor_apply_digest(scratch, constructor.digest(), arguments);
-        wrap(self.intern_digested(digest, || TypeNode::ConstructorApply {
-            constructor: constructor.raw(),
+        H::read(self.intern_digested(digest, || TypeNode::ConstructorApply {
+            constructor: constructor.linked(self),
             arguments: Record::over(self.rehome_fields(arguments)),
         }))
     }
@@ -502,7 +525,7 @@ impl<'run> TypeRegistry<'run> {
     /// A signature's head parameter: a named variable its members read and `WITH` pins, bounded by
     /// `bound` — [`KType::ANY`] where the declaration constrains nothing.
     pub fn head_parameter(&self, name: TypeSymbol, bound: KType) -> Parametric {
-        wrap(self.parameter(name, bound))
+        Parametric::read(self.parameter(name, bound))
     }
 
     /// The carrier an opaque view hides the head parameter `name` behind, keyed on `key`, the
@@ -511,9 +534,10 @@ impl<'run> TypeRegistry<'run> {
     /// it as an atom under `Any` alone. It records `met`, the bound its source met, for a
     /// signature's fit alone.
     pub fn carrier(&self, name: TypeSymbol, met: KType, key: ContentKey) -> KType {
+        let met = met.linked(self);
         self.assert_bound(met);
-        wrap(
-            self.intern_digested(digest::carrier_digest(name, key, met), || {
+        KType::read(
+            self.intern_digested(digest::carrier_digest(name, key, met.digest()), || {
                 TypeNode::Carrier { name, key, met }
             }),
         )
@@ -521,37 +545,35 @@ impl<'run> TypeRegistry<'run> {
 
     /// Whether `kt` is an opaque view's carrier.
     pub fn is_carrier(&self, kt: KType) -> bool {
-        matches!(self.node(kt.raw()), TypeNode::Carrier { .. })
+        matches!(self.enter(kt.raw()).content(), Content::Carrier { .. })
     }
 
     /// A head parameter named `name`, bounded by `bound`.
-    pub(super) fn parameter(&self, name: TypeSymbol, bound: KType) -> Handle {
+    pub(super) fn parameter(&self, name: TypeSymbol, bound: impl Naming<'run>) -> Linked<'run> {
+        let bound = bound.linked(self);
         self.assert_bound(bound);
-        self.intern_digested(digest::parameter_digest(name, bound), || {
+        self.intern_digested(digest::parameter_digest(name, bound.digest()), || {
             TypeNode::Parameter { name, bound }
         })
     }
 
     /// A bound is concrete by its type. An opaque carrier is concrete too, but a bound holds none:
     /// the elaborator refuses one there, and this checks that it did.
-    fn assert_bound(&self, bound: KType) {
-        debug_assert!(
-            !self.contains_carrier(bound.raw()),
-            "a bound holds no opaque carrier",
-        );
+    fn assert_bound(&self, bound: Linked<'run>) {
+        debug_assert!(!bound.contains_carrier(), "a bound holds no opaque carrier");
     }
 
     /// A code kind needing `names` where its code is built. `kind` is a code kind below `Code`;
     /// `names` may arrive in any order and repeat, since identity is their set, and needing none
     /// is the bare `kind` itself.
-    pub fn code_needing(
+    pub fn code_needing<H: Naming<'run>>(
         &self,
         scratch: BumpAllocator<'_>,
-        kind: KType,
+        kind: H,
         names: &[BinderSymbol],
-    ) -> KType {
+    ) -> H {
         debug_assert!(
-            kind.code_parent().is_some(),
+            Handle::from_digest(kind.digest()).code_parent().is_some(),
             "a code kind needing names is a kind below `Code`",
         );
         if names.is_empty() {
@@ -561,26 +583,31 @@ impl<'run> TypeRegistry<'run> {
         sorted.extend_from_slice(names);
         sorted.sort_unstable();
         sorted.dedup();
-        let digest = digest::code_needing_digest(kind, &sorted);
-        wrap(self.intern_digested(digest, || TypeNode::CodeNeeding {
-            kind,
+        let digest = digest::code_needing_digest(kind.digest(), &sorted);
+        H::read(self.intern_digested(digest, || TypeNode::CodeNeeding {
+            kind: kind.linked(self),
             names: self.rehome(&sorted),
         }))
     }
 
     /// The `index`-th rigid variable of the enclosing scheme's group, bounded by `bound`.
     pub fn quantified(&self, index: usize, bound: KType) -> Parametric {
+        Parametric::read(self.quantified_node(index, bound))
+    }
+
+    /// [`quantified`](Self::quantified) as a node.
+    pub(super) fn quantified_node(&self, index: usize, bound: impl Naming<'run>) -> Linked<'run> {
+        let bound = bound.linked(self);
         self.assert_bound(bound);
-        wrap(
-            self.intern_digested(digest::quantified_digest(index, bound), || {
-                TypeNode::Quantified { index, bound }
-            }),
-        )
+        self.intern_digested(digest::quantified_digest(index, bound.digest()), || {
+            TypeNode::Quantified { index, bound }
+        })
     }
 
     /// The lexical variable at `level`, named `name`, bounded by `bound` and above `Never`.
     pub fn lexical(&self, level: usize, name: TypeSymbol, bound: KType) -> Parametric {
-        self.intern_lexical(level, name, KType::NEVER, bound)
+        let bound = bound.linked(self);
+        Parametric::read(self.lexical_node(self.bump, level, name, self.never, bound))
     }
 
     /// A lexical variable between `lower` and `bound`. A `lower` other than `Never` lies strictly
@@ -593,72 +620,90 @@ impl<'run> TypeRegistry<'run> {
         lower: KType,
         bound: KType,
     ) -> Parametric {
-        self.assert_bound(lower);
-        debug_assert!(
-            lower == KType::NEVER
-                || (lower != bound && is_subtype_of(self, scratch, lower.raw(), bound.raw())),
-            "a lexical variable's lower end lies strictly under its bound",
-        );
-        self.intern_lexical(level, name, lower, bound)
+        let (lower, bound) = (lower.linked(self), bound.linked(self));
+        Parametric::read(self.lexical_node(scratch, level, name, lower, bound))
     }
 
-    fn intern_lexical(
+    /// [`lexical_between`](Self::lexical_between) as a node. `scratch` serves the debug check that
+    /// `lower` lies under `bound`, which an unset lower end skips.
+    pub(super) fn lexical_node(
         &self,
+        scratch: BumpAllocator<'_>,
         level: usize,
         name: TypeSymbol,
-        lower: KType,
-        bound: KType,
-    ) -> Parametric {
+        lower: Linked<'run>,
+        bound: Linked<'run>,
+    ) -> Linked<'run> {
+        self.assert_bound(lower);
         self.assert_bound(bound);
-        wrap(
-            self.intern_digested(digest::lexical_digest(level, name, lower, bound), || {
-                TypeNode::Lexical {
-                    level,
-                    name,
-                    lower,
-                    bound,
-                }
-            }),
-        )
+        debug_assert!(
+            lower == Handle::NEVER
+                || (lower != bound && is_subtype_of(self, scratch, lower, bound)),
+            "a lexical variable's lower end lies strictly under its bound",
+        );
+        let digest = digest::lexical_digest(level, name, lower.digest(), bound.digest());
+        self.intern_digested(digest, || TypeNode::Lexical {
+            level,
+            name,
+            lower,
+            bound,
+        })
     }
 
     /// A relative sibling reference against an open recursive-group window.
     pub fn sibling(&self, index: usize) -> KType {
-        wrap(self.intern_digested(digest::sibling_digest(index), || TypeNode::Sibling(index)))
+        KType::read(self.sibling_node(index))
     }
 
-    /// One sealed member of a recursive group. Built only by the seal, which derives the handle
-    /// from the component digest first and interns the node under it; `schema` is copied into the
-    /// region on a miss, so the seal may hand one staged in scratch.
+    /// [`sibling`](Self::sibling) as a node.
+    pub(super) fn sibling_node(&self, index: usize) -> Linked<'run> {
+        self.intern_digested(digest::sibling_digest(index), || TypeNode::Sibling(index))
+    }
+
+    /// One sealed member of a recursive group, its schema slot empty. Built only by the seal, which
+    /// interns a component's members before any type over them and then sets each one's schema
+    /// ([`seal_schema`](Self::seal_schema)). The member's handle is its component digest and
+    /// index, so this is the one source of a member's handle.
     pub(super) fn set_member(
         &self,
         scc_digest: TypeDigest,
         index: usize,
         name: TypeSymbol,
         kind: KKind,
-        schema: NodeSchema<'_>,
-    ) -> Handle {
+    ) -> Linked<'run> {
         self.intern_laid(digest::member_ref_digest(scc_digest, index), || {
-            let schema = match schema {
-                NodeSchema::NewType(repr) => NodeSchema::NewType(repr),
-                NodeSchema::TypeConstructor {
-                    representation,
-                    param_names,
-                } => NodeSchema::TypeConstructor {
-                    representation,
-                    param_names: self.rehome(param_names),
-                },
-            };
             Content::SetMember {
                 kind,
                 index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
                 body: self.bump.alloc(MemberBody {
                     scc_digest,
-                    schema: SchemaSlot::filled(schema),
+                    schema: SchemaSlot::empty(),
                 }),
                 name,
             }
         })
+    }
+
+    /// Set `member`'s schema, copying it into the region; the seal may hand one staged in scratch.
+    /// A member already interned by an earlier seal of the same component keeps the schema that
+    /// seal gave it, which is the same content.
+    pub(super) fn seal_schema(&self, member: Linked<'run>, schema: NodeSchema<'_>) {
+        let Content::SetMember { body, .. } = member.content() else {
+            unreachable!("a sealed member is a SetMember node")
+        };
+        if body.schema.is_set() {
+            return;
+        }
+        body.schema.set(match schema {
+            NodeSchema::NewType(repr) => NodeSchema::NewType(repr),
+            NodeSchema::TypeConstructor {
+                representation,
+                param_names,
+            } => NodeSchema::TypeConstructor {
+                representation,
+                param_names: self.rehome(param_names),
+            },
+        });
     }
 
     /// A module-signature type over `draft`, in canonical form — the one door a schema enters the
@@ -689,13 +734,13 @@ impl<'run> TypeRegistry<'run> {
         if schema.is_empty() {
             return KType::EMPTY_SIGNATURE;
         }
-        wrap(self.intern_schema(schema))
+        KType::read(self.intern_schema(schema))
     }
 
     /// Intern a schema that is already canonical, wherever its slices live: the seed's door for
     /// [`SigSchema::EMPTY`]. Computes the schema's content digest once, here, so the node carries
     /// it and identity is one compare.
-    pub(super) fn intern_schema(&self, schema: SigSchema<'_>) -> Handle {
+    pub(super) fn intern_schema(&self, schema: SigSchema<'_>) -> Linked<'run> {
         let schema_digest = schema_content_digest(schema);
         self.intern_digested(digest::signature_digest(schema_digest), || {
             TypeNode::Signature {
@@ -715,18 +760,19 @@ impl<'run> TypeRegistry<'run> {
     /// `signature` with `pins` fixed — the application `Stack WITH {Elt = Number}` spells —
     /// or `signature` itself for no pins. `signature` is a declared signature, and each pin is
     /// keyed by one of its parameters.
-    pub fn signature_apply<H: TypeHandle>(
+    pub fn signature_apply<H: Naming<'run>>(
         &self,
         scratch: BumpAllocator<'_>,
-        signature: KType,
+        signature: H::Bound,
         pins: &[(BinderSymbol, H)],
     ) -> H {
+        let signature = signature.linked(self);
         if pins.is_empty() {
-            return wrap(signature.raw());
+            return H::read(signature);
         }
         debug_assert!(
             matches!(
-                self.node(signature),
+                signature.view(),
                 TypeNode::Signature { schema, .. }
                     if schema.origin == SigOrigin::Declared
                         && pins.iter().all(|(name, _)| matches!(
@@ -737,7 +783,7 @@ impl<'run> TypeRegistry<'run> {
             "an application pins a declared signature's own parameters",
         );
         let digest = digest::signature_apply_digest(scratch, signature.digest(), pins);
-        wrap(self.intern_digested(digest, || TypeNode::SignatureApply {
+        H::read(self.intern_digested(digest, || TypeNode::SignatureApply {
             signature,
             pins: Record::over(self.rehome_fields(pins)),
         }))
@@ -746,12 +792,12 @@ impl<'run> TypeRegistry<'run> {
     /// The meet of the signature types `members` — the set of every application they hold, less
     /// each application lying above another ([`signatures`](super::signatures)). The empty set is
     /// `Module`, and a set of one is that application's own handle.
-    pub fn signature_meet<H: TypeHandle>(&self, scratch: BumpAllocator<'_>, members: &[H]) -> H {
-        let mut raw = BumpVec::with_capacity_in(members.len(), scratch);
-        raw.extend(members.iter().map(|member| member.raw()));
-        let set = canonical_applications(self, scratch, &raw);
-        wrap(match set[..] {
-            [] => Handle::EMPTY_SIGNATURE,
+    pub fn signature_meet<H: Naming<'run>>(&self, scratch: BumpAllocator<'_>, members: &[H]) -> H {
+        let mut linked = BumpVec::with_capacity_in(members.len(), scratch);
+        linked.extend(members.iter().map(|member| member.linked(self)));
+        let set = canonical_applications(self, scratch, &linked);
+        H::read(match set[..] {
+            [] => self.enter(Handle::EMPTY_SIGNATURE),
             [only] => only,
             _ => self.intern_digested(digest::signature_meet_digest(&set), || {
                 TypeNode::SignatureMeet {
@@ -782,12 +828,22 @@ impl<'run> TypeRegistry<'run> {
     /// normalizes a written ranking; empty for written order. Written order spelled out digests
     /// as the empty ranking, so the two spellings are one handle. The node stores each slot's
     /// class in its element, written order spelled out.
-    pub fn shape_type<H: TypeHandle>(
+    pub fn shape_type<H: Naming<'run>>(
         &self,
         elements: &[DispatchTokenElement<H>],
         classes: &[u16],
         ret: H,
     ) -> H {
+        H::read(self.shape_node(elements, classes, ret.linked(self)))
+    }
+
+    /// [`shape_type`](Self::shape_type) as a node.
+    fn shape_node<H: Naming<'run>>(
+        &self,
+        elements: &[DispatchTokenElement<H>],
+        classes: &[u16],
+        ret: Linked<'run>,
+    ) -> Linked<'run> {
         debug_assert!(
             classes.is_empty()
                 || classes.len()
@@ -798,7 +854,7 @@ impl<'run> TypeRegistry<'run> {
             "a ranking names one class per slot",
         );
         let classes = if written_order(classes) { &[] } else { classes };
-        wrap(self.intern_shape(elements, classes, ret.raw()))
+        self.intern_shape(elements, classes, ret)
     }
 
     /// The one door that mints a quantified expression shape, its `FOR ALL` group (`quantifiers`
@@ -814,8 +870,8 @@ impl<'run> TypeRegistry<'run> {
         classes: &[u16],
         ret: Parametric,
     ) -> GroupIntern<'s> {
-        let body = self.shape_type(elements, classes, ret);
-        self.scheme(scratch, quantifiers, bounds, body.raw())
+        let body = self.shape_node(elements, classes, ret.linked(self));
+        self.scheme(scratch, quantifiers, bounds, body)
     }
 
     /// The declared type both scheme doors answer: [`bind_group`](Self::bind_group) over `body`.
@@ -824,11 +880,11 @@ impl<'run> TypeRegistry<'run> {
         scratch: BumpAllocator<'s>,
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
-        body: Handle,
+        body: Linked<'run>,
     ) -> GroupIntern<'s> {
-        let (handle, quantifier_map) = self.bind_group(scratch, quantifiers, bounds, body);
+        let (node, quantifier_map) = self.bind_group(scratch, quantifiers, bounds, body);
         GroupIntern {
-            handle: self.declared(handle),
+            handle: node.declared(),
             quantifier_map,
         }
     }
@@ -848,8 +904,8 @@ impl<'run> TypeRegistry<'run> {
         scratch: BumpAllocator<'s>,
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
-        body: Handle,
-    ) -> (Handle, &'s [usize]) {
+        body: Linked<'run>,
+    ) -> (Linked<'run>, &'s [usize]) {
         debug_assert_eq!(quantifiers.len(), bounds.len(), "one bound per quantifier");
         if quantifiers.is_empty() {
             return (body, &[]);
@@ -879,10 +935,10 @@ impl<'run> TypeRegistry<'run> {
     fn binder_positions<'s>(
         &self,
         scratch: BumpAllocator<'s>,
-        body: Handle,
-    ) -> BumpVec<'s, (Handle, Variance)> {
+        body: Linked<'run>,
+    ) -> BumpVec<'s, (Linked<'run>, Variance)> {
         let mut positions = BumpVec::new_in(scratch);
-        let ret = match self.node(body) {
+        let ret = match body.view() {
             TypeNode::KFunction { params, ret } => {
                 let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
                 sorted.extend(params.iter());
@@ -916,8 +972,8 @@ impl<'run> TypeRegistry<'run> {
         scratch: BumpAllocator<'s>,
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
-        positions: impl Iterator<Item = (Handle, Variance)>,
-    ) -> GroupOrder<'s> {
+        positions: impl Iterator<Item = (Linked<'run>, Variance)>,
+    ) -> GroupOrder<'s, 'run> {
         let arity = quantifiers.len();
         let census = self.quantifier_census(scratch, positions, arity);
 
@@ -934,7 +990,7 @@ impl<'run> TypeRegistry<'run> {
 
         let mut bindings = BumpVec::with_capacity_in(arity, scratch);
         bindings.extend(
-            (0..arity).map(|index| self.quantified(quantifier_map[index], bounds[index]).raw()),
+            (0..arity).map(|index| self.quantified_node(quantifier_map[index], bounds[index])),
         );
         let mut names = BumpVec::with_capacity_in(arity, scratch);
         names.extend(order.iter().map(|index| quantifiers[*index]));
@@ -953,12 +1009,12 @@ impl<'run> TypeRegistry<'run> {
     /// Probe-first: every definition mints its callable's shape, and re-running one definition —
     /// a lambda inside a loop body — mints a shape already interned. Taking the digest off the
     /// borrowed run means the run is copied into the region only on a genuine miss.
-    fn intern_shape<H: TypeHandle>(
+    fn intern_shape<H: Naming<'run>>(
         &self,
         elements: &[DispatchTokenElement<H>],
         classes: &[u16],
-        ret: Handle,
-    ) -> Handle {
+        ret: Linked<'run>,
+    ) -> Linked<'run> {
         let handle = digest::shape_digest(
             elements.iter().copied(),
             classes.iter().copied(),
@@ -974,7 +1030,7 @@ impl<'run> TypeRegistry<'run> {
                     DispatchTokenElement::Slot(kt) => {
                         let class = class_of(classes, slot);
                         slot += 1;
-                        StoredElement::Slot(kt.raw(), class)
+                        StoredElement::Slot(kt.linked(self), class)
                     }
                 }));
             let elements = Elements::over(stored);
@@ -992,14 +1048,14 @@ impl<'run> TypeRegistry<'run> {
     fn quantifier_census<'s>(
         &self,
         scratch: BumpAllocator<'s>,
-        positions: impl Iterator<Item = (Handle, Variance)>,
+        positions: impl Iterator<Item = (Linked<'run>, Variance)>,
         arity: usize,
     ) -> BumpVec<'s, Occurrences> {
         let mut census = BumpVec::with_capacity_in(arity, scratch);
         census.resize(arity, Occurrences::default());
         let mut seen = 0usize;
         for (kt, position) in positions {
-            visit_free_quantified(self, scratch, kt, position, &mut |index, context| {
+            visit_free_quantified(scratch, kt, position, &mut |index, context| {
                 if let Some(record) = census.get_mut(index) {
                     if record.first == usize::MAX {
                         record.first = seen;
@@ -1029,38 +1085,44 @@ impl<'run> TypeRegistry<'run> {
     ///
     /// Generic over its members' handle, as every composite door is: a union of concrete types is
     /// concrete.
-    pub fn union_of<H: TypeHandle>(&self, scratch: BumpAllocator<'_>, members: &[H]) -> H {
-        let width: usize = members
+    pub fn union_of<H: Naming<'run>>(&self, scratch: BumpAllocator<'_>, members: &[H]) -> H {
+        let mut linked = BumpVec::with_capacity_in(members.len(), scratch);
+        linked.extend(members.iter().map(|member| member.linked(self)));
+        let width: usize = linked
             .iter()
-            .map(|member| match self.enter(member.raw()).content() {
+            .map(|member| match member.content() {
                 Content::Union { members: inner, .. } => inner.len(),
                 _ => 1,
             })
             .sum();
         let mut flat = BumpVec::with_capacity_in(width, scratch);
-        let push_unique = |handle: Handle, flat: &mut BumpVec<'_, Handle>| {
-            if handle != Handle::NEVER && !flat.contains(&handle) {
-                flat.push(handle);
+        let push_unique = |node: Linked<'run>, flat: &mut BumpVec<'_, Linked<'run>>| {
+            if node != Handle::NEVER && !flat.contains(&node) {
+                flat.push(node);
             }
         };
-        for member in members {
-            match self.enter(member.raw()).content() {
+        for member in linked.iter().copied() {
+            match member.content() {
                 Content::Union { members: inner, .. } => {
                     for nested in inner.iter() {
                         push_unique(*nested, &mut flat);
                     }
                 }
-                _ => push_unique(member.raw(), &mut flat),
+                _ => push_unique(member, &mut flat),
             }
         }
-        wrap(self.canonical_union(scratch, flat))
+        H::read(self.canonical_union(scratch, flat))
     }
 
     /// The canonical union over `flat`, already flattened and deduplicated with `Never` dropped.
-    fn canonical_union(&self, scratch: BumpAllocator<'_>, mut flat: BumpVec<'_, Handle>) -> Handle {
+    fn canonical_union(
+        &self,
+        scratch: BumpAllocator<'_>,
+        mut flat: BumpVec<'_, Linked<'run>>,
+    ) -> Linked<'run> {
         // The top's own definition, not the order: every type lies under `Any`, a variable too.
-        if flat.contains(&Handle::ANY) {
-            return Handle::ANY;
+        if flat.iter().any(|member| *member == Handle::ANY) {
+            return self.any;
         }
         if flat.len() > 1 {
             // Subsumption: a concrete member below another contributes nothing the other does not
@@ -1074,38 +1136,12 @@ impl<'run> TypeRegistry<'run> {
         // a type variable bounded by `Any` would lie under `Any` but not under the union that equals it.
         if [Handle::ANY_VALUE, Handle::ANY_TYPE, Handle::ANY_CODE]
             .iter()
-            .all(|top| flat.contains(top))
+            .all(|top| flat.iter().any(|member| *member == *top))
         {
-            return Handle::ANY;
+            return self.any;
         }
         match flat.len() {
-            0 => Handle::NEVER,
-            1 => flat[0],
-            _ => self.intern_union_members(scratch, &flat),
-        }
-    }
-
-    /// Intern a union from members that are already flat and already an antichain — dedup by handle
-    /// and collapse a one-member result, but read no member nodes.
-    ///
-    /// The seal's door, and the seal's alone. A rewritten sibling handle names a still-uninterned
-    /// member of the group being sealed, so [`union_of`](Self::union_of)'s flatten pass would fault
-    /// on it. It is sound there because the rename `Sibling(i) ↦ member_i` preserves every
-    /// subsumption verdict: both are atoms, below only themselves and `Never`, and distinct indices
-    /// name distinct members — so a union canonical before the seal is canonical after it.
-    pub(super) fn intern_union_flat(
-        &self,
-        scratch: BumpAllocator<'_>,
-        members: &[Handle],
-    ) -> Handle {
-        let mut flat = BumpVec::with_capacity_in(members.len(), scratch);
-        for member in members {
-            if !flat.contains(member) {
-                flat.push(*member);
-            }
-        }
-        match flat.len() {
-            0 => Handle::NEVER,
+            0 => self.never,
             1 => flat[0],
             _ => self.intern_union_members(scratch, &flat),
         }
@@ -1114,68 +1150,43 @@ impl<'run> TypeRegistry<'run> {
     /// Intern the `Union` node over the already-canonical `flat`, probing the table before copying
     /// the members in. The `Union` arm of `node_digest` *is* `union_digest` over the node's member
     /// slice, so the digest taken here off `flat` equals the digest the node would key at.
-    fn intern_union_members(&self, scratch: BumpAllocator<'_>, flat: &[Handle]) -> Handle {
+    fn intern_union_members(
+        &self,
+        scratch: BumpAllocator<'_>,
+        flat: &[Linked<'run>],
+    ) -> Linked<'run> {
         self.intern_digested(digest::union_digest(scratch, flat), || TypeNode::Union {
             members: Run::over(self.rehome(flat)),
         })
     }
 
     // --- Quantifier probes ---
-
-    /// Whether any `Quantified` position is reachable from `kt` without crossing a scheme — the
-    /// probe that lets a slot type with nothing to solve answer the relations in one
-    /// step instead of walking under a unifier. Read off the flags interning stored in the node.
-    pub(super) fn contains_quantified(&self, kt: Handle) -> bool {
-        self.enter(kt).flags().holds(Flags::QUANTIFIED)
-    }
-
-    /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable from
-    /// `kt`. Read off the flags interning stored in the node.
-    ///
-    /// The invariant a **bound** carries: a bound is a variable-free type. That is what keeps the
-    /// order's two rigid clauses consistent, since below a rigid variable are only itself and
-    /// `Never` while above it is everything above its bound — and a rigid bound would put a
-    /// variable in both sets at once. A bound is a [`KType`], so it holds no variable; the doors
-    /// that take a bound assert it holds no opaque carrier either.
-    pub(super) fn contains_rigid(&self, kt: Handle) -> bool {
-        self.enter(kt).flags().holds(Flags::RIGID)
-    }
-
-    /// Whether `kt` is concrete: no free `Quantified`, `Lexical`, head `Parameter` or scheme is
-    /// reachable outside sealed content. Read off the flags interning stored in the node.
-    pub(super) fn is_concrete(&self, kt: Handle) -> bool {
-        !self.enter(kt).flags().holds(Flags::PARAMETRIC)
-    }
+    //
+    // The probes themselves read a node's flags ([`StoredNode`]); these are their public doors.
 
     /// `kt` as a [`KType`] where it is concrete — the one checked conversion from a parametric type.
     /// `None` where a variable is reachable from it.
     pub fn concrete(&self, kt: Parametric) -> Option<KType> {
-        self.is_concrete(kt.raw()).then(|| wrap(kt.raw()))
-    }
-
-    /// Whether an opaque carrier is reachable from `kt` outside sealed content. Read off the flag
-    /// interning stored in the node.
-    pub(super) fn contains_carrier(&self, kt: Handle) -> bool {
-        self.enter(kt).flags().holds(Flags::CARRIER)
+        self.enter(kt.raw()).is_concrete().then(|| wrap(kt.raw()))
     }
 
     /// Whether `kt` holds an opaque carrier outside sealed content. A bound holds none, so the
     /// elaborator refuses one there.
     pub fn holds_carrier(&self, kt: KType) -> bool {
-        self.contains_carrier(kt.raw())
+        self.enter(kt.raw()).contains_carrier()
     }
 
     /// Whether `kt` reads the `index`-th quantifier of the enclosing scheme — what a definition asks
     /// of each name its `FOR ALL` group lists.
-    pub fn references_quantifier<H: TypeHandle>(
+    pub fn references_quantifier<H: Naming<'run>>(
         &self,
         scratch: BumpAllocator<'_>,
         kt: H,
         index: usize,
     ) -> bool {
-        let kt = kt.raw();
-        self.contains_quantified(kt)
-            && visit_free_quantified(self, scratch, kt, Variance::Co, &mut |found, _| {
+        let kt = kt.linked(self);
+        kt.contains_quantified()
+            && visit_free_quantified(scratch, kt, Variance::Co, &mut |found, _| {
                 if found == index {
                     Visit::Stop
                 } else {
@@ -1193,12 +1204,9 @@ impl<'run> TypeRegistry<'run> {
         kt: DeclaredType<Parametric>,
         name: TypeSymbol,
     ) -> bool {
-        let kt = match kt {
-            DeclaredType::Type(kt) => kt.raw(),
-            DeclaredType::Scheme(scheme) => scheme.raw(),
-        };
-        self.contains_rigid(kt)
-            && visit(self, scratch, kt, &mut |_, node, _| match *node {
+        let kt = self.enter(kt.raw());
+        kt.contains_rigid()
+            && visit(scratch, kt, &mut |_, node, _| match *node {
                 TypeNode::Parameter { name: found, .. } if found == name => Visit::Stop,
                 _ => Visit::Descend,
             })
@@ -1212,8 +1220,8 @@ impl<'run> TypeRegistry<'run> {
         kt: H,
         arity: usize,
     ) -> bool {
-        let kt = kt.raw();
-        self.contains_quantified(kt)
+        let kt = self.enter(kt.raw());
+        kt.contains_quantified()
             && self
                 .quantifier_census(scratch, std::iter::once((kt, Variance::Co)), arity)
                 .iter()
@@ -1225,10 +1233,10 @@ impl<'run> TypeRegistry<'run> {
     pub(super) fn quantifier_indices_in_range(
         &self,
         scratch: BumpAllocator<'_>,
-        kt: Handle,
+        kt: Linked<'run>,
         arity: usize,
     ) -> bool {
-        !visit_free_quantified(self, scratch, kt, Variance::Co, &mut |index, _| {
+        !visit_free_quantified(scratch, kt, Variance::Co, &mut |index, _| {
             if index >= arity {
                 Visit::Stop
             } else {
@@ -1264,13 +1272,13 @@ impl<'run> TypeRegistry<'run> {
 
 /// A quantifier group put in group order over the positions it binds — what both interning doors
 /// hand their own positions and names through.
-struct GroupOrder<'s> {
+struct GroupOrder<'s, 'run> {
     /// The quantifiers' names, in group order.
     names: BumpVec<'s, TypeSymbol>,
     /// Each quantifier's bound, in the same order.
     bounds: BumpVec<'s, KType>,
     /// What each **declared** variable substitutes to: its `Quantified` at its group index.
-    bindings: BumpVec<'s, Handle>,
+    bindings: BumpVec<'s, Linked<'run>>,
     /// Declaration index → group index.
     quantifier_map: &'s [usize],
 }

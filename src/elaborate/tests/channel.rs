@@ -482,7 +482,10 @@ fn a_quote_s_holes_are_rigid_variables() {
         let [first, second] = codes[..] else {
             panic!("two quotes")
         };
-        let (hole, alias) = if first.captures()[0].mark.is_none() {
+        // Nested shapes are ordered by address, so the two quotes are told apart by their
+        // captures: both open with `PRINT`'s key, and only the alias quote's `$` name is marked.
+        let unmarked = |code: &BodyShape<'_>| code.captures().iter().all(|c| c.mark.is_none());
+        let (hole, alias) = if unmarked(first) {
             (first, second)
         } else {
             (second, first)

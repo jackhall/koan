@@ -11,6 +11,7 @@ use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::tests::allocation_count;
 
+use super::raw::RawRegistry;
 use crate::types::handle::{KType, TypeHandle};
 use crate::types::kind::KKind;
 use crate::types::operators::ReductionMode;
@@ -176,7 +177,7 @@ fn interning_and_relations_touch_no_heap() {
     assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);
     assert_ne!(meet(&types, scratch, module, clashing), KType::NEVER);
 
-    let mut collector = Collector::<KType>::new(scratch, &[KType::ANY]);
+    let mut collector = Collector::<KType>::new(&types, scratch, &[KType::ANY]);
     assert!(
         admits_with(
             &types,
@@ -189,7 +190,7 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(collector.solve(&types).is_ok());
-    let mut least = Collector::<KType>::least(scratch, 2);
+    let mut least = Collector::<KType>::least(&types, scratch, 2);
     assert!(
         admits_with(
             &types,
@@ -202,12 +203,12 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(least.solve(&types).is_ok());
-    let mut split = Collector::<KType>::new(scratch, &[KType::ANY]);
+    let mut split = Collector::<KType>::new(&types, scratch, &[KType::ANY]);
     for argument in [KType::NUMBER, KType::STR] {
         assert!(admits_with(&types, scratch, open, argument, Variance::Co, &mut split).is_ok());
     }
     assert!(split.solve(&types).is_ok_and(|s| s.as_slice() == [mixed]));
-    let mut from_above = Collector::<KType>::new(scratch, &[KType::ANY]);
+    let mut from_above = Collector::<KType>::new(&types, scratch, &[KType::ANY]);
     for argument in [takes_number, takes_str] {
         assert!(
             admits_with(

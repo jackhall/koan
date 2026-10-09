@@ -1,4 +1,4 @@
-//! `join` and the meet — the least upper bound and the greatest lower bound — over raw handles.
+//! `join` and the meet — the least upper bound and the greatest lower bound — over nodes.
 //!
 //! `join` is not a walk. It is the larger operand when the two are ordered and their canonical
 //! union otherwise, which is what makes it associative: a structural join stops being associative
@@ -13,24 +13,25 @@
 
 use crate::bump::{BumpAllocator, BumpVec};
 
-use super::handle::{Handle, TypeHandle, wrap};
+use super::handle::Handle;
 use super::node::TypeNode;
 use super::order::{code_needs, is_subtype_of};
 use super::registry::TypeRegistry;
 use super::signatures::is_signature_type;
+use super::stored::{Content, Linked};
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, Width, lockstep};
 
 /// The least upper bound: the larger operand when the two are ordered, otherwise their union. A
 /// parametric operand is related by no order, so it joins to the union, which keeps a variable
 /// beside every concrete member.
-pub(super) fn join(
-    types: &TypeRegistry<'_>,
+pub(super) fn join<'run>(
+    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    a: Handle,
-    b: Handle,
-) -> Handle {
-    if !types.is_concrete(a) || !types.is_concrete(b) {
+    a: Linked<'run>,
+    b: Linked<'run>,
+) -> Linked<'run> {
+    if !a.is_concrete() || !b.is_concrete() {
         return types.union_of(scratch, &[a, b]);
     }
     if is_subtype_of(types, scratch, a, b) {
@@ -45,14 +46,14 @@ pub(super) fn join(
 /// Reduce an iterator of types to their least upper bound. An empty iterator is `Never`, the join's
 /// identity element: an empty container carries the bottom element type, which every typed element
 /// slot admits and which absorbs the first element joined against it.
-pub(super) fn join_iter<I: IntoIterator<Item = Handle>>(
-    types: &TypeRegistry<'_>,
+pub(super) fn join_iter<'run, I: IntoIterator<Item = Linked<'run>>>(
+    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
     iter: I,
-) -> Handle {
+) -> Linked<'run> {
     iter.into_iter()
         .reduce(|a, b| join(types, scratch, a, b))
-        .unwrap_or(Handle::NEVER)
+        .unwrap_or_else(|| types.never())
 }
 
 /// The greatest lower bound, relating a variable by the rigid rule — the solver's meet, which a
@@ -64,12 +65,12 @@ pub(super) fn join_iter<I: IntoIterator<Item = Handle>>(
 /// and returns met for functions; distribution through a union; the set of both operands'
 /// applications for two signature types; the kinds' meet needing the names both need for two code
 /// kinds; `Never` where no common shape exists.
-pub(super) fn meet_through_variables(
-    types: &TypeRegistry<'_>,
+pub(super) fn meet_through_variables<'run>(
+    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
-    a: Handle,
-    b: Handle,
-) -> Handle {
+    a: Linked<'run>,
+    b: Linked<'run>,
+) -> Linked<'run> {
     lockstep(types, scratch, a, b, Variance::Co, &mut Meet)
 }
 
@@ -80,17 +81,17 @@ pub(super) fn meet_through_variables(
 /// [`enter`]: Lockstep::enter
 struct Meet;
 
-impl Lockstep for Meet {
-    type Out = Handle;
+impl<'run> Lockstep<'run> for Meet {
+    type Out = Linked<'run>;
 
     fn enter(
         &mut self,
-        types: &TypeRegistry<'_>,
+        types: &TypeRegistry<'run>,
         scratch: BumpAllocator<'_>,
-        a: Handle,
-        b: Handle,
+        a: Linked<'run>,
+        b: Linked<'run>,
         v: Variance,
-    ) -> Option<Handle> {
+    ) -> Option<Linked<'run>> {
         if v == Variance::Contra {
             return Some(join(types, scratch, a, b));
         }
@@ -107,7 +108,7 @@ impl Lockstep for Meet {
         // *whole*: pairing members one at a time would lose a variable whose bound spans several
         // of them. With a union on both sides both distributions are taken, since either may hold
         // such a variable. Members that meet at `Never` contribute nothing, and `union_of` drops them.
-        let (na, nb) = (types.node(a), types.node(b));
+        let (na, nb) = (a.view(), b.view());
         if !matches!(na, TypeNode::Union { .. }) && !matches!(nb, TypeNode::Union { .. }) {
             return None;
         }
@@ -116,14 +117,14 @@ impl Lockstep for Meet {
             met.extend(
                 members
                     .iter()
-                    .map(|x| meet_through_variables(types, scratch, *x, b)),
+                    .map(|x| meet_through_variables(types, scratch, x, b)),
             );
         }
         if let TypeNode::Union { members } = nb {
             met.extend(
                 members
                     .iter()
-                    .map(|y| meet_through_variables(types, scratch, a, *y)),
+                    .map(|y| meet_through_variables(types, scratch, a, y)),
             );
         }
         Some(types.union_of(scratch, &met))
@@ -131,58 +132,58 @@ impl Lockstep for Meet {
 
     fn leaf(
         &mut self,
-        types: &TypeRegistry<'_>,
+        types: &TypeRegistry<'run>,
         scratch: BumpAllocator<'_>,
-        a: Handle,
-        b: Handle,
+        a: Linked<'run>,
+        b: Linked<'run>,
         _v: Variance,
-    ) -> Handle {
+    ) -> Linked<'run> {
         // Two signature types meet at the set of both operands' applications, which is exact and
         // never `Never`.
-        if is_signature_type(types, a) && is_signature_type(types, b) {
+        if is_signature_type(a) && is_signature_type(b) {
             return types.signature_meet(scratch, &[a, b]);
         }
         // Two code kinds, one needing names, meet at the kinds' meet needing the names both need.
         // Two bare kinds unordered in the code tree have no meet.
-        let needing = |kt| matches!(types.node(kt), TypeNode::CodeNeeding { .. });
-        match (code_needs(types, a), code_needs(types, b)) {
+        let needing = |kt: Linked<'run>| matches!(kt.content(), Content::CodeNeeding { .. });
+        match (code_needs(a), code_needs(b)) {
             (Some((x, xs)), Some((y, ys))) if needing(a) || needing(b) => {
-                let kind = meet_through_variables(types, scratch, x.raw(), y.raw());
+                let kind = meet_through_variables(types, scratch, x, y);
                 if kind == Handle::NEVER {
-                    return Handle::NEVER;
+                    return types.never();
                 }
                 let mut both = BumpVec::new_in(scratch);
                 both.extend(xs.iter().filter(|name| ys.contains(name)).copied());
-                types.code_needing(scratch, wrap(kind), &both).raw()
+                types.code_needing(scratch, kind, &both)
             }
-            _ => Handle::NEVER,
+            _ => types.never(),
         }
     }
 
     fn set_wise(
         &mut self,
-        _types: &TypeRegistry<'_>,
+        _types: &TypeRegistry<'run>,
         _scratch: BumpAllocator<'_>,
-        _a: &[Handle],
-        _b: &[Handle],
+        _a: &[Linked<'run>],
+        _b: &[Linked<'run>],
         _v: Variance,
-        _recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Handle,
-    ) -> Handle {
+        _recurse: &mut dyn FnMut(&mut Self, Linked<'run>, Linked<'run>, Variance) -> Linked<'run>,
+    ) -> Linked<'run> {
         // `enter` answers every pair with a union on either side.
         unreachable!("Meet::enter distributes every union")
     }
 
     fn structural(
         &mut self,
-        _types: &TypeRegistry<'_>,
+        types: &TypeRegistry<'run>,
         scratch: BumpAllocator<'_>,
-        paired: &[Handle],
-        arm: Arm<'_, '_>,
-    ) -> Handle {
+        paired: &[Linked<'run>],
+        arm: Arm<'_, 'run>,
+    ) -> Linked<'run> {
         let leftovers = !(arm.only_a.is_empty() && arm.only_b.is_empty());
         if arm.width == Width::Exact && leftovers {
             // Two applications naming different parameters have no common application below them.
-            return Handle::NEVER;
+            return types.never();
         }
         if arm.width.bound_keeps_leftovers(false) {
             let mut extra = BumpVec::with_capacity_in(arm.only_a.len() + arm.only_b.len(), scratch);

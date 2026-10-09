@@ -33,6 +33,9 @@ use proptest::prelude::*;
 use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
+use super::raw::RawRegistry;
+use super::raw::walk::visit;
+use super::raw::{lattice, substitute};
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use crate::types::kind::KKind;
 use crate::types::node::{ContentKey, TypeNode};
@@ -43,9 +46,8 @@ use crate::types::shape::shape_slots;
 use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes};
 use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet};
 use crate::types::walk::Variance;
-use crate::types::walk::unary::{Visit, visit};
+use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
-use crate::types::{lattice, substitute};
 
 use super::RawSchemes;
 
@@ -1458,14 +1460,14 @@ fn step(
         TypeNode::List { element } => types.list(at(element, Variance::Co)),
         TypeNode::Dict { key, value } if index % 2 == 0 => types.dict(key, at(value, Variance::Co)),
         TypeNode::Dict { key, value } => types.dict(at(key, Variance::Co), value),
-        TypeNode::Record { fields } if !fields.raw().is_empty() => {
-            let mut fields = fields.raw().to_vec();
+        TypeNode::Record { fields } if !fields.is_empty() => {
+            let mut fields = fields.iter().collect::<Vec<_>>();
             let chosen = index % fields.len();
             fields[chosen].1 = at(fields[chosen].1, Variance::Co);
             types.record(scratch, &fields)
         }
         TypeNode::Union { members } => {
-            let mut members = members.to_vec();
+            let mut members = members.iter().collect::<Vec<_>>();
             let chosen = index % members.len();
             members[chosen] = at(members[chosen], Variance::Co);
             types.union_of(scratch, &members)
@@ -1473,15 +1475,15 @@ fn step(
         TypeNode::ConstructorApply {
             constructor,
             arguments,
-        } if !arguments.raw().is_empty() => {
-            let mut arguments = arguments.raw().to_vec();
+        } if !arguments.is_empty() => {
+            let mut arguments = arguments.iter().collect::<Vec<_>>();
             let chosen = index % arguments.len();
             arguments[chosen].1 = at(arguments[chosen].1, Variance::Co);
             types.constructor_apply(scratch, world.concrete(constructor), &arguments)
         }
         // A parameter is contravariant and the return, the last position, covariant.
         TypeNode::KFunction { params, ret } => {
-            let mut params = params.raw().to_vec();
+            let mut params = params.iter().collect::<Vec<_>>();
             let chosen = index % (params.len() + 1);
             if chosen == params.len() {
                 return types.function_type(scratch, &params, at(ret, Variance::Co));
@@ -1556,20 +1558,24 @@ fn step_width(
         fields
     };
     Some(match (types.node(kt), way) {
-        (TypeNode::Record { fields }, Way::Up) if !fields.raw().is_empty() => {
-            types.record(scratch, &drop(fields.raw()))
+        (TypeNode::Record { fields }, Way::Up) if !fields.is_empty() => {
+            types.record(scratch, &drop(&fields.iter().collect::<Vec<_>>()))
         }
-        (TypeNode::Record { fields }, Way::Down) => types.record(scratch, &gain(fields.raw())?),
+        (TypeNode::Record { fields }, Way::Down) => {
+            types.record(scratch, &gain(&fields.iter().collect::<Vec<_>>())?)
+        }
         (TypeNode::KFunction { params, ret }, Way::Up) => {
-            types.function_type(scratch, &gain(params.raw())?, ret)
+            types.function_type(scratch, &gain(&params.iter().collect::<Vec<_>>())?, ret)
         }
-        (TypeNode::KFunction { params, ret }, Way::Down) if params.raw().len() >= 2 => {
-            types.function_type(scratch, &drop(params.raw()), ret)
+        (TypeNode::KFunction { params, ret }, Way::Down) if params.len() >= 2 => {
+            types.function_type(scratch, &drop(&params.iter().collect::<Vec<_>>()), ret)
         }
         (TypeNode::SignatureApply { signature, pins }, Way::Up) => {
-            types.signature_apply(scratch, signature, &drop(pins.raw()))
+            types.signature_apply(scratch, signature, &drop(&pins.iter().collect::<Vec<_>>()))
         }
-        (TypeNode::SignatureMeet { members }, Way::Up) => members[index % members.len()],
+        (TypeNode::SignatureMeet { members }, Way::Up) => {
+            members.get(index % members.len()).expect("a member")
+        }
         (TypeNode::ConstructorApply { constructor, .. }, Way::Up)
             if matches!(
                 types.node(constructor),
@@ -1595,7 +1601,10 @@ pub fn arb_ordered_pair(world: World, depth: u32) -> BoxedStrategy<(KType, KType
             let b = with_scratch(|scratch| match widening {
                 Some(widening) => widen(&world, scratch, &pool, a.raw(), &widening),
                 None if union => world.types.union_of(scratch, &[a.raw()]),
-                None => world.types.intern(scratch, world.types.node(a.raw())),
+                None => world
+                    .types
+                    .intern(scratch, world.types.enter(a.raw()).view())
+                    .handle(),
             });
             (a, world.concrete(b))
         })

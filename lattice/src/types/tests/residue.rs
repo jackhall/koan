@@ -8,21 +8,22 @@
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
+use super::raw::RawRegistry;
+use super::raw::lattice::{join, meet_through_variables as meet};
+use super::raw::order::{fits, is_subtype_of};
+use super::raw::unify::admits;
 use crate::types::digest::{TypeDigest, node_digest, schema_content_digest};
 use crate::types::handle::{Handle, KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;
-use crate::types::lattice::{join, meet_through_variables as meet};
 use crate::types::node::{NodeSchema, TypeNode};
-use crate::types::order::{fits, is_subtype_of};
 use crate::types::record::Record;
 use crate::types::registry::TypeRegistry;
 use crate::types::render::display_handle;
-use crate::types::run::Elements;
 use crate::types::schema::{SchemaDraft, SigOrigin, SigSchema};
 use crate::types::shape::shape_slots;
-use crate::types::shape::{Classes, DeferredReturnSurface, DispatchTokenElement, StoredElement};
+use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement};
 use crate::types::typed;
-use crate::types::unify::{Collector, UnifyFailure, admits};
+use crate::types::unify::{Collector, UnifyFailure};
 use crate::types::verdicts::Relation;
 use crate::types::walk::Variance;
 
@@ -236,7 +237,7 @@ fn solve_over(
     bounds: &[KType],
     arguments: &[Handle],
 ) -> Result<Vec<Handle>, Option<usize>> {
-    let mut collector = Collector::<Handle>::new(region, bounds);
+    let mut collector = Collector::<Handle>::new(types, region, bounds);
     for (slot, argument) in slots.iter().zip(arguments) {
         if admits(
             types,
@@ -375,7 +376,7 @@ fn a_shape_with_no_group_is_transparent() {
     );
     assert_eq!(scheme.1, &[1, 0]);
     let first = shape_slots(scheme.0, &types).next().expect("a slot");
-    let opened = crate::types::substitute::substitute_quantified(
+    let opened = super::raw::substitute::substitute_quantified(
         &types,
         region,
         first,
@@ -403,7 +404,15 @@ fn a_record_is_order_blind_in_identity_and_ordered_in_presentation() {
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let forwards = [(x, KType::NUMBER.raw()), (y, KType::STR.raw())];
     let backwards = [(y, KType::STR.raw()), (x, KType::NUMBER.raw())];
-    assert_eq!(Record::<Handle>::over(&forwards), Record::over(&backwards));
+    let node = |kt: KType| types.enter(kt.raw());
+    let forwards_nodes =
+        region.alloc_slice_copy(&[(x, node(KType::NUMBER)), (y, node(KType::STR))]);
+    let backwards_nodes =
+        region.alloc_slice_copy(&[(y, node(KType::STR)), (x, node(KType::NUMBER))]);
+    assert_eq!(
+        Record::<Handle>::over(forwards_nodes),
+        Record::over(backwards_nodes)
+    );
     let record = types.record(region, &forwards);
     assert_eq!(record, types.record(region, &backwards));
     let TypeNode::Record { fields } = types.node(record) else {
@@ -525,8 +534,6 @@ fn each_node_kind_lies_under_its_family_top() {
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
-    // Declared ahead of the registry, so it outlives the shape node interned over it.
-    let elements = [StoredElement::Keyword(keyword)];
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
@@ -546,26 +553,19 @@ fn each_node_kind_lies_under_its_family_top() {
         KType::DICT_ANY_ANY.raw(),
         types.record(region, &[(x, Handle::ANY)]),
         types.function_type(region, &[(x, Handle::ANY)], Handle::ANY),
-        types.intern(
-            region,
-            TypeNode::ExpressionShape {
-                elements: Elements::over(&elements),
-                classes: Classes::EMPTY,
-                ret: KType::NUMBER.raw(),
-            },
+        types.shape_type(
+            &[DispatchTokenElement::Keyword(keyword)],
+            &[],
+            KType::NUMBER.raw(),
         ),
         types.constructor_apply(region, KType::NUMBER, &[(x, Handle::ANY)]),
         Handle::EMPTY_SIGNATURE,
-        types.intern(
-            region,
-            TypeNode::SetMember {
-                scc_digest: node_digest(region, &TypeNode::Number),
-                index: 0,
-                name,
-                kind: KKind::NewType,
-                schema: NodeSchema::NewType(KType::NUMBER),
-            },
-        ),
+        {
+            let scc_digest = node_digest(region, &TypeNode::<Handle>::Number);
+            let member = types.set_member(scc_digest, 0, name, KKind::NewType);
+            types.seal_schema(member, NodeSchema::NewType(KType::NUMBER));
+            member.handle()
+        },
         types.sibling(0).raw(),
         Handle::ANY_VALUE,
     ];
@@ -607,7 +607,7 @@ fn each_node_kind_lies_under_its_family_top() {
         under(types.quantified(0, KType::ANY_VALUE).raw()),
         [Handle::ANY_VALUE]
     );
-    let sealed = types.parameter(name, KType::ANY);
+    let sealed = types.parameter(name, KType::ANY).handle();
     assert!(under(sealed).is_empty());
     // A union answers by its members, and a deferred return, whose return is unknown, by none.
     let mixed = types.union_of(region, &[KType::NUMBER.raw(), KType::PROPER_TYPE.raw()]);
@@ -821,7 +821,7 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     // types only, so the variable stays beside the members its bound lies under.
     let spelled = types.union_of(region, &[elt, KType::NUMBER.raw(), KType::STR.raw()]);
     assert!(
-        matches!(types.node(spelled), TypeNode::Union { members } if members[..] == [elt, KType::NUMBER.raw(), KType::STR.raw()])
+        matches!(types.node(spelled), TypeNode::Union { members } if members.iter().eq([elt, KType::NUMBER.raw(), KType::STR.raw()]))
     );
     let elt_or_bool = types.union_of(region, &[elt, KType::BOOL.raw()]);
     assert_ne!(elt_or_bool, types.union_of(region, &[KType::BOOL.raw()]));
@@ -844,25 +844,28 @@ fn a_carrier_meets_a_head_parameter_s_bound_through_the_bound_its_source_met() {
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let under_number = types.carrier(name, KType::NUMBER, crate::types::ContentKey(1));
     let under_either = types.carrier(name, number_or_str, crate::types::ContentKey(2));
-    let solve = |mut collector: Collector<'_, KType>, carrier: KType| {
-        collector.pin(0, KType::NUMBER, carrier);
-        collector.solve(&types).map(|solution| solution.to_vec())
-    };
+    fn solve<'run>(
+        types: &TypeRegistry<'run>,
+        mut collector: Collector<'_, 'run, KType>,
+        carrier: KType,
+    ) -> Result<Vec<KType>, UnifyFailure<KType>> {
+        collector.pin(types, 0, KType::NUMBER, carrier);
+        collector.solve(types).map(|solution| solution.to_vec())
+    }
+    let number = [types.enter(KType::NUMBER.raw())];
     assert_eq!(
-        solve(
-            Collector::heads(region, &[KType::NUMBER], &[]),
-            under_number
-        ),
+        solve(&types, Collector::heads(region, &number, &[]), under_number),
         Ok(vec![under_number])
     );
+    assert!(solve(&types, Collector::heads(region, &number, &[]), under_either).is_err());
     assert!(
         solve(
-            Collector::heads(region, &[KType::NUMBER], &[]),
-            under_either
+            &types,
+            Collector::new(&types, region, &[KType::NUMBER]),
+            under_number
         )
         .is_err()
     );
-    assert!(solve(Collector::new(region, &[KType::NUMBER]), under_number).is_err());
     assert!(!is_subtype_of(
         &types,
         region,
@@ -936,9 +939,9 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let types = TypeRegistry::in_region(region);
     let name = TypeSymbol::declared("Held", &symbols).expect("a Type token");
     let list_of_number = types.list(KType::NUMBER);
-    let carried = types.parameter(name, list_of_number);
+    let carried = types.parameter(name, list_of_number).handle();
     let declared = types.list(types.quantified(0, KType::ANY).raw());
-    let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+    let mut collector = Collector::<Handle>::new(&types, region, &[KType::ANY]);
     assert_eq!(
         admits(
             &types,
@@ -988,9 +991,9 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     // A bound spanning two declared members is admitted member by member: `Held` bounded by
     // `LIST OF Number | Str` fills `LIST OF X | Str`, though neither member alone takes it.
     let spanning_bound = types.union_of(region, &[list_of_number, KType::STR]);
-    let spanning = types.parameter(name, spanning_bound);
+    let spanning = types.parameter(name, spanning_bound).handle();
     let either = types.union_of(region, &[declared, KType::STR.raw()]);
-    let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+    let mut collector = Collector::<Handle>::new(&types, region, &[KType::ANY]);
     assert_eq!(
         admits(
             &types,
@@ -1026,7 +1029,7 @@ fn a_carried_deferred_return_fills_no_slot_it_is_not_under() {
         .deferred_return(DeferredReturnSurface::Type(name))
         .raw();
     let admits = |declared: Handle| {
-        let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+        let mut collector = Collector::<Handle>::new(&types, region, &[KType::ANY]);
         admits(
             &types,
             region,
@@ -1108,7 +1111,7 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let above = |kt| crate::types::substitute::bound_above(&types, region, kt);
+    let above = |kt| super::raw::substitute::bound_above(&types, region, kt);
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let tee = TypeSymbol::declared("Tee", &symbols).expect("a Type token");
     let elt = types.quantified(0, KType::ANY).raw();

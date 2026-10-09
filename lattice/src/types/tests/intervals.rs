@@ -5,10 +5,11 @@
 use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 
+use super::raw::substitute::{Side, read_through};
+use super::raw::unify::admits;
 use crate::types::handle::{Handle, KType, TypeHandle};
 use crate::types::registry::TypeRegistry;
-use crate::types::substitute::{Side, read_through};
-use crate::types::unify::{Collector, Interval, admits, intervals};
+use crate::types::unify::{Collector, Interval, intervals};
 use crate::types::walk::Variance;
 
 /// A registry, an interner and a region.
@@ -46,7 +47,7 @@ impl<'r> World<'r> {
         carried: Handle,
         exact: bool,
     ) -> Interval<Handle> {
-        let mut collector = Collector::<Handle>::new(self.region, &[bound]);
+        let mut collector = Collector::<Handle>::new(&self.types, self.region, &[bound]);
         admits(
             &self.types,
             self.region,
@@ -75,7 +76,7 @@ fn a_variable_no_contribution_reaches_solves_to_its_bound() {
     let world = World::new(&bump);
     let elt = world.types.quantified(0, KType::NUMBER).raw();
     let slot = world.union(&[elt, KType::NULL.raw()]);
-    let mut collector = Collector::<Handle>::new(world.region, &[KType::NUMBER]);
+    let mut collector = Collector::<Handle>::new(&world.types, world.region, &[KType::NUMBER]);
     admits(
         &world.types,
         world.region,
@@ -179,8 +180,11 @@ mod reproducible {
 
     /// A one-variable collector after admitting each `(declared, carried)` pair, and whether every
     /// admission succeeded.
-    fn collect<'w>(world: &World<'w>, pairs: &[(Handle, Handle)]) -> (Collector<'w, Handle>, bool) {
-        let mut collector = Collector::<Handle>::new(world.region, &[KType::ANY]);
+    fn collect<'w>(
+        world: &World<'w>,
+        pairs: &[(Handle, Handle)],
+    ) -> (Collector<'w, 'w, Handle>, bool) {
+        let mut collector = Collector::<Handle>::new(&world.types, world.region, &[KType::ANY]);
         let admitted = pairs.iter().all(|(declared, carried)| {
             admits(
                 &world.types,
@@ -280,7 +284,7 @@ mod reproducible {
         let world = World::new(&bump);
         let elt = world.types.quantified(0, KType::ANY).raw();
         let (mut collector, _) = collect(&world, &[]);
-        collector.pin(0, KType::ANY, KType::NUMBER.raw());
+        collector.pin(&world.types, 0, KType::ANY, KType::NUMBER.raw());
         let admitted = admits(
             &world.types,
             world.region,

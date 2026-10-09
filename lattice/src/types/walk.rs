@@ -18,11 +18,14 @@
 //!
 //! Ask first whether the walk is unary or binary, then whether it rebuilds.
 //!
-//! - A **unary rebuild** supplies a leaf rule `FnMut(Handle, &TypeNode, &Context) -> Option<Handle>`:
-//!   `Some(k)` replaces the node and stops there, `None` lets the driver descend. Pick the union
-//!   door that reassembles a union. Substitution and sibling rewriting are both this.
-//! - A **unary visit** supplies `FnMut(Handle, &TypeNode, &Context) -> Visit` and reads the
-//!   context. Occurrence censuses and reference folds are this.
+//! - A **unary rebuild** supplies a leaf rule
+//!   `FnMut(Linked, &TypeNode<Linked>, &Context) -> Option<Linked>`: `Some(k)` replaces the node
+//!   and stops there, `None` lets the driver descend. Substitution and sibling rewriting are both
+//!   this.
+//! - A **unary visit** supplies `FnMut(Linked, &TypeNode<Linked>, &Context) -> Visit` and reads
+//!   the context. Occurrence censuses and reference folds are this.
+//!
+//! Both drivers walk nodes by reference: a walk is handed nodes and never looks a handle up.
 //! - A **binary walk** implements [`binary::Lockstep`]. The order, the meet and the unifier's
 //!   collector are its three instances.
 //!

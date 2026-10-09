@@ -92,7 +92,7 @@ pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>
             ..
         } => {
             // What the payload solves the parameters to is a `T`, as the payload is.
-            let mut collector = Collector::<T>::least(scratch, param_names.len());
+            let mut collector = Collector::<T>::least(types, scratch, param_names.len());
             let solved = admits_with(
                 types,
                 scratch,

@@ -10,8 +10,9 @@
 //! **A window lives in the frame of the node that declares the group.** That node opens the window
 //! and closes it, so the window's member and binder lists, its members' relative schemas and what
 //! the seal minted are all bumped into that frame's region, the `'w` a window is built over — never
-//! the run region and never the heap. The seal writes only the sealed member nodes into the run
-//! registry; its own working buffers stage in the scratch it is handed.
+//! the run region and never the heap. The seal writes the sealed member nodes, and the absolute
+//! types their schemas name, into the run registry; its own working buffers stage in the scratch it
+//! is handed.
 //!
 //! Inside the window a reference to a co-declared member is a [`TypeNode::Sibling`] handle: a bare
 //! relative index, ordinary interned content, meaningful only against the window that minted it.
@@ -34,14 +35,23 @@
 //! - Adding an unreferenced member to a group perturbs nobody else's identity.
 //! - A non-recursive member declared inside a group unifies with its standalone twin.
 //!
+//! # Members before the types over them
+//!
+//! A member's schema names types over the member — its own cyclic edges, its siblings' — so the
+//! seal interns one component at a time, in that order: once a component's digest is known, its
+//! members are interned, each behind an empty schema slot, and only then is each of their schemas
+//! rewritten absolute and set on its slot. Every member a schema names then exists: its own
+//! component's, and every upstream component's, sealed earlier. The lattice's own view of a member
+//! never reads its slot, so a member whose slot is still empty relates as any other.
+//!
 //! # Unions across the seal
 //!
 //! A relative schema builds its unions through the ordinary canonicalizing door while it still
 //! holds `Sibling` handles. That is exact: the order relates a `Sibling` as an atom with the same
 //! profile as the sealed member it stands for, and distinct indices name distinct members, so a
-//! union canonical before the seal is canonical after it. The seal's rewrite therefore re-interns
-//! through the flat door, which reads no member nodes — necessary, because a rewritten sibling
-//! handle names a member the registry has not interned yet.
+//! union canonical before the seal is canonical after it. The rewrite re-interns each union through
+//! the same door, over member nodes that exist, and the rename `Sibling(i) ↦ member_i` preserves
+//! every subsumption verdict, so the union is the one the relative schema held.
 //!
 //! See [README.md](README.md) § Recursive groups: identity is the SCC, not the declaration.
 
@@ -50,11 +60,12 @@ use std::cell::{Cell, RefCell};
 use crate::bump::{BumpAllocator, BumpVec, strongly_connected_components};
 use crate::symbols::{Symbol, TypeSymbol};
 
-use super::digest::{ComponentMember, TypeDigest, component_digest, member_ref_digest};
-use super::handle::{Handle, KType, Parametric, TypeHandle, wrap};
+use super::digest::{ComponentMember, component_digest};
+use super::handle::{KType, Naming, Parametric, TypeHandle};
 use super::kind::KKind;
 use super::node::NodeSchema;
 use super::registry::TypeRegistry;
+use super::stored::Linked;
 use super::substitute::{collect_siblings, rewrite_siblings};
 
 /// A member's schema while its window is open: the same shape as [`NodeSchema`], but its handles
@@ -101,28 +112,30 @@ impl<'w> RelativeSchema<'w> {
         }
     }
 
-    /// Rewrite every sibling handle through `resolve`, yielding the same shape.
-    fn map_handles<'x>(
+    /// Rewrite every sibling handle through `resolve`, yielding the same shape. Each
+    /// representation is entered once, and rewritten by reference.
+    fn map_handles<'x, 'run>(
         self,
-        types: &TypeRegistry<'_>,
+        types: &TypeRegistry<'run>,
         scratch: BumpAllocator<'x>,
-        resolve: &impl Fn(usize) -> KType,
+        resolve: &impl Fn(usize) -> Linked<'run>,
     ) -> RelativeSchema<'x>
     where
         'w: 'x,
     {
         // A sibling is concrete, as the member it resolves to is, so a rewrite keeps each
         // representation what it was.
+        let rewrite = |kt: Linked<'run>| rewrite_siblings(types, scratch, kt, resolve);
         match self {
             RelativeSchema::NewType(repr) => {
-                RelativeSchema::NewType(wrap(rewrite_siblings(types, scratch, repr.raw(), resolve)))
+                RelativeSchema::NewType(KType::read(rewrite(types.enter(repr.raw()))))
             }
             RelativeSchema::TypeConstructor {
                 representation,
                 param_names,
             } => RelativeSchema::TypeConstructor {
                 representation: representation
-                    .map(|kt| wrap(rewrite_siblings(types, scratch, kt.raw(), resolve))),
+                    .map(|kt| Parametric::read(rewrite(types.enter(kt.raw())))),
                 param_names,
             },
         }
@@ -150,10 +163,12 @@ impl<'w> RelativeSchema<'w> {
         out: &mut BumpVec<'_, usize>,
     ) {
         match self {
-            RelativeSchema::NewType(repr) => collect_siblings(types, scratch, repr.raw(), out),
+            RelativeSchema::NewType(repr) => {
+                collect_siblings(scratch, types.enter(repr.raw()), out)
+            }
             RelativeSchema::TypeConstructor { representation, .. } => {
                 if let Some(representation) = representation {
-                    collect_siblings(types, scratch, representation.raw(), out);
+                    collect_siblings(scratch, types.enter(representation.raw()), out);
                 }
             }
         }
@@ -495,11 +510,11 @@ pub(super) struct SealMemberInput<'w> {
 ///
 /// Every working buffer stages in `scratch`. The member nodes go into the run registry, whose door
 /// copies each schema in on a miss; the two lists the sealed group keeps go into `host`.
-pub(super) fn seal_group<'w>(
+pub(super) fn seal_group<'w, 'run>(
     host: BumpAllocator<'w>,
     members: &[SealMemberInput<'w>],
     binders: &[(TypeSymbol, &[usize])],
-    types: &TypeRegistry<'_>,
+    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
 ) -> SealedGroup<'w> {
     let count = members.len();
@@ -517,13 +532,9 @@ pub(super) fn seal_group<'w>(
         edges.push(&*references.leak());
     }
 
-    // `member index → its finished handle`, filled component by component.
-    let mut handles: BumpVec<'_, Option<KType>> = BumpVec::with_capacity_in(count, scratch);
+    // `member index → its interned node`, filled component by component.
+    let mut handles: BumpVec<'_, Option<Linked<'run>>> = BumpVec::with_capacity_in(count, scratch);
     handles.resize(count, None);
-    // `member index → (its component's digest, its position in that component)`.
-    let mut placement: BumpVec<'_, Option<(TypeDigest, usize)>> =
-        BumpVec::with_capacity_in(count, scratch);
-    placement.resize(count, None);
 
     for mut order in strongly_connected_components(scratch, &edges) {
         // Canonical presentation order is the numeric order of the members' name symbols, with the
@@ -539,7 +550,7 @@ pub(super) fn seal_group<'w>(
         // the referent's already-finished handle as ordinary external content.
         let digest = {
             let resolve = |sibling: usize| match order.iter().position(|m| *m == sibling) {
-                Some(position) => types.sibling(position),
+                Some(position) => types.sibling_node(position),
                 None => handles[sibling].expect(
                     "a cross-component sibling is upstream, so its component sealed already",
                 ),
@@ -558,43 +569,44 @@ pub(super) fn seal_group<'w>(
             component_digest(&component_members)
         };
 
+        // This component's members, each behind an empty schema slot, before any schema over them.
         for (position, member) in order.iter().enumerate() {
-            handles[*member] = Some(wrap(Handle::from_digest(member_ref_digest(
-                digest, position,
-            ))));
-            placement[*member] = Some((digest, position));
+            handles[*member] = Some(types.set_member(
+                digest,
+                position,
+                members[*member].name,
+                members[*member].kind,
+            ));
+        }
+        // Every member this component's schemas name now exists — its own, and every upstream
+        // component's, sealed earlier — so each schema is rewritten absolute, cyclic edges
+        // included, and set on its slot. A union over the siblings canonicalizes through the
+        // ordinary door.
+        let absolute = |sibling: usize| {
+            handles[sibling].expect("a schema names only its own component and upstream ones")
+        };
+        for member in order.iter() {
+            let schema = members[*member]
+                .schema
+                .map_handles(types, scratch, &absolute)
+                .into_node_schema();
+            types.seal_schema(absolute(*member), schema);
         }
     }
 
-    // Every handle is minted, so a member's schema can now be rewritten absolute — including
-    // the cyclic edges, which are just handles into content the registry already keys.
-    let absolute = |sibling: usize| {
-        handles[sibling].expect("every member is placed before any schema is made absolute")
-    };
     let mut sealed = BumpVec::with_capacity_in(count, scratch);
     for (index, member) in members.iter().enumerate() {
-        let (scc_digest, position) = placement[index].expect("Tarjan covers every member");
-        let schema = member
-            .schema
-            .map_handles(types, scratch, &absolute)
-            .into_node_schema();
-        let handle = types.set_member(scc_digest, position, member.name, member.kind, schema);
-        debug_assert_eq!(
-            handle,
-            handles[index].expect("placed").raw(),
-            "the interned member node must key at the handle its component derived",
-        );
         sealed.push(SealedMember {
             name: member.name,
             owner: member.owner,
-            kt: wrap(handle),
+            kt: KType::read(handles[index].expect("Tarjan covers every member")),
         });
     }
     let mut binder_types = BumpVec::with_capacity_in(binders.len(), scratch);
     for (name, owned) in binders {
-        let mut owned_handles = BumpVec::with_capacity_in(owned.len(), scratch);
-        owned_handles.extend(owned.iter().map(|index| sealed[*index].kt));
-        binder_types.push((*name, types.union_of(scratch, &owned_handles)));
+        let mut owned_nodes = BumpVec::with_capacity_in(owned.len(), scratch);
+        owned_nodes.extend(owned.iter().map(|index| handles[*index].expect("sealed")));
+        binder_types.push((*name, KType::read(types.union_of(scratch, &owned_nodes))));
     }
     SealedGroup {
         members: host.alloc_slice_copy(&sealed),

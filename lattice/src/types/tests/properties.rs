@@ -16,31 +16,33 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
+use super::raw::RawRegistry;
+use super::raw::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
+use super::raw::shape::{keys_equal, shape_classes, shape_of};
+use super::raw::sig_relations::{admits_shape, shape_specificity, sig_fits};
+use super::raw::signatures::{applications, applications_under, is_signature_type};
+use super::raw::substitute::{
+    Side, bound_above, read_through, substitute_parameters, substitute_quantified,
+};
+use super::raw::unify::{admits, most_determined_first, ties};
+use super::raw::walk::{visit, visit_free_quantified};
+use super::raw::{lattice, order};
 use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;
 use crate::types::node::{TypeNode, Variable};
-use crate::types::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
 use crate::types::registry::TypeRegistry;
 use crate::types::schema::{Members, canonical_overloads};
-use crate::types::shape::{Shape, Specificity, keys_equal, shape_classes, shape_slots};
+use crate::types::shape::{Specificity, shape_slots};
 use crate::types::sig_relations::InstanceFailure;
-use crate::types::sig_relations::{admits_shape, shape_specificity, sig_fits};
-use crate::types::signatures::{applications, applications_under, is_signature_type};
-use crate::types::substitute::{
-    Side, bound_above, read_through, substitute_parameters, substitute_quantified,
-};
 use crate::types::typed::{
     fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
 };
-use crate::types::unify::{
-    Collector, Interval, UnifyFailure, admits, intervals, most_determined_first, ties,
-};
+use crate::types::unify::{Collector, Interval, UnifyFailure, intervals};
 use crate::types::walk::Variance;
-use crate::types::walk::unary::{Visit, visit, visit_free_quantified};
+use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
-use crate::types::{lattice, order};
 
 use super::generators::{
     Groups, Vocabulary, World, arb_any, arb_any_with, arb_argument_pair, arb_arguments,
@@ -515,8 +517,8 @@ proptest! {
         prop_assert_eq!(types.list(a), types.list(a));
         prop_assert_eq!(types.dict(a, b), types.dict(a, b));
         // A node read back out and re-interned names the same handle.
-        prop_assert_eq!(types.intern(scratch, types.node(a)), a);
-        prop_assert_eq!(types.intern(scratch, types.node(b)), b);
+        prop_assert_eq!(types.intern(scratch, types.enter(a).view()).handle(), a);
+        prop_assert_eq!(types.intern(scratch, types.enter(b).view()).handle(), b);
     }
 
     /// The probe flags interning stores beside a node answer what a walk over the type would: a free
@@ -816,7 +818,7 @@ proptest! {
         // Two things that are not both shapes share no bucket to rank under. The empty element run
         // a non-shape reads as would otherwise make every pair of leaves compare `Equal`. A shape
         // scheme is a shape: specificity reads through it.
-        if Shape::of(&types, a.raw()).is_none() {
+        if shape_of(&types, a.raw()).is_none() {
             let (a, b) = (a.raw(), b.raw());
             prop_assert_eq!(shape_specificity(&types, scratch, a, b), Specificity::Incomparable);
             prop_assert_eq!(shape_specificity(&types, scratch, b, a), Specificity::Incomparable);
@@ -838,8 +840,8 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         prop_assert!(
-            Shape::of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
-                && Shape::of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
+            shape_of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
+                && shape_of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
                 && keys_equal(a, b, &types),
             "the pair is two monomorphic shapes over one key"
         );
@@ -880,8 +882,8 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         prop_assert!(
-            Shape::of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
-                && Shape::of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
+            shape_of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
+                && shape_of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
                 && keys_equal(a, b, &types),
             "the pair is two monomorphic shapes over one key"
         );
@@ -909,7 +911,7 @@ fn admits_tuple(
     shape: Handle,
     arguments: &[KType],
 ) -> bool {
-    let mut collector = Collector::<Handle>::new(scratch, types.split(shape).0.bounds);
+    let mut collector = Collector::<Handle>::new(types, scratch, types.split(shape).0.bounds);
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
         if admits(
             types,
@@ -941,7 +943,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let mut collector = Collector::<Handle>::new(scratch, &[]);
+        let mut collector = Collector::<Handle>::new(&types, scratch, &[]);
         let admitted = admits(&types, scratch, a, b, Variance::Co, &mut collector).is_ok();
         prop_assert_eq!(admitted, order::satisfied_by(&types, scratch, a, b));
     }
@@ -960,7 +962,7 @@ proptest! {
         let scratch = &bump;
         let holding = a == carrier
             || a == Handle::ANY
-            || matches!(types.node(a), TypeNode::Union { members } if members.contains(&carrier));
+            || matches!(types.node(a), TypeNode::Union { members } if members.contains(carrier));
         prop_assert_eq!(order::is_subtype_of(&types, scratch, carrier, a), holding);
         let atom = |x: Handle| x == carrier || x == Handle::NEVER;
         prop_assert_eq!(order::is_subtype_of(&types, scratch, a, carrier), atom(a));
@@ -979,13 +981,13 @@ proptest! {
         // `a`'s members and the list reaches its member-by-member fallback.
         let variable = types.list(types.quantified(0, KType::ANY).raw());
         for declared in [a, types.union_of(scratch, &[a, variable])] {
-            let mut through_bound = Collector::<Handle>::new(scratch, &[KType::ANY]);
+            let mut through_bound = Collector::<Handle>::new(&types, scratch, &[KType::ANY]);
             if admits(&types, scratch, declared, bound.raw(), Variance::Co, &mut through_bound)
                 .is_err()
             {
                 continue;
             }
-            let mut collector = Collector::<Handle>::new(scratch, &[KType::ANY]);
+            let mut collector = Collector::<Handle>::new(&types, scratch, &[KType::ANY]);
             prop_assert!(
                 admits(&types, scratch, declared, b, Variance::Co, &mut collector).is_ok(),
                 "a position its bound fills refused the variable",
@@ -1008,7 +1010,7 @@ proptest! {
         let bounds = types.split(a).0.bounds;
         for slot in shape_slots(a, &types) {
             for (carried, variance) in [(Handle::NEVER, Variance::Co), (Handle::ANY, Variance::Contra)] {
-                let mut collector = Collector::<Handle>::new(scratch, bounds);
+                let mut collector = Collector::<Handle>::new(&types, scratch, bounds);
                 prop_assert!(
                     admits(&types, scratch, slot, carried, variance, &mut collector).is_ok(),
                     "a slot refused an extreme of the order",
@@ -1041,7 +1043,7 @@ proptest! {
         let slots: Vec<Handle> = shape_slots(a, &types).collect();
         let arguments: Vec<Handle> = shape_slots(b, &types).collect();
         prop_assert!(keys_equal(a, b, &types), "the pair shares one key");
-        let mut collector = Collector::<Handle>::new(scratch, bounds);
+        let mut collector = Collector::<Handle>::new(&types, scratch, bounds);
         prop_assume!(slots.iter().zip(arguments.iter()).all(|(slot, argument)| {
             admits(&types, scratch, *slot, *argument, Variance::Co, &mut collector).is_ok()
         }));
@@ -1060,7 +1062,7 @@ proptest! {
             prop_assert!(order::satisfied_by(&types, scratch, solved, *argument));
         }
         // Admission does not depend on the order the slots are read.
-        let mut backwards = Collector::<Handle>::new(scratch, bounds);
+        let mut backwards = Collector::<Handle>::new(&types, scratch, bounds);
         for (slot, argument) in slots.iter().zip(arguments.iter()).rev() {
             prop_assert!(
                 admits(&types, scratch, *slot, *argument, Variance::Co, &mut backwards).is_ok()
@@ -1291,8 +1293,8 @@ fn within(
 }
 
 /// `shape`'s group solved jointly over one argument per slot, or `None`.
-fn solve_jointly<'s>(
-    types: &TypeRegistry<'_>,
+fn solve_jointly<'s, 'run: 's>(
+    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
     shape: Handle,
     arguments: &[Handle],
@@ -1301,13 +1303,13 @@ fn solve_jointly<'s>(
 }
 
 /// [`solve_jointly`]'s solution beside the collector it ran in.
-fn collect_jointly<'s>(
-    types: &TypeRegistry<'_>,
+fn collect_jointly<'s, 'run: 's>(
+    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
     shape: Handle,
     arguments: &[Handle],
-) -> (Option<BumpVec<'s, Handle>>, Collector<'s, Handle>) {
-    let mut collector = Collector::<Handle>::new(scratch, types.split(shape).0.bounds);
+) -> (Option<BumpVec<'s, Handle>>, Collector<'s, 'run, Handle>) {
+    let mut collector = Collector::<Handle>::new(types, scratch, types.split(shape).0.bounds);
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
         if admits(
             types,
@@ -1556,7 +1558,7 @@ proptest! {
                     .iter()
                     .copied()
                     .find(|member| {
-                        let mut collector = Collector::<Handle>::new(scratch, &[]);
+                        let mut collector = Collector::<Handle>::new(&types, scratch, &[]);
                         admits(&types, scratch, *member, one, Variance::Co, &mut collector).is_ok()
                     })
             };

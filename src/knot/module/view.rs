@@ -89,7 +89,7 @@ pub fn views(types: &TypeRegistry<'_>, mode: Ascription, operand: KType, ascribe
 
 /// `source` seen as `signature`, as a module of its own. A refusal writes nothing but what a
 /// partial coercion walk had already laid down, which nothing names.
-pub fn ascribe<'graph, 'cell, 'run, 'x>(
+pub fn ascribe<'graph, 'cell, 'run: 'x, 'x>(
     writer: Writer<'cell>,
     source: Knotted<'graph, 'cell>,
     signature: KType,
@@ -137,7 +137,7 @@ pub fn transparent_view_type(
 /// to under *fits*, and the application's pins. Refused where `signature` names no one application
 /// of a signature, or `held` does not fit it.
 #[allow(clippy::type_complexity)]
-pub(super) fn fitted<'run, 'x>(
+pub(super) fn fitted<'run: 'x, 'x>(
     held: KType,
     signature: KType,
     types: &TypeRegistry<'run>,

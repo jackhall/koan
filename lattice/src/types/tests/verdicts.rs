@@ -8,9 +8,9 @@
 use crate::bump::{Bump, BumpVec};
 use crate::tests::allocation_count;
 
+use super::raw::order::is_subtype_of;
 use crate::types::digest::TypeDigest;
 use crate::types::handle::{KType, TypeHandle};
-use crate::types::order::is_subtype_of;
 use crate::types::registry::TypeRegistry;
 use crate::types::verdicts::Relation;
 

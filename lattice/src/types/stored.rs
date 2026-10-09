@@ -10,23 +10,30 @@
 //! intern miss: a carrier's key, a lexical variable's name, a signature's schema, and a sealed
 //! member's component digest and schema, the schema in a slot its seal sets. A lexical level and a
 //! member's index are stored narrowed to `u32`. A shape stores each slot's priority class in that
-//! slot's element, where the view reads its ranking. A reader that needs only inline fields, such as [`kind_of`](super::handle::KType::kind_of),
-//! matches the stored content and skips the hop.
+//! slot's element, where the view reads its ranking. A reader that needs only inline fields, such
+//! as [`kind_of`](super::handle::KType::kind_of), matches the stored content and skips the hop.
+//!
+//! Each child, and each concrete field — a bound, a lower end, a code kind, a carrier's met bound,
+//! an application's signature — is a [`Linked`] reference to its node, so a walk steps from node to
+//! node without the table. A group's bounds and a schema's members stay handles, which koan reads.
 //!
 //! Two conversions connect the two shapes, each one exhaustive match: [`Content::lay`] lays a
-//! view as stored content on an intern miss, and [`Content::view`] reads stored content back as a
-//! view, its children rewrapped as the handle the reader named it by. Every other reader goes
-//! through [`TypeRegistry::node`](super::registry::TypeRegistry::node) and never sees this layout.
+//! view over references as stored content on an intern miss, and [`StoredNode::view_as`] reads a
+//! node back as a view, each child read as the reader names it — by its handle outside the lattice,
+//! by reference inside ([`StoredNode::view`]). Every reader outside the lattice goes through
+//! [`TypeRegistry::node`](super::registry::TypeRegistry::node) and never sees this layout.
 //!
 //! See [README.md](README.md) § The node vocabulary.
 
 use std::cell::Cell;
+use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use crate::bump::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::digest::TypeDigest;
-use super::handle::{Handle, KType, TypeHandle, wrap};
+use super::handle::{DeclaredType, Handle, Naming, Parametric, wrap};
 use super::kind::KKind;
 use super::node::{ContentKey, Group, NodeSchema, TypeNode};
 use super::record::Record;
@@ -70,8 +77,9 @@ impl std::ops::BitOr for Flags {
     }
 }
 
-/// A stored node's content: [`TypeNode`]'s variants in its order, children raw, and a [`Flags`]
-/// byte in each variant whose children decide its probe answers.
+/// A stored node's content: [`TypeNode`]'s variants in its order, each child and each concrete
+/// field a reference to its node, and a [`Flags`] byte in each variant whose children decide its
+/// probe answers.
 #[derive(Clone, Copy)]
 pub(super) enum Content<'run> {
     Number,
@@ -94,66 +102,66 @@ pub(super) enum Content<'run> {
     AnyValue,
     AnyCode,
     CodeNeeding {
-        kind: KType,
+        kind: Linked<'run>,
         names: &'run [BinderSymbol],
     },
     Never,
     OfKind(KKind),
     Parameter {
         name: TypeSymbol,
-        bound: KType,
+        bound: Linked<'run>,
     },
     Carrier {
-        key: &'run ContentKey,
-        name: TypeSymbol,
-        met: KType,
+        /// The carrier's key and name, laid together.
+        key: &'run (ContentKey, TypeSymbol),
+        met: Linked<'run>,
     },
     List {
         flags: Flags,
-        element: Handle,
+        element: Linked<'run>,
     },
     Dict {
         flags: Flags,
-        key: Handle,
-        value: Handle,
+        key: Linked<'run>,
+        value: Linked<'run>,
     },
     Record {
         flags: Flags,
-        fields: Record<'run, Handle>,
+        fields: Record<'run, Linked<'run>>,
     },
     KFunction {
         flags: Flags,
-        params: Record<'run, Handle>,
-        ret: Handle,
+        params: Record<'run, Linked<'run>>,
+        ret: Linked<'run>,
     },
     ExpressionShape {
         flags: Flags,
-        elements: Elements<'run, Handle>,
-        ret: Handle,
+        elements: Elements<'run, Linked<'run>>,
+        ret: Linked<'run>,
     },
     Scheme {
         flags: Flags,
         group: &'run Group<'run>,
-        body: Handle,
+        body: Linked<'run>,
     },
     Quantified {
         index: usize,
-        bound: KType,
+        bound: Linked<'run>,
     },
     Lexical {
         level: u32,
         name: &'run TypeSymbol,
-        lower: KType,
-        bound: KType,
+        lower: Linked<'run>,
+        bound: Linked<'run>,
     },
     Union {
         flags: Flags,
-        members: Run<'run, Handle>,
+        members: Run<'run, Linked<'run>>,
     },
     ConstructorApply {
         flags: Flags,
-        constructor: Handle,
-        arguments: Record<'run, Handle>,
+        constructor: Linked<'run>,
+        arguments: Record<'run, Linked<'run>>,
     },
     Signature {
         schema: &'run SigSchema<'run>,
@@ -161,14 +169,14 @@ pub(super) enum Content<'run> {
     },
     SignatureApply {
         flags: Flags,
-        signature: KType,
-        pins: Record<'run, Handle>,
+        signature: Linked<'run>,
+        pins: Record<'run, Linked<'run>>,
     },
     SignatureMeet {
         flags: Flags,
-        members: Run<'run, Handle>,
+        members: Run<'run, Linked<'run>>,
     },
-    DeferredReturn(DeferredReturnSurface<'run>),
+    DeferredReturn(&'run DeferredReturnSurface<'run>),
     Sibling(usize),
     SetMember {
         kind: KKind,
@@ -179,8 +187,9 @@ pub(super) enum Content<'run> {
 }
 
 /// What a sealed member carries out of line: the digest of its component, which only a re-digest
-/// of the node reads, and its schema's slot.
-pub(super) struct MemberBody<'run> {
+/// of the node reads, and its schema's slot. Nominally `pub` so the sealed reading trait can name
+/// it.
+pub struct MemberBody<'run> {
     pub(super) scc_digest: TypeDigest,
     pub(super) schema: SchemaSlot<'run>,
 }
@@ -189,13 +198,26 @@ const _: () = assert!(!std::mem::needs_drop::<MemberBody<'static>>());
 
 /// A sealed member's schema. The seal lays the slot empty when it interns the member and sets it
 /// once, after it has rewritten the schema absolute: the schema names types over the member, which
-/// can only be interned once the member is. Nothing sets one twice.
-pub(super) struct SchemaSlot<'run>(Cell<Option<NodeSchema<'run>>>);
+/// can only be interned once the member is. Only a typed view reads a slot, and a typed handle to a
+/// member reaches koan only from a finished seal; the lattice's own view carries the slot and never
+/// reads it. Nothing sets one twice. Nominally `pub` so the sealed reading trait can name it.
+pub struct SchemaSlot<'run>(Cell<Option<NodeSchema<'run>>>);
 
 impl<'run> SchemaSlot<'run> {
-    /// A slot holding `schema` from the start.
+    /// A slot the seal sets once the schema is absolute.
+    pub(super) fn empty() -> Self {
+        SchemaSlot(Cell::new(None))
+    }
+
+    /// A slot holding `schema` from the start: a test's hand-built member.
+    #[cfg(test)]
     pub(super) fn filled(schema: NodeSchema<'run>) -> Self {
         SchemaSlot(Cell::new(Some(schema)))
+    }
+
+    /// Whether the seal has set the schema.
+    pub(super) fn is_set(&self) -> bool {
+        self.0.get().is_some()
     }
 
     /// The schema the seal set.
@@ -204,23 +226,34 @@ impl<'run> SchemaSlot<'run> {
             .get()
             .expect("a sealed member's schema is set by its seal before anything reads it")
     }
+
+    /// Set the schema, once.
+    pub(super) fn set(&self, schema: NodeSchema<'run>) {
+        debug_assert!(!self.is_set(), "a member's schema is set once");
+        self.0.set(Some(schema));
+    }
 }
 
-/// A node named by reference: what the table holds, and what every walk and relation inside the
-/// lattice reads.
-pub(super) type Linked<'run> = &'run StoredNode<'run>;
+/// A node named by reference: what the table holds, what a node names its children by, and what
+/// every walk and relation inside the lattice reads.
+pub type Linked<'run> = &'run StoredNode<'run>;
 
 /// One interned node as the table stores it: its digest, then its content. Laid alone in the
 /// registry's region on an intern miss, so a reference to it lives as long as the region.
-pub(super) struct StoredNode<'run> {
+/// Nominally `pub` so the sealed reading trait can name it; `stored` is private, so nothing
+/// outside the lattice can.
+///
+/// Two nodes compare, order and hash by digest. A reference is an identity only within one table,
+/// and a digest is one everywhere.
+pub struct StoredNode<'run> {
     digest: TypeDigest,
     content: Content<'run>,
 }
 
-// A node fills 64 B — its digest and 48 B of content — and the region releases it without running
+// A node fills 48 B — its digest and 32 B of content — and the region releases it without running
 // anything.
-const _: () = assert!(std::mem::size_of::<Content<'static>>() == 48);
-const _: () = assert!(std::mem::size_of::<StoredNode<'static>>() == 64);
+const _: () = assert!(std::mem::size_of::<Content<'static>>() == 32);
+const _: () = assert!(std::mem::size_of::<StoredNode<'static>>() == 48);
 const _: () = assert!(std::mem::align_of::<StoredNode<'static>>() == 16);
 const _: () = assert!(!std::mem::needs_drop::<StoredNode<'static>>());
 
@@ -235,6 +268,11 @@ impl<'run> StoredNode<'run> {
         self.digest
     }
 
+    /// The node's handle: its digest, as a handle.
+    pub(super) fn handle(&self) -> Handle {
+        Handle::from_digest(self.digest)
+    }
+
     /// The node's content, by value.
     pub(super) fn content(&self) -> Content<'run> {
         self.content
@@ -245,16 +283,233 @@ impl<'run> StoredNode<'run> {
         self.content.flags()
     }
 
-    /// The node read back as a view, its children read as `C`.
-    pub(super) fn view<C: TypeHandle>(&self) -> TypeNode<'run, C> {
-        self.content.view()
+    /// This node as the lattice reads it: every child and every concrete field by reference.
+    pub(super) fn view(&self) -> TypeNode<'run, Linked<'run>> {
+        self.view_as()
+    }
+
+    /// This node with its children read as `C` and its concrete fields as `C::Bound` — **the view
+    /// table**, one exhaustive match, so a new variant is a compile error here. The caller answers
+    /// for `C`'s promise: the registry reads a node as the handle it was named by, and a scheme's
+    /// positions as [`Parametric`](super::handle::Parametric).
+    pub(super) fn view_as<C: Naming<'run>>(&self) -> TypeNode<'run, C> {
+        match self.content {
+            Content::Number => TypeNode::Number,
+            Content::Str => TypeNode::Str,
+            Content::Bool => TypeNode::Bool,
+            Content::Null => TypeNode::Null,
+            Content::Identifier => TypeNode::Identifier,
+            Content::Symbol => TypeNode::Symbol,
+            Content::TypeNameToken => TypeNode::TypeNameToken,
+            Content::Expression => TypeNode::Expression,
+            Content::SigiledTypeExpr => TypeNode::SigiledTypeExpr,
+            Content::RecordType => TypeNode::RecordType,
+            Content::Literal => TypeNode::Literal,
+            Content::Block => TypeNode::Block,
+            Content::Declaration => TypeNode::Declaration,
+            Content::Binder => TypeNode::Binder,
+            Content::Name => TypeNode::Name,
+            Content::Keyword => TypeNode::Keyword,
+            Content::Any => TypeNode::Any,
+            Content::AnyValue => TypeNode::AnyValue,
+            Content::AnyCode => TypeNode::AnyCode,
+            Content::CodeNeeding { kind, names } => TypeNode::CodeNeeding {
+                kind: C::read_bound(kind),
+                names,
+            },
+            Content::Never => TypeNode::Never,
+            Content::OfKind(kind) => TypeNode::OfKind(kind),
+            Content::Parameter { name, bound } => TypeNode::Parameter {
+                name,
+                bound: C::read_bound(bound),
+            },
+            Content::Carrier { key, met } => TypeNode::Carrier {
+                name: key.1,
+                key: key.0,
+                met: C::read_bound(met),
+            },
+            Content::List { element, .. } => TypeNode::List {
+                element: C::read(element),
+            },
+            Content::Dict { key, value, .. } => TypeNode::Dict {
+                key: C::read(key),
+                value: C::read(value),
+            },
+            Content::Record { fields, .. } => TypeNode::Record {
+                fields: Record::over(fields.raw()),
+            },
+            Content::KFunction { params, ret, .. } => TypeNode::KFunction {
+                params: Record::over(params.raw()),
+                ret: C::read(ret),
+            },
+            Content::ExpressionShape { elements, ret, .. } => TypeNode::ExpressionShape {
+                elements: Elements::over(elements.raw()),
+                classes: elements.classes(),
+                ret: C::read(ret),
+            },
+            Content::Scheme { group, body, .. } => TypeNode::Scheme {
+                group,
+                body: C::read(body),
+            },
+            Content::Quantified { index, bound } => TypeNode::Quantified {
+                index,
+                bound: C::read_bound(bound),
+            },
+            Content::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            } => TypeNode::Lexical {
+                level: level as usize,
+                name: *name,
+                lower: C::read_bound(lower),
+                bound: C::read_bound(bound),
+            },
+            Content::Union { members, .. } => TypeNode::Union {
+                members: Run::over(members.raw()),
+            },
+            Content::ConstructorApply {
+                constructor,
+                arguments,
+                ..
+            } => TypeNode::ConstructorApply {
+                constructor: C::read(constructor),
+                arguments: Record::over(arguments.raw()),
+            },
+            Content::Signature {
+                schema,
+                schema_digest,
+            } => TypeNode::Signature {
+                schema: *schema,
+                schema_digest,
+            },
+            Content::SignatureApply {
+                signature, pins, ..
+            } => TypeNode::SignatureApply {
+                signature: C::read_bound(signature),
+                pins: Record::over(pins.raw()),
+            },
+            Content::SignatureMeet { members, .. } => TypeNode::SignatureMeet {
+                members: Run::over(members.raw()),
+            },
+            Content::DeferredReturn(surface) => TypeNode::DeferredReturn(*surface),
+            Content::Sibling(index) => TypeNode::Sibling(index),
+            Content::SetMember {
+                kind,
+                index,
+                body,
+                name,
+            } => TypeNode::SetMember {
+                scc_digest: body.scc_digest,
+                index: index as usize,
+                name,
+                kind,
+                schema: C::read_schema(body),
+            },
+        }
+    }
+
+    /// The node's own quantifier group and the type under it: a scheme's group and body, or the
+    /// empty group over the node itself. How the lattice's relations read a callable that may be a
+    /// scheme.
+    pub(super) fn split(&'run self) -> (Group<'run>, Linked<'run>) {
+        match self.content {
+            Content::Scheme { group, body, .. } => (*group, body),
+            _ => (Group::EMPTY, self),
+        }
+    }
+
+    /// What the node is declared as: a [`Scheme`](super::handle::Scheme) where it is a scheme
+    /// node, and a [`Parametric`] otherwise.
+    pub(super) fn declared(&self) -> DeclaredType<Parametric> {
+        if matches!(self.content, Content::Scheme { .. }) {
+            DeclaredType::Scheme(wrap(self.handle()))
+        } else {
+            DeclaredType::Type(wrap(self.handle()))
+        }
+    }
+
+    /// Whether any `Quantified` position is reachable from the node without crossing a scheme —
+    /// the probe that lets a slot type with nothing to solve answer the relations in one step
+    /// instead of walking under a unifier. Read off the flags interning stored in the node.
+    pub(super) fn contains_quantified(&self) -> bool {
+        self.flags().holds(Flags::QUANTIFIED)
+    }
+
+    /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable from the
+    /// node. Read off the flags interning stored in the node.
+    ///
+    /// The invariant a **bound** carries: a bound is a variable-free type. That is what keeps the
+    /// order's two rigid clauses consistent, since below a rigid variable are only itself and
+    /// `Never` while above it is everything above its bound — and a rigid bound would put a
+    /// variable in both sets at once. A bound is a [`KType`](super::handle::KType), so it holds no variable; the doors
+    /// that take a bound assert it holds no opaque carrier either.
+    pub(super) fn contains_rigid(&self) -> bool {
+        self.flags().holds(Flags::RIGID)
+    }
+
+    /// Whether the node is concrete: no free `Quantified`, `Lexical`, head `Parameter` or scheme is
+    /// reachable outside sealed content. Read off the flags interning stored in the node.
+    pub(super) fn is_concrete(&self) -> bool {
+        !self.flags().holds(Flags::PARAMETRIC)
+    }
+
+    /// Whether an opaque carrier is reachable from the node outside sealed content. Read off the
+    /// flag interning stored in the node.
+    pub(super) fn contains_carrier(&self) -> bool {
+        self.flags().holds(Flags::CARRIER)
+    }
+}
+
+impl PartialEq for StoredNode<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.digest == other.digest
+    }
+}
+
+impl Eq for StoredNode<'_> {}
+
+impl PartialOrd for StoredNode<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StoredNode<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.digest.cmp(&other.digest)
+    }
+}
+
+impl Hash for StoredNode<'_> {
+    fn hash<S: Hasher>(&self, state: &mut S) {
+        self.digest.hash(state);
+    }
+}
+
+/// A node compares against a handle by digest, so a reference reads against a constant.
+impl PartialEq<Handle> for &StoredNode<'_> {
+    fn eq(&self, other: &Handle) -> bool {
+        self.digest == other.digest()
+    }
+}
+
+impl fmt::Debug for StoredNode<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Linked(0x{:032x})", self.digest.0)
     }
 }
 
 impl<'run> Content<'run> {
     /// `node` as the table stores it, carrying `flags` where its variant does. Its slices already
-    /// live in the region.
-    pub(super) fn lay(node: TypeNode<'run>, flags: Flags, bump: BumpAllocator<'run>) -> Self {
+    /// live in the region; a carrier's key and name and a deferred return's surface are laid out of
+    /// line here.
+    pub(super) fn lay(
+        node: TypeNode<'run, Linked<'run>>,
+        flags: Flags,
+        bump: BumpAllocator<'run>,
+    ) -> Self {
         match node {
             TypeNode::Number => Content::Number,
             TypeNode::Str => Content::Str,
@@ -280,8 +535,7 @@ impl<'run> Content<'run> {
             TypeNode::OfKind(kind) => Content::OfKind(kind),
             TypeNode::Parameter { name, bound } => Content::Parameter { name, bound },
             TypeNode::Carrier { name, key, met } => Content::Carrier {
-                key: bump.alloc(key),
-                name,
+                key: bump.alloc((key, name)),
                 met,
             },
             TypeNode::List { element } => Content::List { flags, element },
@@ -338,136 +592,19 @@ impl<'run> Content<'run> {
                 pins,
             },
             TypeNode::SignatureMeet { members } => Content::SignatureMeet { flags, members },
-            TypeNode::DeferredReturn(surface) => Content::DeferredReturn(surface),
+            TypeNode::DeferredReturn(surface) => Content::DeferredReturn(bump.alloc(surface)),
             TypeNode::Sibling(index) => Content::Sibling(index),
             TypeNode::SetMember {
-                scc_digest,
                 index,
                 name,
                 kind,
                 schema,
+                ..
             } => Content::SetMember {
                 kind,
                 index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
-                body: bump.alloc(MemberBody {
-                    scc_digest,
-                    schema: SchemaSlot::filled(schema),
-                }),
+                body: schema,
                 name,
-            },
-        }
-    }
-
-    /// This node as a view with its children read as `C` — **the view table**, one exhaustive
-    /// match, so a new variant is a compile error here. The caller answers for `C`'s promise: the
-    /// registry reads a node as the handle it was named by, and a scheme's positions as
-    /// [`Parametric`](super::handle::Parametric).
-    pub(super) fn view<C: TypeHandle>(self) -> TypeNode<'run, C> {
-        let child = |h: Handle| wrap::<C>(h);
-        match self {
-            Content::Number => TypeNode::Number,
-            Content::Str => TypeNode::Str,
-            Content::Bool => TypeNode::Bool,
-            Content::Null => TypeNode::Null,
-            Content::Identifier => TypeNode::Identifier,
-            Content::Symbol => TypeNode::Symbol,
-            Content::TypeNameToken => TypeNode::TypeNameToken,
-            Content::Expression => TypeNode::Expression,
-            Content::SigiledTypeExpr => TypeNode::SigiledTypeExpr,
-            Content::RecordType => TypeNode::RecordType,
-            Content::Literal => TypeNode::Literal,
-            Content::Block => TypeNode::Block,
-            Content::Declaration => TypeNode::Declaration,
-            Content::Binder => TypeNode::Binder,
-            Content::Name => TypeNode::Name,
-            Content::Keyword => TypeNode::Keyword,
-            Content::Any => TypeNode::Any,
-            Content::AnyValue => TypeNode::AnyValue,
-            Content::AnyCode => TypeNode::AnyCode,
-            Content::CodeNeeding { kind, names } => TypeNode::CodeNeeding { kind, names },
-            Content::Never => TypeNode::Never,
-            Content::OfKind(kind) => TypeNode::OfKind(kind),
-            Content::Parameter { name, bound } => TypeNode::Parameter { name, bound },
-            Content::Carrier { key, name, met } => TypeNode::Carrier {
-                name,
-                key: *key,
-                met,
-            },
-            Content::List { element, .. } => TypeNode::List {
-                element: child(element),
-            },
-            Content::Dict { key, value, .. } => TypeNode::Dict {
-                key: child(key),
-                value: child(value),
-            },
-            Content::Record { fields, .. } => TypeNode::Record {
-                fields: Record::over(fields.raw()),
-            },
-            Content::KFunction { params, ret, .. } => TypeNode::KFunction {
-                params: Record::over(params.raw()),
-                ret: child(ret),
-            },
-            Content::ExpressionShape { elements, ret, .. } => TypeNode::ExpressionShape {
-                elements: Elements::over(elements.raw()),
-                classes: elements.classes(),
-                ret: child(ret),
-            },
-            Content::Scheme { group, body, .. } => TypeNode::Scheme {
-                group,
-                body: child(body),
-            },
-            Content::Quantified { index, bound } => TypeNode::Quantified { index, bound },
-            Content::Lexical {
-                level,
-                name,
-                lower,
-                bound,
-            } => TypeNode::Lexical {
-                level: level as usize,
-                name: *name,
-                lower,
-                bound,
-            },
-            Content::Union { members, .. } => TypeNode::Union {
-                members: Run::over(members.raw()),
-            },
-            Content::ConstructorApply {
-                constructor,
-                arguments,
-                ..
-            } => TypeNode::ConstructorApply {
-                constructor: child(constructor),
-                arguments: Record::over(arguments.raw()),
-            },
-            Content::Signature {
-                schema,
-                schema_digest,
-            } => TypeNode::Signature {
-                schema: *schema,
-                schema_digest,
-            },
-            Content::SignatureApply {
-                signature, pins, ..
-            } => TypeNode::SignatureApply {
-                signature,
-                pins: Record::over(pins.raw()),
-            },
-            Content::SignatureMeet { members, .. } => TypeNode::SignatureMeet {
-                members: Run::over(members.raw()),
-            },
-            Content::DeferredReturn(surface) => TypeNode::DeferredReturn(surface),
-            Content::Sibling(index) => TypeNode::Sibling(index),
-            Content::SetMember {
-                kind,
-                index,
-                body,
-                name,
-            } => TypeNode::SetMember {
-                scc_digest: body.scc_digest,
-                index: index as usize,
-                name,
-                kind,
-                schema: body.schema.get(),
             },
         }
     }

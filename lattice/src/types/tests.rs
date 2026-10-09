@@ -11,6 +11,7 @@ mod intervals;
 mod levels;
 mod properties;
 mod ranking;
+mod raw;
 mod residue;
 mod storage;
 mod verdicts;

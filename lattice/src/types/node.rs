@@ -1,18 +1,21 @@
 //! [`TypeNode`] — one interned type's content, the thing a [`Handle`] names.
 //!
 //! A node stores its variant tag, its scalar payload (names, [`ContentKey`]s, a signature's schema
-//! shape), and **handles to its child types** — never owned substructure. Every run a node holds —
-//! a union's members, a shape's elements, a record's fields, a schema's tables — is a slice in the
-//! run region, so a node is `Copy` and carries no drop glue. Nodes are immutable from the moment
-//! they are interned, and the registry that owns them is insert-only for the life of a run, so a
-//! handle stays dereferenceable as long as its registry lives.
+//! shape), and **references to its child types' nodes** — never owned substructure. Every run a
+//! node holds — a union's members, a shape's elements, a record's fields, a schema's tables — is a
+//! slice in the run region, so a view is `Copy` and carries no drop glue. Nodes are immutable from
+//! the moment they are interned, but for a sealed member's schema slot, which its seal sets once;
+//! the registry that owns them is insert-only for the life of a run, so a handle stays
+//! dereferenceable as long as its registry lives.
 //!
-//! A `TypeNode` is the read view of a node: every field by value, its children read through a
-//! handle `H` — read through a [`KType`], a node's children are concrete, and through a
-//! [`Parametric`], parametric — while every bound, a lexical variable's lower end, a code kind and
-//! an application's signature are always a [`KType`]. The registry's table stores a node in its
-//! own layout ([`stored`](super::stored)), whose `view` is the one rewrapping.
-//! [`Variable`] views the three variable variants as one, and owns the rule for their two ends.
+//! A `TypeNode` is the read view of a node: every field by value, its children read as `H`.
+//! Outside the lattice `H` is a handle — read through a [`KType`], a node's children are concrete,
+//! and through a [`Parametric`], parametric — while every bound, a lexical variable's lower end, a
+//! code kind and an application's signature are always a [`KType`]. Inside the lattice `H` is a
+//! reference to the child's node ([`Linked`]), and so is every one of those concrete fields. The
+//! registry's table stores a node in its own layout ([`stored`](super::stored)), whose `view_as`
+//! is the one conversion. [`Variable`] views the three variable variants as one, and owns the rule
+//! for their two ends.
 //!
 //! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
 //! recipe per variant lives in [`digest`](super::digest).
@@ -22,12 +25,14 @@
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::digest::TypeDigest;
-use super::handle::{Handle, KType, Parametric};
+use super::handle::{Handle, KType, Naming, Parametric, TypeHandle};
 use super::kind::KKind;
 use super::record::Record;
+use super::registry::TypeRegistry;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
 use super::shape::{Classes, DeferredReturnSurface};
+use super::stored::Linked;
 use super::unify::Interval;
 
 /// An opaque identity a carrier is keyed on: what a module layer computes from an opaque view's
@@ -53,11 +58,11 @@ impl Group<'_> {
     };
 }
 
-/// The content of one interned type, its children read as `H`. Every run is a `'run` slice under a
-/// view, so reading a node out of the registry copies its scalar payload and a few fat pointers,
-/// never a type subtree.
+/// The content of one interned type, its children read as `H` and its concrete fields as
+/// `H::Bound`. Every run is a `'run` slice under a view, so reading a node out of the registry
+/// copies its scalar payload and a few fat pointers, never a type subtree.
 #[derive(Clone, Copy)]
-pub enum TypeNode<'run, H = Handle> {
+pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     Number,
     Str,
     Bool,
@@ -103,7 +108,7 @@ pub enum TypeNode<'run, H = Handle> {
     /// through [`TypeRegistry::code_needing`](super::registry::TypeRegistry::code_needing).
     CodeNeeding {
         /// A code kind below `Code`.
-        kind: KType,
+        kind: H::Bound,
         /// Symbol-sorted and deduplicated: the needed names are a set.
         names: &'run [BinderSymbol],
     },
@@ -125,7 +130,7 @@ pub enum TypeNode<'run, H = Handle> {
     /// Every field is identity.
     Parameter {
         name: TypeSymbol,
-        bound: KType,
+        bound: H::Bound,
     },
     /// The **carrier** an opaque `:|` view hides a head parameter `name` behind, keyed on content
     /// the lattice never interprets (a [`ContentKey`]: two views of equal content share one
@@ -141,7 +146,7 @@ pub enum TypeNode<'run, H = Handle> {
     Carrier {
         name: TypeSymbol,
         key: ContentKey,
-        met: KType,
+        met: H::Bound,
     },
     /// `List<element>`. Bare `List` lowers to `List<Any>`.
     List {
@@ -204,7 +209,7 @@ pub enum TypeNode<'run, H = Handle> {
     /// under a renaming of their parameters intern to one node.
     Quantified {
         index: usize,
-        bound: KType,
+        bound: H::Bound,
     },
     /// A **lexical variable**: a name only a run binds — a `FOR ALL` or `:Type` parameter, a name a
     /// `USING` surfaces, a quote's hole, a type binder the load left unknown — read where the
@@ -219,8 +224,8 @@ pub enum TypeNode<'run, H = Handle> {
     Lexical {
         level: usize,
         name: TypeSymbol,
-        lower: KType,
-        bound: KType,
+        lower: H::Bound,
+        bound: H::Bound,
     },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
     /// deduplicated, no nested `Union`, no member below the rest, always two or more, in the order
@@ -254,7 +259,7 @@ pub enum TypeNode<'run, H = Handle> {
     /// [`TypeRegistry::signature_apply`](super::registry::TypeRegistry::signature_apply), which
     /// answers `signature` itself for no pins.
     SignatureApply {
-        signature: KType,
+        signature: H::Bound,
         pins: Record<'run, H>,
     },
     /// A **set of applications**, two or more, none lying above another, sorted by handle so the
@@ -286,11 +291,13 @@ pub enum TypeNode<'run, H = Handle> {
         index: usize,
         name: TypeSymbol,
         kind: KKind,
-        schema: NodeSchema<'run>,
+        /// The schema through a handle; through a reference, the member's body, whose slot its seal
+        /// sets.
+        schema: H::Schema,
     },
 }
 
-impl<'run, H> TypeNode<'run, H> {
+impl<'run, H: Naming<'run>> TypeNode<'run, H> {
     /// The quantifier group a scheme binds, or `None` for every other node.
     pub fn group(&self) -> Option<&'run Group<'run>> {
         match self {
@@ -347,10 +354,12 @@ impl<'run, H> TypeNode<'run, H> {
 
     /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or a
     /// [`Self::Parameter`]'s — or `None` for any other node.
-    pub fn rigid_bound(&self) -> Option<KType> {
+    pub fn rigid_bound(&self) -> Option<H::Bound> {
         Variable::of(self).map(Variable::bound)
     }
+}
 
+impl<'run, H: TypeHandle> TypeNode<'run, H> {
     /// A rigid variable's lower end: a [`Self::Lexical`]'s own, `Never` for the other two, `None`
     /// for any other node.
     pub fn rigid_lower(&self) -> Option<KType> {
@@ -363,25 +372,40 @@ impl<'run, H> TypeNode<'run, H> {
     }
 }
 
-/// A free variable a read through intervals meets, as its node spells it.
+impl<'run> TypeNode<'run, Linked<'run>> {
+    /// [`rigid_lower`](TypeNode::rigid_lower) by reference: `Never` is the registry's own node.
+    pub(super) fn rigid_lower_in(&self, types: &TypeRegistry<'run>) -> Option<Linked<'run>> {
+        Variable::of(self).map(|variable| variable.lower_in(types))
+    }
+
+    /// [`rigid_interval`](TypeNode::rigid_interval) by reference.
+    pub(super) fn rigid_interval_in(
+        &self,
+        types: &TypeRegistry<'run>,
+    ) -> Option<Interval<Linked<'run>>> {
+        Variable::of(self).map(|variable| variable.interval_in(types))
+    }
+}
+
+/// A free variable a read through intervals meets, as its node spells it, its ends read as `B`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Variable {
+pub enum Variable<B = KType> {
     /// A scheme's own variable, read where no scheme captures it.
-    Quantified { index: usize, bound: KType },
+    Quantified { index: usize, bound: B },
     /// A lexical variable at `level` along the chain of bodies that declares it.
     Lexical {
         level: usize,
         name: TypeSymbol,
-        lower: KType,
-        bound: KType,
+        lower: B,
+        bound: B,
     },
     /// A signature's head parameter.
-    Parameter { name: TypeSymbol, bound: KType },
+    Parameter { name: TypeSymbol, bound: B },
 }
 
-impl Variable {
+impl<B: Copy> Variable<B> {
     /// The variable `node` is, or `None` for any other node.
-    pub(super) fn of<H>(node: &TypeNode<'_, H>) -> Option<Self> {
+    pub(super) fn of<'run, H: Naming<'run, Bound = B>>(node: &TypeNode<'run, H>) -> Option<Self> {
         Some(match *node {
             TypeNode::Quantified { index, bound } => Variable::Quantified { index, bound },
             TypeNode::Lexical {
@@ -401,14 +425,16 @@ impl Variable {
     }
 
     /// The variable's bound.
-    pub fn bound(self) -> KType {
+    pub fn bound(self) -> B {
         match self {
             Variable::Quantified { bound, .. }
             | Variable::Lexical { bound, .. }
             | Variable::Parameter { bound, .. } => bound,
         }
     }
+}
 
+impl Variable {
     /// The variable's lower end: a lexical variable's own, `Never` for the other two.
     pub fn lower(self) -> KType {
         match self {
@@ -421,6 +447,49 @@ impl Variable {
     pub fn interval(self) -> Interval<KType> {
         Interval {
             lower: self.lower(),
+            upper: self.bound(),
+        }
+    }
+}
+
+impl<'run> Variable<Linked<'run>> {
+    /// The variable with its ends read as handles.
+    pub(super) fn typed(self) -> Variable {
+        match self {
+            Variable::Quantified { index, bound } => Variable::Quantified {
+                index,
+                bound: KType::read(bound),
+            },
+            Variable::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            } => Variable::Lexical {
+                level,
+                name,
+                lower: KType::read(lower),
+                bound: KType::read(bound),
+            },
+            Variable::Parameter { name, bound } => Variable::Parameter {
+                name,
+                bound: KType::read(bound),
+            },
+        }
+    }
+
+    /// [`lower`](Variable::lower) by reference: `Never` is the registry's own node.
+    pub(super) fn lower_in(self, types: &TypeRegistry<'run>) -> Linked<'run> {
+        match self {
+            Variable::Lexical { lower, .. } => lower,
+            Variable::Quantified { .. } | Variable::Parameter { .. } => types.never(),
+        }
+    }
+
+    /// [`interval`](Variable::interval) by reference.
+    pub(super) fn interval_in(self, types: &TypeRegistry<'run>) -> Interval<Linked<'run>> {
+        Interval {
+            lower: self.lower_in(types),
             upper: self.bound(),
         }
     }

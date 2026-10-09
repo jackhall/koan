@@ -12,7 +12,8 @@
 //! carrier's digest ahead of its name.
 //!
 //! **There is one recipe.** A node's digest is its tag byte, its own scalar payload, and its
-//! children's digests — which are already known, because children are handles. Nothing here walks
+//! children's digests — which are already known, because a child is a handle or a node holding its
+//! digest. Nothing here walks
 //! a type: [`node_digest`] is one layer deep, and [`schema_content_digest`] reads a schema's
 //! members by their handles, each table straight through in the canonical order it is stored in.
 //! The only buffer a recipe needs is the symbol sort an order-blind record or union digests under,
@@ -27,7 +28,7 @@
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 
-use super::handle::{KType, TypeHandle};
+use super::handle::{KType, Naming};
 use super::kind::KKind;
 use super::node::{ContentKey, NodeSchema, TypeNode};
 use super::schema::{SigOrigin, SigSchema};
@@ -181,7 +182,10 @@ fn kkind_tag(k: KKind) -> u8 {
 /// Every per-shape builder below is also reachable from the registry, so each door interns
 /// probe-first: an arm here is its builder over the node's own fields, so a digest taken off a
 /// caller's borrowed slices equals the digest of the node those slices would build.
-pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> TypeDigest {
+pub(super) fn node_digest<'run, C: Naming<'run>>(
+    scratch: BumpAllocator<'_>,
+    node: &TypeNode<'run, C>,
+) -> TypeDigest {
     match node {
         TypeNode::Number => leaf_digest(TAG_NUMBER),
         TypeNode::Str => leaf_digest(TAG_STR),
@@ -203,11 +207,11 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::AnyValue => leaf_digest(TAG_ANY_VALUE),
         TypeNode::AnyCode => leaf_digest(TAG_ANY_CODE),
         TypeNode::Never => leaf_digest(TAG_NEVER),
-        TypeNode::CodeNeeding { kind, names } => code_needing_digest(*kind, names),
+        TypeNode::CodeNeeding { kind, names } => code_needing_digest(kind.digest(), names),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
-        TypeNode::Parameter { name, bound } => parameter_digest(*name, *bound),
-        TypeNode::Carrier { name, key, met } => carrier_digest(*name, *key, *met),
+        TypeNode::Parameter { name, bound } => parameter_digest(*name, bound.digest()),
+        TypeNode::Carrier { name, key, met } => carrier_digest(*name, *key, met.digest()),
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(scratch, fields.raw()),
@@ -225,14 +229,14 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
             )
         }
         TypeNode::Scheme { group, body } => scheme_digest(group.bounds, body.digest()),
-        TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
+        TypeNode::Quantified { index, bound } => quantified_digest(*index, bound.digest()),
         TypeNode::Lexical {
             level,
             name,
             lower,
             bound,
-        } => lexical_digest(*level, *name, *lower, *bound),
-        TypeNode::Union { members } => union_digest(scratch, members),
+        } => lexical_digest(*level, *name, lower.digest(), bound.digest()),
+        TypeNode::Union { members } => union_digest(scratch, members.raw()),
         TypeNode::ConstructorApply {
             constructor,
             arguments,
@@ -241,7 +245,7 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::SignatureApply { signature, pins } => {
             signature_apply_digest(scratch, signature.digest(), pins.raw())
         }
-        TypeNode::SignatureMeet { members } => signature_meet_digest(members),
+        TypeNode::SignatureMeet { members } => signature_meet_digest(members.raw()),
         TypeNode::Sibling(index) => sibling_digest(*index),
         TypeNode::SetMember {
             scc_digest, index, ..
@@ -279,26 +283,26 @@ pub(super) fn sibling_digest(index: usize) -> TypeDigest {
 }
 
 /// A head parameter's identity fields: its name, then its bound.
-pub(super) fn parameter_digest(name: TypeSymbol, bound: KType) -> TypeDigest {
+pub(super) fn parameter_digest(name: TypeSymbol, bound: TypeDigest) -> TypeDigest {
     DigestHasher::new(TAG_PARAMETER)
         .symbol(name.symbol())
-        .digest(bound.digest())
+        .digest(bound)
         .finish()
 }
 
 /// An opaque view's carrier: the key it is minted under first, then its name and the bound its
 /// view's source met.
-pub(super) fn carrier_digest(name: TypeSymbol, key: ContentKey, met: KType) -> TypeDigest {
+pub(super) fn carrier_digest(name: TypeSymbol, key: ContentKey, met: TypeDigest) -> TypeDigest {
     DigestHasher::new(TAG_CARRIER)
         .key(key)
         .symbol(name.symbol())
-        .digest(met.digest())
+        .digest(met)
         .finish()
 }
 
 /// An application of a declared signature: the signature's digest, then its pins as an order-blind
 /// record.
-pub(super) fn signature_apply_digest<H: TypeHandle>(
+pub(super) fn signature_apply_digest<'run, H: Naming<'run>>(
     scratch: BumpAllocator<'_>,
     signature: TypeDigest,
     pins: &[(BinderSymbol, H)],
@@ -311,27 +315,27 @@ pub(super) fn signature_apply_digest<H: TypeHandle>(
 
 /// A set of applications: its members' digests in the stored order, which is sorted by handle, so
 /// the set digests order-blind.
-pub(super) fn signature_meet_digest<H: TypeHandle>(members: &[H]) -> TypeDigest {
+pub(super) fn signature_meet_digest<'run, H: Naming<'run>>(members: &[H]) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE_MEET);
     h.count(members.len());
     for member in members {
-        h.digest(member.raw().digest());
+        h.digest(member.digest());
     }
     h.finish()
 }
 
 /// A code kind needing names: the kind, then the names in the symbol-sorted order the node stores
 /// them in.
-pub(super) fn code_needing_digest(kind: KType, names: &[BinderSymbol]) -> TypeDigest {
+pub(super) fn code_needing_digest(kind: TypeDigest, names: &[BinderSymbol]) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_CODE_NEEDING);
-    h.digest(kind.digest()).count(names.len());
+    h.digest(kind).count(names.len());
     for name in names {
         h.symbol(name.symbol());
     }
     h.finish()
 }
 
-// Per-shape digest builders. Each takes its children's handles — which are already their digests
+// Per-shape digest builders. Each takes its children as handles or nodes — each holds its digest
 // — so the work is shallow: one hash over one tag and a few `u128`s, never a walk.
 
 /// `List<element>`.
@@ -348,7 +352,7 @@ pub(super) fn dict_digest(key: TypeDigest, value: TypeDigest) -> TypeDigest {
 }
 
 /// A structural record type.
-pub(super) fn record_digest<H: TypeHandle>(
+pub(super) fn record_digest<'run, H: Naming<'run>>(
     scratch: BumpAllocator<'_>,
     fields: &[(BinderSymbol, H)],
 ) -> TypeDigest {
@@ -358,7 +362,7 @@ pub(super) fn record_digest<H: TypeHandle>(
 }
 
 /// A function type `(params) -> ret`.
-pub(super) fn function_digest<H: TypeHandle>(
+pub(super) fn function_digest<'run, H: Naming<'run>>(
     scratch: BumpAllocator<'_>,
     params: &[(BinderSymbol, H)],
     ret: TypeDigest,
@@ -372,7 +376,7 @@ pub(super) fn function_digest<H: TypeHandle>(
 /// `1` byte or a slot type's digest behind a `0`, then the return. Order is identity here where a
 /// `KFunction`'s parameter record is order-blind: a shape's argument positions are what dispatch
 /// reads.
-pub(super) fn shape_digest<H: TypeHandle>(
+pub(super) fn shape_digest<'run, H: Naming<'run>>(
     elements: impl ExactSizeIterator<Item = DispatchTokenElement<H>>,
     ranking: impl IntoIterator<Item = u16>,
     ret: TypeDigest,
@@ -382,7 +386,7 @@ pub(super) fn shape_digest<H: TypeHandle>(
     for element in elements {
         match element {
             DispatchTokenElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),
-            DispatchTokenElement::Slot(kt) => h.byte(0).digest(kt.raw().digest()),
+            DispatchTokenElement::Slot(kt) => h.byte(0).digest(kt.digest()),
         };
     }
     // A ranking follows the elements, whose count fixes where it starts; written order feeds
@@ -408,10 +412,10 @@ pub(super) fn scheme_digest(bounds: &[KType], body: TypeDigest) -> TypeDigest {
 /// A positional rigid variable: its index in the enclosing scheme's quantifier group, then the
 /// variable's bound. The bound is identity — two schemes differing only in a variable's bound
 /// admit different arguments.
-pub(super) fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
+pub(super) fn quantified_digest(index: usize, bound: TypeDigest) -> TypeDigest {
     DigestHasher::new(TAG_QUANTIFIED)
         .count(index)
-        .digest(bound.digest())
+        .digest(bound)
         .finish()
 }
 
@@ -419,22 +423,25 @@ pub(super) fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
 pub(super) fn lexical_digest(
     level: usize,
     name: TypeSymbol,
-    lower: KType,
-    bound: KType,
+    lower: TypeDigest,
+    bound: TypeDigest,
 ) -> TypeDigest {
     DigestHasher::new(TAG_LEXICAL)
         .count(level)
         .symbol(name.symbol())
-        .digest(lower.digest())
-        .digest(bound.digest())
+        .digest(lower)
+        .digest(bound)
         .finish()
 }
 
 /// A union — order-blind, matching its set-based identity: the member digests feed sorted, staged
 /// in `scratch`. The node keeps its members in the order first written, for rendering.
-pub(super) fn union_digest<H: TypeHandle>(scratch: BumpAllocator<'_>, members: &[H]) -> TypeDigest {
+pub(super) fn union_digest<'run, H: Naming<'run>>(
+    scratch: BumpAllocator<'_>,
+    members: &[H],
+) -> TypeDigest {
     let mut member_digests = BumpVec::with_capacity_in(members.len(), scratch);
-    member_digests.extend(members.iter().map(|m| m.raw().digest()));
+    member_digests.extend(members.iter().map(|m| m.digest()));
     member_digests.sort_unstable();
     let mut h = DigestHasher::new(TAG_UNION);
     h.count(member_digests.len());
@@ -446,7 +453,7 @@ pub(super) fn union_digest<H: TypeHandle>(scratch: BumpAllocator<'_>, members: &
 
 /// `ConstructorApply(ctor, args)` — the args feed symbol-keyed and symbol-sorted (see
 /// [`feed_record`]), matching the order-blind identity of the args `Record`.
-pub(super) fn constructor_apply_digest<H: TypeHandle>(
+pub(super) fn constructor_apply_digest<'run, H: Naming<'run>>(
     scratch: BumpAllocator<'_>,
     ctor: TypeDigest,
     args: &[(BinderSymbol, H)],
@@ -562,7 +569,7 @@ pub(super) fn member_ref_digest(scc_digest: TypeDigest, index: usize) -> TypeDig
 /// Order-blind record digest: `(symbol, field digest)` pairs in canonical order — the numeric order
 /// of the symbols, staged in `scratch`. Matches `Record`'s order-blind equality. Shared by `Record`
 /// and `KFunction` params and `ConstructorApply` arguments.
-fn feed_record<H: TypeHandle>(
+fn feed_record<'run, H: Naming<'run>>(
     h: &mut DigestHasher,
     scratch: BumpAllocator<'_>,
     fields: &[(BinderSymbol, H)],
@@ -571,7 +578,7 @@ fn feed_record<H: TypeHandle>(
     pairs.extend(
         fields
             .iter()
-            .map(|(key, value)| (key.symbol(), value.raw().digest())),
+            .map(|(key, value)| (key.symbol(), value.digest())),
     );
     pairs.sort_unstable_by_key(|pair| pair.0);
     h.count(pairs.len());

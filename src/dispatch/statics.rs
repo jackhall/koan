@@ -1060,10 +1060,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             named.extend((0..bounds.len()).filter(|variable| names(slot, *variable)));
             Unsolved::Open(named)
         };
-        let mut collector = Collector::<Parametric>::new(scratch, bounds);
+        let mut collector = Collector::<Parametric>::new(types, scratch, bounds);
         for (variable, bound) in bounds.iter().enumerate() {
             if let Some(to) = fixed(variable) {
-                collector.pin(variable, *bound, to);
+                collector.pin(types, variable, *bound, to);
             }
         }
         let mut declared = BumpVec::with_capacity_in(others.len(), scratch);
@@ -1213,10 +1213,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let mut fixed = BumpVec::with_capacity_in(bounds.len(), scratch);
         fixed.resize(bounds.len(), None);
         for current in earlier_classes.iter().copied() {
-            let mut collector = Collector::<Parametric>::new(scratch, bounds);
+            let mut collector = Collector::<Parametric>::new(types, scratch, bounds);
             for (variable, to) in fixed.iter().enumerate() {
                 if let Some(to) = to {
-                    collector.pin(variable, bounds[variable], *to);
+                    collector.pin(types, variable, bounds[variable], *to);
                 }
             }
             let mut admitted_any = false;

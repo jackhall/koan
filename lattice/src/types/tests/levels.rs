@@ -5,12 +5,14 @@
 use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 
+use super::raw::RawRegistry;
+use super::raw::order::is_subtype_of;
+use super::raw::substitute::{bound_above, substitute_levels, substitute_quantified};
+use super::raw::unify::admits;
 use crate::types::handle::{Handle, KType, TypeHandle};
-use crate::types::order::is_subtype_of;
 use crate::types::registry::TypeRegistry;
 use crate::types::render::display_handle;
-use crate::types::substitute::{bound_above, substitute_levels, substitute_quantified};
-use crate::types::unify::{Collector, admits};
+use crate::types::unify::Collector;
 use crate::types::walk::Variance;
 
 use super::RawSchemes;
@@ -149,7 +151,7 @@ fn a_lexical_variable_with_a_lower_end() {
         )
         .raw();
     let carried = world.function(&[], "y", w, KType::NULL.raw());
-    let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+    let mut collector = Collector::<Handle>::new(types, region, &[KType::ANY]);
     assert_eq!(
         admits(
             types,
@@ -174,7 +176,7 @@ fn no_solve_binds_a_lexical_variable() {
     let elt = world.lexical(0, "Elt", KType::NUMBER);
     assert!(world.types.contains_rigid(elt));
     assert!(!world.types.contains_quantified(elt));
-    let mut collector = Collector::<Handle>::new(world.region, &[]);
+    let mut collector = Collector::<Handle>::new(&world.types, world.region, &[]);
     assert_eq!(
         admits(
             &world.types,
@@ -187,7 +189,7 @@ fn no_solve_binds_a_lexical_variable() {
         Ok(())
     );
     assert!(collector.solve(&world.types).unwrap().is_empty());
-    let mut collector = Collector::<Handle>::new(world.region, &[]);
+    let mut collector = Collector::<Handle>::new(&world.types, world.region, &[]);
     assert!(
         admits(
             &world.types,

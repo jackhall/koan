@@ -31,13 +31,15 @@ use std::marker::PhantomData;
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol};
 
-use super::handle::{Handle, TypeHandle, wrap};
+use super::handle::{Handle, Naming};
+use super::stored::Linked;
 
-/// See the module-level documentation for the invariants. The fields are stored raw and read as
-/// `H`: a typed read hands each value back as the reading handle's child.
+/// See the module-level documentation for the invariants. Each field's type is stored as a
+/// reference to its node and read as `H`: a typed read hands each value back as the reading
+/// handle's child, and the lattice's own read hands back the reference.
 #[derive(Debug)]
 pub struct Record<'run, H = Handle> {
-    fields: &'run [(BinderSymbol, Handle)],
+    fields: &'run [(BinderSymbol, Linked<'run>)],
     view: PhantomData<H>,
 }
 
@@ -53,7 +55,7 @@ impl<'run, H> Record<'run, H> {
     /// A record over `fields`, which already live where the record will. The registry's record
     /// doors are the callers: each bumps the caller's run into the region on a miss and wraps it
     /// here.
-    pub(super) fn over(fields: &'run [(BinderSymbol, Handle)]) -> Self {
+    pub(super) fn over(fields: &'run [(BinderSymbol, Linked<'run>)]) -> Self {
         debug_assert!(
             fields.iter().enumerate().all(|(index, (name, _))| {
                 fields[..index]
@@ -68,8 +70,8 @@ impl<'run, H> Record<'run, H> {
         }
     }
 
-    /// Fields in declaration order, raw.
-    pub(super) fn raw(self) -> &'run [(BinderSymbol, Handle)] {
+    /// Fields in declaration order, each type by reference.
+    pub(super) fn raw(self) -> &'run [(BinderSymbol, Linked<'run>)] {
         self.fields
     }
 
@@ -86,35 +88,35 @@ impl<'run, H> Record<'run, H> {
     }
 }
 
-impl<'run, H: TypeHandle> Record<'run, H> {
+impl<'run, H: Naming<'run>> Record<'run, H> {
     /// Fields in declaration order.
     pub fn iter(
         self,
     ) -> impl DoubleEndedIterator<Item = (BinderSymbol, H)> + ExactSizeIterator + 'run {
         self.fields
             .iter()
-            .map(|(name, value)| (*name, wrap(*value)))
+            .map(|(name, value)| (*name, H::read(value)))
     }
 
     pub fn values(self) -> impl DoubleEndedIterator<Item = H> + ExactSizeIterator + 'run {
-        self.fields.iter().map(|(_, value)| wrap(*value))
+        self.fields.iter().map(|(_, value)| H::read(value))
     }
 
     pub fn get(self, name: Symbol) -> Option<H> {
         self.fields
             .iter()
             .find(|(key, _)| key.symbol() == name)
-            .map(|(_, value)| wrap(*value))
+            .map(|(_, value)| H::read(value))
     }
 }
 
 /// `fields` in declaration order with each value mapped through `map` — the one way a field run is
 /// rebuilt. Staged in `scratch`.
-pub(super) fn map_fields<'s, H: TypeHandle>(
+pub(super) fn map_fields<'s, 'run, H: Copy>(
     scratch: BumpAllocator<'s>,
     fields: &[(BinderSymbol, H)],
-    mut map: impl FnMut(H) -> Handle,
-) -> BumpVec<'s, (BinderSymbol, Handle)> {
+    mut map: impl FnMut(H) -> Linked<'run>,
+) -> BumpVec<'s, (BinderSymbol, Linked<'run>)> {
     let mut out = BumpVec::with_capacity_in(fields.len(), scratch);
     out.extend(fields.iter().map(|(name, value)| (*name, map(*value))));
     out
@@ -135,15 +137,15 @@ impl<H> PartialEq for Record<'_, H> {
 }
 impl<H> Eq for Record<'_, H> {}
 
-impl<'run, H: TypeHandle> IntoIterator for Record<'run, H> {
+impl<'run, H: Naming<'run>> IntoIterator for Record<'run, H> {
     type Item = (BinderSymbol, H);
     type IntoIter = std::iter::Map<
-        std::slice::Iter<'run, (BinderSymbol, Handle)>,
-        fn(&(BinderSymbol, Handle)) -> (BinderSymbol, H),
+        std::slice::Iter<'run, (BinderSymbol, Linked<'run>)>,
+        fn(&(BinderSymbol, Linked<'run>)) -> (BinderSymbol, H),
     >;
     fn into_iter(self) -> Self::IntoIter {
         self.fields
             .iter()
-            .map(|(name, value)| (*name, wrap(*value)))
+            .map(|(name, value)| (*name, H::read(value)))
     }
 }

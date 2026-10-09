@@ -620,7 +620,7 @@ fn frame<'graph, 'here>(
         }
         CallKind::Keyworded => {}
         CallKind::ByName => {
-            let mut collector = Collector::<KType>::new(scratch, view.group.bounds);
+            let mut collector = Collector::<KType>::new(types, scratch, view.group.bounds);
             // The load laid the parameters of the callee it saw out in symbol order, and records
             // contributions only where its argument names no field but those: a record as long as
             // both that list and this callee's parameters, naming each (read below), names the

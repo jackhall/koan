@@ -26,12 +26,13 @@ use std::ops::Deref;
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
-use super::handle::{DeclaredType, Handle, KType, Parametric};
+use super::handle::{DeclaredType, KType, Parametric};
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
 use super::operators::ReductionMode;
 use super::order::{Dropped, unsubsumed};
 use super::registry::TypeRegistry;
+use super::stored::Linked;
 
 /// A named member table: `(name, T)` pairs, symbol-sorted by name with each name once. The shape
 /// every name-keyed channel of a schema is stored in, and the shape a substitution's bindings
@@ -287,8 +288,8 @@ pub(super) fn canonical_groups(groups: &mut BumpVec<'_, DeclaredGroup<'_>>) {
 ///
 /// The order is antisymmetric, so two mutually-subsuming shapes are one handle and the dedup above
 /// has already collapsed them; nothing here can drop both sides of a pair.
-pub(super) fn canonical_overloads(
-    types: &TypeRegistry<'_>,
+pub(super) fn canonical_overloads<'run>(
+    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'_>,
     overloads: &mut BumpVec<'_, DeclaredType<Parametric>>,
 ) {
@@ -300,17 +301,17 @@ pub(super) fn canonical_overloads(
     // Quadratic in a bucket's width, which is the width an interface declares overloads at. The
     // order runs the other way from a union's: a shape *above* another is the one dropped. A
     // parametric overload — over a head parameter, or a scheme — is deduplicated by handle alone.
-    let mut raw = BumpVec::with_capacity_in(overloads.len(), scratch);
-    raw.extend(overloads.iter().map(|overload| overload.raw()));
-    let keep = unsubsumed(types, scratch, &raw, Dropped::Above);
+    let mut nodes = BumpVec::with_capacity_in(overloads.len(), scratch);
+    nodes.extend(overloads.iter().map(|overload| types.enter(overload.raw())));
+    let keep = unsubsumed(types, scratch, &nodes, Dropped::Above);
     let mut keep = keep.iter();
     overloads.retain(|_| *keep.next().unwrap_or(&true));
 }
 
 /// The bound a head parameter is declared with. `parameter` is a [`TypeNode::Parameter`], as every
 /// entry of [`SigSchema::parameters`] is.
-pub(super) fn parameter_bound(types: &TypeRegistry<'_>, parameter: Handle) -> KType {
-    match types.node(parameter) {
+pub(super) fn parameter_bound(parameter: Linked<'_>) -> Linked<'_> {
+    match parameter.view() {
         TypeNode::Parameter { bound, .. } => bound,
         _ => unreachable!("a head parameter is a Parameter node"),
     }

@@ -74,7 +74,8 @@ fn least_solves_an_unreached_variable_to_never() {
     let types = TypeRegistry::in_region(region);
     let declared = types.record(region, &[(a, types.quantified(0, KType::ANY))]);
     let carried = types.record(region, &[(a, KType::NUMBER)]);
-    let solve = |mut collector: Collector<'_, KType>| {
+    // The collector's type is read off `admits_with`, so it names the registry's own lifetime.
+    let solve = |mut collector| {
         admits_with(
             &types,
             region,
@@ -90,11 +91,11 @@ fn least_solves_an_unreached_variable_to_never() {
             .to_vec()
     };
     assert_eq!(
-        solve(Collector::least(region, 2)),
+        solve(Collector::least(&types, region, 2)),
         [KType::NUMBER, KType::NEVER]
     );
     assert_eq!(
-        solve(Collector::new(region, &[KType::ANY; 2])),
+        solve(Collector::new(&types, region, &[KType::ANY; 2])),
         [KType::NUMBER, KType::ANY]
     );
 }
