@@ -481,7 +481,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
     let rendering = plan::render_program(program);
     with_fixture(|fixture| {
         let lines = fixture.parse(&rendering.source);
-        fixture.in_cell(|writer| {
+        fixture.in_cell(|writer, _| {
             let table = builtins(fixture, writer);
             let shape = BodyShape::of_program(
                 fixture.program,
@@ -535,7 +535,10 @@ fn unit_of_slot(shape: &BodyShape<'_>, slot: Slot) -> Option<usize> {
     shape.units().iter().position(|unit| unit.work == work)
 }
 
-struct ShapedPlan<'p, 'g, 'c> {
+struct ShapedPlan<'p, 'g, 'c>
+where
+    'g: 'c,
+{
     symbols: &'p SymbolInterner,
     scratch: BumpAllocator<'p>,
     rendering: &'p Rendering<'p>,
@@ -750,7 +753,7 @@ proptest! {
         let rendering = plan::render_program(&program);
         with_fixture(|fixture| {
             let lines = fixture.parse(&rendering.source);
-            fixture.in_cell(|writer| {
+            fixture.in_cell(|writer, _| {
                 let table: &Builtins = builtins(fixture, writer);
                 let source = &rendering.source;
                 let error = BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.symbols, fixture.scratch())

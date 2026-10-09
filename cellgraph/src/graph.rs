@@ -3237,10 +3237,9 @@ where
     /// A foreign carrier's read cannot be embedded here. It arrives at a borrow strictly inside the
     /// step, which has no outlives relation to `'here`, so the only reference that lands in a
     /// cell's region without passing the crossing verdict is one into that same region. The brand
-    /// is what carries this: `Writer` is covariant, so a write may always be taken at a *shorter*
-    /// brand than `'here` — and a run written at a shorter one is unreadable past it, so nothing
-    /// it holds can be named again. What cannot happen is the reverse, a foreign read reaching
-    /// `'here`, which is where every door that outlives the step asks for its value:
+    /// is what carries this: `Writer` is invariant, so every run it writes is a `&'here` run whose
+    /// elements must be valid at `'here` — which a foreign read, valid only strictly inside the
+    /// step, is not. That is where every door that outlives the step asks for its value:
     ///
     /// ```compile_fail
     /// use cellgraph::{Active, CellGraph, DropFree, Verdict, covariant, reattachable};
@@ -3633,9 +3632,42 @@ where
     ///     .unwrap();
     /// ```
     ///
-    /// [`writer`](Self::writer)'s output *used at* `'scratch` is sound and useless: `Writer` is
-    /// covariant, so the write lands in storage at the shorter brand, and the bytes are stranded
-    /// there until the cell dies with nothing able to name them past the scratch state.
+    /// The region's own [`writer`](Self::writer) cannot stand in for this one. `Writer` is
+    /// invariant, so a writer at `'here` is never taken at `'scratch`, and a scratch-lived value is
+    /// never laid in storage, where its bytes would be stranded until the cell dies. A `&'here` run
+    /// the region writer wrote still reads at `'scratch`, as any shared borrow does:
+    ///
+    /// ```compile_fail
+    /// # use cellgraph::{CellGraph, Verdict, reattachable};
+    /// # struct Work;
+    /// # reattachable!(Work => String);
+    /// # let mut graph: CellGraph<'static, Work> = CellGraph::new(1, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// graph
+    ///     .enter(cell, |context| {
+    ///         let mut writer = context.scratch_writer();
+    ///         writer = context.writer();
+    ///         writer.fill(1, |_| 1u32);
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// The same rebinding at one brand compiles:
+    ///
+    /// ```
+    /// # use cellgraph::{CellGraph, Verdict, reattachable};
+    /// # struct Work;
+    /// # reattachable!(Work => String);
+    /// # let mut graph: CellGraph<'static, Work> = CellGraph::new(1, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// graph
+    ///     .enter(cell, |context| {
+    ///         let mut writer = context.scratch_writer();
+    ///         writer = context.scratch_writer();
+    ///         writer.fill(1, |_| 1u32);
+    ///     })
+    ///     .unwrap();
+    /// ```
     pub fn scratch_writer(&self) -> Writer<'scratch> {
         self.scratch_writer
     }

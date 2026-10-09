@@ -123,7 +123,7 @@ impl Region {
     /// The write surface for as long as this borrow lasts: a placement's, for the length of its
     /// build, or the executing cell's, for the length of the step that borrowed the table.
     pub(crate) fn writer(&self) -> Writer<'_> {
-        Writer(&self.bump)
+        Writer(&self.bump, PhantomData)
     }
 
     /// Take `other`'s chunks into this bundle — the storage half of every merge. The bumps move;
@@ -366,7 +366,7 @@ impl Regions {
 
     /// The write surface of `home`'s scratch bump, which a step takes at its `'scratch` brand.
     pub(crate) fn scratch_writer(&self, home: CellHome) -> Writer<'_> {
-        Writer(self.scratch_bump(home))
+        Writer(self.scratch_bump(home), PhantomData)
     }
 
     /// Hand `home`'s scratch bump back whole. The caller has established that nothing at rest names
@@ -467,8 +467,12 @@ impl Regions {
 /// handing back the region borrow once the producer is done. Every simpler shape — one value, a
 /// copied slice, a run collected from an iterator of known length — is the embedder's, derived
 /// from these.
+///
+/// Invariant in its brand: a writer at one habitat half's brand cannot stand in for another's, so
+/// a value meant for a shorter-lived half is never laid in a longer-lived one's bytes, and a writer
+/// is never paired with a [`Header`](crate::Header) of another half.
 #[derive(Clone, Copy)]
-pub struct Writer<'cell>(&'cell Bump);
+pub struct Writer<'cell>(&'cell Bump, PhantomData<fn(&'cell ()) -> &'cell ()>);
 
 impl<'cell> Writer<'cell> {
     /// Write a run of `len` values, each built from its index, and hand back the borrow of it that
@@ -560,7 +564,7 @@ impl Storage {
 
     /// A writer at this storage's borrow — `'graph`, for a graph built over it.
     pub fn writer(&self) -> Writer<'_> {
-        Writer(&self.0)
+        Writer(&self.0, PhantomData)
     }
 }
 

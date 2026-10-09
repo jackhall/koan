@@ -142,12 +142,17 @@ impl<'graph> Fixture<'_, 'graph> {
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"))
     }
 
-    /// Run `step` in one cell of a graph over this fixture's storage, handing it the cell's writer.
-    pub fn in_cell<R>(&self, step: impl for<'cell> FnOnce(Writer<'cell>) -> R) -> R {
+    /// Run `step` in one cell of a graph over this fixture's storage, handing it the cell's writer
+    /// and a witness that the fixture's storage outlives the cell — the writer is invariant, so an
+    /// activation over a program shape takes the cell's brand only where that is known.
+    pub fn in_cell<R>(
+        &self,
+        step: impl for<'cell> FnOnce(Writer<'cell>, &'cell &'graph ()) -> R,
+    ) -> R {
         let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, |_| Verdict::Pin);
         let cell = graph.create(None).expect("the graph has a free slot");
         let out = graph
-            .enter(cell, |context| step(context.writer()))
+            .enter(cell, |context| step(context.writer(), &&()))
             .expect("a fresh cell is enterable");
         graph
             .release(cell, ReleaseAbsorption::IntoHolder)
