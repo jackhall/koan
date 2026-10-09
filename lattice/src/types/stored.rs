@@ -5,6 +5,12 @@
 //! the four answers, folded at intern so each probe is one table read. Every other variant's
 //! answers are a constant of its kind, which [`StoredNode::flags`] answers.
 //!
+//! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
+//! intern miss: a carrier's key, a lexical variable's name, a signature's schema and a sealed
+//! member's schema. A lexical level and a member's index are stored narrowed to `u32`. A reader
+//! that needs only inline fields, such as
+//! [`kind_of`](super::handle::KType::kind_of), matches the stored node and skips the hop.
+//!
 //! Two conversions connect the two shapes, each one exhaustive match: [`StoredNode::lay`] lays a
 //! view as a stored node on an intern miss, and [`StoredNode::view`] reads a stored node back as a
 //! view, its children rewrapped as the handle the reader named it by. Every other reader goes
@@ -94,8 +100,8 @@ pub(super) enum StoredNode<'run> {
         bound: KType,
     },
     Carrier {
+        key: &'run ContentKey,
         name: TypeSymbol,
-        key: ContentKey,
         met: KType,
     },
     List {
@@ -132,8 +138,8 @@ pub(super) enum StoredNode<'run> {
         bound: KType,
     },
     Lexical {
-        level: usize,
-        name: TypeSymbol,
+        level: u32,
+        name: &'run TypeSymbol,
         lower: KType,
         bound: KType,
     },
@@ -147,7 +153,7 @@ pub(super) enum StoredNode<'run> {
         arguments: Record<'run, Handle>,
     },
     Signature {
-        schema: SigSchema<'run>,
+        schema: &'run SigSchema<'run>,
         schema_digest: TypeDigest,
     },
     SignatureApply {
@@ -162,19 +168,18 @@ pub(super) enum StoredNode<'run> {
     DeferredReturn(DeferredReturnSurface<'run>),
     Sibling(usize),
     SetMember {
-        scc_digest: TypeDigest,
-        index: usize,
-        scc_size: usize,
-        name: TypeSymbol,
         kind: KKind,
-        schema: NodeSchema<'run>,
+        index: u32,
+        schema: &'run NodeSchema<'run>,
+        scc_digest: TypeDigest,
+        name: TypeSymbol,
     },
 }
 
 impl<'run> StoredNode<'run> {
     /// `node` as the table stores it, carrying `flags` where its variant does. Its slices already
     /// live in the region.
-    pub(super) fn lay(node: TypeNode<'run>, flags: Flags, _bump: BumpAllocator<'run>) -> Self {
+    pub(super) fn lay(node: TypeNode<'run>, flags: Flags, bump: BumpAllocator<'run>) -> Self {
         match node {
             TypeNode::Number => StoredNode::Number,
             TypeNode::Str => StoredNode::Str,
@@ -199,7 +204,11 @@ impl<'run> StoredNode<'run> {
             TypeNode::Never => StoredNode::Never,
             TypeNode::OfKind(kind) => StoredNode::OfKind(kind),
             TypeNode::Parameter { name, bound } => StoredNode::Parameter { name, bound },
-            TypeNode::Carrier { name, key, met } => StoredNode::Carrier { name, key, met },
+            TypeNode::Carrier { name, key, met } => StoredNode::Carrier {
+                key: bump.alloc(key),
+                name,
+                met,
+            },
             TypeNode::List { element } => StoredNode::List { flags, element },
             TypeNode::Dict { key, value } => StoredNode::Dict { flags, key, value },
             TypeNode::Record { fields } => StoredNode::Record { flags, fields },
@@ -222,8 +231,8 @@ impl<'run> StoredNode<'run> {
                 lower,
                 bound,
             } => StoredNode::Lexical {
-                level,
-                name,
+                level: u32::try_from(level).expect("a lexical level fits u32"),
+                name: bump.alloc(name),
                 lower,
                 bound,
             },
@@ -240,7 +249,7 @@ impl<'run> StoredNode<'run> {
                 schema,
                 schema_digest,
             } => StoredNode::Signature {
-                schema,
+                schema: bump.alloc(schema),
                 schema_digest,
             },
             TypeNode::SignatureApply { signature, pins } => StoredNode::SignatureApply {
@@ -254,17 +263,15 @@ impl<'run> StoredNode<'run> {
             TypeNode::SetMember {
                 scc_digest,
                 index,
-                scc_size,
                 name,
                 kind,
                 schema,
             } => StoredNode::SetMember {
-                scc_digest,
-                index,
-                scc_size,
-                name,
                 kind,
-                schema,
+                index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
+                schema: bump.alloc(schema),
+                scc_digest,
+                name,
             },
         }
     }
@@ -299,7 +306,11 @@ impl<'run> StoredNode<'run> {
             StoredNode::Never => TypeNode::Never,
             StoredNode::OfKind(kind) => TypeNode::OfKind(kind),
             StoredNode::Parameter { name, bound } => TypeNode::Parameter { name, bound },
-            StoredNode::Carrier { name, key, met } => TypeNode::Carrier { name, key, met },
+            StoredNode::Carrier { key, name, met } => TypeNode::Carrier {
+                name,
+                key: *key,
+                met,
+            },
             StoredNode::List { element, .. } => TypeNode::List {
                 element: child(element),
             },
@@ -335,8 +346,8 @@ impl<'run> StoredNode<'run> {
                 lower,
                 bound,
             } => TypeNode::Lexical {
-                level,
-                name,
+                level: level as usize,
+                name: *name,
                 lower,
                 bound,
             },
@@ -355,7 +366,7 @@ impl<'run> StoredNode<'run> {
                 schema,
                 schema_digest,
             } => TypeNode::Signature {
-                schema,
+                schema: *schema,
                 schema_digest,
             },
             StoredNode::SignatureApply {
@@ -370,19 +381,17 @@ impl<'run> StoredNode<'run> {
             StoredNode::DeferredReturn(surface) => TypeNode::DeferredReturn(surface),
             StoredNode::Sibling(index) => TypeNode::Sibling(index),
             StoredNode::SetMember {
-                scc_digest,
-                index,
-                scc_size,
-                name,
                 kind,
+                index,
                 schema,
+                scc_digest,
+                name,
             } => TypeNode::SetMember {
                 scc_digest,
-                index,
-                scc_size,
+                index: index as usize,
                 name,
                 kind,
-                schema,
+                schema: *schema,
             },
         }
     }

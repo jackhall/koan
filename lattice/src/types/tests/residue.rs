@@ -561,7 +561,6 @@ fn each_node_kind_lies_under_its_family_top() {
             TypeNode::SetMember {
                 scc_digest: node_digest(region, &TypeNode::Number),
                 index: 0,
-                scc_size: 1,
                 name,
                 kind: KKind::NewType,
                 schema: NodeSchema::NewType(KType::NUMBER),

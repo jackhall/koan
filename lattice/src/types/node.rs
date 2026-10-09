@@ -279,12 +279,11 @@ pub enum TypeNode<'run, H = Handle> {
     /// members' name symbols — so two independently built components with the same content intern
     /// to the same nodes.
     ///
-    /// `scc_size`, `name`, `kind`, and `schema` are excluded from the digest because they are
-    /// exactly the inputs `scc_digest` was computed over — a handle determines them.
+    /// `name`, `kind` and `schema` are excluded from the digest because `scc_digest` was computed
+    /// over them — a handle determines them.
     SetMember {
         scc_digest: TypeDigest,
         index: usize,
-        scc_size: usize,
         name: TypeSymbol,
         kind: KKind,
         schema: NodeSchema<'run>,

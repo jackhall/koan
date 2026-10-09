@@ -30,6 +30,7 @@ use super::digest::TypeDigest;
 use super::kind::KKind;
 use super::node::{Group, TypeNode};
 use super::registry::TypeRegistry;
+use super::stored::StoredNode;
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
 /// Identity only — every relation and door outside the lattice takes a typed handle.
@@ -608,13 +609,17 @@ impl KType {
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
     /// `OfKind`. A signature type is `Signature`, a user-declared nominal is its family read off its
     /// member node, and every other type is `ProperType`. Never returns [`KKind::AnyType`], which is a slot-only expectation.
+    ///
+    /// Reads the stored node, so a nominal's kind costs no hop to its out-of-line schema.
     pub fn kind_of(self, types: &TypeRegistry<'_>) -> KKind {
-        match types.node(self) {
-            TypeNode::Signature { .. }
-            | TypeNode::SignatureApply { .. }
-            | TypeNode::SignatureMeet { .. } => KKind::Signature,
-            TypeNode::SetMember { kind, .. } => kind,
-            TypeNode::ConstructorApply { constructor, .. } => constructor.kind_of(types),
+        match types.raw_node(self.raw()) {
+            StoredNode::Signature { .. }
+            | StoredNode::SignatureApply { .. }
+            | StoredNode::SignatureMeet { .. } => KKind::Signature,
+            StoredNode::SetMember { kind, .. } => kind,
+            StoredNode::ConstructorApply { constructor, .. } => {
+                wrap::<KType>(constructor).kind_of(types)
+            }
             _ => KKind::ProperType,
         }
     }

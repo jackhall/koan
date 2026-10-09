@@ -609,7 +609,6 @@ impl<'run> TypeRegistry<'run> {
         &self,
         scc_digest: TypeDigest,
         index: usize,
-        scc_size: usize,
         name: TypeSymbol,
         kind: KKind,
         schema: NodeSchema<'_>,
@@ -618,7 +617,6 @@ impl<'run> TypeRegistry<'run> {
             TypeNode::SetMember {
                 scc_digest,
                 index,
-                scc_size,
                 name,
                 kind,
                 schema: match schema {

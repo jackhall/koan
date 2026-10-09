@@ -534,8 +534,9 @@ pub(super) fn class_at_least(
     answer
 }
 
-/// The level of a class walk's stand-in, which no lexical variable the elaborator mints shares.
-pub(super) const STAND_IN_LEVEL: usize = usize::MAX;
+/// The level of a class walk's stand-in, which no lexical variable the elaborator mints shares:
+/// the highest level a stored node can hold.
+pub(super) const STAND_IN_LEVEL: usize = u32::MAX as usize;
 
 /// What a variable an earlier class solved to `solution` reads as in a later one, over static
 /// types: `solution` itself where the reach interval converged, `solution` names a rigid variable

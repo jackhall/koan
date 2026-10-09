@@ -520,8 +520,8 @@ pub(super) fn seal_group<'w>(
     // `member index → its finished handle`, filled component by component.
     let mut handles: BumpVec<'_, Option<KType>> = BumpVec::with_capacity_in(count, scratch);
     handles.resize(count, None);
-    // `member index → (its component's digest, its position in that component, size)`.
-    let mut placement: BumpVec<'_, Option<(TypeDigest, usize, usize)>> =
+    // `member index → (its component's digest, its position in that component)`.
+    let mut placement: BumpVec<'_, Option<(TypeDigest, usize)>> =
         BumpVec::with_capacity_in(count, scratch);
     placement.resize(count, None);
 
@@ -562,7 +562,7 @@ pub(super) fn seal_group<'w>(
             handles[*member] = Some(wrap(Handle::from_digest(member_ref_digest(
                 digest, position,
             ))));
-            placement[*member] = Some((digest, position, order.len()));
+            placement[*member] = Some((digest, position));
         }
     }
 
@@ -573,20 +573,12 @@ pub(super) fn seal_group<'w>(
     };
     let mut sealed = BumpVec::with_capacity_in(count, scratch);
     for (index, member) in members.iter().enumerate() {
-        let (scc_digest, position, scc_size) =
-            placement[index].expect("Tarjan covers every member");
+        let (scc_digest, position) = placement[index].expect("Tarjan covers every member");
         let schema = member
             .schema
             .map_handles(types, scratch, &absolute)
             .into_node_schema();
-        let handle = types.set_member(
-            scc_digest,
-            position,
-            scc_size,
-            member.name,
-            member.kind,
-            schema,
-        );
+        let handle = types.set_member(scc_digest, position, member.name, member.kind, schema);
         debug_assert_eq!(
             handle,
             handles[index].expect("placed").raw(),
