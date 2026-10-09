@@ -39,8 +39,8 @@ built is released with its hop.
 - A verdict is recorded in the shortest-lived tier holding one of its two
   types, so a verdict over a branch's type is released with the branch, and one
   over two root types is kept in the root's table.
-- A branch's table is laid at the node table's smallest size and grows by
-  laying segments in its region.
+- A branch's table is the one [the node table](node-table.md) chooses for
+  branches, laid at its smallest size in its region.
 - Every law in [tests/properties.rs](../../lattice/src/types/tests/properties.rs)
   holds unchanged over a chain of two tiers, and the lattice adds no `unsafe`.
 
@@ -91,18 +91,15 @@ built is released with its hop.
   walk. The merge costs the types the home minted, never the value. The
   alternative, probing the branch of each cell the destination reaches, puts
   reach into the lattice and a probe per reached cell on every lookup.
-- *Table structure — decided*, per
-  [the compact node table](compact-type-node-table.md): a segmented chained
-  table in both tiers, a branch being a small head array and one segment in its
-  region's bump. A region's `Writer` lays fixed runs and has no allocator, so a
-  table that grows by fixed runs is the one that can live there.
+- *Table structure — deferred* to [the node table](node-table.md). A region's
+  `Writer` lays fixed runs and has no allocator, so a branch's table must grow
+  by laying fixed runs.
 - *Probe order — open.* Branch first, whose heads fit a cache line, or root
   first, which most handles name; and whether an empty branch is skipped, which
-  lazy creation gives. Decided by the compact table's benchmark.
-- *Sizing a branch — decided.* A branch starts small and grows, as
-  [the root does](compact-type-node-table.md): the types a body builds at run
-  time are not predictable from its text, and growth strands nothing in the
-  region.
+  lazy creation gives. Decided by [the node table's](node-table.md) benchmark.
+- *Sizing a branch — decided.* A branch starts small and grows, as the root
+  does: the types a body builds at run time are not predictable from its
+  text.
 
 ## Dependencies
 
@@ -111,8 +108,8 @@ A branch is also the scratch lattice a
 
 **Requires:**
 
-- [A compact type node table](compact-type-node-table.md) — the segmented
-  table a branch is laid as in its region.
+- [The node table](node-table.md) — the table a branch is laid as in its
+  region.
 
 **Unblocks:**
 
