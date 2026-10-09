@@ -1,111 +1,105 @@
 # A compact type node table
 
 **Problem.** A [`TypeNode`](../../lattice/src/types/node.rs) is 112 B, sized by
-its largest variants: `Signature` (a `SigSchema` is 88 B), `SetMember` and
-`ExpressionShape`. The variants a
-program mints most often (`List`, `Dict`, `Record`, `KFunction`, `Union`) need
-48 B or less. The [registry](../../lattice/src/types/registry.rs)'s node table
-stores an `Entry` beside each key: the node plus its four probe flags
-(`quantified`, `rigid`, `parametric`, `carrier`), which pad it to 128 B, so each
-bucket is 144 B. The table is a hashbrown map
-in [program storage](../../src/program/README.md) that doubles when full. The
-bump can't take the old table back, so after each doubling the previous bucket
-array sits dead until the program ends. A registry of 16k mixed types, measured
-over a 128 B node, held 11.8 MB: about 5.3 MB of live node table, 5.3 MB of dead
-tables, 1.2 MB of interned content and 49 KB of verdict table. Nothing sizes the
-table ahead of the program it serves.
+its largest variants: `Signature` (a `SigSchema` is 88 B) and `SetMember` at
+111 B, `ExpressionShape` at 95 B, `KFunction` at 80 B, and `Carrier` and
+`Lexical` at 64 B. The variants a program mints most often (`List`, `Dict`,
+`Record`, `Union`) need 48 B or less. The
+[registry](../../lattice/src/types/registry.rs)'s node table stores an `Entry`
+beside each key: the node plus its four probe flags (`quantified`, `rigid`,
+`parametric`, `carrier`), which pad it to 128 B, so each bucket is 144 B. The
+table is a hashbrown map in [program storage](../../src/program/README.md) that
+doubles when full. The bump can't take the old table back, so after each
+doubling the previous bucket array sits dead until the program ends. A
+registry of 16k mixed types, measured over a 128 B node, held 11.8 MB: about
+5.3 MB of live node table, 5.3 MB of dead tables, 1.2 MB of interned content
+and 49 KB of verdict table.
 
 **Acceptance criteria.**
 
 - `size_of::<TypeNode>()` is 48, pinned by a `const` assert beside the enum.
-- `Signature` and `SetMember` each keep the fields their hot paths read inline
-  and carry the rest behind one `&'run` reference into the registry's region,
-  laid on an intern miss. `TypeNode` stays `Copy` and free of drop glue, and
-  the digest of every type is unchanged.
-- One program interned twice, into two registries, yields the same digests,
-  pinned by a test.
-- The four probe flags are a one-byte `Flags` field in each
-  non-leaf variant, read through one `TypeNode::flags` door that answers
-  `Flags::NONE` for a leaf. `Entry` does not exist, and a node table bucket is
-  64 B.
-- Parsing a program yields a count of its type-expression positions, and
-  `CellSubstrate::load` sizes the root's node table from that count times a
-  multiplier, and the root never resizes.
-- The multiplier is measured: the design doc records the load-time
-  nodes-per-position ratio observed over a named set of example programs, and
-  the value chosen from it.
-- The segmented chained table's settings are chosen by a benchmark over the
-  48 B node against a presized hashbrown map. The benchmark is kept in the
-  repo, and the type lattice's design doc records its build, hit, miss and
-  dependent-lookup timings, bytes per entry and dead bytes at 1k, 16k and 64k
-  entries, and the cost of a two-tier lookup in each probe order
+- `Signature`, `SetMember`, `Carrier` and `Lexical` each keep the fields their
+  hot paths read inline and carry the rest behind one `&'run` reference into
+  the registry's region, laid on an intern miss. An expression shape keeps each
+  slot's priority class in that slot's element. `TypeNode` stays `Copy` and
+  free of drop glue.
+- No variant's digest recipe changes: a test pinning the digest of one node of
+  every variant, added before the layout changes, passes after them.
+- One program loaded and run twice, into two registries, interns the same set
+  of digests, pinned by a test.
+- The four probe flags are a one-byte `Flags` field in each variant whose
+  flags its children decide, read through one `TypeNode::flags` door that
+  answers a constant for every other variant. `Entry` does not exist.
+- The node table is a segmented chained table. A slot holds a key and its node
+  in 64 B aligned to a cache line, a parallel run of `u32` links chains the
+  slots, and the heads double by laying a new head segment and splitting each
+  chain. It grows only by laying fixed runs, and asks its storage for nothing
+  but a run of `n` values, so a table can be laid in a cell's region
   ([type branches](type-branches.md)).
+- A benchmark kept in the repo times build, hit, miss and dependent lookups,
+  and totals bytes per entry and dead bytes, at 1k, 16k and 64k entries: for
+  the chained table grown from its smallest size and presized, against a
+  hashbrown map; and for a two-tier lookup in each probe order
+  ([type branches](type-branches.md)). The type lattice's design doc records
+  the results, and the load factor and head fingerprints they chose.
 - A registry of 16k interned types, measured by a test that totals its bump,
   holds under 5 MB.
-- The node table grows by laying fixed runs — a head array and segments — and
-  asks its storage for nothing else, so a table can be laid in a cell's region
-  ([type branches](type-branches.md)).
 - The type lattice adds no `unsafe`.
 
 **Directions.**
 
-- *`Carrier` — open.* An opaque view's carrier holds a 16 B `ContentKey` the
-  [view door](../../src/knot/module/view.rs) computes, beside its 16 B name and
-  its 16 B met bound, so the three do not fit 48 B inline with a tag. Options:
-  move the key behind one `&'run` reference laid on an intern miss, which costs
-  a hop only where a carrier is digested or compared; or the met bound, which
-  only a signature's fit reads.
+- *`Carrier` — decided.* `Carrier { key: &'run ContentKey, name, met }`. After
+  interning, only the digest and the view table read the key; a signature's
+  fit reads `met`.
+- *`Lexical` — decided.* `Lexical { level: u32, name: &'run TypeSymbol, lower,
+  bound }`. Rendering, the digest and dispatch's unresolved-level refusal read
+  the name; every walk reads the two ends inline. Moving `lower` out instead
+  would give a `Never` lower end two spellings.
+- *`KFunction` — decided* per [a scheme node](scheme-node.md):
+  `KFunction { flags, params, ret }`, with nothing out of line.
+- *`ExpressionShape` — decided.* `ExpressionShape { flags, elements, ret }`.
+  A shape element is 32 B with 15 spare bytes, so a slot's priority class rides
+  in its element. The shape doors keep their `classes` argument and pack it,
+  and the digest still feeds nothing for written order.
 - *The layouts of `Signature` and `SetMember` — decided.*
-  Each has room for a `u16` at offset 2, a `u32` at offset 4, one thin
-  reference at offset 8 and two 16 B fields:
-  - `Signature { flags, schema: &'run SigSchema, schema_digest }`.
-    `sig_fits` reads the schema's tables together and its verdict is
-    cached, so the hop is paid once per pair.
-  - `SetMember { flags, kind, index: u32, data, scc_digest, name }`, where
-    `data` holds `scc_size` and the `NodeSchema`. `kind_of` and sibling
-    resolution read `kind`, `index` and `scc_digest` without the hop.
-
-  These hot fields are chosen from what each field is for. A field that the
-  order, window or dispatch paths turn out to read per dispatch moves inline
-  instead.
-- *Packing the flags — decided.* A safe `flags: Flags` field per non-leaf
-  variant: rustc places a variant's one-byte field in the tag's padding at
-  offset 1, and the size assert turns any layout drift into a build error.
-  A hand-packed header over a `union` payload reaches the same 48 B and adds
-  `unsafe`.
-- *How `ExpressionShape` fits 48 B — open.* Only `elements`, `ret`, the
-  quantifier arity and `bounds` carry identity: `quantifiers` is render-only. Options: move the whole payload
-  out of line, which puts a hop on every dispatch read of `elements` and
-  `ret`; or keep `elements` and `ret` inline and move `quantifiers` and
-  `bounds` behind one `Option<&'run ShapeBinders>`, which is `None` for a
-  monomorphic shape and has its arity as its length. rustc places that
-  reference in the tag's slot at offset 8, so the variant is 48 B with no
-  `unsafe`. Recommended: the second, since dispatch never takes the hop and only
-  substitution and rendering of a generic shape do.
+  `Signature { schema: &'run SigSchema, schema_digest }`, and
+  `SetMember { kind, index: u32, data, scc_digest, name }`, where `data` holds
+  `scc_size` and the `NodeSchema`. `kind_of` and sibling resolution read
+  `kind`, `index` and `scc_digest` without the hop; `sig_fits` reads a schema's
+  tables together and its verdict is cached, so the hop is paid once per pair.
+  Neither carries flags: every walk treats both as leaves.
+- *Packing the flags — decided.* A safe `flags: Flags` field in `List`,
+  `Dict`, `Record`, `KFunction`, `ExpressionShape`, `Union`,
+  `ConstructorApply`, `SignatureApply`, `SignatureMeet` and `Scheme`: rustc
+  places a variant's one-byte field in the tag's padding at offset 1, and the
+  size assert turns any layout drift into a build error. A flags byte beside
+  the link would keep the node free of it, but costs a probe a second cache
+  line; a hand-packed header over a `union` payload adds `unsafe`.
 - *The table structure — decided.* A segmented chained table, in the root and
-  in every [branch](type-branches.md). A hashbrown map resizes when a program
-  outgrows its estimate and strands the old buckets in a bump that takes
-  nothing back — the permanent root and a long-lived home region alike. A
-  segmented table never leaves a byte dead: growth adds a segment and relinks
-  each chain, and a segment is a unit a region's bump hands out, so a branch is
-  a small head array and one segment released with its region. With a 144 B
-  entry, its dependent lookups ran about 30% slower at 16k; the benchmark on the
-  48 B node sets its presize, load factor (0.75 measured best) and head
-  fingerprints, which help misses only — and with two tiers every lookup of a
-  root handle from a cell misses in the tier probed first.
-- *Presizing a branch — deferred* to [type branches](type-branches.md): a
-  constant, or a per-body tally taken as the parser's is.
-- *Where the type-expression count is taken — open.* The parser tallies each
-  type-expression position as it lowers it and returns the count beside the
-  statements, or `load` walks the parsed statements afterwards. Recommended:
-  the parser tally, since it visits every position already.
+  in every [branch](type-branches.md). A segmented table never leaves a byte
+  dead: a new slot segment doubles the capacity, and a new head segment
+  doubles the heads, each chain split by the next digest bit. A segment is a
+  unit a region's bump hands out, so a branch is a small head array and one
+  segment released with its region. A link inside the slot would make it 80 B,
+  across two cache lines.
+- *Sizing the root — decided.* The root starts at the table's smallest size
+  and grows. The node count a load reaches is not predictable from its text:
+  equal content interns once, the load interns types no position spells, and
+  until type branches the run interns into the root too. Growth strands
+  nothing and costs one relink per entry over the table's life, which the
+  benchmark's grown row records against the presized one.
+- *The load factor and head fingerprints — open.* Set by the benchmark. Over a
+  144 B entry, 0.75 measured best, and dependent lookups ran about 30% slower
+  at 16k than a hashbrown map. Fingerprints help misses only, and with two
+  tiers every lookup of a root handle from a cell misses in the tier probed
+  first.
 
 ## Dependencies
 
-The multiplier is measured over programs that elaborate their types, which
-needs dispatch.
+**Requires:**
 
-**Requires:** none.
+- [A scheme node](scheme-node.md) — the quantifier group leaves `KFunction` and
+  `ExpressionShape`.
 
 **Unblocks:**
 

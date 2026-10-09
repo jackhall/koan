@@ -138,6 +138,8 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 - [Type branches](../../../roadmap/rewrite/type-branches.md) — the branch tier,
   a run-built type released with the region of the values that carry it.
+- [A scheme node](../../../roadmap/rewrite/scheme-node.md) — one binder node
+  over a function or shape body, in place of a group on each callable.
 - [A compact type node table](../../../roadmap/rewrite/compact-type-node-table.md)
   — the 48 B node and the segmented table both tiers are built on.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)

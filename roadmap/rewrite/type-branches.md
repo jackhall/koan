@@ -39,8 +39,8 @@ built is released with its hop.
 - A verdict is recorded in the shortest-lived tier holding one of its two
   types, so a verdict over a branch's type is released with the branch, and one
   over two root types is kept in the root's table.
-- A branch's table is presized from its body's tally of run-built type
-  positions, taken by the static pass.
+- A branch's table is laid at the node table's smallest size and grows by
+  laying segments in its region.
 - Every law in [tests/properties.rs](../../lattice/src/types/tests/properties.rs)
   holds unchanged over a chain of two tiers, and the lattice adds no `unsafe`.
 
@@ -67,7 +67,7 @@ built is released with its hop.
   lays a value has the branch of the habitat it lays into and none has
   another's. A crossing reads its operand's home branch through the operand's
   `HomeHeader`, inside a closure. The cell that owns a region lays its branch
-  at its first step, presized from its body's tally; a tenant or a producer
+  at its first step; a tenant or a producer
   building into a home only reads the slot, and finds a branch laid, since every
   region has run its owner's step before anything foreign writes into it. A
   scratch branch is laid by the first door that interns there, since a reset
@@ -99,10 +99,10 @@ built is released with its hop.
 - *Probe order — open.* Branch first, whose heads fit a cache line, or root
   first, which most handles name; and whether an empty branch is skipped, which
   lazy creation gives. Decided by the compact table's benchmark.
-- *Presizing a branch — decided.* A per-body tally of run-built type
-  positions, taken by the static pass as the parser tallies the program's. The
-  load already interns a container literal's type, so the positions are opaque
-  views and calls whose return type the run builds.
+- *Sizing a branch — decided.* A branch starts small and grows, as
+  [the root does](compact-type-node-table.md): the types a body builds at run
+  time are not predictable from its text, and growth strands nothing in the
+  region.
 
 ## Dependencies
 
