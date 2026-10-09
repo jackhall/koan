@@ -42,7 +42,7 @@ pub fn builtin_shape_types<'x>(
             });
         }
         let ret = shape.returns[overload];
-        handles.push(types.shape_type(scratch, &elements, &[], ret));
+        handles.push(types.shape_type(&elements, &[], ret));
     }
     handles.leak()
 }

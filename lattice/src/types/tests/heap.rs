@@ -90,7 +90,6 @@ fn interning_and_relations_touch_no_heap() {
         )
         .handle;
     let plain = types.shape_type(
-        scratch,
         &[Keyword(pure), Slot(KType::NUMBER), Slot(KType::NUMBER)],
         &[],
         KType::NUMBER,
@@ -98,12 +97,7 @@ fn interning_and_relations_touch_no_heap() {
 
     // A signature with a head parameter, a member of every kind and a chaining record.
     let member = types.head_parameter(elt, KType::ANY);
-    let operator = types.shape_type(
-        scratch,
-        &[Slot(member), Keyword(plus), Slot(member)],
-        &[],
-        member,
-    );
+    let operator = types.shape_type(&[Slot(member), Keyword(plus), Slot(member)], &[], member);
     let mut draft = SchemaDraft::new(scratch);
     draft.origin = SigOrigin::Declared;
     draft.insert_parameter(elt, member);
@@ -117,18 +111,8 @@ fn interning_and_relations_touch_no_heap() {
     draft.insert_manifest(elt, KType::NUMBER);
     let module = types.signature(scratch, draft);
     // A keyworded interface, and a module whose only overload under that key misses it.
-    let wants = types.shape_type(
-        scratch,
-        &[Keyword(pure), Slot(KType::NUMBER)],
-        &[],
-        KType::NUMBER,
-    );
-    let offers = types.shape_type(
-        scratch,
-        &[Keyword(pure), Slot(KType::STR)],
-        &[],
-        KType::NUMBER,
-    );
+    let wants = types.shape_type(&[Keyword(pure), Slot(KType::NUMBER)], &[], KType::NUMBER);
+    let offers = types.shape_type(&[Keyword(pure), Slot(KType::STR)], &[], KType::NUMBER);
     let mut draft = SchemaDraft::new(scratch);
     draft.origin = SigOrigin::Declared;
     draft.push_keyworded(wants);

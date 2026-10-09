@@ -102,11 +102,7 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             };
             let number = DispatchTokenElement::Slot(KType::NUMBER);
             let shape = |elements: &[DispatchTokenElement<KType>]| {
-                Some(
-                    types
-                        .shape_type(scratch, elements, &[], KType::NUMBER)
-                        .into(),
-                )
+                Some(types.shape_type(elements, &[], KType::NUMBER).into())
             };
             let twice = registered(fixture, activation, "twice");
             let twice_function = twice.function().expect("a function");
@@ -163,7 +159,7 @@ fn a_bare_definition_binds_its_function_to_its_registration_slot() {
         let lines = fixture.parse("EXPR #(TWICE x :Number) -> Number = #(x)");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let types = fixture.types;
             let twice = at_key(fixture, activation, "TWICE _");
             let registered = twice
                 .function()
@@ -175,7 +171,6 @@ fn a_bare_definition_binds_its_function_to_its_registration_slot() {
                 registered.shape,
                 types
                     .shape_type(
-                        scratch,
                         &[
                             DispatchTokenElement::Keyword(keyword),
                             DispatchTokenElement::Slot(KType::NUMBER)

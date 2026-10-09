@@ -196,7 +196,11 @@ impl Lockstep for Order {
         // kinds. In the order a scheme lies under only itself, which the caller's equality guard
         // already answered. A pair it does not settle can still meet a family top below.
         if matches!(na, TypeNode::Scheme { .. }) || matches!(nb, TypeNode::Scheme { .. }) {
-            match (types.node(types.split(a).1), types.node(types.split(b).1)) {
+            let [ba, bb] = [na, nb].map(|node| match node {
+                TypeNode::Scheme { body, .. } => types.node(body),
+                node => node,
+            });
+            match (ba, bb) {
                 (TypeNode::KFunction { .. }, TypeNode::KFunction { .. }) => {
                     return solves && admits_function(types, scratch, a, b);
                 }

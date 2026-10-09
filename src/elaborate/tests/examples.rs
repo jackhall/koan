@@ -91,7 +91,7 @@ LET Bare = Alias";
             ];
             assert_eq!(
                 elaborated(&program, 6),
-                Ok(types.shape_type(scratch, &twice, &[], KType::NUMBER))
+                Ok(types.shape_type(&twice, &[], KType::NUMBER))
             );
             assert_eq!(elaborated(&program, 7), Ok(KType::STR));
         },
@@ -108,14 +108,14 @@ LET Scaled = :(EXPR #(MOVE 20 :Number TO 10 :Str) -> Number)
 LET Written = :(EXPR #(MOVE _ :Number TO _ :Str) -> Number)
 LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
     with_program(source, scalars, nulls, |program| {
-        let (types, scratch) = (program.types, program.scratch);
+        let types = program.types;
         let elements = [
             keyword("MOVE", program.symbols),
             DispatchTokenElement::Slot(KType::NUMBER),
             keyword("TO", program.symbols),
             DispatchTokenElement::Slot(KType::STR),
         ];
-        let ranked = types.shape_type(scratch, &elements, &[1, 0], KType::NUMBER);
+        let ranked = types.shape_type(&elements, &[1, 0], KType::NUMBER);
         assert_eq!(elaborated(&program, 0), Ok(ranked));
         assert_eq!(elaborated(&program, 1), Ok(ranked));
         assert_ne!(elaborated(&program, 2), Ok(ranked));
@@ -233,7 +233,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                 .into())
         );
         let shape = |elements: &[DispatchTokenElement<KType>], ret| {
-            DeclaredType::from(types.shape_type(scratch, elements, &[], ret))
+            DeclaredType::from(types.shape_type(elements, &[], ret))
         };
         let number = DispatchTokenElement::Slot(KType::NUMBER);
         // Every definition is typed by its function type, over its head's **slot names**: a call
@@ -582,12 +582,7 @@ fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
         assert_eq!(
             registered.shape,
             types
-                .shape_type(
-                    scratch,
-                    &[number, keyword("~", symbols), number],
-                    &[],
-                    KType::NUMBER
-                )
+                .shape_type(&[number, keyword("~", symbols), number], &[], KType::NUMBER)
                 .into()
         );
         assert_eq!(registered.parameters, ParameterBinding::Operands);

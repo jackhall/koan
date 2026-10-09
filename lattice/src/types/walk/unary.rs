@@ -306,7 +306,7 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(Handle, bool)) {
 }
 
 /// **The other half of the arm table.** One node plus replacement children, in [`children`]'s
-/// order, re-interned through the registry's own doors. `None` for a node with no rebuild.
+/// order, re-interned through the registry's own doors. `None` for a node with no children.
 fn reassemble(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -340,7 +340,7 @@ fn reassemble(
                 *slots.next().expect("one replacement per slot position")
             });
             let ret = *slots.next().expect("the return follows the slots");
-            types.shape_type(scratch, &rebuilt, classes, ret)
+            types.shape_type(&rebuilt, classes, ret)
         }
         // The rebuilt body still reads the group in its old order, which the door renumbers: a
         // rebuild that drops a variable's first occurrence moves it.
@@ -373,6 +373,34 @@ fn reassemble(
             types.signature_apply(scratch, signature, &pins)
         }
         TypeNode::SignatureMeet { .. } => types.signature_meet(scratch, new),
-        _ => return None,
+        // No wildcard: [`children`] gives each of these no child, so none is ever rebuilt, and a
+        // new compound variant fails to compile here rather than silently keeping its old handle.
+        TypeNode::Number
+        | TypeNode::Str
+        | TypeNode::Bool
+        | TypeNode::Null
+        | TypeNode::Identifier
+        | TypeNode::Symbol
+        | TypeNode::TypeNameToken
+        | TypeNode::Expression
+        | TypeNode::SigiledTypeExpr
+        | TypeNode::RecordType
+        | TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword
+        | TypeNode::Any
+        | TypeNode::AnyValue
+        | TypeNode::AnyCode
+        | TypeNode::CodeNeeding { .. }
+        | TypeNode::Never
+        | TypeNode::OfKind(_)
+        | TypeNode::DeferredReturn(_)
+        | TypeNode::Sibling(_)
+        | TypeNode::Carrier { .. }
+        | TypeNode::Signature { .. }
+        | TypeNode::SetMember { .. } => return None,
     })
 }

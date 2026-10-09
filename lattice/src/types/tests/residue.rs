@@ -1133,15 +1133,8 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
 }
 
 /// `#(<keyword> _ :<slot>) -> <ret>`, unranked and unquantified.
-fn head(
-    types: &TypeRegistry<'_>,
-    region: &Bump,
-    keyword: KeywordSymbol,
-    slot: Handle,
-    ret: Handle,
-) -> Handle {
+fn head(types: &TypeRegistry<'_>, keyword: KeywordSymbol, slot: Handle, ret: Handle) -> Handle {
     types.shape_type(
-        region,
         &[
             DispatchTokenElement::Keyword(keyword),
             DispatchTokenElement::Slot(slot),
@@ -1192,12 +1185,12 @@ fn a_key_s_overloads_are_tried_one_at_a_time() {
         region,
         false,
         &[(elt, parameter)],
-        &[head(&types, region, push, raw, types.list(raw))],
+        &[head(&types, push, raw, types.list(raw))],
     );
     let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
     let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));
     let both = typed::meet(&types, region, numbers, strs);
-    let at = |kt| head(&types, region, push, kt, types.list(kt));
+    let at = |kt| head(&types, push, kt, types.list(kt));
     let two = keyworded(
         &types,
         region,
@@ -1225,7 +1218,7 @@ fn a_tie_under_an_asked_member_still_fits() {
     let types = TypeRegistry::in_region(region);
     let f = KeywordSymbol::declared("FIT", &symbols).expect("a keyword token");
     let either = |other| types.union_of(region, &[KType::NUMBER.raw(), other]);
-    let at = |slot| head(&types, region, f, slot, KType::NUMBER.raw());
+    let at = |slot| head(&types, f, slot, KType::NUMBER.raw());
     let m = keyworded(
         &types,
         region,
@@ -1262,7 +1255,7 @@ fn the_order_never_solves_and_fits_does() {
         region,
         false,
         &[(elt, parameter)],
-        &[head(&types, region, push, raw, types.list(raw))],
+        &[head(&types, push, raw, types.list(raw))],
     );
     let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
     let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));

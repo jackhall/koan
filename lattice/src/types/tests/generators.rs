@@ -18,11 +18,11 @@
 //!
 //! A law draws its precondition by construction rather than filtering for it, since a case that
 //! passes without exercising the law is invisible to proptest. A [`Vocabulary`] says what a draw
-//! may hold — variables, and whether a shape or function binds a group of its own — and the paired
-//! strategies build what independent draws line up only by accident: two shapes over one key
-//! ([`arb_shape_pair`]), arguments a candidate admits ([`arb_argument_pair`]), a shape below
-//! another ([`arb_shape_below`]), an ordered pair or chain by [`Widening`]s ([`arb_chain`]), and a
-//! scheme with its own instance ([`arb_own_instance`]). What still misses a precondition is a
+//! may hold — variables, and whether a shape or function is drawn under a group of its own — and
+//! the paired strategies build what independent draws line up only by accident: two shapes over
+//! one key ([`arb_shape_pair`]), arguments a candidate admits ([`arb_argument_pair`]), a shape
+//! below another ([`arb_shape_below`]), an ordered pair or chain by [`Widening`]s ([`arb_chain`]),
+//! and a scheme with its own instance ([`arb_own_instance`]). What still misses a precondition is a
 //! `prop_assume!` the laws' reject budget counts.
 
 use std::collections::HashMap;
@@ -229,11 +229,11 @@ pub struct Vocabulary {
     /// Rigid variables outside sealed content: lexical variables and whatever an enclosing shape's
     /// group or signature's head hands down.
     pub variables: bool,
-    /// Whether a shape or function may (or must) bind a quantifier group of its own.
+    /// Whether a shape or function may (or must) be drawn under a quantifier group of its own.
     pub groups: Groups,
 }
 
-/// Whether a drawn shape or function binds a quantifier group of its own.
+/// Whether a shape or function is drawn as a scheme's body, under a quantifier group of its own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Groups {
     Never,
@@ -591,8 +591,7 @@ fn arb_binding(world: &World) -> impl Strategy<Value = Binding> + use<> {
         })
 }
 
-/// Whether a quantified binder — a shape or function over a group of its own — is reachable from
-/// `kt`.
+/// Whether a scheme is reachable from `kt`.
 fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle) -> bool {
     visit(types, scratch, kt, &mut |_, node, _| {
         if node.binds_quantifiers() {
@@ -650,8 +649,8 @@ fn arb_shape(
         .boxed()
 }
 
-/// An expression shape over `key`, over a quantifier group of its own where `vocabulary` allows or
-/// demands one. Every variable is minted under a variable-free bound.
+/// An expression shape over `key`, the body of a scheme over a quantifier group of its own where
+/// `vocabulary` allows or demands one. Every variable is minted under a variable-free bound.
 ///
 /// Each variable is planted at **two** positions on purpose — two slots, or a slot and the return,
 /// so a one-slot shape binds a group too — so the laws about quantified shapes run over variables
@@ -757,8 +756,9 @@ fn arb_plantings(
         })
 }
 
-/// A function type of one to three parameters, over a quantifier group of its own where
-/// `vocabulary` allows or demands one. Every variable is minted under a variable-free bound.
+/// A function type of one to three parameters, the body of a scheme over a quantifier group of its
+/// own where `vocabulary` allows or demands one. Every variable is minted under a variable-free
+/// bound.
 ///
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
 /// for the reason [`arb_shape_over`] plants one at two, so the group has at most
@@ -1165,7 +1165,7 @@ pub fn arb_argument_pair(
                         keyword => *keyword,
                     })
                     .collect();
-                types.shape_type(scratch, &run, classes, ret)
+                types.shape_type(&run, classes, ret)
             });
             (world.declared(a), world.declared(b))
         })
@@ -1220,7 +1220,7 @@ pub fn arb_shape_below(
                     Some(index) => meet(&world.types, scratch, world.concrete(ret), pool[index]),
                     None => world.concrete(ret),
                 };
-                world.types.shape_type(scratch, &run, classes, ret.raw())
+                world.types.shape_type(&run, classes, ret.raw())
             });
             (world.declared(a), world.declared(b))
         })
@@ -1500,7 +1500,7 @@ fn step(
             let chosen = index % (slots + 1);
             if chosen == slots {
                 let ret = at(ret, Variance::Co);
-                return types.shape_type(scratch, &elements[..], classes, ret);
+                return types.shape_type(&elements[..], classes, ret);
             }
             let mut seen = 0;
             let run: Vec<DispatchTokenElement> = elements
@@ -1518,7 +1518,7 @@ fn step(
                     keyword => *keyword,
                 })
                 .collect();
-            types.shape_type(scratch, &run, classes, ret)
+            types.shape_type(&run, classes, ret)
         }
         _ => beside(index),
     }

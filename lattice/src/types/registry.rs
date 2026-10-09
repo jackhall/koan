@@ -783,7 +783,6 @@ impl<'run> TypeRegistry<'run> {
     /// stored empty, so the two spellings are one handle.
     pub fn shape_type<H: TypeHandle>(
         &self,
-        _scratch: BumpAllocator<'_>,
         elements: &[DispatchTokenElement<H>],
         classes: &[u8],
         ret: H,
@@ -814,7 +813,7 @@ impl<'run> TypeRegistry<'run> {
         classes: &[u8],
         ret: Parametric,
     ) -> GroupIntern<'s> {
-        let body = self.shape_type(scratch, elements, classes, ret);
+        let body = self.shape_type(elements, classes, ret);
         self.scheme(scratch, quantifiers, bounds, body.raw())
     }
 

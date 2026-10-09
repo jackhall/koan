@@ -1168,8 +1168,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         let mut slots = BumpVec::new_in(scratch);
         slots.extend(scheme_slots(scheme, types));
-        let bounds = scheme.group(types).bounds;
-        let TypeNode::ExpressionShape { classes, .. } = shape.view(types).body else {
+        let view = shape.view(types);
+        let bounds = view.group.bounds;
+        let TypeNode::ExpressionShape { classes, .. } = view.body else {
             unreachable!("a candidate's shape is an expression shape")
         };
         let class = |slot: usize| class_of(classes, slot);
