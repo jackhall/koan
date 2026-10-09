@@ -814,8 +814,9 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         // Two things that are not both shapes share no bucket to rank under. The empty element run
-        // a non-shape reads as would otherwise make every pair of leaves compare `Equal`.
-        if !matches!(types.node(a.raw()), TypeNode::ExpressionShape { .. }) {
+        // a non-shape reads as would otherwise make every pair of leaves compare `Equal`. A shape
+        // scheme is a shape: specificity reads through it.
+        if Shape::of(&types, a.raw()).is_none() {
             let (a, b) = (a.raw(), b.raw());
             prop_assert_eq!(shape_specificity(&types, scratch, a, b), Specificity::Incomparable);
             prop_assert_eq!(shape_specificity(&types, scratch, b, a), Specificity::Incomparable);

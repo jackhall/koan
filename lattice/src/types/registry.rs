@@ -47,7 +47,7 @@ use super::shape::{
     DeferredReturnSurface, DispatchTokenElement, StoredElement, class_of, written_order,
 };
 use super::signatures::canonical_applications;
-use super::stored::{Content, Flags, Linked, StoredNode};
+use super::stored::{Content, Flags, Linked, MemberBody, SchemaSlot, StoredNode};
 use super::substitute::substitute_quantified;
 use super::verdicts::{Relation, VERDICT_SLOTS, VerdictTable};
 use super::walk::Variance;
@@ -212,7 +212,7 @@ impl<'run> TypeRegistry<'run> {
         digest: TypeDigest,
         build: impl FnOnce() -> TypeNode<'run>,
     ) -> Handle {
-        if self.stored(digest).is_none() {
+        self.intern_laid(digest, || {
             let node = build();
             let folded = self.flags_over(&node);
             let content = Content::lay(node, folded, self.bump);
@@ -221,7 +221,16 @@ impl<'run> TypeRegistry<'run> {
                 content.flags() | folded,
                 "a node's flags hold its children's",
             );
-            debug_assert!(self.stored(digest).is_none(), "`build` interns nothing");
+            content
+        })
+    }
+
+    /// The insert-if-absent core under every intern: on a miss, `lay` builds the stored content,
+    /// and the node is laid alone in the region and entered in the table under `digest`.
+    fn intern_laid(&self, digest: TypeDigest, lay: impl FnOnce() -> Content<'run>) -> Handle {
+        if self.stored(digest).is_none() {
+            let content = lay();
+            debug_assert!(self.stored(digest).is_none(), "`lay` interns nothing");
             let node = self.bump.alloc(StoredNode::new(digest, content));
             self.nodes
                 .borrow_mut()
@@ -629,22 +638,25 @@ impl<'run> TypeRegistry<'run> {
         kind: KKind,
         schema: NodeSchema<'_>,
     ) -> Handle {
-        self.intern_digested(digest::member_ref_digest(scc_digest, index), || {
-            TypeNode::SetMember {
-                scc_digest,
-                index,
-                name,
-                kind,
-                schema: match schema {
-                    NodeSchema::NewType(repr) => NodeSchema::NewType(repr),
-                    NodeSchema::TypeConstructor {
-                        representation,
-                        param_names,
-                    } => NodeSchema::TypeConstructor {
-                        representation,
-                        param_names: self.rehome(param_names),
-                    },
+        self.intern_laid(digest::member_ref_digest(scc_digest, index), || {
+            let schema = match schema {
+                NodeSchema::NewType(repr) => NodeSchema::NewType(repr),
+                NodeSchema::TypeConstructor {
+                    representation,
+                    param_names,
+                } => NodeSchema::TypeConstructor {
+                    representation,
+                    param_names: self.rehome(param_names),
                 },
+            };
+            Content::SetMember {
+                kind,
+                index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
+                body: self.bump.alloc(MemberBody {
+                    scc_digest,
+                    schema: SchemaSlot::filled(schema),
+                }),
+                name,
             }
         })
     }

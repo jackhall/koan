@@ -7,10 +7,10 @@
 //! variant's answers are a constant of its kind, which [`Content::flags`] answers.
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
-//! intern miss: a carrier's key, a lexical variable's name, a signature's schema and a sealed
-//! member's schema. A lexical level and a member's index are stored narrowed to `u32`. A shape
-//! stores each slot's priority class in that slot's element, where the view reads its ranking. A
-//! reader that needs only inline fields, such as [`kind_of`](super::handle::KType::kind_of),
+//! intern miss: a carrier's key, a lexical variable's name, a signature's schema, and a sealed
+//! member's component digest and schema, the schema in a slot its seal sets. A lexical level and a
+//! member's index are stored narrowed to `u32`. A shape stores each slot's priority class in that
+//! slot's element, where the view reads its ranking. A reader that needs only inline fields, such as [`kind_of`](super::handle::KType::kind_of),
 //! matches the stored content and skips the hop.
 //!
 //! Two conversions connect the two shapes, each one exhaustive match: [`Content::lay`] lays a
@@ -19,6 +19,8 @@
 //! through [`TypeRegistry::node`](super::registry::TypeRegistry::node) and never sees this layout.
 //!
 //! See [README.md](README.md) § The node vocabulary.
+
+use std::cell::Cell;
 
 use crate::bump::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -171,10 +173,37 @@ pub(super) enum Content<'run> {
     SetMember {
         kind: KKind,
         index: u32,
-        schema: &'run NodeSchema<'run>,
-        scc_digest: TypeDigest,
+        body: &'run MemberBody<'run>,
         name: TypeSymbol,
     },
+}
+
+/// What a sealed member carries out of line: the digest of its component, which only a re-digest
+/// of the node reads, and its schema's slot.
+pub(super) struct MemberBody<'run> {
+    pub(super) scc_digest: TypeDigest,
+    pub(super) schema: SchemaSlot<'run>,
+}
+
+const _: () = assert!(!std::mem::needs_drop::<MemberBody<'static>>());
+
+/// A sealed member's schema. The seal lays the slot empty when it interns the member and sets it
+/// once, after it has rewritten the schema absolute: the schema names types over the member, which
+/// can only be interned once the member is. Nothing sets one twice.
+pub(super) struct SchemaSlot<'run>(Cell<Option<NodeSchema<'run>>>);
+
+impl<'run> SchemaSlot<'run> {
+    /// A slot holding `schema` from the start.
+    pub(super) fn filled(schema: NodeSchema<'run>) -> Self {
+        SchemaSlot(Cell::new(Some(schema)))
+    }
+
+    /// The schema the seal set.
+    pub(super) fn get(&self) -> NodeSchema<'run> {
+        self.0
+            .get()
+            .expect("a sealed member's schema is set by its seal before anything reads it")
+    }
 }
 
 /// A node named by reference: what the table holds, and what every walk and relation inside the
@@ -320,8 +349,10 @@ impl<'run> Content<'run> {
             } => Content::SetMember {
                 kind,
                 index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
-                schema: bump.alloc(schema),
-                scc_digest,
+                body: bump.alloc(MemberBody {
+                    scc_digest,
+                    schema: SchemaSlot::filled(schema),
+                }),
                 name,
             },
         }
@@ -429,15 +460,14 @@ impl<'run> Content<'run> {
             Content::SetMember {
                 kind,
                 index,
-                schema,
-                scc_digest,
+                body,
                 name,
             } => TypeNode::SetMember {
-                scc_digest,
+                scc_digest: body.scc_digest,
                 index: index as usize,
                 name,
                 kind,
-                schema: *schema,
+                schema: body.schema.get(),
             },
         }
     }
