@@ -28,14 +28,14 @@ Storage outside any cell graph, with no reach and no cell, released whole when
 its owner drops. It holds the type lattice's registry and the scratch a caller
 passes. It is a *collections* arena: `BumpAllocator` is `&Bump`, both
 bumpalo's verb receiver and the `Allocator` its growable `BumpVec` and its
-hashbrown `BumpBackedMap` and `BumpBackedSet` are built over. A cell's region
+hashbrown `BumpBackedMap`, `BumpHashTable` and `BumpBackedSet` are built over. A cell's region
 has no verb that grows a buffer, so the tier does not pretend to be a region,
 and it carries no door of its own: callers use bumpalo's `alloc`,
 `alloc_slice_copy`, `alloc_slice_fill_iter` and `alloc_str`.
 
 **Drop-freeness is a compile-time fact.** Bumpalo runs no destructor, so
-nothing with drop glue goes in. `bump_table` and `bump_set` assert that for
-their entries as a `const` assert at each instantiation, so **an entry type
+nothing with drop glue goes in. `bump_table`, `bump_hash_table` and `bump_set`
+assert that for their entries as a `const` assert at each instantiation, so **an entry type
 bringing drop glue with it fails the build where it is declared**, not at
 runtime and not in review. A slice or a single value is the caller's to keep
 `Copy`. The same discipline is why releasing a bump costs its chunks and

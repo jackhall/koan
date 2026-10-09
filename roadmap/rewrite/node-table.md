@@ -1,18 +1,17 @@
 # The node table
 
-**Problem.** The registry's node table is a hashbrown map in
-[program storage](../../src/program/README.md). It doubles when full, and the
-bump cannot take the old bucket array back. A
+**Problem.** The registry's node table is a hashbrown table of references to
+stored nodes, in [program storage](../../src/program/README.md). It doubles
+when full, and the bump cannot take the old bucket array back. A
 [type branch](type-branches.md) needs a table laid in a cell's region, but a
 region's `Writer` only lays fixed runs and has no allocator. A hashbrown map
 grows by asking an allocator for a new table, and implementing `Allocator` in
 the lattice takes `unsafe`. A segmented chained table that grows only by
 laying fixed runs was benchmarked against hashbrown over nodes that named
 their children by digest: hashbrown was faster at hits, misses and dependent
-lookups, and built about 3× faster when grown from empty. With
-[linked type nodes](linked-type-nodes.md), the table serves only a handle's
-entry into the lattice and interning, so it has not been measured on the work
-it now does.
+lookups, and built about 3× faster when grown from empty. A node names each
+child by reference, so the table serves only a handle's entry into the lattice
+and interning, and no candidate has been measured on that work.
 
 **Acceptance criteria.**
 
@@ -38,10 +37,7 @@ it now does.
 
 ## Dependencies
 
-**Requires:**
-
-- [Linked type nodes](linked-type-nodes.md) — the table is chosen on the
-  workload of linked nodes.
+**Requires:** none.
 
 **Unblocks:**
 

@@ -87,9 +87,8 @@ pub(super) mod sealed {
     /// bound, a lower end, a code kind, a carrier's met bound, an application's signature — as
     /// `Self::Bound`, and a sealed member's schema as `Self::Schema`: the schema itself through a
     /// handle, the member's body — the slot that holds it — through a reference, which no walk or
-    /// relation reads. A door
-    /// takes its operands as `Self` and reaches each one's node through `linked`. Implemented for
-    /// every typed handle and for [`Linked`], and nothing else.
+    /// relation reads. A door takes its operands as `Self` and reaches each one's node through
+    /// `linked`. Implemented for every typed handle and for [`Linked`], and nothing else.
     pub trait Naming<'run>: Copy {
         type Bound: Naming<'run>;
         type Schema: Copy;

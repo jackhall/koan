@@ -20,8 +20,8 @@ bounded by the run's source text.
 
 That is also why the [type lattice](../types/README.md) can key its node
 table on a digest of the same width and footing with no shared interner between
-them, and why the same identity hasher serves both: a digest is already uniformly
-distributed, so re-hashing would only cost cycles.
+them, and why both hash a digest by its own low word: a digest is already
+uniformly distributed, so re-hashing would only cost cycles.
 
 ## A symbol carries its binding class
 

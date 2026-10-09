@@ -90,20 +90,25 @@ family](vocabulary.md#the-code-family)) crosses back.
 Every structural recursion here goes through one of the two drivers in
 [walk](walk.rs), with rendering the single hand-written exhaustive match. Adding
 a compound node variant is a compile error at the drivers' arm tables, in the
-renderer, and at [`TypeNode::view`](node.rs), which reads a node's children as
-another typed handle — **and nowhere else**. That is the
+renderer, and at the stored node's two conversions in [stored.rs](stored.rs) —
+`Content::lay` and `StoredNode::view_as`, which reads a node back with its
+children as handles outside the lattice and as references inside — **and
+nowhere else**. That is the
 property the drivers exist for. Adding any variant, leaf or compound, is also a
 compile error at [`family_top`](order.rs), [`leaf_name`](handle.rs) and
 [`TypeNode::group`](node.rs), which have no wildcard arm, so no type goes
 without a family, no leaf without its spelling, and no binder without its
 group.
 
-Ask first whether the walk is unary or binary, then whether it rebuilds.
+Ask first whether the walk is unary or binary, then whether it rebuilds. Every
+driver walks nodes by reference, from node to child, so a walk looks up no
+handle.
 
 - **Unary rebuild** ([walk/unary.rs](walk/unary.rs)) — supply a leaf rule
-  `FnMut(Handle, &TypeNode, &Context) -> Option<Handle>`: `Some(k)` replaces the
-  node and stops, `None` lets the driver descend, and the one knob picks which
-  union door reassembles a union. A signature and a sealed member are leaves to
+  `FnMut(Linked, &TypeNode<Linked>, &Context) -> Option<Linked>`: `Some(k)`
+  replaces the node and stops, and `None` lets the driver descend. A rebuilt
+  composite re-interns through the registry's ordinary doors, a union through
+  the canonicalizing one. A signature and a sealed member are leaves to
   both unary drivers: one is closed content, the other content-addressed by its
   component. Substitution and sibling rewriting are this.
 - **Unary visit** — supply a pre-order rule returning descend / skip / stop.
@@ -140,8 +145,6 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 - [Type branches](../../../roadmap/rewrite/type-branches.md) — the branch tier,
   a run-built type released with the region of the values that carry it.
-- [Linked type nodes](../../../roadmap/rewrite/linked-type-nodes.md) — nodes
-  that name their children by reference, so a walk probes the table once.
 - [The node table](../../../roadmap/rewrite/node-table.md) — the table each
   tier is laid as.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)

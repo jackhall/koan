@@ -44,7 +44,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Families as parameters](rewrite/families-as-parameters.md)
-- [Linked type nodes](rewrite/linked-type-nodes.md)
+- [The node table](rewrite/node-table.md)
 - [Path types](rewrite/path-types.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)

@@ -7,8 +7,9 @@
 //! variant's answers are a constant of its kind, which [`Content::flags`] answers.
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
-//! intern miss: a carrier's key, a lexical variable's name, a signature's schema, and a sealed
-//! member's component digest and schema, the schema in a slot its seal sets. A lexical level and a
+//! intern miss: a carrier's key and name, a lexical variable's name, a signature's schema, a
+//! deferred return's surface, and a sealed member's component digest and schema, the schema in a
+//! slot its seal sets. A lexical level and a
 //! member's index are stored narrowed to `u32`. A shape stores each slot's priority class in that
 //! slot's element, where the view reads its ranking. A reader that needs only inline fields, such
 //! as [`kind_of`](super::handle::KType::kind_of), matches the stored content and skips the hop.

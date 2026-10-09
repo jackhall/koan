@@ -16,7 +16,7 @@ Three things follow, and each is load-bearing:
 
 - **There is one recipe** ([digest.rs](digest.rs)). A node's digest is its tag
   byte, its own scalar payload, and its children's digests — which are already
-  known, because children are handles. Nothing in the recipe walks a type: it is
+  known, because each child is interned first. Nothing in the recipe walks a type: it is
   one layer deep. The only buffer it needs is the symbol sort an order-blind
   record or union digests under.
 - **Identity is interner-independent.** The digest is a pure function of
@@ -74,9 +74,10 @@ parametric child is a compile error, which a `compile_fail` doctest on
 `shape_scheme`, which intern the plain body and then bind the group over it,
 and answer a `DeclaredType`: the plain type where the group is empty.
 
-Inside the lattice every walk and relation runs over raw handles, and
-[typed.rs](typed.rs) wraps each relation for the rest of koan, saying where it
-wraps a result why the result keeps its handle's promise.
+Inside the lattice every walk and relation runs over references to stored nodes
+([storage](#storage-a-root-and-its-branches)), and [typed.rs](typed.rs) wraps
+each relation for the rest of koan: it looks each operand up once, and says,
+where it wraps a result, why the result keeps its handle's promise.
 
 ## Storage: a root and its branches
 
@@ -97,15 +98,38 @@ Each door interns into the branch of the region its writer allocates into: a
 How a value's types reach another region is the crossing's
 ([crossing](../../../src/values/README.md#crossing)).
 
-The handle *is* the lookup key and the digest is already uniformly distributed,
-so each tier hashes it with an identity hasher and a lookup is at most two
-probes, each costing about what an array index would. Interning is
+Each node is a [`StoredNode`](stored.rs) laid alone in the bump: its digest,
+then 32 B of content, 48 B in all. The content names each child — and each
+bound, lower end, code kind, carrier's met bound and application signature — by
+a reference to that child's node, so a walk or a relation steps from node to
+node and never consults a table. A shape's element keeps its slot's priority
+class, a `u16`, beside the slot's reference. A field no hot path reads sits
+behind one reference laid on an intern miss: a carrier's key and name, a
+lexical variable's name, a signature's schema, a deferred return's surface, and
+a sealed member's component digest and schema.
+[`TypeRegistry::node`](registry.rs) reads a stored node back as a `TypeNode`,
+every field by value and each child as a handle, so no reader outside the
+lattice sees this layout.
+
+A tier's table holds a reference to each node and nothing else. The digest is
+already uniformly distributed, so the table hashes it by its low word and finds
+a node by comparing against the digest the node holds: the digest is stored
+once, in the node. A handle is looked up once, where it enters the lattice — at
+a typed door or a public reader, or where it is read out of a quantifier
+group's bounds or a schema, which keep handles because koan reads them — and a
+lookup is at most two probes, one per tier. The registry holds `Never` and
+`Any` by reference, so producing either costs no lookup. Interning is
 insert-if-absent along the chain, so building the same content twice in a region
 yields one node and two equal handles. Identity is by digest, so two branches
-holding one content hold one handle and two copies. Beside each node the entry
-stores four flags computed off its children at intern — whether a free
-quantifier, whether any rigid variable, whether anything parametric, and whether
-an opaque carrier is reachable — so each probe is one table read. The probes are the lattice's own;
+holding one content hold one handle and two copies: two nodes compare, order
+and hash by their digests, and a reference is an identity only within one
+table.
+
+Each node whose children decide them carries four flags computed off those
+children at intern — whether a free quantifier, whether any rigid variable,
+whether anything parametric, and whether an opaque carrier is reachable — and
+every other variant's are a constant of its kind, so each probe is one read of
+the node. The probes are the lattice's own;
 the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
 concreteness through `concrete`.
 
@@ -208,3 +232,16 @@ while it still holds `Sibling` handles, and that is exact: the order relates a
 `Sibling` as an atom with the same profile as the sealed member it stands for, and
 distinct indices name distinct members, so a union canonical before the seal is
 canonical after it.
+
+A member's schema names types over the member — its own cyclic edges, its
+siblings' — so the seal interns one component at a time, in that order: once a
+component's digest is known, it interns the component's members, each behind
+an empty schema slot, and only then rewrites each member's schema absolute and
+sets it on the slot, once. Every member a schema names exists by then: its own
+component's, and every upstream component's, sealed earlier. The rewrite
+re-interns each union through the same canonicalizing door, over member nodes
+that exist, and the rename `Sibling(i) ↦ member_i` preserves every subsumption
+verdict, so the union is the one the relative schema held. The lattice's own
+walks and relations never read a member's slot, so a member whose slot is still
+empty relates as any other; only a typed read of a member, which koan makes
+after the seal returns, reads its schema.

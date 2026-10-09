@@ -523,9 +523,9 @@ pub fn is_keyword_token(s: &str) -> bool {
     upper_count >= 2 && !has_lower
 }
 
-/// The hasher every 128-bit-digest-keyed table runs: the interner here, the type registry's node
-/// table, and the classified scope binding tables. A type lattice digest and a [`Symbol`] are each
-/// the low 128 bits of a BLAKE3 hash, so they
+/// The hasher every 128-bit-digest-keyed map runs: the interner here and the classified scope
+/// binding tables. The type registry's node table hashes a digest by the same low word. A type
+/// lattice digest and a [`Symbol`] are each the low 128 bits of a BLAKE3 hash, so they
 /// are already uniformly distributed and re-hashing would only cost cycles: keep the low 64 bits
 /// and use them directly as the bucket index.
 ///

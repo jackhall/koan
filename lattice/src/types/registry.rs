@@ -4,9 +4,9 @@
 //! Each node is a [`StoredNode`](super::stored::StoredNode) laid alone in the run region the
 //! registry is constructed over ([`TypeRegistry::in_region`]), holding its own digest beside its
 //! content and a reference to each child's node. `nodes` is a hash table of references to those
-//! nodes, its bucket array in the same region. A [`Handle`] *is* the digest of its node, and the digest is already a uniformly
-//! distributed hash, so the table hashes a digest by its low word and finds a node by comparing
-//! against the digest the node holds — it stores no second copy. Interning is insert-if-absent,
+//! nodes, its bucket array in the same region. A [`Handle`] *is* the digest of its node, and the
+//! digest is already a uniformly distributed hash, so the table hashes a digest by its low word
+//! and finds a node by comparing against the digest the node holds — it stores no second copy. Interning is insert-if-absent,
 //! so building the same content twice in a run yields one node and two equal handles. Nothing ever
 //! leaves the table and nothing in it carries drop glue, so the region releases the table and
 //! every node with it, whole.
@@ -15,10 +15,10 @@
 //! and relation inside follows references from there. `Never` and `Any` are laid before the
 //! registry is built and held on it, so producing either costs no lookup. [`TypeRegistry::node`]
 //! reads a stored node back as a [`TypeNode`] view. A read takes a reference into the region and
-//! releases the table borrow before the reader runs, so reads nest and a reader may intern. A stored node carries four flags computed off its children at intern
-//! — whether a free quantifier, whether any rigid variable, whether any variable or scheme outside
-//! sealed content, and whether an opaque carrier outside sealed content is reachable — so each
-//! probe is one read of the node.
+//! releases the table borrow before the reader runs, so reads nest and a reader may intern. A
+//! stored node carries four flags computed off its children at intern — whether a free quantifier,
+//! whether any rigid variable, whether any variable or scheme outside sealed content, and whether
+//! an opaque carrier outside sealed content is reachable — so each probe is one read of the node.
 //!
 //! Verdicts are a fixed cache laid in the same region, described in [`verdicts`](super::verdicts).
 //! The registry therefore owns nothing on the global heap, and can itself rest in a bump.

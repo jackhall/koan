@@ -256,7 +256,7 @@ The [lattice](lattice/README.md) crate's tree:
 lattice/src/
 ├── lib.rs               the crate root — the import rule and `forbid(unsafe_code)` outside the test build
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for this crate's test binary, the tally the heap-contract tests bracket, and the property-case share
-├── bump.rs              pub mod bump — the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpBackedSet and bump_table / bump_set; the crate's only import of bumpalo / hashbrown / allocator_api2
+├── bump.rs              pub mod bump — the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpHashTable / BumpBackedSet and bump_table / bump_hash_table / bump_set; the crate's only import of bumpalo / hashbrown / allocator_api2
 ├── bump/
 │   └── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
 ├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
@@ -264,12 +264,13 @@ lattice/src/
 │   └── tests.rs            interning laws, including how a static_name! records
 ├── types.rs             pub mod types — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols and the bump tier and nothing else
 └── types/
-    ├── node.rs           TypeNode — one interned type's content, generic over the handle its children are read as; every child position is a handle, so a node is shallow; `view` reads one as another typed handle; the `Scheme` node, the one binder, and its `Group`; Variable, the view of the three variable nodes and their two ends
-    ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType, with DeclaredView, a declared type's group and body read whole; the pinned builtin constants, and the name/kind readings off one
+    ├── node.rs           TypeNode — the read view of one interned type, every field by value, generic over how its children are named: a handle outside the lattice, a reference to the child's node inside; the `Scheme` node, the one binder, and its `Group`; Variable, the view of the three variable nodes and their two ends
+    ├── stored.rs         StoredNode — one interned type as the table stores it: its digest beside 32 B of Content, each child a reference to its node, the probe flags inline and the cold fields out of line; `view_as`, the one conversion back to a TypeNode
+    ├── handle.rs         Handle — the Copy content-digest handle — and the sealed typed handles over it: KType (concrete), Parametric, Scheme and DeclaredType, with DeclaredView, a declared type's group and body read whole; the sealed Naming trait, a node's children named by handle or by reference; the pinned builtin constants, and the name/kind readings off one
     ├── run.rs            Run / Elements — typed views over a node's raw child runs
     ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
     ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-    ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags), the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the scheme doors `shape_scheme` and `function_scheme`, which bind a group over a plain body and keep every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
+    ├── registry.rs       TypeRegistry — the region-hosted interning table (a reference to each stored node, found by its digest), the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the scheme doors `shape_scheme` and `function_scheme`, which bind a group over a plain body and keep every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
     ├── verdicts.rs       VerdictTable — the fixed two-way cache of relation verdicts the registry lays in its region
     ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
     ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
@@ -277,7 +278,7 @@ lattice/src/
     ├── operators.rs      ReductionMode / FoldDirection — how a run of a signature's operators reduces, which is part of the signature's identity
     ├── schema.rs         SigSchema over symbol-sorted Members tables, the SchemaDraft the signature door canonicalizes, and the channels' canonical orders
     ├── walk.rs           Variance and the two drivers every structural recursion goes through
-    ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the union door, the position context, and `visit_free_quantified`
+    ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, walking nodes by reference, the position context, and `visit_free_quantified`
     ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
     ├── order.rs          is_subtype_of — the order, which never solves — and fits, the relation a question reads, as one Lockstep instance differing at its leaf; satisfied_by
     ├── lattice.rs        join (subsumption-or-union, not a walk) and the meet (the rebuilding Lockstep instance, relating a variable by the rigid rule for the solver)
