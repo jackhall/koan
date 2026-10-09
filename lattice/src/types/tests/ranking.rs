@@ -164,7 +164,7 @@ fn a_ranking_is_part_of_a_shapes_identity() {
     let TypeNode::ExpressionShape { classes, .. } = world.types.node(written) else {
         unreachable!("the shape door interns a shape")
     };
-    assert!(classes.is_empty());
+    assert_eq!(classes.iter().collect::<Vec<_>>(), [0, 1]);
 
     let render = |kt| display_handle(kt, &world.types, &world.symbols).to_string();
     assert_eq!(render(two_one), ":(EXPR #(MOVE 2 :Any TO 1 :Any) -> Any)");

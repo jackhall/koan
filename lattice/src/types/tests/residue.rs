@@ -20,7 +20,7 @@ use crate::types::render::display_handle;
 use crate::types::run::Elements;
 use crate::types::schema::{SchemaDraft, SigOrigin, SigSchema};
 use crate::types::shape::shape_slots;
-use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement};
+use crate::types::shape::{Classes, DeferredReturnSurface, DispatchTokenElement, StoredElement};
 use crate::types::typed;
 use crate::types::unify::{Collector, UnifyFailure, admits};
 use crate::types::verdicts::Relation;
@@ -526,7 +526,7 @@ fn each_node_kind_lies_under_its_family_top() {
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     // Declared ahead of the registry, so it outlives the shape node interned over it.
-    let elements = [DispatchTokenElement::Keyword(keyword)];
+    let elements = [StoredElement::Keyword(keyword)];
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
@@ -550,7 +550,7 @@ fn each_node_kind_lies_under_its_family_top() {
             region,
             TypeNode::ExpressionShape {
                 elements: Elements::over(&elements),
-                classes: &[],
+                classes: Classes::EMPTY,
                 ret: KType::NUMBER.raw(),
             },
         ),

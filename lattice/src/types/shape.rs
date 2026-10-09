@@ -3,7 +3,9 @@
 //! four-verdict specificity a dispatch ranks candidates by.
 //!
 //! A shape node itself lives in [`node`](super::node); this file owns the pieces that appear
-//! *inside* one, the one reader of a shape's parts ([`Shape`], and the free readers over a handle
+//! *inside* one — among them [`StoredElement`], an element as the node stores it, with a slot's
+//! priority class beside its handle, and [`Classes`], the ranking read back off that run — the one
+//! reader of a shape's parts ([`Shape`], and the free readers over a handle
 //! such as [`shape_slots`] and [`keys_equal`]), [`map_slots`], the one way an element run is
 //! rebuilt, plus the specificity verdict [`shape_specificity`](super::sig_relations) produces.
 
@@ -13,6 +15,7 @@ use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
 use super::handle::{Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use super::node::{Group, TypeNode};
 use super::registry::TypeRegistry;
+use super::run::Elements;
 
 /// One position of an expression shape: a fixed token as its [`KeywordSymbol`], or an argument
 /// slot carrying its declared type as `H`. Both arms are `Copy` handles — a symbol is `u128` bits,
@@ -25,18 +28,89 @@ pub enum DispatchTokenElement<H = Handle> {
     Slot(H),
 }
 
-impl<H: TypeHandle> DispatchTokenElement<H> {
-    /// The element with its slot read as `C`.
-    pub(super) fn view<C: TypeHandle>(self) -> DispatchTokenElement<C> {
+/// One element as an interned shape stores it: a keyword, or a slot's type beside the priority
+/// class it ranks in. The class costs nothing: it sits in the padding beside the handle.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(super) enum StoredElement {
+    Keyword(KeywordSymbol),
+    Slot(Handle, u8),
+}
+
+const _: () = assert!(std::mem::size_of::<StoredElement>() == 32);
+
+impl StoredElement {
+    /// The element read as `C`, its class dropped.
+    pub(super) fn element<C: TypeHandle>(self) -> DispatchTokenElement<C> {
         match self {
-            DispatchTokenElement::Keyword(keyword) => DispatchTokenElement::Keyword(keyword),
-            DispatchTokenElement::Slot(slot) => DispatchTokenElement::Slot(wrap(slot.raw())),
+            StoredElement::Keyword(keyword) => DispatchTokenElement::Keyword(keyword),
+            StoredElement::Slot(slot, _) => DispatchTokenElement::Slot(wrap(slot)),
         }
     }
+}
 
-    /// The element with its slot raw.
-    pub(super) fn raw(self) -> DispatchTokenElement {
-        self.view()
+/// A shape's ranking: each slot's priority class, in slot order, read off the stored elements.
+/// Written order is spelled out, `0..n`.
+#[derive(Clone, Copy)]
+pub struct Classes<'run> {
+    elements: &'run [StoredElement],
+}
+
+impl<'run> Classes<'run> {
+    /// The ranking of a shape with no slots.
+    pub(super) const EMPTY: Classes<'static> = Classes { elements: &[] };
+
+    /// The ranking over a stored element run.
+    pub(super) fn over(elements: &'run [StoredElement]) -> Self {
+        Classes { elements }
+    }
+
+    /// The class of each slot, in slot order.
+    pub fn iter(self) -> impl Iterator<Item = u8> + 'run {
+        self.elements.iter().filter_map(|element| match element {
+            StoredElement::Slot(_, class) => Some(*class),
+            StoredElement::Keyword(_) => None,
+        })
+    }
+
+    /// The class of slot `slot`.
+    pub fn get(self, slot: usize) -> u8 {
+        self.iter().nth(slot).expect("a slot of the shape")
+    }
+
+    /// Whether every slot ranks in its own written position.
+    pub(super) fn is_written_order(self) -> bool {
+        self.iter()
+            .enumerate()
+            .all(|(index, class)| usize::from(class) == index)
+    }
+
+    /// How many classes the ranking has: one past the highest, or none for no slots.
+    pub(super) fn count(self) -> usize {
+        self.iter()
+            .max()
+            .map_or(0, |highest| usize::from(highest) + 1)
+    }
+
+    /// The ranking as a slice in `scratch`, as a shape door takes one.
+    pub fn copied_into<'s>(self, scratch: BumpAllocator<'s>) -> &'s [u8] {
+        let mut ranking = BumpVec::new_in(scratch);
+        ranking.extend(self.iter());
+        ranking.leak()
+    }
+}
+
+/// Two rankings are equal when their slots rank alike, slot by slot.
+impl PartialEq for Classes<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for Classes<'_> {}
+
+impl std::fmt::Debug for Classes<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
@@ -44,11 +118,12 @@ impl<H: TypeHandle> DispatchTokenElement<H> {
 /// element run is rebuilt. Staged in `scratch`.
 pub(super) fn map_slots<'s, H: TypeHandle>(
     scratch: BumpAllocator<'s>,
-    elements: &[DispatchTokenElement<H>],
+    elements: impl IntoIterator<Item = DispatchTokenElement<H>>,
     mut map: impl FnMut(H) -> Handle,
 ) -> BumpVec<'s, DispatchTokenElement> {
-    let mut out = BumpVec::with_capacity_in(elements.len(), scratch);
-    out.extend(elements.iter().map(|element| match *element {
+    let elements = elements.into_iter();
+    let mut out = BumpVec::with_capacity_in(elements.size_hint().0, scratch);
+    out.extend(elements.map(|element| match element {
         DispatchTokenElement::Slot(slot) => DispatchTokenElement::Slot(map(slot)),
         DispatchTokenElement::Keyword(keyword) => DispatchTokenElement::Keyword(keyword),
     }));
@@ -61,8 +136,8 @@ pub(super) fn map_slots<'s, H: TypeHandle>(
 pub(super) struct Shape<'run> {
     pub(super) quantifiers: &'run [TypeSymbol],
     pub(super) bounds: &'run [KType],
-    pub(super) elements: &'run [DispatchTokenElement],
-    pub(super) classes: &'run [u8],
+    pub(super) elements: Elements<'run>,
+    pub(super) classes: Classes<'run>,
     pub(super) ret: Handle,
 }
 
@@ -85,7 +160,7 @@ impl<'run> Shape<'run> {
         Some(Shape {
             quantifiers: group.names,
             bounds: group.bounds,
-            elements: elements.raw(),
+            elements,
             classes,
             ret,
         })
@@ -94,18 +169,14 @@ impl<'run> Shape<'run> {
     /// The slot types, in slot order.
     pub(super) fn slots(self) -> impl Iterator<Item = Handle> + use<'run> {
         self.elements.iter().filter_map(|element| match element {
-            DispatchTokenElement::Slot(kt) => Some(*kt),
+            DispatchTokenElement::Slot(kt) => Some(kt),
             DispatchTokenElement::Keyword(_) => None,
         })
     }
 
-    /// How many classes the ranking has: one per slot in written order, and otherwise one past
-    /// the highest.
+    /// How many classes the ranking has: one past the highest.
     pub(super) fn class_count(self) -> usize {
-        match self.classes.iter().max() {
-            Some(highest) => usize::from(*highest) + 1,
-            None => self.slots().count(),
-        }
+        self.classes.count()
     }
 
     /// Every class index of the ranking, as the `u8` a class is named by.
@@ -131,12 +202,9 @@ pub(super) fn keys_equal(left: Handle, right: Handle, types: &TypeRegistry<'_>) 
 }
 
 /// [`keys_equal`] over two element runs already in hand.
-pub(super) fn elements_key_equal(
-    left: &[DispatchTokenElement],
-    right: &[DispatchTokenElement],
-) -> bool {
+pub(super) fn elements_key_equal(left: Elements<'_>, right: Elements<'_>) -> bool {
     left.len() == right.len()
-        && left.iter().zip(right).all(|(a, b)| match (a, b) {
+        && left.iter().zip(right.iter()).all(|(a, b)| match (a, b) {
             (DispatchTokenElement::Keyword(x), DispatchTokenElement::Keyword(y)) => x == y,
             (DispatchTokenElement::Slot(_), DispatchTokenElement::Slot(_)) => true,
             _ => false,
@@ -146,17 +214,14 @@ pub(super) fn elements_key_equal(
 /// A shape's element sequence, read through a scheme; empty for anything that is not a shape,
 /// which no schema member ever is. The one place the "not a shape reads as the empty key"
 /// convention lives.
-pub(super) fn shape_elements<'run>(
-    types: &TypeRegistry<'run>,
-    kt: Handle,
-) -> &'run [DispatchTokenElement] {
-    Shape::of(types, kt).map_or(&[], |shape| shape.elements)
+pub(super) fn shape_elements<'run>(types: &TypeRegistry<'run>, kt: Handle) -> Elements<'run> {
+    Shape::of(types, kt).map_or(Elements::over(&[]), |shape| shape.elements)
 }
 
-/// A shape's ranking — each slot's dense priority class, empty for written order — read through a
-/// scheme, or empty for anything that is not a shape.
-pub(super) fn shape_classes<'run>(kt: Handle, types: &TypeRegistry<'run>) -> &'run [u8] {
-    Shape::of(types, kt).map_or(&[], |shape| shape.classes)
+/// A shape's ranking — each slot's dense priority class — read through a scheme, or empty for
+/// anything that is not a shape.
+pub(super) fn shape_classes<'run>(kt: Handle, types: &TypeRegistry<'run>) -> Classes<'run> {
+    Shape::of(types, kt).map_or(Classes::EMPTY, |shape| shape.classes)
 }
 
 /// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
@@ -178,11 +243,9 @@ pub fn scheme_slots<'run>(
 }
 
 /// The slot types of an element run, read as `C`.
-fn slots_of<C: TypeHandle>(
-    elements: &[DispatchTokenElement],
-) -> impl Iterator<Item = C> + use<'_, C> {
+fn slots_of<C: TypeHandle>(elements: Elements<'_>) -> impl Iterator<Item = C> + use<'_, C> {
     elements.iter().filter_map(|element| match element {
-        DispatchTokenElement::Slot(kt) => Some(super::handle::wrap(*kt)),
+        DispatchTokenElement::Slot(kt) => Some(wrap(kt)),
         DispatchTokenElement::Keyword(_) => None,
     })
 }
@@ -272,7 +335,7 @@ pub(super) fn written_order(classes: &[u8]) -> bool {
 }
 
 /// The class of slot `index` under `classes` — its own index where the shape is written-order.
-pub fn class_of(classes: &[u8], index: usize) -> u8 {
+pub(super) fn class_of(classes: &[u8], index: usize) -> u8 {
     classes
         .get(index)
         .copied()

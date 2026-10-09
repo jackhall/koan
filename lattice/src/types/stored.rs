@@ -7,7 +7,8 @@
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
 //! intern miss: a carrier's key, a lexical variable's name, a signature's schema and a sealed
-//! member's schema. A lexical level and a member's index are stored narrowed to `u32`. A reader
+//! member's schema. A lexical level and a member's index are stored narrowed to `u32`. A shape
+//! stores each slot's priority class in that slot's element, where the view reads its ranking. A reader
 //! that needs only inline fields, such as
 //! [`kind_of`](super::handle::KType::kind_of), matches the stored node and skips the hop.
 //!
@@ -125,7 +126,6 @@ pub(super) enum StoredNode<'run> {
     ExpressionShape {
         flags: Flags,
         elements: Elements<'run, Handle>,
-        classes: &'run [u8],
         ret: Handle,
     },
     Scheme {
@@ -176,6 +176,12 @@ pub(super) enum StoredNode<'run> {
     },
 }
 
+// A stored node fills 48 B, so a slot with its 16 B key fills one cache line, and the region
+// releases it without running anything.
+const _: () = assert!(std::mem::size_of::<StoredNode<'static>>() == 48);
+const _: () = assert!(std::mem::align_of::<StoredNode<'static>>() == 16);
+const _: () = assert!(!std::mem::needs_drop::<StoredNode<'static>>());
+
 impl<'run> StoredNode<'run> {
     /// `node` as the table stores it, carrying `flags` where its variant does. Its slices already
     /// live in the region.
@@ -217,12 +223,17 @@ impl<'run> StoredNode<'run> {
                 elements,
                 classes,
                 ret,
-            } => StoredNode::ExpressionShape {
-                flags,
-                elements,
-                classes,
-                ret,
-            },
+            } => {
+                debug_assert!(
+                    classes == elements.classes(),
+                    "a shape's classes ride its elements"
+                );
+                StoredNode::ExpressionShape {
+                    flags,
+                    elements,
+                    ret,
+                }
+            }
             TypeNode::Scheme { group, body } => StoredNode::Scheme { flags, group, body },
             TypeNode::Quantified { index, bound } => StoredNode::Quantified { index, bound },
             TypeNode::Lexical {
@@ -325,14 +336,9 @@ impl<'run> StoredNode<'run> {
                 params: Record::over(params.raw()),
                 ret: child(ret),
             },
-            StoredNode::ExpressionShape {
-                elements,
-                classes,
-                ret,
-                ..
-            } => TypeNode::ExpressionShape {
+            StoredNode::ExpressionShape { elements, ret, .. } => TypeNode::ExpressionShape {
                 elements: Elements::over(elements.raw()),
-                classes,
+                classes: elements.classes(),
                 ret: child(ret),
             },
             StoredNode::Scheme { group, body, .. } => TypeNode::Scheme {

@@ -211,7 +211,14 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
             elements,
             classes,
             ret,
-        } => shape_digest(elements, classes, ret.digest()),
+        } => {
+            let ranked = !classes.is_written_order();
+            shape_digest(
+                elements.iter(),
+                classes.iter().filter(move |_| ranked),
+                ret.digest(),
+            )
+        }
         TypeNode::Scheme { group, body } => scheme_digest(group.bounds, body.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
         TypeNode::Lexical {
@@ -361,8 +368,8 @@ pub(super) fn function_digest<H: TypeHandle>(
 /// `KFunction`'s parameter record is order-blind: a shape's argument positions are what dispatch
 /// reads.
 pub(super) fn shape_digest<H: TypeHandle>(
-    elements: &[DispatchTokenElement<H>],
-    classes: &[u8],
+    elements: impl ExactSizeIterator<Item = DispatchTokenElement<H>>,
+    ranking: impl IntoIterator<Item = u8>,
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
@@ -375,8 +382,8 @@ pub(super) fn shape_digest<H: TypeHandle>(
     }
     // A ranking follows the elements, whose count fixes where it starts; written order feeds
     // nothing, so an unranked shape digests as it always has.
-    for class in classes {
-        h.byte(*class);
+    for class in ranking {
+        h.byte(class);
     }
     h.digest(ret).finish()
 }

@@ -274,7 +274,7 @@ pub fn children(node: &TypeNode<'_>, out: &mut impl FnMut(Handle, bool)) {
         TypeNode::ExpressionShape { elements, ret, .. } => {
             for element in elements.iter() {
                 if let DispatchTokenElement::Slot(kt) = element {
-                    out(*kt, true);
+                    out(kt, true);
                 }
             }
             out(ret, false);
@@ -336,11 +336,11 @@ fn reassemble(
             elements, classes, ..
         } => {
             let mut slots = new.iter();
-            let rebuilt = map_slots(scratch, elements.raw(), |_| {
+            let rebuilt = map_slots(scratch, elements.iter(), |_| {
                 *slots.next().expect("one replacement per slot position")
             });
             let ret = *slots.next().expect("the return follows the slots");
-            types.shape_type(&rebuilt, classes, ret)
+            types.shape_type(&rebuilt, classes.copied_into(scratch), ret)
         }
         // The rebuilt body still reads the group in its old order, which the door renumbers: a
         // rebuild that drops a variable's first occurrence moves it.

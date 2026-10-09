@@ -68,8 +68,13 @@ impl RawSchemes for TypeRegistry<'_> {
         classes: &[u8],
         ret: Handle,
     ) -> (Handle, &'s [usize]) {
-        let elements: Vec<DispatchTokenElement<Parametric>> =
-            elements.iter().map(|element| element.view()).collect();
+        let elements: Vec<DispatchTokenElement<Parametric>> = elements
+            .iter()
+            .map(|element| match *element {
+                DispatchTokenElement::Keyword(keyword) => DispatchTokenElement::Keyword(keyword),
+                DispatchTokenElement::Slot(slot) => DispatchTokenElement::Slot(wrap(slot)),
+            })
+            .collect();
         let minted = self.shape_scheme(scratch, quantifiers, bounds, &elements, classes, wrap(ret));
         (minted.handle.raw(), minted.quantifier_map)
     }

@@ -113,9 +113,9 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KKind, KType,
     Parametric, Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with,
-    bound_above, class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class,
-    meet, read_through, scheme_bound_above, scheme_return, scheme_slots, select_by_class,
-    shape_return, shape_slots, solving_slots,
+    bound_above, fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
+    read_through, scheme_bound_above, scheme_return, scheme_slots, select_by_class, shape_return,
+    shape_slots, solving_slots,
 };
 use crate::values::{
     ConstructionRefused, Value, construction, dict_type, list_type, record_type, retyped_to, under,
@@ -1173,7 +1173,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let TypeNode::ExpressionShape { classes, .. } = view.body else {
             unreachable!("a candidate's shape is an expression shape")
         };
-        let class = |slot: usize| class_of(classes, slot);
+        let class = |slot: usize| classes.get(slot);
         let solving = solving_slots(types, scratch, shape);
         let names = |slot: usize, variable: usize| {
             types.references_quantifier(scratch, slots[slot], variable)

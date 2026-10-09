@@ -34,7 +34,7 @@ use super::lattice::meet_through_variables;
 use super::node::{TypeNode, Variable};
 use super::order::fits;
 use super::registry::TypeRegistry;
-use super::shape::{Shape, class_of};
+use super::shape::Shape;
 use super::substitute::{Side, bound_above, read_through};
 use super::unify::{Collector, Interval, admits, intervals};
 use super::verdicts::Relation;
@@ -61,7 +61,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
                 .iter()
                 .enumerate()
                 .filter(|(_, slot)| types.references_quantifier(scratch, **slot, variable))
-                .map(|(index, _)| class_of(declared.classes, index))
+                .map(|(index, _)| declared.classes.get(index))
                 .min()
         }));
         let mut fixed = BumpVec::with_capacity_in(arity, scratch);
@@ -97,7 +97,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     ) -> ClassSolve<'s> {
         let mut collector = self.collector(scratch);
         for (index, slot) in self.slots.iter().enumerate() {
-            if class_of(self.declared.classes, index) == class
+            if self.declared.classes.get(index) == class
                 && reads(index)
                 && admits(
                     types,
@@ -144,7 +144,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         let mut positions = BumpVec::new_in(scratch);
         positions.extend(
             (0..self.slots.len())
-                .filter(|slot| class_of(declared.classes, *slot) == class)
+                .filter(|slot| declared.classes.get(*slot) == class)
                 .map(|slot| self.slots[slot]),
         );
         let reach = intervals(types, scratch, &positions, declared.bounds, solution, false);
@@ -211,7 +211,7 @@ pub(super) fn solving_slots<'s>(
     };
     let walk = ClassWalk::new(types, scratch, ranked);
     scratch.alloc_slice_fill_iter((0..walk.slots.len()).map(|slot| {
-        let class = class_of(ranked.classes, slot);
+        let class = ranked.classes.get(slot);
         (0..walk.first.len()).any(|variable| {
             walk.first[variable] == Some(class)
                 && types.references_quantifier(scratch, walk.slots[slot], variable)
@@ -285,7 +285,7 @@ pub(super) fn judge_by_class<'s>(
     let (mut always, mut solved) = (true, true);
     for class in ranked.class_indices() {
         let own = |variable: usize| walk.first[variable] == Some(class);
-        let in_class = |slot: usize| class_of(ranked.classes, slot) == class;
+        let in_class = |slot: usize| ranked.classes.get(slot) == class;
         let names = |slot: usize, variable: usize| {
             types.references_quantifier(scratch, walk.slots[slot], variable)
         };

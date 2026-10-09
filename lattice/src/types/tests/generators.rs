@@ -1149,7 +1149,7 @@ pub fn arb_argument_pair(
                             let instance =
                                 substitute::substitute_quantified(types, scratch, slot, bindings);
                             DispatchTokenElement::Slot(if holds_binder(types, scratch, instance) {
-                                *unrelated
+                                unrelated
                             } else {
                                 narrowing
                                     .map(|index| {
@@ -1162,10 +1162,10 @@ pub fn arb_argument_pair(
                                     .unwrap_or(instance)
                             })
                         }
-                        keyword => *keyword,
+                        keyword => keyword,
                     })
                     .collect();
-                types.shape_type(&run, classes, ret)
+                types.shape_type(&run, classes.copied_into(scratch), ret)
             });
             (world.declared(a), world.declared(b))
         })
@@ -1208,19 +1208,21 @@ pub fn arb_shape_below(
                         DispatchTokenElement::Slot(slot) => {
                             DispatchTokenElement::Slot(match widenings.next() {
                                 Some(Some(widening)) => {
-                                    widen(&world, scratch, &pool, *slot, widening)
+                                    widen(&world, scratch, &pool, slot, widening)
                                 }
-                                _ => *slot,
+                                _ => slot,
                             })
                         }
-                        keyword => *keyword,
+                        keyword => keyword,
                     })
                     .collect();
                 let ret = match narrowing {
                     Some(index) => meet(&world.types, scratch, world.concrete(ret), pool[index]),
                     None => world.concrete(ret),
                 };
-                world.types.shape_type(&run, classes, ret.raw())
+                world
+                    .types
+                    .shape_type(&run, classes.copied_into(scratch), ret.raw())
             });
             (world.declared(a), world.declared(b))
         })
@@ -1498,9 +1500,11 @@ fn step(
                 .filter(|element| matches!(element, DispatchTokenElement::Slot(_)))
                 .count();
             let chosen = index % (slots + 1);
+            let ranking = classes.copied_into(scratch);
             if chosen == slots {
                 let ret = at(ret, Variance::Co);
-                return types.shape_type(&elements[..], classes, ret);
+                let run: Vec<DispatchTokenElement> = elements.iter().collect();
+                return types.shape_type(&run, ranking, ret);
             }
             let mut seen = 0;
             let run: Vec<DispatchTokenElement> = elements
@@ -1508,17 +1512,17 @@ fn step(
                 .map(|element| match element {
                     DispatchTokenElement::Slot(slot) => {
                         let slot = if seen == chosen {
-                            at(*slot, Variance::Contra)
+                            at(slot, Variance::Contra)
                         } else {
-                            *slot
+                            slot
                         };
                         seen += 1;
                         DispatchTokenElement::Slot(slot)
                     }
-                    keyword => *keyword,
+                    keyword => keyword,
                 })
                 .collect();
-            types.shape_type(&run, classes, ret)
+            types.shape_type(&run, ranking, ret)
         }
         _ => beside(index),
     }

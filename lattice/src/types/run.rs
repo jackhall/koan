@@ -4,6 +4,8 @@
 //! handle, the run hands its children back as that handle's [`Child`](TypeHandle::Child) — a
 //! concrete type's union members are concrete, a parametric type's are parametric — wrapping each
 //! one as it is read, so a view copies nothing. Read raw, inside the lattice, a run is its slice.
+//! A shape's element run is stored with each slot's priority class beside its handle, so
+//! [`Elements`] reads both the elements and the ranking off one slice.
 //!
 //! [`Record`](super::record::Record) is the third view, over a run of named fields.
 
@@ -12,7 +14,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use super::handle::{Handle, KType, Parametric, TypeHandle, wrap};
-use super::shape::DispatchTokenElement;
+use super::shape::{Classes, DispatchTokenElement, StoredElement};
 
 /// A node's run of child handles — a union's members, a meet's applications — read as `H`.
 pub struct Run<'run, H = Handle> {
@@ -67,8 +69,10 @@ impl<'run> Deref for Run<'run, Handle> {
 }
 
 /// An expression shape's element run — keywords and typed slots in call order — read as `H`.
+/// The run is stored with each slot's priority class beside it, read through
+/// [`classes`](Self::classes).
 pub struct Elements<'run, H = Handle> {
-    elements: &'run [DispatchTokenElement],
+    elements: &'run [StoredElement],
     view: PhantomData<H>,
 }
 
@@ -82,7 +86,7 @@ impl<H> Copy for Elements<'_, H> {}
 
 impl<'run, H> Elements<'run, H> {
     /// The run over `elements`, which already live where the node does.
-    pub(super) fn over(elements: &'run [DispatchTokenElement]) -> Self {
+    pub(super) fn over(elements: &'run [StoredElement]) -> Self {
         Elements {
             elements,
             view: PhantomData,
@@ -90,22 +94,35 @@ impl<'run, H> Elements<'run, H> {
     }
 
     /// The raw slice.
-    pub(super) fn raw(self) -> &'run [DispatchTokenElement] {
+    pub(super) fn raw(self) -> &'run [StoredElement] {
         self.elements
+    }
+}
+
+impl<'run, H: TypeHandle> Elements<'run, H> {
+    pub fn iter(
+        self,
+    ) -> impl DoubleEndedIterator<Item = DispatchTokenElement<H>> + ExactSizeIterator + 'run {
+        self.elements.iter().map(|element| element.element())
+    }
+
+    pub fn len(self) -> usize {
+        self.elements.len()
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.elements.is_empty()
+    }
+
+    /// Each slot's priority class, in slot order.
+    pub fn classes(self) -> Classes<'run> {
+        Classes::over(self.elements)
     }
 }
 
 impl<H> fmt::Debug for Elements<'_, H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.elements).finish()
-    }
-}
-
-impl<'run> Deref for Elements<'run, Handle> {
-    type Target = [DispatchTokenElement];
-
-    fn deref(&self) -> &[DispatchTokenElement] {
-        self.elements
     }
 }
 
@@ -148,23 +165,6 @@ macro_rules! typed_runs {
             }
         }
 
-        impl<'run> Elements<'run, $handle> {
-            pub fn iter(
-                self,
-            ) -> impl DoubleEndedIterator<Item = DispatchTokenElement<$handle>>
-                   + ExactSizeIterator
-                   + 'run {
-                self.elements.iter().map(|element| element.view())
-            }
-
-            pub fn len(self) -> usize {
-                self.elements.len()
-            }
-
-            pub fn is_empty(self) -> bool {
-                self.elements.is_empty()
-            }
-        }
     )*};
 }
 

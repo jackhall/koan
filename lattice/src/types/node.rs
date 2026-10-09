@@ -27,7 +27,7 @@ use super::kind::KKind;
 use super::record::Record;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
-use super::shape::DeferredReturnSurface;
+use super::shape::{Classes, DeferredReturnSurface};
 use super::unify::Interval;
 
 /// An opaque identity a carrier is keyed on: what a module layer computes from an opaque view's
@@ -182,9 +182,9 @@ pub enum TypeNode<'run, H = Handle> {
         /// The call shape: fixed keywords interleaved with the argument positions' declared types.
         elements: Elements<'run, H>,
         /// Each slot's priority class, in slot order, dense from 0 — the ranking a dispatch admits
-        /// and ranks the slots by, class by class. Empty for written order, the canonical spelling
-        /// of `0..n`, so an unranked shape stores and digests nothing for it.
-        classes: &'run [u8],
+        /// and ranks the slots by, class by class. Written order reads `0..n`, and the digest
+        /// feeds nothing for it.
+        classes: Classes<'run>,
         ret: H,
     },
     /// A **scheme** — a quantified callable's type, and the one binder: `group` binds the free

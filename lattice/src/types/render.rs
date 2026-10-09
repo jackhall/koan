@@ -18,8 +18,9 @@ use super::node::{Group, TypeNode};
 use super::operators::{FoldDirection, ReductionMode};
 use super::record::Record;
 use super::registry::TypeRegistry;
+use super::run::Elements;
 use super::schema::{DeclaredGroup, SigSchema, parameter_bound};
-use super::shape::{DispatchTokenElement, Shape};
+use super::shape::{Classes, DispatchTokenElement, Shape, StoredElement};
 use super::sig_relations::FitsFailure;
 
 /// A symbol's text, resolved through the run's interner. Rendering stays total: a miss prints a
@@ -434,14 +435,15 @@ fn write_quantifier_group(
 /// 1 :Any)`).
 fn write_shape_head(
     f: &mut std::fmt::Formatter<'_>,
-    elements: &[DispatchTokenElement],
-    classes: &[u8],
+    elements: Elements<'_>,
+    classes: Classes<'_>,
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
     f.write_str("#(")?;
-    let mut slot = 0;
+    let ranked = !classes.is_written_order();
+    let mut classes = classes.iter();
     for (index, element) in elements.iter().enumerate() {
         if index > 0 {
             f.write_str(" ")?;
@@ -451,15 +453,16 @@ fn write_shape_head(
                 write!(f, "{}", display_symbol(symbol.symbol(), symbols))?;
             }
             DispatchTokenElement::Slot(kt) => {
-                match classes.get(slot) {
-                    Some(class) => write!(f, "{} ", u32::from(*class) + 1)?,
-                    None => f.write_str("_ ")?,
+                let class = classes.next().expect("one class per slot");
+                if ranked {
+                    write!(f, "{} ", u32::from(class) + 1)?;
+                } else {
+                    f.write_str("_ ")?;
                 }
-                slot += 1;
-                if !surface_opens_sigil(*kt, types) {
+                if !surface_opens_sigil(kt, types) {
                     f.write_str(":")?;
                 }
-                write_name_in(*kt, f, types, symbols, binder)?;
+                write_name_in(kt, f, types, symbols, binder)?;
             }
         }
     }
@@ -612,16 +615,13 @@ fn render_operator_head(
     symbols: &SymbolInterner,
 ) -> Option<String> {
     let shape = Shape::of(types, shape)?;
-    let (symbol, is_list_form) = match shape.elements {
+    let (symbol, is_list_form) = match shape.elements.raw() {
         [
-            DispatchTokenElement::Slot(_),
-            DispatchTokenElement::Keyword(symbol),
-            DispatchTokenElement::Slot(_),
+            StoredElement::Slot(..),
+            StoredElement::Keyword(symbol),
+            StoredElement::Slot(..),
         ] => Some((*symbol, false)),
-        [
-            DispatchTokenElement::Keyword(symbol),
-            DispatchTokenElement::Slot(_),
-        ] => Some((*symbol, true)),
+        [StoredElement::Keyword(symbol), StoredElement::Slot(..)] => Some((*symbol, true)),
         _ => None,
     }?;
     let mode = operators

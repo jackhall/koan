@@ -43,7 +43,9 @@ use super::schema::{
     DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, canonical_groups,
     canonical_overloads, member,
 };
-use super::shape::{DeferredReturnSurface, DispatchTokenElement, written_order};
+use super::shape::{
+    DeferredReturnSurface, DispatchTokenElement, StoredElement, class_of, written_order,
+};
 use super::signatures::canonical_applications;
 use super::stored::{Flags, StoredNode};
 use super::substitute::substitute_quantified;
@@ -751,8 +753,9 @@ impl<'run> TypeRegistry<'run> {
     /// reads the enclosing scheme's group.
     ///
     /// `classes` is each slot's dense priority class, as [`dense_classes`](super::shape::dense_classes)
-    /// normalizes a written ranking; empty for written order, and written order spelled out is
-    /// stored empty, so the two spellings are one handle.
+    /// normalizes a written ranking; empty for written order. Written order spelled out digests
+    /// as the empty ranking, so the two spellings are one handle. The node stores each slot's
+    /// class in its element, written order spelled out.
     pub fn shape_type<H: TypeHandle>(
         &self,
         elements: &[DispatchTokenElement<H>],
@@ -863,7 +866,7 @@ impl<'run> TypeRegistry<'run> {
             }
             TypeNode::ExpressionShape { elements, ret, .. } => {
                 positions.extend(elements.iter().filter_map(|element| match element {
-                    DispatchTokenElement::Slot(kt) => Some((*kt, Variance::Contra)),
+                    DispatchTokenElement::Slot(kt) => Some((kt, Variance::Contra)),
                     DispatchTokenElement::Keyword(_) => None,
                 }));
                 ret
@@ -930,14 +933,30 @@ impl<'run> TypeRegistry<'run> {
         classes: &[u8],
         ret: Handle,
     ) -> Handle {
-        let handle = digest::shape_digest(elements, classes, ret.digest());
-        self.intern_digested(handle, || TypeNode::ExpressionShape {
-            elements: Elements::over(
-                self.bump
-                    .alloc_slice_fill_iter(elements.iter().map(|element| element.raw())),
-            ),
-            classes: self.rehome(classes),
-            ret,
+        let handle = digest::shape_digest(
+            elements.iter().copied(),
+            classes.iter().copied(),
+            ret.digest(),
+        );
+        self.intern_digested(handle, || {
+            // Each slot's class rides in its element, written order spelled out.
+            let mut slot = 0;
+            let stored = self
+                .bump
+                .alloc_slice_fill_iter(elements.iter().map(|element| match *element {
+                    DispatchTokenElement::Keyword(keyword) => StoredElement::Keyword(keyword),
+                    DispatchTokenElement::Slot(kt) => {
+                        let class = class_of(classes, slot);
+                        slot += 1;
+                        StoredElement::Slot(kt.raw(), class)
+                    }
+                }));
+            let elements = Elements::over(stored);
+            TypeNode::ExpressionShape {
+                elements,
+                classes: elements.classes(),
+                ret,
+            }
         })
     }
 

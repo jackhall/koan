@@ -667,7 +667,7 @@ proptest! {
                 view.group.names,
                 view.group.bounds,
                 &elements,
-                classes,
+                classes.copied_into(scratch),
                 ret,
             );
             prop_assert_eq!(again.handle, a);
@@ -744,7 +744,14 @@ proptest! {
                 ret,
             } => {
                 let elements: Vec<_> = elements.iter().collect();
-                types.shape_scheme(scratch, &renamed, view.group.bounds, &elements, classes, ret)
+                types.shape_scheme(
+                    scratch,
+                    &renamed,
+                    view.group.bounds,
+                    &elements,
+                    classes.copied_into(scratch),
+                    ret,
+                )
             }
             _ => unreachable!("a scheme's body is a function type or a shape"),
         };
@@ -843,7 +850,7 @@ proptest! {
         }
         let left: Vec<Handle> = shape_slots(a, &types).collect();
         let right: Vec<Handle> = shape_slots(b, &types).collect();
-        let class = |index: usize| ranking.get(index).map_or(index, |c| usize::from(*c));
+        let class = |index: usize| usize::from(ranking.get(index));
         let mut expected = Specificity::Equal;
         for current in 0..left.len() {
             let in_class = || (0..left.len()).filter(|index| class(*index) == current);

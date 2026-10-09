@@ -95,7 +95,7 @@ pub use schema::{
     DeclaredGroup, Members, SchemaDraft, SigOrigin, SigSchema, constructor_param_names, member,
 };
 pub use shape::{
-    DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, class_of, dense_classes,
+    Classes, DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, dense_classes,
     scheme_return, scheme_slots, shape_return, shape_slots,
 };
 pub use sig_relations::{FitsFailure, InstanceFailure};

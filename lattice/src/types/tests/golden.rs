@@ -17,7 +17,7 @@ use crate::types::render::display_name;
 use crate::types::run::{Elements, Run};
 use crate::types::schema::{SchemaDraft, SigOrigin, SigSchema};
 use crate::types::shape::DispatchTokenElement::{Keyword, Slot};
-use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement};
+use crate::types::shape::{Classes, DeferredReturnSurface, StoredElement};
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
 #[test]
@@ -178,7 +178,7 @@ fn every_node_kind_has_its_own_tag() {
     // interned over them.
     let fields = [(field, KType::NUMBER.raw())];
     let arguments = [(field, KType::STR.raw())];
-    let elements = [DispatchTokenElement::Keyword(keyword)];
+    let elements = [StoredElement::Keyword(keyword)];
     let members = [KType::NUMBER.raw(), KType::STR.raw()];
     let needed = [field];
     let (group_names, group_bounds) = ([name], [KType::ANY]);
@@ -239,7 +239,7 @@ fn every_node_kind_has_its_own_tag() {
         },
         TypeNode::ExpressionShape {
             elements: Elements::over(&elements),
-            classes: &[],
+            classes: Classes::EMPTY,
             ret: KType::NUMBER.raw(),
         },
         TypeNode::Scheme {

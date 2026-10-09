@@ -18,7 +18,8 @@ use crate::types::handle::{Handle, wrap};
 use crate::types::node::TypeNode;
 use crate::types::record::Record;
 use crate::types::registry::TypeRegistry;
-use crate::types::shape::{DispatchTokenElement, map_slots};
+use crate::types::run::Elements;
+use crate::types::shape::{Classes, DispatchTokenElement, map_slots};
 
 /// What an arm's leftover children mean. The instance reads it rather than knowing which arm it is
 /// looking at: the order turns each into an emptiness requirement, the meet into a keep-or-drop.
@@ -277,7 +278,7 @@ fn pairing<'n>(
             for (x, y) in xe.iter().zip(ye.iter()) {
                 match (x, y) {
                     (DispatchTokenElement::Slot(sx), DispatchTokenElement::Slot(sy)) => {
-                        pairs.push((*sx, *sy, v.flipped()))
+                        pairs.push((sx, sy, v.flipped()))
                     }
                     (DispatchTokenElement::Keyword(kx), DispatchTokenElement::Keyword(ky))
                         if kx == ky => {}
@@ -292,7 +293,7 @@ fn pairing<'n>(
                 width: Width::Positional,
                 only_a: BumpVec::new_in(scratch),
                 only_b: BumpVec::new_in(scratch),
-                assembly: Assembly::Shape(xe.raw(), xc),
+                assembly: Assembly::Shape(xe, xc),
             }
         }
         (
@@ -382,7 +383,7 @@ enum Assembly<'n> {
     Dict,
     Record(&'n [BinderSymbol]),
     Function(&'n [BinderSymbol]),
-    Shape(&'n [DispatchTokenElement], &'n [u8]),
+    Shape(Elements<'n>, Classes<'n>),
     Apply(&'n [BinderSymbol]),
 }
 
@@ -410,11 +411,11 @@ impl Rebuilder<'_, '_> {
             }
             Assembly::Shape(elements, classes) => {
                 let mut slots = paired.iter();
-                let rebuilt = map_slots(scratch, elements, |_| {
+                let rebuilt = map_slots(scratch, elements.iter(), |_| {
                     *slots.next().expect("one child per slot position")
                 });
                 let ret = *slots.next().expect("the return follows the slots");
-                types.shape_type(&rebuilt, classes, ret)
+                types.shape_type(&rebuilt, classes.copied_into(scratch), ret)
             }
             // Two constructors with no common refinement apply to nothing: no application is
             // headed by `Never`.
