@@ -155,6 +155,14 @@ impl<'run> TypeRegistry<'run> {
         self.nodes.borrow().len()
     }
 
+    /// Every interned type's digest, in no particular order. `each` runs while the table is read, so
+    /// it may not intern. Tests read it, koan's among them, as they read `node_count`.
+    pub fn each_digest(&self, mut each: impl FnMut(TypeDigest)) {
+        for digest in self.nodes.borrow().keys() {
+            each(*digest);
+        }
+    }
+
     /// `test`-only: a registry whose verdict table holds `slots` slots, so a test can fill a
     /// bucket.
     #[cfg(test)]

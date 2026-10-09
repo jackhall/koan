@@ -4,6 +4,7 @@
 
 use crate::program::tests::digest_back;
 use crate::program::{CellSubstrate, Outcome};
+use crate::type_lattice::TypeDigest;
 
 use super::{Koan, output};
 
@@ -136,4 +137,33 @@ fn a_view_is_its_operator_and_application_over_its_source() {
     assert_eq!(first, second, "two evaluations of one ascription");
     assert_ne!(first, transparent, "the operator");
     assert_ne!(first, other, "the source");
+}
+
+/// Interning is deterministic: one program loaded and run twice, into two registries, interns one
+/// set of types. The program builds a carrier and a signature, a scheme, a recursive union's sealed
+/// members and a ranked expression shape.
+#[test]
+fn one_program_loaded_twice_interns_one_digest_set() {
+    const PROGRAM: &str = r##"SIG Ordered FOR ALL #[Carrier] = #[(VAL compare :Carrier)]
+MODULE ints = (LET compare = 5)
+LET view = (ints :| Ordered)
+LET kept :(view.Carrier) = view.compare
+MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))
+UNION Nat = #{Zero: Null, Succ: Nat}
+EXPR #(MOVE 2 TO 1)
+EXPR #(MOVE x :Any TO y :Number) -> Str = #("to a number")
+PRINT kept
+PRINT (MOVE 1 TO 1)"##;
+    let interned = || {
+        let mut substrate = CellSubstrate::load::<Koan>(PROGRAM, "<test>", 8, output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
+        substrate.with(|running| {
+            assert_eq!(running.run(), Ok(Outcome::Completed));
+            let mut digests = Vec::<TypeDigest>::new();
+            running.types().each_digest(|digest| digests.push(digest));
+            digests.sort();
+            digests
+        })
+    };
+    assert_eq!(interned(), interned());
 }
