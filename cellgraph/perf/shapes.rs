@@ -11,8 +11,8 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, Covariant, CrossedOperand, Delivery, Dormant, DropFree,
-    NoScratch, Operand, Prices, Ready, Reattachable, ReattachableOverBoth, Receipt,
+    Active, CellGraph, CellHandle, Covariant, CrossedOperand, Delivery, Dormant, DropFree, Header,
+    NoHeader, NoScratch, Operand, Prices, Ready, Reattachable, ReattachableOverBoth, Receipt,
     ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer, covariant,
     reattachable,
 };
@@ -94,6 +94,7 @@ fn number_here<'step, S: ReattachableOverBoth<'static>, D: Delivery<'static>>(
 
 fn build_number<'cell, 'severed>(
     writer: Writer<'cell>,
+    _: Header<'static, 'cell, NoHeader>,
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Number> {
     Active::new(match views[0] {
@@ -107,6 +108,7 @@ fn build_number<'cell, 'severed>(
 /// its own and the placement is charged for nothing the harness did.
 fn build_slice<'cell, 'severed>(
     writer: Writer<'cell>,
+    _: Header<'static, 'cell, NoHeader>,
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Numbers> {
     Active::new(writer.fill(views.len(), |index| match views[index] {
@@ -275,7 +277,7 @@ fn delivery(n: u32) {
             graph.enter(producer, |context| {
                 measure(Verb::Deliver, || {
                     context
-                        .deliver_scratch(consumer, i as usize, |writer, _| {
+                        .deliver_scratch(consumer, i as usize, |writer, _, _| {
                             Active::new(one(writer, i))
                         })
                         .unwrap()

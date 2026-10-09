@@ -4340,6 +4340,73 @@ where
     /// operand's reach names: a slab home's own region, a tree home's region, or, for a carrier
     /// redeemed out of sealed storage, the sealed cell's storage. An operand homed in the
     /// destination carries none — the build already has that header through its own door.
+    ///
+    /// The build's header door is at the build's brand, so what it lays or reads stays inside the
+    /// call, even for a placement into the executing cell:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, NoDelivery, NoScratch, Verdict};
+    /// # use cellgraph::{covariant, reattachable};
+    /// # struct Work;
+    /// # struct Number;
+    /// # struct Table;
+    /// # reattachable!(Work => String, Number => &'cell u32, Table => &'cell Cell<&'cell u32>);
+    /// # covariant!(Number);
+    /// # impl DropFree for Number {}
+    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+    /// #     CellGraph::new(1, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// graph
+    ///     .enter(cell, |context| {
+    ///         let here = context.cell();
+    ///         let mut kept: Option<&u32> = None;
+    ///         context
+    ///             .alloc_into::<Number, Number>(here, &[], |writer, header, _| {
+    ///                 let seven = &writer.fill(1, |_| 7u32)[0];
+    ///                 let table = header.get_or_lay(|| &writer.fill(1, |_| Cell::new(seven))[0]);
+    ///                 kept = Some(table.get());
+    ///                 Active::new(table.get())
+    ///             })
+    ///             .unwrap();
+    ///         let _: u32 = *kept.unwrap();
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// The step's own door, at `'here`, is the one whose header the step keeps:
+    ///
+    /// ```
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, NoDelivery, NoScratch, Verdict};
+    /// # use cellgraph::{covariant, reattachable};
+    /// # struct Work;
+    /// # struct Number;
+    /// # struct Table;
+    /// # reattachable!(Work => String, Number => &'cell u32, Table => &'cell Cell<&'cell u32>);
+    /// # covariant!(Number);
+    /// # impl DropFree for Number {}
+    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+    /// #     CellGraph::new(1, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// graph
+    ///     .enter(cell, |context| {
+    ///         let here = context.cell();
+    ///         let mut kept: Option<&u32> = None;
+    ///         let seven = &context.writer().fill(1, |_| 7u32)[0];
+    ///         let table = context
+    ///             .header()
+    ///             .get_or_lay(|| &context.writer().fill(1, |_| Cell::new(seven))[0]);
+    ///         kept = Some(table.get());
+    ///         context
+    ///             .alloc_into::<Number, Number>(here, &[], |writer, header, _| {
+    ///                 Active::new(header.get().unwrap().get())
+    ///             })
+    ///             .unwrap();
+    ///         let _: u32 = *kept.unwrap();
+    ///     })
+    ///     .unwrap();
+    /// ```
     pub fn alloc_into<T, V>(
         &mut self,
         dest: impl Into<CellHandle>,

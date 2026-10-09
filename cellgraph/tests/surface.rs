@@ -8,15 +8,16 @@
 //! The test is an integration test on purpose. A unit test lives inside the crate, where
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use cellgraph::{
     Active, CellGraph, CellHandle, Config, Covariant, CreateError, CrossedOperand, DeliverError,
-    Delivered, Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, OnceRun,
-    OnceView, Operand, Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError,
-    RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run,
-    SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer,
-    Written, covariant, reattachable,
+    Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader, Header, HomeHeader,
+    NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, Operand, Prices, Prose, Ready,
+    Reattachable, Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
+    ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext,
+    Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, Written, covariant, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -396,6 +397,81 @@ fn a_tenant_and_the_scratch_habitat_answer_from_outside_the_crate() {
 
     graph.release_tenant(second).unwrap();
     assert!(graph.is_empty());
+}
+
+/// A header family: a table in the half's own bytes, invariant through the `Cell`.
+struct Table;
+reattachable!(Table => &'cell Cell<&'cell u32>);
+
+/// What a half's header points at, from any header family's door — generic, so the bound is
+/// named from outside the crate.
+fn laid<'graph, 'cell, H: HabitatHeader<'graph>>(header: Header<'graph, 'cell, H>) -> bool {
+    header.get().is_some()
+}
+
+/// What a home header's table points at, at the operand's brand.
+fn home_number<'b>(home: HomeHeader<'static, 'b, Table>) -> Option<&'b u32> {
+    home.read(|header, _| header.into_value().get())
+}
+
+#[test]
+fn the_habitat_header_answers_from_outside_the_crate() {
+    // A graph that names no header family keeps none.
+    let mut plain: CellGraph<'static, Work, NoScratch, NoDelivery, NoHeader> =
+        CellGraph::new(1, weigh);
+    let cell = plain.create(None).unwrap();
+    let kept = plain
+        .enter(cell, |context| {
+            context.header().get_or_lay(|| ());
+            laid(context.header())
+        })
+        .unwrap();
+    assert!(kept);
+
+    let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, Table> =
+        CellGraph::new(2, weigh);
+    let home = graph.create(None).unwrap();
+    let dest = graph.create(None).unwrap();
+    let read = graph
+        .enter(home, |context| {
+            assert!(!laid(context.header()) && !laid(context.scratch_header()));
+            let seven = one(context.writer(), 7u32);
+            context
+                .header()
+                .get_or_lay(|| one(context.writer(), Cell::new(seven)));
+            let first = one(context.scratch_writer(), 1u32);
+            context
+                .scratch_header()
+                .get_or_lay(|| one(context.scratch_writer(), Cell::new(first)));
+            let value = context.lift::<Number>(one(context.writer(), 41));
+            context
+                .alloc_into::<Number, Number>(
+                    dest,
+                    &[pinned_operand(&value)],
+                    |writer, header, views| {
+                        // The destination's door lays its header; the operand crosses with its
+                        // home's.
+                        let eight = one(writer, 8u32);
+                        header.get_or_lay(|| one(writer, Cell::new(eight)));
+                        match &views[0] {
+                            CrossedOperand::Pinned { home, .. } => {
+                                Active::new(home_number(*home).expect("the home laid a header"))
+                            }
+                            CrossedOperand::Copied { home, .. } => {
+                                Active::new(one(writer, *home_number(*home).unwrap()))
+                            }
+                        }
+                    },
+                )
+                .unwrap();
+            *context.header().get().unwrap().get()
+        })
+        .unwrap();
+    assert_eq!(read, 7);
+    let read = graph
+        .enter(dest, |context| *context.header().get().unwrap().get())
+        .unwrap();
+    assert_eq!(read, 8);
 }
 
 #[test]
