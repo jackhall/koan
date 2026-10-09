@@ -1,7 +1,8 @@
 //! A cell substrate: a capped slab of cells, each owning a bump region, over a liveness matrix
 //! that records which cell holds a value homed in which other. The crate depends on nothing —
-//! not on koan — so a cell carries no embedder vocabulary; a continuation
-//! family enters as a type parameter and is stored erased.
+//! not on koan — so a cell carries no embedder vocabulary; a continuation family, and the habitat
+//! header family each region and scratch habitat keeps one of, enter as type parameters and are
+//! stored erased.
 //!
 //! The cell model — the slot-plus-generation handle, the `create` / `enter` / `release` verbs,
 //! the three region habitats, the tenant that owns none — is [../README.md](../README.md). The matrix that
