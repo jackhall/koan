@@ -67,10 +67,10 @@ impl std::fmt::Write for Unsigiled<'_, '_> {
 
 /// Surface-syntax rendering, straight into `f`. The one place the surface arms are written.
 ///
-/// `binder` is the quantifier binder in force — the enclosing shape's parameter names, which its
-/// element and return positions dereference through [`TypeNode::Quantified`]. Threaded rather than
-/// looked up, because a quantified leaf carries an index and nothing else; a nested shape rebinds
-/// it with its own list, exactly as it shadows one in the relations.
+/// `binder` is the quantifier group in force — the enclosing scheme's names, which its body's
+/// positions dereference through [`TypeNode::Quantified`]. Threaded rather than looked up, because a
+/// quantified leaf carries an index and nothing else; a nested scheme rebinds it with its own names,
+/// exactly as it shadows them in the relations.
 fn write_name_in(
     kt: Handle,
     f: &mut std::fmt::Formatter<'_>,
@@ -151,9 +151,9 @@ fn write_name_in(
             _ => unreachable!("a scheme's body is a function type or a shape"),
         },
         TypeNode::ExpressionShape { .. } => write_shape(f, kt, types, symbols, binder),
-        // A quantified position renders as the name its enclosing binder bound it to. The
-        // placeholder is diagnostic-only: a bare leaf outside a binder is unreachable from any
-        // spelling, since the only doors that mint one are the two canonicalizing interns.
+        // A quantified position renders as the name its enclosing scheme bound it to. The
+        // placeholder is diagnostic-only: a bare leaf outside a scheme is unreachable from any
+        // spelling, since the only doors that mint one are the two scheme doors.
         TypeNode::Quantified { index, .. } => match binder.get(*index) {
             Some(name) => write!(f, "{}", display_symbol(name.symbol(), symbols)),
             None => write!(f, "<quantified {index}>"),

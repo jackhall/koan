@@ -5,8 +5,8 @@
 //! The **order** never solves: two signature types compare by their applications' pins (R-5). It
 //! is what every construction reads — a join, a meet, a union's or an overload set's subsumption —
 //! and it relates concrete types: its public door ([`typed`](super::typed)) takes `KType`s, so no
-//! rigid variable reaches the rigid clause below through it. ***Fits*** solves: a quantified binder
-//! fits another when some instantiation of its group puts the instance under the other, and a
+//! rigid variable reaches the rigid clause below through it. ***Fits*** solves: a scheme fits
+//! another when some instantiation of its group puts the instance under the other, and a
 //! module's signature fits a declared one when its members do. It contains the order, relates a
 //! variable by the rigid rule, and it is what every question reads — whether a value fills a slot,
 //! a return lies within its contract, a bound holds.
@@ -48,7 +48,7 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   between its lower end (`Never` but for a lexical variable's) and its bound: below it lie
 ///   itself and whatever lies under its lower end, above it itself and everything above its bound,
 ///   a union included. The clauses agree because both ends are variable-free types.
-/// - A quantified shape or function type lies under only itself.
+/// - A scheme lies under only itself.
 /// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other. An
 ///   opaque carrier is an atom under no family top: it reveals no bound outside its view, so above
 ///   it lie only itself, a union holding it and `Any`, and below it only itself and `Never`.
@@ -62,9 +62,10 @@ pub(super) fn is_subtype_of(
     related(types, scratch, a, b, Relation::Subtype)
 }
 
-/// Whether `a` fits `b`: the order, but for two clauses that solve. A quantified shape fits another
-/// shape, and a quantified function another function, when some instantiation of its variables,
-/// each under its bound, puts the instance under the other with the other's variables rigid. A
+/// Whether `a` fits `b`: the order, but for two clauses that solve. A pair holding a scheme fits,
+/// body against body of one kind — shape against shape, function against function — when some
+/// instantiation of its variables, each under its bound, puts the instance under the other with
+/// the other's variables rigid. A
 /// signature type fits another when [`sig_fits`] accepts the pair. Everything the order relates
 /// fits.
 pub(super) fn fits(

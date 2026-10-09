@@ -26,7 +26,7 @@
 //!   collector are its three instances.
 //!
 //! The context a unary rule is handed answers two questions the arm table alone cannot: how many
-//! shape binders lie between the root and here, and the variance of the current position.
+//! schemes lie between the root and here, and the variance of the current position.
 
 pub mod binary;
 pub mod unary;

@@ -1,4 +1,4 @@
-//! *Fits* over two signature types, the two binder relations *fits*' instantiation clauses read,
+//! *Fits* over two signature types, the two scheme relations *fits*' instantiation clauses read,
 //! and the specificity verdict a dispatch ranks candidates by.
 //!
 //! [`sig_fits`] is *fits* for signatures: `offered` fits `asked` when, for each application `asked`
@@ -328,7 +328,7 @@ pub(super) fn fits_application<'run, 's>(
 
 /// The class walks' stand-in level less one: the offered side's own unpinned parameters read as
 /// lexical variables at `OFFERED_LEVEL - k` for its `k`th application, apart from every level the
-/// elaborator mints and from the stand-ins an asked binder opens its group to. Each is bounded by
+/// elaborator mints and from the stand-ins an asked scheme opens its group to. Each is bounded by
 /// `Any`: a head parameter's bound reveals nothing to a reader, so a signature over `Carrier`
 /// bounded by `Number` offers no `Number`. Only an asked head parameter's bound reads the bound it
 /// was declared under ([`Collector::heads`]).
@@ -525,7 +525,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
         }
     }
 
-    /// `declared`, a member type of the asked schema, read for pass A: a binder's own group opened
+    /// `declared`, a member type of the asked schema, read for pass A: a scheme's own group opened
     /// to stand-ins first, then each pin, and each unpinned parameter as the collector's variable.
     fn read_open(&self, declared: Handle) -> Handle {
         let opened = open_to_stand_ins(self.types, self.scratch, declared);
@@ -754,7 +754,7 @@ fn check<'run, 's>(
         };
         if let Some((parameter, got)) = quantified_position_failure(types, scratch, expected, first)
         {
-            // A slot holds no binder, so the candidate's slot is no scheme.
+            // A slot holds no scheme.
             return Err(FitsFailure::QuantifiedMismatch {
                 head,
                 parameter,

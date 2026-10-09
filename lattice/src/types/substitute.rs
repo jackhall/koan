@@ -53,7 +53,7 @@ pub(super) fn substitute_quantified<B: TypeHandle>(
 }
 
 /// `kt` with every lexical variable whose level `bindings` covers replaced by its binding, under
-/// any binder — no binder captures one. What a run reads a load-time type through, each level bound
+/// any scheme — no scheme captures one. What a run reads a load-time type through, each level bound
 /// to the type its coordinate holds. A level past `bindings` is kept, and a signature is opaque.
 pub(super) fn substitute_levels<B: TypeHandle>(
     types: &TypeRegistry<'_>,
@@ -108,7 +108,7 @@ pub(super) fn erase_rigid(
     })
 }
 
-/// `kt` with each free variable — a `Quantified` under none of `kt`'s own binders, a `Lexical` or
+/// `kt` with each free variable — a `Quantified` under none of `kt`'s own schemes, a `Lexical` or
 /// a `Parameter` — read as the extreme that puts the result above every instance within the
 /// variables' ends: its bound at a covariant position, its lower end at a contravariant one. The
 /// variable-free type a load-time type is compared through where the run may bind its variables to
@@ -139,7 +139,7 @@ pub enum Side {
 }
 
 /// `kt` read through intervals: each free variable — a `Quantified` under none of `kt`'s own
-/// binders, a lexical variable, a `Parameter` — and each opaque carrier that `interval` answers for
+/// schemes, a lexical variable, a `Parameter` — and each opaque carrier that `interval` answers for
 /// replaced by the end `side` takes at its position; one it answers `None` for is kept. A signature
 /// is opaque.
 ///

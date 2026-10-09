@@ -34,7 +34,7 @@ pub fn is_subtype_of(
     order::is_subtype_of(types, scratch, a.raw(), b.raw())
 }
 
-/// Whether `a` fits `b`: the order, but for the clauses that solve — a quantified binder through an
+/// Whether `a` fits `b`: the order, but for the clauses that solve — a scheme through an
 /// instance, a signature type through its members — and the rigid rule, under which a variable
 /// lies under its bound and above only itself, `Never` and its lower end.
 pub fn fits(
@@ -267,14 +267,14 @@ pub fn instance_under<'s, T: TypeHandle>(
     sig_relations::instance_under(types, scratch, scheme.raw(), wanted.raw())
 }
 
-/// `kt` with every variable replaced by its bound. A parametric type holds no binder, so every
+/// `kt` with every variable replaced by its bound. A parametric type holds no scheme, so every
 /// variable in it is free and the result is concrete.
 pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Parametric) -> KType {
     wrap(substitute::erase_rigid(types, scratch, kt.raw()))
 }
 
 /// `kt` read from above with every variable at its two ends — the concrete type above every
-/// instance. A parametric type holds no binder, so every variable in it is read and the result is
+/// instance. A parametric type holds no scheme, so every variable in it is read and the result is
 /// concrete.
 pub fn bound_above(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Parametric) -> KType {
     wrap(substitute::bound_above(types, scratch, kt.raw()))
@@ -310,7 +310,7 @@ pub fn read_through(
 }
 
 /// What a substitution of lexical levels or head parameters keeps the kind of: a type that may
-/// hold a variable stays one, and a scheme keeps its group, since no binder captures a lexical
+/// hold a variable stays one, and a scheme keeps its group, since no scheme captures a lexical
 /// variable or a head parameter.
 pub trait Substitutable: Copy + sealed::Substitutable {}
 
@@ -349,7 +349,7 @@ impl Substitutable for Scheme {}
 impl Substitutable for DeclaredType<Parametric> {}
 
 /// `kt` with every lexical variable whose level `bindings` covers replaced by its binding, under
-/// any binder — what a run reads a load-time type through.
+/// any scheme — what a run reads a load-time type through.
 pub fn substitute_levels<S: Substitutable>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,

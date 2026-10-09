@@ -13,7 +13,7 @@
 //! A node is `Copy`: a read copies the entry out and releases the table borrow before the reader
 //! runs, so reads nest and a reader may intern. Beside each node the entry stores four flags
 //! computed off its children at intern — whether a free quantifier, whether any rigid variable,
-//! whether any variable or quantified binder outside sealed content, and whether an opaque carrier
+//! whether any variable or scheme outside sealed content, and whether an opaque carrier
 //! outside sealed content is reachable — so each probe is one table read.
 //!
 //! Verdicts are a fixed cache laid in the same region, described in [`verdicts`](super::verdicts).
@@ -57,7 +57,7 @@ struct Entry<'run> {
     /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable.
     rigid: bool,
     /// Whether the type is **parametric** rather than concrete: whether a free `Quantified`, a
-    /// `Lexical`, a head `Parameter` or a quantified binder is reachable outside sealed content.
+    /// `Lexical`, a head `Parameter` or a scheme is reachable outside sealed content.
     /// Everything inside a signature or a sealed member is concrete.
     parametric: bool,
     /// Whether an opaque carrier is reachable outside sealed content.
@@ -569,7 +569,7 @@ impl<'run> TypeRegistry<'run> {
         }))
     }
 
-    /// The `index`-th rigid variable of the enclosing binder's group, bounded by `bound`.
+    /// The `index`-th rigid variable of the enclosing scheme's group, bounded by `bound`.
     pub fn quantified(&self, index: usize, bound: KType) -> Parametric {
         self.assert_bound(bound);
         wrap(
@@ -1106,8 +1106,8 @@ impl<'run> TypeRegistry<'run> {
 
     // --- Quantifier probes ---
 
-    /// Whether any `Quantified` position is reachable from `kt` without crossing a shape's own
-    /// binder — the probe that lets a slot type with nothing to solve answer the relations in one
+    /// Whether any `Quantified` position is reachable from `kt` without crossing a scheme — the
+    /// probe that lets a slot type with nothing to solve answer the relations in one
     /// step instead of walking under a unifier. Read off the flag interning stored beside the node.
     pub(super) fn contains_quantified(&self, kt: Handle) -> bool {
         self.entry(kt).quantified
@@ -1125,9 +1125,8 @@ impl<'run> TypeRegistry<'run> {
         self.entry(kt).rigid
     }
 
-    /// Whether `kt` is concrete: no free `Quantified`, `Lexical`, head `Parameter` or quantified
-    /// binder is reachable outside sealed content. Read off the flag interning stored beside the
-    /// node.
+    /// Whether `kt` is concrete: no free `Quantified`, `Lexical`, head `Parameter` or scheme is
+    /// reachable outside sealed content. Read off the flag interning stored beside the node.
     pub(super) fn is_concrete(&self, kt: Handle) -> bool {
         !self.entry(kt).parametric
     }
@@ -1150,7 +1149,7 @@ impl<'run> TypeRegistry<'run> {
         self.contains_carrier(kt.raw())
     }
 
-    /// Whether `kt` reads the `index`-th quantifier of the enclosing binder — what a definition asks
+    /// Whether `kt` reads the `index`-th quantifier of the enclosing scheme — what a definition asks
     /// of each name its `FOR ALL` group lists.
     pub fn references_quantifier<H: TypeHandle>(
         &self,
@@ -1206,7 +1205,7 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// Whether every free `Quantified` position reachable from `kt` names an index below `arity` —
-    /// the binder doors' well-formedness probe.
+    /// the scheme doors' well-formedness probe.
     pub(super) fn quantifier_indices_in_range(
         &self,
         scratch: BumpAllocator<'_>,
@@ -1260,7 +1259,7 @@ struct GroupOrder<'s> {
     quantifier_map: &'s [usize],
 }
 
-/// One variable's census entry while a binder's group is being ordered.
+/// One variable's census entry while a scheme's group is being ordered.
 #[derive(Clone, Copy)]
 struct Occurrences {
     contravariant: usize,

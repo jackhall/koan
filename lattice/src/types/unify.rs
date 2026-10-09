@@ -187,7 +187,7 @@ struct Names {
 
 impl Names {
     /// Read `kt`, at `variance` and under a union or not, for the `index`-th variable. A nested
-    /// binder's group shadows the declared one.
+    /// scheme's group shadows the declared one.
     fn over(
         &mut self,
         types: &TypeRegistry<'_>,
@@ -621,7 +621,7 @@ pub(super) fn member_at_least(
 /// is at least as specific as the other ([`member_at_least`]), or neither is and some type lies
 /// under both read from above. An argument both admit then has no member to prefer, so the solve
 /// would turn on which member is stored first. A contravariant position takes its union whole, and
-/// a nested binder's group is its own.
+/// a nested scheme's group is its own.
 pub(super) fn tied_members(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,

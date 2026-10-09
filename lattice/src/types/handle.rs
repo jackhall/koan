@@ -16,7 +16,7 @@
 //! concrete because every door that yields one builds it from concrete parts or checks it
 //! ([`TypeRegistry::concrete`](super::registry::TypeRegistry::concrete)). **Concrete** means that,
 //! outside a sealed `Signature` or `SetMember` node, the type holds no free `Quantified`, no
-//! `Lexical`, no head `Parameter` and no quantified binder. An opaque carrier is concrete.
+//! `Lexical`, no head `Parameter` and no scheme. An opaque carrier is concrete.
 //!
 //! Container types are always parameterized: bare `List` / `Dict` lower to `List<Any>` /
 //! `Dict<Any, Any>` at [`KType::from_symbol`] time.
@@ -40,14 +40,14 @@ use super::registry::TypeRegistry;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Handle(TypeDigest);
 
-/// A **concrete** type: outside sealed content it holds no variable and no quantified binder. The
+/// A **concrete** type: outside sealed content it holds no variable and no scheme. The
 /// lattice's order, join and meet relate these and nothing else, and every value but a quantified
 /// callable carries one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KType(Handle);
 
 /// A type that may hold a variable — a free `Quantified`, a `Lexical` or a head `Parameter` —
-/// but no quantified binder outside sealed content. Related by *fits* and the solver, never by
+/// but no scheme outside sealed content. Related by *fits* and the solver, never by
 /// the order. Becomes a [`KType`] only by substitution, or through
 /// [`TypeRegistry::concrete`](super::registry::TypeRegistry::concrete).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

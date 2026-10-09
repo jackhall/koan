@@ -366,7 +366,7 @@ impl<'run, H> TypeNode<'run, H> {
 /// A free variable a read through intervals meets, as its node spells it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Variable {
-    /// A binder's own variable, read where no binder captures it.
+    /// A scheme's own variable, read where no scheme captures it.
     Quantified { index: usize, bound: KType },
     /// A lexical variable at `level` along the chain of bodies that declares it.
     Lexical {
