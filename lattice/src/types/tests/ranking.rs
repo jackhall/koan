@@ -21,6 +21,7 @@ use crate::types::render::display_handle;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::{DispatchTokenElement, RawRank, Specificity, dense_classes};
 use crate::types::sig_relations::{FitsFailure, shape_specificity, sig_fits};
+use crate::types::typed;
 use crate::types::unify::Interval;
 
 /// Anything under `kt`, read raw.
@@ -71,13 +72,13 @@ impl<'r> World<'r> {
     }
 
     /// The shape `FOR ALL #[<group>] #(<parts>) -> Any` under `classes`.
-    fn head(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8]) -> Handle {
+    fn head(&self, group: &[&str], parts: &[Part<'_>], classes: &[u16]) -> Handle {
         self.head_to(group, parts, classes, Handle::ANY)
     }
 
     /// The shape `FOR ALL #[<group>] #(<parts>) -> <ret>` under `classes`, each variable bounded by
     /// `Any`.
-    fn head_to(&self, group: &[&str], parts: &[Part<'_>], classes: &[u8], ret: Handle) -> Handle {
+    fn head_to(&self, group: &[&str], parts: &[Part<'_>], classes: &[u16], ret: Handle) -> Handle {
         let names: Vec<TypeSymbol> = group.iter().map(|text| self.name(text)).collect();
         let bounds = vec![KType::ANY; names.len()];
         let elements: Vec<DispatchTokenElement> = parts
@@ -125,7 +126,7 @@ fn a_written_ranking_normalizes_to_dense_classes() {
     let bump = Bump::new();
     let n = RawRank::Numbered;
     let u = RawRank::Unnumbered;
-    let cases: [(&[RawRank], &[u8]); 6] = [
+    let cases: [(&[RawRank], &[u16]); 6] = [
         (&[n(2), n(1)], &[1, 0]),
         (&[n(20), n(10)], &[1, 0]),
         (&[u, u], &[0, 1]),
@@ -304,7 +305,7 @@ fn a_later_class_reads_an_earlier_variable_at_its_interval() {
     let world = World::new(&bump);
     let below = |a, b| fits(&world.types, world.region, a, b);
     let number_or_str = world.union(&[KType::NUMBER.raw(), KType::STR.raw()]);
-    let pair = |group: &[&str], x, y, classes: &[u8]| {
+    let pair = |group: &[&str], x, y, classes: &[u16]| {
         world.head_to(
             group,
             &[Kw("PAIR"), Slot(x), Kw("WITH"), Slot(y)],
@@ -823,5 +824,47 @@ fn an_exact_class_over_a_lexical_variable_is_judged_by_a_reproducible_solve() {
             )
             .0,
         Verdict::Maybe
+    );
+}
+
+/// No law: a shape wider than a byte's worth of slots is ordinary content. Written order and a
+/// ranking each intern and rank at 300 slots.
+#[test]
+fn three_hundred_slot_shapes_intern_and_rank() {
+    let symbols = SymbolInterner::new();
+    let key = KeywordSymbol::declared("RUN", &symbols).expect("a keyword token");
+    let (region, scratch) = (Bump::new(), Bump::new());
+    let types = TypeRegistry::in_region(&region);
+    let shape = |slot: KType, classes: &[u16]| {
+        let mut elements = vec![DispatchTokenElement::Keyword(key)];
+        elements.extend((0..300).map(|_| DispatchTokenElement::Slot(slot)));
+        types.shape_type(&elements, classes, KType::NULL)
+    };
+    let spelled: Vec<u16> = (0..300).collect();
+    let reversed: Vec<u16> = (0..300).rev().collect();
+
+    let written = shape(KType::NUMBER, &[]);
+    assert_eq!(
+        shape(KType::NUMBER, &spelled),
+        written,
+        "written order spelled out is one handle"
+    );
+    let ranked = shape(KType::NUMBER, &reversed);
+    assert_ne!(ranked, written);
+    // The ranking reads back as written.
+    let TypeNode::ExpressionShape { classes, .. } = types.node(ranked) else {
+        unreachable!("a shape door interns a shape")
+    };
+    assert!(classes.iter().eq(reversed.iter().copied()));
+
+    // 300 numbers are admitted by each, and the narrower of two ranked shapes ranks above.
+    let arguments = vec![KType::NUMBER; 300];
+    for declared in [written, ranked] {
+        assert!(typed::admit_by_class(&types, &scratch, declared.into(), &arguments).is_some());
+    }
+    let wide = shape(KType::ANY, &reversed);
+    assert_eq!(
+        typed::shape_specificity(&types, &scratch, ranked.into(), wide.into()),
+        Specificity::StrictlyMore,
     );
 }

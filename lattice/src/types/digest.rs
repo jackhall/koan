@@ -115,6 +115,11 @@ impl DigestHasher {
         self
     }
 
+    fn short(&mut self, s: u16) -> &mut Self {
+        self.inner.update(&s.to_le_bytes());
+        self
+    }
+
     fn count(&mut self, n: usize) -> &mut Self {
         self.inner.update(&(n as u64).to_le_bytes());
         self
@@ -369,7 +374,7 @@ pub(super) fn function_digest<H: TypeHandle>(
 /// reads.
 pub(super) fn shape_digest<H: TypeHandle>(
     elements: impl ExactSizeIterator<Item = DispatchTokenElement<H>>,
-    ranking: impl IntoIterator<Item = u8>,
+    ranking: impl IntoIterator<Item = u16>,
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
@@ -381,9 +386,9 @@ pub(super) fn shape_digest<H: TypeHandle>(
         };
     }
     // A ranking follows the elements, whose count fixes where it starts; written order feeds
-    // nothing, so an unranked shape digests as it always has.
+    // nothing, so an unranked shape digests as it always has. Each class is two bytes.
     for class in ranking {
-        h.byte(class);
+        h.short(class);
     }
     h.digest(ret).finish()
 }

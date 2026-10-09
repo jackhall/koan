@@ -39,7 +39,7 @@ trait RawSchemes {
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
         elements: &[DispatchTokenElement],
-        classes: &[u8],
+        classes: &[u16],
         ret: Handle,
     ) -> (Handle, &'s [usize]);
 }
@@ -65,7 +65,7 @@ impl RawSchemes for TypeRegistry<'_> {
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
         elements: &[DispatchTokenElement],
-        classes: &[u8],
+        classes: &[u16],
         ret: Handle,
     ) -> (Handle, &'s [usize]) {
         let elements: Vec<DispatchTokenElement<Parametric>> = elements

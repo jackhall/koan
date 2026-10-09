@@ -267,7 +267,7 @@ pub struct Registration<'graph> {
     /// Each slot's dense priority class, in element order: the ranking of the declaration visible
     /// where the definition is written, an operator's chaining, a surfaced head's own ranking, or
     /// written order.
-    pub classes: &'graph [u8],
+    pub classes: &'graph [u16],
     pub which: Which,
     /// In a `USING … SCOPE` block, every head its operand declares at the key; `None` for a
     /// definition's registration.
@@ -316,7 +316,7 @@ pub struct Ranking<'graph> {
     pub key: KeySymbol,
     pub elements: &'graph [KeyElement],
     pub at: Position,
-    pub classes: &'graph [u8],
+    pub classes: &'graph [u16],
 }
 
 /// One callable, or list of callables, a keyworded use may select.
@@ -337,7 +337,7 @@ pub enum Candidate {
 pub struct CandidateList<'graph> {
     pub key: KeySymbol,
     pub elements: &'graph [KeyElement],
-    pub classes: &'graph [u8],
+    pub classes: &'graph [u16],
     pub candidates: &'graph [Candidate],
 }
 
@@ -1017,7 +1017,7 @@ impl<'graph> BodyShape<'graph> {
     /// Whether every keyworded use at `key` that lists a candidate of its own beside a spread —
     /// here, and in each body nested here short of another quote's code — carries the ranking
     /// `classes`: what a `USING` filling this code's hole at `key` must agree with.
-    pub fn ranks_alike(&self, key: KeySymbol, classes: &[u8]) -> bool {
+    pub fn ranks_alike(&self, key: KeySymbol, classes: &[u16]) -> bool {
         let own = self.candidates.iter().all(|(_, list)| {
             list.key != key
                 || list.classes == classes

@@ -274,7 +274,7 @@ fn registered<'x>(
     function: DeclaredType<Parametric>,
     map: FunctionGroupMap<'_>,
     head: Head<'_, '_>,
-    classes: &[u8],
+    classes: &[u16],
 ) -> Registered<'x> {
     let (shape, parameters) = registered_shape(types, scratch, function, head, classes);
     Registered {
@@ -310,7 +310,7 @@ fn registered_shape<'x>(
     scratch: BumpAllocator<'x>,
     function: DeclaredType<Parametric>,
     head: Head<'_, '_>,
-    classes: &[u8],
+    classes: &[u16],
 ) -> (GroupIntern<'x>, ParameterBinding<'x>) {
     let view = function.view(types);
     let TypeNode::KFunction { params, ret } = view.body else {

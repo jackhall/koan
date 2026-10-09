@@ -420,7 +420,7 @@ fn every_compound_variant_digests_as_pinned() {
                     KType::NUMBER,
                 )
                 .raw(),
-            0x02b78ae09baf4e112143c56e0105ac00,
+            0x432b1cc0d9b69372bbe99c659948f2a9,
         ),
         (
             "Scheme",

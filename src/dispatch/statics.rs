@@ -2041,7 +2041,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .iter()
                 .map(|(_, param)| DispatchTokenElement::Slot(*param)),
         );
-        let classes = scratch.alloc_slice_fill_copy(sorted.len(), 0u8);
+        let classes = scratch.alloc_slice_fill_copy(sorted.len(), 0u16);
         // The shape's group may be numbered otherwise than the callee's, and nothing reads one
         // through the other: the shape is judged and returns through its own group, and the frame
         // solves the callee's.

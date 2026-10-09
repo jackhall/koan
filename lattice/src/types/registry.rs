@@ -759,7 +759,7 @@ impl<'run> TypeRegistry<'run> {
     pub fn shape_type<H: TypeHandle>(
         &self,
         elements: &[DispatchTokenElement<H>],
-        classes: &[u8],
+        classes: &[u16],
         ret: H,
     ) -> H {
         debug_assert!(
@@ -785,7 +785,7 @@ impl<'run> TypeRegistry<'run> {
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
         elements: &[DispatchTokenElement<Parametric>],
-        classes: &[u8],
+        classes: &[u16],
         ret: Parametric,
     ) -> GroupIntern<'s> {
         let body = self.shape_type(elements, classes, ret);
@@ -930,7 +930,7 @@ impl<'run> TypeRegistry<'run> {
     fn intern_shape<H: TypeHandle>(
         &self,
         elements: &[DispatchTokenElement<H>],
-        classes: &[u8],
+        classes: &[u16],
         ret: Handle,
     ) -> Handle {
         let handle = digest::shape_digest(

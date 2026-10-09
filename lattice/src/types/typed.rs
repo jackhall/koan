@@ -166,7 +166,7 @@ pub fn outranks(
     scratch: BumpAllocator<'_>,
     a: DeclaredType<Parametric>,
     b: DeclaredType<Parametric>,
-    class: u8,
+    class: u16,
 ) -> bool {
     ranking::outranks(types, scratch, a.raw(), b.raw(), class)
 }

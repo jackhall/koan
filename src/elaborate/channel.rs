@@ -651,7 +651,7 @@ fn ranked(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     shape: DeclaredType<Parametric>,
-    classes: &[u8],
+    classes: &[u16],
 ) -> DeclaredType<Parametric> {
     let view = shape.view(types);
     let TypeNode::ExpressionShape { elements, ret, .. } = view.body else {

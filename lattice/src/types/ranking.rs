@@ -46,7 +46,7 @@ struct ClassWalk<'s, 'run> {
     declared: Shape<'run>,
     slots: BumpVec<'s, Handle>,
     /// Per variable, the lowest class whose slots mention it; `None` for one only the return does.
-    first: BumpVec<'s, Option<u8>>,
+    first: BumpVec<'s, Option<u16>>,
     fixed: BumpVec<'s, Option<Handle>>,
 }
 
@@ -92,7 +92,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'s>,
         arguments: &[Handle],
-        class: u8,
+        class: u16,
         reads: impl Fn(usize) -> bool,
     ) -> ClassSolve<'s> {
         let mut collector = self.collector(scratch);
@@ -122,7 +122,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     }
 
     /// Fix each variable `class` first mentions to `read(variable)`.
-    fn fix(&mut self, class: u8, mut read: impl FnMut(usize) -> Handle) {
+    fn fix(&mut self, class: u16, mut read: impl FnMut(usize) -> Handle) {
         for variable in 0..self.fixed.len() {
             if self.first[variable] == Some(class) {
                 self.fixed[variable] = Some(read(variable));
@@ -137,7 +137,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
         &mut self,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'s>,
-        class: u8,
+        class: u16,
         solution: &[Handle],
     ) {
         let declared = self.declared;
@@ -483,7 +483,7 @@ pub(super) fn outranks(
     scratch: BumpAllocator<'_>,
     a: Handle,
     b: Handle,
-    class: u8,
+    class: u16,
 ) -> bool {
     class_at_least(types, scratch, a, b, class) && !class_at_least(types, scratch, b, a, class)
 }
@@ -500,7 +500,7 @@ pub(super) fn class_at_least(
     scratch: BumpAllocator<'_>,
     a: Handle,
     b: Handle,
-    class: u8,
+    class: u16,
 ) -> bool {
     let relation = Relation::ClassAtLeast(class);
     if let Some(known) = types.verdict(a.digest(), b.digest(), relation) {

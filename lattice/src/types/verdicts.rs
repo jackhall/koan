@@ -29,7 +29,7 @@ pub(super) enum Relation {
     /// [`member_at_least`](super::unify::member_at_least).
     MemberAtLeast,
     /// [`class_at_least`](super::ranking::class_at_least) at the class it names.
-    ClassAtLeast(u8),
+    ClassAtLeast(u16),
 }
 
 impl Relation {

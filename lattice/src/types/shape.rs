@@ -33,7 +33,7 @@ pub enum DispatchTokenElement<H = Handle> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum StoredElement {
     Keyword(KeywordSymbol),
-    Slot(Handle, u8),
+    Slot(Handle, u16),
 }
 
 const _: () = assert!(std::mem::size_of::<StoredElement>() == 32);
@@ -65,7 +65,7 @@ impl<'run> Classes<'run> {
     }
 
     /// The class of each slot, in slot order.
-    pub fn iter(self) -> impl Iterator<Item = u8> + 'run {
+    pub fn iter(self) -> impl Iterator<Item = u16> + 'run {
         self.elements.iter().filter_map(|element| match element {
             StoredElement::Slot(_, class) => Some(*class),
             StoredElement::Keyword(_) => None,
@@ -73,7 +73,7 @@ impl<'run> Classes<'run> {
     }
 
     /// The class of slot `slot`.
-    pub fn get(self, slot: usize) -> u8 {
+    pub fn get(self, slot: usize) -> u16 {
         self.iter().nth(slot).expect("a slot of the shape")
     }
 
@@ -92,7 +92,7 @@ impl<'run> Classes<'run> {
     }
 
     /// The ranking as a slice in `scratch`, as a shape door takes one.
-    pub fn copied_into<'s>(self, scratch: BumpAllocator<'s>) -> &'s [u8] {
+    pub fn copied_into<'s>(self, scratch: BumpAllocator<'s>) -> &'s [u16] {
         let mut ranking = BumpVec::new_in(scratch);
         ranking.extend(self.iter());
         ranking.leak()
@@ -179,10 +179,10 @@ impl<'run> Shape<'run> {
         self.classes.count()
     }
 
-    /// Every class index of the ranking, as the `u8` a class is named by.
-    pub(super) fn class_indices(self) -> impl Iterator<Item = u8> {
+    /// Every class index of the ranking, as the `u16` a class is named by.
+    pub(super) fn class_indices(self) -> impl Iterator<Item = u16> {
         (0..self.class_count())
-            .map(|class| u8::try_from(class).expect("a shape has fewer than 256 classes"))
+            .map(|class| u16::try_from(class).expect("a shape has fewer than 65536 slots"))
     }
 
     /// The bound of the `index`-th variable of the shape's scheme group.
@@ -309,7 +309,7 @@ pub enum RawRank {
 /// [`ExpressionShape`](super::node::TypeNode::ExpressionShape) stores: numbered slots come first,
 /// in integer order, slots sharing an integer share a class, and each `_` is a class of its own
 /// after them, in written order. So `2 1` and `20 10` are both `[1, 0]`, and `_ _` is `[0, 1]`.
-pub fn dense_classes<'s>(scratch: BumpAllocator<'s>, raw: &[RawRank]) -> &'s [u8] {
+pub fn dense_classes<'s>(scratch: BumpAllocator<'s>, raw: &[RawRank]) -> &'s [u16] {
     let key = |index: usize| match raw[index] {
         RawRank::Numbered(n) => (0u8, n as usize),
         RawRank::Unnumbered => (1u8, index),
@@ -322,12 +322,12 @@ pub fn dense_classes<'s>(scratch: BumpAllocator<'s>, raw: &[RawRank]) -> &'s [u8
         let class = keys
             .binary_search(&key(index))
             .expect("every key was collected");
-        u8::try_from(class).expect("a shape has fewer than 256 slots")
+        u16::try_from(class).expect("a shape has fewer than 65536 slots")
     }))
 }
 
 /// Whether `classes` ranks the slots in written order: empty, or `0..n`.
-pub(super) fn written_order(classes: &[u8]) -> bool {
+pub(super) fn written_order(classes: &[u16]) -> bool {
     classes
         .iter()
         .enumerate()
@@ -335,11 +335,11 @@ pub(super) fn written_order(classes: &[u8]) -> bool {
 }
 
 /// The class of slot `index` under `classes` — its own index where the shape is written-order.
-pub(super) fn class_of(classes: &[u8], index: usize) -> u8 {
+pub(super) fn class_of(classes: &[u16], index: usize) -> u16 {
     classes
         .get(index)
         .copied()
-        .unwrap_or_else(|| u8::try_from(index).expect("a shape has fewer than 256 slots"))
+        .unwrap_or_else(|| u16::try_from(index).expect("a shape has fewer than 65536 slots"))
 }
 
 /// How two candidates under one dispatch bucket rank against each other.
