@@ -433,9 +433,11 @@ where
             Err(error) => return self.failed(error),
         };
         if report.use_ == Use::Reads {
-            let filled = self
-                .context
-                .deliver_scratch(self.provenance.parent, report.slot, build);
+            let filled = self.context.deliver_scratch(
+                self.provenance.parent,
+                report.slot,
+                |writer, _, witness| build(writer, witness),
+            );
             return Action::settle(filled);
         }
         let placed = self.context.alloc_into::<KValueFamily, KValueFamily>(
@@ -444,7 +446,7 @@ where
             // The witness is minted here: `CrossedOperand` declares `'graph: 'cell`, so the slice
             // argument's type implies the bound the witness states. Were that where-clause to go,
             // this would stop compiling — a compile error, never unsoundness.
-            |writer, _: &[CrossedOperand<'graph, '_, '_, KValueFamily>]| build(writer, &&()),
+            |writer, _, _: &[CrossedOperand<'graph, '_, '_, KValueFamily>]| build(writer, &&()),
         );
         self.file(report, placed)
     }
@@ -478,7 +480,7 @@ where
         let placed = self.context.alloc_into::<KValueFamily, KValueFamily>(
             self.provenance.home,
             &crossing,
-            |writer, views| {
+            |writer, _, views| {
                 let values = std::array::from_fn(|index| {
                     crate::values::cross_view(writer, &views[index], types)
                 });
@@ -524,7 +526,7 @@ where
                 carrier: &lifted,
                 copy_bytes,
             }],
-            |writer, views| Active::new(B::cross(writer, &views[0])),
+            |writer, _, views| Active::new(B::cross(writer, &views[0])),
         );
         let Ok(placed) = placed else {
             return self.failed(StepError::Stale);

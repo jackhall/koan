@@ -82,7 +82,9 @@ fn send(
     let consumer = consumer.into();
     graph
         .enter(producer, |context| {
-            context.deliver_scratch(consumer, slot, |writer, _| Active::new(one(writer, value)))
+            context.deliver_scratch(consumer, slot, |writer, _, _| {
+                Active::new(one(writer, value))
+            })
         })
         .unwrap()
 }
@@ -107,14 +109,14 @@ fn a_run_rests_where_its_registration_put_it_and_drains_one_slot_at_a_time() {
         .enter(producer, |context| {
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 0, |writer, _| Active::new(one(writer, 41u32)))
+                    .deliver_scratch(consumer, 0, |writer, _, _| Active::new(one(writer, 41u32)))
                     .unwrap(),
                 Delivered::Outstanding,
                 "one slot of two"
             );
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 1, |writer, _| Active::new(one(writer, 42u32)))
+                    .deliver_scratch(consumer, 1, |writer, _, _| Active::new(one(writer, 42u32)))
                     .unwrap(),
                 Delivered::Complete
             );
@@ -278,7 +280,7 @@ fn a_producer_places_into_its_consumer_files_the_carrier_and_dies() {
                 .alloc_into::<Number, Number>(
                     consumer,
                     &[operand_at(&value, usize::MAX)],
-                    |_, views| Active::new(pinned(&views[0])),
+                    |_, _, views| Active::new(pinned(&views[0])),
                 )
                 .unwrap();
             let carrier = context.keep(placed);
@@ -482,7 +484,7 @@ fn a_tenants_run_is_its_own_though_the_bytes_under_it_are_its_hosts() {
     graph
         .enter(host, |context| {
             assert_eq!(
-                context.deliver_scratch(tenant, 0, |writer, _| Active::new(one(writer, 41u32))),
+                context.deliver_scratch(tenant, 0, |writer, _, _| Active::new(one(writer, 41u32))),
                 Ok(Delivered::Complete)
             );
         })
@@ -614,7 +616,7 @@ fn a_bare_signal_costs_no_bump_byte_beyond_the_run() {
     graph
         .enter(producer, |context| {
             assert_eq!(
-                context.deliver_scratch(consumer, 0, |_, _| Active::new(())),
+                context.deliver_scratch(consumer, 0, |_, _, _| Active::new(())),
                 Ok(Delivered::Complete)
             );
         })

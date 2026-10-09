@@ -271,7 +271,9 @@ fn the_delivery_doors_answer_from_outside_the_crate() {
         .enter(producer, |context| {
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 0, |writer, _| Active::new(build_number(writer)))
+                    .deliver_scratch(consumer, 0, |writer, _, _| Active::new(build_number(
+                        writer
+                    )))
                     .unwrap(),
                 Delivered::Outstanding
             );
@@ -280,7 +282,7 @@ fn the_delivery_doors_answer_from_outside_the_crate() {
                 .alloc_into::<Number, Number>(
                     consumer,
                     &[pinned_operand(&value)],
-                    |writer, views| {
+                    |writer, _, views| {
                         Active::new(match &views[0] {
                             CrossedOperand::Pinned { view: value, .. } => *value,
                             CrossedOperand::Copied { view: value, .. } => one(writer, **value),
@@ -295,12 +297,16 @@ fn the_delivery_doors_answer_from_outside_the_crate() {
             );
             // Both refusals of a filled run, from outside the crate.
             let refused = context
-                .deliver_scratch(consumer, 1, |writer, _| Active::new(build_number(writer)))
+                .deliver_scratch(consumer, 1, |writer, _, _| {
+                    Active::new(build_number(writer))
+                })
                 .unwrap_err();
             assert_eq!(refused, DeliverError::Filled);
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 2, |writer, _| Active::new(build_number(writer)))
+                    .deliver_scratch(consumer, 2, |writer, _, _| Active::new(build_number(
+                        writer
+                    )))
                     .unwrap_err(),
                 DeliverError::OutOfRange
             );
@@ -428,12 +434,16 @@ fn every_public_door_answers_from_outside_the_crate() {
             assert_eq!(read_first(context, &filtered), &[3, 6, 99]);
             assert_eq!(read_first(context, &rendered), "3;6;99;");
             let pushed = context
-                .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
-                    Active::new(match views[0] {
-                        CrossedOperand::Pinned { view: value, .. } => one(writer, *value + 1),
-                        CrossedOperand::Copied { view: value, .. } => one(writer, *value + 1),
-                    })
-                })
+                .alloc_into::<Number, Number>(
+                    root,
+                    &[pinned_operand(&number)],
+                    |writer, _, views| {
+                        Active::new(match views[0] {
+                            CrossedOperand::Pinned { view: value, .. } => one(writer, *value + 1),
+                            CrossedOperand::Copied { view: value, .. } => one(writer, *value + 1),
+                        })
+                    },
+                )
                 .unwrap();
             // The same door under the other verdict: an operand the embedder prices cheap to copy
             // crosses severed, so the only thing the build can do with it is copy it in deeply.
@@ -444,7 +454,7 @@ fn every_public_door_answers_from_outside_the_crate() {
                         carrier: &number,
                         copy_bytes: 0,
                     }],
-                    |writer, views| {
+                    |writer, _, views| {
                         Active::new(match views[0] {
                             CrossedOperand::Copied { view: value, .. } => {
                                 writer.fill(2, |_| *value)
@@ -474,7 +484,7 @@ fn every_public_door_answers_from_outside_the_crate() {
                         copy_bytes: 0,
                     },
                 ],
-                |writer, views| {
+                |writer, _, views| {
                     let here = match views[0] {
                         CrossedOperand::Pinned { view: value, .. } => value,
                         CrossedOperand::Copied { view: value, .. } => one(writer, *value),
@@ -582,14 +592,18 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
     graph
         .enter(cell, |context| {
             let foreign = context
-                .alloc_into::<Number, Number>(other, &[], |writer, _| Active::new(one(writer, 23)))
+                .alloc_into::<Number, Number>(other, &[], |writer, _, _| {
+                    Active::new(one(writer, 23))
+                })
                 .unwrap();
-            let held = context.alloc_here(&[pinned_operand(&foreign)], |writer, views| match views
-                [0]
-            {
-                CrossedOperand::Pinned { view: value, .. } => value,
-                CrossedOperand::Copied { view: value, .. } => one(writer, *value),
-            });
+            let held =
+                context.alloc_here(
+                    &[pinned_operand(&foreign)],
+                    |writer, _, views| match views[0] {
+                        CrossedOperand::Pinned { view: value, .. } => value,
+                        CrossedOperand::Copied { view: value, .. } => one(writer, *value),
+                    },
+                );
             context.store_successor(held);
         })
         .unwrap();
@@ -669,12 +683,16 @@ fn the_tree_pool_answers_from_outside_the_crate() {
             // Into the cell's own tree parent: an upward pin, priced at the splice and pledging
             // this cell's bump to the parent's bundle.
             let up = context
-                .alloc_into::<Number, Number>(outer, &[pinned_operand(&value)], |writer, views| {
-                    Active::new(match views[0] {
-                        CrossedOperand::Pinned { view: value, .. } => one(writer, *value + 1),
-                        CrossedOperand::Copied { view: value, .. } => one(writer, *value + 1),
-                    })
-                })
+                .alloc_into::<Number, Number>(
+                    outer,
+                    &[pinned_operand(&value)],
+                    |writer, _, views| {
+                        Active::new(match views[0] {
+                            CrossedOperand::Pinned { view: value, .. } => one(writer, *value + 1),
+                            CrossedOperand::Copied { view: value, .. } => one(writer, *value + 1),
+                        })
+                    },
+                )
                 .unwrap();
             kept = Some(context.keep(up));
 
@@ -752,7 +770,7 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
                 .alloc_into::<Listing, Listing>(
                     right,
                     &[pinned_operand(&source)],
-                    |writer, views| {
+                    |writer, _, views| {
                         let CrossedOperand::Copied { view: entry, .. } = views[0] else {
                             panic!("a sibling crossing is a forced copy");
                         };

@@ -160,7 +160,7 @@ fn an_absorb_leaves_the_absorbers_named_scratch_alone() {
                 .alloc_into::<Number, Number>(
                     parent,
                     &[operand_at(&value, usize::MAX)],
-                    |_, views| Active::new(super::pinned(&views[0])),
+                    |_, _, views| Active::new(super::pinned(&views[0])),
                 )
                 .unwrap();
         })
@@ -251,7 +251,7 @@ fn scratch_bytes_are_in_no_price() {
                 .alloc_into::<Number, Number>(
                     consumer,
                     &[operand_at(&value, usize::MAX)],
-                    |_, views| Active::new(super::pinned(&views[0])),
+                    |_, _, views| Active::new(super::pinned(&views[0])),
                 )
                 .unwrap();
             // Parked, so the bytes are still there to be compared against the price.

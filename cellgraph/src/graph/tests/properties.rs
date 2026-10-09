@@ -763,7 +763,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             .alloc_into::<Number, Number>(
                                 consumer,
                                 &[operand_at(&value, 1)],
-                                |writer, views| Active::new(take(&views[0], writer)),
+                                |writer, _, views| Active::new(take(&views[0], writer)),
                             )
                             .map(|_| ())
                     });
@@ -778,12 +778,12 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 {
                     let _ = graph.enter(cell, |context| {
                         if let Ok(value) =
-                            context.alloc_into::<Number, Number>(over, &[], |w, _| {
+                            context.alloc_into::<Number, Number>(over, &[], |w, _, _| {
                                 Active::new(one(w, 1))
                             })
                         {
                             let captured = context
-                                .alloc_here(&[operand_at(&value, 1)], |writer, views| {
+                                .alloc_here(&[operand_at(&value, 1)], |writer, _, views| {
                                     take(&views[0], writer)
                                 });
                             context.store_successor(captured);
@@ -869,7 +869,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             .alloc_into::<Number, Number>(
                                 consumer,
                                 &[operand_at(&value, 1)],
-                                |writer, views| Active::new(take(&views[0], writer)),
+                                |writer, _, views| Active::new(take(&views[0], writer)),
                             )
                             .map(|_| ())
                     });
@@ -947,7 +947,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             .alloc_into::<Number, Number>(
                                 consumer,
                                 &[operand_at(&value, 1)],
-                                |writer, views| Active::new(take(&views[0], writer)),
+                                |writer, _, views| Active::new(take(&views[0], writer)),
                             )
                             .map(|_| ())
                     });

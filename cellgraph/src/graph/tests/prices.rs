@@ -56,7 +56,7 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
             // One operand homed in the destination and one homed elsewhere, at two stated copy
             // costs, in one placement.
             let there = context
-                .alloc_into::<Number, Number>(destination, &[], |writer, _| {
+                .alloc_into::<Number, Number>(destination, &[], |writer, _, _| {
                     Active::new(one(writer, 1))
                 })
                 .unwrap();
@@ -65,7 +65,7 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
                 .alloc_into::<Number, Number>(
                     destination,
                     &[operand_at(&there, 3), operand_at(&own, 5)],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
         })
@@ -109,7 +109,7 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
                     .alloc_into::<Number, Number>(
                         destination,
                         &[operand_at(&own, 0)],
-                        |writer, views| Active::new(take(&views[0], writer)),
+                        |writer, _, views| Active::new(take(&views[0], writer)),
                     )
                     .unwrap();
                 assert_eq!(*context.read(&placed).value(), 41);
@@ -150,7 +150,7 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
                 .alloc_into::<Number, Number>(
                     destination,
                     &[operand_at(&own, 0)],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
             // Unpriceable to copy, so the same operand pins and the build embeds the borrow.
@@ -158,7 +158,7 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
                 .alloc_into::<Number, Number>(
                     destination,
                     &[operand_at(&own, usize::MAX)],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
             assert!(!copied.reach().names(producer.slot()));
@@ -207,10 +207,12 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
     graph
         .enter(driver, |context| {
             context
-                .alloc_into::<Number, Number>(tail, &[], |writer, _| Active::new(one(writer, 1)))
+                .alloc_into::<Number, Number>(tail, &[], |writer, _, _| Active::new(one(writer, 1)))
                 .unwrap();
             context
-                .alloc_into::<Number, Number>(doomed, &[], |writer, _| Active::new(one(writer, 2)))
+                .alloc_into::<Number, Number>(doomed, &[], |writer, _, _| {
+                    Active::new(one(writer, 2))
+                })
                 .unwrap();
         })
         .unwrap();
@@ -227,16 +229,16 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
     graph
         .enter(driver, |context| {
             let near = context
-                .alloc_into::<Number, Number>(held, &[], |writer, _| Active::new(one(writer, 3)))
+                .alloc_into::<Number, Number>(held, &[], |writer, _, _| Active::new(one(writer, 3)))
                 .unwrap();
             let far = context
-                .alloc_into::<Number, Number>(head, &[], |writer, _| Active::new(one(writer, 4)))
+                .alloc_into::<Number, Number>(head, &[], |writer, _, _| Active::new(one(writer, 4)))
                 .unwrap();
             context
                 .alloc_into::<Number, Number>(
                     destination,
                     &[operand_at(&near, usize::MAX), operand_at(&far, usize::MAX)],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
         })
@@ -269,10 +271,14 @@ fn operands_from_one_source_are_priced_against_what_the_placement_has_already_pi
         .enter(driver, |context| {
             // Two values homed in the same cell, so both operands reach exactly `source`.
             let first = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| Active::new(one(writer, 1)))
+                .alloc_into::<Number, Number>(source, &[], |writer, _, _| {
+                    Active::new(one(writer, 1))
+                })
                 .unwrap();
             let second = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| Active::new(one(writer, 2)))
+                .alloc_into::<Number, Number>(source, &[], |writer, _, _| {
+                    Active::new(one(writer, 2))
+                })
                 .unwrap();
             context
                 .alloc_into::<Number, Number>(
@@ -281,7 +287,7 @@ fn operands_from_one_source_are_priced_against_what_the_placement_has_already_pi
                         operand_at(&first, usize::MAX),
                         operand_at(&second, usize::MAX),
                     ],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
         })
@@ -313,16 +319,20 @@ fn a_copied_operand_leaves_the_next_one_the_whole_price() {
     graph
         .enter(driver, |context| {
             let first = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| Active::new(one(writer, 1)))
+                .alloc_into::<Number, Number>(source, &[], |writer, _, _| {
+                    Active::new(one(writer, 1))
+                })
                 .unwrap();
             let second = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| Active::new(one(writer, 2)))
+                .alloc_into::<Number, Number>(source, &[], |writer, _, _| {
+                    Active::new(one(writer, 2))
+                })
                 .unwrap();
             context
                 .alloc_into::<Number, Number>(
                     destination,
                     &[operand_at(&first, 0), operand_at(&second, usize::MAX)],
-                    |writer, views| Active::new(take(&views[1], writer)),
+                    |writer, _, views| Active::new(take(&views[1], writer)),
                 )
                 .unwrap();
         })
@@ -375,7 +385,7 @@ fn a_frozen_closure_prices_through_its_memo() {
                 .alloc_into::<Number, Number>(
                     destination,
                     &[operand_at(&carrier, usize::MAX)],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
             // The pin above minted the sealed cell into the destination's sealed holds, so the same
@@ -384,7 +394,7 @@ fn a_frozen_closure_prices_through_its_memo() {
                 .alloc_into::<Number, Number>(
                     destination,
                     &[operand_at(&carrier, usize::MAX)],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
         })
@@ -414,7 +424,9 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
     let (mut argument, mut accumulated) = graph
         .enter(cart, |context| {
             let first = context
-                .alloc_into::<Number, Number>(running, &[], |writer, _| Active::new(one(writer, 1)))
+                .alloc_into::<Number, Number>(running, &[], |writer, _, _| {
+                    Active::new(one(writer, 1))
+                })
                 .unwrap();
             let total = number_here(context, 0);
             (context.keep(first), context.keep(total))
@@ -435,7 +447,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
                     .alloc_into::<Number, Number>(
                         waiting,
                         &[operand_at(&argument, 0)],
-                        |writer, views| Active::new(one(writer, number(&views[0]) + 1)),
+                        |writer, _, views| Active::new(one(writer, number(&views[0]) + 1)),
                     )
                     .unwrap();
                 // The accumulated result goes into the cart, over the cart's own value pinned —
@@ -447,7 +459,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
                             operand_at(&accumulated, usize::MAX),
                             operand_at(&argument, 0),
                         ],
-                        |writer, views| {
+                        |writer, _, views| {
                             Active::new(one(writer, number(&views[0]) + number(&views[1])))
                         },
                     )
@@ -534,11 +546,11 @@ fn captures_cross_through_the_same_verdict() {
         graph
             .enter(keeper, |context| {
                 let value = context
-                    .alloc_into::<Number, Number>(host, &[], |writer, _| {
+                    .alloc_into::<Number, Number>(host, &[], |writer, _, _| {
                         Active::new(one(writer, 41))
                     })
                     .unwrap();
-                let captured = context.alloc_here(&[operand_at(&value, 0)], |writer, views| {
+                let captured = context.alloc_here(&[operand_at(&value, 0)], |writer, _, views| {
                     take(&views[0], writer)
                 });
                 context.store_successor(captured);
@@ -568,7 +580,9 @@ fn a_placement_over_no_operands_consults_nothing() {
         .enter(cell, |context| {
             number_here(context, 1);
             context
-                .alloc_into::<Number, Number>(other, &[], |writer, _| Active::new(one(writer, 2)))
+                .alloc_into::<Number, Number>(other, &[], |writer, _, _| {
+                    Active::new(one(writer, 2))
+                })
                 .unwrap();
             context.store_successor(String::new());
         })

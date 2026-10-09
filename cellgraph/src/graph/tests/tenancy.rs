@@ -156,7 +156,7 @@ fn a_tenants_carrier_reaches_its_host() {
                 .alloc_into::<Number, Number>(
                     consumer,
                     &[operand_at(&value, usize::MAX)],
-                    |_, views| Active::new(pinned(&views[0])),
+                    |_, _, views| Active::new(pinned(&views[0])),
                 )
                 .unwrap();
         })
@@ -200,7 +200,7 @@ fn a_tenant_embeds_a_host_homed_borrow_through_its_own_writer() {
         .enter(tenant, |context| {
             let carrier = context.redeem(dormant).unwrap();
             let borrowed: &u32 = context
-                .alloc_here(&[operand_at(&carrier, usize::MAX)], |_, views| {
+                .alloc_here(&[operand_at(&carrier, usize::MAX)], |_, _, views| {
                     pinned(&views[0])
                 });
             // The embed itself: the tenant's own writer, no operand, no build.
@@ -441,7 +441,7 @@ fn a_tree_child_created_under_a_tenant_is_its_hosts_child(mut hosted: Hosted<Own
                 .alloc_into::<Number, Number>(
                     tenant,
                     &[operand_at(&value, usize::MAX)],
-                    |_, views| Active::new(pinned(&views[0])),
+                    |_, _, views| Active::new(pinned(&views[0])),
                 )
                 .unwrap();
         })
@@ -480,7 +480,7 @@ fn a_placement_into_a_tenant_lands_in_its_host() {
         .graph
         .enter(producer, |context| {
             let placed = context
-                .alloc_into::<Number, Number>(tenant, &[], |writer, _| {
+                .alloc_into::<Number, Number>(tenant, &[], |writer, _, _| {
                     Active::new(one(writer, 41u32))
                 })
                 .unwrap();
@@ -496,7 +496,7 @@ fn a_placement_into_a_tenant_lands_in_its_host() {
         .graph
         .enter(producer, |context| {
             context
-                .alloc_into::<Number, Number>(tenant, &[], |writer, _| {
+                .alloc_into::<Number, Number>(tenant, &[], |writer, _, _| {
                     Active::new(one(writer, 0u32))
                 })
                 .map(|_| ())
@@ -519,7 +519,7 @@ fn a_tenant_redeems_what_its_host_may() {
         .graph
         .enter(producer, |context| {
             let placed = context
-                .alloc_into::<Number, Number>(host, &[], |writer, _| {
+                .alloc_into::<Number, Number>(host, &[], |writer, _, _| {
                     Active::new(one(writer, 41u32))
                 })
                 .unwrap();

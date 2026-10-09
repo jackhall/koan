@@ -114,6 +114,15 @@ impl<const W: usize> GraphReach<W> {
         self.slab.test(slot)
     }
 
+    /// The one sealed cell this reach names, when it names no slab cell and exactly one sealed
+    /// cell — the reach a redeem out of sealed storage hands back.
+    pub(crate) fn sole_sealed(&self) -> Option<SealedId> {
+        if self.slab.ones().next().is_some() || self.sealed.len() != 1 {
+            return None;
+        }
+        self.sealed.iter().next()
+    }
+
     /// Whether the value's borrows reach the sealed region `id`.
     pub(crate) fn names_sealed(&self, id: SealedId) -> bool {
         self.sealed.contains(id)

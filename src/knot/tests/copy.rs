@@ -589,19 +589,26 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                 };
                 // A birth carrying two values copies them the way this placement does.
                 let placed = context
-                    .alloc_into::<KValueFamily, KValueFamily>(dest, &[operand], |writer, views| {
-                        let CrossedOperand::Copied { view, .. } = views[0] else {
-                            panic!("the operand is copied");
-                        };
-                        let cells = parts(view, types, scratch);
-                        let copies = copy_severed::<_, KnottedFamily, 2>(
-                            writer,
-                            &views[0],
-                            [&cells[0], &cells[1]],
-                            fixture.types,
-                        );
-                        Active::new(Value::List(List::of_candidates(writer, copies.into_iter())))
-                    })
+                    .alloc_into::<KValueFamily, KValueFamily>(
+                        dest,
+                        &[operand],
+                        |writer, _, views| {
+                            let CrossedOperand::Copied { view, .. } = views[0] else {
+                                panic!("the operand is copied");
+                            };
+                            let cells = parts(view, types, scratch);
+                            let copies = copy_severed::<_, KnottedFamily, 2>(
+                                writer,
+                                &views[0],
+                                [&cells[0], &cells[1]],
+                                fixture.types,
+                            );
+                            Active::new(Value::List(List::of_candidates(
+                                writer,
+                                copies.into_iter(),
+                            )))
+                        },
+                    )
                     .unwrap();
                 let copied = parts(context.read(&placed).value(), types, scratch);
                 let [Value::Knotted(f), Value::Knotted(g)] = copied[..] else {

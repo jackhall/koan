@@ -71,7 +71,7 @@ where
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, views| Active::new(cross_view(writer, &views[0], types)),
+        |writer, _, views| Active::new(cross_view(writer, &views[0], types)),
     )
 }
 
@@ -99,7 +99,7 @@ where
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, views| cross_view(writer, &views[0], types),
+        |writer, _, views| cross_view(writer, &views[0], types),
     )
 }
 

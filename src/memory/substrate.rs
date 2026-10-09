@@ -33,12 +33,12 @@ pub type Receipt<'graph, 'step, 'scratch, D> =
 /// nothing unless named; `D` is the bundle of the two families its cells deliver, which is nothing
 /// unless named.
 pub type CellGraph<'graph, C, S = NoScratch, D = NoDelivery> =
-    cellgraph::CellGraph<'graph, C, S, D, WIDTH>;
+    cellgraph::CellGraph<'graph, C, S, D, cellgraph::NoHeader, WIDTH>;
 
 /// What a step running in a cell holds: the cell's brand `'here`, its scratch habitat's brand
 /// `'scratch`, a writer at each, and the step's doors.
 pub type StepContext<'graph, 'step, 'here, 'scratch, C, S = NoScratch, D = NoDelivery> =
-    cellgraph::StepContext<'graph, 'step, 'here, 'scratch, C, S, D, WIDTH>;
+    cellgraph::StepContext<'graph, 'step, 'here, 'scratch, C, S, D, cellgraph::NoHeader, WIDTH>;
 
 /// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
 /// one.

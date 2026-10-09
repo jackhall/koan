@@ -27,7 +27,7 @@ fn place_over(
             let source = number_here(context, 1);
             let carriers: Vec<_> = (0..operands).map(|_| operand(&source)).collect();
             context
-                .alloc_into::<Number, Number>(into, &carriers, |writer, views| {
+                .alloc_into::<Number, Number>(into, &carriers, |writer, _, views| {
                     Active::new(one(writer, views.iter().map(|view| *pinned(view)).sum()))
                 })
                 .unwrap();

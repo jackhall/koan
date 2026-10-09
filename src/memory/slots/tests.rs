@@ -83,7 +83,7 @@ fn a_tree_child_reads_a_slot_bound_in_its_root_through_a_view() {
                     carrier: &carrier,
                     copy_bytes: usize::MAX,
                 }],
-                |_, views| match views[0] {
+                |_, _, views| match views[0] {
                     CrossedOperand::Pinned { view, .. } => view,
                     CrossedOperand::Copied { .. } => unreachable!("the verdict always pins"),
                 },

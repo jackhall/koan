@@ -76,7 +76,7 @@ fn read_across_a_step(
                     carrier: &carrier,
                     copy_bytes: usize::MAX,
                 }],
-                |_, views| match views[0] {
+                |_, _, views| match views[0] {
                     CrossedOperand::Pinned { view, .. } => view,
                     CrossedOperand::Copied { .. } => unreachable!("the verdict always pins"),
                 },

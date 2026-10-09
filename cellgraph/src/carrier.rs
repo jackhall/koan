@@ -166,10 +166,18 @@ where
     /// whose live form is not `Copy`.
     pub fn into_value(self) -> T::At<'cell> {
         // SAFETY: every `Active` holds a value whose region referents outlive `'cell`. `new` took it
-        // at `'cell`, so this is the same lifetime it was erased from; `anchored`'s one caller,
-        // `StepContext::read`, holds a carrier branded to its step, whose referents are live for the
-        // whole step, and `'cell` is its `&'cell self` borrow inside that step. `'cell` is
-        // invariant, so neither can be moved to a longer one.
+        // at `'cell`, so this is the same lifetime it was erased from. `anchored` has two callers.
+        // `StepContext::read` holds a carrier branded to its step, whose referents are live for the
+        // whole step, and `'cell` is its `&'cell self` borrow inside that step. `HomeHeader::read`
+        // anchors a home's header at a brand `'h` its closure is generic over, instantiated at the
+        // operand's brand `'b`. The header comes from a region the operand's reach names (for a
+        // tree home, the tree cell its view is valid in), and its referents are of the kinds a
+        // value laid at the home's brand holds, so they outlive `'b` on the grounds the operand's
+        // own view does: minted into the destination for a pinned operand, kept for the step for a
+        // copied one. The closure is generic over `'h`, so it can write into the header only what
+        // is valid at every `'h: 'b` — the header's own contents and `'graph` borrows — and its
+        // result cannot name `'h`. `'cell` is invariant, so none of these can be moved to a longer
+        // one.
         unsafe { self.value.reattach::<'cell>() }
     }
 

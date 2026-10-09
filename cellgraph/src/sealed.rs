@@ -16,6 +16,7 @@ use bumpalo::Bump;
 use smallvec::SmallVec;
 
 use crate::handle::SlabHandle;
+use crate::header::HabitatHeader;
 use crate::reach::GraphReach;
 use crate::region::Region;
 use crate::scratch::ScratchVec;
@@ -196,14 +197,14 @@ impl<V: IdBuffer> IdSet<V> {
 }
 
 /// One retained region: everything its cell had, minus everything a cell needs to run.
-pub(crate) struct SealedCell<const W: usize> {
+pub(crate) struct SealedCell<'graph, H: HabitatHeader<'graph>, const W: usize> {
     /// The cell's hold set, frozen at its death instead of cleared. Monotone holds make this
     /// exactly the union of every reach ever minted into the region, so the freeze is a word copy
     /// and consults no storage.
     pub(crate) aggregate: GraphReach<W>,
     /// The chunks, detached from the slot unmoved — a bundle with no chunk at all for a cell that
     /// never allocated, and the sealed cell's own bytes from then on: its memo is written here too.
-    pub(crate) storage: Region,
+    pub(crate) storage: Region<'graph, H>,
     /// How many hold sets name this region — live cells' sealed halves plus other sealed cells'
     /// aggregates. Decremented only in batch, when a holder dies or reclaims.
     pub(crate) holders: u32,
@@ -219,7 +220,7 @@ pub(crate) struct SealedCell<const W: usize> {
     pub(crate) lineage: Option<SlabHandle>,
 }
 
-impl<const W: usize> SealedCell<W> {
+impl<'graph, H: HabitatHeader<'graph>, const W: usize> SealedCell<'graph, H, W> {
     /// Bytes the detached chunks still occupy, the memo's own among them. Retention lives only in
     /// this tier, so this is the occupancy a hold on the region is answerable for — what the
     /// consolidation copy buys back, and the input a pressure model prices a release against.
@@ -263,11 +264,11 @@ impl<const W: usize> SealedCell<W> {
 /// No hashing anywhere. An id carries its own index, so every lookup is a bounds-checked load and a
 /// serial compare, and the serial is what makes a retired id read as absent rather than as whatever
 /// sealed cell later took its index.
-pub(crate) struct SealedTier<const W: usize> {
+pub(crate) struct SealedTier<'graph, H: HabitatHeader<'graph>, const W: usize> {
     /// One entry per index the tier has ever handed out. `None` while the index is on the free
     /// list; the serial beside a present sealed cell is what tells a live id from a retired one
     /// that reused its index.
-    cells: Vec<Option<(u32, SealedCell<W>)>>,
+    cells: Vec<Option<(u32, SealedCell<'graph, H, W>)>>,
     free: Vec<u32>,
     next_serial: u32,
     live: usize,
@@ -277,7 +278,7 @@ pub(crate) struct SealedTier<const W: usize> {
     bytes: Cell<usize>,
 }
 
-impl<const W: usize> SealedTier<W> {
+impl<'graph, H: HabitatHeader<'graph>, const W: usize> SealedTier<'graph, H, W> {
     /// A tier pre-sized to the slab's `cap`: a graph cannot have more sealed cells than it has had
     /// cells, up to what retention keeps beyond that. Construction is unmetered, like the slab
     /// itself, so the reserve costs no verb an allocation.
@@ -314,7 +315,7 @@ impl<const W: usize> SealedTier<W> {
         SealedId::pack(serial, index)
     }
 
-    pub(crate) fn insert(&mut self, id: SealedId, sealed_cell: SealedCell<W>) {
+    pub(crate) fn insert(&mut self, id: SealedId, sealed_cell: SealedCell<'graph, H, W>) {
         let slot = &mut self.cells[id.index() as usize];
         debug_assert!(slot.is_none(), "a minted index is filled once");
         self.bytes
@@ -323,21 +324,21 @@ impl<const W: usize> SealedTier<W> {
         self.live += 1;
     }
 
-    pub(crate) fn get(&self, id: SealedId) -> Option<&SealedCell<W>> {
+    pub(crate) fn get(&self, id: SealedId) -> Option<&SealedCell<'graph, H, W>> {
         match self.cells.get(id.index() as usize)? {
             Some((serial, sealed_cell)) if *serial == id.serial() => Some(sealed_cell),
             _ => None,
         }
     }
 
-    pub(crate) fn get_mut(&mut self, id: SealedId) -> Option<&mut SealedCell<W>> {
+    pub(crate) fn get_mut(&mut self, id: SealedId) -> Option<&mut SealedCell<'graph, H, W>> {
         match self.cells.get_mut(id.index() as usize)? {
             Some((serial, sealed_cell)) if *serial == id.serial() => Some(sealed_cell),
             _ => None,
         }
     }
 
-    pub(crate) fn remove(&mut self, id: SealedId) -> Option<SealedCell<W>> {
+    pub(crate) fn remove(&mut self, id: SealedId) -> Option<SealedCell<'graph, H, W>> {
         let slot = self.cells.get_mut(id.index() as usize)?;
         match slot {
             Some((serial, _)) if *serial == id.serial() => {}
@@ -360,7 +361,7 @@ impl<const W: usize> SealedTier<W> {
     /// is re-read around the splice rather than summed from the source: a bump left out takes its
     /// chunk's bytes with it.
     #[must_use = "a bump left out of the bundle may own a chunk, which its caller retires"]
-    pub(crate) fn splice_storage(&mut self, id: SealedId, from: Region) -> Option<Bump> {
+    pub(crate) fn splice_storage(&mut self, id: SealedId, from: Region<'graph, H>) -> Option<Bump> {
         let sealed_cell = self.get_mut(id).expect("the fold target is present");
         let before = sealed_cell.storage.allocated_bytes();
         let displaced = sealed_cell.storage.absorb(from);

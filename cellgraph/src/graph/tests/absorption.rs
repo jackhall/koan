@@ -88,15 +88,15 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| {
+                .alloc_into::<Number, Number>(producer, &[], |writer, _, _| {
                     Active::new(one(writer, 41))
                 })
                 .unwrap();
             let captured =
-                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+                context.alloc_here(&[operand(&value)], |_writer, _, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
-                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, _, views| {
                     Active::new(pinned(&views[0]))
                 })
                 .unwrap();
@@ -195,15 +195,15 @@ fn a_refused_release_seals_as_before() {
     let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| {
+                .alloc_into::<Number, Number>(producer, &[], |writer, _, _| {
                     Active::new(one(writer, 41))
                 })
                 .unwrap();
             let captured =
-                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+                context.alloc_here(&[operand(&value)], |_writer, _, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
-                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, _, views| {
                     Active::new(pinned(&views[0]))
                 })
                 .unwrap();
@@ -474,13 +474,15 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     let kept = graph
         .enter(keeper, |context| {
             let value = context
-                .alloc_into::<Number, Number>(namer, &[], |writer, _| Active::new(one(writer, 41)))
+                .alloc_into::<Number, Number>(namer, &[], |writer, _, _| {
+                    Active::new(one(writer, 41))
+                })
                 .unwrap();
             let captured =
-                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+                context.alloc_here(&[operand(&value)], |_writer, _, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
-                .alloc_into::<Number, Number>(keeper, &[operand(&value)], |_writer, views| {
+                .alloc_into::<Number, Number>(keeper, &[operand(&value)], |_writer, _, views| {
                     Active::new(pinned(&views[0]))
                 })
                 .unwrap();

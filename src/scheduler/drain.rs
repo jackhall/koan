@@ -372,7 +372,7 @@ where
             carrier: &carrier,
             copy_bytes,
         }],
-        |writer, views| B::cross(writer, &views[0]),
+        |writer, _, views| B::cross(writer, &views[0]),
     );
     Ok(B::born(birth))
 }

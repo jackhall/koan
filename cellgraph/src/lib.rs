@@ -17,6 +17,7 @@ mod carrier;
 mod dormant;
 mod graph;
 mod handle;
+mod header;
 mod matrix;
 mod once;
 mod reach;
@@ -37,6 +38,7 @@ pub use graph::{
     ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
+pub use header::{HabitatHeader, Header, HomeHeader, NoHeader};
 pub use once::{OnceRun, OnceView, Written};
 pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};
 pub use receipt::{Delivered, Delivery, NoDelivery};
