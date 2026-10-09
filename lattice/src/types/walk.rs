@@ -11,7 +11,7 @@
 //! Rendering is the one recursion written by hand: it spells syntax *between* children and
 //! inherits the quantifier binder from above, which neither driver expresses. Adding a compound
 //! variant is a compile error at [`unary`]'s `children` / `reassemble` pair, at [`binary`]'s
-//! pairing table, in the rendering match, and at `TypeNode::view`'s table — nowhere else.
+//! pairing table, in the rendering match, and at the stored node's two conversion tables — nowhere else.
 //!
 //! # Writing a new walk
 //!

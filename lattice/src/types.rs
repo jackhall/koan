@@ -38,8 +38,8 @@
 //! Every structural recursion here goes through one of the two drivers in [`walk`], with rendering
 //! the single hand-written exhaustive match. [`walk`]'s own module documentation says which driver
 //! a new walk wants and what it must supply; adding a compound node variant is a compile error at
-//! the drivers' arm tables, at the descent-knob sites, in [`render`], and at `TypeNode::view`'s
-//! table, and nowhere else.
+//! the drivers' arm tables, at the descent-knob sites, in [`render`], and at the stored node's
+//! two conversion tables, and nowhere else.
 //!
 //! # Laws, not shapes
 //!
@@ -65,6 +65,7 @@ mod schema;
 mod shape;
 mod sig_relations;
 mod signatures;
+mod stored;
 mod substitute;
 mod typed;
 mod unify;

@@ -7,10 +7,11 @@
 //! they are interned, and the registry that owns them is insert-only for the life of a run, so a
 //! handle stays dereferenceable as long as its registry lives.
 //!
-//! A node is stored raw and read through a handle `H`: each child comes back as `H` — read through
-//! a [`KType`], a node's children are concrete, and through a [`Parametric`], parametric —
-//! while every bound, a lexical variable's lower end, a code kind and an application's signature
-//! are always a [`KType`]. [`TypeNode::view`] is the one rewrapping, one exhaustive match.
+//! A `TypeNode` is the read view of a node: every field by value, its children read through a
+//! handle `H` — read through a [`KType`], a node's children are concrete, and through a
+//! [`Parametric`], parametric — while every bound, a lexical variable's lower end, a code kind and
+//! an application's signature are always a [`KType`]. The registry's table stores a node in its
+//! own layout ([`stored`](super::stored)), whose `view` is the one rewrapping.
 //! [`Variable`] views the three variable variants as one, and owns the rule for their two ends.
 //!
 //! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
@@ -21,7 +22,7 @@
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::digest::TypeDigest;
-use super::handle::{Handle, KType, Parametric, TypeHandle, wrap};
+use super::handle::{Handle, KType, Parametric};
 use super::kind::KKind;
 use super::record::Record;
 use super::run::{Elements, Run};
@@ -422,121 +423,6 @@ impl Variable {
         Interval {
             lower: self.lower(),
             upper: self.bound(),
-        }
-    }
-}
-
-impl<'run, H: TypeHandle> TypeNode<'run, H> {
-    /// This node with its children read as `C` — **the view table**, one exhaustive match, so a
-    /// new variant is a compile error here. The caller answers for `C`'s promise: the registry
-    /// reads a node as the handle it was named by, and a scheme's positions as [`Parametric`].
-    pub(super) fn view<C: TypeHandle>(self) -> TypeNode<'run, C> {
-        let child = |h: H| wrap::<C>(h.raw());
-        match self {
-            TypeNode::Number => TypeNode::Number,
-            TypeNode::Str => TypeNode::Str,
-            TypeNode::Bool => TypeNode::Bool,
-            TypeNode::Null => TypeNode::Null,
-            TypeNode::Identifier => TypeNode::Identifier,
-            TypeNode::Symbol => TypeNode::Symbol,
-            TypeNode::TypeNameToken => TypeNode::TypeNameToken,
-            TypeNode::Expression => TypeNode::Expression,
-            TypeNode::SigiledTypeExpr => TypeNode::SigiledTypeExpr,
-            TypeNode::RecordType => TypeNode::RecordType,
-            TypeNode::Literal => TypeNode::Literal,
-            TypeNode::Block => TypeNode::Block,
-            TypeNode::Declaration => TypeNode::Declaration,
-            TypeNode::Binder => TypeNode::Binder,
-            TypeNode::Name => TypeNode::Name,
-            TypeNode::Keyword => TypeNode::Keyword,
-            TypeNode::Any => TypeNode::Any,
-            TypeNode::AnyValue => TypeNode::AnyValue,
-            TypeNode::AnyCode => TypeNode::AnyCode,
-            TypeNode::CodeNeeding { kind, names } => TypeNode::CodeNeeding { kind, names },
-            TypeNode::Never => TypeNode::Never,
-            TypeNode::OfKind(kind) => TypeNode::OfKind(kind),
-            TypeNode::Parameter { name, bound } => TypeNode::Parameter { name, bound },
-            TypeNode::Carrier { name, key, met } => TypeNode::Carrier { name, key, met },
-            TypeNode::List { element } => TypeNode::List {
-                element: child(element),
-            },
-            TypeNode::Dict { key, value } => TypeNode::Dict {
-                key: child(key),
-                value: child(value),
-            },
-            TypeNode::Record { fields } => TypeNode::Record {
-                fields: Record::over(fields.raw()),
-            },
-            TypeNode::KFunction { params, ret } => TypeNode::KFunction {
-                params: Record::over(params.raw()),
-                ret: child(ret),
-            },
-            TypeNode::ExpressionShape {
-                elements,
-                classes,
-                ret,
-            } => TypeNode::ExpressionShape {
-                elements: Elements::over(elements.raw()),
-                classes,
-                ret: child(ret),
-            },
-            TypeNode::Scheme { group, body } => TypeNode::Scheme {
-                group,
-                body: child(body),
-            },
-            TypeNode::Quantified { index, bound } => TypeNode::Quantified { index, bound },
-            TypeNode::Lexical {
-                level,
-                name,
-                lower,
-                bound,
-            } => TypeNode::Lexical {
-                level,
-                name,
-                lower,
-                bound,
-            },
-            TypeNode::Union { members } => TypeNode::Union {
-                members: Run::over(members.raw()),
-            },
-            TypeNode::ConstructorApply {
-                constructor,
-                arguments,
-            } => TypeNode::ConstructorApply {
-                constructor: child(constructor),
-                arguments: Record::over(arguments.raw()),
-            },
-            TypeNode::Signature {
-                schema,
-                schema_digest,
-            } => TypeNode::Signature {
-                schema,
-                schema_digest,
-            },
-            TypeNode::SignatureApply { signature, pins } => TypeNode::SignatureApply {
-                signature,
-                pins: Record::over(pins.raw()),
-            },
-            TypeNode::SignatureMeet { members } => TypeNode::SignatureMeet {
-                members: Run::over(members.raw()),
-            },
-            TypeNode::DeferredReturn(surface) => TypeNode::DeferredReturn(surface),
-            TypeNode::Sibling(index) => TypeNode::Sibling(index),
-            TypeNode::SetMember {
-                scc_digest,
-                index,
-                scc_size,
-                name,
-                kind,
-                schema,
-            } => TypeNode::SetMember {
-                scc_digest,
-                index,
-                scc_size,
-                name,
-                kind,
-                schema,
-            },
         }
     }
 }
