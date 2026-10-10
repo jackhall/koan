@@ -20,3 +20,9 @@ allocator-api2 = "0.2.21"
 [dev-dependencies]
 # Generated type trees for the lattice's laws and generated spellings for the symbol classes.
 proptest = "1"
+
+# The node-table benchmark: the digest table a type branch lays against the hashbrown table the
+# root keeps, over linked stand-in nodes. `cargo bench -p lattice --bench node_table [section…]`.
+[[bench]]
+name = "node_table"
+harness = false
