@@ -94,12 +94,17 @@ built is released with its hop.
 - *Table structure — deferred* to [the node table](node-table.md). A region's
   `Writer` lays fixed runs and has no allocator, so a branch's table must grow
   by laying fixed runs.
-- *Probe order — open.* Branch first, whose heads fit a cache line, or root
-  first, which most handles name; and whether an empty branch is skipped, which
-  lazy creation gives. Decided by [the node table's](node-table.md) benchmark.
+- *Probe order — decided.* Root first, then the branch; an empty branch is
+  skipped, which lazy creation gives. [The node table's](node-table.md)
+  benchmark put a hashbrown root's miss at about 1 ns, so a branch handle
+  entering root first pays nothing worth a hint from the elaborator about
+  which tier a site's handles can live in; that hint is a later lever of
+  [presizing a branch](branch-presizing.md).
 - *Sizing a branch — decided.* A branch starts small and grows, as the root
-  does: the types a body builds at run time are not predictable from its
-  text.
+  does. Growth by doubling strands one run per branch, two thirds of a
+  256-entry branch's node bytes with 16 B slots, and dominates the branch's
+  build; laying a branch at a predicted size is
+  [presizing a branch](branch-presizing.md).
 
 ## Dependencies
 
@@ -115,3 +120,5 @@ A branch is also the scratch lattice a
 
 - [Activation typing](../gradual-typing/activation-typing.md) — a pass per
   activation interns into the activation's branch.
+- [Presizing a branch](branch-presizing.md) — a branch laid at a predicted
+  size instead of grown from its smallest.
