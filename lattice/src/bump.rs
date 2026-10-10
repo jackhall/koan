@@ -10,6 +10,10 @@
 //!
 //! [`strongly_connected_components`] is the index-graph walk staged here.
 //!
+//! [`DigestTable`] is the one structure here that grows without an allocator: it lays fixed runs
+//! through [`LaysRuns`], which a bump implements here and a region's writer implements in koan, so
+//! a cell's region can host it.
+//!
 //! This is the crate's only import of `bumpalo`, `allocator_api2` and `hashbrown`.
 //!
 //! **Nothing with drop glue goes in.** Bumpalo runs no destructor, so a value owning heap memory
@@ -19,8 +23,10 @@
 use std::hash::BuildHasher;
 
 mod components;
+mod digest_table;
 
 pub use components::strongly_connected_components;
+pub use digest_table::{DigestTable, Keyed, LaysRuns};
 
 /// The arena the tier allocates from; its owner releases it whole.
 pub type Bump = bumpalo::Bump;
@@ -28,6 +34,18 @@ pub type Bump = bumpalo::Bump;
 /// The tier's allocation capability: a shared borrow of a bump, which is both bumpalo's verb
 /// receiver and the [`Allocator`](allocator_api2::alloc::Allocator) the tier's collections take.
 pub type BumpAllocator<'a> = &'a Bump;
+
+impl<'r> LaysRuns<'r> for BumpAllocator<'r> {
+    fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'r [T] {
+        const {
+            assert!(
+                !std::mem::needs_drop::<T>(),
+                "a bump-laid run must carry no drop glue: the bump runs no destructor",
+            )
+        };
+        self.alloc_slice_fill_with(len, fill)
+    }
+}
 
 /// A growable vector whose buffer lives in a bump.
 pub type BumpVec<'a, T> = allocator_api2::vec::Vec<T, BumpAllocator<'a>>;
