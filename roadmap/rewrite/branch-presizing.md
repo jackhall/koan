@@ -19,7 +19,9 @@ body's doors and its past activations both say something about it.
 - A branch is laid at its predicted size when a prediction exists, and still
   grows past it.
 - The share of a region's branch bytes stranded by growth is reported by the
-  node table's benchmark and the measurement above.
+  small-branch dead-share column of the lattice's
+  [node-table benchmark](../../lattice/benches/node_table.rs) and by the
+  measurement above.
 
 **Directions.**
 
@@ -42,9 +44,9 @@ body's doors and its past activations both say something about it.
 - *A root-only site hint — open.* Every handle the elaborator produces lives
   in the root, so a site whose static type is concrete can skip the branch
   probe, and only a gradually typed site or a quantified position instantiated
-  at the run can hold a branch handle. With a hashbrown root a root miss is
-  about 1 ns, so the hint buys little until the branch probe itself costs
-  more than that.
+  at the run can hold a branch handle. With a hashbrown root, the root miss a
+  branch handle pays costs under half a nanosecond, so the hint buys little
+  until the branch probe itself costs more than that.
 
 ## Dependencies
 

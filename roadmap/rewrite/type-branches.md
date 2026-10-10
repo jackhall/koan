@@ -39,8 +39,9 @@ built is released with its hop.
 - A verdict is recorded in the shortest-lived tier holding one of its two
   types, so a verdict over a branch's type is released with the branch, and one
   over two root types is kept in the root's table.
-- A branch's table is the one [the node table](node-table.md) chooses for
-  branches, laid at its smallest size in its region.
+- A branch's table is a lattice
+  [`DigestTable`](../../lattice/src/bump/digest_table.rs), laid at its
+  smallest size in its region.
 - Every law in [tests/properties.rs](../../lattice/src/types/tests/properties.rs)
   holds unchanged over a chain of two tiers, and the lattice adds no `unsafe`.
 
@@ -91,14 +92,18 @@ built is released with its hop.
   walk. The merge costs the types the home minted, never the value. The
   alternative, probing the branch of each cell the destination reaches, puts
   reach into the lattice and a probe per reached cell on every lookup.
-- *Table structure — deferred* to [the node table](node-table.md). A region's
-  `Writer` lays fixed runs and has no allocator, so a branch's table must grow
-  by laying fixed runs.
+- *Table structure — decided* per
+  [storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches).
+  A branch is a `DigestTable` laid in its region, which grows by laying fixed
+  runs, since a region's `Writer` has no allocator. Koan implements the
+  lattice's `LaysRuns` for a newtype over the region's `Writer`, since neither
+  crate names the other.
 - *Probe order — decided.* Root first, then the branch; an empty branch is
-  skipped, which lazy creation gives. [The node table's](node-table.md)
-  benchmark put a hashbrown root's miss at about 1 ns, so a branch handle
-  entering root first pays nothing worth a hint from the elaborator about
-  which tier a site's handles can live in; that hint is a later lever of
+  skipped, which lazy creation gives. The lattice's
+  [node-table benchmark](../../lattice/benches/node_table.rs) puts the root
+  miss a branch handle pays over a hashbrown root at under half a nanosecond,
+  nothing worth a hint from the elaborator about which tier a site's handles
+  can live in; that hint is a later lever of
   [presizing a branch](branch-presizing.md).
 - *Sizing a branch — decided.* A branch starts small and grows, as the root
   does. Growth by doubling strands one run per branch, two thirds of a
@@ -111,10 +116,7 @@ built is released with its hop.
 A branch is also the scratch lattice a
 [refused program](refused-programs-stay-loaded.md) could hold its types in.
 
-**Requires:**
-
-- [The node table](node-table.md) — the table a branch is laid as in its
-  region.
+**Requires:** none.
 
 **Unblocks:**
 

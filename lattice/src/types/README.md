@@ -145,8 +145,8 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 - [Type branches](../../../roadmap/rewrite/type-branches.md) — the branch tier,
   a run-built type released with the region of the values that carry it.
-- [The node table](../../../roadmap/rewrite/node-table.md) — the table each
-  tier is laid as.
+- [Presizing a branch](../../../roadmap/rewrite/branch-presizing.md) — a
+  branch's table laid at a predicted size, and the width of its slots.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.

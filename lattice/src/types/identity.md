@@ -125,6 +125,41 @@ holding one content hold one handle and two copies: two nodes compare, order
 and hash by their digests, and a reference is an identity only within one
 table.
 
+The two tiers keep different tables. The root's is a hashbrown table in
+program storage, built during the load, where its grown build and its
+stranded bucket arrays are paid once. A miss there is one group probe of
+control bytes, so a branch handle that enters at the root pays almost nothing
+for the detour. A branch's is a [`DigestTable`](../bump/digest_table.rs) in
+its region: 16 B slots, each the digest's low word beside the node's
+reference, probed linearly at a load of at most one half. A region's writer
+lays fixed runs and has no allocator, so the table grows by laying a run of
+twice the length and re-placing each slot by its stored word, reading no node.
+A lookup probes the root first, then the branch, and skips a branch that holds
+nothing.
+
+The lattice's [node-table benchmark](../../benches/node_table.rs) times both
+tables over 48 B linked stand-in nodes, from 1,000 to 60,000 entries, each
+grown from its smallest size and presized
+(`cargo bench -p lattice --bench node_table`):
+
+| | digest table | hashbrown |
+|---|---|---|
+| dependent hit, warm, 60k | 28–33 ns | 27–36 ns |
+| dependent hit, cold, 60k | 258 ns | 348 ns |
+| miss, 60k | 12 ns | 2.2 ns |
+| dependent hit, branch of 8 | 3.5 ns | 8.5 ns |
+| table bytes per entry, grown | 33–44 B | 12–20 B |
+| build, grown over presized | 1.2–5.4× | 2.8–5.2× |
+
+Warm, the two hit alike, since hashbrown's control bytes stay cached; cold, a
+digest-table hit reads a slot line and the node, where hashbrown reads a
+control group, a bucket and the node. Hashbrown's miss is one well-predicted
+group probe, where linear probing takes a branch per occupied slot, which is
+why the root keeps hashbrown. With a hashbrown root of 16,000 and a
+digest-table branch of 256, root first costs a lookup stream drawing a tenth
+of its keys from the branch 23.2 ns per lookup against 27.0 ns branch first,
+and a stream drawn wholly from the branch 6.5 ns against 6.1 ns.
+
 Each node whose children decide them carries four flags computed off those
 children at intern — whether a free quantifier, whether any rigid variable,
 whether anything parametric, and whether an opaque carrier is reachable — and
