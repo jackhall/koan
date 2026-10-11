@@ -939,10 +939,8 @@ tutorial snippet is checked against its shown output by
 - [Path types](../../roadmap/gradual-typing/path-types.md) — a type member named at
   load through a module-valued expression, and a quantified member over an
   unpinned head parameter instantiated through its path.
-- [Body classes](../../roadmap/type-tiers/body-classes.md) — every body
-  classified inert, sealed or porous by a fold over the static pass's sites.
 - [Shape branches](../../roadmap/type-tiers/shape-branches.md) — the atom-born
-  bit per value binder, and the closure births it marks.
+  bit per value binder, and the ties it marks.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

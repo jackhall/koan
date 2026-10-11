@@ -49,6 +49,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
-- [Body classes](type-tiers/body-classes.md)
 - [Type branches](type-tiers/type-branches.md)
 

@@ -28,8 +28,8 @@ A handle is its content's digest, so it names one type in every tier, and a
 reset moves where a type resolves, never what it is. Every tier's table is a
 [`DigestTable`](../lattice/src/bump/digest_table.rs) differing only in what
 lays its runs. A lookup probes the tiers a step reads, shortest-lived first.
-The root is closed after the load, so a site whose static type is non-porous
-holds a root handle and skips every branch.
+The root is closed after the load, so every type the run builds lives in a
+branch, a composite over root types alone included.
 
 ## A node lives in a tier its children outlive
 
@@ -45,47 +45,83 @@ insert-if-absent, so a content relaid twice is one node.
 
 ## Porosity
 
-A reified atom — a carrier [the view door](../src/knot/module/README.md#the-view-door)
-mints, a nominal born per call — lies under almost nothing: itself, a union
-holding it, and `Any` ([the order](../lattice/src/types/laws.md#the-order-is-a-partial-order)).
-A value carrying one can pass a slot only where the slot's static type has a
-**porous** position: a lexical or quantified variable, or an unpinned head
-parameter of a declared signature, anywhere; `Any` at a covariant position;
-`Never` at a contravariant position, since the order flips at a function
-type's parameters and a function over a carrier parameter lies under
-`FN :{x :Never} -> Number`. An open capture, typed `[Never, Any]`, is porous by
-definition. Porosity is a property of a root type, folded once at the load as
-a flag beside the lattice's others: two bits per node, swapped at a function
-type's parameter position, the covariant one read at the root.
+A type minted at run — a carrier [the view door](../src/knot/module/README.md#the-view-door)
+mints, a nominal declared per call — and every type built over one is
+**minted content**. Porosity says where minted content can sit, as two flags
+folded once per type at the load, beside the lattice's others.
 
-Slot porosity is the lookup side only. A closure typed `Number -> Number` can
-hold a captured module whose memo is a branch handle; the type does not show
-it, and a reader at that slot resolves a root memo. What the capture does is
-bound a lifetime, below.
+A type is **porous** where minted content can lie under it or fit it. A
+carrier is an atom of [the order](../lattice/src/types/laws.md#the-order-is-a-partial-order),
+under itself, a union holding it and `Any` alone, but a type built over one
+reaches further: a list or record over it lies under `Value`, a record with an
+extra field at it lies under every record type by width, and a view's
+signature lies under `Module`, the top of the signature types, and fits every
+signature its members satisfy. At a contravariant position every type but
+`Any` admits `P | C`, so `FN :{x :(Number | C)} -> Null` lies under
+`FN :{x :Number} -> Null`. So `Any`, `Value`, every record type, every
+signature type and every variable are porous; a function or shape type is
+porous where a parameter or slot is not typed `Any` or where its return is;
+and a list, dict, union or family application is porous where a child is.
 
-## Three classes of body
+A type is **exposing** where a value seen at it can hand a reader a part or
+payload of minted content. A part keeps its own memo under `Any`, a union, a
+function type or a carrier ([values](../src/values/README.md#the-type-memo-and-satisfies)),
+and `Value` or a variable restamps nothing; a module reports its own memo
+under any signature; a type value's payload is the type it names, whatever
+its kind; a nominal's payload is read at its representation. So `Any`,
+`Value`, every kind, every signature type, every variable, a carrier and a
+nominal are exposing; a union is exposing where it is porous or a child is
+exposing; and a list, dict, record or family application is exposing where a
+child is exposing or is a porous function type. A function type exposes
+nothing: what a function reaches it reaches through its captures, which the
+tie rule below closes.
 
-Every body is classified where the program loads. A reified-dependent value
-enters a body only through a porous parameter or capture, a surfaced
-`USING … SCOPE` name typed rigid or unknown, an `EVAL`'s result, a hole, or
-the result of a call whose static type is porous; it leaves only through a
-porous result or a porous argument slot of a call the body makes.
+A value is **porous** where its static type's upper end is porous or
+exposing, and, where that type is exact and closed, where it is exposing: an
+exact closed site carries that very type, and the surface door hides what the
+type does not name, so a retyped record shows no extra field to any reader
+but a knot's copy, which the tie rule closes too. An open capture, typed
+`[Never, Any]`, is porous by definition.
 
-- **inert**: no porous entry and no minting door. It never sees a branch
-  handle and probes the root alone.
-- **sealed**: it mints, but has no porous exit slot. Nothing it minted is
-  reachable after it returns.
-- **porous**: it has a porous exit slot. The static pass lists the sites where
-  a type can cross, and only those probe a branch.
+Porosity promises only that a value at a non-porous site reaches no minted
+content, never that its handles are the root's (§ Four tiers).
 
-A closure is the one way a type leaves under a non-porous slot, through a
-capture, and that route is closed at the closure's birth rather than by
-classification: a closure born over a value whose memo resolves in a shape
-branch has that branch merged into the region branch of the habitat the
-closure is laid in, so it never holds a shape handle when it leaves, and the
-crossing rules carry its captured types from there. The static pass marks the
-birth sites that can pay, those with a capture typed over an atom the body
-births; every other birth costs nothing.
+## Two classes of body
+
+Every frame body — the program, a callable, a quote's code — is classified
+where the program loads, the arms and module bodies it runs counted with it. A
+value enters a body through a parameter, a capture, a surfaced
+`USING … SCOPE` name, an `EVAL`'s result, a hole or a call's result, and
+minted content enters only where that value is porous. It leaves only through
+the body's return or an argument of a call the body makes into a frame — a
+registration, a function called by name, a surfaced head, a candidate the load
+cannot read — and only where a porous value meets a porous slot there; and
+through every `EVAL`, which offers values to the code's open `\` marks at
+slots the body does not type. A builtin's native runs in the caller's step and
+enters no frame. A body mints at a `:|` ascription, which hides each unpinned
+head parameter behind a carrier, and at a nominal declaration the load leaves
+unknown, declared each time its unit runs; `:!` mints nothing, since it
+carries each head parameter at what *fits* solved.
+
+- **sealed**: no porous exit. Nothing it minted is reachable after it
+  returns.
+- **porous**: a porous exit.
+
+Beside a sealed body the load fixes whether it lays a shape branch: it mints,
+and it is placed `Shares` — a callable by its declared return, a quote's code
+always, the program never.
+
+A tie — a closure's or a quote's birth, a cyclic component's — is the one way
+minted content leaves under a non-porous slot: through a closure's or a
+quote's captures, since neither a function type nor a code type exposes what
+its value captures, and through the cells a knot member's seen type hides,
+since a knot is [copied](../src/values/README.md#crossing) at each node's own
+memo. That route is closed at the tie rather than by classification: a knot
+tied over a value whose memo resolves in a shape branch has that branch merged
+into the region branch of the habitat it is laid in, so no member holds a
+shape handle when it leaves, and the crossing rules carry its types from
+there. The static pass marks the ties that can pay, those with a capture or a
+member typed over an atom the body births; every other tie costs nothing.
 
 ## Where each body interns
 
@@ -173,8 +209,6 @@ types, and released with that tier.
 
 ## Open work
 
-- [Body classes](../roadmap/type-tiers/body-classes.md) — the porosity flag and
-  the class fold at the load.
 - [Type branches](../roadmap/type-tiers/type-branches.md) — the region and
   scratch tiers, the chain, and the crossing's re-intern.
 - [Shape branches](../roadmap/type-tiers/shape-branches.md) — the shape tier,

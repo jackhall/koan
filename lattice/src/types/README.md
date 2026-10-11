@@ -143,8 +143,6 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Open work
 
-- [Body classes](../../../roadmap/type-tiers/body-classes.md) — porosity folded
-  at intern as two bits, swapped under a function type's parameter.
 - [Type branches](../../../roadmap/type-tiers/type-branches.md) — the branch tier,
   a run-built type released with the region of the values that carry it.
 - [Presizing a branch](../../../roadmap/type-tiers/branch-presizing.md) — a
