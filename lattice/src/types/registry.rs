@@ -67,9 +67,10 @@ type NodeTable<'run> = BumpHashTable<'run, Linked<'run>>;
 /// The porous and exposing flags of a flagged `node`, from its children's
 /// ([type tiers](../../../design/type-tiers.md#porosity)). A child at a flipped position — a
 /// parameter or a slot — makes the node porous unless it is `Any`, since every other type there
-/// admits a union with a minted one; a child at the node's own variance hands up its porous flag.
-/// A child's **part** exposes where it is exposing, or where it is a porous function type, whose
-/// value keeps its own memo. Every other variant's flags are [`Content::flags`]'s constants.
+/// admits a union with a minted one; a child at the node's own variance hands up its porous flag,
+/// an application's family aside. A child's **part** exposes where it is exposing, or where it is
+/// a porous function type, whose value keeps its own memo. Every other variant's flags are
+/// [`Content::flags`]'s constants.
 fn porosity_over<'run>(node: &TypeNode<'run, Linked<'run>>) -> Flags {
     let (mut porous, mut parts) = (false, false);
     // An application lies under its bare family, never over it: what lies under an application
@@ -1280,8 +1281,8 @@ impl<'run> TypeRegistry<'run> {
 
     /// Whether a type minted at run, or one built over it, can lie under or fit `kt`: at `Any`,
     /// `Value`, a record or signature type, a variable, a bare type family, a function or shape
-    /// type with a parameter or slot not typed `Any`, and over a child at the same variance that is
-    /// porous.
+    /// type with a parameter or slot not typed `Any`, and over a porous child at the same variance,
+    /// an application's family aside.
     pub fn porous(&self, kt: impl Into<Parametric>) -> bool {
         self.enter(kt.into().raw()).is_porous()
     }

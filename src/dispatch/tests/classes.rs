@@ -114,7 +114,7 @@ fn a_call_by_name_is_an_exit_where_a_porous_value_meets_a_porous_slot() {
         class(
             &format!(
                 "LET g = (FN :{{x :Any}} -> Number = #(1))\n\
-                 LET f = (FN :{{c :Number}} -> Number = #({view} (g v) (c)))"
+                 LET f = (FN :{{c :Number}} -> Number = #({view} (g {{x = v}}) (c)))"
             ),
             "f"
         ),
@@ -124,13 +124,13 @@ fn a_call_by_name_is_an_exit_where_a_porous_value_meets_a_porous_slot() {
     assert_eq!(
         class(
             &format!(
-                "LET g = (FN :{{x :Number}} -> Number = #(1))\n\
-                 LET f = (FN :{{c :Number}} -> Number = #({view} (g c) (c)))"
+                "LET g = (FN :{{x :Any}} -> Number = #(1))\n\
+                 LET f = (FN :{{c :Number}} -> Number = #({view} (g {{x = c}}) (c)))"
             ),
             "f"
         ),
         "sealed 1",
-        "a value that is not porous at a slot that is not either"
+        "a value that is not porous carries nothing out, at a porous slot too"
     );
     assert_eq!(
         class(
