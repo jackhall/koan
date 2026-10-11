@@ -436,6 +436,17 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             .or_else(|| self.region.and_then(|region| region.reach(digest)))
     }
 
+    /// Whether the own tier or the region tier is the branch at `address`, or reaches it through
+    /// its links: a branch whose nodes every read of the chain already finds.
+    pub(super) fn reaches_branch(&self, address: *const ()) -> bool {
+        self.half
+            .own()
+            .is_some_and(|own| own.reaches_branch(address))
+            || self
+                .region
+                .is_some_and(|region| region.reaches_branch(address))
+    }
+
     /// Whether `handle` names a union. The construction lane's first probe, so it answers from the
     /// node's shape alone and never reads out the member list.
     pub fn is_union<N: TypeHandle>(&self, handle: N) -> bool {

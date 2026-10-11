@@ -200,10 +200,17 @@ where
     values.map(|value| copying.value(value))
 }
 
+/// How many parts of a crossed value the habitat check reads: a pin is O(1) in a release build, so
+/// a debug build reads a bounded prefix of the value rather than make every pin of a deep value
+/// walk it whole, which turns a loop over a deep value quadratic.
+#[cfg(debug_assertions)]
+const CHECKED_PARTS: usize = 16;
+
 /// The habitat check, in a debug build: every type `value` carries — each part's own memo, hidden
 /// parts included, each type value's payload, and every type a knot it reaches carries — resolves
-/// in `types`, the chain of the habitat it was crossed into. It interns nothing and caches nothing,
-/// so a debug build's branches hold what a release build's would.
+/// in `types`, the chain of the habitat it was crossed into, for the first [`CHECKED_PARTS`] parts
+/// a depth-first walk reaches. It interns nothing and caches nothing, so a debug build's branches
+/// hold what a release build's would.
 #[cfg(debug_assertions)]
 pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
     types: &Types<'graph, 'cell>,
@@ -231,7 +238,11 @@ pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
     let mut stack = BumpVec::new_in(&scratch);
     let mut knots: BumpBackedSet<'_, _> = bump_set(&scratch);
     stack.push(*value);
-    while let Some(value) = stack.pop() {
+    let mut read = 0;
+    while let Some(value) = stack.pop()
+        && read < CHECKED_PARTS
+    {
+        read += 1;
         check(value.ktype().into());
         match value {
             Value::Type(type_value) => check(type_value.handle().into()),

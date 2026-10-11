@@ -37,7 +37,7 @@ memory error *no other slate test catches*. Do not whitelist a group just to
 silence the stale-anchor check; delete a redundant test instead.
 
 <!-- slate-audit-whitelist:start -->
-- `lattice/src/types/registry.rs` — the registry's node table is built over its region's bump
+- `lattice/src/types/tiers.rs` — a tier's node table is built over its region's bump
   (`bump_table`) and every interned node's slices are bumped into the same region, so nothing the
   lattice owns carries drop glue and the region releases it whole; the relations take a scratch
   allocator from the caller. The backing `unsafe` is `bumpalo`'s.
@@ -83,8 +83,8 @@ Test names, grouped by the discipline each pins. `python3 tools/observe_tests.py
 slate` reads every `` - `name` `` line below; a name must match exactly one test
 in the lib binary.
 
-**Region-hosted type registry** ([lattice/src/types/registry.rs](../lattice/src/types/registry.rs)) —
-the table, every node and every slice live in the registry's region; a relation's transient
+**Region-hosted type tiers** ([lattice/src/types/tiers.rs](../lattice/src/types/tiers.rs)) —
+the table, every node and every slice live in the tier's region; a relation's transient
 buffers live in a scratch region the caller hands it.
 
 - `interning_and_relations_touch_no_heap`
@@ -138,6 +138,10 @@ region it came from is released.
 - `a_copied_list_outlives_its_home`
   a list of a string list and a string-keyed dict crosses under a copy verdict, is kept, its home
   released, and redeemed in the destination's next step: every byte reads back.
+- `a_copied_type_value_names_a_type_its_destination_resolves`
+  a type value whose record type its home's branch minted crosses under a copy verdict, its home
+  is released, and the destination reads the record's node: the copy re-laid it in the
+  destination's branch rather than entering the home's by reference.
 
 **Knots in a cell's region** ([src/knot/copy.rs](../src/knot/copy.rs)) — a knot
 member copied across a crossing, a function, a quote or a data node, re-ties its whole knot through the
@@ -195,6 +199,14 @@ cell's region; what this pins is the ordering between two.
   builds its result out of them with no crossing at the wake — what Miri checks is storage read
   through a run that is retyped at a fresh pair of brands each wake and whose own bytes are handed
   back under the result built from it.
+- `a_child_links_its_spawners_branch`
+  a `Fresh` child's branch links its spawner's, reads a type through the link and caches the
+  spawner's node in its own table by reference: a table in one region pointing into another,
+  released child first.
+- `a_hop_reaches_what_its_births_home_read_through_its_link`
+  a tenant hops `Fresh` with a list homed at its host, so the successor's birth merges the host's
+  branch and the spawner's it links, entering both regions' nodes in a third by reference, read by
+  the habitat check after the tenant is released.
 - `a_recursion_asking_two_children_per_level_peaks_at_its_depth`
   a deep stack of births and releases: five hundred and eleven tree cells born one path at a
   time under one root work, each delivering into its parked parent's scratch run before it is

@@ -80,4 +80,45 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell> {
 
 /// The chain a step, a build or the load reads and interns types through, writing the half its
 /// writer lays into.
+///
+/// A value door takes its writer and its chain at one brand, so the types it interns land in the
+/// habitat it lays the value in:
+///
+/// ```
+/// use koan::memory::Bump;
+/// use koan::program::KBundle;
+/// use koan::scheduler::{Action, Step};
+/// use koan::type_lattice::Root;
+/// use koan::values::{List, Value};
+///
+/// fn scratch_list<'graph>(
+///     step: Step<'_, 'graph, '_, '_, '_, KBundle>,
+///     root: &'graph Root<'graph>,
+/// ) -> Action<'graph, KBundle> {
+///     let types = step.scratch_types(root);
+///     let items = [Value::Number(1.0)].into_iter();
+///     let _: &List<'_> = List::new(step.scratch_writer(), items, &types, &Bump::new());
+///     step.done()
+/// }
+/// ```
+///
+/// A door handed one half's writer and another half's chain does not compile:
+///
+/// ```compile_fail
+/// use koan::memory::Bump;
+/// use koan::program::KBundle;
+/// use koan::scheduler::{Action, Step};
+/// use koan::type_lattice::Root;
+/// use koan::values::{List, Value};
+///
+/// fn scratch_list<'graph>(
+///     step: Step<'_, 'graph, '_, '_, '_, KBundle>,
+///     root: &'graph Root<'graph>,
+/// ) -> Action<'graph, KBundle> {
+///     let types = step.types(root);
+///     let items = [Value::Number(1.0)].into_iter();
+///     let _: &List<'_> = List::new(step.scratch_writer(), items, &types, &Bump::new());
+///     step.done()
+/// }
+/// ```
 pub type Types<'graph, 'cell> = TypeChain<'cell, Half<'graph, 'cell>>;

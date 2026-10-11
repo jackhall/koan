@@ -10,8 +10,11 @@
 //!   birth costs the same whatever the spawner holds. A cell has one spawner, so a branch links
 //!   once.
 //! - A **merge** enters every node of the home's branch in the destination's by reference, laying
-//!   nothing; it does not follow the home's link, since what the home read through it is cached in
-//!   its branch, and what it never read no value of it carries.
+//!   nothing, then each branch the home's links reach, up to the first the destination already
+//!   reaches. A value of the home may carry a part whose type the home only reached through its
+//!   link: reading the part's holder caches the holder's node, not its children's. A merge into
+//!   the cell the home links stops at once, so only a destination off the home's line of spawners
+//!   — a tenant's `Fresh` hop — pays for the walk.
 //!
 //! A copied value is rebuilt in the destination, and its home may die first, so its types are
 //! re-laid: [`adopt`](TypeChain::adopt) lays each node the destination lacks at its own digest and
@@ -39,10 +42,11 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     }
 
     /// Enter every node `source` holds in the own tier, by reference, where the chain does not
-    /// already find it; the own branch is laid only if one is entered.
+    /// already find it, then every node of each branch `source` links, up to the first branch the
+    /// chain already reaches; the own branch is laid only if one is entered.
     pub fn merge<'s: 't>(&self, source: &Branch<'s>) {
         let half = self.half();
-        source.each(|node| {
+        source.each_until(&|address| self.reaches_branch(address), &mut |node| {
             if self.find(node.digest()).is_none() {
                 half.own_or_lay().insert(half, node);
             }

@@ -91,6 +91,38 @@ fn an_intern_lays_content_its_link_holds() {
     ));
 }
 
+/// A spawner holding `{x :Number}`, and a child linked to it that minted `{y :Number}`.
+#[test]
+fn a_merge_enters_what_its_source_reaches_through_its_link() {
+    let symbols = SymbolInterner::new();
+    let regions = [Bump::new(), Bump::new(), Bump::new(), Bump::new()];
+    let root = Root::seeded(&regions[0]);
+    let spawner = TypeChain::new(root, BumpHalf::new(&regions[1]));
+    let inherited = record_named(&spawner, &symbols, "x");
+    let child = TypeChain::new(root, BumpHalf::new(&regions[2]));
+    child.link(BumpHalf::branch_of(&spawner));
+    let minted = record_named(&child, &symbols, "y");
+
+    let unlinked = TypeChain::new(root, BumpHalf::new(&regions[3]));
+    unlinked.merge(BumpHalf::branch_of(&child));
+    for kt in [minted, inherited] {
+        assert!(
+            unlinked.find(kt.raw().digest()).is_some(),
+            "a destination that reaches neither branch enters both"
+        );
+    }
+    assert_eq!(unlinked.own_len(), 2);
+
+    // The spawner reaches itself, so a merge into it walks the child's branch alone.
+    let spawner_len = spawner.own_len();
+    spawner.merge(BumpHalf::branch_of(&child));
+    assert_eq!(
+        spawner.own_len(),
+        spawner_len + 1,
+        "only the child's mint is entered"
+    );
+}
+
 #[test]
 fn a_branch_verdict_is_recorded_in_the_branch() {
     let symbols = SymbolInterner::new();

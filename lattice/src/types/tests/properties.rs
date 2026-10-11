@@ -1902,7 +1902,7 @@ proptest! {
         };
         there.merge(branch);
         let mut every = true;
-        branch.each(|node| every &= there.find(node.digest()).is_some());
+        branch.each_digest(|digest| every &= there.find(digest).is_some());
         prop_assert!(every);
     }
 

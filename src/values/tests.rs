@@ -10,6 +10,7 @@ mod crossing;
 mod depth;
 mod digest;
 mod equality;
+mod habitat;
 mod render;
 mod satisfaction;
 mod surface;

@@ -322,9 +322,34 @@ impl<'t> Branch<'t> {
         self.nodes.insert_unique(lay, node);
     }
 
-    /// Visit every node the branch holds.
-    pub(super) fn each(&self, visit: impl FnMut(Linked<'t>)) {
-        self.nodes.each(visit);
+    /// The branch's address, which names it whatever its brand.
+    pub(super) fn address(&self) -> *const () {
+        (self as *const Self).cast()
+    }
+
+    /// Whether the branch is the one at `address`, or reaches it through its links.
+    pub(super) fn reaches_branch(&self, address: *const ()) -> bool {
+        self.address() == address
+            || self
+                .link
+                .get()
+                .is_some_and(|link| link.reaches_branch(address))
+    }
+
+    /// Visit the nodes of the branch, then of each branch its links reach, nearest first, stopping
+    /// at the first branch `reached` answers true for.
+    pub(super) fn each_until(
+        &self,
+        reached: &dyn Fn(*const ()) -> bool,
+        visit: &mut dyn FnMut(Linked<'t>),
+    ) {
+        if reached(self.address()) {
+            return;
+        }
+        self.nodes.each(&mut *visit);
+        if let Some(link) = self.link.get() {
+            link.each_until(reached, visit);
+        }
     }
 
     /// Link `tier`: one per branch, since a cell has one spawner.
@@ -414,6 +439,14 @@ impl<'t> Own<'t> {
         }
     }
 
+    /// Whether the tier is the branch at `address`, or reaches it through its links.
+    pub(super) fn reaches_branch(self, address: *const ()) -> bool {
+        match self {
+            Own::Builder(_) => false,
+            Own::Branch(branch) => branch.reaches_branch(address),
+        }
+    }
+
     /// The branch, for a door only a branch serves.
     pub(super) fn branch(self) -> &'t Branch<'t> {
         match self {
@@ -447,6 +480,12 @@ pub(super) trait Tier<'t> {
 
     /// Record `verdict` for `key` in the tier.
     fn record(&self, key: VerdictKey, verdict: bool);
+
+    /// Whether the tier is the branch at `address`, or reaches it through its links.
+    fn reaches_branch(&self, address: *const ()) -> bool;
+
+    /// [`Branch::each_until`] over the tier's branch, which a link always is.
+    fn each_until(&self, reached: &dyn Fn(*const ()) -> bool, visit: &mut dyn FnMut(Linked<'t>));
 }
 
 /// A scratch chain's region tier: the region half itself, so every call re-reads the region's
@@ -472,6 +511,16 @@ impl<'r: 't, 't, H: Habitat<'r>> Tier<'t> for RegionTier<'r, H> {
             own.record(self.0, key, verdict);
         }
     }
+
+    fn reaches_branch(&self, address: *const ()) -> bool {
+        self.0.own().is_some_and(|own| own.reaches_branch(address))
+    }
+
+    fn each_until(&self, reached: &dyn Fn(*const ()) -> bool, visit: &mut dyn FnMut(Linked<'t>)) {
+        if let Some(Own::Branch(branch)) = self.0.own() {
+            branch.each_until(reached, &mut |node| visit(node));
+        }
+    }
 }
 
 /// A branch's link to its spawner's branch, which existed when the link was laid. A chain reads
@@ -494,6 +543,14 @@ impl<'h: 't, 't> Tier<'t> for BranchTier<'h> {
     }
 
     fn record(&self, _: VerdictKey, _: bool) {}
+
+    fn reaches_branch(&self, address: *const ()) -> bool {
+        self.0.reaches_branch(address)
+    }
+
+    fn each_until(&self, reached: &dyn Fn(*const ()) -> bool, visit: &mut dyn FnMut(Linked<'t>)) {
+        self.0.each_until(reached, &mut |node| visit(node));
+    }
 }
 
 /// `test`-only: a habitat half over a bump, its branch in a slot beside it — how the suite builds
