@@ -190,7 +190,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 });
                 #[cfg(debug_assertions)]
                 view.values(&mut |value| {
-                    crate::values::check_habitat::<KnottedFamily>(&types, value)
+                    crate::values::check_pinned_habitat::<KnottedFamily>(&types, value)
                 });
                 *view
             }

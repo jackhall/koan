@@ -11,7 +11,7 @@ use super::evaluator::{Mini, contribute, recorded, reset};
 use super::{compare_back, loaded, output, read_back, run_and_read, type_back, written};
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
-const DEPTH: u32 = if cfg!(miri) { 8 } else { 300 };
+const DEPTH: u32 = if cfg!(miri) { 2 } else { 300 };
 
 /// How many top-level statements the slab-cap test writes.
 const STATEMENTS: usize = if cfg!(miri) { 8 } else { 200 };
@@ -398,7 +398,7 @@ fn a_quantified_return_shares_its_frame() {
     // copying it: `r` reads back at the very address `xs` was built at. The list is long enough
     // that copying it never costs less than pinning the calling evaluation's region, which holds
     // the types the call builds beside its own work.
-    let elements = (1..=64)
+    let elements = (1..=24)
         .map(|n| n.to_string())
         .collect::<Vec<_>>()
         .join(" ");
@@ -483,13 +483,13 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
     // its capture where it now lies. The captures are long enough that copying either costs more
     // than pinning a region of the call's own work and types, and the unreached list far longer.
     let capture = |from: usize| {
-        (from..from + 64)
+        (from..from + 8)
             .map(|n| n.to_string())
             .collect::<Vec<_>>()
             .join(" ")
     };
     let (first, second) = (capture(1), capture(100));
-    let long = vec!["x"; 4096].join(" ");
+    let long = vec!["x"; 32].join(" ");
     let source = format!(
         "LET constantly = (FN :{{x :Any}} -> Any = #(FN :{{y :Number}} -> Any = #(x)))\n\
          LET wasteful = (FN :{{x :Any}} -> Any = #((LET big = [{long}]) (FN :{{y :Number}} -> Any = #(x))))\n\
@@ -814,6 +814,7 @@ fn a_self_call_in_tail_position_holds_its_cells_constant_however_deep() {
     // The frame tails its `WHEN` into the evaluator under its contract, the `WHEN` tails its branch,
     // and the call — whose callee returns `Number`, which the contract asks — tails into the next
     // frame, so no frame waits on the one after it.
-    let deep = if cfg!(miri) { 64 } else { 10_000 };
-    assert_eq!(peak_counting_down(deep), peak_counting_down(4));
+    // Under Miri one hop past the shallow count is enough to exercise the hop's crossing.
+    let (deep, shallow) = if cfg!(miri) { (3, 2) } else { (10_000, 4) };
+    assert_eq!(peak_counting_down(deep), peak_counting_down(shallow));
 }

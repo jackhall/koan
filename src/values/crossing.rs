@@ -121,23 +121,24 @@ pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
     types: &Types<'graph, 'cell>,
     view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, TypeHeader>,
 ) -> Value<'cell, XF::Closed<'cell>> {
-    let crossed = match *view {
+    match *view {
         CrossedOperand::Pinned {
             view: value, home, ..
         } => {
             home.read(|header, _| types.merge(header.into_value()));
+            #[cfg(debug_assertions)]
+            check_pinned_habitat::<XF>(types, &value);
             value
         }
         CrossedOperand::Copied {
             view: value, home, ..
         } => {
             let [copied] = copied::<XF, 1>(writer, types, home, [&value]);
+            #[cfg(debug_assertions)]
+            check_habitat::<XF>(types, &copied);
             copied
         }
-    };
-    #[cfg(debug_assertions)]
-    check_habitat::<XF>(types, &crossed);
-    crossed
+    }
 }
 
 /// Values held inside a copied operand of another family — a birth that carries values — rebuilt
@@ -200,21 +201,43 @@ where
     values.map(|value| copying.value(value))
 }
 
-/// How many parts of a crossed value the habitat check reads: a pin is O(1) in a release build, so
+/// How many parts of a pinned value the habitat check reads: a pin is O(1) in a release build, so
 /// a debug build reads a bounded prefix of the value rather than make every pin of a deep value
-/// walk it whole, which turns a loop over a deep value quadratic.
+/// walk it whole, which turns a loop over a deep value quadratic. A copy already walks every part
+/// it lays, so its check reads them all.
 #[cfg(debug_assertions)]
-const CHECKED_PARTS: usize = 16;
+const PINNED_PARTS: usize = 16;
 
 /// The habitat check, in a debug build: every type `value` carries — each part's own memo, hidden
 /// parts included, each type value's payload, and every type a knot it reaches carries — resolves
-/// in `types`, the chain of the habitat it was crossed into, for the first [`CHECKED_PARTS`] parts
-/// a depth-first walk reaches. It interns nothing and caches nothing, so a debug build's branches
-/// hold what a release build's would.
+/// in `types`, the chain of the habitat it was crossed into. It interns nothing and caches nothing,
+/// so a debug build's branches hold what a release build's would. For a copy, which walked the
+/// value already.
 #[cfg(debug_assertions)]
 pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
     types: &Types<'graph, 'cell>,
     value: &Value<'cell, XF::Closed<'cell>>,
+) {
+    check_parts::<XF>(types, value, usize::MAX);
+}
+
+/// [`check_habitat`] for a pinned value, over the first [`PINNED_PARTS`] parts a depth-first walk
+/// reaches: a crossing door that misses a tier misses every type the tier holds, so a prefix finds
+/// it unless every such type lies past the prefix.
+#[cfg(debug_assertions)]
+pub fn check_pinned_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
+    types: &Types<'graph, 'cell>,
+    value: &Value<'cell, XF::Closed<'cell>>,
+) {
+    check_parts::<XF>(types, value, PINNED_PARTS);
+}
+
+/// The habitat check over the first `limit` parts of `value`.
+#[cfg(debug_assertions)]
+fn check_parts<'graph, 'cell, XF: KnottedFamily<'graph>>(
+    types: &Types<'graph, 'cell>,
+    value: &Value<'cell, XF::Closed<'cell>>,
+    limit: usize,
 ) {
     use crate::memory::{BumpBackedSet, bump_set};
     let check = |kt: DeclaredType<Parametric>| {
@@ -240,7 +263,7 @@ pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
     stack.push(*value);
     let mut read = 0;
     while let Some(value) = stack.pop()
-        && read < CHECKED_PARTS
+        && read < limit
     {
         read += 1;
         check(value.ktype().into());

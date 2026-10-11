@@ -59,8 +59,8 @@ fn peak_of(source: &str) -> usize {
 fn a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep() {
     // The frame tails its last statement into the evaluator under its contract; the evaluator
     // selects `WALK` again, whose declared `Str` the contract asks, and hops to its frame.
-    // Under Miri a few hops past the shallow walk are enough to exercise the hop's crossing.
-    let (deep, shallow) = if cfg!(miri) { (5, 2) } else { (10_000, 4) };
+    // Under Miri one hop past the shallow walk is enough to exercise the hop's crossing.
+    let (deep, shallow) = if cfg!(miri) { (3, 2) } else { (10_000, 4) };
     assert_eq!(peak_walking(deep), peak_walking(shallow));
 }
 

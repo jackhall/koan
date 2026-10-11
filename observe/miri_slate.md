@@ -208,9 +208,9 @@ cell's region; what this pins is the ordering between two.
   branch and the spawner's it links, entering both regions' nodes in a third by reference, read by
   the habitat check after the tenant is released.
 - `a_recursion_asking_two_children_per_level_peaks_at_its_depth`
-  a deep stack of births and releases: five hundred and eleven tree cells born one path at a
-  time under one root work, each delivering into its parked parent's scratch run before it is
-  released.
+  a stack of births and releases: tree cells born one path at a time under one root work, each
+  delivering into its parked parent's scratch run before it is released — two levels, seven cells,
+  under Miri.
 
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
 storage, the registry's bump and the interner in `self_cell`'s owner, and in its dependent at
@@ -248,7 +248,7 @@ shorter brand than the one it was bound at.
   a frame tails its last statement into the evaluator with a view of its own activation: the
   successor is a tenant of the frame's caller, so the crossing pins the frame's region before the
   frame is released, and the evaluation reads through that view and tails into the next frame —
-  sixty-four hops under Miri.
+  three hops under Miri, against two.
 
 **Dispatch** ([src/dispatch/evaluate.rs](../src/dispatch/evaluate.rs)) — the evaluator selecting a
 registration's function under a frame's contract and hopping to its frame, its argument record built
@@ -257,7 +257,7 @@ in a tenant's storage and crossed into the callee's birth.
 - `a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep`
   a keyworded call as a frame's last statement selects its own overload by the carried type of a
   link read through a newtype, and the evaluation owing the frame's contract tails into the next
-  frame with the argument record it built — five hops under Miri, against two.
+  frame with the argument record it built — three hops under Miri, against two.
 - `an_instance_made_in_a_frame_is_called_where_it_lands`
   a quantified member of a two-member knot whose closure holds an edge to its sibling and a
   captured string, instantiated at a frame's last statement: its knot re-tied through the frame's

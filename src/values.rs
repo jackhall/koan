@@ -53,9 +53,9 @@ pub use admission::{
     part_ktype, record_type, representation, satisfies, sealing, solves_identity,
 };
 pub use circular::{Circular, CodeView, Resolved};
-#[cfg(debug_assertions)]
-pub use crossing::check_habitat;
 pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
+#[cfg(debug_assertions)]
+pub use crossing::{check_habitat, check_pinned_habitat};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use digest::{ContentDigest, Digests};
 pub use equality::Incomparable;

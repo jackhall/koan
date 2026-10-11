@@ -6,7 +6,11 @@
 //!
 //! The crossing doors read types over a frozen root, and a test step, a bare `fn`, has no program
 //! to take one from, so each thread keeps a seeded root of its own ([`test_root`]), leaked for the
-//! thread's life.
+//! process's life and anchored in a static, so Miri's leak check reads it as reachable.
+
+use std::ptr;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicPtr;
 
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Bump, CrossedOperand, Header, Writer, reattachable};
@@ -14,8 +18,17 @@ use crate::scheduler::{Born, Graph, NativeStep, StepBundle};
 use crate::type_lattice::Root;
 use crate::values::{Half, TypeHeader, Types};
 
+/// Every thread's root bump, held for the process's life: the root a test step reads is `'static`,
+/// so its bump is never released, and a pointer to it here is what keeps that from being a leak.
+static ANCHORS: Mutex<Vec<AtomicPtr<Bump>>> = Mutex::new(Vec::new());
+
 thread_local! {
-    static ROOT: &'static Root<'static> = Root::seeded(Box::leak(Box::new(Bump::new())));
+    static ROOT: &'static Root<'static> = {
+        let bump: &'static Bump = Box::leak(Box::new(Bump::new()));
+        let anchor = AtomicPtr::new(ptr::from_ref(bump).cast_mut());
+        ANCHORS.lock().expect("no thread panics holding the anchors").push(anchor);
+        Root::seeded(bump)
+    };
 }
 
 /// This thread's seeded root, which every test step's chain reads first.
@@ -54,7 +67,7 @@ impl<'graph> StepBundle<'graph> for Native {
             CrossedOperand::Pinned { view, home, .. } if born == Born::Child => {
                 home.read(|header, _| types.link(header.into_value()));
                 #[cfg(debug_assertions)]
-                crate::values::check_habitat::<crate::knot::KnottedFamily>(&types, view);
+                crate::values::check_pinned_habitat::<crate::knot::KnottedFamily>(&types, view);
                 *view
             }
             _ => crate::values::cross_view(writer, &types, view),

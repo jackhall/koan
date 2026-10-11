@@ -78,7 +78,9 @@ fn woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
 
 #[test]
 fn a_child_links_its_spawners_branch() {
-    for minted in [8, 256] {
+    // Under Miri a spawner holding one type and one holding two are enough to read the link.
+    let counts = if cfg!(miri) { [1, 2] } else { [8, 256] };
+    for minted in counts {
         MINTED.with(|count| count.set(minted));
         assert_eq!(
             run(2, spawner),

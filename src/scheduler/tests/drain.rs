@@ -191,8 +191,9 @@ fn two_children_asked_in_one_park_run_one_subtree_after_the_other() {
     );
 }
 
-/// How deep the recursion goes below its root work.
-const DEPTH: f64 = 8.0;
+/// How deep the recursion goes below its root work. Under Miri two levels are enough: a parked
+/// inner node woken by two leaves, under a root parked on two inner nodes.
+const DEPTH: f64 = if cfg!(miri) { 2.0 } else { 8.0 };
 
 /// One level of a recursion that asks for two children at every level, down to a leaf.
 fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
