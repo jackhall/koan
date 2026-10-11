@@ -27,10 +27,10 @@ use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected
 use crate::parse::{ExpressionPart, KExpression, KLiteral, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, Site, Target};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType};
 use crate::values::{
     CALL_ONLY, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue,
-    Value, construction, dict_type, kept_entries, list_type, part_ktype, record_type,
+    Types, Value, construction, dict_type, kept_entries, list_type, part_ktype, record_type,
     solves_identity,
 };
 
@@ -443,7 +443,7 @@ fn each_child<'a, 'graph, 'cell, 'x>(
 
 /// Whether a staged node's memo is derived from its cells: a container, or a construction whose
 /// head solves its identity from its payload. Any other tagged node is a cut.
-fn is_derived(staged: &Staged<'_, '_, '_>, types: &TypeRegistry<'_>) -> bool {
+fn is_derived(staged: &Staged<'_, '_, '_>, types: &Types<'_, '_>) -> bool {
     match staged {
         Staged::List(_) | Staged::Dict(_) | Staged::Record(_) => true,
         Staged::Tagged { head, .. } => solves_identity(types, head.handle()),
@@ -458,7 +458,7 @@ pub(super) fn memos<'x>(
     nodes: &Nodes<'_, '_, '_>,
     memos: &mut [Option<DeclaredType<KType>>],
     names: &dyn Fn(u32) -> BinderSymbol,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<(), Untieable<'x>> {
     let derived = |node: &Option<Node<'_, '_, '_>>| {
@@ -534,7 +534,7 @@ pub(super) fn memos<'x>(
 fn staged_type(
     staged: &Staged<'_, '_, '_>,
     memos: &[Option<DeclaredType<KType>>],
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, (Site, ConstructionRefused)> {
     let of = |staged| staged_type(staged, memos, types, scratch);
@@ -588,14 +588,14 @@ pub(super) fn check(
     nodes: &Nodes<'_, '_, '_>,
     memos: &[Option<DeclaredType<KType>>],
     names: &dyn Fn(u32) -> BinderSymbol,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Untieable<'static>> {
     fn walk(
         staged: &Staged<'_, '_, '_>,
         memos: &[Option<DeclaredType<KType>>],
         name: BinderSymbol,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), Untieable<'static>> {
         if let Staged::Tagged {
@@ -631,7 +631,7 @@ pub(super) fn check(
 fn write<'graph, 'cell>(
     writer: Writer<'cell>,
     staged: &Staged<'graph, 'cell, '_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let value = |staged| write(writer, staged, types, scratch);
@@ -671,7 +671,7 @@ fn link<'graph, 'cell>(
     writer: Writer<'cell>,
     staged: &Staged<'graph, 'cell, '_>,
     plan: &KnotPlan,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Link<'cell, Knotted<'graph, 'cell>> {
     match staged {
@@ -689,7 +689,7 @@ pub(super) fn lay_down<'graph, 'cell>(
     node: &Node<'graph, 'cell, '_>,
     memo: KType,
     plan: &KnotPlan,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Circular<'cell, Knotted<'graph, 'cell>> {
     let cell = |staged| link(writer, staged, plan, types, scratch);

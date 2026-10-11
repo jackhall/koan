@@ -9,7 +9,7 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph, with_types};
+use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph, test_root};
 use crate::scheduler::tests::native::{record, recorded, reset, shares, where_text, work};
 use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Slot, Step, StepError, Use};
 
@@ -37,7 +37,7 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
     let KValue::Str(text) = state else {
         return step.failed(StepError::Stale);
     };
-    step.finish_fresh(move |writer, _| {
+    step.finish_fresh(test_root(), move |writer, _, _| {
         let value: KValue<'graph, '_> = crate::values::text(writer, text);
         Active::new(value)
     })
@@ -58,7 +58,7 @@ fn gather_two<'graph, 'here, 'scratch>(
     let mut gathered = [KValue::Null; 2];
     for (held, received) in gathered
         .iter_mut()
-        .zip(with_types(|types| step.results(types).collect::<Vec<_>>()))
+        .zip(step.results(test_root()).collect::<Vec<_>>())
     {
         // Homed in this very cell, so the verdict pins and nothing is copied: the value reads at
         // this step's `'here` over the bytes the producer wrote.
@@ -87,7 +87,7 @@ fn build<'graph, 'here>(step: Step<'_, 'graph, '_, 'here, '_, Native>) -> Action
     let Some(ScratchState::Gathered(run)) = scratch else {
         return step.failed(StepError::Unredeemable);
     };
-    let Some(Ok(Received::Here(third))) = with_types(|types| step.results(types).next()) else {
+    let Some(Ok(Received::Here(third))) = step.results(test_root()).next() else {
         return step.failed(StepError::Unredeemable);
     };
     // The gathered values go into storage as they are — the whole point of holding them at

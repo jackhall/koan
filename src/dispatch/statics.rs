@@ -127,14 +127,14 @@ use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KKind, KType,
-    Parametric, Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with,
-    bound_above, fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet,
-    read_through, scheme_bound_above, scheme_return, scheme_slots, select_by_class, shape_return,
-    shape_slots, solving_slots,
+    Parametric, Scheme, Side, TypeNode, Variable, Variance, Verdict, admits_with, bound_above,
+    fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet, read_through,
+    scheme_bound_above, scheme_return, scheme_slots, select_by_class, shape_return, shape_slots,
+    solving_slots,
 };
 use crate::values::{
-    ConstructionRefused, Value, construction, dict_type, list_type, record_type, retyped_to, under,
-    unknown,
+    ConstructionRefused, Types, Value, construction, dict_type, list_type, record_type, retyped_to,
+    under, unknown,
 };
 
 use super::builtins::Native;
@@ -148,7 +148,7 @@ use super::select;
 pub(super) fn statics<'graph>(
     root: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'graph, 'graph>,
-    types: &TypeRegistry<'graph>,
+    types: &Types<'graph, 'graph>,
     writer: Writer<'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
@@ -197,7 +197,7 @@ type Bound = DeclaredType<Interval>;
 /// static type `value` can ever satisfy `wanted`. `None` where one might. Each end is named
 /// through its bound, since a variable's name is its binder's.
 fn never_satisfies(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     value: Parametric,
     wanted: Parametric,
@@ -212,7 +212,7 @@ fn never_satisfies(
 /// Whether a value of the static type `typed` can reach a type minted at run: where its upper end
 /// is porous or exposing, and, where that is exact and closed, where it is exposing — an exact
 /// closed site carries that very type, and the surface door hides what the type does not name.
-fn porous_site(types: &TypeRegistry<'_>, typed: Interval) -> bool {
+fn porous_site(types: &Types<'_, '_>, typed: Interval) -> bool {
     if typed.is_exact() && types.concrete(typed.upper).is_some() {
         types.exposing(typed.upper)
     } else {
@@ -222,7 +222,7 @@ fn porous_site(types: &TypeRegistry<'_>, typed: Interval) -> bool {
 
 /// Whether a value held to the declared type `slot` — a return, a parameter — can carry a type
 /// minted at run.
-fn porous_slot(types: &TypeRegistry<'_>, slot: Parametric) -> bool {
+fn porous_slot(types: &Types<'_, '_>, slot: Parametric) -> bool {
     types.porous(slot) || types.exposing(slot)
 }
 
@@ -285,7 +285,7 @@ struct Level<'p, 'graph> {
 /// The walk's state: the chain of enclosing shapes.
 struct Pass<'p, 'x, 'graph> {
     builtins: &'x KBuiltins<'graph, 'graph>,
-    types: &'x TypeRegistry<'graph>,
+    types: &'x Types<'graph, 'graph>,
     writer: Writer<'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,

@@ -4,17 +4,18 @@
 //! relation of the same name, and reads its result back as handles. The modules mirror the
 //! lattice's own, so a test imports `raw::order::fits` where it means the order's *fits*.
 //!
-//! [`RawRegistry`] gives the registry back the readers that moved onto a node: a scheme's split,
+//! [`RawRegistry`] gives the chain back the readers that moved onto a node: a scheme's split,
 //! a declared type and the six probes.
 
 use crate::bump::BumpAllocator;
 
+use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, Parametric, TypeHandle};
 use crate::types::node::{Group, TypeNode};
-use crate::types::registry::TypeRegistry;
 use crate::types::stored::Linked;
+use crate::types::tiers::Habitat;
 
-/// The registry's handle-level readers, for the suite alone.
+/// The chain's handle-level readers, for the suite alone.
 pub(super) trait RawRegistry<'run> {
     /// `handle`'s own group and the type under it.
     fn split(&self, handle: Handle) -> (Group<'run>, Handle);
@@ -28,7 +29,7 @@ pub(super) trait RawRegistry<'run> {
     fn is_exposing(&self, handle: Handle) -> bool;
 }
 
-impl<'run> RawRegistry<'run> for TypeRegistry<'run> {
+impl<'run, H: Habitat<'run>> RawRegistry<'run> for TypeChain<'run, H> {
     fn split(&self, handle: Handle) -> (Group<'run>, Handle) {
         let (group, body) = self.enter(handle).split();
         (group, body.handle())
@@ -64,15 +65,18 @@ impl<'run> RawRegistry<'run> for TypeRegistry<'run> {
 }
 
 /// Each of `handles`' nodes.
-fn enter_all<'run>(types: &TypeRegistry<'run>, handles: &[Handle]) -> Vec<Linked<'run>> {
+fn enter_all<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    handles: &[Handle],
+) -> Vec<Linked<'run>> {
     handles.iter().map(|handle| types.enter(*handle)).collect()
 }
 
 pub(super) mod order {
     use super::*;
 
-    pub(in crate::types::tests) fn is_subtype_of(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn is_subtype_of<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         a: Handle,
         b: Handle,
@@ -80,8 +84,8 @@ pub(super) mod order {
         crate::types::order::is_subtype_of(types, scratch, types.enter(a), types.enter(b))
     }
 
-    pub(in crate::types::tests) fn fits(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn fits<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         a: Handle,
         b: Handle,
@@ -89,8 +93,8 @@ pub(super) mod order {
         crate::types::order::fits(types, scratch, types.enter(a), types.enter(b))
     }
 
-    pub(in crate::types::tests) fn satisfied_by(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn satisfied_by<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         slot: Handle,
         carried: Handle,
@@ -102,8 +106,8 @@ pub(super) mod order {
 pub(super) mod lattice {
     use super::*;
 
-    pub(in crate::types::tests) fn join(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn join<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         a: Handle,
         b: Handle,
@@ -111,8 +115,8 @@ pub(super) mod lattice {
         crate::types::lattice::join(types, scratch, types.enter(a), types.enter(b)).handle()
     }
 
-    pub(in crate::types::tests) fn join_iter(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn join_iter<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         iter: impl IntoIterator<Item = Handle>,
     ) -> Handle {
@@ -120,8 +124,8 @@ pub(super) mod lattice {
         crate::types::lattice::join_iter(types, scratch, nodes).handle()
     }
 
-    pub(in crate::types::tests) fn meet_through_variables(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn meet_through_variables<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         a: Handle,
         b: Handle,
@@ -143,8 +147,8 @@ pub(super) mod ranking {
 
     pub(in crate::types::tests) use crate::types::ranking::{Judged, Verdict};
 
-    pub(in crate::types::tests) fn admit_by_class<'s>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn admit_by_class<'ty, 's>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'s>,
         declared: Handle,
         arguments: &[Handle],
@@ -159,8 +163,8 @@ pub(super) mod ranking {
         Some(scratch.alloc_slice_fill_iter(solution.iter().map(|solved| solved.handle())))
     }
 
-    pub(in crate::types::tests) fn judge_by_class<'s>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn judge_by_class<'ty, 's>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'s>,
         declared: Handle,
         arguments: &[Interval<Handle>],
@@ -175,16 +179,16 @@ pub(super) mod ranking {
         crate::types::ranking::judge_by_class(types, scratch, types.enter(declared), &arguments)
     }
 
-    pub(in crate::types::tests) fn solving_slots<'s>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn solving_slots<'ty, 's>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'s>,
         declared: Handle,
     ) -> &'s [bool] {
         crate::types::ranking::solving_slots(types, scratch, types.enter(declared))
     }
 
-    pub(in crate::types::tests) fn select_by_class<'s>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn select_by_class<'ty, 's>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'s>,
         shapes: &[Handle],
     ) -> BumpVec<'s, usize> {
@@ -197,23 +201,23 @@ pub(super) mod shape {
     use crate::types::shape::{Classes, Shape};
 
     pub(in crate::types::tests) fn shape_of<'run>(
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         kt: Handle,
     ) -> Option<Shape<'run>> {
         Shape::of(types.enter(kt))
     }
 
-    pub(in crate::types::tests) fn keys_equal(
+    pub(in crate::types::tests) fn keys_equal<'ty>(
         left: Handle,
         right: Handle,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
     ) -> bool {
         crate::types::shape::keys_equal(types.enter(left), types.enter(right))
     }
 
     pub(in crate::types::tests) fn shape_classes<'run>(
         kt: Handle,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
     ) -> Classes<'run> {
         crate::types::shape::shape_classes(types.enter(kt))
     }
@@ -224,8 +228,8 @@ pub(super) mod sig_relations {
     use crate::types::shape::Specificity;
     use crate::types::sig_relations::FitsFailure;
 
-    pub(in crate::types::tests) fn admits_shape(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn admits_shape<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         declared: Handle,
         candidate: Handle,
@@ -238,8 +242,8 @@ pub(super) mod sig_relations {
         )
     }
 
-    pub(in crate::types::tests) fn shape_specificity(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn shape_specificity<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         a: Handle,
         b: Handle,
@@ -253,7 +257,7 @@ pub(super) mod sig_relations {
     }
 
     pub(in crate::types::tests) fn sig_fits<'run: 's, 's>(
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'s>,
         offered: Handle,
         asked: Handle,
@@ -275,14 +279,17 @@ pub(super) mod signatures {
     pub(in crate::types::tests) use crate::types::signatures::applications_under;
 
     pub(in crate::types::tests) fn applications<'run, 's>(
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'s>,
         kt: Handle,
     ) -> Option<BumpVec<'s, Application<'run, 'run>>> {
         crate::types::signatures::applications(scratch, types.enter(kt))
     }
 
-    pub(in crate::types::tests) fn is_signature_type(types: &TypeRegistry<'_>, kt: Handle) -> bool {
+    pub(in crate::types::tests) fn is_signature_type<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
+        kt: Handle,
+    ) -> bool {
         crate::types::signatures::is_signature_type(types.enter(kt))
     }
 }
@@ -295,8 +302,8 @@ pub(super) mod substitute {
 
     pub(in crate::types::tests) use crate::types::substitute::Side;
 
-    pub(in crate::types::tests) fn substitute_quantified<B: TypeHandle>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn substitute_quantified<'ty, B: TypeHandle>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         kt: Handle,
         bindings: &[B],
@@ -309,8 +316,8 @@ pub(super) mod substitute {
             .handle()
     }
 
-    pub(in crate::types::tests) fn substitute_levels<B: TypeHandle>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn substitute_levels<'ty, B: TypeHandle>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         kt: Handle,
         bindings: &[B],
@@ -323,16 +330,16 @@ pub(super) mod substitute {
             .handle()
     }
 
-    pub(in crate::types::tests) fn bound_above(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn bound_above<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         kt: Handle,
     ) -> Handle {
         crate::types::substitute::bound_above(types, scratch, types.enter(kt)).handle()
     }
 
-    pub(in crate::types::tests) fn substitute_parameters<B: TypeHandle>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn substitute_parameters<'ty, B: TypeHandle>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         kt: Handle,
         bindings: Members<'_, TypeSymbol, B>,
@@ -349,7 +356,7 @@ pub(super) mod substitute {
 
     /// `interval` is handed each variable's handle and its node read through a handle.
     pub(in crate::types::tests) fn read_through<'run>(
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         kt: Handle,
         side: Side,
@@ -379,7 +386,7 @@ pub(super) mod unify {
     use crate::types::walk::Variance;
 
     pub(in crate::types::tests) fn admits<'run, T>(
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         declared: Handle,
         carried: Handle,
@@ -397,8 +404,8 @@ pub(super) mod unify {
         .map_err(UnifyFailure::typed)
     }
 
-    pub(in crate::types::tests) fn most_determined_first<'s>(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn most_determined_first<'ty, 's>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'s>,
         declared: &[Handle],
         carried: Handle,
@@ -414,8 +421,8 @@ pub(super) mod unify {
         handles
     }
 
-    pub(in crate::types::tests) fn ties(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn ties<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         a: Handle,
         b: Handle,
@@ -431,7 +438,7 @@ pub(super) mod walk {
 
     /// `at` is handed each node's handle and the node read through a handle.
     pub(in crate::types::tests) fn visit<'run>(
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         root: Handle,
         at: &mut impl FnMut(Handle, &TypeNode<'run, Handle>, &Context) -> Visit,
@@ -441,8 +448,8 @@ pub(super) mod walk {
         })
     }
 
-    pub(in crate::types::tests) fn visit_free_quantified(
-        types: &TypeRegistry<'_>,
+    pub(in crate::types::tests) fn visit_free_quantified<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         root: Handle,
         variance: Variance,

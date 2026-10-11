@@ -1,7 +1,7 @@
 //! The laws.
 //!
 //! Every statement here is a property of the algebra, not a pin on a particular input: a rewrite of
-//! any walk has these as its oracle. One registry per test thread, so handles generated inside one
+//! any walk has these as its oracle. One chain per test thread, so handles generated inside one
 //! law all name content the same table holds; each case brings its own scratch region, dropped with
 //! the case.
 //!
@@ -29,13 +29,14 @@ use super::raw::walk::{visit, visit_free_quantified};
 use super::raw::{lattice, order};
 use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
+use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::types::kind::KKind;
 use crate::types::node::{TypeNode, Variable};
-use crate::types::registry::TypeRegistry;
 use crate::types::schema::{Members, canonical_overloads};
 use crate::types::shape::{DispatchTokenElement, Specificity, shape_slots};
 use crate::types::sig_relations::InstanceFailure;
+use crate::types::tiers::{BumpHalf, Habitat};
 use crate::types::typed::{
     fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
 };
@@ -53,7 +54,7 @@ use super::generators::{
 };
 
 thread_local! {
-    /// One live registry and one alphabet per test thread — proptest runs each `#[test]` on its
+    /// One live chain and one alphabet per test thread — proptest runs each `#[test]` on its
     /// own, so a law's generated handles all name content one table holds.
     static WORLD: World = World::new();
 }
@@ -62,7 +63,7 @@ fn world() -> World {
     WORLD.with(|world| world.clone())
 }
 
-fn registry() -> std::rc::Rc<TypeRegistry<'static>> {
+fn registry() -> std::rc::Rc<TypeChain<'static, super::generators::WorldHalf>> {
     world().types
 }
 
@@ -616,9 +617,9 @@ fn widened_with_a_carrier() -> BoxedStrategy<(Handle, Handle)> {
         .boxed()
 }
 
-/// [`TypeRegistry::porous`] by its definition, as a descent: whether a type minted at run, or one
+/// [`TypeChain::porous`] by its definition, as a descent: whether a type minted at run, or one
 /// built over it, can lie under or fit `kt`.
-fn porous_walk(types: &TypeRegistry<'_>, kt: Handle) -> bool {
+fn porous_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> bool {
     let at = |child: Handle| porous_walk(types, child);
     match types.node(kt) {
         TypeNode::Any
@@ -649,9 +650,9 @@ fn porous_walk(types: &TypeRegistry<'_>, kt: Handle) -> bool {
     }
 }
 
-/// [`TypeRegistry::exposing`] by its definition, as a descent: whether a value seen at `kt` can
+/// [`TypeChain::exposing`] by its definition, as a descent: whether a value seen at `kt` can
 /// expose a part or payload of a type minted at run.
-fn exposing_walk(types: &TypeRegistry<'_>, kt: Handle) -> bool {
+fn exposing_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> bool {
     let part = |child: Handle| {
         exposing_walk(types, child)
             || (matches!(
@@ -1022,8 +1023,8 @@ proptest! {
 }
 
 /// Whether `shape` admits one argument tuple at its slot positions.
-fn admits_tuple(
-    types: &TypeRegistry<'_>,
+fn admits_tuple<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     shape: Handle,
     arguments: &[KType],
@@ -1287,8 +1288,8 @@ fn draw_from(source: impl Strategy<Value = u8>) -> impl Strategy<Value = Draw> {
 /// `kt` as the run carries it: each lexical variable replaced by the type the run binds its level
 /// to — its bound, its lower end, or the bound met with a pool type and joined with the lower end,
 /// as `draw` says.
-fn instance(
-    types: &TypeRegistry<'_>,
+fn instance<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     kt: Handle,
     draw: &Draw,
@@ -1329,8 +1330,8 @@ fn instance(
 /// and meets a drawn type above `Never`, is bounded below by that meet, which it carries; anything
 /// else is within the static type, carrying it met with a drawn type, or as the run carries it where
 /// that meet is `Never`. `None` where some static type is `Never`.
-fn static_and_carried(
-    types: &TypeRegistry<'_>,
+fn static_and_carried<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     a: Handle,
     b: Handle,
@@ -1386,8 +1387,8 @@ fn static_and_carried(
 }
 
 /// `interval` with each end as the run carries it.
-fn carried_interval(
-    types: &TypeRegistry<'_>,
+fn carried_interval<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     interval: Interval<Handle>,
     draw: &Draw,
@@ -1399,8 +1400,8 @@ fn carried_interval(
 }
 
 /// Whether `kt` lies within `interval`.
-fn within(
-    types: &TypeRegistry<'_>,
+fn within<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     kt: Handle,
     interval: Interval<Handle>,
@@ -1411,7 +1412,7 @@ fn within(
 
 /// `shape`'s group solved jointly over one argument per slot, or `None`.
 fn solve_jointly<'s, 'run: 's>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     shape: Handle,
     arguments: &[Handle],
@@ -1421,7 +1422,7 @@ fn solve_jointly<'s, 'run: 's>(
 
 /// [`solve_jointly`]'s solution beside the collector it ran in.
 fn collect_jointly<'s, 'run: 's>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     shape: Handle,
     arguments: &[Handle],
@@ -1716,8 +1717,8 @@ proptest! {
 /// Seal a group of newtypes over `reprs`, each also referencing its successor as a sibling, in
 /// announcement order or reversed, over a window hosted in `scratch`. Returns the member handles in
 /// announcement order.
-fn seal(
-    types: &TypeRegistry<'_>,
+fn seal<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     names: &[TypeSymbol],
     reprs: &[KType],
@@ -1850,5 +1851,78 @@ proptest! {
                 "an overload was dropped with no survivor below it",
             );
         }
+    }
+}
+
+// --- Tiers ---
+
+/// A fresh branch chain over the world's root, in `region`.
+fn beside<'r>(world: &World, region: &'r Bump) -> TypeChain<'r, BumpHalf<'r>> {
+    TypeChain::new(world.root, BumpHalf::new(region))
+}
+
+/// Whether `kt` reads in `there` exactly as in the world: one digest recomputed off its content,
+/// one set of flags, one rendering — which enters every handle a side table holds.
+fn reads_alike<'r>(
+    world: &World,
+    there: &TypeChain<'r, BumpHalf<'r>>,
+    kt: DeclaredType<Parametric>,
+) -> bool {
+    let scratch = Bump::new();
+    let (here, laid) = (world.types.enter(kt.raw()), there.enter(kt.raw()));
+    crate::types::digest::node_digest(&scratch, &laid.view()) == here.digest()
+        && laid.flags() == here.flags()
+        && crate::types::display_name(kt, there, &world.symbols).to_string()
+            == crate::types::display_name(kt, &world.types, &world.symbols).to_string()
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// A copy's transfer re-lays a type at its own digest and flags: adopted into a fresh branch
+    /// over the same root, every generated type reads as it did where it was built.
+    #[test]
+    fn an_adopted_type_reads_as_its_source(kt in one()) {
+        let world = world();
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        there.adopt(world.branch(), kt);
+        prop_assert!(reads_alike(&world, &there, kt));
+    }
+
+    /// A merge enters every node of its source: each then resolves without a link.
+    #[test]
+    fn a_merge_finds_every_source_entry(kt in one()) {
+        let world = world();
+        world.types.enter(kt.raw());
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        let Some(branch) = world.branch() else {
+            return Ok(());
+        };
+        there.merge(branch);
+        let mut every = true;
+        branch.each(|node| every &= there.find(node.digest()).is_some());
+        prop_assert!(every);
+    }
+
+    /// A chain linked to the generating chain's branch reads every generated type as the world
+    /// does, and holds exactly the handles it read: one, unless the root holds it.
+    #[test]
+    fn a_linked_chain_reads_through_and_holds_what_it_read(kt in one()) {
+        let world = world();
+        world.types.enter(kt.raw());
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        if let Some(branch) = world.branch() {
+            there.link(branch);
+        }
+        prop_assert!(reads_alike(&world, &there, kt));
+        let rooted = world.root.find(kt.raw().digest()).is_some();
+        let read = there.own_len();
+        prop_assert!(read >= usize::from(!rooted));
+        let before = read;
+        there.enter(kt.raw());
+        prop_assert_eq!(there.own_len(), before, "a second read caches nothing more");
     }
 }

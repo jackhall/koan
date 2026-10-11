@@ -13,8 +13,8 @@
 use crate::memory::BumpAllocator;
 use crate::scope::{ActivationView, BodyShape, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType, Parametric, SchemaDraft, TypeRegistry};
-use crate::values::{KnottedFamily, Value};
+use crate::type_lattice::{DeclaredType, KType, Parametric, SchemaDraft};
+use crate::values::{KnottedFamily, Types, Value};
 
 /// The self-signature of the module whose body `activation` ran, `keyworded` holding the shape each
 /// of its registrations' functions registers. Every slot is bound: the caller runs the body to
@@ -22,7 +22,7 @@ use crate::values::{KnottedFamily, Value};
 pub fn self_signature<'graph, XF: KnottedFamily<'graph>>(
     activation: &ActivationView<'graph, '_, XF>,
     keyworded: &[DeclaredType<KType>],
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     let shape = activation.shape();
@@ -45,7 +45,7 @@ pub fn module_signature(
     shape: &BodyShape<'_>,
     members: impl IntoIterator<Item = (Slot, DeclaredType<Parametric>)>,
     keyworded: &[DeclaredType<KType>],
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     debug_assert_eq!(shape.kind(), ShapeKind::Module);

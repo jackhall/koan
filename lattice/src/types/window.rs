@@ -1,9 +1,9 @@
 //! `RecursiveGroupWindow` — the declarator-local pre-seal record a group of co-declared nominal
 //! types elaborates against — and [`seal_group`], the pure identity computation it reaches.
 //!
-//! A window is a held record, not registry state: it holds the group's announced member names, each
+//! A window is a held record, not tier state: it holds the group's announced member names, each
 //! member's owner and schema slot, and the declaring binders. Several can
-//! be open at once, which a registry-hosted stack could not express. Nothing on a window is
+//! be open at once, which a tier-hosted stack could not express. Nothing on a window is
 //! digestible; nothing on it survives the seal. Building a group's relative schemas from the AST is
 //! the elaborator's; the lattice only opens and seals the window.
 //!
@@ -11,7 +11,7 @@
 //! and closes it, so the window's member and binder lists, its members' relative schemas and what
 //! the seal minted are all bumped into that frame's region, the `'w` a window is built over — never
 //! the run region and never the heap. The seal writes the sealed member nodes and their component
-//! into the run registry; its own working buffers stage in the scratch it is handed.
+//! into the chain's own tier; its own working buffers stage in the scratch it is handed.
 //!
 //! Inside the window a reference to a co-declared member is a [`TypeNode::Sibling`] handle: a bare
 //! relative index, ordinary interned content, meaningful only against the window that minted it.
@@ -43,7 +43,7 @@
 //! read it: every member's name, kind and schema, with each reference into the component still a
 //! relative `Sibling`. The members are interned against it, each schema is rewritten absolute
 //! against them, and the component is repointed at the absolute table, which
-//! [`TypeRegistry::member_schema`] reads.
+//! [`TypeChain::member_schema`](super::chain::TypeChain::member_schema) reads.
 //!
 //! # Unions across the rewrite
 //!
@@ -61,13 +61,14 @@ use std::cell::{Cell, RefCell};
 use crate::bump::{BumpAllocator, BumpVec, strongly_connected_components};
 use crate::symbols::{Symbol, TypeSymbol};
 
+use super::chain::TypeChain;
 use super::digest::{ComponentMember, component_digest};
 use super::handle::{KType, Naming, Parametric, TypeHandle};
 use super::kind::KKind;
 use super::node::NodeSchema;
-use super::registry::TypeRegistry;
 use super::stored::Linked;
 use super::substitute::{collect_siblings, rewrite_siblings};
+use super::tiers::Habitat;
 
 /// A member's schema while its window is open: the same shape as [`NodeSchema`], but its handles
 /// may name a [`TypeNode::Sibling`] — a relative reference resolved only against this window. Its
@@ -117,7 +118,7 @@ impl<'w> RelativeSchema<'w> {
     /// representation is entered once, and rewritten by reference.
     fn map_handles<'x, 'run>(
         self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'x>,
         resolve: &impl Fn(usize) -> Linked<'run>,
     ) -> RelativeSchema<'x>
@@ -157,9 +158,9 @@ impl<'w> RelativeSchema<'w> {
     }
 
     /// The sibling indices this schema references, at any depth, in walk order.
-    fn sibling_references(
+    fn sibling_references<'ty>(
         self,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         out: &mut BumpVec<'_, usize>,
     ) {
@@ -405,7 +406,12 @@ impl<'w> RecursiveGroupWindow<'w> {
     /// window has not seen the name — the forward-reference case inside a declarator whose own
     /// member list is discovered as its schema is walked. `kind` is the family to announce it
     /// with, ignored when the name is already announced.
-    pub fn sibling(&self, name: TypeSymbol, kind: KKind, types: &TypeRegistry<'_>) -> KType {
+    pub fn sibling<'ty>(
+        &self,
+        name: TypeSymbol,
+        kind: KKind,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
+    ) -> KType {
         let index = match self.member_index(name) {
             Some(index) => index,
             None => {
@@ -421,9 +427,9 @@ impl<'w> RecursiveGroupWindow<'w> {
     /// The relative type binder `name` denotes: the union of the members it owns, each as its
     /// relative sibling handle. A `UNION`'s variant payload naming the union itself resolves
     /// through here.
-    pub fn binder_union(
+    pub fn binder_union<'ty>(
         &self,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         name: TypeSymbol,
     ) -> Option<KType> {
@@ -439,11 +445,11 @@ impl<'w> RecursiveGroupWindow<'w> {
     ///
     /// The single sealing seam: [`PendingMember`]'s fill slot is private, so no site can install a
     /// schema without reaching the identity computation below.
-    pub fn fill_member(
+    pub fn fill_member<'ty>(
         &self,
         index: usize,
         schema: RelativeSchema<'w>,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
     ) -> Option<SealedGroup<'w>> {
         let members = self.members.borrow();
@@ -476,11 +482,11 @@ impl<'w> RecursiveGroupWindow<'w> {
     /// Seal a one-member window in `host` in place — the standalone declarators' path, where
     /// announcement, fill and seal all happen at one site. The member's own self-reference is
     /// `Sibling(0)`, so a self-recursive standalone type needs no other setup.
-    pub fn seal_singleton(
+    pub fn seal_singleton<'ty>(
         host: BumpAllocator<'w>,
         name: TypeSymbol,
         schema: RelativeSchema<'w>,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
     ) -> KType {
         let kind = schema.kind();
@@ -509,13 +515,13 @@ pub(super) struct SealMemberInput<'w> {
 /// binder with the indices of the members it owns. Implements the per-component identity
 /// described in this module's header.
 ///
-/// Every working buffer stages in `scratch`. The member nodes go into the run registry, whose door
-/// copies each schema in on a miss; the two lists the sealed group keeps go into `host`.
+/// Every working buffer stages in `scratch`. The member nodes go into the chain's own tier, whose
+/// door copies each schema in on a miss; the two lists the sealed group keeps go into `host`.
 pub(super) fn seal_group<'w, 'run>(
     host: BumpAllocator<'w>,
     members: &[SealMemberInput<'w>],
     binders: &[(TypeSymbol, &[usize])],
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
 ) -> SealedGroup<'w> {
     let count = members.len();

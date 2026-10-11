@@ -15,12 +15,13 @@
 use crate::memory::{BumpAllocator, Writer, collect};
 use crate::parse::KExpression;
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::KType;
 
 use super::digest::{ContentDigest, DigestHasher, Tag, edge, scalar};
 use super::surface::Parts;
 use super::{
-    DeepCopy, Dict, Knotted, Link, List, Nothing, Record, Seen, Surface, Tagged, Value, Weight,
+    DeepCopy, Dict, Knotted, Link, List, Nothing, Record, Seen, Surface, Tagged, Types, Value,
+    Weight,
 };
 
 /// What a knot member holds.
@@ -103,7 +104,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     /// knot [holds](super::Knotted::held) of this node.
     pub fn content_parts<'a>(
         holder: X,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, X>),
     ) where
@@ -123,7 +124,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     /// `parts` answers in [`content_parts`](Self::content_parts)' order.
     pub fn content(
         holder: X,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -219,7 +220,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
 /// `holder`'s data node opened through the door at its memo.
 fn opened<'x, 'a, X: Knotted + 'a>(
     holder: X,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Surface<'x, 'a, X> {
     Seen::of(Value::Knotted(holder))

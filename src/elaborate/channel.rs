@@ -36,9 +36,9 @@ use crate::scope::{
 use crate::source::SourceRef;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, TypeNode, TypeRegistry, substitute_parameters,
+    DeclaredType, KType, Members, Parametric, TypeNode, substitute_parameters,
 };
-use crate::values::{Knotted, Value};
+use crate::values::{Knotted, Types, Value};
 
 use super::declaration::{HeadShape, signature_heads, type_declarations};
 use super::expression::{Elaborator, Groups, type_expression};
@@ -52,7 +52,7 @@ use super::signature::callable_type;
 pub fn type_channel<'graph, X: Knotted>(
     root: &'graph BodyShape<'graph>,
     builtins: &Builtins<'_, X>,
-    types: &TypeRegistry<'graph>,
+    types: &Types<'graph, 'graph>,
     writer: Writer<'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
@@ -128,7 +128,7 @@ enum Mode {
 /// The walk's state: the chain of enclosing shapes, each numbering its names.
 struct Pass<'p, 'graph, 'cell, X> {
     builtins: &'p Builtins<'cell, X>,
-    types: &'p TypeRegistry<'graph>,
+    types: &'p Types<'graph, 'graph>,
     writer: Writer<'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
@@ -648,7 +648,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
 
 /// The expression shape `shape` ranked by `classes`.
 fn ranked(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     shape: DeclaredType<Parametric>,
     classes: &[u16],
@@ -682,7 +682,7 @@ const FREE: &str = "a load-time type that read no lexical variable holds no vari
 
 /// `declared` where it read no lexical variable: a scheme as it is, a type narrowed to concrete.
 fn close_declared(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     declared: DeclaredType<Parametric>,
 ) -> DeclaredType<KType> {
     match declared {
@@ -693,7 +693,7 @@ fn close_declared(
 
 /// [`close_declared`] over a callable and its bucket entry.
 fn close_callable<'graph>(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     callable: Callable<'graph>,
 ) -> Callable<'graph, KType> {
     Callable {
@@ -707,7 +707,7 @@ fn close_callable<'graph>(
 
 /// [`close_declared`] over a bucket entry.
 fn close_registered<'graph>(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     registered: Registered<'graph>,
 ) -> Registered<'graph, KType> {
     Registered {

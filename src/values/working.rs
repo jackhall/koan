@@ -16,9 +16,9 @@ use crate::parse::{
 };
 use crate::source::{SourceRef, Span, Spanned};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{TypeRegistry, display_name};
+use crate::type_lattice::display_name;
 
-use super::{Knotted, Nothing, Value, part_ktype};
+use super::{Knotted, Nothing, Types, Value, part_ktype};
 
 /// One slot of a working expression.
 #[derive(Clone, Copy, Debug)]
@@ -87,7 +87,7 @@ impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
     pub fn write_summary(
         &self,
         f: &mut fmt::Formatter<'_>,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
@@ -268,7 +268,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     pub fn write_summary(
         &self,
         f: &mut fmt::Formatter<'_>,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {

@@ -15,13 +15,14 @@ use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 
 use super::Variance;
+use crate::types::chain::TypeChain;
 use crate::types::handle::Handle;
 use crate::types::node::TypeNode;
 use crate::types::record::Record;
-use crate::types::registry::TypeRegistry;
 use crate::types::run::Elements;
 use crate::types::shape::{Classes, DispatchTokenElement, map_slots};
 use crate::types::stored::Linked;
+use crate::types::tiers::Habitat;
 
 /// What an arm's leftover children mean. The instance reads it rather than knowing which arm it is
 /// looking at: the order turns each into an emptiness requirement, the meet into a keep-or-drop.
@@ -75,7 +76,7 @@ pub trait Lockstep<'run> {
     /// equality, a top or bottom, a fast path with nothing to solve.
     fn enter(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         a: Linked<'run>,
         b: Linked<'run>,
@@ -86,7 +87,7 @@ pub trait Lockstep<'run> {
     /// two callables of which one is quantified, or two arms of different shape.
     fn leaf(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         a: Linked<'run>,
         b: Linked<'run>,
@@ -96,7 +97,7 @@ pub trait Lockstep<'run> {
     /// The verdict when either side is a union. A non-union side arrives as a one-element slice.
     fn set_wise(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         a: &[Linked<'run>],
         b: &[Linked<'run>],
@@ -105,12 +106,12 @@ pub trait Lockstep<'run> {
     ) -> Self::Out;
 
     /// The verdict for a structurally paired arm, from its children's verdicts and the arm itself.
-    fn structural(
+    fn structural<H: Habitat<'run>>(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, H>,
         scratch: BumpAllocator<'_>,
         paired: &[Self::Out],
-        arm: Arm<'_, 'run>,
+        arm: Arm<'_, 'run, H>,
     ) -> Self::Out;
 
     /// Whether a child's verdict decides the whole arm, so the driver can stop pairing.
@@ -120,8 +121,8 @@ pub trait Lockstep<'run> {
 }
 
 /// Walk `a` against `b` under `v` through `rules`.
-pub fn lockstep<'run, L: Lockstep<'run>>(
-    types: &TypeRegistry<'run>,
+pub fn lockstep<'run, L: Lockstep<'run>, H: Habitat<'run>>(
+    types: &TypeChain<'run, H>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -181,12 +182,12 @@ pub fn lockstep<'run, L: Lockstep<'run>>(
 
 /// One structurally paired arm, as an instance reads it: what its children's verdicts mean, which
 /// leftovers each side had, the polarity it was reached at, and the door back to a rebuilt node.
-pub struct Arm<'n, 'run> {
+pub struct Arm<'n, 'run, H> {
     pub width: Width,
     pub only_a: &'n [Leftover<'run>],
     pub only_b: &'n [Leftover<'run>],
     pub variance: Variance,
-    pub rebuild: Rebuilder<'n, 'run>,
+    pub rebuild: Rebuilder<'n, 'run, H>,
 }
 
 /// How two nodes correspond.
@@ -391,13 +392,13 @@ enum Assembly<'n, 'run> {
 
 /// The door [`Lockstep::structural`] rebuilds its arm through. Handed to every instance; only the
 /// ones whose `Out` is a type ever call it.
-pub struct Rebuilder<'n, 'run> {
-    types: &'n TypeRegistry<'run>,
+pub struct Rebuilder<'n, 'run, H> {
+    types: &'n TypeChain<'run, H>,
     scratch: BumpAllocator<'n>,
     assembly: Assembly<'n, 'run>,
 }
 
-impl<'run> Rebuilder<'_, 'run> {
+impl<'run, H: Habitat<'run>> Rebuilder<'_, 'run, H> {
     /// Rebuild this arm from its paired children, in the order the driver produced them, plus
     /// `extra` fields to carry over on a name-keyed arm. `extra` is ignored where the arm has no
     /// names to carry.

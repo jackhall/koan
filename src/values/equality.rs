@@ -27,11 +27,11 @@
 
 use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry, satisfied_by};
+use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 
 use super::circular::{CodeView, Resolved};
 use super::surface::Parts;
-use super::{Knotted, Seen, Surface, Value};
+use super::{Knotted, Seen, Surface, Types, Value};
 
 /// A comparison reached a module or a barrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,7 +59,7 @@ impl<'left, X: Knotted> Value<'left, X> {
     pub fn equals<'right, Y: Knotted>(
         &self,
         other: &Value<'right, Y>,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<bool, Incomparable> {
         let mut seen = bump_set(scratch);
@@ -79,7 +79,7 @@ impl<'left, X: Knotted> Value<'left, X> {
 fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
     this: Seen<'left, X>,
     that: Seen<'right, Y>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     seen: &mut Entered<'_, X, Y>,
     pending: &mut Pending<'_, 'left, 'right, X, Y>,
@@ -162,7 +162,7 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
 fn surface_gate<X: Knotted, Y: Knotted>(
     left: &Surface<'_, '_, X>,
     right: &Surface<'_, '_, Y>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
     let related = |left: KType, right: KType| {

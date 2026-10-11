@@ -8,14 +8,15 @@ use crate::scope::{
     Static, StaticType, Target, TypeExpression, Variable,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
+use crate::values::Types;
 
 use super::super::type_channel;
 use super::{Held, Program, with_program};
 
 /// The scalars and `Type`, which a `:Type` parameter names.
 fn with_type(
-    _: &TypeRegistry<'_>,
+    _: &Types<'_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
@@ -38,7 +39,7 @@ fn loaded<R>(
             let typed = type_channel(
                 program.activation.shape(),
                 program.activation.builtins(),
-                program.types,
+                program.load,
                 program.storage,
                 program.scratch,
             );

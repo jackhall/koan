@@ -16,9 +16,9 @@ use super::raw::ranking::{
     Verdict, admit_by_class, judge_by_class, select_by_class, solving_slots,
 };
 use super::raw::sig_relations::{shape_specificity, sig_fits};
+use crate::types::chain::TypeChain;
 use crate::types::handle::{Handle, KType, TypeHandle};
 use crate::types::node::TypeNode;
-use crate::types::registry::TypeRegistry;
 use crate::types::render::display_handle;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::{DispatchTokenElement, RawRank, Specificity, dense_classes};
@@ -43,10 +43,10 @@ use Part::{Kw, Slot};
 
 use super::RawSchemes;
 
-/// A registry, an interner and a region, and the door that interns a head over them.
+/// A chain, an interner and a region, and the door that interns a head over them.
 struct World<'r> {
     region: BumpAllocator<'r>,
-    types: TypeRegistry<'r>,
+    types: TypeChain<'r, crate::types::tiers::BumpHalf<'r>>,
     symbols: SymbolInterner,
 }
 
@@ -54,7 +54,7 @@ impl<'r> World<'r> {
     fn new(region: BumpAllocator<'r>) -> Self {
         World {
             region,
-            types: TypeRegistry::in_region(region),
+            types: crate::types::tests::tiered(region),
             symbols: SymbolInterner::new(),
         }
     }
@@ -836,7 +836,7 @@ fn three_hundred_slot_shapes_intern_and_rank() {
     let symbols = SymbolInterner::new();
     let key = KeywordSymbol::declared("RUN", &symbols).expect("a keyword token");
     let (region, scratch) = (Bump::new(), Bump::new());
-    let types = TypeRegistry::in_region(&region);
+    let types = crate::types::tests::tiered(&region);
     let shape = |slot: KType, classes: &[u16]| {
         let mut elements = vec![DispatchTokenElement::Keyword(key)];
         elements.extend((0..300).map(|_| DispatchTokenElement::Slot(slot)));

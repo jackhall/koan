@@ -3,7 +3,7 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, with_types};
+use crate::scheduler::tests::bundle::{Native, TestGraph, test_root};
 use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
@@ -89,7 +89,7 @@ fn hand_over_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Actio
 fn take_over<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     record(format!("woke {}", where_text(state)));
-    step.finish_fresh(|_, _| Active::new(KValue::Null))
+    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
 }
 
 /// A consumer woken by its children, with nothing more to do.
@@ -130,7 +130,7 @@ fn named<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
     };
     record(name.to_owned());
     if name.len() == 2 {
-        return step.finish_fresh(|_, _| Active::new(KValue::Null));
+        return step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null));
     }
     let children: [&str; 2] = if name == "root" {
         ["A", "B"]
@@ -162,7 +162,7 @@ fn named_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gr
     if name == "root" {
         return step.done();
     }
-    step.finish_fresh(|_, _| Active::new(KValue::Null))
+    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Na
         return step.failed(StepError::Stale);
     };
     if depth == 0.0 {
-        return step.finish_fresh(|_, _| Active::new(KValue::Number(1.0)));
+        return step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Number(1.0)));
     }
     step.spawn(fresh(node, Use::Reads, KValue::Number(depth - 1.0)));
     let asked = step.spawn(fresh(node, Use::Reads, KValue::Number(depth - 1.0)));
@@ -215,7 +215,7 @@ fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
         return step.failed(StepError::Stale);
     };
     let mut leaves = 0.0;
-    for received in with_types(|types| step.results(types).collect::<Vec<_>>()) {
+    for received in step.results(test_root()).collect::<Vec<_>>() {
         let Ok(Received::Scratch(KValue::Number(count))) = received else {
             return step.failed(StepError::Unredeemable);
         };
@@ -225,7 +225,9 @@ fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
         record(leaves.to_string());
         return step.done();
     }
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(leaves)))
+    step.finish_fresh(test_root(), move |_, _, _| {
+        Active::new(KValue::Number(leaves))
+    })
 }
 
 #[test]
@@ -267,12 +269,14 @@ fn sibling<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
         return step.failed(StepError::Stale);
     };
     record(index.to_string());
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(index)))
+    step.finish_fresh(test_root(), move |_, _, _| {
+        Active::new(KValue::Number(index))
+    })
 }
 
 /// The spawner, woken: count what arrived.
 fn count_them<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let arrived = with_types(|types| step.results(types).filter(Result::is_ok).count());
+    let arrived = step.results(test_root()).filter(Result::is_ok).count();
     record(format!("{arrived} arrived"));
     step.done()
 }

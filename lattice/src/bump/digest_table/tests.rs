@@ -10,9 +10,15 @@ struct Entry<'c> {
 }
 
 impl Keyed for Entry<'_> {
+    type Key = u128;
+
     fn key(&self) -> u128 {
         self.reads.set(self.reads.get() + 1);
         self.key
+    }
+
+    fn word(key: u128) -> u64 {
+        key as u64
     }
 }
 
@@ -45,6 +51,10 @@ impl<'b> LaysRuns<'b> for Recording<'b> {
     fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'b [T] {
         self.runs.borrow_mut().push(len);
         self.bump.lay(len, fill)
+    }
+
+    fn text(self, text: &str) -> &'b str {
+        self.bump.text(text)
     }
 }
 
@@ -89,6 +99,23 @@ fn every_inserted_entry_is_found_and_absent_keys_miss() {
             assert!(table.get(*key).is_none());
         }
     }
+}
+
+#[test]
+fn each_visits_every_entry_once() {
+    let bump = Bump::new();
+    let reads = Cell::new(0);
+    let laid = entries(&bump, &SplitMix(4).keys(100), &reads);
+    let table = DigestTable::new(&bump);
+    for &entry in &laid {
+        table.insert_unique(&bump, entry);
+    }
+    let mut seen = Vec::new();
+    table.each(|entry| seen.push(entry.key));
+    seen.sort_unstable();
+    let mut keys: Vec<u128> = laid.iter().map(|entry| entry.key).collect();
+    keys.sort_unstable();
+    assert_eq!(seen, keys);
 }
 
 #[test]

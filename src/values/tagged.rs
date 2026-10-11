@@ -4,10 +4,10 @@
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, Writer, resident};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::KType;
 
 use super::{
-    ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Value, Weight,
+    ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Types, Value, Weight,
     construction, sealing,
 };
 
@@ -29,7 +29,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         writer: Writer<'cell>,
         head: &TypeValue,
         payload: Value<'cell, X>,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, ConstructionRefused> {
         let identity = construction(types, scratch, head.handle(), payload.concrete_ktype())?;
@@ -55,7 +55,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         value: Value<'cell, X>,
         carrier: KType,
         witness: KType,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, SealRefused> {
         let identity = sealing(types, scratch, carrier, witness, value.ktype())?;

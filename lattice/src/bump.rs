@@ -1,4 +1,4 @@
-//! The **bump tier**: storage outside any cell graph, for the type lattice's registry and for the
+//! The **bump tier**: storage outside any cell graph, for the type lattice's root and for the
 //! scratch a caller passes. A bump here has no reach and no cell; it is released whole when its
 //! owner drops.
 //!
@@ -44,6 +44,10 @@ impl<'r> LaysRuns<'r> for BumpAllocator<'r> {
             )
         };
         self.alloc_slice_fill_with(len, fill)
+    }
+
+    fn text(self, text: &str) -> &'r str {
+        self.alloc_str(text)
     }
 }
 

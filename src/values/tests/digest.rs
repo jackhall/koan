@@ -5,16 +5,17 @@
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
-use crate::values::{Key, ValueFamily, cross, record_type};
+use crate::values::{Key, ValueFamily, record_type};
 
-use super::{Dict, List, Record, Step, Value, copy, pin, text, with_fixture};
+use super::{Dict, List, Record, TestGraph, Value, copy, pin, text, with_fixture};
 
 #[test]
 fn equal_content_digests_alike_in_two_cells() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let build = || {
             fixture.in_cell(pin, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
                 let cells = [Value::Number(1.0), text(writer, "a"), Value::Null];
                 Value::List(List::new(writer, cells.into_iter(), types, scratch))
@@ -28,10 +29,11 @@ fn equal_content_digests_alike_in_two_cells() {
 #[test]
 fn a_dict_digests_in_key_order_and_a_record_blind_to_field_order() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let name = |text| BinderSymbol::declared(text, fixture.symbols).unwrap();
         let (x, y) = (name("x"), name("y"));
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let (one, two) = (Value::Number(1.0), Value::Number(2.0));
             let (a, b) = (Key::str("a"), Key::str("b"));
@@ -55,10 +57,11 @@ fn a_dict_digests_in_key_order_and_a_record_blind_to_field_order() {
 #[test]
 fn a_retype_changes_the_digest_and_a_hidden_cell_does_not() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let name = |text| BinderSymbol::declared(text, fixture.symbols).unwrap();
         let (x, y) = (name("x"), name("y"));
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let digest = |value: Value<'_>| value.digest(types, scratch);
             let wide = Record::new(
@@ -112,18 +115,19 @@ fn a_copy_digests_as_its_source() {
             name("held"),
         );
         let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
 
                 let fields = [(x, Value::Number(1.0)), (y, text(writer, "a"))];
                 let record = Record::new(writer, &fields, types, scratch);
                 let retyped = Value::Record(record).retyped(writer, narrow, types, scratch);
                 let source = context.lift::<ValueFamily>(retyped);
-                let crossed = cross(context, dest, &source, types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let copied = context.read(&crossed).value();
                 assert_eq!(
                     copied.digest(types, scratch),
@@ -143,7 +147,7 @@ fn a_copy_digests_as_its_source() {
                 assert_eq!(list.ktype(), types.list(narrow), "the join hides `y`");
                 let joined = Value::List(list);
                 let source = context.lift::<ValueFamily>(joined);
-                let crossed = cross(context, dest, &source, types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let copied = context.read(&crossed).value();
                 assert_eq!(
                     copied.digest(types, scratch),
@@ -172,7 +176,7 @@ fn a_copy_digests_as_its_source() {
                     scratch,
                 ));
                 let source = context.lift::<ValueFamily<NodeFamily>>(pair);
-                let crossed = cross(context, dest, &source, types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let copied = context.read(&crossed).value();
                 assert_eq!(
                     copied.digest(types, scratch),
@@ -200,7 +204,7 @@ fn a_copy_digests_as_its_source() {
                 let shown = types.record(scratch, &[(held, only_value)]);
                 let narrowed = Holding::Record(holder).retyped(writer, shown, types, scratch);
                 let source = context.lift::<ValueFamily<NodeFamily>>(narrowed);
-                let crossed = cross(context, dest, &source, types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let copied = context.read(&crossed).value();
                 let digest = narrowed.digest(types, scratch);
                 assert_eq!(
@@ -228,8 +232,9 @@ fn a_copy_digests_as_its_source() {
 #[test]
 fn a_part_shared_many_times_over_is_digested_once_per_demand() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let mut level = Value::Number(1.0);
             for _ in 0..64 {

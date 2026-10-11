@@ -6,7 +6,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BodyShape, CaptureSlot, Site};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DeclaredType, KType};
-use crate::values::{Circular, Knotted as _, Link, Value};
+use crate::values::{Circular, Knotted as _, Link, Types, Value};
 
 use super::super::{KActivation, Knotted, Untieable, lambda};
 use super::birth::tie_with;
@@ -50,12 +50,13 @@ fn body_of<'graph>(
 fn born<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
+    types: &Types<'graph, 'cell>,
     activation: &KActivation<'graph, 'cell>,
     statement: usize,
 ) -> Knotted<'graph, 'cell> {
     let node = statement_lambda(activation.shape(), statement);
     let site = Site::of_body(node).expect("a `FN` has a body");
-    lambda(writer, activation, site, fixture.types, fixture.scratch()).expect("the lambda is born")
+    lambda(writer, activation, site, types, fixture.scratch()).expect("the lambda is born")
 }
 
 #[test]
@@ -63,9 +64,10 @@ fn a_lambda_is_born_as_a_one_node_knot() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET k = \"kept\"\n(FN :{} -> Str = #(k))");
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
-            let member = born(fixture, writer, activation, 1);
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let member = born(fixture, writer, types, activation, 1);
             assert_eq!(member.member().knot().len(), 1);
             let function = member.function().expect("a function");
             let shape = activation.shape();
@@ -76,8 +78,7 @@ fn a_lambda_is_born_as_a_one_node_knot() {
             ));
             assert_eq!(
                 member.ktype(),
-                fixture
-                    .types
+                types
                     .function_type(fixture.scratch(), &[], KType::STR)
                     .into()
             );
@@ -97,9 +98,10 @@ fn a_lambda_reads_a_later_binding_at_birth() {
     with_fixture(|fixture| {
         let lines = fixture.parse("(FN :{} -> Number = #(later))\nLET later = 5");
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
-            let member = born(fixture, writer, activation, 0);
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let member = born(fixture, writer, types, activation, 0);
             let closure = member.function().expect("a function").closure();
             assert!(matches!(
                 closure.get(CaptureSlot(0)),
@@ -115,9 +117,10 @@ fn a_lambda_weighs_what_the_tie_gives_the_same_function() {
         let lines = fixture
             .parse("LET k = \"kept\"\nLET f = (FN :{} -> Str = #(k))\n(FN :{} -> Str = #(k))");
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
-            let member = born(fixture, writer, activation, 2);
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let member = born(fixture, writer, types, activation, 2);
             let f = callable(fixture, activation, "f");
             assert_eq!(member.ktype(), f.ktype());
             assert_eq!(member.weight(), f.weight());
@@ -130,7 +133,8 @@ fn a_quantified_lambda_carries_its_quantifier_map() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))");
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let member = callable(fixture, activation, "pick");
             let function = member.function().expect("a function");
             assert_eq!(function.quantifier_map().iter().len(), 1);
@@ -150,7 +154,8 @@ fn a_lambda_capturing_its_binder_is_a_node_of_its_knot() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = [(FN :{} -> Any = #(a))]");
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let (a, Circular::List(list)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a list node");
             };
@@ -162,11 +167,9 @@ fn a_lambda_capturing_its_binder_is_a_node_of_its_knot() {
                 function.shape(),
                 body_of(shape, item_lambda(shape, 0, 0))
             ));
-            let any = fixture
-                .types
-                .function_type(fixture.scratch(), &[], KType::ANY);
+            let any = types.function_type(fixture.scratch(), &[], KType::ANY);
             assert_eq!(lambda.ktype(), any.into());
-            assert_eq!(list.ktype(), fixture.types.list(any));
+            assert_eq!(list.ktype(), types.list(any));
             assert!(follow(lambda, function.closure().get(CaptureSlot(0))) == a);
         });
     });
@@ -178,7 +181,8 @@ fn a_lambda_capturing_a_fellow_function_is_a_node_of_the_knot() {
         let lines =
             fixture.parse("LET a = [(FN :{} -> Any = #(f))]\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let f = callable(fixture, activation, "f");
             let (a, Circular::List(list)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a list node");
@@ -197,7 +201,8 @@ fn a_lambda_below_a_nested_constructor_makes_its_path_anonymous() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = {inner = [(FN :{} -> Any = #(a))] plain = [1 2]}");
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let (a, Circular::Record(record)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a record node");
             };
@@ -226,11 +231,12 @@ fn a_lambda_part_capturing_no_fellow_is_asked_of_the_caller() {
             "LET k = 7\nLET a = [(FN :{} -> Number = #(k)) f]\nLET f = (FN :{} -> Any = #(a))",
         );
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &["a", "f"]);
+            let activation = fixture.run(writer, types, &lines, &["a", "f"]);
             let part = item_lambda(activation.shape(), 1, 0);
             let mut asked = Vec::new();
-            let refused = tie_with(fixture, writer, activation, "a", &mut |site, _| {
+            let refused = tie_with(fixture, writer, types, activation, "a", &mut |site, _| {
                 asked.push(site);
                 None
             })

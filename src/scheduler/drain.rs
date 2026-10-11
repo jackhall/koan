@@ -13,10 +13,11 @@ use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
 };
 use crate::scheduler::continuation::{
-    Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt, StepBundle,
-    Work,
+    Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt,
+    StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::values::TypeHeader;
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -25,7 +26,7 @@ use crate::scheduler::delivery::KDelivery;
 /// makes one, takes its roots from it, keeps it across calls and asks what is left in it, and
 /// reaches every other cell only through a [`Scheduler`] over it.
 pub struct Graph<'graph, B: StepBundle<'graph>>(
-    CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery>,
+    CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
 );
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
@@ -59,7 +60,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     #[cfg(test)]
     pub(super) fn cells(
         &mut self,
-    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery> {
+    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader> {
         &mut self.0
     }
 }
@@ -141,7 +142,12 @@ where
         under: impl Into<CellHandle>,
         placement: Placement,
     ) -> Result<Option<Resting<'graph, B>>, DrainStalled> {
-        self.drive(step, Rested::Dormant(resting.0), under.into(), placement)
+        self.drive(
+            step,
+            Rested::Dormant(resting.0, Born::Child),
+            under.into(),
+            placement,
+        )
     }
 
     /// The drain loop both root works share: born under `under`, reporting to nobody, run until
@@ -177,7 +183,14 @@ where
                     provenance,
                     asked,
                     release_after,
-                } => (self.create(provenance, asked)?, release_after),
+                } => {
+                    let born = if release_after.is_some() {
+                        Born::Hop
+                    } else {
+                        Born::Child
+                    };
+                    (self.create(provenance, asked, born)?, release_after)
+                }
             };
             let (action, provenance) = self.step(cell)?;
             // A hop's successor has woken what its predecessor kept, so the predecessor can go.
@@ -244,11 +257,13 @@ where
         }
     }
 
-    /// Give a request its cell, under the parent its provenance names.
+    /// Give a request its cell, under the parent its provenance names, its birth crossing as
+    /// `born` says.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
+        born: Born,
     ) -> Result<CellHandle, DrainStalled> {
         self.born(
             provenance.parent,
@@ -256,7 +271,7 @@ where
             Continuation {
                 step: asked.step,
                 provenance,
-                state: Rested::Dormant(asked.state),
+                state: Rested::Dormant(asked.state, born),
             },
         )
     }
@@ -284,7 +299,7 @@ where
                 let scratch = context.scratch_state();
                 let state = match state {
                     Rested::Awake(state) => state,
-                    Rested::Dormant(dormant) => match wake::<B>(context, dormant) {
+                    Rested::Dormant(dormant, born) => match wake::<B>(context, dormant, born) {
                         Ok(state) => state,
                         Err(_) => {
                             return (Action::refused(StepError::Unredeemable), provenance);
@@ -359,6 +374,7 @@ where
 fn wake<'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, B>,
     dormant: Dormant<'graph, B::Birth>,
+    born: Born,
 ) -> Result<StateAt<'graph, 'here, B>, RedeemError>
 where
     'graph: 'step + 'here,
@@ -372,7 +388,7 @@ where
             carrier: &carrier,
             copy_bytes,
         }],
-        |writer, _, views| B::cross(writer, &views[0]),
+        |writer, header, views| B::cross(writer, header, &views[0], born),
     );
     Ok(B::born(birth))
 }

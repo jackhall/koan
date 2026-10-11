@@ -7,9 +7,8 @@ use crate::elaborate::{member_count, schema_member, schema_of};
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeySymbol};
-use crate::type_lattice::{
-    DeclaredType, DispatchTokenElement, KType, Parametric, TypeNode, TypeRegistry,
-};
+use crate::type_lattice::{DeclaredType, DispatchTokenElement, KType, Parametric, TypeNode};
+use crate::values::Types;
 
 /// The registration members of `module` — the tail of its run past the named members, each a
 /// function a keyworded use at its registered shape's key may select: one per registration of a
@@ -17,7 +16,7 @@ use crate::type_lattice::{
 /// Empty for anything that is no module.
 pub fn registrations<'graph, 'cell>(
     module: Knotted<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> &'cell [KValue<'graph, 'cell>] {
     let Some((node, schema)) = module
@@ -36,7 +35,7 @@ pub fn registrations<'graph, 'cell>(
 pub fn member<'graph, 'cell>(
     module: Knotted<'graph, 'cell>,
     name: BinderSymbol,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'cell>> {
     let node = module.module()?;
@@ -50,7 +49,7 @@ pub fn member<'graph, 'cell>(
 pub fn functions_at<'graph, 'cell, 'x>(
     module: Knotted<'graph, 'cell>,
     key: KeySymbol,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, KValue<'graph, 'cell>> {
     let mut found = BumpVec::new_in(scratch);
@@ -76,7 +75,7 @@ pub fn registered_shape(member: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
 
 /// The bucket key of the expression shape `shape`: its keywords in place, each slot erased. A
 /// scheme's body spells its keys as a type's does.
-pub fn key_of(shape: DeclaredType<impl Into<Parametric>>, types: &TypeRegistry<'_>) -> KeySymbol {
+pub fn key_of(shape: DeclaredType<impl Into<Parametric>>, types: &Types<'_, '_>) -> KeySymbol {
     let TypeNode::ExpressionShape { elements, .. } = shape.view(types).body else {
         unreachable!("a registered shape is an expression shape")
     };

@@ -7,7 +7,7 @@
 
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Active, Writer};
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, with_types};
+use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, test_root};
 use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
@@ -71,14 +71,14 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
         return step.failed(StepError::Stale);
     };
     match code - code % 10 {
-        FINISH_FRESH => step.finish_fresh(seven),
-        FINISH_IN_HOME => with_types(|types| {
-            step.finish_in_home(types, [], |writer, [], witness| seven(writer, witness))
+        FINISH_FRESH => step.finish_fresh(test_root(), |writer, _, witness| seven(writer, witness)),
+        FINISH_IN_HOME => step.finish_in_home(test_root(), [], |writer, _, [], witness| {
+            seven(writer, witness)
         }),
         _ => {
             let value = crate::values::text(step.writer(), "seven");
             record(format!("built {}", where_text(value)));
-            with_types(|types| step.finish(value, types))
+            step.finish(value, test_root())
         }
     }
 }
@@ -121,7 +121,7 @@ fn record_received(received: Result<Received<'_, '_, '_>, StepError>) -> Result<
 
 /// The consumer, woken: read its one slot back.
 fn read_back<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    for received in with_types(|types| step.results(types).collect::<Vec<_>>()) {
+    for received in step.results(test_root()).collect::<Vec<_>>() {
         if let Err(error) = record_received(received) {
             return step.failed(error);
         }
@@ -242,11 +242,11 @@ fn middle<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, 
 
 /// The middle, woken: read the leaf's result and hand it on, kept, to the grandparent.
 fn middle_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let Some(Ok(Received::Here(value))) = with_types(|types| step.results(types).next()) else {
+    let Some(Ok(Received::Here(value))) = step.results(test_root()).next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("middle read here {}", where_text(value)));
-    with_types(|types| step.finish(value, types))
+    step.finish(value, test_root())
 }
 
 /// The grandparent, woken: a second marker, then the result.
@@ -257,7 +257,7 @@ fn grandparent_woken<'graph>(
         "marker {}",
         where_text(crate::values::text(step.writer(), "marker"))
     ));
-    let Some(Ok(Received::Here(value))) = with_types(|types| step.results(types).next()) else {
+    let Some(Ok(Received::Here(value))) = step.results(test_root()).next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("grandparent read here {}", describe(value)));
@@ -386,12 +386,14 @@ fn scale<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
     let KValue::Number(born) = state else {
         return step.failed(StepError::Stale);
     };
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(born * 10.0)))
+    step.finish_fresh(test_root(), move |_, _, _| {
+        Active::new(KValue::Number(born * 10.0))
+    })
 }
 
 /// The consumer, woken: read every slot of the run it registered.
 fn drain_the_run<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let results: Vec<_> = with_types(|types| step.results(types).collect());
+    let results: Vec<_> = step.results(test_root()).collect();
     record(format!("woke on {}", results.len()));
     for received in results {
         match received {

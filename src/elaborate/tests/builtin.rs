@@ -4,12 +4,13 @@
 use crate::memory::Bump;
 use crate::parse::KeyElement;
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, builtin_shape_for};
-use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
+use crate::type_lattice::{DispatchTokenElement, KType, TypeNode};
+use crate::values::Types;
 
 use super::super::builtin_shape_types;
 
 /// The bucket key an interned handle's elements spell.
-fn erasure(types: &TypeRegistry<'_>, handle: KType) -> Vec<KeyElement> {
+fn erasure(types: &Types<'_, '_>, handle: KType) -> Vec<KeyElement> {
     let TypeNode::ExpressionShape { elements, .. } = types.node(handle) else {
         panic!("the door interns an expression shape");
     };
@@ -33,7 +34,7 @@ fn entry_of(key: &[KeyElement]) -> &'static crate::parse::BuiltinShape {
 fn every_builtin_shape_erases_to_its_key() {
     let arena = Bump::new();
     let bump = &arena;
-    let types = &TypeRegistry::in_region(bump);
+    let types = &crate::values::tests::TestTypes::new(bump).load();
 
     for shape in BUILTIN_SHAPES {
         for handle in builtin_shape_types(shape, types, bump) {
@@ -58,7 +59,7 @@ fn every_builtin_shape_erases_to_its_key() {
 fn a_bucket_interns_one_handle_per_overload() {
     let arena = Bump::new();
     let bump = &arena;
-    let types = &TypeRegistry::in_region(bump);
+    let types = &crate::values::tests::TestTypes::new(bump).load();
 
     for shape in BUILTIN_SHAPES {
         let handles = builtin_shape_types(shape, types, bump);

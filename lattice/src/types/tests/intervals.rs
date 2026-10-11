@@ -7,15 +7,15 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 
 use super::raw::substitute::{Side, read_through};
 use super::raw::unify::admits;
+use crate::types::chain::TypeChain;
 use crate::types::handle::{Handle, KType, TypeHandle};
-use crate::types::registry::TypeRegistry;
 use crate::types::unify::{Collector, Interval, intervals};
 use crate::types::walk::Variance;
 
-/// A registry, an interner and a region.
+/// A chain, an interner and a region.
 struct World<'r> {
     region: BumpAllocator<'r>,
-    types: TypeRegistry<'r>,
+    types: TypeChain<'r, crate::types::tiers::BumpHalf<'r>>,
     symbols: SymbolInterner,
 }
 
@@ -23,7 +23,7 @@ impl<'r> World<'r> {
     fn new(region: BumpAllocator<'r>) -> Self {
         World {
             region,
-            types: TypeRegistry::in_region(region),
+            types: crate::types::tests::tiered(region),
             symbols: SymbolInterner::new(),
         }
     }

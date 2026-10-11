@@ -5,17 +5,19 @@
 //! some of its head parameters pinned — through [`applications`]: a signature is the one
 //! application pinning nothing, except the empty signature, which is the empty set; an application
 //! is itself; a meet is its members. The order ([`applications_under`]), the meet
-//! ([`canonical_applications`], what [`TypeRegistry::signature_meet`] interns) and *fits* (in
-//! [`sig_relations`](super::sig_relations)) all read signature types through here and nothing
-//! else, so none of them solves: two applications compare by their pins alone.
+//! ([`canonical_applications`], what
+//! [`TypeChain::signature_meet`](super::chain::TypeChain::signature_meet) interns) and *fits* (in
+//! [`sig_relations`](super::sig_relations)) all read signature types through here and nothing else,
+//! so none of them solves: two applications compare by their pins alone.
 
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol};
 
+use super::chain::TypeChain;
 use super::handle::Handle;
 use super::node::TypeNode;
-use super::registry::TypeRegistry;
 use super::stored::Linked;
+use super::tiers::Habitat;
 
 /// One application: `signature`, a [`TypeNode::Signature`], with `pins` fixing some of its head
 /// parameters by name. Empty pins for the signature on its own. The pins live in `'p`: the region
@@ -30,7 +32,7 @@ impl<'run> Application<'_, 'run> {
     /// The node this application interns to: the signature itself for no pins.
     pub(super) fn node(
         self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
     ) -> Linked<'run> {
         types.signature_apply(scratch, self.signature, self.pins)
@@ -120,10 +122,10 @@ pub(super) fn applications_under<'run>(
 
 /// The meet of the signature types `members` as the nodes of its applications: every application
 /// any member holds, less each one lying above another — of two equal, the first — sorted by
-/// handle. What [`TypeRegistry::signature_meet`] interns, and exact: it is the greatest set lying
-/// under every member.
+/// handle. What [`TypeChain::signature_meet`](super::chain::TypeChain::signature_meet) interns, and
+/// exact: it is the greatest set lying under every member.
 pub(super) fn canonical_applications<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     members: &[Linked<'run>],
 ) -> BumpVec<'s, Linked<'run>> {

@@ -4,7 +4,7 @@
 //! position carries; [`reassemble`] puts a node back together from replacement children in that
 //! same order. Every structural recursion over one type is [`visit`] or [`rebuild`] over that
 //! pair, so a new compound variant is a compile error in exactly two matches here. Both walk nodes
-//! by reference, from node to child: [`visit`] needs no registry at all, and [`rebuild`] takes one
+//! by reference, from node to child: [`visit`] needs no chain at all, and [`rebuild`] takes one
 //! only to re-intern what it rebuilds.
 //! [`visit_free_quantified`] is [`visit`] narrowed to the free `Quantified` positions, the probe
 //! every scheme check shares.
@@ -18,11 +18,12 @@
 use crate::bump::{BumpAllocator, BumpVec};
 
 use super::Variance;
+use crate::types::chain::TypeChain;
 use crate::types::node::TypeNode;
 use crate::types::record::map_fields;
-use crate::types::registry::TypeRegistry;
 use crate::types::shape::{DispatchTokenElement, map_slots};
 use crate::types::stored::Linked;
+use crate::types::tiers::Habitat;
 
 /// What a [`visit`] rule does at the node it was handed.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -145,11 +146,11 @@ fn visit_at<'run>(
 /// Rebuild `root` with `rule` applied at every node before descent: `Some(k)` replaces the node and
 /// stops there, `None` lets the driver descend.
 ///
-/// Rebuilt composites re-intern through the registry's ordinary doors — a union through the
+/// Rebuilt composites re-intern through the chain's ordinary doors — a union through the
 /// canonicalizing one — so a rebuild that changes nothing returns the input node and interns not
 /// one node.
 pub fn rebuild<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     root: Linked<'run>,
     rule: &mut impl FnMut(Linked<'run>, &TypeNode<'run, Linked<'run>>, &Context) -> Option<Linked<'run>>,
@@ -159,7 +160,7 @@ pub fn rebuild<'run>(
 }
 
 fn rebuild_at<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     context: &mut Context,
@@ -290,9 +291,9 @@ pub fn children<'run>(
 }
 
 /// **The other half of the arm table.** One node plus replacement children, in [`children`]'s
-/// order, re-interned through the registry's own doors. `None` for a node with no children.
+/// order, re-interned through the chain's own doors. `None` for a node with no children.
 fn reassemble<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     node: &TypeNode<'run, Linked<'run>>,
     new: &[Linked<'run>],

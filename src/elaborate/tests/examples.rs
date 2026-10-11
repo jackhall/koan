@@ -7,9 +7,9 @@ use crate::scope::{BodyShape, Position, Site, Slot, Which};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, Scheme,
-    TypeRegistry, display_name,
+    display_name,
 };
-use crate::values::Value;
+use crate::values::{Types, Value};
 
 use super::super::{callable_type, type_expression};
 use super::{Held, Program, nulls, scalars, with_program};
@@ -129,7 +129,7 @@ LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
 
 /// A union `Shape` of two singleton members, `Circle` and `Square`.
 fn shapes(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     symbols: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
@@ -439,7 +439,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
 
 /// The scalars and the value family's top, which a bound most often names.
 fn with_value(
-    _: &TypeRegistry<'_>,
+    _: &Types<'_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
@@ -448,7 +448,7 @@ fn with_value(
 
 /// Each variable's bound in `scheme`'s own group, sorted, so a canonical order the test does not
 /// pin reads the same either way.
-fn sorted_bounds(types: &TypeRegistry<'_>, scheme: Scheme) -> Vec<KType> {
+fn sorted_bounds(types: &Types<'_, '_>, scheme: Scheme) -> Vec<KType> {
     let mut bounds = scheme.group(types).bounds.to_vec();
     bounds.sort();
     bounds

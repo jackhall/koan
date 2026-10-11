@@ -1,6 +1,6 @@
 //! `is_subtype_of` — the one order — and *fits*, the relation a question reads, over nodes.
 //!
-//! Both are reflexive, memoized through the registry's verdict edges under their own
+//! Both are reflexive, memoized through the tiers' verdict tables under their own
 //! [`Relation`], and share one descent, [`Order`], which differs between them at its leaf alone.
 //! The **order** never solves: two signature types compare by their applications' pins (R-5). It
 //! is what every construction reads — a join, a meet, a union's or an overload set's subsumption —
@@ -19,12 +19,13 @@
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 
+use super::chain::TypeChain;
 use super::handle::Handle;
 use super::node::TypeNode;
-use super::registry::TypeRegistry;
 use super::sig_relations::{admits_function, admits_shape, sig_fits};
 use super::signatures::{applications, applications_under, is_signature_type};
 use super::stored::Linked;
+use super::tiers::Habitat;
 use super::verdicts::Relation;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
@@ -55,7 +56,7 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   it lie only itself, a union holding it and `Any`, and below it only itself and `Never`.
 /// - Every other pair is unrelated.
 pub(super) fn is_subtype_of<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -70,7 +71,7 @@ pub(super) fn is_subtype_of<'run>(
 /// signature type fits another when [`sig_fits`] accepts the pair. Everything the order relates
 /// fits.
 pub(super) fn fits<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -81,7 +82,7 @@ pub(super) fn fits<'run>(
 /// Whether the type a position carries fills the slot declared there — *fits*, read from the
 /// slot's side.
 pub(super) fn satisfied_by<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     slot: Linked<'run>,
     carried: Linked<'run>,
@@ -91,7 +92,7 @@ pub(super) fn satisfied_by<'run>(
 
 /// `relation` — the order or *fits* — over `a` and `b`, through the verdict cache.
 fn related<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -134,7 +135,7 @@ impl<'run> Lockstep<'run> for Order {
 
     fn enter(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         a: Linked<'run>,
         b: Linked<'run>,
@@ -171,7 +172,7 @@ impl<'run> Lockstep<'run> for Order {
 
     fn leaf(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         a: Linked<'run>,
         b: Linked<'run>,
@@ -238,7 +239,7 @@ impl<'run> Lockstep<'run> for Order {
 
     fn set_wise(
         &mut self,
-        _types: &TypeRegistry<'run>,
+        _types: &TypeChain<'run, impl Habitat<'run>>,
         _scratch: BumpAllocator<'_>,
         a: &[Linked<'run>],
         b: &[Linked<'run>],
@@ -250,12 +251,12 @@ impl<'run> Lockstep<'run> for Order {
         a.iter().all(|x| b.iter().any(|y| recurse(self, x, y, v)))
     }
 
-    fn structural(
+    fn structural<H: Habitat<'run>>(
         &mut self,
-        _types: &TypeRegistry<'run>,
+        _types: &TypeChain<'run, H>,
         _scratch: BumpAllocator<'_>,
         paired: &[bool],
-        arm: Arm<'_, 'run>,
+        arm: Arm<'_, 'run, H>,
     ) -> bool {
         paired.iter().all(|verdict| *verdict) && arm.width.permits(arm.only_a, arm.only_b)
     }
@@ -347,7 +348,7 @@ pub(super) enum Dropped {
 /// both. Dropping each because of the other would drop the promise itself, leaving the canonical
 /// set admitting less than the run it came from.
 pub(super) fn unsubsumed<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     members: &[Linked<'run>],
     dropped: Dropped,

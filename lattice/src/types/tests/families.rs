@@ -1,21 +1,22 @@
 //! Type-constructor families: the relation between an application and its bare family, the least
 //! solution a construction takes, and the contravariance probe a declaration is refused by. Each
-//! builds its own registry over a region of its own, which doubles as its scratch.
+//! builds its own chain over a region of its own, which doubles as its scratch.
 
 use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 
+use crate::types::chain::TypeChain;
 use crate::types::handle::{KType, Parametric};
 use crate::types::kind::KKind;
-use crate::types::registry::TypeRegistry;
+use crate::types::tiers::Habitat;
 use crate::types::typed::is_subtype_of;
 use crate::types::unify::{Collector, admits_with};
 use crate::types::walk::Variance;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
 /// A sealed one-parameter family named `name` over parameter `parameter`, wrapping the parameter.
-fn family(
-    types: &TypeRegistry<'_>,
+fn family<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     name: TypeSymbol,
     parameter: TypeSymbol,
@@ -39,7 +40,7 @@ fn an_application_lies_strictly_under_its_family() {
     let (boxed, other, parameter) = (declare("Boxed"), declare("Other"), declare("Elt"));
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let f = family(&types, region, boxed, parameter);
     let g = family(&types, region, other, parameter);
     assert_ne!(f, g);
@@ -71,10 +72,10 @@ fn least_solves_an_unreached_variable_to_never() {
     let a = BinderSymbol::declared("a", &symbols).expect("a bindable token");
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let declared = types.record(region, &[(a, types.quantified(0, KType::ANY))]);
     let carried = types.record(region, &[(a, KType::NUMBER)]);
-    // The collector's type is read off `admits_with`, so it names the registry's own lifetime.
+    // The collector's type is read off `admits_with`, so it names the chain's own lifetime.
     let solve = |mut collector| {
         admits_with(
             &types,
@@ -111,7 +112,7 @@ fn a_contravariant_occurrence_is_found() {
     let name = TypeSymbol::declared("Boxed", &symbols).expect("a Type token");
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let variable = types.quantified(0, KType::ANY);
     let function = |params: &[(BinderSymbol, Parametric)], ret: Parametric| {
         types.function_type(region, params, ret)

@@ -22,10 +22,10 @@ use crate::elaborate::{SignatureMember, signature_member};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, SchemaDraft, SigOrigin, TypeNode, TypeRegistry,
-    bound_above, lower_end_outside, shape_return, shape_slots,
+    DeclaredType, Interval, KType, Parametric, SchemaDraft, SigOrigin, TypeNode, bound_above,
+    lower_end_outside, shape_return, shape_slots,
 };
-use crate::values::{record_type, retyped_to, under, unknown};
+use crate::values::{Types, record_type, retyped_to, under, unknown};
 
 use super::builtins::Native;
 
@@ -63,7 +63,7 @@ pub(super) fn typed(
     native: Native,
     declared: KType,
     given: &[Given<'_>],
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Typed {
     let needs = needs(native, declared, given, types, scratch);
@@ -89,7 +89,7 @@ fn returns(
     native: Native,
     declared: KType,
     given: &[Given<'_>],
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Interval {
     debug_assert_eq!(given.len(), shape_slots(declared, types).count());
@@ -145,12 +145,7 @@ fn returns(
 /// What the argument at `slot` of `native`'s call lacks, where a need the rule narrowed by the
 /// names the call reads dropped it: the first name, in the order written, a record lower end lacks,
 /// or the one member a module read names. `None` where the rule narrowed nothing there.
-fn lacks(
-    native: Native,
-    given: &[Given<'_>],
-    slot: usize,
-    types: &TypeRegistry<'_>,
-) -> Option<Lacks> {
+fn lacks(native: Native, given: &[Given<'_>], slot: usize, types: &Types<'_, '_>) -> Option<Lacks> {
     let names = named(given, native)?;
     match (native, slot, types.node(given[slot].typed.lower)) {
         (Native::Project, 1, TypeNode::Record { fields })
@@ -176,7 +171,7 @@ fn needs<'x>(
     native: Native,
     declared: KType,
     given: &[Given<'_>],
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, KType> {
     let mut needs = BumpVec::with_capacity_in(given.len(), scratch);
@@ -244,7 +239,7 @@ pub(super) fn distinct<'x>(
 /// The record of each of `names` at the type `field` reads for it; `Never` where one reads `Never`,
 /// since no record holds a field at `Never`.
 fn projection(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     names: &[BinderSymbol],
     mut field: impl FnMut(BinderSymbol) -> Parametric,
@@ -264,7 +259,7 @@ fn projection(
 /// union's members, read through a rigid variable's bound; `Any` where a value under `ktype` may
 /// hold no such field.
 fn upper_field(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     ktype: Parametric,
     name: BinderSymbol,
@@ -293,7 +288,7 @@ fn upper_field(
 
 /// A type under the field `name` of every value above the lower end `ktype`: a record's field type,
 /// or `Never` where it names no such field.
-fn lower_field(types: &TypeRegistry<'_>, ktype: Parametric, name: BinderSymbol) -> Parametric {
+fn lower_field(types: &Types<'_, '_>, ktype: Parametric, name: BinderSymbol) -> Parametric {
     match types.node(ktype) {
         TypeNode::Record { fields } => fields
             .get(name.symbol())
@@ -303,6 +298,6 @@ fn lower_field(types: &TypeRegistry<'_>, ktype: Parametric, name: BinderSymbol) 
 }
 
 /// The return the builtin shape `declared` declares.
-fn declared_return(declared: KType, types: &TypeRegistry<'_>) -> KType {
+fn declared_return(declared: KType, types: &Types<'_, '_>) -> KType {
     shape_return(declared, types).expect("a builtin's type is an expression shape")
 }

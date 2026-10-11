@@ -40,13 +40,14 @@ use crate::bump::{BumpAllocator, BumpVec};
 
 use std::marker::PhantomData;
 
+use super::chain::TypeChain;
 use super::handle::{Handle, KType, Naming, Parametric, TypeHandle, wrap};
 use super::lattice::{join_iter, meet_through_variables};
 use super::node::TypeNode;
 use super::order::fits;
-use super::registry::TypeRegistry;
 use super::stored::Linked;
 use super::substitute::{Side, bound_above, read_through};
+use super::tiers::Habitat;
 use super::verdicts::Relation;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
@@ -123,7 +124,10 @@ impl<T: TypeHandle> Interval<T> {
     }
 
     /// Both ends' nodes.
-    pub(super) fn linked<'run>(self, types: &TypeRegistry<'run>) -> Interval<Linked<'run>> {
+    pub(super) fn linked<'run>(
+        self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> Interval<Linked<'run>> {
         Interval {
             lower: types.enter(self.lower.raw()),
             upper: types.enter(self.upper.raw()),
@@ -158,8 +162,8 @@ impl From<Interval<KType>> for Interval<Parametric> {
 /// the lower end is `Never` where some covariant position names it, and the solution elsewhere.
 ///
 /// Each end is a solution or a bound, so an interval over a `T` solution is a `T` interval.
-pub fn intervals<'s, D: TypeHandle, T: TypeHandle>(
-    types: &TypeRegistry<'_>,
+pub fn intervals<'ty, 's, D: TypeHandle, T: TypeHandle>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'s>,
     declared: &[D],
     bounds: &[KType],
@@ -185,7 +189,7 @@ pub fn intervals<'s, D: TypeHandle, T: TypeHandle>(
 
 /// [`intervals`] over nodes, each group bound among them.
 pub(super) fn intervals_in<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     declared: &[Linked<'run>],
     bounds: &[Linked<'run>],
@@ -297,7 +301,11 @@ pub(super) struct Mark {
 impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// One empty cell per variable of a group bounded by `bounds` — what a call collects its
     /// arguments into. A variable no contribution reaches solves to its bound.
-    pub fn new(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, bounds: &[KType]) -> Self {
+    pub fn new(
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'s>,
+        bounds: &[KType],
+    ) -> Self {
         Self::over(scratch, bounds.iter().map(|bound| types.enter(bound.raw())))
     }
 
@@ -323,7 +331,11 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// it — what a construction collects a payload into. A family is covariant in its parameters,
     /// so its least instance is the one the payload asks for, and a parameter the payload never
     /// reaches is bounded by `Never`.
-    pub fn least(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, arity: usize) -> Self {
+    pub fn least(
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'s>,
+        arity: usize,
+    ) -> Self {
         Self::over(scratch, std::iter::repeat_n(types.never(), arity))
     }
 
@@ -385,8 +397,13 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// solves to `to`. A later contribution on the wrong side of `to` is refused where it arrives,
     /// so a union whose walk reaches the variable chooses a member the pin allows. How a
     /// class-by-class admission holds a variable an earlier class solved.
-    pub fn pin(&mut self, types: &TypeRegistry<'run>, index: usize, bound: KType, to: T)
-    where
+    pub fn pin(
+        &mut self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        index: usize,
+        bound: KType,
+        to: T,
+    ) where
         T: Naming<'run>,
     {
         self.pin_node(types, index, types.enter(bound.raw()), to.linked(types));
@@ -395,7 +412,7 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// [`pin`](Self::pin) over nodes.
     pub(super) fn pin_node(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         index: usize,
         bound: Linked<'run>,
         to: Linked<'run>,
@@ -414,7 +431,7 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// past the group it was built over is bounded by `Any`.
     fn contribute(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         index: usize,
         bound: Linked<'run>,
         carried: Linked<'run>,
@@ -475,7 +492,10 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// the join of its lower contributions where any reached it, else the meet of its upper ones
     /// and its bound. The join must lie under each upper contribution and the bound, or the set the
     /// pair denotes is empty. Built in the collector's own scratch.
-    pub fn solve(&self, types: &TypeRegistry<'run>) -> Result<BumpVec<'s, T>, UnifyFailure<T>>
+    pub fn solve(
+        &self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> Result<BumpVec<'s, T>, UnifyFailure<T>>
     where
         T: Naming<'run>,
     {
@@ -502,7 +522,7 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// the rest, and a verdict that holds over a variable holds at every binding. What may not: a
     /// read through a variable's ends (`bound_read`), a meet over one, and a verdict that fails
     /// over one.
-    pub fn reproducible(&self, types: &TypeRegistry<'run>) -> bool {
+    pub fn reproducible(&self, types: &TypeChain<'run, impl Habitat<'run>>) -> bool {
         !self.bound_read
             && (0..self.bounds.len()).all(|index| match self.answer(types, index) {
                 Ok(_) => {
@@ -520,7 +540,7 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// ceiling — an upper contribution or the bound — the join beside the first such ceiling.
     fn answer(
         &self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         index: usize,
     ) -> Result<Linked<'run>, (Linked<'run>, Linked<'run>)> {
         let scratch = self.scratch;
@@ -570,7 +590,7 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
 ///
 /// What reaches a variable is `carried` or a part of it, so a collector of `T`s takes a `T`.
 pub fn admits_with<'run, T: TypeHandle>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Parametric,
     carried: T,
@@ -590,7 +610,7 @@ pub fn admits_with<'run, T: TypeHandle>(
 
 /// [`admits_with`] over nodes, for the lattice's own walks.
 pub(super) fn admits<'run, T>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Linked<'run>,
     carried: Linked<'run>,
@@ -620,7 +640,7 @@ pub(super) fn admits<'run, T>(
 /// that one argument can both admit [tie](self::tied_members), and a binder holding such a pair is
 /// refused where it is declared; any order of the rest gives one answer.
 pub(super) fn most_determined_first<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     declared: &[Linked<'run>],
     carried: Linked<'run>,
@@ -664,7 +684,7 @@ pub(super) fn most_determined_first<'s, 'run>(
 /// with `a`'s variables rigid, as [`class_at_least`](super::ranking::class_at_least) compares two
 /// shapes' slots. Recorded in the verdict table.
 pub(super) fn member_at_least<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -686,7 +706,7 @@ pub(super) fn member_at_least<'run>(
 /// would turn on which member is stored first. A contravariant position takes its union whole, and
 /// a nested scheme's group is its own.
 pub(super) fn tied_members<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Linked<'run>,
 ) -> Option<(Linked<'run>, Linked<'run>)> {
@@ -719,7 +739,7 @@ pub(super) fn tied_members<'run>(
 
 /// Whether two members of one declared union tie: see [`tied_members`].
 pub(super) fn ties<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -760,7 +780,7 @@ impl<'run, T> Admits<'_, '_, 'run, T> {
     /// first. A rejected member's contributions are rolled back; the admitting member's stay.
     fn admit_one(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         declared: &[Linked<'run>],
         one: Linked<'run>,
@@ -783,7 +803,7 @@ impl<'run, T> Admits<'_, '_, 'run, T> {
     /// the union; a member chosen for it would narrow it to that member alone.
     fn under_carried(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         declared: &[Linked<'run>],
         carried: &[Linked<'run>],
@@ -823,7 +843,7 @@ impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
 
     fn enter(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         declared: Linked<'run>,
         carried: Linked<'run>,
@@ -888,7 +908,7 @@ impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
 
     fn leaf(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         declared: Linked<'run>,
         carried: Linked<'run>,
@@ -912,7 +932,7 @@ impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
 
     fn set_wise(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         declared: &[Linked<'run>],
         carried: &[Linked<'run>],
@@ -952,12 +972,12 @@ impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
         Ok(())
     }
 
-    fn structural(
+    fn structural<H: Habitat<'run>>(
         &mut self,
-        _types: &TypeRegistry<'run>,
+        _types: &TypeChain<'run, H>,
         _scratch: BumpAllocator<'_>,
         paired: &[Admission<'run>],
-        arm: Arm<'_, 'run>,
+        arm: Arm<'_, 'run, H>,
     ) -> Admission<'run> {
         if let Some(failure) = paired.iter().find(|out| out.is_err()) {
             return *failure;

@@ -1,9 +1,9 @@
-//! Shared scaffolding for `knot`'s suites: program storage with a registry and an interner, a
-//! builtin table, and a runner that activates a program in a cell and brings every binding it can
-//! into being — each component of type binders through the declaration door, each cyclic component
-//! of value binders and each component of callable binders through the tie, each lone data binder
-//! whose right-hand side lowers, and each lone binder of a quote through the quote door — beside
-//! readers for what a slot then holds.
+//! Shared scaffolding for `knot`'s suites: program storage with the types a test runs over
+//! ([`TestTypes`]) and an interner, a builtin table, and a runner that activates a program in a
+//! cell and brings every binding it can into being — each component of type binders through the
+//! declaration door, each cyclic component of value binders and each component of callable binders
+//! through the tie, each lone data binder whose right-hand side lowers, and each lone binder of a
+//! quote through the quote door — beside readers for what a slot then holds.
 //!
 //! A module binder is brought body-first: the runner builds its body's activation, runs every
 //! component of that body, and only then ties the binder with the finished activation. The
@@ -20,15 +20,16 @@ mod properties;
 
 use crate::elaborate::type_declarations;
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, Prices, ProgramBrand, ReleaseAbsorption, StepContext, Verdict,
-    Writer, program_storage, reattachable, resident,
+    Bump, BumpAllocator, CellGraph, NoDelivery, NoScratch, Prices, ProgramBrand, ReleaseAbsorption,
+    StepContext, Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::scope::{BodyShape, Builtins, Component, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::{Circular, Knotted as _, Link, TypeValue, Value};
+use crate::type_lattice::KType;
+use crate::values::tests::TestTypes;
+use crate::values::{Circular, Knotted as _, Link, TypeHeader, TypeValue, Types, Value};
 
 use super::module::body_activation;
 use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
@@ -37,9 +38,19 @@ use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
 pub(crate) struct Step;
 reattachable!(Step => ());
 
+/// A graph whose cells only store, keeping a type branch per habitat half.
+pub(crate) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TypeHeader>;
+
+/// A step context over [`TestGraph`].
+pub(crate) type TestContext<'graph, 'step, 'here, 'scratch> =
+    StepContext<'graph, 'step, 'here, 'scratch, Step, NoScratch, NoDelivery, TypeHeader>;
+
 pub(crate) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
-    pub types: &'f TypeRegistry<'graph>,
+    /// The load's chain, which a test's load-time work and every shape go through.
+    pub types: &'f Types<'graph, 'graph>,
+    /// The tiers every cell's chain is built over.
+    pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
@@ -48,15 +59,17 @@ pub(crate) struct Fixture<'f, 'graph> {
 pub(crate) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>) -> R) -> R {
     let storage = program_storage();
     let program = storage.brand();
-    // The lattice's registry is a collections arena, so it keeps a bump of its own; program
-    // storage is the one `cellgraph` store everything else here is written into.
+    // The lattice's tiers keep a bump of their own; program storage is the one `cellgraph` store
+    // everything else here is written into.
     let registry = Bump::new();
-    let types = TypeRegistry::in_region(&registry);
+    let tiers = TestTypes::new(&registry);
+    let types = tiers.load();
     let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     test(&Fixture {
         program,
         types: &types,
+        tiers: &tiers,
         symbols: &symbols,
         scratch: &scratch,
     })
@@ -78,10 +91,10 @@ impl<'graph> Fixture<'_, 'graph> {
         &self,
         verdict: fn(Prices) -> Verdict,
         step: impl for<'step, 'here, 'scratch> FnOnce(
-            &mut StepContext<'graph, 'step, 'here, 'scratch, Step>,
+            &mut TestContext<'graph, 'step, 'here, 'scratch>,
         ) -> R,
     ) -> R {
-        let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, verdict);
+        let mut graph: TestGraph<'graph> = CellGraph::new(1, verdict);
         let cell = graph.create(None).expect("the graph has a free slot");
         let out = graph.enter(cell, step).expect("a fresh cell is enterable");
         graph
@@ -95,10 +108,11 @@ impl<'graph> Fixture<'_, 'graph> {
     }
 
     /// `origin = 0`, the scalar types, and a `Null` overload at the generated plans' `ZZ _` and
-    /// `ZZ _ _`, laid down in `writer`'s region.
+    /// `ZZ _ _`, laid down in `writer`'s region, typed through `types`.
     pub fn builtins<'cell>(
         &self,
         writer: Writer<'cell>,
+        types: &Types<'graph, 'cell>,
     ) -> &'cell Builtins<'cell, Knotted<'graph, 'cell>> {
         let origin = ValueSymbol::declared("origin", self.symbols).expect("a value token");
         let types: Vec<_> = [
@@ -112,10 +126,7 @@ impl<'graph> Fixture<'_, 'graph> {
         .into_iter()
         .map(|(name, handle)| {
             let name = TypeSymbol::declared(name, self.symbols).expect("a Type token");
-            (
-                name,
-                Value::Type(TypeValue::new(writer, handle, self.types)),
-            )
+            (name, Value::Type(TypeValue::new(writer, handle, types)))
         })
         .collect();
         Builtins::new(
@@ -130,16 +141,17 @@ impl<'graph> Fixture<'_, 'graph> {
         )
     }
 
-    /// `lines` shaped and activated in `writer`'s region, then run: each component, in the order
-    /// the shape emitted them, is brought into being unless one of its members is named in
-    /// `leave`, whose slots stay empty.
+    /// `lines` shaped through the load's chain and activated in `writer`'s region, then run through
+    /// `types`, the cell's chain: each component, in the order the shape emitted them, is brought
+    /// into being unless one of its members is named in `leave`, whose slots stay empty.
     pub fn run<'cell>(
         &self,
         writer: Writer<'cell>,
+        types: &Types<'graph, 'cell>,
         lines: &[KExpression<'graph>],
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
-        let builtins = self.builtins(writer);
+        let builtins = self.builtins(writer, types);
         let shape = BodyShape::of_program(
             self.program,
             lines,
@@ -164,7 +176,7 @@ impl<'graph> Fixture<'_, 'graph> {
             if names.clone().any(|name| left.contains(&name)) {
                 continue;
             }
-            self.bring_in(writer, activation, &statements, component);
+            self.bring_in(writer, types, activation, &statements, component);
         }
         activation
     }
@@ -177,6 +189,7 @@ impl<'graph> Fixture<'_, 'graph> {
     fn bring_in<'cell>(
         &self,
         writer: Writer<'cell>,
+        types: &Types<'graph, 'cell>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
@@ -187,10 +200,10 @@ impl<'graph> Fixture<'_, 'graph> {
             .iter()
             .any(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Type(_)));
         if declares_types {
-            let handles = type_declarations(component, activation, self.types, self.scratch)
+            let handles = type_declarations(component, activation, types, self.scratch)
                 .expect("the component declares its types");
             for (slot, handle) in component.members.iter().zip(handles) {
-                let value = Value::Type(TypeValue::new(writer, *handle, self.types));
+                let value = Value::Type(TypeValue::new(writer, *handle, types));
                 activation.bind(*slot, value).expect("an empty slot binds");
             }
             return;
@@ -200,7 +213,7 @@ impl<'graph> Fixture<'_, 'graph> {
                 .births(*slot)
                 .is_some_and(|body| body.kind() == crate::scope::ShapeKind::Module)
         {
-            self.bring_module(writer, activation, statements, component, *slot);
+            self.bring_module(writer, types, activation, statements, component, *slot);
             return;
         }
         let births = component
@@ -212,7 +225,7 @@ impl<'graph> Fixture<'_, 'graph> {
                 writer,
                 activation,
                 component,
-                self.types,
+                types,
                 self.scratch,
                 &mut |_, _| None,
             )
@@ -239,7 +252,7 @@ impl<'graph> Fixture<'_, 'graph> {
                     &rhs.value,
                     self.scratch,
                 ))),
-                _ => Value::lower_part(writer, &rhs.value, self.types, self.scratch),
+                _ => Value::lower_part(writer, &rhs.value, types, self.scratch),
             };
             if let Some(value) = value {
                 activation.bind(*slot, value).expect("an empty slot binds");
@@ -252,6 +265,7 @@ impl<'graph> Fixture<'_, 'graph> {
     fn bring_module<'cell>(
         &self,
         writer: Writer<'cell>,
+        types: &Types<'graph, 'cell>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
@@ -269,13 +283,13 @@ impl<'graph> Fixture<'_, 'graph> {
             body_activation(writer, activation, slot, self.scratch),
         );
         for inner_component in body.shape().components() {
-            self.bring_in(writer, body, &inner, inner_component);
+            self.bring_in(writer, types, body, &inner, inner_component);
         }
         let knot = tie(
             writer,
             activation,
             component,
-            self.types,
+            types,
             self.scratch,
             &mut |_, _| Some(Supplied::Body(body)),
         )

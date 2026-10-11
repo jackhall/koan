@@ -11,8 +11,8 @@ use crate::parse::{KExpression, KeyElement};
 use crate::program::Program;
 use crate::scope::{ViewRefused, selection_refused, view_refused};
 use crate::symbols::{KeySymbol, Symbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
-use crate::values::KeyRejected;
+use crate::type_lattice::{KType, display_name};
+use crate::values::{KeyRejected, Types};
 
 /// Why dispatch raised an error value.
 #[derive(Clone, Copy)]
@@ -86,31 +86,33 @@ pub(super) enum Raised<'a> {
 }
 
 impl Raised<'_> {
-    /// The error value carrying this message, built in `writer`'s region.
+    /// The error value carrying this message, built in `writer`'s region, its types in `types`.
     pub(super) fn raise<'graph, 'cell>(
         self,
         program: &Program<'graph>,
         writer: Writer<'cell>,
+        types: &Types<'_, 'cell>,
     ) -> KValue<'graph, 'cell> {
         program.error(
             writer,
+            types,
             RaisedDisplay {
                 raised: self,
                 symbols: program.symbols(),
-                types: program.types(),
+                types,
             },
         )
     }
 }
 
 /// A [`Raised`] beside the interner and registry it renders through.
-struct RaisedDisplay<'a, 'x, 'run> {
+struct RaisedDisplay<'a, 'x, 'g, 'run> {
     raised: Raised<'a>,
     symbols: &'x SymbolInterner,
-    types: &'x TypeRegistry<'run>,
+    types: &'x Types<'g, 'run>,
 }
 
-impl fmt::Display for RaisedDisplay<'_, '_, '_> {
+impl fmt::Display for RaisedDisplay<'_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ktype = |handle: KType| display_name(handle, self.types, self.symbols);
         match self.raised {

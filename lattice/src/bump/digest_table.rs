@@ -1,6 +1,7 @@
 //! The **digest table**: an insert-only hash table of references to entries that each carry their
-//! own key, a uniformly distributed 128-bit digest. The key is already a hash, so the table runs
-//! no hash function, and the entry holds it, so the table stores no copy of it.
+//! own key, whose low word is uniformly distributed — a type's 128-bit digest, or a verdict's
+//! fold of two. The key is already a hash, so the table runs no hash function, and the entry
+//! holds it, so the table stores no copy of it.
 //!
 //! A slot is 16 B: the key's low word beside the reference. The word's masked low bits are the
 //! slot's home, and a probe walks linearly from there to the first empty slot, comparing words
@@ -19,18 +20,28 @@
 use std::cell::Cell;
 
 /// What lays a fixed run of drop-free values and hands back its borrow for `'r`: the one
-/// capability a [`DigestTable`] grows by. A bump serves it here; a region's writer serves it in
-/// koan.
+/// capability a [`DigestTable`] grows by, and the one a type branch lays its nodes through. A bump
+/// serves it here; a region's writer serves it in koan.
 pub trait LaysRuns<'r>: Copy {
     /// Lay a run of `len` values, each built from its index.
     fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'r [T];
+
+    /// Lay a copy of `text`.
+    fn text(self, text: &str) -> &'r str;
 }
 
-/// An entry a [`DigestTable`] holds by reference: it carries its own key, a uniformly
-/// distributed 128-bit digest, so the table hashes by the key's low word and stores no copy.
+/// An entry a [`DigestTable`] holds by reference: it carries its own key, whose low
+/// [`word`](Self::word) is uniformly distributed, so the table hashes by that word and stores no
+/// copy of the key.
 pub trait Keyed {
+    /// What the entry is found by.
+    type Key: Copy + Eq;
+
     /// The entry's key.
-    fn key(&self) -> u128;
+    fn key(&self) -> Self::Key;
+
+    /// The key's uniformly distributed low word: the slot's home and its stored word.
+    fn word(key: Self::Key) -> u64;
 }
 
 /// One slot: the key's low word beside the entry. Empty when `entry` is `None`; the word of an
@@ -88,10 +99,10 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
     }
 
     /// The entry whose key is `key`, if the table holds one.
-    pub fn get(&self, key: u128) -> Option<&'r N> {
+    pub fn get(&self, key: N::Key) -> Option<&'r N> {
         let run = self.run.get();
         let mask = run.len() - 1;
-        let word = key as u64;
+        let word = N::word(key);
         let mut index = word as usize & mask;
         // Ends: the load is at most one half, so an empty slot always lies ahead.
         loop {
@@ -115,7 +126,7 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
         place(
             self.run.get(),
             Slot {
-                word: key as u64,
+                word: N::word(key),
                 entry: Some(entry),
             },
         );
@@ -135,6 +146,15 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
     /// The current run's length in slots.
     pub fn slots(&self) -> usize {
         self.run.get().len()
+    }
+
+    /// Visit every entry, in slot order.
+    pub fn each(&self, mut visit: impl FnMut(&'r N)) {
+        for slot in self.run.get() {
+            if let Some(entry) = slot.get().entry {
+                visit(entry);
+            }
+        }
     }
 
     /// Lay a run twice the length and re-place every occupied slot by its stored word.

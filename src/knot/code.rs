@@ -15,9 +15,9 @@ use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, res
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeySymbol};
-use crate::type_lattice::{KType, TypeNode, TypeRegistry};
+use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{CodeView, ContentDigest, Link, List, Seen, Value, Weight};
+use crate::values::{CodeView, ContentDigest, Link, List, Seen, Types, Value, Weight};
 
 use super::{KActivationView, KValue, Knotted, Node};
 
@@ -303,7 +303,7 @@ pub fn using<'graph, 'cell>(
     writer: Writer<'cell>,
     code: Knotted<'graph, 'cell>,
     source: KValue<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Knotted<'graph, 'cell>, UsingRefused> {
     let node = code
@@ -356,7 +356,7 @@ fn keyed<'graph, 'cell>(
     shape: &BodyShape<'graph>,
     key: KeySymbol,
     source: KValue<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {

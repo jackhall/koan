@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, with_types};
+use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, test_root};
 use crate::scheduler::tests::native::{describe, fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Taken, Use, Work};
 
@@ -87,12 +87,14 @@ fn deliver<'graph>(
         return step.failed(StepError::Stale);
     };
     let length = text.len() as f64;
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(length)))
+    step.finish_fresh(test_root(), move |_, _, _| {
+        Active::new(KValue::Number(length))
+    })
 }
 
 /// The caller, woken by the loop's last cell.
 fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let first = with_types(|types| step.results(types).next());
+    let first = step.results(test_root()).next();
     match first {
         Some(Ok(Received::Scratch(value))) => record(describe(value)),
         _ => return step.failed(StepError::Unredeemable),

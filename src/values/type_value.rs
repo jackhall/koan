@@ -1,7 +1,8 @@
 //! A first-class type as a value: the handle it names and the `OfKind` type it has.
 
+use super::Types;
 use crate::memory::{Writer, resident};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::KType;
 
 /// A type in value position. Its own type is the kind of the type it names, memoized at
 /// construction, so a kind slot checks it with one lattice relation.
@@ -12,11 +13,12 @@ pub struct TypeValue {
 }
 
 impl TypeValue {
-    /// The type value naming `handle`, typed `OfKind` of `handle`'s kind.
+    /// The type value naming `handle`, typed `OfKind` of `handle`'s kind, which `types` reads and
+    /// never interns.
     pub fn new<'cell>(
         writer: Writer<'cell>,
         handle: KType,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
     ) -> &'cell TypeValue {
         resident(
             writer,

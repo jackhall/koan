@@ -5,9 +5,9 @@ use crate::memory::BumpAllocator;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, FoldDirection, KKind, KType, NodeSchema, Parametric,
-    ReductionMode, SigOrigin, SigSchema, TypeNode, TypeRegistry, display_name, member,
-    shape_return, shape_slots,
+    ReductionMode, SigOrigin, SigSchema, TypeNode, display_name, member, shape_return, shape_slots,
 };
+use crate::values::Types;
 
 use super::{Held, Program, brought, declared, with_program};
 use crate::scope::Elaboration;
@@ -324,7 +324,7 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
 #[test]
 fn a_code_kind_needing_names_is_spelled_with_needing() {
     fn expression(
-        _: &TypeRegistry<'_>,
+        _: &Types<'_, '_>,
         _: BumpAllocator<'_>,
         _: &SymbolInterner,
     ) -> Vec<(&'static str, KType)> {
@@ -760,7 +760,7 @@ fn a_repeated_head_parameter_is_refused() {
 }
 
 /// The signature `name` binds.
-fn schema_of<'run>(program: &Program<'_, 'run, '_>, name: &str) -> SigSchema<'run> {
+fn schema_of<'cell>(program: &Program<'_, '_, 'cell>, name: &str) -> SigSchema<'cell> {
     let TypeNode::Signature { schema, .. } = program.types.node(program.bound(name)) else {
         panic!("`{name}` binds a signature");
     };

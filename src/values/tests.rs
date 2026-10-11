@@ -1,7 +1,8 @@
-//! Shared scaffolding for `values`' suites: program storage with a registry built in it, a scratch
-//! and an interner, a graph over that storage to run steps in, and a test-only knot member whose
-//! every node is a data node, with a sealed singleton newtype to tag its rings. [`parts`] is shared
-//! crate-wide: a suite outside `values` reads a value's parts through the door as a program does.
+//! Shared scaffolding for `values`' suites: program storage beside the types a test runs over, a
+//! scratch and an interner, a graph over that storage to run steps in, and a test-only knot member
+//! whose every node is a data node, with a sealed singleton newtype to tag its rings. [`parts`] and
+//! [`TestTypes`] are shared crate-wide: a suite outside `values` reads a value's parts through the
+//! door as a program does, and lays its types out as a load and a run lay them.
 
 mod boundary;
 mod construction;
@@ -15,16 +16,22 @@ mod surface;
 mod working;
 
 use super::digest::{ContentDigest, DigestHasher, Tag};
+use super::{Half, TypeHeader, Types};
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
-    ReleaseAbsorption, StepContext, Verdict, Writer, covariant, program_storage, reattachable,
+    Active, Bump, BumpAllocator, CellGraph, CellHandle, Covariant, Delivery, Edge, Header,
+    KnotPlan, Member, NoDelivery, NoScratch, Operand, Prices, ProgramBrand, Reattachable,
+    ReattachableOverBoth, ReleaseAbsorption, Stale, StepContext, Verdict, Writer, covariant,
+    program_storage, reattachable,
 };
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
+    DeclaredType, KType, Parametric, RecursiveGroupWindow, RelativeSchema, Root, RootBuilder,
 };
-use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Seen, Weight};
+use crate::values::{
+    Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Seen, ValueCarrier,
+    ValueFamily, Weight, cross_view,
+};
 
 /// A value holding no callable — what every suite here builds, spelled once so a literal arm
 /// needs no annotation. The containers and the working form follow it.
@@ -46,7 +53,7 @@ pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell>, text: &str) -> V
 /// value's payload. Empty for a value that does not open.
 pub(crate) fn parts<'cell, X: Knotted + 'cell>(
     value: crate::values::Value<'cell, X>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Vec<crate::values::Value<'cell, X>> {
     let Some(surface) = value.surface(types, scratch) else {
@@ -75,15 +82,128 @@ pub(super) fn held<'cell, X: Copy>(
     record.cells().get(at)
 }
 
+/// The types a test runs over, laid out as a load and a run lay them: a root builder the test's
+/// load-time work interns into through [`load`](Self::load), a seeded root, and a chain per habitat
+/// half that reads the root, then the builder's live table as its region tier, then the half's own
+/// branch — so a type a test interned outside a cell, or a shape built inside one, resolves in
+/// every cell, and a type a cell's value door builds lands in that cell's branch.
+pub(crate) struct TestTypes<'graph> {
+    builder: &'graph RootBuilder<'graph>,
+    root: &'graph Root<'graph>,
+}
+
+impl<'graph> TestTypes<'graph> {
+    /// A builder and a root, both laid in `bump`.
+    pub fn new(bump: &'graph Bump) -> Self {
+        TestTypes {
+            builder: RootBuilder::in_region(bump),
+            root: Root::seeded(bump),
+        }
+    }
+
+    /// The chain a test's load-time work goes through: the builder, as the load's chain.
+    pub fn load(&self) -> Types<'graph, 'graph> {
+        Types::building(Half::Load(self.builder))
+    }
+
+    /// The chain for the half `writer` lays into, whose header door is `header`.
+    pub fn half<'here>(
+        &self,
+        writer: Writer<'here>,
+        header: Header<'graph, 'here, TypeHeader>,
+    ) -> Types<'graph, 'here> {
+        Types::scratch(
+            self.root,
+            Half::Load(self.builder),
+            Half::of(writer, header),
+        )
+    }
+
+    /// The chain for what `context`'s step lays in its cell.
+    pub fn of<'here, C, S, D>(
+        &self,
+        context: &StepContext<'graph, '_, 'here, '_, C, S, D, TypeHeader>,
+    ) -> Types<'graph, 'here>
+    where
+        C: Reattachable<'graph>,
+        S: ReattachableOverBoth<'graph>,
+        D: Delivery<'graph>,
+    {
+        self.half(context.writer(), context.header())
+    }
+
+    /// [`values::cross`](crate::values::cross) over this test's chains.
+    pub fn cross<'step, C, S, D, XF>(
+        &self,
+        context: &mut StepContext<'graph, 'step, '_, '_, C, S, D, TypeHeader>,
+        dest: impl Into<CellHandle>,
+        carrier: &ValueCarrier<'graph, 'step, XF>,
+    ) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
+    where
+        C: Reattachable<'graph>,
+        S: ReattachableOverBoth<'graph>,
+        D: Delivery<'graph>,
+        XF: KnottedFamily<'graph>,
+        ValueFamily<XF>: Covariant<'graph>,
+    {
+        let weight = context.read(carrier).value().weight();
+        context.alloc_into::<ValueFamily<XF>, ValueFamily<XF>>(
+            dest,
+            &[Operand {
+                carrier,
+                copy_bytes: weight.bytes(),
+            }],
+            |writer, header, views| {
+                Active::new(cross_view(writer, &self.half(writer, header), &views[0]))
+            },
+        )
+    }
+
+    /// [`values::cross_here`](crate::values::cross_here) over this test's chains.
+    pub fn cross_here<'step, 'here, C, S, D, XF>(
+        &self,
+        context: &mut StepContext<'graph, 'step, 'here, '_, C, S, D, TypeHeader>,
+        carrier: &ValueCarrier<'graph, 'step, XF>,
+    ) -> crate::values::Value<'here, XF::Closed<'here>>
+    where
+        C: Reattachable<'graph>,
+        S: ReattachableOverBoth<'graph>,
+        D: Delivery<'graph>,
+        XF: KnottedFamily<'graph>,
+        ValueFamily<XF>: Covariant<'graph>,
+    {
+        let weight = context.read(carrier).value().weight();
+        context.alloc_here(
+            &[Operand {
+                carrier,
+                copy_bytes: weight.bytes(),
+            }],
+            |writer, header, views| cross_view(writer, &self.half(writer, header), &views[0]),
+        )
+    }
+}
+
+/// A chain that reads `root` and interns anything a test asks of it into a builder of its own in
+/// `bump`: how a test reads the types a load built, outside any step.
+pub(crate) fn reading<'tier>(root: &'tier Root<'tier>, bump: &'tier Bump) -> Types<'tier, 'tier> {
+    Types::new(root, Half::Load(RootBuilder::in_region(bump)))
+}
+
 /// A continuation family for a graph whose cells only store.
 pub(super) struct Step;
 reattachable!(Step => ());
 
+/// A graph whose cells only store, keeping a type branch per habitat half.
+pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TypeHeader>;
+
 /// What a test reads and writes outside the graph. `'graph` is the program storage the parsed AST
-/// and the registry live in, which a graph built over it borrows.
+/// and the types live in, which a graph built over it borrows.
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
-    pub types: &'f TypeRegistry<'graph>,
+    /// The load's chain, which a test interns through outside a cell.
+    pub types: &'f Types<'graph, 'graph>,
+    /// The tiers every cell's chain is built over.
+    pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
@@ -115,10 +235,19 @@ impl<'graph> Fixture<'_, 'graph> {
         &self,
         verdict: fn(Prices) -> Verdict,
         step: impl for<'step, 'here, 'scratch> FnOnce(
-            &mut StepContext<'graph, 'step, 'here, 'scratch, Step>,
+            &mut StepContext<
+                'graph,
+                'step,
+                'here,
+                'scratch,
+                Step,
+                NoScratch,
+                NoDelivery,
+                TypeHeader,
+            >,
         ) -> R,
     ) -> R {
-        let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, verdict);
+        let mut graph: TestGraph<'graph> = CellGraph::new(1, verdict);
         let cell = graph
             .create(None)
             .expect("a one-slot graph has a free slot");
@@ -134,15 +263,17 @@ impl<'graph> Fixture<'_, 'graph> {
 pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>) -> R) -> R {
     let storage = program_storage();
     let program = storage.brand();
-    // The lattice's registry is a collections arena, so it keeps a bump of its own; program
-    // storage is the one `cellgraph` store everything else here is written into.
+    // The lattice's tiers keep a bump of their own; program storage is the one `cellgraph` store
+    // everything else here is written into.
     let registry = Bump::new();
-    let types = TypeRegistry::in_region(&registry);
+    let tiers = TestTypes::new(&registry);
+    let types = tiers.load();
     let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     test(&Fixture {
         program,
         types: &types,
+        tiers: &tiers,
         symbols: &symbols,
         scratch: &scratch,
     })
@@ -205,19 +336,15 @@ impl Knotted for Stand<'_> {
     }
 
     /// A stand-in holds no value: its knot is its identity.
-    fn held<'a>(
-        &self,
-        _: &TypeRegistry<'_>,
-        _: BumpAllocator<'_>,
-        _: &mut dyn FnMut(Seen<'a, Self>),
-    ) where
+    fn held<'a>(&self, _: &Types<'_, '_>, _: BumpAllocator<'_>, _: &mut dyn FnMut(Seen<'a, Self>))
+    where
         Self: 'a,
     {
     }
 
     fn digest_held(
         &self,
-        _: &TypeRegistry<'_>,
+        _: &Types<'_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -284,7 +411,7 @@ impl Knotted for Node<'_> {
     /// a data node's.
     fn held<'a>(
         &self,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -299,7 +426,7 @@ impl Knotted for Node<'_> {
     /// knot.
     fn digest_held(
         &self,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -353,6 +480,15 @@ impl<'graph> KnottedFamily<'graph> for NodeFamily {
     {
         for node in member.0.knot().members() {
             node.payload().held(out);
+        }
+    }
+
+    fn carried_types<'from>(member: &Node<'from>, out: &mut dyn FnMut(DeclaredType<Parametric>))
+    where
+        'graph: 'from,
+    {
+        for node in member.0.knot().members() {
+            out(node.payload().ktype().into());
         }
     }
 

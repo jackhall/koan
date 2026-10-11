@@ -13,7 +13,6 @@ use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, 
 use crate::types::kind::KKind;
 use crate::types::node::{ContentKey, Group, NodeSchema, TypeNode};
 use crate::types::record::Record;
-use crate::types::registry::TypeRegistry;
 use crate::types::render::display_name;
 use crate::types::run::{Elements, Run};
 use crate::types::schema::{SchemaDraft, SigOrigin, SigSchema};
@@ -26,7 +25,7 @@ use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 fn constants_match_freshly_interned_nodes() {
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let pins: &[(&str, KType, TypeNode<'_>)] = &[
         ("NUMBER", KType::NUMBER, TypeNode::Number),
         ("STR", KType::STR, TypeNode::Str),
@@ -105,7 +104,7 @@ fn constants_match_freshly_interned_nodes() {
         );
     }
     // The code composites are checked through the doors that mint them, the union's canonical
-    // member order being the registry's to choose.
+    // member order being the chain's to choose.
     let type_code = types.union_of(
         region,
         &[
@@ -176,7 +175,7 @@ fn every_node_kind_has_its_own_tag() {
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let field = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
-    // The representatives' plain runs, declared ahead of the registry so they outlive every node
+    // The representatives' plain runs, declared ahead of the chain so they outlive every node
     // that is interned over them.
     let needed = [field];
     let (group_names, group_bounds) = ([name], [KType::ANY]);
@@ -186,7 +185,7 @@ fn every_node_kind_has_its_own_tag() {
     };
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     // A node names its children by reference, so the runs over children are laid in the region.
     let node = |kt: KType| types.enter(kt.raw());
     let fields = &*region.alloc_slice_copy(&[(field, node(KType::NUMBER))]);
@@ -342,7 +341,7 @@ fn every_compound_variant_digests_as_pinned() {
     let b = ValueSymbol::declared("b", &symbols).expect("a value token");
     let (region_bump, scratch_bump, host_bump) = (Bump::new(), Bump::new(), Bump::new());
     let (region, scratch, host) = (&region_bump, &scratch_bump, &host_bump);
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
 
     let number_or_str = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
     let variable = types.quantified(0, KType::ANY);
@@ -643,7 +642,7 @@ fn variant_name<'run, H: crate::types::handle::Naming<'run>>(
 fn the_family_tops_are_spelled_value_type_and_code() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
-    let types = TypeRegistry::in_region(&bump);
+    let types = crate::types::tests::tiered(&bump);
     for (spelling, top) in [
         ("Value", KType::ANY_VALUE),
         ("Type", KType::ANY_TYPE),
@@ -665,7 +664,7 @@ fn the_family_tops_are_spelled_value_type_and_code() {
 fn every_builtin_type_name_round_trips() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
-    let types = TypeRegistry::in_region(&bump);
+    let types = crate::types::tests::tiered(&bump);
     for (name, ktype) in builtin_types() {
         let symbol = symbols.record(name);
         assert_eq!(KType::from_symbol(symbol), Some(ktype), "{}", name.text());

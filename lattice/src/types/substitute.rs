@@ -11,10 +11,11 @@
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 
+use super::chain::TypeChain;
 use super::node::{TypeNode, Variable};
-use super::registry::TypeRegistry;
 use super::schema::{Members, member};
 use super::stored::Linked;
+use super::tiers::Habitat;
 use super::unify::Interval;
 use super::walk::Variance;
 use super::walk::unary::{Visit, rebuild, visit};
@@ -25,7 +26,7 @@ use super::walk::unary::{Visit, rebuild, visit};
 /// A **nested** scheme rebinds the indices with its own group, exactly as it shadows them in the
 /// relations, so a variable under one is not free and is left alone.
 pub(super) fn substitute_quantified<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     bindings: &[Linked<'run>],
@@ -45,7 +46,7 @@ pub(super) fn substitute_quantified<'run>(
 /// any scheme — no scheme captures one. What a run reads a load-time type through, each level bound
 /// to the type its coordinate holds. A level past `bindings` is kept, and a signature is opaque.
 pub(super) fn substitute_levels<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     bindings: &[Linked<'run>],
@@ -65,10 +66,10 @@ pub(super) fn substitute_levels<'run>(
 /// place.
 ///
 /// `bindings` are in the scheme's **group** order — a caller holding declaration-order bindings
-/// translates them through the map [`function_scheme`](TypeRegistry::function_scheme) or
-/// [`shape_scheme`](TypeRegistry::shape_scheme) handed back.
+/// translates them through the map [`function_scheme`](super::chain::TypeChain::function_scheme) or
+/// [`shape_scheme`](super::chain::TypeChain::shape_scheme) handed back.
 pub(super) fn instantiate_quantified<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     bindings: &[Linked<'run>],
@@ -82,7 +83,7 @@ pub(super) fn instantiate_quantified<'run>(
 /// A bound is itself variable-free, so one pass reaches a fixed point. What a caller minting a
 /// *bound* out of an arbitrary type runs it through, since the two doors that take one require it.
 pub(super) fn erase_rigid<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
 ) -> Linked<'run> {
@@ -100,7 +101,7 @@ pub(super) fn erase_rigid<'run>(
 /// [`erase_rigid`] reads a variable as its bound everywhere, which at a contravariant position puts
 /// the result *below* an instance whose variable is bound lower.
 pub(super) fn bound_above<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
 ) -> Linked<'run> {
@@ -130,7 +131,7 @@ pub enum Side {
 /// bound its view's source met ([`Collector::heads`](super::unify::Collector::heads)); every other
 /// reader answers `None` for it.
 pub(super) fn read_through<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     side: Side,
@@ -168,7 +169,7 @@ pub(super) fn read_through<'run>(
 /// declaration names. A `Signature` node is opaque — its own parameters are its own, and a declared
 /// signature is closed — so the walk reaches only an application's pins.
 pub(super) fn substitute_parameters<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     bindings: Members<'_, TypeSymbol, Linked<'run>>,
@@ -187,7 +188,7 @@ pub(super) fn substitute_parameters<'run>(
 /// terminates rather than descending forever. Every member `resolve` names is interned before the
 /// rewrite, so a union re-interns through the canonical door, reading member nodes that exist.
 pub(super) fn rewrite_siblings<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     resolve: &impl Fn(usize) -> Linked<'run>,

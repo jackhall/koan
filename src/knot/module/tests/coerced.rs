@@ -7,7 +7,7 @@
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::values::{Knotted as _, Resolved, Value, Weight};
 
-use crate::knot::tests::{Step, callable, copy, declared, with_fixture};
+use crate::knot::tests::{TestGraph, callable, copy, declared, with_fixture};
 use crate::knot::{Knotted, Node};
 
 use super::super::Coerced;
@@ -29,12 +29,13 @@ fn priced(underlying: Knotted<'_, '_>) -> Weight {
 fn a_barrier_holds_its_view_and_the_function_behind_it() {
     with_fixture(|fixture| {
         let lines = fixture.parse(SOURCE);
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(1, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(1, copy);
         let home = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, &[]);
+                let activation = fixture.run(writer, types, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let dist = declared(fixture, activation, "Dist");
                 let plain = f.ktype().as_type().expect("`f` is unquantified");
@@ -60,12 +61,13 @@ fn a_barrier_holds_its_view_and_the_function_behind_it() {
 fn values_sees_a_barrier_as_the_function_it_stands_for() {
     with_fixture(|fixture| {
         let lines = fixture.parse(SOURCE);
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(1, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(1, copy);
         let home = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, &[]);
+                let activation = fixture.run(writer, types, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let plain = f.ktype().as_type().expect("`f` is unquantified");
                 let barrier = Knotted::of(

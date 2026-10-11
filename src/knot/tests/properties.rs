@@ -23,10 +23,10 @@ use crate::scope::{
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
-use crate::values::{Circular, Knotted as _, Link, TypeValue, Value, cross};
+use crate::values::{Circular, Knotted as _, Link, TypeValue, Types, Value};
 
 use super::super::{KActivation, KValue, KValueFamily, Knotted, Supplied, Untieable, tie};
-use super::{Fixture, Step, copy, with_fixture};
+use super::{Fixture, TestGraph, copy, with_fixture};
 use crate::scope::tests::plan;
 
 /// Whether two words are the same binding: bit-identical scalars, one type, one knot node.
@@ -65,13 +65,13 @@ fn rebuilt<'graph>(original: KValue<'graph, '_>, copied: KValue<'graph, '_>) -> 
 /// The value a runner binds a slot the tie does not: a fresh number, a type for a type name, or
 /// `null` for a registration.
 fn synthetic<'graph, 'cell>(
-    fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
+    types: &Types<'graph, 'cell>,
     name: BinderSymbol,
     next: &mut f64,
 ) -> KValue<'graph, 'cell> {
     match name {
-        BinderSymbol::Type(_) => Value::Type(TypeValue::new(writer, KType::ANY, fixture.types)),
+        BinderSymbol::Type(_) => Value::Type(TypeValue::new(writer, KType::ANY, types)),
         BinderSymbol::Value(_) => {
             *next += 1.0;
             Value::Number(*next)
@@ -197,6 +197,7 @@ fn cyclic(data: &[usize], reads: &[Vec<usize>]) -> bool {
 fn run<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
+    types: &Types<'graph, 'cell>,
     activation: &'cell KActivation<'graph, 'cell>,
     next: &mut f64,
     tied: &mut Vec<Knotted<'graph, 'cell>>,
@@ -217,7 +218,7 @@ fn run<'graph, 'cell>(
             .count();
         let synthesize = |next: &mut f64| {
             for slot in component.members {
-                let value = synthetic(fixture, writer, shape.slot_name(*slot), next);
+                let value = synthetic(writer, types, shape.slot_name(*slot), next);
                 activation.bind(*slot, value).expect("a fresh slot binds");
             }
         };
@@ -229,7 +230,7 @@ fn run<'graph, 'cell>(
             writer,
             activation,
             component,
-            fixture.types,
+            types,
             fixture.scratch(),
             &mut |_, _| Some(Supplied::Value(Value::Null)),
         );
@@ -357,6 +358,7 @@ fn run<'graph, 'cell>(
         run(
             fixture,
             writer,
+            types,
             resident(writer, nested_activation),
             next,
             tied,
@@ -377,22 +379,23 @@ proptest! {
         let source = plan::program_source(&choices);
         with_fixture(|fixture| {
             let lines = fixture.parse(&source);
-            let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+            let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
             let home = graph.create(None).unwrap();
             let dest = graph.create(None).unwrap();
             graph
                 .enter(home, |context| {
+                    let types = &fixture.tiers.of(context);
                     let writer = context.writer();
-                    let builtins = fixture.builtins(writer);
+                    let builtins = fixture.builtins(writer, types);
                     let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.types, fixture.symbols, fixture.scratch())
                         .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.symbols, fixture.types)));
                     let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
                     let mut tied = Vec::new();
-                    run(fixture, writer, activation, &mut 0.0, &mut tied);
+                    run(fixture, writer, types, activation, &mut 0.0, &mut tied);
 
                     for original in tied {
                         let carrier = context.lift::<KValueFamily>(Value::Knotted(original));
-                        let crossed = cross(context, dest, &carrier, fixture.types).unwrap();
+                        let crossed = fixture.tiers.cross(context, dest, &carrier).unwrap();
                         let Value::Knotted(copied) = context.read(&crossed).value() else {
                             panic!("a knot member crosses as a knot member");
                         };

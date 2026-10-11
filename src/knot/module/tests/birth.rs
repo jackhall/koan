@@ -30,7 +30,8 @@ LET outside = 1";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let m = module(fixture, activation, "m");
             assert!(matches!(m.resolve(), Resolved::Module));
             assert_eq!(
@@ -80,9 +81,8 @@ LET outside = 1";
             };
 
             // The signature is the memo, and reports each member at the type its value carries.
-            let TypeNode::Signature { schema, .. } = fixture
-                .types
-                .node(m.ktype().as_type().expect("a module's type is concrete"))
+            let TypeNode::Signature { schema, .. } =
+                types.node(m.ktype().as_type().expect("a module's type is concrete"))
             else {
                 panic!("a module's type is a Signature node");
             };
@@ -112,7 +112,8 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greetin
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let outer = module(fixture, activation, "outer");
             let node = outer.module().expect("a module node");
             let body = activation
@@ -133,7 +134,7 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greetin
             // A module bound in another module's body is a value slot at a Signature handle.
             let inner = member("inner").as_module().expect("a nested module");
             assert!(matches!(
-                fixture.types.node(
+                types.node(
                     inner
                         .ktype()
                         .as_type()
@@ -141,7 +142,7 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greetin
                 ),
                 TypeNode::Signature { .. }
             ));
-            let TypeNode::Signature { schema, .. } = fixture.types.node(
+            let TypeNode::Signature { schema, .. } = types.node(
                 outer
                     .ktype()
                     .as_type()
@@ -169,7 +170,8 @@ fn a_group_binder_births_a_module_the_same_way() {
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let g = module(fixture, activation, "g");
             // `step`, and the `OP`'s registration: a bare definition is a member too.
             assert_eq!(g.module().expect("a module node").members().len(), 2);
@@ -184,7 +186,8 @@ MODULE m = ((LET f = (FN :{} -> Number = #(g))) (LET g = (FN :{} -> Number = #(f
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let node = m.module().expect("a module node");
             assert_eq!(node.members().len(), 2);
@@ -208,9 +211,10 @@ fn two_modules_are_incomparable_and_render_as_their_signature() {
     let source = "MODULE m = (LET x = 1)\nMODULE n = (LET x = 1)";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let (m, n) = (
                 Value::Knotted(module(fixture, activation, "m")),
                 Value::Knotted(module(fixture, activation, "n")),
@@ -234,14 +238,15 @@ fn a_module_member_with_no_body_supplied_is_eager_at_its_bodys_site() {
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &["m"]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &["m"]);
             let shape = activation.shape();
             let (slot, _) = shape.slot(fixture.name("m")).unwrap();
             let refused = tie(
                 context.writer(),
                 activation,
                 shape.component_of(slot),
-                fixture.types,
+                types,
                 fixture.scratch(),
                 &mut |_, _| None,
             )
@@ -264,10 +269,10 @@ fn a_type_member_is_read_back_through_the_declaration_door() {
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             assert_eq!(declared(fixture, activation, "Outer"), {
-                let TypeNode::SetMember { .. } =
-                    fixture.types.node(declared(fixture, activation, "Outer"))
+                let TypeNode::SetMember { .. } = types.node(declared(fixture, activation, "Outer"))
                 else {
                     panic!("a newtype is a set member");
                 };
@@ -292,9 +297,10 @@ fn a_bare_definition_is_the_run_tail_and_a_keyworded_member_of_the_signature() {
     let source = "MODULE m = ((LET zero = 0) (EXPR #(TWICE x :Number) -> Number = #(x)))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let m = module(fixture, activation, "m");
             assert_eq!(m.module().expect("a module node").members().len(), 2);
             let [twice] = layout::registrations(m, types, scratch) else {

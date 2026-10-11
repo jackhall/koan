@@ -2,7 +2,7 @@
 //!
 //! [`symbols`] is how every syntactic name travels; [`types`] is a closed algebra over interned
 //! type nodes that names nothing but those symbols and the bump tier; [`bump`] is storage outside
-//! any cell graph, which the lattice's registry and every scratch buffer are built over. The crate
+//! any cell graph, which the lattice's root and every scratch buffer are built over. The crate
 //! depends on no koan code, so nothing koan's evaluator knows — a value, a cell, an AST node, a
 //! scope — is nameable here.
 //!
@@ -25,6 +25,6 @@ pub mod symbols;
 /// lattice's heap contract — and the property-case share.
 #[cfg(test)]
 mod tests;
-/// The type lattice: the node vocabulary, the interning registry, the identity recipe, the
+/// The type lattice: the node vocabulary, the tiers types are interned in, the identity recipe, the
 /// relations between types and the unifier — a closed algebra over [`symbols`].
 pub mod types;

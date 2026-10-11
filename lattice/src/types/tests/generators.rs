@@ -1,12 +1,12 @@
-//! The bespoke strategy the laws run over: type trees interned into a live registry as they are
+//! The bespoke strategy the laws run over: type trees interned into a live chain as they are
 //! built, so every generated value is a real handle rather than a description of one.
 //!
 //! The alphabets are tiny on purpose — three binder names, three Type names, two keywords, two
 //! value names — because the interesting collisions are structural, and a wide alphabet makes two
 //! generated types share a shape only by accident.
 //!
-//! The registry and every scratch buffer live in the bump tier — storage outside the graph — so a
-//! test owns a bare arena. A strategy is `'static`, so the registry it interns into lives over an
+//! The chain's tiers and every scratch buffer live in the bump tier — storage outside the graph —
+//! so a test owns a bare arena. A strategy is `'static`, so the chain it interns into lives over an
 //! arena leaked for the rest of the test process. Everything transient — a generated value's
 //! scratch buffers, a sealed group's window — lives in a fresh arena dropped as soon as the value
 //! is built ([`with_scratch`]), so generation keeps nothing but interned content.
@@ -30,20 +30,21 @@ use std::rc::Rc;
 
 use proptest::prelude::*;
 
-use crate::bump::{Bump, BumpAllocator};
+use crate::bump::{Bump, BumpAllocator, LaysRuns};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 use super::raw::RawRegistry;
 use super::raw::walk::visit;
 use super::raw::{lattice, substitute};
+use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use crate::types::kind::KKind;
 use crate::types::node::{ContentKey, TypeNode};
 use crate::types::operators::{FoldDirection, ReductionMode};
-use crate::types::registry::TypeRegistry;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::shape_slots;
 use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes};
+use crate::types::tiers::{Branch, BumpHalf, Habitat, Own, Root, RootBuilder};
 use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet};
 use crate::types::walk::Variance;
 use crate::types::walk::unary::Visit;
@@ -61,10 +62,69 @@ pub fn with_scratch<R>(build: impl FnOnce(BumpAllocator<'_>) -> R) -> R {
     build(&Bump::new())
 }
 
-/// One registry, one interner and the alphabets, shared by every strategy in a `proptest!` block.
+/// The half a [`World`]'s chain writes: the root builder while the world seeds its root, then a
+/// branch over the frozen root.
+#[derive(Clone, Copy)]
+pub enum WorldHalf {
+    Building(&'static RootBuilder<'static>),
+    Branch(BumpHalf<'static>),
+}
+
+impl LaysRuns<'static> for WorldHalf {
+    fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'static [T] {
+        match self {
+            WorldHalf::Building(builder) => builder.lay(len, fill),
+            WorldHalf::Branch(half) => half.lay(len, fill),
+        }
+    }
+
+    fn text(self, text: &str) -> &'static str {
+        match self {
+            WorldHalf::Building(builder) => builder.text(text),
+            WorldHalf::Branch(half) => half.text(text),
+        }
+    }
+}
+
+impl Habitat<'static> for WorldHalf {
+    fn own(self) -> Option<Own<'static>> {
+        match self {
+            WorldHalf::Building(builder) => builder.own(),
+            WorldHalf::Branch(half) => half.own(),
+        }
+    }
+
+    fn own_or_lay(self) -> Own<'static> {
+        match self {
+            WorldHalf::Building(builder) => builder.own_or_lay(),
+            WorldHalf::Branch(half) => half.own_or_lay(),
+        }
+    }
+}
+
+impl World {
+    /// The branch the world's chain writes, once anything has landed in it.
+    pub fn branch(&self) -> Option<&'static Branch<'static>> {
+        match self.types.half() {
+            WorldHalf::Building(_) => None,
+            WorldHalf::Branch(half) => half.branch(),
+        }
+    }
+}
+
+/// How many generated types a world's root is seeded with before its laws draw.
+const SEEDED: usize = 256;
+
+/// One chain, one interner and the alphabets, shared by every strategy in a `proptest!` block.
+///
+/// The chain is a branch over a root seeded with types drawn from the generators themselves, so a
+/// law's types span two tiers: what repeats the seed's content resolves in the root, and what is
+/// new lands in the branch over it.
 #[derive(Clone)]
 pub struct World {
-    pub types: Rc<TypeRegistry<'static>>,
+    pub types: Rc<TypeChain<'static, WorldHalf>>,
+    /// The frozen root under `types`, seeded from the generators.
+    pub root: &'static Root<'static>,
     pub symbols: Rc<SymbolInterner>,
     pub binders: Rc<Vec<BinderSymbol>>,
     pub type_names: Rc<Vec<TypeSymbol>>,
@@ -82,8 +142,12 @@ impl World {
             |text: &str| KeywordSymbol::declared(text, &symbols).expect("a keyword token");
         let declare_value =
             |text: &str| ValueSymbol::declared(text, &symbols).expect("a value token");
-        World {
-            types: Rc::new(TypeRegistry::in_region(leaked_arena())),
+        let arena = leaked_arena();
+        let builder = RootBuilder::in_region(arena);
+        let seeding = World {
+            types: Rc::new(TypeChain::building(WorldHalf::Building(builder))),
+            // Read by no seeding draw; the frozen root replaces it below.
+            root: Root::seeded(arena),
             binders: Rc::new(vec![
                 declare_binder("x"),
                 declare_binder("y"),
@@ -97,6 +161,23 @@ impl World {
             keywords: Rc::new(vec![declare_keyword("PURE"), declare_keyword("WRAP")]),
             values: Rc::new(vec![declare_value("a"), declare_value("b")]),
             symbols,
+        };
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let pool = arb_any(seeding.clone(), 3);
+        for _ in 0..SEEDED {
+            pool.new_tree(&mut runner)
+                .expect("a generated type")
+                .current();
+        }
+        drop(pool);
+        let root = builder.freeze();
+        World {
+            types: Rc::new(TypeChain::new(
+                root,
+                WorldHalf::Branch(BumpHalf::new(arena)),
+            )),
+            root,
+            ..seeding
         }
     }
 
@@ -594,7 +675,11 @@ fn arb_binding(world: &World) -> impl Strategy<Value = Binding> + use<> {
 }
 
 /// Whether a scheme is reachable from `kt`.
-fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle) -> bool {
+fn holds_binder<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+    scratch: BumpAllocator<'_>,
+    kt: Handle,
+) -> bool {
     visit(types, scratch, kt, &mut |_, node, _| {
         if node.binds_quantifiers() {
             Visit::Stop

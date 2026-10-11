@@ -11,16 +11,17 @@ mod module;
 mod projections;
 
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, ProgramBrand, ReleaseAbsorption, SlabHandle, Verdict, Writer,
-    program_storage, reattachable, resident,
+    Bump, BumpAllocator, CellGraph, NoDelivery, NoScratch, ProgramBrand, ReleaseAbsorption,
+    SlabHandle, Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{KExpression, parse};
 use crate::scope::{
     Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Registration, Slot, Target, Which,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
-use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::{TypeValue, Value};
+use crate::type_lattice::KType;
+use crate::values::tests::TestTypes;
+use crate::values::{TypeHeader, TypeValue, Types, Value};
 
 use super::{callable_type, type_declarations};
 use crate::scope::{Callable, Elaboration};
@@ -44,9 +45,12 @@ pub(super) enum Held<'cell> {
     Empty,
 }
 
-/// What a check reads: the fixture's storage and the activated program.
+/// What a check reads: the fixture's storage and the activated program, its types through the
+/// cell's chain, which reads what the load built.
 pub(super) struct Program<'p, 'graph, 'cell> {
-    pub types: &'p TypeRegistry<'graph>,
+    pub types: &'p Types<'graph, 'cell>,
+    /// The load's chain, which a load-time pass reads and interns through.
+    pub load: &'p Types<'graph, 'graph>,
     pub symbols: &'p SymbolInterner,
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
@@ -182,32 +186,31 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
 /// `hold` gives for its name, and run `check`.
 pub(super) fn with_program<R>(
     source: &str,
-    extra: impl FnOnce(
-        &TypeRegistry<'_>,
-        BumpAllocator<'_>,
-        &SymbolInterner,
-    ) -> Vec<(&'static str, KType)>,
-    hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &TypeRegistry<'graph>) -> Held<'cell>,
+    extra: impl FnOnce(&Types<'_, '_>, BumpAllocator<'_>, &SymbolInterner) -> Vec<(&'static str, KType)>,
+    hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &Types<'graph, 'cell>) -> Held<'cell>,
     check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
 ) -> R {
     let storage = program_storage();
     let program: ProgramBrand<'_> = storage.brand();
-    // The lattice's registry is a collections arena, so it keeps a bump of its own; program
-    // storage is the one `cellgraph` store everything else here is written into.
+    // The lattice's tiers keep a bump of their own; program storage is the one `cellgraph` store
+    // everything else here is written into.
     let registry = Bump::new();
-    let types = TypeRegistry::in_region(&registry);
+    let tiers = TestTypes::new(&registry);
+    let types = tiers.load();
     let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     let lines = parse(program, &symbols, source)
         .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
     let extra = extra(&types, &scratch, &symbols);
-    let mut graph: CellGraph<'_, Step> = CellGraph::new(1, |_| Verdict::Pin);
+    let mut graph: CellGraph<'_, Step, NoScratch, NoDelivery, TypeHeader> =
+        CellGraph::new(1, |_| Verdict::Pin);
     let cells: Vec<SlabHandle> = (0..1)
         .map(|_| graph.create(None).expect("the graph has a free slot"))
         .collect();
     let out = graph
         .enter(cells[0], |context| {
             let writer = context.writer();
+            let cell_types = tiers.of(context);
             let scalars = [
                 ("Number", KType::NUMBER),
                 ("Str", KType::STR),
@@ -234,12 +237,13 @@ pub(super) fn with_program<R>(
             for slot in 0..shape.slots() {
                 let slot = Slot(slot as u32);
                 let name = symbols.display(shape.slot_name(slot).symbol()).to_string();
-                if let Held::Bound(value) = hold(&name, writer, &types) {
+                if let Held::Bound(value) = hold(&name, writer, &cell_types) {
                     activation.bind(slot, value).expect("an empty slot binds");
                 }
             }
             check(Program {
-                types: &types,
+                types: &cell_types,
+                load: &types,
                 symbols: &symbols,
                 scratch: &scratch,
                 // A reader takes a body's statements from its shape, never from the parse: the
@@ -291,14 +295,14 @@ pub(super) fn brought<R>(
 pub(super) fn nulls<'graph, 'cell>(
     _: &str,
     _: Writer<'cell>,
-    _: &TypeRegistry<'graph>,
+    _: &Types<'graph, 'cell>,
 ) -> Held<'cell> {
     Held::Bound(Value::Null)
 }
 
 /// No builtin type past the scalars.
 pub(super) fn scalars(
-    _: &TypeRegistry<'_>,
+    _: &Types<'_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {

@@ -171,7 +171,7 @@ fn kkind_tag(k: KKind) -> u8 {
     }
 }
 
-/// The digest of a [`TypeNode`] — the identity of the type it interns as, and the key the registry
+/// The digest of a [`TypeNode`] — the identity of the type it interns as, and the key every tier
 /// stores it under.
 ///
 /// Two recipes are not derived from child handles. A [`TypeNode::Sibling`] is its bare index under
@@ -179,7 +179,7 @@ fn kkind_tag(k: KKind) -> u8 {
 /// `(component digest, index in component)` — its schema is *not* re-fed here, because the
 /// component digest was computed over exactly that content at seal.
 ///
-/// Every per-shape builder below is also reachable from the registry, so each door interns
+/// Every per-shape builder below is also reachable from the chain, so each door interns
 /// probe-first: an arm here is its builder over the node's own fields, so a digest taken off a
 /// caller's borrowed slices equals the digest of the node those slices would build.
 pub(super) fn node_digest<'run, C: Naming<'run>>(

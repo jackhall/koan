@@ -18,10 +18,8 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
-use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, TypeRegistry, Verdict, display_name,
-};
-use crate::values::{KnottedFamily, Value};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, display_name};
+use crate::values::{KnottedFamily, Types, Value};
 
 use super::activation::ActivationView;
 use super::keyed::Keyed;
@@ -157,11 +155,11 @@ impl Elaboration {
 
     /// The refusal as an error value's message, with its names spelled through `symbols` and its
     /// types through `types`.
-    pub fn display<'x, 'run>(
+    pub fn display<'x, 'g, 'run>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x TypeRegistry<'run>,
-    ) -> ElaborationDisplay<'x, 'run> {
+        types: &'x Types<'g, 'run>,
+    ) -> ElaborationDisplay<'x, 'g, 'run> {
         ElaborationDisplay {
             error: self,
             symbols,
@@ -171,13 +169,13 @@ impl Elaboration {
 }
 
 /// An [`Elaboration`] beside the interner and registry it renders through.
-pub struct ElaborationDisplay<'x, 'run> {
+pub struct ElaborationDisplay<'x, 'g, 'run> {
     error: &'x Elaboration,
     symbols: &'x SymbolInterner,
-    types: &'x TypeRegistry<'run>,
+    types: &'x Types<'g, 'run>,
 }
 
-impl fmt::Display for ElaborationDisplay<'_, '_> {
+impl fmt::Display for ElaborationDisplay<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.error {
             Elaboration::NotAType { name, .. } => {

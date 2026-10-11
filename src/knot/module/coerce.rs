@@ -26,9 +26,9 @@ use crate::scope::{IMPLICIT, ParameterBinding};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Members, Parametric, Record as TypeRecord,
-    SchemaDraft, TypeNode, TypeRegistry, display_name, satisfied_by, substitute_parameters,
+    SchemaDraft, TypeNode, display_name, satisfied_by, substitute_parameters,
 };
-use crate::values::{Dict, List, Record, SealRefused, Tagged, Value, satisfies};
+use crate::values::{Dict, List, Record, SealRefused, Tagged, Types, Value, satisfies};
 
 use super::{Coerced, ModuleContent, Operator, view};
 
@@ -59,7 +59,7 @@ impl CoercionRefused {
     /// The refusal worded for a message, its types rendered through `types` and `symbols`.
     pub fn display<'a>(
         self,
-        types: &'a TypeRegistry<'_>,
+        types: &'a Types<'_, '_>,
         symbols: &'a SymbolInterner,
     ) -> impl fmt::Display + 'a {
         CoercionRefusedDisplay {
@@ -71,13 +71,13 @@ impl CoercionRefused {
 }
 
 /// A [`CoercionRefused`] beside the registry and interner it renders through.
-struct CoercionRefusedDisplay<'a, 'run> {
+struct CoercionRefusedDisplay<'a, 'g, 'run> {
     refused: CoercionRefused,
-    types: &'a TypeRegistry<'run>,
+    types: &'a Types<'g, 'run>,
     symbols: &'a SymbolInterner,
 }
 
-impl fmt::Display for CoercionRefusedDisplay<'_, '_> {
+impl fmt::Display for CoercionRefusedDisplay<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |handle: KType| display_name(handle, self.types, self.symbols);
         match self.refused {
@@ -117,7 +117,7 @@ impl<'run> Substitution<'run> {
     /// `bindings`, interned.
     pub fn interned(
         bindings: Members<'_, TypeSymbol, KType>,
-        types: &TypeRegistry<'run>,
+        types: &Types<'_, 'run>,
         scratch: BumpAllocator<'_>,
     ) -> Self {
         let mut draft = SchemaDraft::new(scratch);
@@ -128,7 +128,7 @@ impl<'run> Substitution<'run> {
     }
 
     /// The substitution the interned `handle` holds.
-    pub fn of(handle: KType, types: &TypeRegistry<'run>) -> Self {
+    pub fn of(handle: KType, types: &Types<'_, 'run>) -> Self {
         let schema =
             crate::elaborate::schema_of(handle, types).expect("a substitution is a signature");
         Substitution {
@@ -140,21 +140,21 @@ impl<'run> Substitution<'run> {
 
 /// What a coercion reads: the region it writes into, the lattice, and the two substitutions a
 /// declared type is read under — the source module's bindings and the view's.
-pub struct Coercion<'a, 'cell, 'run, 'x> {
+pub struct Coercion<'a, 'g, 'cell, 'x> {
     pub writer: Writer<'cell>,
-    pub types: &'a TypeRegistry<'run>,
+    pub types: &'a Types<'g, 'cell>,
     pub scratch: BumpAllocator<'x>,
     /// What the source module binds the signature's head parameters to.
-    pub from: Substitution<'run>,
+    pub from: Substitution<'cell>,
     /// What the view binds them to: the carriers under `:|`, the source's own under `:!`.
-    pub to: Substitution<'run>,
+    pub to: Substitution<'cell>,
 }
 
 /// Why a member type read under a module's or a view's bindings is concrete: it reads only its
 /// signature's head parameters, and each is bound to a concrete type.
 const BOUND: &str = "a member type reads only head parameters, each bound";
 
-impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
+impl<'g, 'cell, 'x> Coercion<'_, 'g, 'cell, 'x> {
     /// `declared` read under `bindings`.
     fn read(
         &self,
@@ -180,7 +180,7 @@ impl<'cell, 'run, 'x> Coercion<'_, 'cell, 'run, 'x> {
 
 /// `declared` read as a type of a value: a type where it holds no variable, a scheme as it is.
 fn concrete(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     declared: DeclaredType<Parametric>,
 ) -> Option<DeclaredType<KType>> {
     match declared {
@@ -193,7 +193,7 @@ fn concrete(
 /// `declared` read under `cx.to`: carried as it is where both sides read it alike — a slot over the
 /// member's own `FOR ALL` group among them — and refused where they differ over such a group.
 pub fn coerce<'graph, 'cell>(
-    cx: &Coercion<'_, 'cell, '_, '_>,
+    cx: &Coercion<'_, '_, 'cell, '_>,
     value: KValue<'graph, 'cell>,
     declared: DeclaredType<Parametric>,
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
@@ -382,13 +382,13 @@ pub fn coerce<'graph, 'cell>(
 
 /// What the barrier `barrier` reads its declared type under: the source module's bindings and the
 /// view's, read off the signature handles it holds — swapped for a value crossing it inwards.
-fn across<'a, 'cell, 'run, 'x>(
+fn across<'a, 'g, 'cell, 'x>(
     writer: Writer<'cell>,
     barrier: &Coerced<'_, '_>,
     inwards: bool,
-    types: &'a TypeRegistry<'run>,
+    types: &'a Types<'g, 'cell>,
     scratch: BumpAllocator<'x>,
-) -> Coercion<'a, 'cell, 'run, 'x> {
+) -> Coercion<'a, 'g, 'cell, 'x> {
     let (from, to) = (
         Substitution::of(barrier.from(), types),
         Substitution::of(barrier.to(), types),
@@ -413,7 +413,7 @@ pub fn inward<'graph, 'cell>(
     barrier: &Coerced<'graph, 'cell>,
     arguments: KValue<'graph, 'cell>,
     parameters: ParameterBinding<'_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
     let cx = across(writer, barrier, true, types, scratch);
@@ -458,7 +458,7 @@ pub fn outward<'graph, 'cell>(
     writer: Writer<'cell>,
     barrier: &Coerced<'graph, 'cell>,
     value: KValue<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
     let cx = across(writer, barrier, false, types, scratch);
@@ -483,7 +483,7 @@ enum Declared<'run, 'x> {
 
 /// The slot types and return of the barrier's declared type `declared`.
 fn declared_of<'run, 'x>(
-    types: &TypeRegistry<'run>,
+    types: &Types<'_, 'run>,
     scratch: BumpAllocator<'x>,
     declared: DeclaredType<Parametric>,
 ) -> Declared<'run, 'x> {

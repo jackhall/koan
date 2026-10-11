@@ -9,18 +9,18 @@ use super::raw::RawRegistry;
 use super::raw::order::is_subtype_of;
 use super::raw::substitute::{bound_above, substitute_levels, substitute_quantified};
 use super::raw::unify::admits;
+use crate::types::chain::TypeChain;
 use crate::types::handle::{Handle, KType, TypeHandle};
-use crate::types::registry::TypeRegistry;
 use crate::types::render::display_handle;
 use crate::types::unify::Collector;
 use crate::types::walk::Variance;
 
 use super::RawSchemes;
 
-/// A registry, an interner and a region.
+/// A chain, an interner and a region.
 struct World<'r> {
     region: BumpAllocator<'r>,
-    types: TypeRegistry<'r>,
+    types: TypeChain<'r, crate::types::tiers::BumpHalf<'r>>,
     symbols: SymbolInterner,
 }
 
@@ -28,7 +28,7 @@ impl<'r> World<'r> {
     fn new(region: BumpAllocator<'r>) -> Self {
         World {
             region,
-            types: TypeRegistry::in_region(region),
+            types: crate::types::tests::tiered(region),
             symbols: SymbolInterner::new(),
         }
     }

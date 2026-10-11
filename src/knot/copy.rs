@@ -6,6 +6,9 @@
 //! weight and a module's content ride over. A builtin's node points into program storage, so it is
 //! carried as-is. The copied member is the one at the source's own index.
 //!
+//! [`carried_types`](values::KnottedFamily::carried_types) lists every type a node carries beside
+//! them, which the crossing makes resolve in the destination before the rebuild runs.
+//!
 //! [`held`](values::KnottedFamily::held) lists the values a rebuild asks for, in the order it asks,
 //! so each arm below sits beside its rebuild's twin. The crossing copies those values over its own
 //! worklist and keys every knot it has rebuilt, so two members of one foreign knot a module holds
@@ -13,6 +16,7 @@
 //! as the value word it would be if a member held it.
 
 use crate::memory::{KnotPlan, Writer, resident};
+use crate::type_lattice::{DeclaredType, Parametric};
 use crate::values::{self, DeepCopy, Value};
 
 use super::{Knotted, KnottedFamily, Node};
@@ -37,6 +41,37 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                 Node::Module(module) => module.members().iter().for_each(|value| out(*value)),
                 Node::Coerced(coerced) => out(Value::Knotted(coerced.underlying())),
                 Node::Code(code) => code.held(out),
+            }
+        }
+    }
+
+    fn carried_types<'from>(
+        member: &Knotted<'graph, 'from>,
+        out: &mut dyn FnMut(DeclaredType<Parametric>),
+    ) where
+        'graph: 'from,
+    {
+        for node in member.member().knot().members() {
+            match node.payload() {
+                Node::Function(function) => {
+                    out(function.ktype().into());
+                    if let Some(registered) = function.registered() {
+                        out(registered.shape.into());
+                    }
+                    for solved in function.instance().unwrap_or(&[]) {
+                        out((*solved).into());
+                    }
+                }
+                Node::Builtin(builtin) => out(builtin.ktype().into()),
+                Node::Data { circular, .. } => out(circular.ktype().into()),
+                Node::Module(module) => out(module.ktype().into()),
+                Node::Coerced(coerced) => {
+                    out(coerced.ktype().into());
+                    out(coerced.declared());
+                    out(coerced.from().into());
+                    out(coerced.to().into());
+                }
+                Node::Code(code) => out(code.ktype().into()),
             }
         }
     }

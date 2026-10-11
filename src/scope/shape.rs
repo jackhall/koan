@@ -56,9 +56,9 @@ use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
+    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, display_name,
 };
-use crate::values::{ContentDigest, Knotted};
+use crate::values::{ContentDigest, Knotted, Types};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
@@ -600,7 +600,7 @@ impl<'graph> BodyShape<'graph> {
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, X>,
-        types: &TypeRegistry<'graph>,
+        types: &Types<'graph, 'graph>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -1419,11 +1419,11 @@ impl ShapeError<'_> {
 
     /// The error rendered, led by where it was found (`path:line:col: `), with its names spelled
     /// through `symbols` and its types through `types`.
-    pub fn display<'x, 'run>(
+    pub fn display<'x, 'g, 'run>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x TypeRegistry<'run>,
-    ) -> ShapeErrorDisplay<'x, 'run> {
+        types: &'x Types<'g, 'run>,
+    ) -> ShapeErrorDisplay<'x, 'g, 'run> {
         ShapeErrorDisplay {
             error: self,
             symbols,
@@ -1434,13 +1434,13 @@ impl ShapeError<'_> {
 
 /// A [`ShapeError`] beside the interner its names render through and the registry its types
 /// render through.
-pub struct ShapeErrorDisplay<'x, 'run> {
+pub struct ShapeErrorDisplay<'x, 'g, 'run> {
     error: &'x ShapeError<'x>,
     symbols: &'x SymbolInterner,
-    types: &'x TypeRegistry<'run>,
+    types: &'x Types<'g, 'run>,
 }
 
-impl fmt::Display for ShapeErrorDisplay<'_, '_> {
+impl fmt::Display for ShapeErrorDisplay<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
@@ -1719,7 +1719,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
     }
 }
 
-impl ShapeErrorDisplay<'_, '_> {
+impl ShapeErrorDisplay<'_, '_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
     }
@@ -1733,7 +1733,7 @@ pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
     arguments: &[A],
     ambiguous: Option<usize>,
     symbols: &SymbolInterner,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
 ) -> fmt::Result {
     let key = spelled(key, symbols);
     match ambiguous {
@@ -1767,7 +1767,7 @@ pub fn view_refused(
     f: &mut fmt::Formatter<'_>,
     refused: ViewRefused,
     symbols: &SymbolInterner,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
 ) -> fmt::Result {
     match refused {
         ViewRefused::NotAModule(value) => {

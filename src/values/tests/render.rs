@@ -2,14 +2,14 @@
 
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
-use crate::values::{Key, TypeValue};
+use crate::values::{Key, TypeValue, Types};
 
 use super::{Dict, Fixture, List, Record, Stand, Tagged, Value, pin, quote, text, with_fixture};
 
-fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_>) -> String {
+fn rendered(fixture: &Fixture<'_, '_>, types: &Types<'_, '_>, value: Value<'_>) -> String {
     let mut out = String::new();
     value
-        .render(&mut out, fixture.types, fixture.symbols, fixture.scratch())
+        .render(&mut out, types, fixture.symbols, fixture.scratch())
         .unwrap();
     out
 }
@@ -18,11 +18,12 @@ fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_>) -> String {
 fn scalars_render_bare() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
-            assert_eq!(rendered(fixture, Value::Number(3.0)), "3");
-            assert_eq!(rendered(fixture, Value::Number(2.5)), "2.5");
-            assert_eq!(rendered(fixture, Value::Bool(true)), "true");
-            assert_eq!(rendered(fixture, Value::Null), "null");
-            assert_eq!(rendered(fixture, text(context.writer(), "hi")), "hi");
+            let types = &fixture.tiers.of(context);
+            assert_eq!(rendered(fixture, types, Value::Number(3.0)), "3");
+            assert_eq!(rendered(fixture, types, Value::Number(2.5)), "2.5");
+            assert_eq!(rendered(fixture, types, Value::Bool(true)), "true");
+            assert_eq!(rendered(fixture, types, Value::Null), "null");
+            assert_eq!(rendered(fixture, types, text(context.writer(), "hi")), "hi");
         })
     });
 }
@@ -30,23 +31,27 @@ fn scalars_render_bare() {
 #[test]
 fn containers_render_their_cells_in_reading_order() {
     with_fixture(|fixture| {
-        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
         let zeta = BinderSymbol::declared("zeta", symbols).unwrap();
         let alpha = BinderSymbol::declared("alpha", symbols).unwrap();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let cells = [Value::Number(1.0), text(writer, "a")];
             let list = Value::List(List::new(writer, cells.into_iter(), types, scratch));
-            assert_eq!(rendered(fixture, list), "[1, a]");
+            assert_eq!(rendered(fixture, types, list), "[1, a]");
             let entries = [
                 (Key::str("b"), Value::Number(2.0)),
                 (Key::number(1.0).unwrap(), list),
             ];
             let dict = Value::Dict(Dict::new(writer, &entries, types, scratch));
-            assert_eq!(rendered(fixture, dict), "{1: [1, a], \"b\": 2}");
+            assert_eq!(rendered(fixture, types, dict), "{1: [1, a], \"b\": 2}");
             let fields = [(zeta, Value::Null), (alpha, Value::Bool(false))];
             let record = Value::Record(Record::new(writer, &fields, types, scratch));
-            assert_eq!(rendered(fixture, record), "{alpha = false, zeta = null}");
+            assert_eq!(
+                rendered(fixture, types, record),
+                "{alpha = false, zeta = null}"
+            );
         })
     });
 }
@@ -55,14 +60,15 @@ fn containers_render_their_cells_in_reading_order() {
 fn types_tags_and_quotes_render_their_surface() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let number = Value::Type(TypeValue::new(writer, KType::NUMBER, fixture.types));
-            assert_eq!(rendered(fixture, number), "Number");
+            let number = Value::Type(TypeValue::new(writer, KType::NUMBER, types));
+            assert_eq!(rendered(fixture, types, number), "Number");
             let tagged = Value::Tagged(Tagged::hold(writer, text(writer, "x"), KType::STR));
-            assert_eq!(rendered(fixture, tagged), "Str(x)");
+            assert_eq!(rendered(fixture, types, tagged), "Str(x)");
             let code = crate::values::Value::Knotted(Stand::Code(quote(fixture, "#($a \\b)")));
             let mut out = String::new();
-            code.render(&mut out, fixture.types, fixture.symbols, fixture.scratch())
+            code.render(&mut out, types, fixture.symbols, fixture.scratch())
                 .unwrap();
             assert_eq!(out, "$a \\b", "code prints each mark as written");
         })
@@ -74,15 +80,16 @@ fn a_cycle_labels_its_target_and_a_shared_node_prints_inline() {
     use super::{Holding, Link, ring, tie};
     use crate::values::Circular;
     with_fixture(|fixture| {
-        let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
+        let (symbols, scratch) = (fixture.symbols, fixture.scratch());
         let ring_type = fixture.ring_type("Ring", "next");
         let next = BinderSymbol::declared("next", symbols).unwrap();
-        let rendered = |value: Holding<'_>| {
-            let mut out = String::new();
-            value.render(&mut out, types, symbols, scratch).unwrap();
-            out
-        };
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let rendered = |value: Holding<'_>| {
+                let mut out = String::new();
+                value.render(&mut out, types, symbols, scratch).unwrap();
+                out
+            };
             let writer = context.writer();
             let one = ring(fixture, writer, ring_type, &[None])[0];
             assert_eq!(rendered(Holding::Knotted(one)), "@0 = Ring({next = @0})");

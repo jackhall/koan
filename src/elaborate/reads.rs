@@ -11,10 +11,8 @@ use crate::memory::{Bump, BumpAllocator};
 use crate::parse::ExpressionPart;
 use crate::scope::{Activation, ActivationView, BodyShape, Coordinate, Elaboration, Site};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeNode, TypeRegistry, substitute_levels,
-};
-use crate::values::{KnottedFamily, Value};
+use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, substitute_levels};
+use crate::values::{KnottedFamily, Types, Value};
 
 use super::expression::type_expression;
 use super::members::{SignatureMember, signature_member};
@@ -55,7 +53,7 @@ pub trait Reads<'graph> {
         _at: Coordinate,
         _chain: &[ValueSymbol],
         _name: TypeSymbol,
-        _types: &TypeRegistry<'_>,
+        _types: &Types<'_, '_>,
     ) -> Option<(TypeAt, KType)> {
         Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE))
     }
@@ -67,7 +65,7 @@ pub trait Reads<'graph> {
 /// type, the last names no type member, or a member names a head parameter its application leaves
 /// unpinned.
 fn member_through(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     signature: KType,
     chain: &[ValueSymbol],
@@ -115,7 +113,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         at: Coordinate,
         chain: &[ValueSymbol],
         name: TypeSymbol,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
     ) -> Option<(TypeAt, KType)> {
         let held = self.read(at);
         held.as_module()?;
@@ -142,7 +140,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
         at: Coordinate,
         chain: &[ValueSymbol],
         name: TypeSymbol,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
     ) -> Option<(TypeAt, KType)> {
         ActivationView::member_type(self, at, chain, name, types)
     }
@@ -153,7 +151,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
 pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
     part: &'graph ExpressionPart<'graph>,
     view: &ActivationView<'graph, '_, XF>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
     // Where it runs, every name a type reads is bound to a concrete type.

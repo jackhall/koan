@@ -38,10 +38,11 @@ MODULE m = ((LET Carrier = Number) \
 fn every_slot_that_names_the_carrier_is_born_at_it() {
     with_fixture(|fixture| {
         let lines = fixture.parse(BAG);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let view = ascribe(writer, m, bag, Ascription::Opaque, types, scratch)
@@ -144,10 +145,11 @@ fn every_slot_that_names_the_carrier_is_born_at_it() {
 fn a_function_member_is_born_behind_a_barrier() {
     with_fixture(|fixture| {
         let lines = fixture.parse(BAG);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let source_step = member(fixture, m, "step", types, scratch);
@@ -196,10 +198,11 @@ fn a_function_member_is_born_behind_a_barrier() {
 fn a_transparent_view_coerces_nothing() {
     with_fixture(|fixture| {
         let lines = fixture.parse(BAG);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let view = ascribe(writer, m, bag, Ascription::Transparent, types, scratch)
@@ -250,10 +253,11 @@ MODULE m = ((LET Carrier = Number) (LET one = 1) \
 (MODULE inner = ((LET Elem = Number) (LET v = 5))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let outer = declared(fixture, activation, "Outer");
             let source_inner = member(fixture, m, "inner", types, scratch);
@@ -290,10 +294,11 @@ SIG Inner FOR ALL #[Elem] = #[(VAL v :Elem)]
 MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let inner = declared(fixture, activation, "Inner");
 
@@ -360,10 +365,11 @@ SIG Inner FOR ALL #[Elem] = #[(VAL v :Elem)]
 LET f = (FN :{} -> Number = #(1))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let inner = declared(fixture, activation, "Inner");
             let BinderSymbol::Type(carrier) = fixture.name("Carrier") else {
                 panic!("`Carrier` is a Type token");
@@ -407,10 +413,11 @@ MODULE m = ((LET Carrier = Any) (LET ring = [1 spin]) \
 (LET spin = (FN :{} -> Any = #(ring))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             assert!(
@@ -438,10 +445,11 @@ MODULE m = ((LET a = 1) (LET b = 2) (LET v = 3))";
 fn a_union_member_naming_a_hidden_parameter_takes_the_value_whatever_the_union_s_order() {
     with_fixture(|fixture| {
         let lines = fixture.parse(UNIONS);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let either = declared(fixture, activation, "Either");
             let view = ascribe(writer, m, either, Ascription::Opaque, types, scratch)

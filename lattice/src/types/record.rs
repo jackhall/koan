@@ -13,7 +13,7 @@
 //! [`Symbol`] for the same reason.
 //!
 //! A record is one `Copy` fat pointer into the run region — no index table. At record sizes a
-//! linear symbol compare beats hashing. Only the registry's record doors build one, bumping the
+//! linear symbol compare beats hashing. Only the chain's record doors build one, bumping the
 //! caller's field run into the region on an intern miss.
 //!
 //! Two invariants define it:
@@ -52,7 +52,7 @@ impl<H> Clone for Record<'_, H> {
 impl<H> Copy for Record<'_, H> {}
 
 impl<'run, H> Record<'run, H> {
-    /// A record over `fields`, which already live where the record will. The registry's record
+    /// A record over `fields`, which already live where the record will. The chain's record
     /// doors are the callers: each bumps the caller's run into the region on a miss and wraps it
     /// here.
     pub(super) fn over(fields: &'run [(BinderSymbol, Linked<'run>)]) -> Self {

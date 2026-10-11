@@ -1,5 +1,6 @@
-//! [`StoredNode`] — one interned type as the registry's table stores it: its digest beside its
-//! [`Content`]. Each node is laid alone in the region, and the table holds a reference to it.
+//! [`StoredNode`] — one interned type as a tier's table stores it: its digest beside its
+//! [`Content`]. Each node is laid alone in the half its chain writes, and the table holds a
+//! reference to it.
 //!
 //! The table stores a node apart from the [`TypeNode`] a reader sees, so storage can pack what a
 //! view spells out. Each variant whose probe answers its children decide carries a [`Flags`] byte:
@@ -7,7 +8,7 @@
 //! so each probe is one read of the node. Every other variant's answers are a constant of its
 //! kind, which [`Content::flags`] answers.
 //!
-//! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
+//! A few fields a hot path never reads sit behind one `&'run` reference, laid in the half on an
 //! intern miss: a carrier's key and name, a lexical variable's name, a signature's schema, a
 //! deferred return's surface, and a sealed member's [`Component`]. A lexical level and a member's
 //! index are stored narrowed to `u32`. A shape stores each slot's priority class in that
@@ -18,18 +19,20 @@
 //! an application's signature — is a [`Linked`] reference to its node, so a walk steps from node to
 //! node without the table. A group's bounds and a schema's members stay handles, which koan reads.
 //!
-//! Two conversions connect the two shapes, each one exhaustive match: [`Content::lay`] lays a
-//! view over references as stored content on an intern miss, and [`StoredNode::view_as`] reads a
-//! node back as a view, each child read as the reader names it — by its handle outside the lattice,
-//! by reference inside ([`StoredNode::view`]). Every reader outside the lattice goes through
-//! [`TypeRegistry::node`](super::registry::TypeRegistry::node) and never sees this layout.
+//! Three conversions connect the shapes, each one exhaustive match: [`Content::lay`] lays a view
+//! over references as stored content on an intern miss, [`StoredNode::view_as`] reads a node back
+//! as a view, each child read as the reader names it — by its handle outside the lattice, by
+//! reference inside ([`StoredNode::view`]) — and [`Content::transfer`] re-lays stored content in
+//! another half, each child mapped to its copy there, for a crossing's copy
+//! ([transfer.rs](super::transfer)). Every reader outside the lattice goes through
+//! [`TypeChain::node`](super::chain::TypeChain::node) and never sees this layout.
 //!
 //! See [README.md](README.md) § The node vocabulary.
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use crate::bump::BumpAllocator;
+use crate::bump::LaysRuns;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::component::Component;
@@ -40,7 +43,8 @@ use super::node::{ContentKey, Group, TypeNode};
 use super::record::Record;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
-use super::shape::DeferredReturnSurface;
+use super::shape::{DeferredReturnSurface, StoredElement};
+use super::tiers::lay_one;
 
 /// The six probe answers, folded from a node's children when it is interned: a free
 /// `Quantified`, any rigid variable, anything parametric, an opaque carrier, and the two
@@ -199,7 +203,7 @@ pub(super) enum Content<'run> {
 pub type Linked<'run> = &'run StoredNode<'run>;
 
 /// One interned node as the table stores it: its digest, then its content. Laid alone in the
-/// registry's region on an intern miss, so a reference to it lives as long as the region.
+/// half its chain writes on an intern miss, so a reference to it lives as long as that half.
 /// Nominally `pub` so the sealed reading trait can name it; `stored` is private, so nothing
 /// outside the lattice can.
 ///
@@ -250,7 +254,7 @@ impl<'run> StoredNode<'run> {
 
     /// This node with its children read as `C` and its concrete fields as `C::Bound` — **the view
     /// table**, one exhaustive match, so a new variant is a compile error here. The caller answers
-    /// for `C`'s promise: the registry reads a node as the handle it was named by, and a scheme's
+    /// for `C`'s promise: the chain reads a node as the handle it was named by, and a scheme's
     /// positions as [`Parametric`](super::handle::Parametric).
     pub(super) fn view_as<C: Naming<'run>>(&self) -> TypeNode<'run, C> {
         match self.content {
@@ -488,7 +492,7 @@ impl<'run> Content<'run> {
     pub(super) fn lay(
         node: TypeNode<'run, Linked<'run>>,
         flags: Flags,
-        bump: BumpAllocator<'run>,
+        lay: impl LaysRuns<'run>,
     ) -> Self {
         match node {
             TypeNode::Number => Content::Number,
@@ -515,7 +519,7 @@ impl<'run> Content<'run> {
             TypeNode::OfKind(kind) => Content::OfKind(kind),
             TypeNode::Parameter { name, bound } => Content::Parameter { name, bound },
             TypeNode::Carrier { name, key, met } => Content::Carrier {
-                key: bump.alloc((key, name)),
+                key: lay_one(lay, (key, name)),
                 met,
             },
             TypeNode::List { element } => Content::List { flags, element },
@@ -546,7 +550,7 @@ impl<'run> Content<'run> {
                 bound,
             } => Content::Lexical {
                 level: u32::try_from(level).expect("a lexical level fits u32"),
-                name: bump.alloc(name),
+                name: lay_one(lay, name),
                 lower,
                 bound,
             },
@@ -563,7 +567,7 @@ impl<'run> Content<'run> {
                 schema,
                 schema_digest,
             } => Content::Signature {
-                schema: bump.alloc(schema),
+                schema: lay_one(lay, schema),
                 schema_digest,
             },
             TypeNode::SignatureApply { signature, pins } => Content::SignatureApply {
@@ -572,7 +576,7 @@ impl<'run> Content<'run> {
                 pins,
             },
             TypeNode::SignatureMeet { members } => Content::SignatureMeet { flags, members },
-            TypeNode::DeferredReturn(surface) => Content::DeferredReturn(bump.alloc(surface)),
+            TypeNode::DeferredReturn(surface) => Content::DeferredReturn(lay_one(lay, surface)),
             TypeNode::Sibling(index) => Content::Sibling(index),
             TypeNode::SetMember {
                 component,
@@ -583,6 +587,169 @@ impl<'run> Content<'run> {
                 kind,
                 index: u32::try_from(index).expect("a component has fewer than 2^32 members"),
                 component,
+                name,
+            },
+        }
+    }
+
+    /// **The transfer table**: this content as another half stores it — the third conversion, one
+    /// exhaustive match beside [`lay`](Self::lay) and [`StoredNode::view_as`]. Every scalar is
+    /// copied, every slice re-laid through `lay`, every child reference mapped through `map`, and a
+    /// sealed member's component through `component`. Nothing is re-digested or re-canonicalized:
+    /// the content is already canonical, so it is laid again at its own digest and flags. A handle
+    /// a side table holds — a group's bounds, a schema's members, a component's member schemas — is
+    /// copied as it is; the caller makes it resolve once the node is laid.
+    pub(super) fn transfer<'t>(
+        self,
+        lay: impl LaysRuns<'t>,
+        map: &mut impl FnMut(Linked<'run>) -> Linked<'t>,
+        component: &mut impl FnMut(&'run Component<'run>) -> &'t Component<'t>,
+    ) -> Content<'t> {
+        match self {
+            Content::Number => Content::Number,
+            Content::Str => Content::Str,
+            Content::Bool => Content::Bool,
+            Content::Null => Content::Null,
+            Content::Identifier => Content::Identifier,
+            Content::Symbol => Content::Symbol,
+            Content::TypeNameToken => Content::TypeNameToken,
+            Content::Expression => Content::Expression,
+            Content::SigiledTypeExpr => Content::SigiledTypeExpr,
+            Content::RecordType => Content::RecordType,
+            Content::Literal => Content::Literal,
+            Content::Block => Content::Block,
+            Content::Declaration => Content::Declaration,
+            Content::Binder => Content::Binder,
+            Content::Name => Content::Name,
+            Content::Keyword => Content::Keyword,
+            Content::Any => Content::Any,
+            Content::AnyValue => Content::AnyValue,
+            Content::AnyCode => Content::AnyCode,
+            Content::CodeNeeding { kind, names } => Content::CodeNeeding {
+                kind: map(kind),
+                names: copied(lay, names),
+            },
+            Content::Never => Content::Never,
+            Content::OfKind(kind) => Content::OfKind(kind),
+            Content::Parameter { name, bound } => Content::Parameter {
+                name,
+                bound: map(bound),
+            },
+            Content::Carrier { key, met } => Content::Carrier {
+                key: lay_one(lay, *key),
+                met: map(met),
+            },
+            Content::List { flags, element } => Content::List {
+                flags,
+                element: map(element),
+            },
+            Content::Dict { flags, key, value } => Content::Dict {
+                flags,
+                key: map(key),
+                value: map(value),
+            },
+            Content::Record { flags, fields } => Content::Record {
+                flags,
+                fields: Record::over(mapped_fields(lay, fields.raw(), map)),
+            },
+            Content::KFunction { flags, params, ret } => Content::KFunction {
+                flags,
+                params: Record::over(mapped_fields(lay, params.raw(), map)),
+                ret: map(ret),
+            },
+            Content::ExpressionShape {
+                flags,
+                elements,
+                ret,
+            } => {
+                let elements = elements.raw();
+                Content::ExpressionShape {
+                    flags,
+                    elements: Elements::over(lay.lay(elements.len(), |at| match elements[at] {
+                        StoredElement::Keyword(keyword) => StoredElement::Keyword(keyword),
+                        StoredElement::Slot(kt, class) => StoredElement::Slot(map(kt), class),
+                    })),
+                    ret: map(ret),
+                }
+            }
+            Content::Scheme { flags, group, body } => Content::Scheme {
+                flags,
+                group: lay_one(
+                    lay,
+                    Group {
+                        names: copied(lay, group.names),
+                        bounds: copied(lay, group.bounds),
+                    },
+                ),
+                body: map(body),
+            },
+            Content::Quantified { index, bound } => Content::Quantified {
+                index,
+                bound: map(bound),
+            },
+            Content::Lexical {
+                level,
+                name,
+                lower,
+                bound,
+            } => Content::Lexical {
+                level,
+                name: lay_one(lay, *name),
+                lower: map(lower),
+                bound: map(bound),
+            },
+            Content::Union { flags, members } => Content::Union {
+                flags,
+                members: Run::over(mapped(lay, members.raw(), map)),
+            },
+            Content::ConstructorApply {
+                flags,
+                constructor,
+                arguments,
+            } => Content::ConstructorApply {
+                flags,
+                constructor: map(constructor),
+                arguments: Record::over(mapped_fields(lay, arguments.raw(), map)),
+            },
+            Content::Signature {
+                schema,
+                schema_digest,
+            } => Content::Signature {
+                schema: lay_one(lay, schema.copied_into(lay)),
+                schema_digest,
+            },
+            Content::SignatureApply {
+                flags,
+                signature,
+                pins,
+            } => Content::SignatureApply {
+                flags,
+                signature: map(signature),
+                pins: Record::over(mapped_fields(lay, pins.raw(), map)),
+            },
+            Content::SignatureMeet { flags, members } => Content::SignatureMeet {
+                flags,
+                members: Run::over(mapped(lay, members.raw(), map)),
+            },
+            Content::DeferredReturn(surface) => Content::DeferredReturn(lay_one(
+                lay,
+                match *surface {
+                    DeferredReturnSurface::Type(name) => DeferredReturnSurface::Type(name),
+                    DeferredReturnSurface::Expression(text) => {
+                        DeferredReturnSurface::Expression(lay.text(text))
+                    }
+                },
+            )),
+            Content::Sibling(index) => Content::Sibling(index),
+            Content::SetMember {
+                kind,
+                index,
+                component: from,
+                name,
+            } => Content::SetMember {
+                kind,
+                index,
+                component: component(from),
                 name,
             },
         }
@@ -649,5 +816,40 @@ impl<'run> Content<'run> {
             | Content::CodeNeeding { .. }
             | Content::Never => Flags::NONE,
         }
+    }
+}
+
+/// `items` copied through `lay`; an empty run needs no bytes.
+pub(super) fn copied<'t, T: Copy>(lay: impl LaysRuns<'t>, items: &[T]) -> &'t [T] {
+    if items.is_empty() {
+        &[]
+    } else {
+        lay.lay(items.len(), |at| items[at])
+    }
+}
+
+/// `nodes` laid through `lay`, each mapped through `map`.
+fn mapped<'s, 't>(
+    lay: impl LaysRuns<'t>,
+    nodes: &[Linked<'s>],
+    map: &mut impl FnMut(Linked<'s>) -> Linked<'t>,
+) -> &'t [Linked<'t>] {
+    if nodes.is_empty() {
+        &[]
+    } else {
+        lay.lay(nodes.len(), |at| map(nodes[at]))
+    }
+}
+
+/// `fields` laid through `lay`, each type mapped to its node through `map`.
+pub(super) fn mapped_fields<'t, S: Copy>(
+    lay: impl LaysRuns<'t>,
+    fields: &[(BinderSymbol, S)],
+    map: &mut impl FnMut(S) -> Linked<'t>,
+) -> &'t [(BinderSymbol, Linked<'t>)] {
+    if fields.is_empty() {
+        &[]
+    } else {
+        lay.lay(fields.len(), |at| (fields[at].0, map(fields[at].1)))
     }
 }

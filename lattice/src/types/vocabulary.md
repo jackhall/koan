@@ -136,7 +136,7 @@ none, since its return is not known. So no type but `Never` lies under two tops.
 A pair of tops is their union: `Value | Type` is the top of values and types
 together, since a named node for it would be a second node for one type. A
 union holding all three tops is canonicalized to `Any` by
-[`union_of`](registry.rs), so the three families together are the whole
+[`union_of`](chain.rs), so the three families together are the whole
 lattice. Left uncollapsed, that union would be a second top strictly below
 `Any`, missing only the variables bounded by `Any`, which lie under no member.
 
@@ -172,7 +172,7 @@ own: a union drops a member under another, so `Literal | Expression` is
 `Expression`, and two kinds on different branches meet at `Never`.
 
 **A code kind needing names** is `CodeNeeding`, built through
-[`TypeRegistry::code_needing`](registry.rs), which sorts and deduplicates the
+[`TypeChain::code_needing`](chain.rs), which sorts and deduplicates the
 names and answers the bare kind for none. A bare kind is the kind needing
 nothing, so one order covers both: a code type lies under a kind needing names
 when its kind lies under that kind and every name it needs is among them. So

@@ -12,11 +12,12 @@
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
 
+use super::chain::TypeChain;
 use super::handle::{Handle, KType, Naming, Parametric, Scheme, TypeHandle};
 use super::node::{Group, TypeNode};
-use super::registry::TypeRegistry;
 use super::run::Elements;
 use super::stored::Linked;
+use super::tiers::Habitat;
 
 /// One position of an expression shape: a fixed token as its [`KeywordSymbol`], or an argument
 /// slot carrying its declared type as `H`. Both arms are `Copy` — a symbol is `u128` bits, a type
@@ -232,18 +233,18 @@ pub(super) fn shape_classes(kt: Linked<'_>) -> Classes<'_> {
 /// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
 /// compare or render one position at a time. Read straight off the node's element run, so the
 /// read builds nothing.
-pub fn shape_slots<'run, H: TypeHandle>(
+pub fn shape_slots<'run, H: TypeHandle, X: Habitat<'run>>(
     kt: H,
-    types: &TypeRegistry<'run>,
-) -> impl Iterator<Item = H::Child> + use<'run, H> {
+    types: &TypeChain<'run, X>,
+) -> impl Iterator<Item = H::Child> + use<'run, H, X> {
     slots_of(shape_elements(types.enter(kt.raw())))
 }
 
 /// A scheme's argument-position types, in order, each of which may read the scheme's own group.
-pub fn scheme_slots<'run>(
+pub fn scheme_slots<'run, X: Habitat<'run>>(
     scheme: Scheme,
-    types: &TypeRegistry<'run>,
-) -> impl Iterator<Item = Parametric> + use<'run> {
+    types: &TypeChain<'run, X>,
+) -> impl Iterator<Item = Parametric> + use<'run, X> {
     slots_of(shape_elements(types.enter(scheme.raw())))
 }
 
@@ -258,18 +259,24 @@ pub(super) fn slots_of<'run, C: Naming<'run>>(
 }
 
 /// A shape's return type, or `None` for anything that is not a shape.
-pub fn shape_return<H: TypeHandle>(kt: H, types: &TypeRegistry<'_>) -> Option<H::Child> {
+pub fn shape_return<'ty, H: TypeHandle>(
+    kt: H,
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+) -> Option<H::Child> {
     Shape::of(types.enter(kt.raw())).map(|shape| <H::Child as Naming>::read(shape.ret))
 }
 
 /// A scheme's return type, which may read the scheme's own group; `None` for a function scheme.
-pub fn scheme_return(scheme: Scheme, types: &TypeRegistry<'_>) -> Option<Parametric> {
+pub fn scheme_return<'ty>(
+    scheme: Scheme,
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+) -> Option<Parametric> {
     Shape::of(types.enter(scheme.raw())).map(|shape| <Parametric as Naming>::read(shape.ret))
 }
 
 /// A confined FN `ret` slot whose source return is deferred to per-call elaboration — `-> er` or
 /// `-> er.Carrier`. It holds only the hashable surface shadow: a bare name's lifetime-free
-/// [`TypeSymbol`], or an expression's canonical render, which the registry bumps into the run
+/// [`TypeSymbol`], or an expression's canonical render, which the chain lays into its half
 /// region when the node is interned. Identity is syntactic, so a
 /// [`TypeNode::DeferredReturn`](super::node::TypeNode::DeferredReturn) compares, hashes and
 /// digests by surface form.

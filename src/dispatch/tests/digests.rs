@@ -3,8 +3,35 @@
 //! one knot they are tied into.
 
 use crate::program::tests::digest_back;
-use crate::program::{CellSubstrate, Outcome};
+use std::cell::RefCell;
+
+use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
+use crate::scheduler::{Action, Step, StepError};
 use crate::type_lattice::TypeDigest;
+
+thread_local! {
+    /// What [`interned_digests`] read: every digest the root and the root cell's branch hold.
+    static INTERNED: RefCell<Vec<TypeDigest>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A root work over the top level's resting view: it records every digest the program's types
+/// hold once it has run — the load's, in the root, and the run's, in the root cell's branch, where
+/// every top-level evaluation's result crossed.
+fn interned_digests<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, KBundle>,
+) -> Action<'graph, KBundle> {
+    let (step, state) = step.state();
+    let KState::Born(birth @ KBirth::Inspect { program, .. }) = state else {
+        return step.failed(StepError::Refused);
+    };
+    let mut digests = Vec::new();
+    program.root().each_digest(|digest| digests.push(digest));
+    if let Some(branch) = step.header().get() {
+        branch.each_digest(|digest| digests.push(digest));
+    }
+    INTERNED.with(|interned| *interned.borrow_mut() = digests);
+    step.leave(birth)
+}
 
 use super::{Koan, output};
 
@@ -159,11 +186,13 @@ PRINT (MOVE 1 TO 1)"##;
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
         substrate.with(|running| {
             assert_eq!(running.run(), Ok(Outcome::Completed));
-            let mut digests = Vec::<TypeDigest>::new();
-            running.types().each_digest(|digest| digests.push(digest));
-            digests.sort();
-            digests
-        })
+            running
+                .inspect(interned_digests)
+                .expect("the inspection runs to completion");
+        });
+        let mut digests = INTERNED.with(|interned| interned.take());
+        digests.sort();
+        digests
     };
     assert_eq!(interned(), interned());
 }

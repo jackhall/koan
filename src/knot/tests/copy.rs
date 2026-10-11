@@ -14,11 +14,11 @@ use crate::scope::{CaptureSlot, Slot};
 use crate::type_lattice::KType;
 use crate::values::tests::parts;
 use crate::values::{Circular, Link};
-use crate::values::{Knotted as _, Value, cross};
+use crate::values::{Knotted as _, Value};
 
 use super::super::{Coerced, KValue, KValueFamily, Knotted, builtin};
 use super::{
-    Fixture, Step, bound, callable, circular, copy, declared, follow, registered, with_fixture,
+    Fixture, TestGraph, bound, callable, circular, copy, declared, follow, registered, with_fixture,
 };
 
 /// The capture `name` of `callable`'s closure.
@@ -70,16 +70,17 @@ LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(words f x))";
 fn a_copied_knot_is_the_same_knot_rebuilt() {
     with_fixture(|fixture| {
         let lines = fixture.parse(KNOT);
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let scratch = fixture.scratch();
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, &[]);
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
                 let g = callable(fixture, activation, "g");
                 let source = context.lift::<KValueFamily>(Value::Knotted(g));
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let Value::Knotted(copied) = context.read(&crossed).value() else {
                     panic!("a callable crosses as a callable");
                 };
@@ -169,21 +170,23 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
 fn a_copied_knot_outlives_its_home() {
     with_fixture(|fixture| {
         let lines = fixture.parse(KNOT);
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, &[]);
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 context.keep(crossed)
             })
             .unwrap();
         graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
         graph
             .enter(dest, |context| {
+                let types = &fixture.tiers.of(context);
                 let carrier = context.redeem(dormant).unwrap();
                 let Value::Knotted(f) = context.read(&carrier).value() else {
                     panic!("the kept callable redeems as a callable");
@@ -193,7 +196,7 @@ fn a_copied_knot_outlives_its_home() {
                 assert_eq!(captured_value(fixture, f, "greeting").as_str(), Some("hi"));
                 for holder in [f, g] {
                     let words = captured_value(fixture, holder, "words");
-                    let words = parts(words, fixture.types, fixture.scratch());
+                    let words = parts(words, types, fixture.scratch());
                     assert_eq!(words[1].as_str(), Some("beta"));
                 }
             })
@@ -207,13 +210,13 @@ fn a_copied_knot_outlives_its_home() {
 fn a_copied_builtin_keeps_its_record() {
     with_fixture(|fixture| {
         let original = builtin(fixture.program.writer(), KType::NUMBER, 7);
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
                 let source = context.lift::<KValueFamily>(Value::Knotted(original));
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 context.keep(crossed)
             })
             .unwrap();
@@ -246,16 +249,17 @@ fn a_copied_builtin_keeps_its_record() {
 fn a_copied_quote_outlives_its_home() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET greeting = \"hi\"\nLET echo = #(PRINT $echo $greeting)");
-        let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let (symbols, scratch) = (fixture.symbols, fixture.scratch());
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, &[]);
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
                 let echo = bound(fixture, activation, "echo");
                 let source = context.lift::<KValueFamily>(echo);
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let copied = context.read(&crossed).value();
                 assert!(!ptr::eq(
                     copied.as_code().expect("code crosses as code").node(),
@@ -268,6 +272,7 @@ fn a_copied_quote_outlives_its_home() {
         graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
         graph
             .enter(dest, |context| {
+                let types = &fixture.tiers.of(context);
                 let carrier = context.redeem(dormant).unwrap();
                 let echo = context.read(&carrier).value();
                 let member = echo.as_code().expect("the kept code redeems as code");
@@ -323,17 +328,18 @@ fn successor<'graph, 'cell>(
 fn a_copied_ring_is_the_same_graph_rebuilt() {
     with_fixture(|fixture| {
         let lines = fixture.parse(RING);
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let scratch = fixture.scratch();
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, &[]);
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
                 let ring = declared(fixture, activation, "Ring");
                 let f = callable(fixture, activation, "f");
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let Value::Knotted(copied_f) = context.read(&crossed).value() else {
                     panic!("a callable crosses as a callable");
                 };
@@ -385,15 +391,16 @@ fn a_copied_ring_outlives_its_home() {
             "NEWTYPE Tag = :{next :Tag, name :Str, items :(LIST OF Tag)}\n\
              LET a = (Tag {next = a name = \"ring\" items = [a]})",
         );
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, &[]);
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
                 let a = super::bound(fixture, activation, "a");
                 let source = context.lift::<KValueFamily>(a);
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 context.keep(crossed)
             })
             .unwrap();
@@ -459,19 +466,20 @@ fn member<'graph, 'cell>(module: Knotted<'graph, 'cell>, slot: Slot) -> KValue<'
 fn a_copied_module_is_the_same_members_rebuilt() {
     with_fixture(|fixture| {
         let lines = fixture.parse(MODULE);
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let scratch = fixture.scratch();
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, &[]);
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
                 let slots = member_slots(fixture, activation, ["words", "f", "Dist"]);
                 let m = bound(fixture, activation, "m")
                     .as_module()
                     .expect("`m` is a module");
                 let source = context.lift::<KValueFamily>(Value::Knotted(m));
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let Value::Knotted(copied) = context.read(&crossed).value() else {
                     panic!("a module crosses as a module");
                 };
@@ -515,29 +523,31 @@ fn a_copied_module_is_the_same_members_rebuilt() {
 fn a_copied_module_outlives_its_home() {
     with_fixture(|fixture| {
         let lines = fixture.parse(MODULE);
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let (dormant, slots) = graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, &[]);
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
                 let slots = member_slots(fixture, activation, ["words", "f", "g"]);
                 let m = bound(fixture, activation, "m")
                     .as_module()
                     .expect("`m` is a module");
                 let source = context.lift::<KValueFamily>(Value::Knotted(m));
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 (context.keep(crossed), slots)
             })
             .unwrap();
         graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
         graph
             .enter(dest, |context| {
+                let types = &fixture.tiers.of(context);
                 let carrier = context.redeem(dormant).unwrap();
                 let Value::Knotted(m) = context.read(&carrier).value() else {
                     panic!("the kept module redeems as a module");
                 };
-                let words = parts(member(m, slots[0]), fixture.types, fixture.scratch());
+                let words = parts(member(m, slots[0]), types, fixture.scratch());
                 assert_eq!(words[1].as_str(), Some("beta"));
                 let f = member(m, slots[1])
                     .as_callable()
@@ -567,14 +577,15 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
 
     with_fixture(|fixture| {
         let lines = fixture.parse(KNOT);
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let scratch = fixture.scratch();
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, &[]);
+                let activation = fixture.run(writer, types, &lines, &[]);
                 let (f, g) = (
                     callable(fixture, activation, "f"),
                     callable(fixture, activation, "g"),
@@ -592,16 +603,16 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                     .alloc_into::<KValueFamily, KValueFamily>(
                         dest,
                         &[operand],
-                        |writer, _, views| {
+                        |writer, header, views| {
                             let CrossedOperand::Copied { view, .. } = views[0] else {
                                 panic!("the operand is copied");
                             };
                             let cells = parts(view, types, scratch);
                             let copies = copy_severed::<_, KnottedFamily, 2>(
                                 writer,
+                                &fixture.tiers.half(writer, header),
                                 &views[0],
                                 [&cells[0], &cells[1]],
-                                fixture.types,
                             );
                             Active::new(Value::List(List::of_candidates(
                                 writer,
@@ -631,13 +642,14 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
 fn a_copied_barrier_outlives_its_home() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET greeting = \"hi\"\nLET f = (FN :{} -> Str = #(greeting))");
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let (dormant, ktype) = graph
             .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, &[]);
+                let activation = fixture.run(writer, types, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 // The barrier's types are this item's only fiction: a real view substitutes, which
                 // is the module layer's work. What is pinned here is that the node and the function
@@ -646,7 +658,7 @@ fn a_copied_barrier_outlives_its_home() {
                 let knot = Coerced::tie(writer, f, f.ktype(), f.ktype().into(), plain, plain);
                 let barrier = Knotted::of(knot, 0);
                 let source = context.lift::<KValueFamily>(Value::Knotted(barrier));
-                let crossed = cross(context, dest, &source, fixture.types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 (context.keep(crossed), f.ktype())
             })
             .unwrap();

@@ -20,12 +20,12 @@
 
 use crate::memory::{
     Active, Bump, BumpAllocator, BumpBackedMap, BumpVec, CellHandle, Covariant, CrossedOperand,
-    Delivery, Operand, Prices, Reattachable, ReattachableOverBoth, Stale, StepContext, Verdict,
-    Writer, bump_table, collect,
+    Delivery, HomeHeader, Operand, Prices, Reattachable, ReattachableOverBoth, Stale, StepContext,
+    Verdict, Writer, bump_table, collect,
 };
+use crate::type_lattice::{Branch, DeclaredType, Parametric, Root};
 
-use crate::type_lattice::TypeRegistry;
-
+use super::habitat::{Half, TypeHeader, Types};
 use super::surface::Parts;
 use super::{
     Dict, Knotted, KnottedFamily, List, Record, Seen, Surface, Tagged, Value, ValueCarrier,
@@ -47,7 +47,7 @@ pub fn verdict(prices: Prices) -> Verdict {
 }
 
 /// Build `carrier`'s value into `dest`'s region and hand back the carrier resting there: the value
-/// as it is under a pin, rebuilt deep under a copy.
+/// as it is under a pin, rebuilt deep under a copy, its types made to resolve there over `root`.
 pub fn cross<
     'graph,
     'step,
@@ -56,10 +56,10 @@ pub fn cross<
     D: Delivery<'graph>,
     XF: KnottedFamily<'graph>,
 >(
-    context: &mut StepContext<'graph, 'step, '_, '_, C, S, D>,
+    context: &mut StepContext<'graph, 'step, '_, '_, C, S, D, TypeHeader>,
     dest: impl Into<CellHandle>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-    types: &TypeRegistry<'_>,
+    root: &'graph Root<'graph>,
 ) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
 where
     ValueFamily<XF>: Covariant<'graph>,
@@ -71,12 +71,16 @@ where
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, _, views| Active::new(cross_view(writer, &views[0], types)),
+        |writer, header, views| {
+            let types = Types::new(root, Half::of(writer, header));
+            Active::new(cross_view(writer, &types, &views[0]))
+        },
     )
 }
 
 /// The own-cell crossing: `carrier`'s value made reachable at the executing cell's `'here`, where it
-/// may be embedded in what the step builds or captured by its continuation.
+/// may be embedded in what the step builds or captured by its continuation, its types made to
+/// resolve there over `root`.
 pub fn cross_here<
     'graph,
     'step,
@@ -86,9 +90,9 @@ pub fn cross_here<
     D: Delivery<'graph>,
     XF: KnottedFamily<'graph>,
 >(
-    context: &mut StepContext<'graph, 'step, 'here, '_, C, S, D>,
+    context: &mut StepContext<'graph, 'step, 'here, '_, C, S, D, TypeHeader>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-    types: &TypeRegistry<'_>,
+    root: &'graph Root<'graph>,
 ) -> Value<'here, XF::Closed<'here>>
 where
     ValueFamily<XF>: Covariant<'graph>,
@@ -99,32 +103,48 @@ where
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, _, views| cross_view(writer, &views[0], types),
+        |writer, header, views| {
+            let types = Types::new(root, Half::of(writer, header));
+            cross_view(writer, &types, &views[0])
+        },
     )
 }
 
-/// One crossed operand as a value at the destination's brand: the pinned view as it is, a copied
-/// view rebuilt through `writer`. The one door a copy of a value comes through, and it takes a
-/// [`CrossedOperand`], which only a priced placement hands out — so every copy is one the graph
+/// One crossed operand as a value at the destination's brand, every type it carries made to
+/// resolve in `types`, the destination's chain: a pinned view as it is, its home's branch merged
+/// into the destination's; a copied view rebuilt through `writer`, each part's memo adopted from
+/// its home's branch before it is read. The one door a copy of a value comes through, and it takes
+/// a [`CrossedOperand`], which only a priced placement hands out — so every copy is one the graph
 /// priced. See [README.md § Crossing](README.md#crossing).
 pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
     writer: Writer<'cell>,
-    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'graph, 'cell>,
+    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, TypeHeader>,
 ) -> Value<'cell, XF::Closed<'cell>> {
-    match *view {
-        CrossedOperand::Pinned { view: value, .. } => value,
-        CrossedOperand::Copied { view: value, .. } => {
-            let scratch = Bump::new();
-            Copying::<XF>::new(writer, types, &scratch).value(&value)
+    let crossed = match *view {
+        CrossedOperand::Pinned {
+            view: value, home, ..
+        } => {
+            home.read(|header, _| types.merge(header.into_value()));
+            value
         }
-    }
+        CrossedOperand::Copied {
+            view: value, home, ..
+        } => {
+            let [copied] = copied::<XF, 1>(writer, types, home, [&value]);
+            copied
+        }
+    };
+    #[cfg(debug_assertions)]
+    check_habitat::<XF>(types, &crossed);
+    crossed
 }
 
 /// Values held inside a copied operand of another family — a birth that carries values — rebuilt
-/// through `writer`, all through one copy, so they share one copy of each knot they reach. The
-/// operand is the proof: only a priced placement hands one out, and its severed brand is the one
-/// `values` are read at, so this is still a copy the graph priced.
+/// through `writer`, all through one copy, so they share one copy of each knot they reach, every
+/// type they carry adopted into `types` from the operand's home branch. The operand is the proof:
+/// only a priced placement hands one out, and its severed brand is the one `values` are read at,
+/// so this is still a copy the graph priced.
 pub fn copy_severed<
     'graph,
     'cell,
@@ -134,17 +154,96 @@ pub fn copy_severed<
     const N: usize,
 >(
     writer: Writer<'cell>,
-    operand: &CrossedOperand<'graph, 'cell, 'severed, F>,
+    types: &Types<'graph, 'cell>,
+    operand: &CrossedOperand<'graph, 'cell, 'severed, F, TypeHeader>,
     values: [&Value<'severed, XF::Closed<'severed>>; N],
-    types: &TypeRegistry<'_>,
 ) -> [Value<'cell, XF::Closed<'cell>>; N] {
-    debug_assert!(
-        matches!(operand, CrossedOperand::Copied { .. }),
-        "a pinned operand's values embed as they are"
-    );
+    let CrossedOperand::Copied { home, .. } = *operand else {
+        unreachable!("a pinned operand's values embed as they are")
+    };
+    let copies = copied::<XF, N>(writer, types, home, values);
+    #[cfg(debug_assertions)]
+    for copy in &copies {
+        check_habitat::<XF>(types, copy);
+    }
+    copies
+}
+
+/// `values` rebuilt through `writer`, all through one copy, each type a part carries adopted into
+/// `types` from `home`'s branch, the half they were read in.
+fn copied<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, const N: usize>(
+    writer: Writer<'cell>,
+    types: &Types<'graph, 'cell>,
+    home: HomeHeader<'graph, 'from, TypeHeader>,
+    values: [&Value<'from, XF::Closed<'from>>; N],
+) -> [Value<'cell, XF::Closed<'cell>>; N]
+where
+    'graph: 'from,
+{
+    home.read(|header, _| rebuilt::<XF, N>(writer, types, Some(header.into_value()), values))
+        .unwrap_or_else(|| rebuilt::<XF, N>(writer, types, None, values))
+}
+
+/// [`copied`], its types adopted from `source`, the home's branch, or from nowhere where the home
+/// laid none.
+fn rebuilt<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, const N: usize>(
+    writer: Writer<'cell>,
+    types: &Types<'graph, 'cell>,
+    source: Option<&Branch<'_>>,
+    values: [&Value<'from, XF::Closed<'from>>; N],
+) -> [Value<'cell, XF::Closed<'cell>>; N]
+where
+    'graph: 'from,
+{
     let scratch = Bump::new();
-    let mut copying = Copying::<XF>::new(writer, types, &scratch);
+    let mut copying = Copying::<XF>::new(writer, types, source, &scratch);
     values.map(|value| copying.value(value))
+}
+
+/// The habitat check, in a debug build: every type `value` carries — each part's own memo, hidden
+/// parts included, each type value's payload, and every type a knot it reaches carries — resolves
+/// in `types`, the chain of the habitat it was crossed into. It interns nothing and caches nothing,
+/// so a debug build's branches hold what a release build's would.
+#[cfg(debug_assertions)]
+pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
+    types: &Types<'graph, 'cell>,
+    value: &Value<'cell, XF::Closed<'cell>>,
+) {
+    use crate::memory::{BumpBackedSet, bump_set};
+    let check = |kt: DeclaredType<Parametric>| {
+        assert!(
+            types.resolves(kt),
+            "a crossed value carries a type its habitat cannot resolve: {kt:?}"
+        );
+    };
+    // A value with no part is checked where it stands, so a scalar's crossing touches no heap.
+    match value {
+        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) => {
+            return check(value.ktype().into());
+        }
+        Value::Type(type_value) => {
+            check(value.ktype().into());
+            return check(type_value.handle().into());
+        }
+        _ => {}
+    }
+    let scratch = Bump::new();
+    let mut stack = BumpVec::new_in(&scratch);
+    let mut knots: BumpBackedSet<'_, _> = bump_set(&scratch);
+    stack.push(*value);
+    while let Some(value) = stack.pop() {
+        check(value.ktype().into());
+        match value {
+            Value::Type(type_value) => check(type_value.handle().into()),
+            Value::Knotted(member) => {
+                if knots.insert(member.root()) {
+                    XF::carried_types(&member, &mut |kt| check(kt));
+                    XF::held(&member, &mut |held| stack.push(held));
+                }
+            }
+            _ => super::surface::raw_parts(value, &mut |part| stack.push(part)),
+        }
+    }
 }
 
 /// One pending composite of the deep copy: the surface its children are read from, how many of
@@ -174,14 +273,16 @@ enum Frame<'x, 'from, X> {
 /// program node embedded as the same node; a knot member rebuilt by its family once per knot, its
 /// memos and weights carried over. Total. Built only by [`cross_view`] and
 /// [`copy_severed`], so every copy is one the graph priced.
-struct Copying<'graph, 'x, 'from, 'to, 'run, XF: KnottedFamily<'graph>>
+struct Copying<'graph, 'x, 'from, 'to, 'home, XF: KnottedFamily<'graph>>
 where
     'graph: 'from,
     'graph: 'to,
 {
     writer: Writer<'to>,
-    /// The registry the types a copy reads are interned in.
-    types: &'x TypeRegistry<'run>,
+    /// The destination's chain: every type the copy reads is adopted into it, then read there.
+    types: &'x Types<'graph, 'to>,
+    /// The home branch the copied value's types are read from; `None` where its home had none.
+    source: Option<&'x Branch<'home>>,
     /// Where the surfaces a copy opens are staged, beside its stacks.
     scratch: BumpAllocator<'x>,
     frames: BumpVec<'x, Frame<'x, 'from, XF::Closed<'from>>>,
@@ -193,16 +294,22 @@ where
     knots: BumpBackedMap<'x, XF::Closed<'from>, XF::Closed<'to>>,
 }
 
-impl<'graph, 'x, 'from, 'to, 'run, XF: KnottedFamily<'graph>>
-    Copying<'graph, 'x, 'from, 'to, 'run, XF>
+impl<'graph, 'x, 'from, 'to, 'home, XF: KnottedFamily<'graph>>
+    Copying<'graph, 'x, 'from, 'to, 'home, XF>
 where
     'graph: 'from,
     'graph: 'to,
 {
-    fn new(writer: Writer<'to>, types: &'x TypeRegistry<'run>, scratch: BumpAllocator<'x>) -> Self {
+    fn new(
+        writer: Writer<'to>,
+        types: &'x Types<'graph, 'to>,
+        source: Option<&'x Branch<'home>>,
+        scratch: BumpAllocator<'x>,
+    ) -> Self {
         Copying {
             writer,
             types,
+            source,
             scratch,
             frames: BumpVec::new_in(scratch),
             done: BumpVec::new_in(scratch),
@@ -211,8 +318,15 @@ where
         }
     }
 
-    /// `value` copied: a leaf at once, anything else by running the stack until it empties.
+    /// Make `kt` resolve in the destination, re-laying from the source what it lacks.
+    fn adopt(&self, kt: impl Into<DeclaredType<Parametric>>) {
+        self.types.adopt(self.source, kt);
+    }
+
+    /// `value` copied: a leaf at once, anything else by running the stack until it empties. Its
+    /// own memo is adopted before anything reads it.
     fn value(&mut self, value: &Value<'from, XF::Closed<'from>>) -> Value<'to, XF::Closed<'to>> {
+        self.adopt(value.ktype());
         if let Some(leaf) = self.start(Seen::of(*value)) {
             return leaf;
         }
@@ -268,7 +382,10 @@ where
             Value::Bool(flag) => Value::Bool(flag),
             Value::Null => Value::Null,
             Value::Str(source) => text(writer, source),
-            Value::Type(type_value) => Value::Type(type_value.copied(writer)),
+            Value::Type(type_value) => {
+                self.adopt(type_value.handle());
+                Value::Type(type_value.copied(writer))
+            }
             Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => {
                 unreachable!("a composite pushed its frame above")
             }
@@ -292,18 +409,25 @@ where
         Some(finished)
     }
 
-    /// The next child `frame` has not started, if any.
+    /// The next child `frame` has not started, if any, its own memo adopted before the type it is
+    /// seen at is read off it. A part its holder's type hides is never visited, so nothing of it is
+    /// adopted.
     fn next_child(
         &self,
         frame: Frame<'x, 'from, XF::Closed<'from>>,
     ) -> Option<Seen<'from, XF::Closed<'from>>> {
         match frame {
-            Frame::Composite { surface, next, .. } => {
-                (next < surface.len()).then(|| surface.child(next, self.types, self.scratch))
-            }
+            Frame::Composite { surface, next, .. } => (next < surface.len()).then(|| {
+                self.adopt(surface.raw(next).ktype());
+                surface.child(next, self.types, self.scratch)
+            }),
             Frame::Knot {
                 held, end, next, ..
-            } => (held + next < end).then(|| Seen::of(self.held[held + next])),
+            } => (held + next < end).then(|| {
+                let value = self.held[held + next];
+                self.adopt(value.ktype());
+                Seen::of(value)
+            }),
         }
     }
 
@@ -356,6 +480,7 @@ where
                     debug_assert!(same_word(listed, asked), "copy_into asks in held's order");
                     *copy
                 };
+                XF::carried_types(&member, &mut |kt| self.adopt(kt));
                 let copied = XF::copy_into(writer, &member, &mut cursor);
                 debug_assert!(
                     answers.next().is_none(),

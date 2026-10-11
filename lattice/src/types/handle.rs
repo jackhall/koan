@@ -4,19 +4,19 @@
 //! builtin vocabulary that lowers to a fixed handle.
 //!
 //! A `Handle` *is* its type's content digest ([`TypeDigest`]): a bare `u128`, `Copy`, carrying no
-//! pointer, no index, and no reference to the registry that minted it. Equality, hashing and
+//! pointer, no index, and no reference to the tier that minted it. Equality, hashing and
 //! ordering derive on that one word, so comparing two types is comparing two integers and no
-//! structural descent exists to fall back to. Content lives in a
-//! [`TypeRegistry`](super::registry::TypeRegistry), keyed by the same digest, so any operation
-//! that needs a type's shape — rendering, kind classification, the relations — takes the registry
-//! and reads the [`TypeNode`]. Inside the lattice a type is named by a reference to its node
+//! structural descent exists to fall back to. Content lives in the tiers a
+//! [`TypeChain`](super::chain::TypeChain) reads, keyed by the same digest, so any operation that
+//! needs a type's shape — rendering, kind classification, the relations — takes a chain and reads
+//! the [`TypeNode`]. Inside the lattice a type is named by a reference to its node
 //! instead ([`Naming`]): a handle is looked up once, where it enters, and every walk and relation
 //! follows references from there.
 //!
 //! A typed handle wraps a `Handle` and adds nothing at run time; what it adds is a promise the
 //! compiler keeps. Only the lattice wraps a `Handle` into one ([`sealed::Wrap`]), so a `KType` is
 //! concrete because every door that yields one builds it from concrete parts or checks it
-//! ([`TypeRegistry::concrete`](super::registry::TypeRegistry::concrete)). **Concrete** means that,
+//! ([`TypeChain::concrete`](super::chain::TypeChain::concrete)). **Concrete** means that,
 //! outside a sealed `Signature` or `SetMember` node, the type holds no free `Quantified`, no
 //! `Lexical`, no head `Parameter` and no scheme. An opaque carrier is concrete.
 //!
@@ -28,11 +28,12 @@ use std::hash::Hash;
 
 use crate::symbols::{StaticName, TypeSymbol};
 
+use super::chain::TypeChain;
 use super::digest::TypeDigest;
 use super::kind::KKind;
 use super::node::{Group, TypeNode};
-use super::registry::TypeRegistry;
 use super::stored::{Content, Linked};
+use super::tiers::Habitat;
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
 /// Identity only — every relation and door outside the lattice takes a typed handle.
@@ -52,7 +53,7 @@ pub struct KType(Handle);
 /// A type that may hold a variable — a free `Quantified`, a `Lexical` or a head `Parameter` —
 /// but no scheme outside sealed content. Related by *fits* and the solver, never by
 /// the order. Becomes a [`KType`] only by substitution, or through
-/// [`TypeRegistry::concrete`](super::registry::TypeRegistry::concrete).
+/// [`TypeChain::concrete`](super::chain::TypeChain::concrete).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Parametric(Handle);
 
@@ -72,9 +73,10 @@ pub enum DeclaredType<T> {
 }
 
 pub(super) mod sealed {
+    use super::super::chain::TypeChain;
     use super::super::digest::TypeDigest;
-    use super::super::registry::TypeRegistry;
     use super::super::stored::Linked;
+    use super::super::tiers::Habitat;
 
     /// Wrapping a raw handle into a typed one: the lattice's alone, so a typed handle's promise is
     /// the lattice's to keep.
@@ -92,7 +94,7 @@ pub(super) mod sealed {
         fn read(node: Linked<'run>) -> Self;
         fn read_bound(node: Linked<'run>) -> Self::Bound;
         fn digest(self) -> TypeDigest;
-        fn linked(self, types: &TypeRegistry<'run>) -> Linked<'run>;
+        fn linked(self, types: &TypeChain<'run, impl Habitat<'run>>) -> Linked<'run>;
     }
 }
 
@@ -168,7 +170,7 @@ impl<'run, H: TypeHandle> Naming<'run> for H {
         self.raw().digest()
     }
 
-    fn linked(self, types: &TypeRegistry<'run>) -> Linked<'run> {
+    fn linked(self, types: &TypeChain<'run, impl Habitat<'run>>) -> Linked<'run> {
         types.enter(self.raw())
     }
 }
@@ -189,7 +191,7 @@ impl<'run> Naming<'run> for Linked<'run> {
         self.digest()
     }
 
-    fn linked(self, _: &TypeRegistry<'run>) -> Self {
+    fn linked(self, _: &TypeChain<'run, impl Habitat<'run>>) -> Self {
         self
     }
 }
@@ -208,7 +210,7 @@ impl Handle {
         Handle(digest)
     }
 
-    /// This type's content digest — its identity, and its key in the registry's node table.
+    /// This type's content digest — its identity, and its key in every tier's node table.
     pub const fn digest(self) -> TypeDigest {
         self.0
     }
@@ -381,7 +383,10 @@ impl<T> DeclaredType<T> {
 impl Scheme {
     /// The scheme's group and its body. A `Scheme` is only ever wrapped by the scheme doors, over
     /// the scheme node they interned.
-    fn parts<'run>(self, types: &TypeRegistry<'run>) -> (&'run Group<'run>, Parametric) {
+    fn parts<'run>(
+        self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> (&'run Group<'run>, Parametric) {
         let TypeNode::Scheme { group, body } = types.enter(self.0).view_as::<Parametric>() else {
             unreachable!("a scheme names a scheme node: only the scheme doors wrap one")
         };
@@ -389,7 +394,7 @@ impl Scheme {
     }
 
     /// The scheme's quantifier group, in group order, read without its body.
-    pub fn group<'run>(self, types: &TypeRegistry<'run>) -> Group<'run> {
+    pub fn group<'run>(self, types: &TypeChain<'run, impl Habitat<'run>>) -> Group<'run> {
         *self.parts(types).0
     }
 }
@@ -405,7 +410,7 @@ pub struct DeclaredView<'run> {
 impl<T: Into<Parametric>> DeclaredType<T> {
     /// This declaration read whole: a scheme's group and its body's node, or a type's own node
     /// under the empty group.
-    pub fn view<'run>(self, types: &TypeRegistry<'run>) -> DeclaredView<'run> {
+    pub fn view<'run>(self, types: &TypeChain<'run, impl Habitat<'run>>) -> DeclaredView<'run> {
         let (group, body) = match self {
             DeclaredType::Type(declared) => (Group::EMPTY, declared.into()),
             DeclaredType::Scheme(scheme) => {
@@ -540,9 +545,9 @@ macro_rules! raw_twins {
 // --- Fixed handles ---
 //
 // The twenty leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>`, the code
-// composites, the empty record and the empty signature name content every registry pre-seeds
-// (`TypeRegistry::in_region`), so their digests are known at compile time and lowering a
-// builtin type name needs no registry in hand. The literals below are the digest recipe's
+// composites, the empty record and the empty signature name content every root pre-seeds
+// (`RootBuilder::in_region`), so their digests are known at compile time and lowering a
+// builtin type name needs no chain in hand. The literals below are the digest recipe's
 // output; `constants_match_freshly_interned_nodes` in the golden module recomputes each one
 // from its own node, so a recipe change fails loudly here rather than silently re-identifying a
 // leaf.
@@ -634,8 +639,8 @@ impl KType {
     }
 
     /// Look up a `KType` by the name a user can write in source (e.g. `Number`, `List`). Every
-    /// name here lowers to a fixed handle, so the lookup needs no registry: the content each one
-    /// names is pre-seeded into every registry at construction.
+    /// name here lowers to a fixed handle, so the lookup needs no chain: the content each one
+    /// names is pre-seeded into every root at construction.
     pub fn from_symbol(name: TypeSymbol) -> Option<KType> {
         builtin_types()
             .into_iter()
@@ -651,9 +656,9 @@ impl KType {
     /// statics rendering reads, so the two doors agree by construction. Static spellings are
     /// recorded in the run's symbol interner here, matching what declaring the name from text would
     /// have recorded, so rendering resolves either way.
-    pub fn name_symbol(
+    pub fn name_symbol<'ty>(
         self,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
         symbols: &crate::symbols::SymbolInterner,
     ) -> Option<TypeSymbol> {
         let node = types.node(self);
@@ -677,7 +682,7 @@ impl KType {
     /// member node, and every other type is `ProperType`. Never returns [`KKind::AnyType`], which is a slot-only expectation.
     ///
     /// Reads the stored node, so a nominal's kind costs no hop to its out-of-line schema.
-    pub fn kind_of(self, types: &TypeRegistry<'_>) -> KKind {
+    pub fn kind_of<'ty>(self, types: &TypeChain<'ty, impl Habitat<'ty>>) -> KKind {
         kind_of_node(types.enter(self.raw()))
     }
 }
@@ -733,7 +738,7 @@ pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 21] {
 /// the kind's `surface_symbol` mint one memo apiece rather than sharing one across two roles.
 static ANY_TYPE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Type");
 
-/// A handle prints as its digest and nothing else: rendering content would need a registry, which
+/// A handle prints as its digest and nothing else: rendering content would need a chain, which
 /// a `Formatter`-only signature cannot reach, and the digest is the whole identity anyway.
 macro_rules! digest_debug {
     ($($handle:ident),*) => {$(

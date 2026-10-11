@@ -62,9 +62,9 @@ use crate::symbols::{
     BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, SymbolInterner, TypeSymbol,
     ValueSymbol,
 };
-use crate::values::{ContentDigest, Knotted, admits_part};
+use crate::values::{ContentDigest, Knotted, Types, admits_part};
 
-use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, TypeRegistry, dense_classes};
+use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
 
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
@@ -118,7 +118,7 @@ pub(super) fn program<'graph, X: Knotted>(
     brand: ProgramBrand<'graph>,
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, X>,
-    types: &TypeRegistry<'graph>,
+    types: &Types<'graph, 'graph>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -170,7 +170,7 @@ fn declared_parameters(
 fn written_as_read<'e>(
     form: &'static BuiltinShape,
     node: &KExpression<'_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
 ) -> Result<(), ShapeError<'e>> {
     let declarator = matches!(
         form.id,
@@ -697,7 +697,7 @@ struct Builder<'graph, 'x, 'e> {
     builtins: &'e dyn BuiltinNames,
     /// The program's type registry, which the static check admits written parts through and a
     /// quote's carried type is interned in.
-    types: &'e TypeRegistry<'graph>,
+    types: &'e Types<'graph, 'graph>,
     /// The program's interner, which records the spelling of each key a quote's code leaves open,
     /// so its carried type renders the key as written.
     symbols: &'e SymbolInterner,
@@ -733,7 +733,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         brand: ProgramBrand<'graph>,
         scratch: BumpAllocator<'x>,
         builtins: &'e dyn BuiltinNames,
-        types: &'e TypeRegistry<'graph>,
+        types: &'e Types<'graph, 'graph>,
         symbols: &'e SymbolInterner,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,

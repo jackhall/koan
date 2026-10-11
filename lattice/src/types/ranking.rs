@@ -11,7 +11,7 @@
 //! as the arguments.
 //!
 //! [`class_at_least`] is the per-class specificity verdict dispatch ranks by, recorded in the
-//! registry's verdict table under [`Relation::ClassAtLeast`]. It and *fits*' shape clause differ from
+//! tiers' verdict tables under [`Relation::ClassAtLeast`]. It and *fits*' shape clause differ from
 //! admission at a call in how an earlier class's outcome reads later: over static types, each
 //! stands for every type a call carries under it, so a class that admitted fixes each variable it
 //! solved to an **interval** of bindings, read later as a lexical variable between its ends
@@ -29,14 +29,15 @@
 
 use crate::bump::{BumpAllocator, BumpVec};
 
+use super::chain::TypeChain;
 use super::handle::{Handle, Parametric, TypeHandle};
 use super::lattice::meet_through_variables;
 use super::node::{TypeNode, Variable};
 use super::order::fits;
-use super::registry::TypeRegistry;
 use super::shape::Shape;
 use super::stored::Linked;
 use super::substitute::{Side, bound_above, read_through};
+use super::tiers::Habitat;
 use super::unify::{Collector, Interval, admits, intervals_in};
 use super::verdicts::Relation;
 use super::walk::Variance;
@@ -54,7 +55,11 @@ struct ClassWalk<'s, 'run> {
 }
 
 impl<'s, 'run> ClassWalk<'s, 'run> {
-    fn new(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, declared: Shape<'run>) -> Self {
+    fn new(
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'s>,
+        declared: Shape<'run>,
+    ) -> Self {
         let mut slots = BumpVec::new_in(scratch);
         slots.extend(declared.slots());
         let arity = declared.quantifiers.len();
@@ -84,7 +89,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     /// A collector with every fixed variable pinned to what it reads as.
     fn collector(
         &self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'s>,
     ) -> Collector<'s, 'run, Linked<'run>> {
         let mut collector = Collector::over(scratch, self.bounds.iter().copied());
@@ -100,7 +105,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     /// the earlier classes fixed: the class's solution, or `None`, beside the collector it ran in.
     fn admit_class(
         &self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'s>,
         arguments: &[Linked<'run>],
         class: u16,
@@ -146,7 +151,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     /// read by [`read_later`].
     fn fix_to_intervals(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'s>,
         class: u16,
         solution: &[Linked<'run>],
@@ -175,7 +180,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
     /// first class that does not admit.
     fn admit_all(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'s>,
         arguments: &[Linked<'run>],
     ) -> Option<()> {
@@ -194,7 +199,7 @@ impl<'s, 'run> ClassWalk<'s, 'run> {
 /// reading as its bound; `None` when some class does not admit, when `declared` is not a shape,
 /// or when the arguments are not one per slot.
 pub(super) fn admit_by_class<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     declared: Linked<'run>,
     arguments: &[Linked<'run>],
@@ -213,7 +218,7 @@ pub(super) fn admit_by_class<'s, 'run>(
 /// Which slots of `declared` its group's solve reads: slot `i` names a variable whose first class —
 /// the lowest class whose slots name it — is `i`'s own. Empty for anything that is not a shape.
 pub(super) fn solving_slots<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     declared: Linked<'run>,
 ) -> &'s [bool] {
@@ -271,7 +276,7 @@ pub struct Judged<'s> {
 /// An exact class whose static solve fails over the slots naming its own variables is *never*
 /// too: that solve is the call's.
 pub(super) fn judge_by_class<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     declared: Linked<'run>,
     arguments: &[Interval<Linked<'run>>],
@@ -441,7 +446,7 @@ pub(super) fn judge_by_class<'s, 'run>(
 /// (README § Priority classes). Both must be shapes under one key and one ranking;
 /// the caller checks that.
 pub(super) fn admits_by_class<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Shape<'run>,
     candidate: Shape<'run>,
@@ -474,7 +479,7 @@ pub(super) fn admits_by_class<'run>(
 /// Whether an argument whose static lower end is `lower`, read below its variables, lies outside
 /// `slot`: every type the run can carry there lies outside it too, so the candidate never admits.
 pub(super) fn lower_end_outside<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     lower: Linked<'run>,
     slot: Linked<'run>,
@@ -488,7 +493,7 @@ pub(super) fn lower_end_outside<'run>(
 /// Whether `a` strictly outranks `b` at `class`: at least as specific there, and `b` not at least
 /// as specific as `a`. A survivor `a` outranks at a class eliminates `b` there.
 pub(super) fn outranks<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -505,7 +510,7 @@ pub(super) fn outranks<'run>(
 /// A function of the two shape types and the class alone, so it is recorded in the verdict table;
 /// one pass computes every class's verdict for the pair and records them all.
 pub(super) fn class_at_least<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -554,7 +559,7 @@ pub(super) const STAND_IN_LEVEL: usize = u32::MAX as usize;
 /// atom no lexical variable's ends may hold; and otherwise a lexical variable between the
 /// interval's ends.
 fn read_later<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     shape: Shape<'run>,
     variable: usize,
@@ -579,7 +584,7 @@ fn read_later<'run>(
 /// one ranking — as indices into `shapes`. At each class, a candidate some other survivor strictly
 /// beats there drops out; a class that orders neither of two leaves both to the next.
 pub(super) fn select_by_class<'s, 'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     shapes: &[Linked<'run>],
 ) -> BumpVec<'s, usize> {

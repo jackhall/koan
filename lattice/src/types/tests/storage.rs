@@ -1,4 +1,4 @@
-//! The store's own contract, which no law states: how much a registry holds, that a walk reads
+//! The store's own contract, which no law states: how much a root holds, that a walk reads
 //! nodes through references, that a node's identity is its digest, and that a seal lays each
 //! component's members before the types over them.
 
@@ -8,12 +8,11 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::types::handle::{KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;
 use crate::types::node::NodeSchema;
-use crate::types::registry::TypeRegistry;
 use crate::types::shape::DispatchTokenElement;
 use crate::types::typed::{fits, is_subtype_of, join, substitute_quantified};
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
-/// A registry of 16k mixed types — lists, dicts, records, functions, unions and shapes over a
+/// A root of 16k mixed types — lists, dicts, records, functions, unions and shapes over a
 /// growing pool — holds under 5 MB of bump, dead tables included.
 #[test]
 fn sixteen_thousand_types_fit_in_five_megabytes() {
@@ -27,10 +26,10 @@ fn sixteen_thousand_types_fit_in_five_megabytes() {
         .map(|key| KeywordSymbol::declared(key, &symbols).expect("a keyword token"))
         .collect();
     let (region, scratch) = (Bump::new(), Bump::new());
-    let types = TypeRegistry::in_region(&region);
+    let types = crate::types::tests::building(&region);
     let mut pool = vec![KType::NUMBER, KType::STR, KType::BOOL, KType::NULL];
     let mut step = 0usize;
-    while types.node_count() < 16_384 {
+    while types.own_len() < 16_384 {
         let n = pool.len();
         let pick = |k: usize| pool[(step * 7 + k * 13) % n];
         // Unions draw from the first 64 entries, so none grows past a handful of members.
@@ -59,11 +58,11 @@ fn sixteen_thousand_types_fit_in_five_megabytes() {
         step += 1;
     }
     let bytes = region.allocated_bytes();
-    println!("{} types hold {bytes} B", types.node_count());
+    println!("{} types hold {bytes} B", types.own_len());
     assert!(
         bytes < 5_000_000,
         "{} types hold {bytes} B",
-        types.node_count()
+        types.own_len()
     );
 }
 
@@ -75,7 +74,7 @@ fn walks_and_relations_look_up_only_their_operands() {
     let [x, f, y] = ["x", "f", "y"]
         .map(|name| BinderSymbol::declared(name, &symbols).expect("a bindable token"));
     let (region, scratch) = (Bump::new(), Bump::new());
-    let types = TypeRegistry::in_region(&region);
+    let types = crate::types::tests::building(&region);
     // Twelve lists over a record holding a function: `narrow` lies under `wide` field by field.
     let deep = |inner: KType| (0..12).fold(inner, |kt, _| types.list(kt));
     let record = |x_type: KType, ret: KType| {
@@ -120,22 +119,25 @@ fn walks_and_relations_look_up_only_their_operands() {
     assert_eq!(solved, Parametric::from(deep(KType::NUMBER)));
 }
 
-/// Two registries interning one content hold two nodes that compare equal: a node's identity is
+/// Two roots interning one content hold two nodes that compare equal: a node's identity is
 /// its digest, never its address.
 #[test]
-fn nodes_compare_by_digest_across_registries() {
+fn nodes_compare_by_digest_across_roots() {
     let symbols = SymbolInterner::new();
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let (first_region, second_region, scratch) = (Bump::new(), Bump::new(), Bump::new());
     let (first, second) = (
-        TypeRegistry::in_region(&first_region),
-        TypeRegistry::in_region(&second_region),
+        crate::types::tests::building(&first_region),
+        crate::types::tests::building(&second_region),
     );
-    let record = |types: &TypeRegistry<'_>| types.record(&scratch, &[(x, KType::NUMBER)]);
-    let (a, b) = (record(&first), record(&second));
-    assert_eq!(a, b, "one content is one handle in every registry");
+    let fields = [(x, KType::NUMBER)];
+    let (a, b) = (
+        first.record(&scratch, &fields),
+        second.record(&scratch, &fields),
+    );
+    assert_eq!(a, b, "one content is one handle in every root");
     let (a, b) = (first.enter(a.raw()), second.enter(b.raw()));
-    assert!(!std::ptr::eq(a, b), "each registry lays its own node");
+    assert!(!std::ptr::eq(a, b), "each root lays its own node");
     assert_eq!(a, b);
 }
 
@@ -148,7 +150,7 @@ fn a_seal_keys_each_component_as_it_would_alone() {
     let [wrapper, other] = ["Wrapper", "Other"]
         .map(|name| TypeSymbol::declared(name, &symbols).expect("a Type token"));
     let (host, region, scratch) = (Bump::new(), Bump::new(), Bump::new());
-    let types = TypeRegistry::in_region(&region);
+    let types = crate::types::tests::building(&region);
     let window =
         RecursiveGroupWindow::new(&host, &[(wrapper, KKind::NewType), (other, KKind::NewType)]);
     let list_of_other = types.list(window.sibling(other, KKind::NewType, &types));

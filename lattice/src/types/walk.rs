@@ -1,7 +1,7 @@
 //! The two drivers every structural recursion in the lattice goes through.
 //!
 //! [`unary`] owns the arm table — which children a compound node has, in which order, and the
-//! registry door that puts one back together — behind two entry points: [`unary::rebuild`] takes a
+//! chain door that puts one back together — behind two entry points: [`unary::rebuild`] takes a
 //! leaf rule and re-interns each rebuilt composite, [`unary::visit`] takes a pre-order rule that
 //! descends, skips or stops. [`binary`] owns the pairing policy — positional, by name, or set-wise
 //! — the variance flip, the width verdict per arm, and the mismatch case, behind one
@@ -11,8 +11,9 @@
 //! Rendering is the one recursion written by hand: it spells syntax *between* children and
 //! inherits the quantifier binder from above, which neither driver expresses. Adding a compound
 //! variant is a compile error at [`unary`]'s `children` / `reassemble` pair, at [`binary`]'s
-//! pairing table, in the rendering match, and at the stored node's two conversion tables —
-//! nowhere else.
+//! pairing table, in the rendering match, and at the stored node's three conversion tables —
+//! nowhere else. The third, the transfer a crossing's copy re-lays a node by, maps a node's
+//! children as it re-lays them and descends no further, so it is a conversion, not a walk.
 //!
 //! # Writing a new walk
 //!

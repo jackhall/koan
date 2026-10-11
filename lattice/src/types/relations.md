@@ -43,7 +43,7 @@ ordered argument by argument, covariantly, and an application lies strictly
 under the bare family it applies, which stands for every application of it.
 Covariance is sound because a family's representation is covariant in its
 parameters: the elaborator refuses one placing a parameter at a contravariant
-position, which [`quantifies_contravariantly`](registry.rs) finds.
+position, which [`quantifies_contravariantly`](chain.rs) finds.
 
 [`join`](lattice.rs) **is not a walk.** It is the larger operand when the two are
 ordered and their canonical union otherwise, which is what makes it associative —
@@ -58,7 +58,7 @@ parameter is refused where the program writes it
 solves the variable, so the meet cannot be taken at load, and no intersection
 type keeps it symbolic.
 
-**A union holding a variable keeps it.** [`union_of`](registry.rs) reduces the
+**A union holding a variable keeps it.** [`union_of`](chain.rs) reduces the
 concrete members among themselves by the order and keeps every parametric
 member beside them, even one whose bound lies under a concrete member:
 `Elt | Number | Str` stays three members with `Elt` bounded by `Number | Str`,
@@ -196,7 +196,7 @@ solution, in group order, is the plain callable that call has, function or
 shape alike.
 
 **A scheme keeps every variable it declares.** Both doors that mint one —
-[`shape_scheme`](registry.rs) and [`function_scheme`](registry.rs) — intern the
+[`shape_scheme`](chain.rs) and [`function_scheme`](chain.rs) — intern the
 plain body first, its `Quantified` positions indexed in declaration order. Then
 they number the group over the body's positions: first the variables some
 position names, by first occurrence, a shape walking its slots in element order

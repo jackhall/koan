@@ -9,9 +9,9 @@ use crate::bump::{Bump, BumpVec};
 use crate::tests::allocation_count;
 
 use super::raw::order::is_subtype_of;
+use crate::types::chain::TypeChain;
 use crate::types::digest::TypeDigest;
 use crate::types::handle::{KType, TypeHandle};
-use crate::types::registry::TypeRegistry;
 use crate::types::verdicts::Relation;
 
 fn key(n: u128) -> TypeDigest {
@@ -21,7 +21,7 @@ fn key(n: u128) -> TypeDigest {
 #[test]
 fn a_recorded_verdict_reads_back() {
     let bump = Bump::new();
-    let types = TypeRegistry::in_region(&bump);
+    let types = crate::types::tests::building(&bump);
     assert_eq!(types.verdict(key(1), key(2), Relation::Subtype), None);
     types.record_verdict(key(1), key(2), Relation::Subtype, true);
     types.record_verdict(key(1), key(2), Relation::Fits, false);
@@ -38,7 +38,9 @@ fn a_recorded_verdict_reads_back() {
 fn a_colliding_key_never_answers_for_another() {
     let bump = Bump::new();
     // One bucket: every key collides.
-    let types = TypeRegistry::in_region_with_verdict_slots(&bump, 2);
+    let types = TypeChain::building(crate::types::tiers::RootBuilder::with_verdict_slots(
+        &bump, 2,
+    ));
     let keys = [(1, 2, true), (2, 1, false), (3, 3, true)];
     for (subject, candidate, verdict) in keys {
         types.record_verdict(key(subject), key(candidate), Relation::Subtype, verdict);
@@ -53,7 +55,9 @@ fn a_colliding_key_never_answers_for_another() {
 #[test]
 fn a_full_bucket_evicts_the_slot_not_touched_last() {
     let bump = Bump::new();
-    let types = TypeRegistry::in_region_with_verdict_slots(&bump, 2);
+    let types = TypeChain::building(crate::types::tiers::RootBuilder::with_verdict_slots(
+        &bump, 2,
+    ));
     let [a, b, c] = [key(10), key(20), key(30)];
     types.record_verdict(a, a, Relation::Subtype, true);
     types.record_verdict(b, b, Relation::Subtype, false);
@@ -68,7 +72,9 @@ fn a_full_bucket_evicts_the_slot_not_touched_last() {
 fn the_table_is_laid_once_and_never_grows() {
     let bump = Bump::new();
     drop(BumpVec::<u8>::with_capacity_in(1 << 12, &bump));
-    let types = TypeRegistry::in_region_with_verdict_slots(&bump, 2);
+    let types = TypeChain::building(crate::types::tiers::RootBuilder::with_verdict_slots(
+        &bump, 2,
+    ));
     // Seeding the code composites records verdicts of its own; only the loop's are counted.
     let seeded = types.verdict_tally().0;
     let before = allocation_count();
@@ -83,7 +89,7 @@ fn the_table_is_laid_once_and_never_grows() {
 #[test]
 fn conflict_evictions_stay_rare_at_the_default_size() {
     let (region, scratch) = (Bump::new(), Bump::new());
-    let types = TypeRegistry::in_region(&region);
+    let types = crate::types::tests::building(&region);
     let leaves = [
         KType::NUMBER.raw(),
         KType::STR.raw(),

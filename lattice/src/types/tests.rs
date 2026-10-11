@@ -14,14 +14,29 @@ mod ranking;
 mod raw;
 mod residue;
 mod storage;
+mod tiers;
 mod verdicts;
 
 use crate::bump::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
+use crate::types::tiers::{BumpHalf, Root, RootBuilder};
 
+use super::chain::TypeChain;
 use super::handle::{Handle, KType, Parametric, wrap};
-use super::registry::TypeRegistry;
 use super::shape::DispatchTokenElement;
+use super::tiers::Habitat;
+
+/// A chain over a branch of a freshly seeded root in `region`: two tiers, so what a test interns
+/// lands in the branch over the root's constants. The suite's default fixture.
+pub(super) fn tiered(region: BumpAllocator<'_>) -> TypeChain<'_, BumpHalf<'_>> {
+    TypeChain::new(Root::seeded(region), BumpHalf::new(region))
+}
+
+/// The load's chain over a fresh root builder in `region`: one table, for a test about the root's
+/// own table.
+pub(super) fn building(region: BumpAllocator<'_>) -> TypeChain<'_, &RootBuilder<'_>> {
+    TypeChain::building(RootBuilder::in_region(region))
+}
 
 /// The two scheme doors over raw positions, answering the raw handle and the quantifier map — how
 /// the suite mints a scheme from parts it holds raw. A position may itself hold a scheme, which no
@@ -47,7 +62,7 @@ trait RawSchemes {
     ) -> (Handle, &'s [usize]);
 }
 
-impl RawSchemes for TypeRegistry<'_> {
+impl<'run, H: Habitat<'run>> RawSchemes for TypeChain<'run, H> {
     fn function_scheme_raw<'s>(
         &self,
         scratch: BumpAllocator<'s>,

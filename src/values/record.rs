@@ -5,9 +5,9 @@ use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::symbols::{BinderSymbol, Symbol};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::KType;
 
-use super::{Knotted, Link, Nothing, Value, Weight, record_type};
+use super::{Knotted, Link, Nothing, Types, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
 /// nominal identity, only its fields; equality over two is blind to the order they were written in.
@@ -29,7 +29,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
     pub fn new(
         writer: Writer<'cell>,
         fields: &[(BinderSymbol, Value<'cell, X>)],
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
         let order = symbol_order(fields, scratch);

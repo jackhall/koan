@@ -77,8 +77,14 @@ const _: () = assert!(std::mem::size_of::<Node<'static>>() == NODE_BYTES);
 const _: () = assert!(std::mem::align_of::<Node<'static>>() == 16);
 
 impl Keyed for Node<'_> {
+    type Key = u128;
+
     fn key(&self) -> u128 {
         self.digest.0
+    }
+
+    fn word(key: u128) -> u64 {
+        key as u64
     }
 }
 
@@ -122,6 +128,10 @@ impl<'b> LaysRuns<'b> for Counting<'b> {
         self.table_bytes
             .set(self.table_bytes.get() + len * std::mem::size_of::<T>());
         self.bump.lay(len, fill)
+    }
+
+    fn text(self, text: &str) -> &'b str {
+        self.bump.text(text)
     }
 }
 

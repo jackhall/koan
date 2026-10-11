@@ -65,7 +65,7 @@ Only the lattice wraps a raw handle into a typed one: the wrapping trait is
 sealed. So a `KType` is concrete because every door that yields one builds it
 from concrete children or checks it. A `KType` converts into a `Parametric`; a
 `Parametric` becomes a `KType` only by a substitution that answers every
-variable, or through [`TypeRegistry::concrete`](registry.rs), the one checked
+variable, or through [`TypeChain::concrete`](chain.rs), the one checked
 conversion, which reads a flag interning stored. Every door that builds a type
 from child types is generic over the handle, so it yields a `KType` from
 `KType` children and a `Parametric` from parametric ones. A `KType` asked of a
@@ -81,7 +81,7 @@ where it wraps a result, why the result keeps its handle's promise.
 
 ## Storage: a root and its branches
 
-A [`TypeRegistry`](registry.rs) is built over a bump its owner keeps for it,
+A [`TypeChain`](chain.rs) is built over a bump its owner keeps for it,
 and every node it interns — with every slice a node holds — lives in that bump.
 Nothing the lattice owns carries drop glue, so the region releases the table and
 every node with it, whole.
@@ -107,7 +107,7 @@ class, a `u16`, beside the slot's reference. A field no hot path reads sits
 behind one reference laid on an intern miss: a carrier's key and name, a
 lexical variable's name, a signature's schema, a deferred return's surface, and
 a sealed member's component.
-[`TypeRegistry::node`](registry.rs) reads a stored node back as a `TypeNode`,
+[`TypeChain::node`](chain.rs) reads a stored node back as a `TypeNode`,
 every field by value and each child as a handle, so no reader outside the
 lattice sees this layout.
 
@@ -279,7 +279,7 @@ absolute, re-interning each union through the same canonicalizing door, and
 repoints the component at the absolute table. The rename `Sibling(i) ↦ member_i`
 preserves every subsumption verdict, so the union is the one the relative schema
 held. Every reader after the seal reads the absolute schema with one field read,
-[`TypeRegistry::member_schema`](registry.rs). The table sits behind a cell that
+[`TypeChain::member_schema`](chain.rs). The table sits behind a cell that
 erases its lifetime, so nodes stay covariant; its read is the crate's one
 `unsafe`, sound because `tie` alone writes it, once, before the component is
 returned. The lattice's own walks and

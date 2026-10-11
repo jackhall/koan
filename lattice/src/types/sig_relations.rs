@@ -14,13 +14,13 @@
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, TypeSymbol, ValueSymbol};
 
+use super::chain::TypeChain;
 use super::handle::{DeclaredType, KType, Naming, Parametric, TypeHandle};
 use super::lattice::meet_through_variables;
 use super::node::TypeNode;
 use super::operators::ReductionMode;
 use super::order::{fits, satisfied_by};
 use super::ranking::{STAND_IN_LEVEL, admits_by_class, class_at_least};
-use super::registry::TypeRegistry;
 use super::schema::{DeclaredGroup, Members, SigOrigin, SigSchema, parameter_bound};
 use super::shape::{
     Shape, Specificity, elements_key_equal, keys_equal, shape_classes, shape_elements, slots_of,
@@ -28,6 +28,7 @@ use super::shape::{
 use super::signatures::{Application, applications, applications_under};
 use super::stored::Linked;
 use super::substitute::{instantiate_quantified, substitute_parameters};
+use super::tiers::Habitat;
 use super::unify::{Collector, UnifyFailure, admits};
 use super::walk::Variance;
 
@@ -47,7 +48,7 @@ use super::walk::Variance;
 /// side is never substituted. Two things that are not both shapes under one key and one ranking
 /// admit nothing.
 pub(super) fn admits_shape<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Linked<'run>,
     candidate: Linked<'run>,
@@ -67,7 +68,7 @@ pub(super) fn admits_shape<'run>(
 /// `candidate`'s rigid — with `declared`'s return under `candidate`'s. The function twin of
 /// [`admits_shape`], reached from *fits* alone.
 pub(super) fn admits_function<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Linked<'run>,
     candidate: Linked<'run>,
@@ -88,7 +89,7 @@ pub(super) fn admits_function<'run>(
 /// polarity is contravariant) and the return pair asks the declared return to lie under the
 /// candidate's.
 fn collect_function<'run, T>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Linked<'run>,
     candidate: Linked<'run>,
@@ -142,7 +143,7 @@ pub enum InstanceFailure<'s> {
 /// Each variable some contribution reaches takes its least instance; one none reaches is named,
 /// never read as its bound.
 pub(super) fn instance_under<'s, 'run: 's, T: Naming<'run>>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     scheme: Linked<'run>,
     wanted: Linked<'run>,
@@ -184,7 +185,7 @@ pub(super) fn instance_under<'s, 'run: 's, T: Naming<'run>>(
 /// and some class leaves unrelated is `Incomparable`, as are shapes under different keys or
 /// rankings.
 pub(super) fn shape_specificity<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -294,7 +295,7 @@ pub enum FitsFailure<'run, 's> {
 /// over two signature types. Each asked application is fitted on its own
 /// ([`fits_application`]), so the solution each one takes is its own.
 pub(super) fn sig_fits<'run: 's, 's>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     offered: Linked<'run>,
     asked: Linked<'run>,
@@ -315,7 +316,7 @@ pub(super) fn sig_fits<'run: 's, 's>(
 /// each of `signature`'s head parameters to: the pins, then the solution for each unpinned one.
 /// What the view door reads as the source's bindings.
 pub(super) fn fits_application<'run, 's>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     offered: Linked<'run>,
     signature: Linked<'run>,
@@ -350,7 +351,11 @@ struct Offered<'run, 's> {
 impl<'run, 's> Offered<'run, 's> {
     /// The offered side's pool. Each member type and head parameter read out of a schema is a
     /// handle, entered once here.
-    fn pool(types: &TypeRegistry<'run>, scratch: BumpAllocator<'s>, offered: Linked<'run>) -> Self {
+    fn pool(
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'s>,
+        offered: Linked<'run>,
+    ) -> Self {
         let mut pool = Offered {
             manifest: BumpVec::new_in(scratch),
             values: BumpVec::new_in(scratch),
@@ -422,7 +427,7 @@ impl<'run, 's> Offered<'run, 's> {
 
 /// [`fits_application`] over an application already in hand.
 fn fits_one<'run, 's>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     offered: Linked<'run>,
     asked: Application<'_, 'run>,
@@ -476,8 +481,8 @@ fn fits_one<'run, 's>(
 
 /// Pass A's choice search over one asked application with unpinned parameters: what each asked
 /// member contributes to them, one offered overload per keyworded member, tried in turn.
-struct Search<'a, 'run, 's> {
-    types: &'a TypeRegistry<'run>,
+struct Search<'a, 'run, 's, H> {
+    types: &'a TypeChain<'run, H>,
     scratch: BumpAllocator<'s>,
     schema: SigSchema<'run>,
     pool: &'a Offered<'run, 's>,
@@ -487,7 +492,7 @@ struct Search<'a, 'run, 's> {
     first: Option<FitsFailure<'run, 's>>,
 }
 
-impl<'run, 's> Search<'_, 'run, 's> {
+impl<'run, 's, H: Habitat<'run>> Search<'_, 'run, 's, H> {
     fn solve(&mut self) -> Result<Members<'s, TypeSymbol, Linked<'run>>, FitsFailure<'run, 's>> {
         let (types, scratch) = (self.types, self.scratch);
         let mut bounds = BumpVec::with_capacity_in(self.unpinned.len(), scratch);
@@ -663,7 +668,7 @@ impl<'run, 's> Search<'_, 'run, 's> {
 /// Admit each `(asked, offered, variance)` pair into `collector`, all or nothing: `false`, with
 /// nothing contributed, where any pair does not admit.
 fn contribute<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     collector: &mut Collector<'_, 'run, Linked<'run>>,
     pairs: &[(Linked<'run>, Linked<'run>, Variance)],
@@ -682,7 +687,7 @@ fn contribute<'run>(
 /// lexical variable per variable, named and bounded as declared, each bound entered once. A scheme
 /// opens to its body.
 fn open_to_stand_ins<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
 ) -> Linked<'run> {
@@ -705,7 +710,7 @@ fn open_to_stand_ins<'run>(
 
 /// Pass C: each asked member of `schema`, read under `solution`, against the pooled offer.
 fn check<'run, 's>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     schema: SigSchema<'run>,
     pool: &Offered<'run, 's>,
@@ -824,7 +829,7 @@ fn schema_of(signature: Linked<'_>) -> SigSchema<'_> {
 /// position: the first slot whose declared type reads a quantifier and whose candidate slot is not
 /// at least as general, as the parameter's name and the type the candidate fixes it to.
 fn quantified_position_failure<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     declared: Linked<'run>,
     candidate: Linked<'run>,

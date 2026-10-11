@@ -23,10 +23,10 @@ use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, Sha
 use crate::scope::{StaticSolution, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeRegistry, instantiate_quantified, substitute_levels,
+    DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
 };
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{ContentDigest, Knotted as _, Link, Seen, Value, Weight};
+use crate::values::{ContentDigest, Knotted as _, Link, Seen, Types, Value, Weight};
 
 use super::{KActivationView, Knotted, Node, Untieable, composed};
 
@@ -305,7 +305,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
 ) -> Result<Staged<'graph, 'cell, 'x>, Untieable<'x>> {
@@ -362,7 +362,7 @@ const BOUND: &str = "an instance's lexical variables are bound where it is read 
 fn solved<'x>(
     solution: StaticSolution<'_>,
     activation: &KActivationView<'_, '_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
@@ -385,7 +385,7 @@ const BORN: &str = "a callable's type holds no variable once its levels are boun
 
 /// `declared` where every level is bound: a scheme as it is, and a type narrowed to concrete.
 fn concrete_declared(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     declared: DeclaredType<Parametric>,
 ) -> DeclaredType<KType> {
     match declared {
@@ -395,7 +395,7 @@ fn concrete_declared(
 }
 
 /// `callable` as a function is born with it, every level its declaration read bound.
-fn born<'x>(types: &TypeRegistry<'_>, callable: Callable<'x, Parametric>) -> Callable<'x, KType> {
+fn born<'x>(types: &Types<'_, '_>, callable: Callable<'x, Parametric>) -> Callable<'x, KType> {
     Callable {
         ktype: concrete_declared(types, callable.ktype),
         quantifier_map: callable.quantifier_map,
@@ -415,7 +415,7 @@ fn loaded<'graph, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, '_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<Callable<'x, KType>> {
     let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
@@ -477,7 +477,7 @@ pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
     activation: &KActivationView<'graph, 'cell>,
     bodies: &[Option<Born<'graph>>],
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Option<Staged<'graph, 'cell, 'x>>>, Untieable<'x>> {
     let mut staged = BumpVec::with_capacity_in(bodies.len(), scratch);
@@ -512,7 +512,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell>,
     activation: &KActivationView<'graph, 'cell>,
     site: Site,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>> {
     let body = activation
@@ -551,7 +551,7 @@ pub fn instance<'graph, 'cell>(
     member: Knotted<'graph, 'cell>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);

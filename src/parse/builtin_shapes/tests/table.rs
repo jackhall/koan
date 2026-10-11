@@ -7,7 +7,6 @@ use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, render_key,
 };
 use crate::parse::{DispatchShape, KeyElement, PartClass, classify_dispatch_shape};
-use crate::type_lattice::TypeRegistry;
 
 /// Every form the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
@@ -307,7 +306,7 @@ fn every_binder_form_key_classifies_keyworded() {
 #[test]
 fn every_slot_type_names_a_seeded_node() {
     let region = Bump::new();
-    let types = TypeRegistry::in_region(&region);
+    let types = crate::values::tests::TestTypes::new(&region).load();
     for shape in BUILTIN_SHAPES {
         for element in shape.elements {
             if let ShapeElement::Slot {

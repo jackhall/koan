@@ -9,6 +9,9 @@
 //! the component reads relative. Either table is fully laid, so no read meets uninitialized memory
 //! and none can fail.
 //!
+//! A crossing re-lays a component another half holds with [`Component::absolute`], over a table
+//! that is already absolute, so it ties nothing.
+//!
 //! The table sits behind [`Tied`], a cell that erases its slice's lifetime so a node stays covariant
 //! in `'run`, as a `Cell<&'run [T]>` would not. Its read is the crate's one `unsafe`; its soundness
 //! rests on writes this module alone makes. See [identity.md](identity.md) § Recursive groups.
@@ -18,9 +21,10 @@
 use std::cell::Cell;
 use std::marker::PhantomData;
 
-use crate::bump::BumpAllocator;
+use crate::bump::LaysRuns;
 
 use super::digest::{ComponentMember, TypeDigest};
+use super::tiers::lay_one;
 
 /// A sealed component: its digest, and each member's name, kind and schema in canonical order.
 /// Nominally `pub` so a view can carry it.
@@ -32,22 +36,42 @@ pub struct Component<'run> {
 const _: () = assert!(!std::mem::needs_drop::<Component<'static>>());
 
 impl<'run> Component<'run> {
-    /// Lay a component in `bump` over `relative`, its members as the digest read them, then
+    /// Lay a component through `lay` over `relative`, its members as the digest read them, then
     /// repoint it at `absolute(component)`. Inside `absolute` the component reads `relative`, so
     /// the seal may intern its members, which read only names and kinds; every reader of the
     /// returned component reads what `absolute` answered.
     pub(super) fn tie(
-        bump: BumpAllocator<'run>,
+        lay: impl LaysRuns<'run>,
         digest: TypeDigest,
         relative: &'run [ComponentMember<'run>],
         absolute: impl FnOnce(&'run Self) -> &'run [ComponentMember<'run>],
     ) -> &'run Self {
-        let component: &'run Self = bump.alloc(Self {
-            digest,
-            members: Tied::new(relative),
-        });
+        let component: &'run Self = lay_one(
+            lay,
+            Self {
+                digest,
+                members: Tied::new(relative),
+            },
+        );
         component.members.set(absolute(component));
         component
+    }
+
+    /// Lay a component through `lay` over `members`, whose schemas are already absolute: how a
+    /// crossing re-lays a sealed component another half holds. Nothing reads the component before
+    /// it is laid, so it needs no tie.
+    pub(super) fn absolute(
+        lay: impl LaysRuns<'run>,
+        digest: TypeDigest,
+        members: &'run [ComponentMember<'run>],
+    ) -> &'run Self {
+        lay_one(
+            lay,
+            Self {
+                digest,
+                members: Tied::new(members),
+            },
+        )
     }
 
     /// The members, in canonical order.

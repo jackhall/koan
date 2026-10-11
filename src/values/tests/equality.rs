@@ -10,8 +10,9 @@ use super::{Dict, List, Record, Tagged, Value, pin, text, with_fixture};
 #[test]
 fn scalars_compare_by_ieee_and_types_by_handle() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let equal = |left: &Value<'_>, right: &Value<'_>| {
                 left.equals(right, types, scratch).expect("no callable")
@@ -33,9 +34,10 @@ fn scalars_compare_by_ieee_and_types_by_handle() {
 #[test]
 fn containers_compare_contents_only_under_related_types() {
     with_fixture(|fixture| {
-        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
         let x = BinderSymbol::declared("x", symbols).unwrap();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let equal = |left: Value<'_>, right: Value<'_>| {
                 left.equals(&right, types, scratch).expect("no callable")
@@ -92,8 +94,9 @@ fn containers_compare_contents_only_under_related_types() {
 #[test]
 fn a_tagged_value_never_equals_its_payload() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let tagged =
                 |identity| Value::Tagged(Tagged::hold(writer, Value::Number(1.0), identity));
@@ -142,8 +145,9 @@ fn a_function_compares_by_identity_and_a_barrier_is_incomparable() {
     use super::Stand;
     use crate::values::{Incomparable, Value as Holding};
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let (one, other) = (
                 Holding::Knotted(Stand::Function(1)),
@@ -199,9 +203,10 @@ fn a_function_compares_by_identity_and_a_barrier_is_incomparable() {
 fn circular_values_compare_as_a_bisimulation() {
     use super::{Holding, ring};
     with_fixture(|fixture| {
-        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
         let next = BinderSymbol::declared("next", symbols).unwrap();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let equal = |left: Holding<'_>, right: Holding<'_>| {
                 left.equals(&right, types, scratch).expect("no function")
@@ -287,6 +292,7 @@ fn a_seal_is_read_through_nowhere_outside_its_view() {
             carrier_under(number_or_str),
         );
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let five = Value::Number(5.0);
             let sealed = |carrier| {

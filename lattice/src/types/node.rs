@@ -3,36 +3,37 @@
 //! A node stores its variant tag, its scalar payload (names, [`ContentKey`]s, a signature's schema
 //! shape), and **references to its child types' nodes** — never owned substructure. Every run a
 //! node holds — a union's members, a shape's elements, a record's fields, a schema's tables — is a
-//! slice in the run region, so a view is `Copy` and carries no drop glue. Nodes are immutable from
-//! the moment they are interned, and the registry that owns them is insert-only for the life of a
-//! run, so a handle stays dereferenceable as long as its registry lives.
+//! slice in the half its node was laid in, so a view is `Copy` and carries no drop glue. Nodes are
+//! immutable from the moment they are interned, and every tier is insert-only for its life, so a
+//! handle stays dereferenceable in a chain whose tiers hold it.
 //!
 //! A `TypeNode` is the read view of a node: every field by value, its children read as `H`.
 //! Outside the lattice `H` is a handle — read through a [`KType`], a node's children are concrete,
 //! and through a [`Parametric`], parametric — while every bound, a lexical variable's lower end, a
 //! code kind and an application's signature are always a [`KType`]. Inside the lattice `H` is a
-//! reference to the child's node ([`Linked`]), and so is every one of those concrete fields. The
-//! registry's table stores a node in its own layout ([`stored`](super::stored)), whose `view_as`
+//! reference to the child's node ([`Linked`]), and so is every one of those concrete fields. A
+//! tier's table stores a node in its own layout ([`stored`](super::stored)), whose `view_as`
 //! is the one conversion. [`Variable`] views the three variable variants as one, and owns the rule
 //! for their two ends.
 //!
-//! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
+//! Interning and node reads live on [`TypeChain`](super::chain::TypeChain); the digest
 //! recipe per variant lives in [`digest`](super::digest).
 //!
 //! See [README.md](README.md) § The node vocabulary.
 
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
+use super::chain::TypeChain;
 use super::component::Component;
 use super::digest::TypeDigest;
 use super::handle::{Handle, KType, Naming, Parametric, TypeHandle};
 use super::kind::KKind;
 use super::record::Record;
-use super::registry::TypeRegistry;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
 use super::shape::{Classes, DeferredReturnSurface};
 use super::stored::Linked;
+use super::tiers::Habitat;
 use super::unify::Interval;
 
 /// An opaque identity a carrier is keyed on: what a module layer computes from an opaque view's
@@ -59,7 +60,7 @@ impl Group<'_> {
 }
 
 /// The content of one interned type, its children read as `H` and its concrete fields as
-/// `H::Bound`. Every run is a `'run` slice under a view, so reading a node out of the registry
+/// `H::Bound`. Every run is a `'run` slice under a view, so reading a node out of its tier
 /// copies its scalar payload and a few fat pointers, never a type subtree.
 #[derive(Clone, Copy)]
 pub enum TypeNode<'run, H: Naming<'run> = Handle> {
@@ -105,7 +106,7 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// `:(Expression NEEDING #[y])`: the carried type of a quote whose `\` marks no binder in its
     /// own code fills. Below `Code`, above the same kind needing more, and below the same kind
     /// needing fewer; the bare kind is the kind needing nothing, so `names` is never empty. Build
-    /// through [`TypeRegistry::code_needing`](super::registry::TypeRegistry::code_needing).
+    /// through [`TypeChain::code_needing`](super::chain::TypeChain::code_needing).
     CodeNeeding {
         /// A code kind below `Code`.
         kind: H::Bound,
@@ -198,8 +199,8 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// for an empty one. The digest feeds the group's arity and bounds and the body's digest, never
     /// the names, so alpha-variants intern once and `group` holds whichever spelling was interned
     /// first. Build through
-    /// [`TypeRegistry::function_scheme`](super::registry::TypeRegistry::function_scheme) or
-    /// [`TypeRegistry::shape_scheme`](super::registry::TypeRegistry::shape_scheme).
+    /// [`TypeChain::function_scheme`](super::chain::TypeChain::function_scheme) or
+    /// [`TypeChain::shape_scheme`](super::chain::TypeChain::shape_scheme).
     Scheme {
         group: &'run Group<'run>,
         body: H,
@@ -230,7 +231,7 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
     /// deduplicated, no nested `Union`, no member below the rest, always two or more, in the order
     /// first written. Identity is order-blind. Build through
-    /// [`TypeRegistry::union_of`](super::registry::TypeRegistry::union_of).
+    /// [`TypeChain::union_of`](super::chain::TypeChain::union_of).
     Union {
         members: Run<'run, H>,
     },
@@ -256,7 +257,7 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// An **application** of a declared signature: `signature` with some of its head parameters
     /// pinned, spelled `Stack WITH {Elt = Number}`. `signature` is a [`Self::Signature`] of origin
     /// `Declared`; `pins` is non-empty and keyed by the parameters' names. Build through
-    /// [`TypeRegistry::signature_apply`](super::registry::TypeRegistry::signature_apply), which
+    /// [`TypeChain::signature_apply`](super::chain::TypeChain::signature_apply), which
     /// answers `signature` itself for no pins.
     SignatureApply {
         signature: H::Bound,
@@ -266,7 +267,7 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// set's identity is order-blind: what the meet of two signature types is. Each member is a
     /// [`Self::Signature`] or a [`Self::SignatureApply`], never the empty signature and never a
     /// meet. Build through
-    /// [`TypeRegistry::signature_meet`](super::registry::TypeRegistry::signature_meet).
+    /// [`TypeChain::signature_meet`](super::chain::TypeChain::signature_meet).
     SignatureMeet {
         members: Run<'run, H>,
     },
@@ -274,7 +275,7 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// only the hashable surface shadow, and admits nothing on its own.
     DeferredReturn(DeferredReturnSurface<'run>),
     /// A relative sibling reference inside a pre-seal recursive-group window: the sibling's bare
-    /// index, meaningful only against the ambient window. Ordinary registry content, and the
+    /// index, meaningful only against the ambient window. Ordinary interned content, and the
     /// order relates it as an atom with the same profile as the member it will become — which is
     /// what lets a relative schema's unions canonicalize before their members exist. A sealed
     /// [`Component`] holds its schemas in this relative form only while it is tied; an absolute
@@ -287,7 +288,7 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     ///
     /// `name`, `kind` and the schema are excluded from the digest because the component's digest
     /// was computed over them — a handle determines them. The schema is read absolute through
-    /// [`TypeRegistry::member_schema`](super::registry::TypeRegistry::member_schema).
+    /// [`TypeChain::member_schema`](super::chain::TypeChain::member_schema).
     SetMember {
         component: &'run Component<'run>,
         index: usize,
@@ -372,15 +373,18 @@ impl<'run, H: TypeHandle> TypeNode<'run, H> {
 }
 
 impl<'run> TypeNode<'run, Linked<'run>> {
-    /// [`rigid_lower`](TypeNode::rigid_lower) by reference: `Never` is the registry's own node.
-    pub(super) fn rigid_lower_in(&self, types: &TypeRegistry<'run>) -> Option<Linked<'run>> {
+    /// [`rigid_lower`](TypeNode::rigid_lower) by reference: `Never` is the chain's own node.
+    pub(super) fn rigid_lower_in(
+        &self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> Option<Linked<'run>> {
         Variable::of(self).map(|variable| variable.lower_in(types))
     }
 
     /// [`rigid_interval`](TypeNode::rigid_interval) by reference.
     pub(super) fn rigid_interval_in(
         &self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
     ) -> Option<Interval<Linked<'run>>> {
         Variable::of(self).map(|variable| variable.interval_in(types))
     }
@@ -477,8 +481,8 @@ impl<'run> Variable<Linked<'run>> {
         }
     }
 
-    /// [`lower`](Variable::lower) by reference: `Never` is the registry's own node.
-    pub(super) fn lower_in(self, types: &TypeRegistry<'run>) -> Linked<'run> {
+    /// [`lower`](Variable::lower) by reference: `Never` is the chain's own node.
+    pub(super) fn lower_in(self, types: &TypeChain<'run, impl Habitat<'run>>) -> Linked<'run> {
         match self {
             Variable::Lexical { lower, .. } => lower,
             Variable::Quantified { .. } | Variable::Parameter { .. } => types.never(),
@@ -486,7 +490,10 @@ impl<'run> Variable<Linked<'run>> {
     }
 
     /// [`interval`](Variable::interval) by reference.
-    pub(super) fn interval_in(self, types: &TypeRegistry<'run>) -> Interval<Linked<'run>> {
+    pub(super) fn interval_in(
+        self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> Interval<Linked<'run>> {
         Interval {
             lower: self.lower_in(types),
             upper: self.bound(),

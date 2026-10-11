@@ -13,12 +13,13 @@
 
 use crate::bump::{BumpAllocator, BumpVec};
 
+use super::chain::TypeChain;
 use super::handle::Handle;
 use super::node::TypeNode;
 use super::order::{code_needs, is_subtype_of};
-use super::registry::TypeRegistry;
 use super::signatures::is_signature_type;
 use super::stored::{Content, Linked};
+use super::tiers::Habitat;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, Width, lockstep};
 
@@ -26,7 +27,7 @@ use super::walk::binary::{Arm, Lockstep, Width, lockstep};
 /// parametric operand is related by no order, so it joins to the union, which keeps a variable
 /// beside every concrete member.
 pub(super) fn join<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -47,7 +48,7 @@ pub(super) fn join<'run>(
 /// identity element: an empty container carries the bottom element type, which every typed element
 /// slot admits and which absorbs the first element joined against it.
 pub(super) fn join_iter<'run, I: IntoIterator<Item = Linked<'run>>>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     iter: I,
 ) -> Linked<'run> {
@@ -66,7 +67,7 @@ pub(super) fn join_iter<'run, I: IntoIterator<Item = Linked<'run>>>(
 /// applications for two signature types; the kinds' meet needing the names both need for two code
 /// kinds; `Never` where no common shape exists.
 pub(super) fn meet_through_variables<'run>(
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     a: Linked<'run>,
     b: Linked<'run>,
@@ -86,7 +87,7 @@ impl<'run> Lockstep<'run> for Meet {
 
     fn enter(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         a: Linked<'run>,
         b: Linked<'run>,
@@ -132,7 +133,7 @@ impl<'run> Lockstep<'run> for Meet {
 
     fn leaf(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
         a: Linked<'run>,
         b: Linked<'run>,
@@ -162,7 +163,7 @@ impl<'run> Lockstep<'run> for Meet {
 
     fn set_wise(
         &mut self,
-        _types: &TypeRegistry<'run>,
+        _types: &TypeChain<'run, impl Habitat<'run>>,
         _scratch: BumpAllocator<'_>,
         _a: &[Linked<'run>],
         _b: &[Linked<'run>],
@@ -173,12 +174,12 @@ impl<'run> Lockstep<'run> for Meet {
         unreachable!("Meet::enter distributes every union")
     }
 
-    fn structural(
+    fn structural<H: Habitat<'run>>(
         &mut self,
-        types: &TypeRegistry<'run>,
+        types: &TypeChain<'run, H>,
         scratch: BumpAllocator<'_>,
         paired: &[Linked<'run>],
-        arm: Arm<'_, 'run>,
+        arm: Arm<'_, 'run, H>,
     ) -> Linked<'run> {
         let leftovers = !(arm.only_a.is_empty() && arm.only_b.is_empty());
         if arm.width == Width::Exact && leftovers {

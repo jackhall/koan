@@ -13,14 +13,15 @@
 use crate::knot::KBuiltins;
 use crate::memory::BumpAllocator;
 use crate::scope::{BodyShape, ShapeError, ShapeKind, Static};
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry, meet, shape_slots};
+use crate::type_lattice::{DeclaredType, KType, meet, shape_slots};
+use crate::values::Types;
 
 /// Refuse the first registration in `shape`, or in a body nested in it short of a quote's code,
 /// that overlaps a builtin overload at its key.
 pub(super) fn overlaps<'graph>(
     shape: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'_, '_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
     for registration in shape.registrations() {

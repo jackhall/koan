@@ -33,6 +33,7 @@ mod crossing;
 mod dict;
 pub mod digest;
 mod equality;
+mod habitat;
 mod link;
 mod list;
 mod lower;
@@ -52,10 +53,13 @@ pub use admission::{
     part_ktype, record_type, representation, satisfies, sealing, solves_identity,
 };
 pub use circular::{Circular, CodeView, Resolved};
+#[cfg(debug_assertions)]
+pub use crossing::check_habitat;
 pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use digest::{ContentDigest, Digests};
 pub use equality::Incomparable;
+pub use habitat::{Half, TypeHeader, Types};
 pub use link::Link;
 pub use list::List;
 pub use record::Record;
@@ -69,7 +73,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, DropFree, Edge, Ready, Writer, covariant, reattachable};
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 
 /// What `values` asks of a knot member at one region lifetime — a function or a data node of a
 /// knot: its memoized type, what rebuilding its knot at a destination writes, the fellow member an
@@ -89,7 +93,7 @@ pub trait Knotted: Copy + Eq + Hash {
     /// digests. An edge between siblings is no held value: the knot hashes its index.
     fn held<'a>(
         &self,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -102,7 +106,7 @@ pub trait Knotted: Copy + Eq + Hash {
     /// value of its kind the door shows.
     fn digest_held(
         &self,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest;
@@ -144,6 +148,15 @@ pub trait KnottedFamily<'graph> {
     ) where
         'graph: 'from;
 
+    /// Every type handle `member`'s knot carries outside the values [`held`](Self::held) lists — a
+    /// node's own type, and whatever its rebuild carries over beside it — so a copy makes each
+    /// resolve in its destination before the rebuild lays the knot there.
+    fn carried_types<'from>(
+        member: &Self::Closed<'from>,
+        out: &mut dyn FnMut(DeclaredType<Parametric>),
+    ) where
+        'graph: 'from;
+
     /// `member`'s knot rebuilt in `writer`'s region, and the member at its own index. `copy`
     /// answers each value [`held`](Self::held) listed with its finished copy, in `held`'s order,
     /// and answers nothing else.
@@ -173,12 +186,8 @@ impl Knotted for Nothing {
         match *self {}
     }
 
-    fn held<'a>(
-        &self,
-        _: &TypeRegistry<'_>,
-        _: BumpAllocator<'_>,
-        _: &mut dyn FnMut(Seen<'a, Self>),
-    ) where
+    fn held<'a>(&self, _: &Types<'_, '_>, _: BumpAllocator<'_>, _: &mut dyn FnMut(Seen<'a, Self>))
+    where
         Self: 'a,
     {
         match *self {}
@@ -186,7 +195,7 @@ impl Knotted for Nothing {
 
     fn digest_held(
         &self,
-        _: &TypeRegistry<'_>,
+        _: &Types<'_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -220,6 +229,13 @@ impl<'graph> KnottedFamily<'graph> for NoKnot {
         'graph: 'cell;
 
     fn held<'from>(member: &Nothing, _: &mut dyn FnMut(Value<'from, Nothing>))
+    where
+        'graph: 'from,
+    {
+        match *member {}
+    }
+
+    fn carried_types<'from>(member: &Nothing, _: &mut dyn FnMut(DeclaredType<Parametric>))
     where
         'graph: 'from,
     {
@@ -317,12 +333,12 @@ impl<'cell, X: Knotted> Value<'cell, X> {
 
     /// The value's content digest ([`digest`]), computed now, as one demand over `scratch`: what
     /// the door shows of it at its own memo, as a copy lays it down.
-    pub fn digest(&self, types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>) -> ContentDigest {
+    pub fn digest(&self, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> ContentDigest {
         self.digest_in(&mut Digests::new(types, scratch))
     }
 
     /// [`digest`](Self::digest) inside a demand already walking, through its `memo`.
-    pub fn digest_in(&self, memo: &mut Digests<'_, '_, X>) -> ContentDigest {
+    pub fn digest_in(&self, memo: &mut Digests<'_, '_, '_, X>) -> ContentDigest {
         memo.seen(Seen::of(*self))
     }
 

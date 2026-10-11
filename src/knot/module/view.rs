@@ -31,9 +31,9 @@ use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     ContentKey, FitsFailure, KKind, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
-    TypeRegistry, fits_application, member as bound_member, satisfied_by, substitute_parameters,
+    fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
-use crate::values::{TypeValue, Value};
+use crate::values::{TypeValue, Types, Value};
 
 use super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
 use super::{Module, ModuleContent, Operator, layout};
@@ -66,7 +66,7 @@ pub enum Unascribable<'run, 'x> {
 }
 
 /// Whether the view door takes `ascribed`: one application of a signature, or the signature.
-pub fn takes(types: &TypeRegistry<'_>, ascribed: KType) -> bool {
+pub fn takes(types: &Types<'_, '_>, ascribed: KType) -> bool {
     matches!(
         types.node(ascribed),
         TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
@@ -77,7 +77,7 @@ pub fn takes(types: &TypeRegistry<'_>, ascribed: KType) -> bool {
 /// the module seen through a signature — rather than holding it to a type: `:|` always does, `:!`
 /// where both are signature types. The run reads it over the carried type; the load over the
 /// static upper end, both types read through their bounds.
-pub fn views(types: &TypeRegistry<'_>, mode: Ascription, operand: KType, ascribed: KType) -> bool {
+pub fn views(types: &Types<'_, '_>, mode: Ascription, operand: KType, ascribed: KType) -> bool {
     match mode {
         Ascription::Opaque => true,
         Ascription::Transparent => {
@@ -89,14 +89,14 @@ pub fn views(types: &TypeRegistry<'_>, mode: Ascription, operand: KType, ascribe
 
 /// `source` seen as `signature`, as a module of its own. A refusal writes nothing but what a
 /// partial coercion walk had already laid down, which nothing names.
-pub fn ascribe<'graph, 'cell, 'run: 'x, 'x>(
+pub fn ascribe<'graph, 'cell: 'x, 'x>(
     writer: Writer<'cell>,
     source: Knotted<'graph, 'cell>,
     signature: KType,
     mode: Ascription,
-    types: &TypeRegistry<'run>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'x>,
-) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
+) -> Result<Knotted<'graph, 'cell>, Unascribable<'cell, 'x>> {
     let held = source.module().ok_or(Unascribable::NotAModule)?.ktype();
     let (sig, from, pins) = fitted(held, signature, types, scratch)?;
     // A view is its operator and its application over its source. A module's digest is its knot's
@@ -126,7 +126,7 @@ pub fn ascribe<'graph, 'cell, 'run: 'x, 'x>(
 pub fn transparent_view_type(
     source: KType,
     signature: KType,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KType> {
     let (sig, from, _) = fitted(source, signature, types, scratch).ok()?;
@@ -140,7 +140,7 @@ pub fn transparent_view_type(
 pub(super) fn fitted<'run: 'x, 'x>(
     held: KType,
     signature: KType,
-    types: &TypeRegistry<'run>,
+    types: &Types<'_, 'run>,
     scratch: BumpAllocator<'x>,
 ) -> Result<
     (
@@ -181,7 +181,7 @@ pub(super) fn fitted<'run: 'x, 'x>(
 /// self-signature declares no head parameter, so no offered stand-in reaches the solution, and
 /// each parameter is solved to a concrete type.
 fn solved<'x>(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
     solution: Members<'_, TypeSymbol, Parametric>,
 ) -> Members<'x, TypeSymbol, KType> {
@@ -204,17 +204,17 @@ fn solved<'x>(
 /// a nested boundary makes no carrier of its own. Satisfaction is the caller's: an ascription checks
 /// it outright, and a nested slot was checked when the enclosing one was.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build<'graph, 'cell, 'run, 'x>(
+pub(super) fn build<'graph, 'cell, 'x>(
     writer: Writer<'cell>,
     source: Knotted<'graph, 'cell>,
-    sig: SigSchema<'run>,
+    sig: SigSchema<'cell>,
     view: KType,
     from: Members<'x, TypeSymbol, KType>,
     to: Members<'x, TypeSymbol, KType>,
     content: ModuleContent,
-    types: &TypeRegistry<'run>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'x>,
-) -> Result<Knotted<'graph, 'cell>, Unascribable<'run, 'x>> {
+) -> Result<Knotted<'graph, 'cell>, Unascribable<'cell, 'x>> {
     let cx = Coercion {
         writer,
         types,
@@ -275,7 +275,7 @@ fn carriers<'x>(
     from: Members<'_, TypeSymbol, KType>,
     pins: &[(BinderSymbol, KType)],
     key: ContentKey,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Members<'x, TypeSymbol, KType> {
     Members::from_pairs(
@@ -302,7 +302,7 @@ fn carriers<'x>(
 pub(super) fn view_signature(
     sig: &SigSchema<'_>,
     to: Members<'_, TypeSymbol, KType>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     let mut draft = SchemaDraft::new(scratch);

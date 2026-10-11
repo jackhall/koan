@@ -48,10 +48,10 @@ const MISSING_SYMBOL: &str = "<symbol>";
 
 /// The run's digest → text side table for symbols.
 ///
-/// Interior mutability by `RefCell`, matching the type registry beside it: construction sites hold
-/// a shared `&RunRegistries` and still need to record text. Never borrowed across a call that can
-/// re-enter — [`intern`](Self::intern) and [`resolve`](Self::resolve) each take and release the
-/// borrow within one statement.
+/// Interior mutability by `RefCell`, matching the type lattice's tiers beside it: construction
+/// sites hold a shared `&RunRegistries` and still need to record text. Never borrowed across a call
+/// that can re-enter — [`intern`](Self::intern) and [`resolve`](Self::resolve) each take and
+/// release the borrow within one statement.
 #[derive(Default)]
 pub struct SymbolInterner {
     texts: RefCell<HashMap<Symbol, Box<str>, IdentityBuildHasher>>,
@@ -524,7 +524,7 @@ pub fn is_keyword_token(s: &str) -> bool {
 }
 
 /// The hasher every 128-bit-digest-keyed map runs: the interner here, the classified scope
-/// binding tables and the type registry's node table. A type lattice digest and a [`Symbol`] are
+/// binding tables and the type lattice's node tables. A type lattice digest and a [`Symbol`] are
 /// each the low 128 bits of a BLAKE3 hash, so they are already uniformly distributed and
 /// re-hashing would only cost cycles: keep the low 64 bits and use them directly as the bucket
 /// index.

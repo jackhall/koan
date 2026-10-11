@@ -52,10 +52,11 @@ USING m SCOPE (zero name Dist)";
 fn a_surfaced_name_reads_the_member_it_names() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let block = entered(writer, activation);
 
@@ -90,10 +91,11 @@ MODULE o = ((LET other = 0) (LET third = 1))
 USING m SCOPE (zero name)";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let block = entered(writer, activation);
 
             assert_eq!(
@@ -140,10 +142,11 @@ LET f = (FN :{} -> Number = #(1))
 USING m SCOPE (zero)";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let f = crate::knot::tests::callable(fixture, activation, "f");
             let block = entered(writer, activation);
             assert_eq!(
@@ -221,10 +224,11 @@ fn every_member_is_read_by_its_name() {
     for (source, bound) in programs {
         with_fixture(|fixture| {
             let lines = fixture.parse(source);
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let scratch = fixture.scratch();
             fixture.in_cell(pin, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, &[]);
+                let activation = fixture.run(writer, types, &lines, &[]);
                 let m = module(fixture, activation, "m");
                 let block = entered(writer, activation);
                 surface(writer, m, block, types, scratch)

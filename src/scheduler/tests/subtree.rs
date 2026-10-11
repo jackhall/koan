@@ -3,7 +3,7 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, with_types};
+use crate::scheduler::tests::bundle::{Native, TestGraph, test_root};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
 use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Step, StepError, Use};
 
@@ -31,7 +31,7 @@ fn descend<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 
 /// The count the level below delivered.
 fn below(step: &mut Step<'_, '_, '_, '_, '_, Native>) -> Option<f64> {
-    match with_types(|types| step.results(types).next()) {
+    match step.results(test_root()).next() {
         Some(Ok(Received::Scratch(KValue::Number(count)))) => Some(count),
         _ => None,
     }
@@ -50,7 +50,9 @@ fn fill<'graph, S: Hold>(
     step: Step<'_, 'graph, '_, '_, '_, Native, S>,
     count: f64,
 ) -> Action<'graph, Native> {
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(count)))
+    step.finish_fresh(test_root(), move |_, _, _| {
+        Active::new(KValue::Number(count))
+    })
 }
 
 /// The root work, woken by the head of the descent.
