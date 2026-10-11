@@ -608,7 +608,7 @@ refusal refusing the load, or kept on its quote's code shape.
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [Path types](../../roadmap/rewrite/path-types.md) — a type member read through
+- [Path types](../../roadmap/gradual-typing/path-types.md) — a type member read through
   a module-valued expression at load.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
   variance, which no declaration states, and a nominal over a run-bound type

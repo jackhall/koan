@@ -13,11 +13,12 @@ prerequisites and the items it unblocks.
 Work is grouped into project subdirectories, each a coherent body of work whose items
 share design constraints and ship together. Each has a README naming what the project
 buys the language and listing its ready-to-start items. The live projects are
-[rewrite/](rewrite/README.md), the runtime's layers, and the three bodies of work
+[rewrite/](rewrite/README.md), the runtime's layers, and the four bodies of work
 that build on it:
 [conditionals/](conditionals/README.md),
-[gradual-typing/](gradual-typing/README.md) and
-[metaprogramming/](metaprogramming/README.md).
+[gradual-typing/](gradual-typing/README.md),
+[metaprogramming/](metaprogramming/README.md) and
+[type-tiers/](type-tiers/README.md).
 
 The one `old_`-prefixed project, [old_editor_tooling/](old_editor_tooling/README.md),
 was written against the first runtime. Its item is stale as work to pick up, but it
@@ -41,12 +42,13 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
+- [Path types](gradual-typing/path-types.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Families as parameters](rewrite/families-as-parameters.md)
-- [Path types](rewrite/path-types.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
-- [Type branches](rewrite/type-branches.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
+- [Body classes](type-tiers/body-classes.md)
+- [Type branches](type-tiers/type-branches.md)
 

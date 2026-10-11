@@ -143,10 +143,14 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Open work
 
-- [Type branches](../../../roadmap/rewrite/type-branches.md) — the branch tier,
+- [Body classes](../../../roadmap/type-tiers/body-classes.md) — porosity folded
+  at intern as two bits, swapped under a function type's parameter.
+- [Type branches](../../../roadmap/type-tiers/type-branches.md) — the branch tier,
   a run-built type released with the region of the values that carry it.
-- [Presizing a branch](../../../roadmap/rewrite/branch-presizing.md) — a
+- [Presizing a branch](../../../roadmap/type-tiers/branch-presizing.md) — a
   branch's table laid at a predicted size, and the width of its slots.
+- [Shape branches](../../../roadmap/type-tiers/shape-branches.md) — a chain over
+  four tiers, one of them reset in place under a count.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.

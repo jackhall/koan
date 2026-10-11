@@ -639,5 +639,5 @@ knots as deep as the chain of newtypes digests beside it.
   the lazy transformations that run koan code.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — the lattice walks over a value's carried type, as deep as the value.
-- [Type branches](../../roadmap/rewrite/type-branches.md) — the copy's
+- [Type branches](../../roadmap/type-tiers/type-branches.md) — the copy's
   per-part re-intern and the pin's branch merge.

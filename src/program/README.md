@@ -447,6 +447,8 @@ before the program ran, and a stalled substrate. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
+- [Shape branches](../../roadmap/type-tiers/shape-branches.md) — the activation
+  count at frame entry and release, and which bodies lay a shape branch.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
   receipt run laid down anew per park, and the bytes a `Shares` tail hop leaves
   in its host.

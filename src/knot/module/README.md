@@ -273,7 +273,7 @@ open a module and call through a barrier are
 
 ## Open work
 
-- [Path types](../../../roadmap/rewrite/path-types.md) — a type member named at
+- [Path types](../../../roadmap/gradual-typing/path-types.md) — a type member named at
   load through a module-valued expression.
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
   data member coerced through a barrier, and a dict's keys crossing a barrier

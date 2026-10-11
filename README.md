@@ -352,8 +352,9 @@ A design no single module owns sits in [design/](design/gradual-typing.md):
 [gradual typing](design/gradual-typing.md) follows a type from its declaration,
 through the load, to a call, [quantified types](design/quantified-types.md)
 says where a `FOR ALL` may be written and what stands in for a higher-ranked
-type, and [modules](design/modules.md) says what a module's types are and when
-two are one.
+type, [modules](design/modules.md) says what a module's types are and when
+two are one, and [type tiers](design/type-tiers.md) says where a type the run
+builds lives and when it is released.
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project

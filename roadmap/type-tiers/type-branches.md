@@ -110,11 +110,18 @@ built is released with its hop.
   256-entry branch's node bytes with 16 B slots, and dominates the branch's
   build; laying a branch at a predicted size is
   [presizing a branch](branch-presizing.md).
+- *Which regions lay a branch — decided.* Where the program loads: a reified
+  atom passes only a porous position, so a body with no porous entry and no
+  minting door never lays a branch, and a site whose static type is non-porous
+  holds a root handle and skips every branch probe
+  ([type tiers](../../design/type-tiers.md#porosity)).
 
 ## Dependencies
 
 A branch is also the scratch lattice a
-[refused program](refused-programs-stay-loaded.md) could hold its types in.
+[refused program](../rewrite/refused-programs-stay-loaded.md) could hold its types in.
+The skip at a non-porous site reads the flag
+[body classes](body-classes.md) folds; until then every site probes.
 
 **Requires:** none.
 
@@ -124,3 +131,5 @@ A branch is also the scratch lattice a
   activation interns into the activation's branch.
 - [Presizing a branch](branch-presizing.md) — a branch laid at a predicted
   size instead of grown from its smallest.
+- [Shape branches](shape-branches.md) — a branch per sealed `Shares` body,
+  laid beside the region tier.

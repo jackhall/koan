@@ -39,7 +39,7 @@ between the load and a read.
 
 **Requires:**
 
-- [Type branches](../rewrite/type-branches.md) — the recomputation's types and
+- [Type branches](../type-tiers/type-branches.md) — the recomputation's types and
   verdicts die with the frame.
 
 **Unblocks:** none — a leaf.

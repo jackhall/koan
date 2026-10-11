@@ -29,9 +29,10 @@ body's doors and its past activations both say something about it.
   doors, functor runs, run-built code shapes and per-call nominals, and the
   nodes one pass through the body builds, and lays the branch at that size. A
   loop over varying content exceeds it, so growth remains.
-- *A shape-cell memo — open.* A function's shape cell remembers the size its
-  last activation's branch reached, and the next activation lays that size.
-  The memo is a hint: a wrong one costs one stranded run, as today.
+- *A shape-record memo — open.* The record beside a body shape remembers the
+  size its last activation's branch reached, and the next activation lays that
+  size; a shape branch keeps its high-water mark there across resets. The memo
+  is a hint: a wrong one costs one stranded run, as today.
 - *A recycled-region memo — open.* A reset region remembers its previous
   branch's size, suited to tail hops where the same body returns.
 - *Fingerprint slots or bare references — open.* A branch's table holds 16 B

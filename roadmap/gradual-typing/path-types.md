@@ -53,7 +53,7 @@ since the load has no type to instantiate it at.
 - *A call unfolds — decided.* No builtin yields a fresh value, so a call over
   the same trees builds the same content, and the load substitutes its
   arguments into the tree its function builds. A call it cannot unfold is a
-  leaf, so no node stands for an application. [Effects](effects.md) leave an
+  leaf, so no node stands for an application. [Effects](../rewrite/effects.md) leave an
   effectful call folded.
 - *Where a path in a type expression is typed — open.* The type channel fixes
   every type expression before the static pass selects a callee, and a call
@@ -77,6 +77,6 @@ since the load has no type to instantiate it at.
 
 **Unblocks:**
 
-- [Effects](effects.md) — an effectful call is a leaf only where calls unfold.
-- [Dependent signatures](../gradual-typing/dependent-signatures.md) — a
+- [Effects](../rewrite/effects.md) — an effectful call is a leaf only where calls unfold.
+- [Dependent signatures](dependent-signatures.md) — a
   signature reads a parameter's member through a path.

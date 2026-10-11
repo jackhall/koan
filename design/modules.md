@@ -199,9 +199,9 @@ equal content give two types; koan keys it on content, so they give one.
 
 ## Open work
 
-- [Path types](../roadmap/rewrite/path-types.md) — content trees, a path's
+- [Path types](../roadmap/gradual-typing/path-types.md) — content trees, a path's
   load-time type, and a call unfolded.
 - [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.
-- [Type branches](../roadmap/rewrite/type-branches.md) — a carrier released
+- [Type branches](../roadmap/type-tiers/type-branches.md) — a carrier released
   with the region its view is tied in.
