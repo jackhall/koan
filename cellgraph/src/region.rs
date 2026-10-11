@@ -379,13 +379,13 @@ impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
     }
 
     /// How many bumps the spare list holds.
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     pub(crate) fn spare_len(&self) -> usize {
         self.spare.len()
     }
 
     /// What [`bound`](Self::bound) reads right now.
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     pub(crate) fn spare_bound(&self) -> usize {
         self.bound()
     }

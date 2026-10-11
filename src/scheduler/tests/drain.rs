@@ -242,7 +242,7 @@ fn a_recursion_asking_two_children_per_level_peaks_at_its_depth() {
         .expect("the root work ends");
     assert_eq!(
         recorded(),
-        [2f64.powf(DEPTH).to_string()],
+        [(1u32 << DEPTH as u32).to_string()],
         "every leaf answered"
     );
     // The running leaf and its parked ancestors, up to and including the root work: a sibling
