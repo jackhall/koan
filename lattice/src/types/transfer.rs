@@ -8,15 +8,15 @@
 //! nodes are valid wherever the destination's are.
 //!
 //! - A **link** points the destination's branch at the home's, read on a miss and cached, so a
-//!   birth costs the same whatever the home holds. A branch links once: a spawned child links its
-//!   spawner's, and any other birth links its home's unless its branch already links one, as a
-//!   tenant of a linked host's does.
+//!   birth costs the same whatever the home holds. A branch links once, as it is laid: a spawned
+//!   child links its spawner's, and any other birth links its home's where it has laid no branch
+//!   yet, as a new cell has not.
 //! - A **merge** enters every node of the home's branch in the destination's by reference, laying
 //!   nothing, then each branch the home's links reach, up to the first the destination already
 //!   reaches. A value of the home may carry a part whose type the home only reached through its
 //!   link: reading the part's holder caches the holder's node, not its children's. A merge into
 //!   a branch on the home's line of spawners stops at once; one off it walks the home's line up
-//!   to it, which a birth avoids by linking whenever it can.
+//!   to it, which a birth into a new cell avoids by linking.
 //!
 //! A copied value is rebuilt in the destination, and its home may die first, so its types are
 //! re-laid: [`adopt`](TypeChain::adopt) lays each node the destination lacks at its own digest and
@@ -32,7 +32,7 @@ use super::digest::{self, ComponentMember, TypeDigest};
 use super::handle::{DeclaredType, Parametric};
 use super::node::NodeSchema;
 use super::stored::{Content, Linked, StoredNode};
-use super::tiers::{Branch, BranchTier, Habitat, Own, Tier, lay_one};
+use super::tiers::{Branch, BranchTier, Habitat, Tier, lay_one};
 
 impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// Link the own branch to `home`, the spawner's branch a pinned birth crossed from, laying the
@@ -43,20 +43,13 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         half.own_or_lay().branch().set_link(tier);
     }
 
-    /// Make `home`'s handles resolve at a pinned birth: nothing where the chain already reaches
-    /// `home`, a [`link`](Self::link) where the own branch links nothing yet, else a
-    /// [`merge`](Self::merge). A branch `home` reaches merges too, since a link back would close a
-    /// cycle; its merge stops at the branch. A hop's successor or a left birth is born unlinked
-    /// unless it is a tenant, so its birth costs a link whatever the home reaches.
+    /// Make `home`'s handles resolve at a pinned birth: a [`link`](Self::link) where the half has
+    /// laid no branch yet, else a [`merge`](Self::merge). No branch can link an unlaid one, so the
+    /// link closes no cycle, and an unlaid branch links nothing, so it is its first. A hop's
+    /// `Fresh` successor or a left birth is a new cell, so its birth costs a link whatever the
+    /// home reaches.
     pub fn link_or_merge<'h: 't>(&self, home: &'h Branch<'h>) {
-        if self.reaches_branch(home.address()) {
-            return;
-        }
-        let merges = self.half().own().is_some_and(|own| {
-            own.is_linked()
-                || matches!(own, Own::Branch(branch) if home.reaches_branch(branch.address()))
-        });
-        if merges {
+        if self.half().own().is_some() {
             self.merge(home);
         } else {
             self.link(home);

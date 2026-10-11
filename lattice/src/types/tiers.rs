@@ -352,11 +352,6 @@ impl<'t> Branch<'t> {
         }
     }
 
-    /// Whether the branch links a tier.
-    pub(super) fn is_linked(&self) -> bool {
-        self.link.get().is_some()
-    }
-
     /// Link `tier`: one per branch, since a cell has one spawner.
     pub(super) fn set_link(&self, tier: &'t dyn Tier<'t>) {
         assert!(
@@ -449,14 +444,6 @@ impl<'t> Own<'t> {
         match self {
             Own::Builder(_) => false,
             Own::Branch(branch) => branch.reaches_branch(address),
-        }
-    }
-
-    /// Whether the tier is a branch that links a tier.
-    pub(super) fn is_linked(self) -> bool {
-        match self {
-            Own::Builder(_) => false,
-            Own::Branch(branch) => branch.is_linked(),
         }
     }
 

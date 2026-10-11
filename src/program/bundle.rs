@@ -170,8 +170,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     }
 
     /// A pinned birth embeds as it is, and its home's branch reaches the cell's: a spawned child's
-    /// branch links it, and a hop's successor or a left birth links it too unless the branch
-    /// already links one — a tenant of a linked host's — where it merges it. A copied one is rebuilt, each
+    /// branch links it, and a hop's successor or a left birth links it too where it has laid no
+    /// branch yet, and merges it where it has — a tenant, whose branch is its host's. A copied one is rebuilt, each
     /// type its values carry adopted from the home's branch.
     fn cross<'cell>(
         writer: Writer<'cell>,

@@ -123,53 +123,39 @@ fn a_merge_enters_what_its_source_reaches_through_its_link() {
     );
 }
 
-/// A birth links where its branch links nothing, merges where it already links one, and does
-/// nothing where it already reaches the home.
+/// A birth links where the destination has laid no branch, and merges where it has.
 #[test]
-fn a_birth_links_its_home_unless_its_branch_already_links_one() {
+fn a_birth_links_its_home_unless_its_branch_is_laid() {
     let symbols = SymbolInterner::new();
     let regions = [Bump::new(), Bump::new(), Bump::new(), Bump::new()];
     let root = Root::seeded(&regions[0]);
     let host = TypeChain::new(root, BumpHalf::new(&regions[1]));
     let held = record_named(&host, &symbols, "x");
-    let home = BumpHalf::branch_of(&host);
 
-    let unlinked = TypeChain::new(root, BumpHalf::new(&regions[2]));
-    unlinked.link_or_merge(home);
-    assert_eq!(unlinked.own_len(), 0, "a link enters nothing");
-    assert!(unlinked.resolves(held), "and reaches the home's types");
+    let fresh = TypeChain::new(root, BumpHalf::new(&regions[2]));
+    fresh.link_or_merge(BumpHalf::branch_of(&host));
+    assert_eq!(fresh.own_len(), 0, "a link enters nothing");
+    assert!(fresh.resolves(held), "and reaches the home's types");
 
-    let linked = TypeChain::new(root, BumpHalf::new(&regions[3]));
-    linked.link(BumpHalf::branch_of(&unlinked));
-    let reached = linked.own_len();
-    linked.link_or_merge(home);
+    let laid = TypeChain::new(root, BumpHalf::new(&regions[3]));
+    let _ = record_named(&laid, &symbols, "y");
+    let laid_len = laid.own_len();
+    laid.link_or_merge(BumpHalf::branch_of(&host));
     assert_eq!(
-        linked.own_len(),
-        reached,
-        "a branch reaching the home enters nothing"
+        laid.own_len(),
+        laid_len + 1,
+        "a laid branch merges the home"
     );
 
-    let elsewhere = Bump::new();
-    let other = TypeChain::new(root, BumpHalf::new(&elsewhere));
-    let _ = record_named(&other, &symbols, "y");
-    let other_home = BumpHalf::branch_of(&other);
-    let other_len = other.own_len();
-    linked.link_or_merge(other_home);
-    assert_eq!(
-        linked.own_len(),
-        reached + other_len,
-        "a linked branch merges a home it does not reach"
-    );
-
-    // `unlinked` links `host`, so `host` linking it back would close a cycle: it merges the
-    // home's own mint instead, stopping at its own branch.
-    let _ = record_named(&unlinked, &symbols, "z");
+    // `fresh` links `host`, so `host` linking it back would close a cycle. `host` is laid, so it
+    // merges, and the merge stops at its own branch.
+    let _ = record_named(&fresh, &symbols, "z");
     let host_len = host.own_len();
-    host.link_or_merge(BumpHalf::branch_of(&unlinked));
+    host.link_or_merge(BumpHalf::branch_of(&fresh));
     assert_eq!(
         host.own_len(),
         host_len + 1,
-        "a home that reaches the branch is merged"
+        "only the home's own mint is entered"
     );
 }
 

@@ -52,8 +52,8 @@ impl<'graph> StepBundle<'graph> for Native {
     }
 
     /// As koan's own bundle crosses a birth: a pinned birth links its home's branch, or merges it
-    /// where a hop's or a left birth's branch already links one; a copied one goes through the
-    /// value crossing.
+    /// where a hop's or a left birth's half has already laid a branch; a copied one goes through
+    /// the value crossing.
     fn cross<'cell>(
         writer: Writer<'cell>,
         header: Header<'graph, 'cell, TypeHeader>,
