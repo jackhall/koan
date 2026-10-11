@@ -39,7 +39,7 @@
 //! transient buffers, and every door computes its digest off the caller's own slices first, so
 //! content is laid in the half only on a miss.
 //!
-//! See [README.md](README.md) § Storage: one region.
+//! See [identity.md § Storage](identity.md#storage-a-root-and-its-branches).
 
 #[cfg(test)]
 use std::cell::Cell;

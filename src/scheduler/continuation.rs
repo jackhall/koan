@@ -18,6 +18,7 @@ use crate::memory::{
     ReattachableOverBoth, Writer, reattachable,
 };
 use crate::scheduler::action::{Action, Step, Use};
+use crate::type_lattice::Root;
 use crate::values::TypeHeader;
 
 /// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
@@ -44,14 +45,15 @@ pub trait StepBundle<'graph>: 'graph {
         'graph: 'cell;
 
     /// `view` at the destination's brand: the pinned view as it is, a copied view rebuilt through
-    /// `writer`, its types made to resolve in the half `header` names as `born` says. The one place
-    /// above the scheduler a birth is copied, and the veneer calls it only from inside a priced
-    /// crossing.
+    /// `writer`, its types made to resolve in the half `header` names, over the graph's
+    /// `type_root`, as `born` says. The one place above the scheduler a birth is copied, and the
+    /// veneer calls it only from inside a priced crossing.
     fn cross<'cell>(
         writer: Writer<'cell>,
         header: Header<'graph, 'cell, TypeHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, TypeHeader>,
         born: Born,
+        type_root: &'graph Root<'graph>,
     ) -> BirthAt<'graph, 'cell, Self>
     where
         'graph: 'cell;

@@ -41,6 +41,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
+- [Activation typing](gradual-typing/activation-typing.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Path types](gradual-typing/path-types.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
@@ -49,5 +50,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
-- [Type branches](type-tiers/type-branches.md)
+- [Presizing a branch](type-tiers/branch-presizing.md)
+- [A merge's reach check](type-tiers/merge-reach-check.md)
+- [Shape branches](type-tiers/shape-branches.md)
 

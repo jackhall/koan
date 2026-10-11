@@ -182,7 +182,8 @@ impl<'graph> Program<'graph> {
         self.builtins
     }
 
-    /// The frozen root of the types the load built, which every step's chain reads first.
+    /// The frozen root of the types the load built: what the program's graph hands every step's
+    /// chain to read first, and what a reader outside a step reads over.
     pub fn root(&self) -> &'graph Root<'graph> {
         self.root
     }

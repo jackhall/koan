@@ -3,9 +3,11 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, test_root};
+use crate::memory::Bump;
+use crate::scheduler::tests::bundle::{Native, TestGraph};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
 use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Step, StepError, Use};
+use crate::type_lattice::Root;
 
 /// Deeper than the sixty-four slots a one-word matrix has, several times over.
 const DEPTH: f64 = 200.0;
@@ -31,7 +33,7 @@ fn descend<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 
 /// The count the level below delivered.
 fn below(step: &mut Step<'_, '_, '_, '_, '_, Native>) -> Option<f64> {
-    match step.results(test_root()).next() {
+    match step.results().next() {
         Some(Ok(Received::Scratch(KValue::Number(count)))) => Some(count),
         _ => None,
     }
@@ -50,9 +52,7 @@ fn fill<'graph, S: Hold>(
     step: Step<'_, 'graph, '_, '_, '_, Native, S>,
     count: f64,
 ) -> Action<'graph, Native> {
-    step.finish_fresh(test_root(), move |_, _, _| {
-        Active::new(KValue::Number(count))
-    })
+    step.finish_fresh(move |_, _, _| Active::new(KValue::Number(count)))
 }
 
 /// The root work, woken by the head of the descent.
@@ -70,7 +70,8 @@ fn a_subtree_two_hundred_deep_takes_no_slab_slot_but_its_root() {
     // A slab of one, and its one slot is the root. Every level of the descent is a tree cell, so a
     // level that reached for a slab slot would be refused and the drain would stall before the
     // bottom.
-    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)

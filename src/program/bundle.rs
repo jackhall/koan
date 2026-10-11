@@ -11,7 +11,7 @@ use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, StepBundle};
 use crate::scope::{BodyShape, Site};
-use crate::type_lattice::KType;
+use crate::type_lattice::{KType, Root};
 use crate::values::{Half, TypeHeader, Types, copy_severed};
 
 use super::body::Runner;
@@ -97,18 +97,6 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
             _ => {}
         }
     }
-
-    /// The program every birth carries.
-    pub fn program(&self) -> &'graph Program<'graph> {
-        match *self {
-            KBirth::Program { program }
-            | KBirth::Call { program, .. }
-            | KBirth::Eval { program, .. }
-            | KBirth::Evaluate { program, .. }
-            | KBirth::Block { program, .. }
-            | KBirth::Inspect { program, .. } => program,
-        }
-    }
 }
 
 /// What a cell holds at a step and parks with.
@@ -171,20 +159,21 @@ impl<'graph> StepBundle<'graph> for KBundle {
 
     /// A pinned birth embeds as it is, and its home's branch reaches the cell's: a spawned child's
     /// branch links it, and a hop's successor or a left birth links it too where it has laid no
-    /// branch yet, and merges it where it has — a tenant, whose branch is its host's. A copied one is rebuilt, each
-    /// type its values carry adopted from the home's branch.
+    /// branch yet, and merges it where it has — a tenant, whose branch is its host's. A copied one
+    /// is rebuilt, each type its values carry adopted from the home's branch.
     fn cross<'cell>(
         writer: Writer<'cell>,
         header: Header<'graph, 'cell, TypeHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, TypeHeader>,
         born: Born,
+        type_root: &'graph Root<'graph>,
     ) -> KBirth<'graph, 'cell>
     where
         'graph: 'cell,
     {
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
-                let types = Types::new(view.program().root(), Half::of(writer, header));
+                let types = Types::new(type_root, Half::of(writer, header));
                 home.read(|header, _| match born {
                     Born::Child => types.link(header.into_value()),
                     Born::Hop | Born::Left => types.link_or_merge(header.into_value()),
@@ -206,7 +195,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     contributed,
                     owed,
                 } => {
-                    let types = Types::new(program.root(), Half::of(writer, header));
+                    let types = Types::new(type_root, Half::of(writer, header));
                     let [callee, arguments] = copy_severed::<_, KnottedFamily, 2>(
                         writer,
                         &types,
@@ -228,7 +217,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     offered,
                     contract,
                 } => {
-                    let types = Types::new(program.root(), Half::of(writer, header));
+                    let types = Types::new(type_root, Half::of(writer, header));
                     let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
                         writer,
                         &types,

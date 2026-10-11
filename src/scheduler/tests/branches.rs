@@ -12,9 +12,10 @@ use std::cell::Cell;
 
 use crate::knot::KValue;
 use crate::memory::{Active, Bump};
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, test_root};
+use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Scheduler, Step, Use, Work};
+use crate::type_lattice::Root;
 use crate::type_lattice::{Branch, KType};
 
 thread_local! {
@@ -53,7 +54,7 @@ enum Shape {
 /// The list of the handed type, interned through `step`'s chain and handed on in its place.
 fn mint_list(step: &Step<'_, '_, '_, '_, '_, Native>) {
     let handed = HANDED.with(Cell::get);
-    let minted = step.types(test_root()).list(handed);
+    let minted = step.types().list(handed);
     HANDED.with(|slot| slot.set(minted));
 }
 
@@ -64,10 +65,11 @@ fn branch_length(step: &Step<'_, '_, '_, '_, '_, Native>) -> usize {
 
 /// Run `start` as a root work over a slab of `cells`, starting from `Number`, and hand back what
 /// it recorded.
-fn run(cells: u32, start: TestStep<'static>) -> Vec<String> {
+fn run(cells: u32, start: AnyStep) -> Vec<String> {
     reset();
     HANDED.with(|handed| handed.set(KType::NUMBER));
-    let mut graph: TestGraph<'static> = TestGraph::new(cells);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(cells, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)
@@ -88,14 +90,14 @@ fn spawner<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gr
 
 /// The child: read the handed type, then report its branch's length.
 fn reader<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let _ = step.types(test_root()).node(HANDED.with(Cell::get));
+    let _ = step.types().node(HANDED.with(Cell::get));
     record(branch_length(&step).to_string());
-    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// A root work, woken by the child it parked on: take the result and end.
 fn woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let _ = step.results(test_root()).count();
+    let _ = step.results().count();
     step.done()
 }
 
@@ -138,7 +140,7 @@ fn descend<'graph>(
             return hand_down(step, wake, shape);
         }
         record(branch_length(&step).to_string());
-        return step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null));
+        return step.finish_fresh(|_, _, _| Active::new(KValue::Null));
     }
     let asked = step.spawn(fresh(level, Use::Reads, KValue::Null));
     step.park(asked, wake, KValue::Null, None)
@@ -146,8 +148,8 @@ fn descend<'graph>(
 
 /// A parked level, woken by the level below it: take its result and deliver one of its own.
 fn relay<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let _ = step.results(test_root()).count();
-    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
+    let _ = step.results().count();
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// What the deepest level of a minting recursion `depth` levels deep, one cell per level, reports.
@@ -176,7 +178,7 @@ fn a_minting_recursion_holds_each_level_flat() {
 /// The case's spawner: lay `[[[1]]]`, minting `List^1` through `List^3`, and hand it to a `Fresh`
 /// child, whose branch links this one.
 fn nests<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let types = step.types(test_root());
+    let types = step.types();
     let scratch = Bump::new();
     let writer = step.writer();
     let mut nested = KValue::Number(1.0);
@@ -193,7 +195,7 @@ fn nests<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
 /// tenant is handed the list pinned.
 fn lists<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
-    let types = step.types(test_root());
+    let types = step.types();
     let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
     let asked = step.spawn(shares(hops, Use::Reads, KValue::List(list)));
     step.park(asked, relay, KValue::Null, None)
@@ -206,7 +208,7 @@ fn hand_down<'graph>(
     wake: TestStep<'graph>,
     shape: Shape,
 ) -> Action<'graph, Native> {
-    let types = step.types(test_root());
+    let types = step.types();
     let element = KValue::List(crate::values::List::new(
         step.writer(),
         std::iter::empty(),
@@ -252,7 +254,7 @@ fn wrap_and_hop_fresh<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let (step, state) = step.state();
-    let types = step.types(test_root());
+    let types = step.types();
     let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
     let state = KValue::List(list);
     step.tail(
@@ -269,7 +271,7 @@ fn wrap_and_hop_shares<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let (step, state) = step.state();
-    let types = step.types(test_root());
+    let types = step.types();
     let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
     let state = KValue::List(list);
     step.tail(
@@ -284,22 +286,22 @@ fn wrap_and_hop_shares<'graph>(
 /// The hop's successor: report its branch's length.
 fn measures<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     record(branch_length(&step).to_string());
-    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// Hand the state back up as a kept result.
 fn hand_back<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
-    step.finish(state, test_root())
+    step.finish(state)
 }
 
 /// [`relay`], reporting the branch's length once the kept result has crossed into it.
 fn relay_measuring<'graph>(
     mut step: Step<'_, 'graph, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
-    let _ = step.results(test_root()).count();
+    let _ = step.results().count();
     record(branch_length(&step).to_string());
-    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// What the cell a list lands in reports when the deepest level of a recursion `depth` levels deep
@@ -347,7 +349,7 @@ fn hops<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Na
 /// The hop's successor, whose birth passed the habitat check.
 fn arrives<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     record(String::from("arrived"));
-    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 #[test]

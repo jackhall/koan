@@ -208,15 +208,14 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
     else {
         return step.failed(StepError::Refused);
     };
-    let root = program.root();
-    let types = &step.types(root);
+    let types = &step.types();
     let scratch = Bump::new();
     let parts = match form(node) {
         Form::Leaf(part @ ExpressionPart::Literal(literal)) => {
             if let KLiteral::Number(number) = literal {
                 record(format!("literal {number}"));
             }
-            return step.finish_fresh(root, |writer, types, _| {
+            return step.finish_fresh(|writer, types, _| {
                 let value =
                     Value::lower_part(writer, part, types, &scratch).expect("a literal lowers");
                 Active::new(held(program, contract, writer, types, value))
@@ -226,10 +225,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             let member = quote(step.writer(), &view, part, &scratch);
             return {
                 let writer = step.writer();
-                step.finish(
-                    held(program, contract, writer, types, Value::Knotted(member)),
-                    root,
-                )
+                step.finish(held(
+                    program,
+                    contract,
+                    writer,
+                    types,
+                    Value::Knotted(member),
+                ))
             };
         }
         // A Type-class name reads through the activation like any other mention: a frame binds
@@ -251,7 +253,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             }
             return {
                 let writer = step.writer();
-                step.finish(held(program, contract, writer, types, value), root)
+                step.finish(held(program, contract, writer, types, value))
             };
         }
         Form::Leaf(ExpressionPart::ListLiteral(items)) => {
@@ -260,7 +262,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 .all(|item| matches!(item, ExpressionPart::Literal(_)))
             {
                 // Built in the home from the start: a fresh result, placed operand-free.
-                return step.finish_fresh(root, |writer, types, _| {
+                return step.finish_fresh(|writer, types, _| {
                     let cells = items.iter().map(|item| {
                         Value::lower_part(writer, item, types, &scratch).expect("a literal lowers")
                     });
@@ -289,10 +291,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             // Built here and crossed into the home at the verdict's price.
             let list = List::new(writer, cells.into_iter(), types, &scratch);
             record(format!("built {:p}", list));
-            return step.finish(
-                held(program, contract, writer, types, Value::List(list)),
-                root,
-            );
+            return step.finish(held(program, contract, writer, types, Value::List(list)));
         }
         Form::Leaf(_) => return step.failed(StepError::Refused),
         Form::Lambda(node) => {
@@ -302,10 +301,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 return step.failed(StepError::Refused);
             };
             record(format!("born {}", born(member, program, types)));
-            return step.finish(
-                held(program, contract, writer, types, Value::Knotted(member)),
-                root,
-            );
+            return step.finish(held(
+                program,
+                contract,
+                writer,
+                types,
+                Value::Knotted(member),
+            ));
         }
         Form::Call(parts) => parts,
     };
@@ -317,7 +319,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 1)
         }
         ([_, _, _, taken, _, other], 1) => {
-            let Some(Ok(condition)) = step.results(root).next() else {
+            let Some(Ok(condition)) = step.results().next() else {
                 return step.failed(StepError::Unredeemable);
             };
             let holds = match condition {
@@ -339,13 +341,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
         }
         ([_, _, _], 1) => {
             let operands: Vec<Option<f64>> = step
-                .results(root)
+                .results()
                 .map(|received| received.ok().and_then(number))
                 .collect();
             let [Some(left), Some(right)] = operands[..] else {
                 return step.failed(StepError::Refused);
             };
-            step.finish_fresh(root, move |writer, types, _| {
+            step.finish_fresh(move |writer, types, _| {
                 Active::new(held(
                     program,
                     contract,
@@ -364,16 +366,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             match list.cells().first() {
                 Some(Link::Edge(edge)) => {
                     let writer = step.writer();
-                    step.finish(
-                        held(
-                            program,
-                            contract,
-                            writer,
-                            types,
-                            Value::Knotted(holder.sibling(*edge)),
-                        ),
-                        root,
-                    )
+                    step.finish(held(
+                        program,
+                        contract,
+                        writer,
+                        types,
+                        Value::Knotted(holder.sibling(*edge)),
+                    ))
                 }
                 _ => step.failed(StepError::Refused),
             }
@@ -383,7 +382,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 3)
         }
         ([_, operand, _, _], 3) => {
-            let Some(Ok(Received::Here(code))) = step.results(root).next() else {
+            let Some(Ok(Received::Here(code))) = step.results().next() else {
                 return step.failed(StepError::Unredeemable);
             };
             let Some(code) = code.as_code() else {
@@ -415,7 +414,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                     let message = refused.display(program.symbols(), types).to_string();
                     record(format!("refused {message}"));
                     let error = program.error(step.writer(), types, message);
-                    step.finish(error, root)
+                    step.finish(error)
                 }
             }
         }
@@ -424,7 +423,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 1)
         }
         ([head, _], 1) => {
-            let Some(Ok(Received::Here(argument))) = step.results(root).next() else {
+            let Some(Ok(Received::Here(argument))) = step.results().next() else {
                 return step.failed(StepError::Unredeemable);
             };
             let Some(callee) = read(&view, &head.value) else {
@@ -460,11 +459,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             park(step, asked, birth, 2)
         }
         (_, 2) => {
-            let received = step.results(root).next();
+            let received = step.results().next();
             match received {
                 Some(Ok(Received::Here(value))) => {
                     let writer = step.writer();
-                    step.finish(held(program, contract, writer, types, value), root)
+                    step.finish(held(program, contract, writer, types, value))
                 }
                 _ => step.failed(StepError::Unredeemable),
             }

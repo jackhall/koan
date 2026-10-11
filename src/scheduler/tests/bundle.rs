@@ -4,37 +4,14 @@
 //! run gathered there over values at rest in storage — so the tests drive both of the scratch
 //! family's positions.
 //!
-//! The crossing doors read types over a frozen root, and a test step, a bare `fn`, has no program
-//! to take one from, so each thread keeps a seeded root of its own ([`test_root`]), leaked for the
-//! process's life and anchored in a static, so Miri's leak check reads it as reachable.
-
-use std::ptr;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicPtr;
+//! A test seeds a root of its own over a local bump and builds its graph over it; the drain hands
+//! it to every step and crossing, so a bare `fn` step reads types with no program around it.
 
 use crate::knot::{KValue, KValueFamily};
-use crate::memory::{Bump, CrossedOperand, Header, Writer, reattachable};
-use crate::scheduler::{Born, Graph, NativeStep, StepBundle};
+use crate::memory::{CrossedOperand, Header, Writer, reattachable};
+use crate::scheduler::{Action, Born, Graph, NativeStep, Step, StepBundle};
 use crate::type_lattice::Root;
 use crate::values::{Half, TypeHeader, Types};
-
-/// Every thread's root bump, held for the process's life: the root a test step reads is `'static`,
-/// so its bump is never released, and a pointer to it here is what keeps that from being a leak.
-static ANCHORS: Mutex<Vec<AtomicPtr<Bump>>> = Mutex::new(Vec::new());
-
-thread_local! {
-    static ROOT: &'static Root<'static> = {
-        let bump: &'static Bump = Box::leak(Box::new(Bump::new()));
-        let anchor = AtomicPtr::new(ptr::from_ref(bump).cast_mut());
-        ANCHORS.lock().expect("no thread panics holding the anchors").push(anchor);
-        Root::seeded(bump)
-    };
-}
-
-/// This thread's seeded root, which every test step's chain reads first.
-pub fn test_root() -> &'static Root<'static> {
-    ROOT.with(|root| *root)
-}
 
 /// The bundle the scheduler's tests run over.
 pub struct Native;
@@ -59,11 +36,12 @@ impl<'graph> StepBundle<'graph> for Native {
         header: Header<'graph, 'cell, TypeHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, TypeHeader>,
         born: Born,
+        type_root: &'graph Root<'graph>,
     ) -> KValue<'graph, 'cell>
     where
         'graph: 'cell,
     {
-        let types = Types::new(test_root(), Half::of(writer, header));
+        let types = Types::new(type_root, Half::of(writer, header));
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
                 home.read(|header, _| match born {
@@ -88,6 +66,12 @@ impl<'graph> StepBundle<'graph> for Native {
 
 /// A native step over the test bundle.
 pub type TestStep<'graph> = NativeStep<'graph, Native>;
+
+/// A test step over every graph: what a helper that builds its own graph, over a root it seeds,
+/// takes to start a root work at.
+pub type AnyStep = for<'graph, 'step, 'here, 'scratch> fn(
+    Step<'_, 'graph, 'step, 'here, 'scratch, Native>,
+) -> Action<'graph, Native>;
 
 /// A graph over the test bundle.
 pub type TestGraph<'graph> = Graph<'graph, Native>;

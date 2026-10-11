@@ -126,8 +126,9 @@ as surprises, not scheduled.
   but a hop placed `Shares` lays the next frame's activation and argument
   record down in the region of the cell it shares, which reclaims nothing until
   that cell finishes, so the recursion's memory still grows with its depth — and
-  the types it builds with it ([type branches](../type-tiers/type-branches.md);
-  [shape branches](../type-tiers/shape-branches.md) release a sealed body's at the loop's
+  the types it builds with it, in the host's
+  [branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)
+  ([shape branches](../type-tiers/shape-branches.md) release a sealed body's at the loop's
   end). The hints
   already separate a result's home from the frame's region, so a hop could place
   its activation and temporaries `Fresh`, recycled per hop, and build only what

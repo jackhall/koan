@@ -4,9 +4,9 @@ A branch of the type lattice per sealed `Shares` body, released when its last
 live activation returns, so a type such a body builds does not linger in its
 host.
 
-**Problem.** A `Shares` callee lays its bytes in its host's region and, under
-[type branches](type-branches.md), interns the types it builds into the host's
-branch. A body that views a module and returns a number leaves nothing
+**Problem.** A `Shares` callee lays its bytes in its host's region and
+interns the types it builds into the host's
+[branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches). A body that views a module and returns a number leaves nothing
 reachable when it returns, yet every carrier it minted, and every type built
 over one, stays in the host's branch until the host finishes: a host that
 calls such a body once per element of a list of modules grows its branch per
@@ -91,9 +91,7 @@ programs no sealed body placed `Shares` mints, so none lays a branch
 
 ## Dependencies
 
-**Requires:**
-
-- [Type branches](type-branches.md) — the region tier, the chain and the
-  crossing's re-intern the shape tier is laid beside.
+**Requires:** none — it builds on the branch tier
+([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 
 **Unblocks:** none.

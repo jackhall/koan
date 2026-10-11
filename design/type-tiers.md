@@ -25,11 +25,24 @@ brands each tier's door.
 | shape branch | a sealed `Shares` body's outermost entry | its return | that body's self-contained content |
 
 A handle is its content's digest, so it names one type in every tier, and a
-reset moves where a type resolves, never what it is. Every tier's table is a
+reset moves where a type resolves, never what it is. Every branch's table is a
 [`DigestTable`](../lattice/src/bump/digest_table.rs) differing only in what
-lays its runs. A lookup probes the tiers a step reads, shortest-lived first.
+lays its runs; the root's is a hashbrown table the load grows and freezes. A
+node lookup probes the tiers a step reads longest-lived first, the root before
+any branch, and a read by handle then follows a branch's link to its
+spawner's, caching the hit; a verdict lookup probes them shortest-lived first.
 The root is closed after the load, so every type the run builds lives in a
 branch, a composite over root types alone included.
+
+A crossing carries a value's types to where it lands
+([storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
+A pinned birth into a cell that has laid no branch — a spawned child, a hop's
+successor in a new cell — links the cell's branch to its home's, so a birth
+costs the same whatever the home holds. Every other pin — a result, a birth
+into a tenant, whose branch is its host's — merges the home's branch, and what
+the home reaches through its links up to a branch the destination reaches,
+into the destination's; a copy re-lays each type it reads. No pin walks the
+value it carries.
 
 ## A node lives in a tier its children outlive
 
@@ -194,7 +207,7 @@ return, and makes a hop between shapes reset the predecessor's branch after
 the successor's first step ran the crossing. That reset is sound because what
 crossed went to the successor's region tier: a `Fresh` hop's forced copy
 relays each memo, and a `Shares` hop's pin merges the predecessor's shape
-branch into the host's region branch, as a pin merges a home's branch.
+branch into the host's region branch.
 
 **Its growth** is a high-water mark, never a leak: every nested activation's
 distinct content accumulates while the count is positive, and the reset
@@ -209,8 +222,8 @@ types, and released with that tier.
 
 ## Open work
 
-- [Type branches](../roadmap/type-tiers/type-branches.md) — the region and
-  scratch tiers, the chain, and the crossing's re-intern.
+- [A merge's reach check](../roadmap/type-tiers/merge-reach-check.md) — a
+  merge whose cost does not grow with its destination's link depth.
 - [Shape branches](../roadmap/type-tiers/shape-branches.md) — the shape tier,
   its brand and count, and the merge at a closure's birth.
 - [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch

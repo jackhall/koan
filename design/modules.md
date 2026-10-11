@@ -203,5 +203,3 @@ equal content give two types; koan keys it on content, so they give one.
   load-time type, and a call unfolded.
 - [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.
-- [Type branches](../roadmap/type-tiers/type-branches.md) — a carrier released
-  with the region its view is tied in.

@@ -37,9 +37,7 @@ between the load and a read.
 
 ## Dependencies
 
-**Requires:**
-
-- [Type branches](../type-tiers/type-branches.md) — the recomputation's types and
-  verdicts die with the frame.
+**Requires:** none — it builds on the branch tier
+([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 
 **Unblocks:** none — a leaf.

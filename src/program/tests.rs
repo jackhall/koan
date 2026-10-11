@@ -134,7 +134,7 @@ fn digesting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
     };
     let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
     let scratch = Bump::new();
-    let types = &step.types(program.root());
+    let types = &step.types();
     let digest = wanted(program, &view, &name).digest(types, &scratch);
     record(format!("{digest:?}"));
     step.leave(birth)
@@ -159,7 +159,7 @@ fn typing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph,
     };
     let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
     let value = wanted(program, &view, &name);
-    let types = &step.types(program.root());
+    let types = &step.types();
     record(display_name(value.ktype(), types, program.symbols()).to_string());
     step.leave(birth)
 }
@@ -171,7 +171,7 @@ fn inspecting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gr
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
     };
-    let types = &step.types(program.root());
+    let types = &step.types();
     for name in WANTED.with(|wanted| wanted.borrow().clone()) {
         record(describe(wanted(program, &view, &name), program, types));
     }
@@ -187,7 +187,7 @@ fn comparing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
     let names = WANTED.with(|wanted| wanted.borrow().clone());
     let [left, right] = [&names[0], &names[1]].map(|name| wanted(program, &view, name));
     let bump = Bump::new();
-    let types = &step.types(program.root());
+    let types = &step.types();
     record(format!("{:?}", left.equals(&right, types, &bump)));
     step.leave(birth)
 }

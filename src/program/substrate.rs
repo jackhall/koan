@@ -175,7 +175,7 @@ impl CellSubstrate {
                     &writer.fill(1, |_| Cell::new(false))[0],
                 ),
             );
-            let mut graph = Graph::new(cap);
+            let mut graph = Graph::new(cap, root);
             let root = graph
                 .root()
                 .expect("a fresh slab of at least one cell admits its root");

@@ -4,8 +4,8 @@ Part of [the type lattice](README.md)'s design.
 
 A [`TypeNode`](node.rs) is one interned type's content: a variant tag, a scalar
 payload, and **handles to its child types** — never owned substructure. Every run
-a node holds is a slice in the run region, so a node is `Copy` and carries no
-drop glue, and reading one out of the registry copies a few words rather than a
+a node holds is a slice laid in the node's tier, so a node is `Copy` and carries
+no drop glue, and reading one out of a tier copies a few words rather than a
 subtree.
 
 - **Leaves** — `Number`, `Str`, `Bool`, `Null`, the two bounds `Any` (the top,

@@ -4,7 +4,7 @@ Part of [the type lattice](README.md)'s design.
 
 Two relations, and the split is the point. [`is_subtype_of`](order.rs) is **the
 order**: reflexive, transitive and antisymmetric, memoized through the
-registry's verdict edges, and it **never solves**. It relates **concrete types
+verdict tables, and it **never solves**. It relates **concrete types
 and nothing else** — it takes `KType`s — and two signature types compare by
 their applications' pins. It is what every construction reads: interning, a
 canonical union, `join`, `meet`, an overload set's subsumption, a cache key.

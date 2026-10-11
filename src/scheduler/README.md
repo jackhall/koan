@@ -27,10 +27,12 @@ Four things it does not keep, because a neighbour already does:
 
 ## The drain
 
-The graph a drain runs over is `Graph`: a newtype over a `CellGraph` closed over
-the continuation family, the scratch-state family and the delivery bundle, so
-the families stay the scheduler's own. What owns a graph makes one with
-`Graph::new`, takes a storage-only slab cell from `Graph::root` — a region that
+The graph a drain runs over is `Graph`: a `CellGraph` closed over the
+continuation family, the scratch-state family and the delivery bundle, so the
+families stay the scheduler's own, beside the frozen type root every step's
+chain reads first. What owns a graph makes one with `Graph::new` over that
+root — a loaded program over the root its load froze, a test over one it seeds
+in a local bump — takes a storage-only slab cell from `Graph::root` — a region that
 outlives every drain over it and is never entered — gives it back with
 `Graph::release_root`, and asks `is_empty` and `is_live`. Every other cell is
 the drain's.
@@ -121,7 +123,10 @@ private, holds the state its cell was woken with and the scratch state the
 previous step parked, and exposes:
 
 - its cell's two writers, `writer` at `'here` and `scratch_writer` at
-  `'scratch`;
+  `'scratch`, the `header` door of its write home, and the type chain beside
+  each writer — `types` and `scratch_types`, built over the graph's type root
+  once per step and never parked — so a type the step builds lands in the
+  branch of the habitat it lays its value in;
 - `state` and `scratch`, which take the cell's state and its parked scratch
   state, each once. A state is a projection of the step bundle, which a
   higher-ranked function pointer cannot take as a parameter (rustc #100013), so
@@ -157,10 +162,11 @@ needs is the veneer's to perform, from the provenance the drain filled:
 - **A child's result is read, not redeemed.** `results` yields each slot of the
   receipt run as the consumer can use it: a scratch fill at `'scratch`, a
   carrier fill redeemed and crossed to `'here`.
-- **A copy reads the caller's types.** `results`, `finish` and `finish_in_home`
-  take the type registry from the step, since a
-  [deep copy](../values/README.md#crossing) lays each part down at the type it
-  is seen at.
+- **A crossing carries types.** `results`, `finish`, `finish_in_home` and the
+  wake of a rested birth build the destination's chain inside the build, over
+  the graph's type root and the build's writer and header, since a
+  [crossing](../values/README.md#crossing) makes every type the value carries
+  resolve there and a deep copy lays each part down at the type it is seen at.
 - **A result goes where the drain said.** The three `finish` ends below build
   or cross into the home the provenance names and fill the slot it names.
 
@@ -281,7 +287,13 @@ returns all name the graph they belong to.
 A *birth* continuation is the family at `'cell = 'graph`, because every birth
 door takes one there: it holds only words, program storage and dormant
 carriers, which is the rested form the veneer makes of what `spawn` and `tail`
-were handed. The successor `Step::park` stores is at `'here` and may hold region
+were handed. A birth at rest keeps how it was handed over, a `Born`: a spawned
+child, a root work resumed from what an earlier one left, a hop's successor,
+or what a root work leaves. The wake hands it to the bundle's crossing, which
+for a pinned birth links the cell's branch to its home's where the cell has
+laid no branch — a spawned child always, a hop's successor or a left birth when
+it lands in a new cell — and merges the home's branch into one already laid, a
+tenant's host's ([crossing](../values/README.md#crossing)). The successor `Step::park` stores is at `'here` and may hold region
 borrows freely.
 
 `Provenance` is what a cell carries about itself, for the drain's use:
@@ -360,11 +372,13 @@ nothing naming it.
 
 ## The import rule
 
-Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
-`crate::memory`, `crate::type_lattice` and `crate::values`, and nothing else in
-the crate. It does not name `scope`, `parse`, `elaborate` or `program`. It
-names the lattice for the type registry alone, which the step doors that cross
-a value take from their callers and hand to the deep copy. `cellgraph` is reached only
+Outside doc comments this module names `crate::knot`, `crate::memory`,
+`crate::type_lattice` and `crate::values`, and nothing else in the crate — its
+tests included, which may name the crate's test scaffolding besides. It does
+not name `scope`, `parse`, `elaborate`, `symbols` or `program`. It names the
+lattice for the frozen root and a branch alone, the root a graph holds and
+hands every step and crossing, and `values` for the type chain those doors
+build and the header a graph keeps per habitat half (`TypeHeader`). `cellgraph` is reached only
 through `memory`, and `cellgraph` itself depends on neither this module nor
 koan. `tests/boundary.rs` reads the source to hold the rule there; the ready
 stack and the request buffer are the owning heap types it blanks, because each
@@ -386,9 +400,17 @@ no layer of koan's above present. They hold, each with a workload of its own:
 - a ten-thousand-hop loop at each placement, with three cells live at the peak
   and no more heap than the same loop a hundred hops long;
 - a subtree two hundred levels deep on a slab of one;
+- what a birth costs a branch: a child born under a spawner holding any number
+  of types holds only the one it reads, the deepest level of a recursion
+  minting at every level holds as much at depth sixty-four as at eight, a
+  tenant's `Fresh` hop reaches what its host read through its link, and each
+  way a deep cell hands a value on — a hop at each placement from a tree cell
+  and a tenant, and a kept result — leaves the landing cell's branch the same
+  at depth four and sixteen ([tests/branches.rs](tests/branches.rs));
 - a root work that leaves a birth a later root work resumes from, at each
   placement, and a cell that reports to somebody refused on `leave`;
-- two schedulers beside each other sharing nothing, two views over one graph in
+- two schedulers beside each other sharing nothing — each test seeds its own
+  type root in a local bump, released with the test — two views over one graph in
   turn, and a view dropped mid-work leaving a graph its root's release does not
   empty;
 - the round trip a continuation makes between `'graph` and a step's `'here`,

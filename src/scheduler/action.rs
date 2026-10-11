@@ -193,6 +193,9 @@ pub struct Step<
     'here: 'scratch,
 {
     context: &'a mut Context<'graph, 'step, 'here, 'scratch, B>,
+    /// The frozen type root of the graph this step runs over, which every chain it builds reads
+    /// first.
+    type_root: &'graph Root<'graph>,
     provenance: &'a Provenance,
     spawns: &'a mut Spawns<'graph, B>,
     state: S::Of<StateAt<'graph, 'here, B>>,
@@ -228,10 +231,12 @@ where
     'graph: 'step + 'here,
     'here: 'scratch,
 {
-    /// The step the drain hands a cell's continuation, over the provenance it read off that same
-    /// continuation, the buffer it cleared for this step, and both slots the cell parked in.
+    /// The step the drain hands a cell's continuation, over its graph's type root, the provenance
+    /// it read off that same continuation, the buffer it cleared for this step, and both slots the
+    /// cell parked in.
     pub(super) fn new(
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, B>,
+        type_root: &'graph Root<'graph>,
         provenance: &'a Provenance,
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
@@ -239,6 +244,7 @@ where
     ) -> Self {
         Step {
             context,
+            type_root,
             provenance,
             spawns,
             state,
@@ -265,6 +271,7 @@ where
     ) {
         let Step {
             context,
+            type_root,
             provenance,
             spawns,
             state,
@@ -272,6 +279,7 @@ where
         } = self;
         let step = Step {
             context,
+            type_root,
             provenance,
             spawns,
             state: (),
@@ -299,6 +307,7 @@ where
     ) {
         let Step {
             context,
+            type_root,
             provenance,
             spawns,
             state,
@@ -306,6 +315,7 @@ where
         } = self;
         let step = Step {
             context,
+            type_root,
             provenance,
             spawns,
             state,
@@ -337,17 +347,17 @@ where
         self.context.header()
     }
 
-    /// The chain this step reads and interns types through for what it lays at `'here`: `root`,
-    /// then its write home's branch. Built once per step, never parked.
-    pub fn types(&self, root: &'graph Root<'graph>) -> Types<'graph, 'here> {
-        Types::new(root, Half::of(self.writer(), self.header()))
+    /// The chain this step reads and interns types through for what it lays at `'here`: the
+    /// graph's type root, then its write home's branch. Built once per step, never parked.
+    pub fn types(&self) -> Types<'graph, 'here> {
+        Types::new(self.type_root, Half::of(self.writer(), self.header()))
     }
 
-    /// The chain for what the step lays in its scratch habitat: `root`, its write home's branch,
-    /// then the scratch habitat's own, released with it at the step's end.
-    pub fn scratch_types(&self, root: &'graph Root<'graph>) -> Types<'graph, 'scratch> {
+    /// The chain for what the step lays in its scratch habitat: the graph's type root, its write
+    /// home's branch, then the scratch habitat's own, released with it at the step's end.
+    pub fn scratch_types(&self) -> Types<'graph, 'scratch> {
         Types::scratch(
-            root,
+            self.type_root,
             Half::of(self.writer(), self.header()),
             Half::of(self.scratch_writer(), self.context.scratch_header()),
         )
@@ -370,11 +380,12 @@ where
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
     /// fill at `'scratch`, a carrier fill redeemed and crossed to `'here`, its types made to
-    /// resolve over `root`. Each slot is taken as it is read, so a second pass finds it empty.
+    /// resolve over the graph's type root. Each slot is taken as it is read, so a second pass finds
+    /// it empty.
     pub fn results(
         &mut self,
-        root: &'graph Root<'graph>,
     ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> {
+        let root = self.type_root;
         let context = &mut *self.context;
         let count = context.receipt_count().unwrap_or(0);
         (0..count).map(move |slot| match context.receipt(slot) {
@@ -445,17 +456,17 @@ where
     /// is built in the consumer's scratch habitat and read back at its `'scratch`; under `Keeps` or
     /// `Forwards` it is built in this cell's home and filed as a carrier the consumer reads at its
     /// `'here`. One build serves both, because it is quantified over the brand it is built at; it
-    /// is handed the chain of the half it builds in, over `root`, which reads no other half's
-    /// branch, so it takes no handle from this step's chain.
+    /// is handed the chain of the half it builds in, over the graph's type root, which reads no
+    /// other half's branch, so it takes no handle from this step's chain.
     pub fn finish_fresh(
         self,
-        root: &'graph Root<'graph>,
         build: impl for<'their> FnOnce(
             Writer<'their>,
             &Types<'graph, 'their>,
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
+        let root = self.type_root;
         let report = match self.report() {
             Ok(report) => report,
             Err(error) => return self.failed(error),
@@ -485,12 +496,12 @@ where
 
     /// Finish with a result built by `build` over `operands`, values this step holds, in this
     /// cell's home, and deliver it as a carrier. Each operand reaches the build pinned or copied as
-    /// the verdict ruled, at the home's brand, its types made to resolve there over `root`; the
-    /// build is handed the home's chain beside its writer. Every `Use` takes this door: a build
-    /// over operands never goes through scratch, where what it embeds could not follow.
+    /// the verdict ruled, at the home's brand, its types made to resolve there over the graph's
+    /// type root; the build is handed the home's chain beside its writer. Every `Use` takes this
+    /// door: a build over operands never goes through scratch, where what it embeds could not
+    /// follow.
     pub fn finish_in_home<const N: usize>(
         self,
-        root: &'graph Root<'graph>,
         operands: [KValue<'graph, 'here>; N],
         build: impl for<'their> FnOnce(
             Writer<'their>,
@@ -503,6 +514,7 @@ where
             Ok(report) => report,
             Err(error) => return self.failed(error),
         };
+        let root = self.type_root;
         let weights = operands.map(|value| value.weight().bytes());
         let lifted = operands.map(|value| self.context.lift::<KValueFamily>(value));
         let crossing: [Operand<'graph, '_, 'step, KValueFamily>; N] =
@@ -525,13 +537,9 @@ where
     }
 
     /// Finish with `value`, crossed into this cell's home at the verdict's price, its types made
-    /// to resolve there over `root`, and deliver it as a carrier.
-    pub fn finish(
-        self,
-        value: KValue<'graph, 'here>,
-        root: &'graph Root<'graph>,
-    ) -> Action<'graph, B> {
-        self.finish_in_home(root, [value], |_, _, [value], _| Active::new(value))
+    /// to resolve there over the graph's type root, and deliver it as a carrier.
+    pub fn finish(self, value: KValue<'graph, 'here>) -> Action<'graph, B> {
+        self.finish_in_home([value], |_, _, [value], _| Active::new(value))
     }
 
     /// End a root work by leaving `birth` at rest in its home — the cell it was born under — for
@@ -552,6 +560,7 @@ where
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
         }
+        let root = self.type_root;
         let copy_bytes = B::weight(&birth);
         let lifted = self.context.lift::<B::Birth>(birth);
         let placed = self.context.alloc_into::<B::Birth, B::Birth>(
@@ -560,7 +569,9 @@ where
                 carrier: &lifted,
                 copy_bytes,
             }],
-            |writer, header, views| Active::new(B::cross(writer, header, &views[0], Born::Left)),
+            |writer, header, views| {
+                Active::new(B::cross(writer, header, &views[0], Born::Left, root))
+            },
         );
         let Ok(placed) = placed else {
             return self.failed(StepError::Stale);

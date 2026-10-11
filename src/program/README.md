@@ -2,7 +2,7 @@
 
 A loaded program as one owning value, and the body runner that performs it.
 [`CellSubstrate`](substrate.rs) holds program storage, the symbol interner, the
-type registry, the program's record and the
+root of the types the load builds, the program's record and the
 [cell graph](../scheduler/README.md) that runs it, and it can be returned from a
 function, moved, kept in a struct and dropped like any other value. An embedder
 that keeps a program across calls — a language server, a REPL — keeps one of
@@ -18,7 +18,7 @@ and nothing here names an expression form.
 ## Owner and dependent
 
 The graph's cells and the AST borrow program storage at `'graph`, and the
-registry borrows the bump beside it, so a value holding both owners beside them
+types' root borrows the bump beside it, so a value holding both owners beside them
 is self-referential.
 [`self_cell`](https://docs.rs/self_cell) carries the `unsafe` that takes;
 koan's production code writes none. Its dependent is one lifetime and no type
@@ -26,23 +26,22 @@ parameters, so the substrate is a concrete type over koan's own families rather
 than a generic `cellgraph` type.
 
 - **The owner** is the permanent tier and nothing else: program storage, the
-  bump the type registry is built over, and the interner. It borrows nothing,
+  bump the types' root is built over, and the interner. It borrows nothing,
   and `self_cell` boxes it and only ever lends it shared.
 - **The dependent**, `Running<'graph>`, is everything that names `'graph`:
   - the **graph**, by value. Reclaiming one of its recycling regions needs
     exclusive access, which a shared borrow of the owner cannot give.
   - the graph's **root**, [below](#the-top-level).
-  - the **type registry**, laid down in the owner's bump rather than held by
-    value, so a record laid down there can borrow it at `'graph`. A registry
-    held in the dependent could not be borrowed by a sibling, and would reach a
-    step only through a per-call channel on the step context. It takes a bump
-    of its own rather than program storage's `Writer` because it is a
-    [collections arena](../../lattice/README.md#the-bump-tier)
-    client — it grows tables as it interns. Resting there is sound because the
-    registry owns nothing on the global heap — its
+  - the **program record**, [below](#the-program-record), in program storage,
+    which holds the **types' root**: laid down in the owner's bump rather than
+    held by value, so the record and the graph can both borrow it at `'graph`.
+    The graph hands it to every step and crossing; the record keeps it for a
+    reader outside a step. It takes a bump of its own rather than program
+    storage's `Writer` because the load grows it as a
+    [collections arena](../../lattice/README.md#the-bump-tier) client. Resting
+    there is sound because the root owns nothing on the global heap — its
     [verdict table](../../lattice/src/types/identity.md#storage-a-root-and-its-branches) is a fixed
-    cache in the registry's own bump — so its destructor never needs to run.
-  - the **program record**, [below](#the-program-record), in program storage.
+    cache in the same bump — so its destructor never needs to run.
   - what the top level **left at rest** when it last ran, for a later root work
     to resume from.
   - the program brand and a borrow of the interner, so a call reaches every
@@ -58,20 +57,25 @@ substrate exposes no signature that names it. The running state is reached
 only through `CellSubstrate::with`, whose closure is quantified over a fresh
 lifetime: nothing borrowed at `'graph` escapes a call, and two substrates'
 states can never be mixed. Each call's `'graph` names the same storage, so what
-one call leaves in the graph or interns in the registry the next call finds.
+one call leaves in the graph the next call finds. No call interns into the
+root: the run's types live in the branches of the habitats that carry them
+([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)),
+and leave with them.
 
 **Setup runs in the builder.** `CellSubstrate::load::<L>` does all of it inside
 `self_cell`'s builder closure, which sees the same `'graph` every later call
-does: it parses the source into program storage, lays the registry in the owner's
-bump, has
+does: it parses the source into program storage, lays a root builder in the
+owner's bump and builds every load-time type through one chain over it, has
 `L` lay the builtin table down, builds the program's shape over that table, types
 its type channel through
 [the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load),
-has `L` check it and record what it types, takes the root, and lays the record down, beside the
-[output sinks](#faults-and-output) the embedder hands `load`. It returns a `Result`, and
+has `L` check it and record what it types, freezes the types' root so no step
+can intern into it, lays the record down beside the
+[output sinks](#faults-and-output) the embedder hands `load`, and makes the cell
+graph over the frozen root and takes its root cell. It returns a `Result`, and
 `LoadError` carries the parse error, or the rendering of the `ShapeError` that
 stopped it. A shape error borrows program storage and names symbols and types
-through the interner and registry, all of which a refused builder drops with
+through the interner and the load's chain, all of which a refused builder drops with
 its owner, so it is rendered on the error branch, while they stand; a load that
 succeeds renders nothing. The
 `LoadError`'s `Display` is the whole diagnostic, led by `path:line:col`. The
@@ -81,7 +85,7 @@ index into it.
 ## The program record
 
 [`Program`](record.rs) is what a loaded program's steps read, at `'graph`: the
-top level's shape, the builtin table, the registry and interner, the
+top level's shape, the builtin table, the types' frozen root and the interner, the
 evaluator's step, the output sinks and the sealed `Error` type. It rests in program storage beside the table, written through
 `cellgraph`'s [`Storage`](../memory/README.md#two-tiers-and-why-the-boundary-falls-where-it-does)
 writer, so every step names it by a `'graph` borrow that crosses at no price.

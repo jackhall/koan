@@ -1,6 +1,7 @@
 # Presizing a branch
 
-**Problem.** A [type branch](type-branches.md) starts at its smallest size
+**Problem.** A
+[type branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches) starts at its smallest size
 and doubles as the run interns into it, laying each doubled run in its region.
 The region cannot take a superseded run back, so a grown branch strands every
 run but its last: with 16 B slots a 256-entry branch strands 8 KiB against
@@ -53,8 +54,7 @@ body's doors and its past activations both say something about it.
 
 ## Dependencies
 
-**Requires:**
-
-- [Type branches](type-branches.md) — the branch whose size is predicted.
+**Requires:** none — it builds on the branch tier
+([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 
 **Unblocks:** none.

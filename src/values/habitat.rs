@@ -88,14 +88,12 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell> {
 /// use koan::memory::Bump;
 /// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
-/// use koan::type_lattice::Root;
 /// use koan::values::{List, Value};
 ///
 /// fn scratch_list<'graph>(
 ///     step: Step<'_, 'graph, '_, '_, '_, KBundle>,
-///     root: &'graph Root<'graph>,
 /// ) -> Action<'graph, KBundle> {
-///     let types = step.scratch_types(root);
+///     let types = step.scratch_types();
 ///     let items = [Value::Number(1.0)].into_iter();
 ///     let _: &List<'_> = List::new(step.scratch_writer(), items, &types, &Bump::new());
 ///     step.done()
@@ -108,14 +106,12 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell> {
 /// use koan::memory::Bump;
 /// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
-/// use koan::type_lattice::Root;
 /// use koan::values::{List, Value};
 ///
 /// fn scratch_list<'graph>(
 ///     step: Step<'_, 'graph, '_, '_, '_, KBundle>,
-///     root: &'graph Root<'graph>,
 /// ) -> Action<'graph, KBundle> {
-///     let types = step.types(root);
+///     let types = step.types();
 ///     let items = [Value::Number(1.0)].into_iter();
 ///     let _: &List<'_> = List::new(step.scratch_writer(), items, &types, &Bump::new());
 ///     step.done()

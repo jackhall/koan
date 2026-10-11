@@ -48,7 +48,7 @@ handle only because no variable reaches it.
 ([identity](identity.md#typed-handles)). Only the lattice wraps a raw handle,
 every door is generic over its children's handle, and a `KType` asked of a
 parametric child is a compile error, pinned by a `compile_fail` doctest on
-`TypeRegistry::list`. `TypeRegistry::concrete` is the one checked conversion.
+`TypeChain::list`. `TypeChain::concrete` is the one checked conversion.
 
 ## The order is a partial order
 
@@ -131,7 +131,7 @@ for a type that already has one.
   `FOR ALL #[Left Right] :{x :Right, y :Left}` and its renaming two types,
   which fit each other and share no handle.
 
-**What enforces it.** Every composite is built through the registry's doors,
+**What enforces it.** Every composite is built through the chain's doors,
 which canonicalize before they digest. `equal_content_interns_once`,
 `union_of_is_canonical`, `a_union_holding_the_three_family_tops_is_any` and the
 two fixed-point laws over shapes and function types state it;
@@ -322,7 +322,7 @@ list would.
 Each of these keeps the suite green while removing what a law protects:
 
 - wrapping a raw `Handle` into a typed one outside the doors that check it;
-- narrowing through `TypeRegistry::concrete` without naming the invariant that
+- narrowing through `TypeChain::concrete` without naming the invariant that
   makes the type concrete;
 - reading a variable through `erase_rigid` where `bound_above` or an interval
   is meant;
@@ -336,7 +336,9 @@ Each of these keeps the suite green while removing what a law protects:
 ## How the laws are tested
 
 The lattice is tested by its laws, as properties over generated type trees
-interned into a live registry ([tests/properties.rs](tests/properties.rs)).
+interned into a live chain of two tiers — a branch over a root seeded from the
+same generators — so every law holds across the tier line
+([tests/properties.rs](tests/properties.rs)).
 The order's, `join`'s and `meet`'s laws hold by handle over every generated
 concrete type (`arb_concrete`, a `KType` strategy, which builds no parametric
 type into a concrete one), signature types included, and no law has a twin
@@ -347,7 +349,11 @@ raw. The generators draw signatures over head parameters, applications pinning
 some of them and meets of two applications, and put carried unions under
 quantified positions, where a solve joins and meets. The interval and verdict
 laws draw their carried types within the static ones, binding each lexical
-variable as a run does.
+variable as a run does. Three laws hold the crossing doors over any generated
+type: an adopted type reads in a fresh branch at its source's digest, view and
+flags; a merge leaves every source entry found; and a chain linked to the
+generating branch reads every generated handle alike and holds exactly what it
+read.
 
 A law draws a case that meets its precondition by construction rather than by
 filtering, since a case that passes without reaching the law is invisible: an

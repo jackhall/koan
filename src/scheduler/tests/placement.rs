@@ -6,9 +6,11 @@ use std::cell::Cell;
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, test_root};
+use crate::memory::Bump;
+use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
 use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Use, Work};
+use crate::type_lattice::Root;
 
 /// Enough turns that a region which only ever grows parts company with one that is recycled.
 const MANY: usize = 4_000;
@@ -66,14 +68,12 @@ fn turn<'graph>(
             },
         );
     }
-    step.finish_fresh(test_root(), move |_, _, _| {
-        Active::new(KValue::Number(length))
-    })
+    step.finish_fresh(move |_, _, _| Active::new(KValue::Number(length)))
 }
 
 /// The caller, woken by the loop's last cell.
 fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let first = step.results(test_root()).next();
+    let first = step.results().next();
     match first {
         Some(Ok(Received::Scratch(KValue::Number(length)))) => record(length.to_string()),
         _ => return step.failed(StepError::Unredeemable),
@@ -103,10 +103,11 @@ struct Run {
     allocations: u64,
 }
 
-fn run(hops: usize, start: TestStep<'static>) -> Run {
+fn run(hops: usize, start: AnyStep) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
-    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     let before = crate::tests::allocation_count();

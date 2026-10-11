@@ -158,9 +158,9 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
                 ..Runner::at(program, activation, Level::Frame, Some(contract))
             },
             Err(message) => {
-                let types = step.types(program.root());
+                let types = step.types();
                 let error = program.error(step.writer(), &types, message);
-                return step.finish(error, program.root());
+                return step.finish(error);
             }
         },
         KState::Born(KBirth::Eval {
@@ -184,7 +184,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             // A `USING` body's parameters are the module's surfaced names, which its shape and the
             // module cannot disagree on: a refusal is an invariant break.
             if let Some(module) = module {
-                let (types, bump) = (&step.types(program.root()), Bump::new());
+                let (types, bump) = (&step.types(), Bump::new());
                 let surfaced = module
                     .as_module()
                     .map(|module| surface(writer, module, activation, types, &bump));
@@ -515,7 +515,7 @@ fn frame<'graph, 'here>(
     ),
     &'here str,
 > {
-    let types = &step.types(program.root());
+    let types = &step.types();
     let writer = step.writer();
     let name = |handle| display_name(handle, types, program.symbols());
     // A barrier stands before the function a call runs: the arguments cross each one inwards, and
@@ -828,7 +828,7 @@ fn code_frame<'graph, 'here>(
     };
     let bump = Bump::new();
     let writer = step.writer();
-    let types = &step.types(program.root());
+    let types = &step.types();
     let mut links = BumpVec::with_capacity_in(shape.captures().len(), &bump);
     for capture in shape.captures() {
         let value = match capture.source {
@@ -864,11 +864,10 @@ fn woken<'graph, 'here, 'scratch>(
     match runner.stage {
         Stage::Next => unreachable!("a runner parks only with an evaluation in flight"),
         Stage::Evaluation => {
-            let root = runner.program.root();
-            let received = step.results(root).next().ok_or(StepError::Unredeemable)??;
+            let received = step.results().next().ok_or(StepError::Unredeemable)??;
             match received {
-                Received::Here(value) => runner.check(&value, &step.types(root))?,
-                Received::Scratch(value) => runner.check(&value, &step.scratch_types(root))?,
+                Received::Here(value) => runner.check(&value, &step.types())?,
+                Received::Scratch(value) => runner.check(&value, &step.scratch_types())?,
             }
             match unit.work {
                 UnitWork::Component(component) => {
@@ -902,9 +901,8 @@ fn woken<'graph, 'here, 'scratch>(
             let local = Bump::new();
             let mut supplied: BumpVec<'_, (Site, KValue<'graph, 'here>)> =
                 BumpVec::with_capacity_in(sites.len(), &local);
-            let root = runner.program.root();
-            let types = step.types(root);
-            for (site, received) in sites.iter().zip(step.results(root)) {
+            let types = step.types();
+            for (site, received) in sites.iter().zip(step.results()) {
                 let Received::Here(value) = received? else {
                     unreachable!("an eager part is asked for with `Keeps`")
                 };
@@ -930,7 +928,7 @@ fn untied<'graph, 'here>(
     let program = runner.program;
     Stopped::Raised(rendered(
         step.writer(),
-        error.display(program.symbols(), &step.types(program.root())),
+        error.display(program.symbols(), &step.types()),
     ))
 }
 
@@ -948,7 +946,7 @@ fn tied<'graph, 'here>(
         step.writer(),
         runner.activation,
         component,
-        &step.types(runner.program.root()),
+        &step.types(),
         &scratch,
         &mut |site, _| {
             let at = supplied
@@ -990,7 +988,7 @@ fn held<'graph, 'here>(
         return Ok(value);
     };
     let program = runner.program;
-    let (types, writer, scratch) = (&step.types(program.root()), step.writer(), Bump::new());
+    let (types, writer, scratch) = (&step.types(), step.writer(), Bump::new());
     let held = match denoted(annotation, &runner.activation.view(), types, &scratch) {
         Ok(annotated) => {
             let settled = shape.settled(Site::of(annotation));
@@ -1118,7 +1116,7 @@ fn first_tie<'graph, 'here, 'scratch>(
         step.writer(),
         runner.activation,
         component,
-        &step.types(runner.program.root()),
+        &step.types(),
         &scratch,
         &mut |site, part| {
             missed.extend(part.map(|part| (site, part)));
@@ -1162,7 +1160,7 @@ fn declared<'graph, 'here>(
 ) -> Result<(), Stopped<'here>> {
     let scratch = Bump::new();
     let program = runner.program;
-    let types = &step.types(program.root());
+    let types = &step.types();
     let writer = step.writer();
     let shape = runner.activation.shape();
     let mut loaded = BumpVec::with_capacity_in(component.members.len(), &scratch);
@@ -1249,7 +1247,7 @@ fn left<'graph, 'here>(
         step.writer(),
         activation,
         activation.shape().component_of(outer.binder),
-        &step.types(body.program.root()),
+        &step.types(),
         &scratch,
         &mut |_, _| Some(Supplied::Body(body.activation)),
     )
@@ -1280,9 +1278,9 @@ fn ended<'graph, 'here>(
             program: runner.program,
             view: runner.activation.view(),
         }),
-        (Level::Frame | Level::Block, None) => step.finish(value, runner.program.root()),
+        (Level::Frame | Level::Block, None) => step.finish(value),
         (Level::Frame | Level::Block, Some(contract)) => {
-            let types = step.types(runner.program.root());
+            let types = step.types();
             let value = runner
                 .program
                 .fulfilled(step.writer(), &types, value, contract);
@@ -1290,7 +1288,7 @@ fn ended<'graph, 'here>(
                 Some(barrier) => crossed_out(step.writer(), &types, runner.program, barrier, value),
                 None => value,
             };
-            step.finish(value, runner.program.root())
+            step.finish(value)
         }
     }
 }
@@ -1318,8 +1316,8 @@ fn stop<'graph, 'here>(
             })
         }
         Level::Frame | Level::Block => {
-            let error = program.error(step.writer(), &step.types(program.root()), message);
-            step.finish(error, program.root())
+            let error = program.error(step.writer(), &step.types(), message);
+            step.finish(error)
         }
     }
 }

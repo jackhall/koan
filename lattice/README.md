@@ -16,7 +16,7 @@ as a law over generated types, and the compiler, not a review, refuses one.
   ([src/symbols/README.md](src/symbols/README.md)). It names nothing else in
   the crate.
 - [`types`](src/types.rs) — the type lattice: the node vocabulary, the
-  interning registry, the identity recipe, the relations between types and the
+  interning registry of a frozen root and per-habitat branches, the identity recipe, the relations between types and the
   unifier ([src/types/README.md](src/types/README.md)). It names `symbols` and
   the bump tier, and nothing else.
 - [`bump`](src/bump.rs) — the bump tier, below. It names neither of the
@@ -25,7 +25,7 @@ as a law over generated types, and the compiler, not a review, refuses one.
 ## The bump tier
 
 Storage outside any cell graph, with no reach and no cell, released whole when
-its owner drops. It holds the type lattice's registry and the scratch a caller
+its owner drops. It holds the type lattice's root and the scratch a caller
 passes. It is a *collections* arena: `BumpAllocator` is `&Bump`, both
 bumpalo's verb receiver and the `Allocator` its growable `BumpVec` and its
 hashbrown `BumpBackedMap`, `BumpHashTable` and `BumpBackedSet` are built over. A cell's region
@@ -33,7 +33,7 @@ has no verb that grows a buffer, so the tier does not pretend to be a region,
 and it carries no door of its own: callers use bumpalo's `alloc`,
 `alloc_slice_copy`, `alloc_slice_fill_iter` and `alloc_str`. The one
 exception is `LaysRuns`, below, which a bump implements so that the digest
-table can grow in one.
+table can grow in one and a type tier can lay its nodes there.
 
 **Drop-freeness is a compile-time fact.** Bumpalo runs no destructor, so
 nothing with drop glue goes in. `bump_table`, `bump_hash_table` and `bump_set`
@@ -46,24 +46,27 @@ nothing more: no graph of owned values is walked on the way out.
 ## The digest table
 
 [`DigestTable`](src/bump/digest_table.rs) is an insert-only hash table of
-references to entries that each carry their own key, a uniformly distributed
-128-bit digest (the `Keyed` trait). The key is already a hash, so the table
-runs no hash function, and the entry holds it, so the table stores no copy.
-A slot is 16 B: the key's low word, whose masked low bits are the slot's
-home, beside the reference. A probe walks linearly to the first empty slot
-and reads an entry only when its word matches; the load stays at most one
-half, and the smallest run is four slots, one cache line.
+references to entries that each carry their own key (the `Keyed` trait) and
+name a uniformly distributed low word of it: a 128-bit digest's own, or a
+fold of a wider key, as a verdict entry folds its two digests and relation.
+The word is already a hash, so the table runs no hash function, and the entry
+holds its key, so the table stores no copy. A slot is 16 B: the key's word,
+whose masked low bits are the slot's home, beside the reference. A probe
+walks linearly to the first empty slot and reads an entry, comparing its whole
+key, only when its word matches; the load stays at most one half, and the
+smallest run is four slots, one cache line.
 
 The table grows without an allocator. It lays a run of twice the length
-through `LaysRuns`, a one-method trait an insert takes as an argument, and
-re-places every slot by its stored word, so growth reads no entry and strands
-the old run. A bump implements `LaysRuns` here; koan implements it for a
-newtype over a cell region's `Writer`, which lays fixed runs and has no
-allocator, so a region can host the table. A type branch's table is one
+through `LaysRuns` — a trait an insert takes as an argument, which lays a run
+of values or a string — and re-places every slot by its stored word, so growth
+reads no entry and strands the old run. A bump implements `LaysRuns` here;
+koan implements it for a habitat half — a cell region's or scratch habitat's
+`Writer` beside its header door — which lays fixed runs and has no allocator,
+so a habitat can host the table. A type branch's table is one
 ([storage](src/types/identity.md#storage-a-root-and-its-branches)).
 
 `cargo bench -p lattice --bench node_table` times the digest table against
-the hashbrown table the registry's root keeps.
+the hashbrown table the root keeps.
 
 ## Strongly connected components
 

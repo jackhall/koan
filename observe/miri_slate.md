@@ -204,18 +204,18 @@ cell's region; what this pins is the ordering between two.
   spawner's node in its own table by reference: a table in one region pointing into another,
   released child first.
 - `a_hop_reaches_what_its_births_home_read_through_its_link`
-  a tenant hops `Fresh` with a list homed at its host, so the successor's birth merges the host's
-  branch and the spawner's it links, entering both regions' nodes in a third by reference, read by
-  the habitat check after the tenant is released.
+  a tenant hops `Fresh` with a list homed at its host, so the successor's new branch links the
+  host's, which links the spawner's: a table in a third region reading both regions' nodes
+  through two links, read by the habitat check after the tenant is released.
 - `a_recursion_asking_two_children_per_level_peaks_at_its_depth`
   a stack of births and releases: tree cells born one path at a time under one root work, each
   delivering into its parked parent's scratch run before it is released — two levels, seven cells,
   under Miri.
 
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
-storage, the registry's bump and the interner in `self_cell`'s owner, and in its dependent at
-`'graph` the graph, a borrow of the registry, and the builtin table and the program record laid
-down in program storage.
+storage, the types' root bump and the interner in `self_cell`'s owner, and in its dependent at
+`'graph` the graph, and the builtin table and the program record laid down in program storage, the
+record borrowing the frozen root.
 
 - `two_programs_run_and_are_read_back_in_a_separate_call`
   two substrates returned from a helper, moved through a `Vec` into a `Box`, each running its
@@ -282,9 +282,9 @@ in a tenant's storage and crossed into the callee's birth.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-11: 259s — 34 tests, 0 leaks, 0 UB
 - 2026-10-09: 371s — 31 tests, 0 leaks, 0 UB
 - 2026-10-04: 398s — 28 tests, 0 leaks, 0 UB
 - 2026-10-02: 264s — 27 tests, 0 leaks, 0 UB
 - 2026-09-30: 307s — 26 tests, 0 leaks, 0 UB
-- 2026-09-28: 293s — 26 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
