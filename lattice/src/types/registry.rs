@@ -72,11 +72,15 @@ type NodeTable<'run> = BumpHashTable<'run, Linked<'run>>;
 /// value keeps its own memo. Every other variant's flags are [`Content::flags`]'s constants.
 fn porosity_over<'run>(node: &TypeNode<'run, Linked<'run>>) -> Flags {
     let (mut porous, mut parts) = (false, false);
+    // An application lies under its bare family, never over it: what lies under an application
+    // differs from it only in its arguments, so its constructor — its first child — hands up no
+    // porous flag.
+    let mut constructor = matches!(node, TypeNode::ConstructorApply { .. });
     children(node, &mut |child, flips| {
         porous |= if flips {
             child != Handle::ANY
         } else {
-            child.is_porous()
+            !std::mem::take(&mut constructor) && child.is_porous()
         };
         parts |= child.is_exposing() || (child.is_function_type() && child.is_porous());
     });

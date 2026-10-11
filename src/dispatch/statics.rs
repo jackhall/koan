@@ -638,17 +638,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         })
     }
 
-    /// A callable body's declared return, read off its function type or its scheme's body, where
-    /// the load typed the callable.
+    /// A callable body's declared return, read off the function type its body runs at, where the
+    /// load typed the callable.
     fn declared_return(&self, shape: &BodyShape<'graph>) -> Option<Parametric> {
-        let ktype = match shape.callable_type() {
-            Static::Closed(callable) => callable.ktype.into(),
-            Static::Rigid {
-                value: callable, ..
-            } => callable.ktype,
-            Static::Unknown => return None,
-        };
-        match ktype.view(self.types).body {
+        match self.types.node(self.in_body(shape)?) {
             TypeNode::KFunction { ret, .. } => Some(ret),
             _ => None,
         }
@@ -669,11 +662,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let types = self.types;
         let slot = match at.shape.kind() {
             ShapeKind::Callable => {
-                self.in_body(at.shape)
-                    .map_or(KType::ANY.into(), |ktype| match types.node(ktype) {
-                        TypeNode::KFunction { ret, .. } => ret,
-                        _ => KType::ANY.into(),
-                    })
+                (self.declared_return(at.shape)).unwrap_or_else(|| KType::ANY.into())
             }
             ShapeKind::Code => KType::ANY.into(),
             ShapeKind::Program | ShapeKind::Module | ShapeKind::Block => return,

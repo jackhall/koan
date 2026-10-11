@@ -637,10 +637,8 @@ fn porous_walk(types: &TypeRegistry<'_>, kt: Handle) -> bool {
         TypeNode::List { element } => at(element),
         TypeNode::Dict { key, value } => at(key) || at(value),
         TypeNode::Union { members } => members.iter().any(at),
-        TypeNode::ConstructorApply {
-            constructor,
-            arguments,
-        } => at(constructor.raw()) || arguments.values().any(at),
+        // What lies under an application differs from it only in its arguments.
+        TypeNode::ConstructorApply { arguments, .. } => arguments.values().any(at),
         TypeNode::Scheme { body, .. } => at(body),
         // A parameter or slot not typed `Any` admits a union with a minted type.
         TypeNode::KFunction { params, ret } => params.values().any(|p| p != Handle::ANY) || at(ret),

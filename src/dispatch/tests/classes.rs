@@ -108,6 +108,76 @@ fn a_call_into_a_frame_at_a_porous_slot_is_an_exit_and_a_builtin_is_none() {
 }
 
 #[test]
+fn a_call_by_name_is_an_exit_where_a_porous_value_meets_a_porous_slot() {
+    let view = "(LET v = (ints :| Counter))";
+    assert_eq!(
+        class(
+            &format!(
+                "LET g = (FN :{{x :Any}} -> Number = #(1))\n\
+                 LET f = (FN :{{c :Number}} -> Number = #({view} (g v) (c)))"
+            ),
+            "f"
+        ),
+        "porous 1",
+        "an exact callee whose parameter is porous"
+    );
+    assert_eq!(
+        class(
+            &format!(
+                "LET g = (FN :{{x :Number}} -> Number = #(1))\n\
+                 LET f = (FN :{{c :Number}} -> Number = #({view} (g c) (c)))"
+            ),
+            "f"
+        ),
+        "sealed 1",
+        "a value that is not porous at a slot that is not either"
+    );
+    assert_eq!(
+        class(
+            &format!(
+                "LET f = (FN :{{c :Number, h :(FN :{{x :Any}} -> Number)}} -> Number = \
+                 #({view} (h v) (c)))"
+            ),
+            "f"
+        ),
+        "porous 1",
+        "a callee known at most"
+    );
+    assert_eq!(
+        class(
+            &format!("LET f = (FN :{{c :Number, h :Any}} -> Number = #({view} (h v) (c)))"),
+            "f"
+        ),
+        "porous 1",
+        "a callee the load cannot type"
+    );
+}
+
+#[test]
+fn every_eval_is_an_exit() {
+    assert_eq!(
+        class(
+            "LET f = (FN :{c :Number} -> Number = \
+             #((LET v = (ints :| Counter)) (EVAL #(1) -> Number) (c)))",
+            "f"
+        ),
+        "porous 1"
+    );
+}
+
+#[test]
+fn a_module_body_counts_toward_the_body_running_it() {
+    assert_eq!(
+        class(
+            "LET f = (FN :{c :Number} -> Number = \
+             #((MODULE m = (LET v = (ints :| Counter))) (c)))",
+            "f"
+        ),
+        "sealed 1"
+    );
+}
+
+#[test]
 fn a_call_result_returned_is_the_only_exit() {
     assert_eq!(
         class(
