@@ -29,12 +29,12 @@ use super::raw::walk::{visit, visit_free_quantified};
 use super::raw::{lattice, order};
 use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
-use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle};
+use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::types::kind::KKind;
 use crate::types::node::{TypeNode, Variable};
 use crate::types::registry::TypeRegistry;
 use crate::types::schema::{Members, canonical_overloads};
-use crate::types::shape::{Specificity, shape_slots};
+use crate::types::shape::{DispatchTokenElement, Specificity, shape_slots};
 use crate::types::sig_relations::InstanceFailure;
 use crate::types::typed::{
     fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
@@ -49,7 +49,7 @@ use super::generators::{
     arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain, arb_function_type,
     arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair, arb_over_head_parameter,
     arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
-    arb_signature_type, arb_wanted_instance,
+    arb_signature_type, arb_wanted_instance, under_with,
 };
 
 thread_local! {
@@ -523,7 +523,7 @@ proptest! {
 
     /// The probe flags interning stores beside a node answer what a walk over the type would: a free
     /// quantifier reachable without crossing a shape's binder, any rigid variable reachable at all,
-    /// anything parametric, and an opaque carrier.
+    /// anything parametric, an opaque carrier, and the two porosity answers, each its definition.
     #[test]
     fn the_probe_flags_are_their_walks(declared in one()) {
         let types = registry();
@@ -560,6 +560,8 @@ proptest! {
         prop_assert_eq!(types.contains_rigid(a), rigid);
         prop_assert_eq!(types.is_concrete(a), !parametric);
         prop_assert_eq!(types.contains_carrier(a), carrier);
+        prop_assert_eq!(types.is_porous(a), porous_walk(&types, a));
+        prop_assert_eq!(types.is_exposing(a), exposing_walk(&types, a));
         // The checked conversion agrees: a scheme is never concrete, and a type is where no
         // variable is reachable from it.
         let concrete = match declared {
@@ -567,6 +569,123 @@ proptest! {
             DeclaredType::Scheme(_) => false,
         };
         prop_assert_eq!(concrete, !parametric);
+    }
+
+    /// A type holding a carrier lies under, or fits, a type only where that type is porous, over
+    /// drawn pairs.
+    #[test]
+    fn a_carrier_lies_only_under_a_porous_type(
+        a in concrete().prop_filter("holds a carrier", |a| registry().holds_carrier(*a)),
+        b in concrete().prop_filter("holds no carrier", |b| !registry().holds_carrier(*b)),
+    ) {
+        let (a, b) = (a.raw(), b.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        if order::is_subtype_of(&types, scratch, a, b) || order::fits(&types, scratch, a, b) {
+            prop_assert!(types.is_porous(b), "a carrier reached a type that is not porous");
+        }
+    }
+
+    /// The same law over a type built under a drawn one by widening it with a fresh carrier, so it
+    /// cannot pass by the generators' luck in lining a pair up.
+    #[test]
+    fn widening_with_a_carrier_reaches_only_a_porous_type((a, b) in widened_with_a_carrier()) {
+        let (world, types) = (world(), registry());
+        let bump = Bump::new();
+        let scratch = &bump;
+        prop_assert!(types.contains_carrier(a), "the move holds its carrier");
+        prop_assert!(order::is_subtype_of(&types, scratch, a, b), "the move builds a type under b");
+        prop_assert!(
+            types.is_porous(b),
+            "{} reached {}, which is not porous",
+            crate::types::display_name(wrap::<Parametric>(a), &world.types, &world.symbols),
+            crate::types::display_name(wrap::<Parametric>(b), &world.types, &world.symbols),
+        );
+    }
+}
+
+/// A drawn concrete type `b` beside the type [`under_with`] builds under it, holding a fresh
+/// carrier; a draw no move reaches is redrawn.
+fn widened_with_a_carrier() -> BoxedStrategy<(Handle, Handle)> {
+    concrete()
+        .prop_filter_map("no move reaches under the draw", |b| {
+            let bump = Bump::new();
+            under_with(&world(), &bump, b.raw()).map(|a| (a, b.raw()))
+        })
+        .boxed()
+}
+
+/// [`TypeRegistry::porous`] by its definition, as a descent: whether a type minted at run, or one
+/// built over it, can lie under or fit `kt`.
+fn porous_walk(types: &TypeRegistry<'_>, kt: Handle) -> bool {
+    let at = |child: Handle| porous_walk(types, child);
+    match types.node(kt) {
+        TypeNode::Any
+        | TypeNode::AnyValue
+        | TypeNode::Record { .. }
+        | TypeNode::Signature { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. }
+        | TypeNode::Quantified { .. }
+        | TypeNode::Lexical { .. }
+        | TypeNode::Parameter { .. }
+        | TypeNode::DeferredReturn(_)
+        | TypeNode::Sibling(_) => true,
+        // An application lies under the bare family it applies.
+        TypeNode::SetMember { kind, .. } => kind == KKind::TypeConstructor,
+        TypeNode::List { element } => at(element),
+        TypeNode::Dict { key, value } => at(key) || at(value),
+        TypeNode::Union { members } => members.iter().any(at),
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => at(constructor.raw()) || arguments.values().any(at),
+        TypeNode::Scheme { body, .. } => at(body),
+        // A parameter or slot not typed `Any` admits a union with a minted type.
+        TypeNode::KFunction { params, ret } => params.values().any(|p| p != Handle::ANY) || at(ret),
+        TypeNode::ExpressionShape { elements, ret, .. } => elements.iter().any(
+            |element| matches!(element, DispatchTokenElement::Slot(slot) if slot != Handle::ANY),
+        ) || at(ret),
+        _ => false,
+    }
+}
+
+/// [`TypeRegistry::exposing`] by its definition, as a descent: whether a value seen at `kt` can
+/// expose a part or payload of a type minted at run.
+fn exposing_walk(types: &TypeRegistry<'_>, kt: Handle) -> bool {
+    let part = |child: Handle| {
+        exposing_walk(types, child)
+            || (matches!(
+                types.node(child),
+                TypeNode::KFunction { .. }
+                    | TypeNode::ExpressionShape { .. }
+                    | TypeNode::Scheme { .. }
+            ) && porous_walk(types, child))
+    };
+    match types.node(kt) {
+        TypeNode::Any
+        | TypeNode::AnyValue
+        | TypeNode::OfKind(_)
+        | TypeNode::Signature { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. }
+        | TypeNode::Quantified { .. }
+        | TypeNode::Lexical { .. }
+        | TypeNode::Parameter { .. }
+        | TypeNode::Carrier { .. }
+        | TypeNode::DeferredReturn(_)
+        | TypeNode::SetMember { .. }
+        | TypeNode::Sibling(_) => true,
+        TypeNode::Union { members } => porous_walk(types, kt) || members.iter().any(part),
+        TypeNode::List { element } => part(element),
+        TypeNode::Dict { key, value } => part(key) || part(value),
+        TypeNode::Record { fields } => fields.values().any(part),
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => part(constructor.raw()) || arguments.values().any(part),
+        _ => false,
     }
 }
 

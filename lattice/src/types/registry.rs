@@ -16,9 +16,10 @@
 //! registry is built and held on it, so producing either costs no lookup. [`TypeRegistry::node`]
 //! reads a stored node back as a [`TypeNode`] view. A read takes a reference into the region and
 //! releases the table borrow before the reader runs, so reads nest and a reader may intern. A
-//! stored node carries four flags computed off its children at intern — whether a free quantifier,
-//! whether any rigid variable, whether any variable or scheme outside sealed content, and whether
-//! an opaque carrier outside sealed content is reachable — so each probe is one read of the node.
+//! stored node carries six flags computed off its children at intern — whether a free quantifier,
+//! whether any rigid variable, whether any variable or scheme outside sealed content, whether an
+//! opaque carrier outside sealed content is reachable, and whether the type is porous or
+//! exposing — so each probe is one read of the node.
 //!
 //! Verdicts are a fixed cache laid in the same region, described in [`verdicts`](super::verdicts).
 //! The registry therefore owns nothing on the global heap, and can itself rest in a bump.
@@ -62,6 +63,46 @@ use super::walk::unary::{Visit, children, visit, visit_free_quantified};
 /// The node table: a reference to each stored node, bucket array in the run region. A node holds
 /// its own digest, so the table holds no second copy of it.
 type NodeTable<'run> = BumpHashTable<'run, Linked<'run>>;
+
+/// The porous and exposing flags of a flagged `node`, from its children's
+/// ([type tiers](../../../design/type-tiers.md#porosity)). A child at a flipped position — a
+/// parameter or a slot — makes the node porous unless it is `Any`, since every other type there
+/// admits a union with a minted one; a child at the node's own variance hands up its porous flag.
+/// A child's **part** exposes where it is exposing, or where it is a porous function type, whose
+/// value keeps its own memo. Every other variant's flags are [`Content::flags`]'s constants.
+fn porosity_over<'run>(node: &TypeNode<'run, Linked<'run>>) -> Flags {
+    let (mut porous, mut parts) = (false, false);
+    children(node, &mut |child, flips| {
+        porous |= if flips {
+            child != Handle::ANY
+        } else {
+            child.is_porous()
+        };
+        parts |= child.is_exposing() || (child.is_function_type() && child.is_porous());
+    });
+    let (porous, exposing) = match node {
+        TypeNode::Record { .. } => (true, parts),
+        TypeNode::List { .. } | TypeNode::Dict { .. } | TypeNode::ConstructorApply { .. } => {
+            (porous, parts)
+        }
+        // Under a union a part keeps its own memo.
+        TypeNode::Union { .. } => (porous, porous || parts),
+        // What a function reaches it reaches through its captures.
+        TypeNode::KFunction { .. } | TypeNode::ExpressionShape { .. } | TypeNode::Scheme { .. } => {
+            (porous, false)
+        }
+        TypeNode::SignatureApply { .. } | TypeNode::SignatureMeet { .. } => (true, true),
+        _ => (false, false),
+    };
+    let mut flags = Flags::NONE;
+    if porous {
+        flags = flags | Flags::POROUS;
+    }
+    if exposing {
+        flags = flags | Flags::EXPOSING;
+    }
+    flags
+}
 
 /// The table's hash of `digest`: the identity hash every digest-keyed map runs.
 fn slot_hash(digest: TypeDigest) -> u64 {
@@ -294,7 +335,10 @@ impl<'run> TypeRegistry<'run> {
     /// variable's or a carrier's own flags are [`Content::flags`]'s constants.
     fn flags_over(&self, node: &TypeNode<'run, Linked<'run>>) -> Flags {
         let mut folded = Flags::NONE;
-        children(node, &mut |child, _| folded = folded | child.flags());
+        children(node, &mut |child, _| {
+            folded = folded | child.flags().without(Flags::POROSITY);
+        });
+        let folded = folded | porosity_over(node);
         // A scheme binds its own variables, so nothing under one is free here, and the scheme
         // itself is a quantified callable's type.
         if node.binds_quantifiers() {
@@ -1228,6 +1272,21 @@ impl<'run> TypeRegistry<'run> {
     /// elaborator refuses one there.
     pub fn holds_carrier(&self, kt: KType) -> bool {
         self.enter(kt.raw()).contains_carrier()
+    }
+
+    /// Whether a type minted at run, or one built over it, can lie under or fit `kt`: at `Any`,
+    /// `Value`, a record or signature type, a variable, a bare type family, a function or shape
+    /// type with a parameter or slot not typed `Any`, and over a child at the same variance that is
+    /// porous.
+    pub fn porous(&self, kt: impl Into<Parametric>) -> bool {
+        self.enter(kt.into().raw()).is_porous()
+    }
+
+    /// Whether a value seen at `kt` can expose a part or payload of a type minted at run: at `Any`,
+    /// `Value`, a kind, a signature type, a variable, a carrier, a nominal and a porous union, and
+    /// over an exposing child or a porous function type.
+    pub fn exposing(&self, kt: impl Into<Parametric>) -> bool {
+        self.enter(kt.into().raw()).is_exposing()
     }
 
     /// Whether `kt` reads the `index`-th quantifier of the enclosing scheme — what a definition asks

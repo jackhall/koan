@@ -5,7 +5,7 @@
 //! lattice's own, so a test imports `raw::order::fits` where it means the order's *fits*.
 //!
 //! [`RawRegistry`] gives the registry back the readers that moved onto a node: a scheme's split,
-//! a declared type and the four probes.
+//! a declared type and the six probes.
 
 use crate::bump::BumpAllocator;
 
@@ -24,6 +24,8 @@ pub(super) trait RawRegistry<'run> {
     fn contains_rigid(&self, handle: Handle) -> bool;
     fn is_concrete(&self, handle: Handle) -> bool;
     fn contains_carrier(&self, handle: Handle) -> bool;
+    fn is_porous(&self, handle: Handle) -> bool;
+    fn is_exposing(&self, handle: Handle) -> bool;
 }
 
 impl<'run> RawRegistry<'run> for TypeRegistry<'run> {
@@ -50,6 +52,14 @@ impl<'run> RawRegistry<'run> for TypeRegistry<'run> {
 
     fn contains_carrier(&self, handle: Handle) -> bool {
         self.enter(handle).contains_carrier()
+    }
+
+    fn is_porous(&self, handle: Handle) -> bool {
+        self.enter(handle).is_porous()
+    }
+
+    fn is_exposing(&self, handle: Handle) -> bool {
+        self.enter(handle).is_exposing()
     }
 }
 

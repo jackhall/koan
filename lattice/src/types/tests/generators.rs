@@ -1588,6 +1588,139 @@ fn step_width(
     })
 }
 
+/// The key of the carrier [`under_with`] mints: no drawn carrier shares it.
+const FRESH_KEY: ContentKey = ContentKey(u128::MAX);
+
+/// A type lying under `b` and holding a fresh carrier, built where one move reaches one: `Any` to
+/// the carrier; `Value` to a list of it; a record gains a field at it; a bare family is applied at
+/// it; a signature, or an application of one, pins an unpinned head parameter at it; a function's
+/// or shape's first parameter or slot not typed `Any` widens to a union with it; and otherwise a
+/// list, dict, union, family application, or function or shape return is rebuilt over a child the
+/// move reaches. `None` where no move does — the porosity law's targeted draw.
+pub fn under_with(world: &World, scratch: BumpAllocator<'_>, b: Handle) -> Option<Handle> {
+    let types = &world.types;
+    let name = world.type_names[0];
+    let carrier = || types.carrier(name, KType::ANY, FRESH_KEY).raw();
+    let widened = |slot: Handle| types.union_of(scratch, &[slot, carrier()]);
+    let pin_one = |signature: Handle, pins: Vec<(BinderSymbol, Handle)>| -> Option<Handle> {
+        let TypeNode::Signature { schema, .. } = types.node(signature) else {
+            unreachable!("an application applies a signature");
+        };
+        let open = schema
+            .parameters
+            .iter()
+            .map(|(name, _)| BinderSymbol::Type(*name))
+            .find(|name| pins.iter().all(|(pinned, _)| pinned != name))?;
+        let mut pins = pins;
+        pins.push((open, carrier()));
+        Some(types.signature_apply(scratch, world.concrete(signature), &pins))
+    };
+    Some(match types.node(b) {
+        TypeNode::Any => carrier(),
+        TypeNode::AnyValue => types.list(carrier()),
+        TypeNode::Record { fields } => {
+            let mut fields = fields.iter().collect::<Vec<_>>();
+            let gained = world
+                .binders
+                .iter()
+                .copied()
+                .find(|name| fields.iter().all(|(taken, _)| taken != name))?;
+            fields.push((gained, carrier()));
+            types.record(scratch, &fields)
+        }
+        TypeNode::SetMember {
+            kind: KKind::TypeConstructor,
+            ..
+        } => types.constructor_apply(
+            scratch,
+            world.concrete(b),
+            &[(BinderSymbol::Type(name), carrier())],
+        ),
+        TypeNode::Signature { schema, .. } if schema.origin == SigOrigin::Declared => {
+            pin_one(b, Vec::new())?
+        }
+        TypeNode::SignatureApply { signature, pins } => {
+            pin_one(signature.raw(), pins.iter().collect())?
+        }
+        TypeNode::SignatureMeet { members } => {
+            let mut members = members.iter().collect::<Vec<_>>();
+            let (chosen, under) = members
+                .iter()
+                .enumerate()
+                .find_map(|(at, member)| Some((at, under_with(world, scratch, *member)?)))?;
+            members[chosen] = under;
+            types.signature_meet(scratch, &members)
+        }
+        TypeNode::KFunction { params, ret } => {
+            let mut params = params.iter().collect::<Vec<_>>();
+            match params.iter().position(|(_, kt)| *kt != Handle::ANY) {
+                Some(at) => params[at].1 = widened(params[at].1),
+                None => {
+                    return Some(types.function_type(
+                        scratch,
+                        &params,
+                        under_with(world, scratch, ret)?,
+                    ));
+                }
+            }
+            types.function_type(scratch, &params, ret)
+        }
+        TypeNode::ExpressionShape {
+            elements,
+            classes,
+            ret,
+        } => {
+            let ranking = classes.copied_into(scratch);
+            let mut widen = elements.iter().any(
+                |element| matches!(element, DispatchTokenElement::Slot(slot) if slot != Handle::ANY),
+            );
+            let ret = if widen {
+                ret
+            } else {
+                under_with(world, scratch, ret)?
+            };
+            let run: Vec<DispatchTokenElement> = elements
+                .iter()
+                .map(|element| match element {
+                    DispatchTokenElement::Slot(slot) if widen && slot != Handle::ANY => {
+                        widen = false;
+                        DispatchTokenElement::Slot(widened(slot))
+                    }
+                    other => other,
+                })
+                .collect();
+            types.shape_type(&run, ranking, ret)
+        }
+        TypeNode::List { element } => types.list(under_with(world, scratch, element)?),
+        TypeNode::Dict { key, value } => match under_with(world, scratch, value) {
+            Some(value) => types.dict(key, value),
+            None => types.dict(under_with(world, scratch, key)?, value),
+        },
+        TypeNode::Union { members } => {
+            let mut members = members.iter().collect::<Vec<_>>();
+            let (chosen, under) = members
+                .iter()
+                .enumerate()
+                .find_map(|(at, member)| Some((at, under_with(world, scratch, *member)?)))?;
+            members[chosen] = under;
+            types.union_of(scratch, &members)
+        }
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => {
+            let mut arguments = arguments.iter().collect::<Vec<_>>();
+            let (chosen, under) = arguments
+                .iter()
+                .enumerate()
+                .find_map(|(at, (_, kt))| Some((at, under_with(world, scratch, *kt)?)))?;
+            arguments[chosen].1 = under;
+            types.constructor_apply(scratch, world.concrete(constructor), &arguments)
+        }
+        _ => return None,
+    })
+}
+
 /// `a ≤ b` by construction: `b` is `a` restated — a union of one member, or its node re-interned —
 /// or `a` widened.
 pub fn arb_ordered_pair(world: World, depth: u32) -> BoxedStrategy<(KType, KType)> {

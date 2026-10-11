@@ -3,8 +3,9 @@
 //!
 //! The table stores a node apart from the [`TypeNode`] a reader sees, so storage can pack what a
 //! view spells out. Each variant whose probe answers its children decide carries a [`Flags`] byte:
-//! the four answers, folded at intern so each probe is one read of the node. Every other
-//! variant's answers are a constant of its kind, which [`Content::flags`] answers.
+//! the six answers — four about variables and carriers, and porous and exposing — folded at intern
+//! so each probe is one read of the node. Every other variant's answers are a constant of its
+//! kind, which [`Content::flags`] answers.
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the region on an
 //! intern miss: a carrier's key and name, a lexical variable's name, a signature's schema, a
@@ -41,8 +42,9 @@ use super::run::{Elements, Run};
 use super::schema::SigSchema;
 use super::shape::DeferredReturnSurface;
 
-/// The four probe answers, folded from a node's children when it is interned: a free
-/// `Quantified`, any rigid variable, anything parametric, an opaque carrier.
+/// The six probe answers, folded from a node's children when it is interned: a free
+/// `Quantified`, any rigid variable, anything parametric, an opaque carrier, and the two
+/// porosity answers ([type tiers](../../../design/type-tiers.md#porosity)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct Flags(u8);
 
@@ -57,6 +59,12 @@ impl Flags {
     pub(super) const PARAMETRIC: Self = Flags(4);
     /// An opaque carrier is reachable outside sealed content.
     pub(super) const CARRIER: Self = Flags(8);
+    /// A type minted at run, or one built over it, can lie under the type or fit it.
+    pub(super) const POROUS: Self = Flags(16);
+    /// A value seen at the type can expose a part or payload of a type minted at run.
+    pub(super) const EXPOSING: Self = Flags(32);
+    /// Both porosity answers.
+    pub(super) const POROSITY: Self = Flags(16 | 32);
 
     /// These flags less `other`'s.
     pub(super) fn without(self, other: Self) -> Self {
@@ -411,6 +419,27 @@ impl<'run> StoredNode<'run> {
     pub(super) fn contains_carrier(&self) -> bool {
         self.flags().holds(Flags::CARRIER)
     }
+
+    /// Whether a type minted at run, or one built over it, can lie under or fit the node. Read off
+    /// the flag interning stored in the node.
+    pub(super) fn is_porous(&self) -> bool {
+        self.flags().holds(Flags::POROUS)
+    }
+
+    /// Whether a value seen at the node can expose a part or payload of a type minted at run. Read
+    /// off the flag interning stored in the node.
+    pub(super) fn is_exposing(&self) -> bool {
+        self.flags().holds(Flags::EXPOSING)
+    }
+
+    /// Whether the node is a function type — a function, a shape or a scheme — whose value keeps
+    /// its own memo where it sits as a part.
+    pub(super) fn is_function_type(&self) -> bool {
+        matches!(
+            self.content,
+            Content::KFunction { .. } | Content::ExpressionShape { .. } | Content::Scheme { .. }
+        )
+    }
 }
 
 impl PartialEq for StoredNode<'_> {
@@ -574,10 +603,31 @@ impl<'run> Content<'run> {
             | Content::ConstructorApply { flags, .. }
             | Content::SignatureApply { flags, .. }
             | Content::SignatureMeet { flags, .. } => flags,
-            Content::Quantified { .. } => Flags::QUANTIFIED | Flags::RIGID | Flags::PARAMETRIC,
-            Content::Lexical { .. } | Content::Parameter { .. } => Flags::RIGID | Flags::PARAMETRIC,
-            // An opaque carrier: a value carries it and dispatches on it, so it is concrete.
-            Content::Carrier { .. } => Flags::CARRIER,
+            Content::Quantified { .. } => {
+                Flags::QUANTIFIED | Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY
+            }
+            Content::Lexical { .. } | Content::Parameter { .. } => {
+                Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY
+            }
+            // An opaque carrier: a value carries it and dispatches on it, so it is concrete. Its
+            // payload is read at its own type, so it exposes; nothing but itself lies under it.
+            Content::Carrier { .. } => Flags::CARRIER | Flags::EXPOSING,
+            // Every type built over a minted one lies under these, and a part under them keeps its
+            // own memo. A signature is the top of the signature types a view's lies under.
+            // An application lies under the bare family it applies, and a pre-seal sibling has the
+            // profile of the member it becomes.
+            Content::Any
+            | Content::AnyValue
+            | Content::Signature { .. }
+            | Content::DeferredReturn(_)
+            | Content::SetMember {
+                kind: KKind::TypeConstructor,
+                ..
+            }
+            | Content::Sibling(_) => Flags::POROSITY,
+            // A type value's payload is the type it names; a nominal's is read at its
+            // representation.
+            Content::OfKind(_) | Content::SetMember { .. } => Flags::EXPOSING,
             // Sealed content and leaves: every walk treats them as leaves.
             Content::Number
             | Content::Str
@@ -595,16 +645,9 @@ impl<'run> Content<'run> {
             | Content::Binder
             | Content::Name
             | Content::Keyword
-            | Content::Any
-            | Content::AnyValue
             | Content::AnyCode
             | Content::CodeNeeding { .. }
-            | Content::Never
-            | Content::OfKind(_)
-            | Content::Signature { .. }
-            | Content::DeferredReturn(_)
-            | Content::Sibling(_)
-            | Content::SetMember { .. } => Flags::NONE,
+            | Content::Never => Flags::NONE,
         }
     }
 }
