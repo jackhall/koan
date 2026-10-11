@@ -51,8 +51,9 @@ impl<'graph> StepBundle<'graph> for Native {
         state.weight().bytes()
     }
 
-    /// As koan's own bundle crosses a birth: a spawned child's pinned birth links its spawner's
-    /// branch, every other crossing goes through the value crossing.
+    /// As koan's own bundle crosses a birth: a pinned birth links its home's branch, or merges it
+    /// where a hop's or a left birth's branch already links one; a copied one goes through the
+    /// value crossing.
     fn cross<'cell>(
         writer: Writer<'cell>,
         header: Header<'graph, 'cell, TypeHeader>,
@@ -64,8 +65,11 @@ impl<'graph> StepBundle<'graph> for Native {
     {
         let types = Types::new(test_root(), Half::of(writer, header));
         match view {
-            CrossedOperand::Pinned { view, home, .. } if born == Born::Child => {
-                home.read(|header, _| types.link(header.into_value()));
+            CrossedOperand::Pinned { view, home, .. } => {
+                home.read(|header, _| match born {
+                    Born::Child => types.link(header.into_value()),
+                    Born::Hop | Born::Left => types.link_or_merge(header.into_value()),
+                });
                 #[cfg(debug_assertions)]
                 crate::values::check_pinned_habitat::<crate::knot::KnottedFamily>(&types, view);
                 *view

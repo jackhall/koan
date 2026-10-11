@@ -1,7 +1,8 @@
 //! What a cell's branch of the type lattice costs at a birth: a spawned child links its spawner's
 //! branch rather than copying it, and a recursion that mints at every level holds each level's
-//! branch to what that level mints. And what a birth makes resolve: a hop that merges its birth's
-//! home reaches what the home read through its link.
+//! branch to what that level mints. And what a birth makes resolve and costs: a tenant's hop
+//! links its host's branch, so it reaches what the host read through its link, and costs the same
+//! however deep the host sits.
 //!
 //! A native step reads and interns through its own chain over the thread's test root, and reports
 //! the length of its write home's branch, which is the cost the birth left it. The types are lists
@@ -25,6 +26,9 @@ thread_local! {
     /// How many levels the recursion has entered, and how many it enters before it stops.
     static LEVEL: Cell<usize> = const { Cell::new(0) };
     static DEPTH: Cell<usize> = const { Cell::new(0) };
+    /// Whether the recursion's deepest level hands a list to a tenant that hops, rather than
+    /// reporting its own branch.
+    static HOPS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The list of the handed type, interned through `step`'s chain and handed on in its place.
@@ -101,8 +105,9 @@ fn first<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
 }
 
 /// Mint the list of the level above's type, then either spawn the next level `Fresh` and park on
-/// it, to wake at `wake`, or, at the bottom, report the branch's length. Each level reads the type
-/// it lists once, through its link, so its branch holds that type and its own.
+/// it, to wake at `wake`, or, at the bottom, report the branch's length or [`hand_down`]. Each
+/// level reads the type it lists once, through its link, so its branch holds that type and its
+/// own.
 fn descend<'graph>(
     mut step: Step<'_, 'graph, '_, '_, '_, Native>,
     wake: TestStep<'graph>,
@@ -110,6 +115,9 @@ fn descend<'graph>(
     let at = LEVEL.with(|level| level.replace(level.get() + 1));
     mint_list(&step);
     if at + 1 == DEPTH.with(Cell::get) {
+        if HOPS.with(Cell::get) {
+            return hand_down(step, wake);
+        }
         record(branch_length(&step).to_string());
         return step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null));
     }
@@ -125,6 +133,7 @@ fn relay<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
 
 /// What the deepest level of a minting recursion `depth` levels deep, one cell per level, reports.
 fn deepest(depth: u32) -> Vec<String> {
+    HOPS.with(|hops| hops.set(false));
     LEVEL.with(|level| level.set(0));
     DEPTH.with(|limit| limit.set(depth as usize));
     run(depth, first)
@@ -169,6 +178,62 @@ fn lists<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
     let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
     let asked = step.spawn(shares(hops, Use::Reads, KValue::List(list)));
     step.park(asked, relay, KValue::Null, None)
+}
+
+/// The deepest level, as a host: lay a list of the type it minted in its own region and hand it to
+/// a tenant that hops `Fresh` with it, then park on the tenant, to wake at `wake`.
+fn hand_down<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    wake: TestStep<'graph>,
+) -> Action<'graph, Native> {
+    let types = step.types(test_root());
+    let element = KValue::List(crate::values::List::new(
+        step.writer(),
+        std::iter::empty(),
+        &types,
+        &Bump::new(),
+    ));
+    let list = crate::values::List::new(step.writer(), [element].into_iter(), &types, &Bump::new());
+    let asked = step.spawn(shares(hops_to_measure, Use::Reads, KValue::List(list)));
+    step.park(asked, wake, KValue::Null, None)
+}
+
+/// A tenant: hop `Fresh` with its state to [`measures`].
+fn hops_to_measure<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (step, state) = step.state();
+    step.tail(
+        Placement::Fresh,
+        Work {
+            step: measures,
+            state,
+        },
+    )
+}
+
+/// The hop's successor: report its branch's length.
+fn measures<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    record(branch_length(&step).to_string());
+    step.finish_fresh(test_root(), |_, _, _| Active::new(KValue::Null))
+}
+
+/// What the successor of a tenant's `Fresh` hop reports, under a host `depth` levels deep.
+fn hop_under(depth: u32) -> Vec<String> {
+    HOPS.with(|hops| hops.set(true));
+    LEVEL.with(|level| level.set(0));
+    DEPTH.with(|limit| limit.set(depth as usize));
+    run(depth, first)
+}
+
+#[test]
+fn a_tenants_hop_costs_the_same_however_deep_its_host() {
+    let (shallow, deep) = if cfg!(miri) { (2, 3) } else { (8, 64) };
+    let shallow = hop_under(shallow);
+    assert_eq!(shallow.len(), 1, "the successor reported once");
+    assert_eq!(
+        hop_under(deep),
+        shallow,
+        "the successor links its host's branch rather than entering every level above it"
+    );
 }
 
 /// The tenant: hop `Fresh` with the list. The successor has a branch of its own and links none,

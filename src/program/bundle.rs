@@ -170,7 +170,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     }
 
     /// A pinned birth embeds as it is, and its home's branch reaches the cell's: a spawned child's
-    /// branch links it, a hop's successor or a left birth merges it. A copied one is rebuilt, each
+    /// branch links it, and a hop's successor or a left birth links it too unless the branch
+    /// already links one — a tenant of a linked host's — where it merges it. A copied one is rebuilt, each
     /// type its values carry adopted from the home's branch.
     fn cross<'cell>(
         writer: Writer<'cell>,
@@ -186,7 +187,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 let types = Types::new(view.program().root(), Half::of(writer, header));
                 home.read(|header, _| match born {
                     Born::Child => types.link(header.into_value()),
-                    Born::Hop | Born::Left => types.merge(header.into_value()),
+                    Born::Hop | Born::Left => types.link_or_merge(header.into_value()),
                 });
                 #[cfg(debug_assertions)]
                 view.values(&mut |value| {

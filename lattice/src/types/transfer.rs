@@ -1,5 +1,6 @@
 //! How a crossing makes another half's handles resolve in a chain: [`TypeChain::link`] at a spawned
-//! child's birth, [`TypeChain::merge`] at every other pin, and [`TypeChain::adopt`] in a copy.
+//! child's birth, [`TypeChain::link_or_merge`] at any other birth, [`TypeChain::merge`] at a pinned
+//! result or view, and [`TypeChain::adopt`] in a copy.
 //!
 //! A pinned value is embedded as it is, so every handle it carries must resolve in the
 //! destination as it did in its home, and nothing may walk the value to learn which ones it
@@ -7,14 +8,15 @@
 //! nodes are valid wherever the destination's are.
 //!
 //! - A **link** points the destination's branch at the home's, read on a miss and cached, so a
-//!   birth costs the same whatever the spawner holds. A cell has one spawner, so a branch links
-//!   once.
+//!   birth costs the same whatever the home holds. A branch links once: a spawned child links its
+//!   spawner's, and any other birth links its home's unless its branch already links one, as a
+//!   tenant of a linked host's does.
 //! - A **merge** enters every node of the home's branch in the destination's by reference, laying
 //!   nothing, then each branch the home's links reach, up to the first the destination already
 //!   reaches. A value of the home may carry a part whose type the home only reached through its
 //!   link: reading the part's holder caches the holder's node, not its children's. A merge into
-//!   the cell the home links stops at once, so only a destination off the home's line of spawners
-//!   — a tenant's `Fresh` hop — pays for the walk.
+//!   a branch on the home's line of spawners stops at once; one off it walks the home's line up
+//!   to it, which a birth avoids by linking whenever it can.
 //!
 //! A copied value is rebuilt in the destination, and its home may die first, so its types are
 //! re-laid: [`adopt`](TypeChain::adopt) lays each node the destination lacks at its own digest and
@@ -30,7 +32,7 @@ use super::digest::{self, ComponentMember, TypeDigest};
 use super::handle::{DeclaredType, Parametric};
 use super::node::NodeSchema;
 use super::stored::{Content, Linked, StoredNode};
-use super::tiers::{Branch, BranchTier, Habitat, Tier, lay_one};
+use super::tiers::{Branch, BranchTier, Habitat, Own, Tier, lay_one};
 
 impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// Link the own branch to `home`, the spawner's branch a pinned birth crossed from, laying the
@@ -39,6 +41,26 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         let half = self.half();
         let tier: &'t dyn Tier<'t> = lay_one(half, BranchTier(home));
         half.own_or_lay().branch().set_link(tier);
+    }
+
+    /// Make `home`'s handles resolve at a pinned birth: nothing where the chain already reaches
+    /// `home`, a [`link`](Self::link) where the own branch links nothing yet, else a
+    /// [`merge`](Self::merge). A branch `home` reaches merges too, since a link back would close a
+    /// cycle; its merge stops at the branch. A hop's successor or a left birth is born unlinked
+    /// unless it is a tenant, so its birth costs a link whatever the home reaches.
+    pub fn link_or_merge<'h: 't>(&self, home: &'h Branch<'h>) {
+        if self.reaches_branch(home.address()) {
+            return;
+        }
+        let merges = self.half().own().is_some_and(|own| {
+            own.is_linked()
+                || matches!(own, Own::Branch(branch) if home.reaches_branch(branch.address()))
+        });
+        if merges {
+            self.merge(home);
+        } else {
+            self.link(home);
+        }
     }
 
     /// Enter every node `source` holds in the own tier, by reference, where the chain does not
