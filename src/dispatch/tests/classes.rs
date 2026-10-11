@@ -182,7 +182,7 @@ fn a_call_result_returned_is_the_only_exit() {
     assert_eq!(
         class(
             "LET g = (FN :{x :Number} -> Any = #(x))\n\
-             LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (g c)))",
+             LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (g {x = c})))",
             "f"
         ),
         "porous 1"
