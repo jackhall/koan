@@ -240,7 +240,11 @@ fn a_recursion_asking_two_children_per_level_peaks_at_its_depth() {
     scheduler
         .run(work(node, KValue::Number(DEPTH)), root, Placement::Fresh)
         .expect("the root work ends");
-    assert_eq!(recorded(), ["256"], "every leaf answered");
+    assert_eq!(
+        recorded(),
+        [2f64.powf(DEPTH).to_string()],
+        "every leaf answered"
+    );
     // The running leaf and its parked ancestors, up to and including the root work: a sibling
     // whose turn has not come has no cell.
     assert_eq!(scheduler.peak_live_cells(), DEPTH as usize + 1);
