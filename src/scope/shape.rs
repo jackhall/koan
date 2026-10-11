@@ -65,7 +65,7 @@ use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::typed::{
-    Elaboration, InstanceRead, Static, StaticCallable, StaticRegistered, StaticSolution,
+    BodyClass, Elaboration, InstanceRead, Static, StaticCallable, StaticRegistered, StaticSolution,
     StaticType, Statics, UseStatics,
 };
 
@@ -952,6 +952,19 @@ impl<'graph> BodyShape<'graph> {
             .get()
             .and_then(|statics| statics.uses.get(site))
             .map_or(UseStatics::UNFIXED, |(_, fixed)| *fixed)
+    }
+
+    /// The class the load fixed for this frame body; `None` for a block or a module body, or where
+    /// the load fixed nothing.
+    pub fn class(&self) -> Option<BodyClass> {
+        self.statics.get()?.class
+    }
+
+    /// Whether the load recorded `site` as one of this shape's own minting sites.
+    pub fn mints_at(&self, site: Site) -> bool {
+        self.statics
+            .get()
+            .is_some_and(|statics| statics.minting.get(site).is_some())
     }
 
     /// Whether the load settled the ascription at `site`: its operand's static upper end lies under

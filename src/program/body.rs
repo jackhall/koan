@@ -32,7 +32,7 @@
 
 use std::fmt;
 
-use crate::elaborate::{denoted, type_declarations};
+use crate::elaborate::{declares_nominal, denoted, type_declarations};
 use crate::knot::body_activation;
 use crate::knot::module::coerce::{self, CoercionRefused};
 use crate::knot::module::surface::surface;
@@ -1177,6 +1177,16 @@ fn declared<'graph, 'here>(
         );
         &loaded
     } else {
+        debug_assert!(
+            !(component.members.iter())
+                .any(|member| shape.declarations(*member).is_some_and(declares_nominal))
+                || shape.mints_at(Site::of_node(
+                    shape
+                        .declarations(component.members[0])
+                        .expect("a type binder records its declaration node"),
+                )),
+            "the load recorded a nominal component declared where it runs as a minting site",
+        );
         type_declarations(component, runner.activation, types, &scratch).map_err(|error| {
             Stopped::Raised(rendered(writer, error.display(program.symbols(), types)))
         })?

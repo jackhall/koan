@@ -29,6 +29,20 @@ use super::expression::{Elaborator, Fellow, Groups};
 use super::reads::Reads;
 use super::signature::operator_shape;
 
+/// Whether the declaration node `node` declares a nominal type — a `NEWTYPE` of either spelling
+/// or a `UNION` — the member kinds that name a fresh identity, and so the ones a body declaring
+/// them where they run mints.
+pub fn declares_nominal(node: &KExpression<'_>) -> bool {
+    node.cache().builtin_shape().is_some_and(|form| {
+        matches!(
+            form.id,
+            BuiltinShapeId::NewTypeDefinition
+                | BuiltinShapeId::NewTypeDeclaration
+                | BuiltinShapeId::Union
+        )
+    })
+}
+
 /// One `KType` per member of `component`, in member order: a `NEWTYPE`'s newtype over its
 /// representation, a `NEWTYPE (Key Val AS Pair)`'s constructor family, a `UNION`'s canonical union
 /// over its variants — each variant a family over the union's parameters when its declarator names

@@ -333,6 +333,11 @@ fn ascribe<'graph, 'here>(
         }
     };
     if view::views(types, mode, value.concrete_ktype(), ascribed) {
+        debug_assert!(
+            mode != Ascription::Opaque || at.view.shape().mints_at(Site::of_node(node)),
+            "the load recorded the opaque view at {:?} as a minting site",
+            node.source,
+        );
         let Some(module) = value.as_module() else {
             let raised = Raised::NotAModule {
                 value: value.concrete_ktype(),
