@@ -358,8 +358,9 @@ impl<'t> Branch<'t> {
         (self as *const Self).cast()
     }
 
-    /// How many reach steps the merges into the branch have taken, summed. Tests read it — koan's
-    /// among them, through the `counters` feature, since `cfg(test)` does not reach a dependency.
+    /// How many reach steps the merges into the branch have taken, summed; a merge into a half that
+    /// ends it with no branch counts nowhere. Tests read it — koan's among them, through the
+    /// `counters` feature, since `cfg(test)` does not reach a dependency.
     #[cfg(any(test, feature = "counters"))]
     pub fn reach_steps(&self) -> usize {
         self.reach_steps.get()
@@ -434,7 +435,10 @@ impl<'t> Branch<'t> {
     /// Link `tier`, the branch at `home`, taking the depth and bottom it gives. Called once, as the
     /// branch is laid, so a branch's depth never changes once another links it.
     pub(super) fn set_link(&self, tier: &'t dyn Tier<'t>, home: ChainPosition) {
-        self.link.set(Some(tier));
+        assert!(
+            self.link.replace(Some(tier)).is_none(),
+            "a branch links once"
+        );
         self.depth.set(home.depth + 1);
         self.bottom.set(home.bottom);
     }
