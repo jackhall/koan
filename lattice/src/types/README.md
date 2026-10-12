@@ -145,8 +145,6 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Open work
 
-- [A merge's reach check](../../../roadmap/type-tiers/merge-reach-check.md) — a
-  merge whose cost does not grow with its destination's link depth.
 - [Presizing a branch](../../../roadmap/type-tiers/branch-presizing.md) — a
   branch's table laid at a predicted size, and the width of its slots.
 - [Shape branches](../../../roadmap/type-tiers/shape-branches.md) — a chain over

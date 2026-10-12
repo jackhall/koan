@@ -16,12 +16,13 @@
 //!   nothing, then each branch the home's links reach, up to the first the destination already
 //!   reaches. A value of the home may carry a part whose type the home only reached through its
 //!   link: reading the part's holder caches the holder's node, not its children's. Each branch
-//!   records, as it is laid, its link depth and its chain's bottom, so the merge knows a branch the
-//!   destination reaches by walking the destination's chain only as far as that branch's depth,
-//!   and knows a branch on another chain at once. A merge pays for how far above the destination
-//!   the two chains meet, never for how deep either sits. A hop's predecessor or a result's child
-//!   links the destination, and a result forwarded to the reader's home lies in the branch the
-//!   reader links, so each of those meets within a link.
+//!   records, as it is laid, its link depth and a tag of its chain's bottom, so the merge knows a
+//!   branch the destination reaches by walking the destination's chain only as far as that
+//!   branch's depth, and knows a branch on another chain at once unless the two chains' tags
+//!   collide, which costs steps, never a wrong answer. A merge pays for how far above the
+//!   destination the two chains meet, never for how deep either sits. A hop's predecessor or a
+//!   result's child links the destination, and a result forwarded to the reader's home lies in the
+//!   branch the reader links, so each of those meets within a link.
 //!
 //! A copied value is rebuilt in the destination, and its home may die first, so its types are
 //! re-laid: [`adopt`](TypeChain::adopt) lays each node the destination lacks at its own digest and

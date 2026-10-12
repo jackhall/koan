@@ -123,17 +123,24 @@ outliving its destination.
   holds, which identity by digest allows. A home with no branch needs no link:
   its values carry root handles alone. A link follows a pin rather than the
   call tree, and a branch links once, as it is laid, and only to a branch
-  already laid, so links never cycle.
+  already laid, so links never cycle and a branch's depth on its chain never
+  changes.
 - A **merge** enters every node of the home's branch into the destination's by
   reference: at a pinned result or view, and at a pinned birth into a half
   that has already laid a branch — a tenant's, whose branch is its host's. A
   home's value may carry a part whose type the home reached only through its
   link, since a read caches the node it reads and not that node's children, so
-  the merge goes on through the home's links, branch by branch, up to the first
-  branch the destination already reaches. A result merged into its spawner
-  stops there at once. Each such check walks the destination's own link chain,
-  so a merge into a deep destination pays a step per level above it
-  ([a merge's reach check](../../../roadmap/type-tiers/merge-reach-check.md)).
+  the merge goes on through the home's links, branch by branch, up to the
+  first branch the destination already reaches. A branch records its link
+  depth and a 32-bit tag of its chain's bottom's address as it is laid, so
+  that check walks the destination's chain only as far as the depth of the
+  branch it checks, and answers at once for a branch on a chain whose tag
+  differs; a tag shared by two chains costs steps, never a wrong answer, since
+  equal depths compare full addresses. A merge pays for how far above the
+  destination the two chains meet, never for how deep they sit. A
+  result merged into its spawner stops after the child's branch, and a result
+  forwarded to an ancestor stops at once, since the reading cell's branch
+  links it.
 - An **adopt** re-lays a type the destination lacks, and everything under it,
   at the same digests and flags, children first, for a copy, whose home need
   not outlive its destination: the third conversion on stored content,

@@ -222,8 +222,6 @@ types, and released with that tier.
 
 ## Open work
 
-- [A merge's reach check](../roadmap/type-tiers/merge-reach-check.md) — a
-  merge whose cost does not grow with its destination's link depth.
 - [Shape branches](../roadmap/type-tiers/shape-branches.md) — the shape tier,
   its brand and count, and the merge at a closure's birth.
 - [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch

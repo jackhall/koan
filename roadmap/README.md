@@ -51,6 +51,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 - [Presizing a branch](type-tiers/branch-presizing.md)
-- [A merge's reach check](type-tiers/merge-reach-check.md)
 - [Shape branches](type-tiers/shape-branches.md)
 
