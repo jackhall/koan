@@ -1,5 +1,6 @@
 //! The tiers' own contract, which no law states: a branch's size when laid, the root's variance,
-//! that a link is read once per chain and never by an intern, and which tier keeps a verdict.
+//! that a link is read once per chain and never by an intern, which tier keeps a verdict, and how
+//! far a merge walks.
 
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, SymbolInterner};
@@ -121,6 +122,102 @@ fn a_merge_enters_what_its_source_reaches_through_its_link() {
         spawner_len + 1,
         "only the child's mint is entered"
     );
+}
+
+/// The reach steps a merge into `into` takes, and how many nodes it enters.
+fn merged<'t, 's: 't>(into: &TypeChain<'t, BumpHalf<'t>>, source: &Branch<'s>) -> (usize, usize) {
+    let (steps, len) = (
+        into.half().branch().map_or(0, Branch::reach_steps),
+        into.own_len(),
+    );
+    into.merge(source);
+    (
+        BumpHalf::branch_of(into).reach_steps() - steps,
+        into.own_len() - len,
+    )
+}
+
+/// A merge walks the destination's chain only as far as the depth of the branch it checks, so a
+/// destination 64 links deep checks as many steps as one 4 deep.
+#[test]
+fn a_merge_checks_as_many_steps_however_deep_its_destination() {
+    let symbols = SymbolInterner::new();
+    for depth in [4, 64] {
+        let regions: Vec<Bump> = (0..depth + 6).map(|_| Bump::new()).collect();
+        let root = Root::seeded(&regions[0]);
+        let mut line: Vec<TypeChain<'_, BumpHalf<'_>>> = Vec::new();
+        for (level, region) in regions[1..=depth + 1].iter().enumerate() {
+            let chain = TypeChain::new(root, BumpHalf::new(region));
+            if let Some(previous) = line.last() {
+                chain.link(BumpHalf::branch_of(previous));
+            }
+            let _ = record_named(&chain, &symbols, &format!("level{level}"));
+            line.push(chain);
+        }
+        let destination = &line[depth];
+        assert_eq!(
+            BumpHalf::branch_of(destination).position().depth as usize,
+            depth
+        );
+        let linked = |region| {
+            let chain = TypeChain::new(root, BumpHalf::new(region));
+            chain.link(BumpHalf::branch_of(destination));
+            chain
+        };
+
+        let child = linked(&regions[depth + 2]);
+        let _ = record_named(&child, &symbols, "child");
+        let into_child = merged(destination, BumpHalf::branch_of(&child));
+        let into_link = merged(destination, BumpHalf::branch_of(&line[depth - 1]));
+        let (sibling, other) = (linked(&regions[depth + 3]), linked(&regions[depth + 4]));
+        let _ = record_named(&sibling, &symbols, "sibling");
+        let _ = record_named(&other, &symbols, "other");
+        let into_sibling = merged(&sibling, BumpHalf::branch_of(&other));
+        let linkless = TypeChain::new(root, BumpHalf::new(&regions[depth + 5]));
+        let _ = record_named(&linkless, &symbols, "linkless");
+        let into_linkless = merged(destination, BumpHalf::branch_of(&linkless));
+
+        assert_eq!(
+            [into_child, into_link, into_sibling, into_linkless],
+            [(2, 1), (2, 0), (3, 1), (1, 1)],
+            "steps and entries merging a child, the link, a sibling and a linkless branch at depth {depth}"
+        );
+    }
+}
+
+/// A scratch chain reaches its region's branch, so a merge into it stops there.
+#[test]
+fn a_merge_into_a_scratch_habitat_stops_at_its_region() {
+    let symbols = SymbolInterner::new();
+    let (root_region, region, child_region, scratch_region) =
+        (Bump::new(), Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let region_half = BumpHalf::new(&region);
+    let types = TypeChain::new(root, region_half);
+    let _ = record_named(&types, &symbols, "region");
+    let child = TypeChain::new(root, BumpHalf::new(&child_region));
+    child.link(BumpHalf::branch_of(&types));
+    let _ = record_named(&child, &symbols, "child");
+
+    let in_scratch = TypeChain::scratch(root, region_half, BumpHalf::new(&scratch_region));
+    assert_eq!(
+        merged(&in_scratch, BumpHalf::branch_of(&child)),
+        (3, 1),
+        "the child's mint is entered, and the region's is not"
+    );
+}
+
+#[test]
+#[should_panic(expected = "a branch links as it is laid")]
+fn a_laid_branch_takes_no_link() {
+    let symbols = SymbolInterner::new();
+    let (root_region, home_region, region) = (Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let home = TypeChain::new(root, BumpHalf::new(&home_region));
+    let _ = record_named(&home, &symbols, "x");
+    let laid = TypeChain::new(root, BumpHalf::new(&region));
+    let _ = record_named(&laid, &symbols, "y");
+    laid.link(BumpHalf::branch_of(&home));
 }
 
 /// A birth links where the destination has laid no branch, and merges where it has.

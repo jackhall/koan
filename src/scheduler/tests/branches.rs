@@ -2,7 +2,7 @@
 //! branch rather than copying it, and a recursion that mints at every level holds each level's
 //! branch to what that level mints. And what a birth makes resolve and costs: a hop reaches what
 //! its birth's home read through its link, and each way a cell deep in a recursion hops or hands a
-//! result up costs the same however deep it sits.
+//! result up costs the same however deep it sits, as does a tail cycle's merges into its host.
 //!
 //! A native step reads and interns through its own chain over the thread's test root, and reports
 //! the length of its write home's branch, which is the cost the birth left it. The types are lists
@@ -30,10 +30,15 @@ thread_local! {
     /// What the recursion's deepest level does with a list it lays, rather than reporting its
     /// own branch.
     static SHAPE: Cell<Option<Shape>> = const { Cell::new(None) };
+    /// How many frames a tail cycle has entered.
+    static FRAMES: Cell<usize> = const { Cell::new(0) };
 }
 
+/// How many frames a tail cycle enters before it reports.
+const CYCLE_FRAMES: usize = 3;
+
 /// A way the deepest level of a recursion hands a list it laid onward, each measured by the
-/// branch length of the cell the list lands in.
+/// branch length of the cell the list lands in, but for a cycle, which reports its merges' cost.
 #[derive(Clone, Copy, Debug)]
 enum Shape {
     /// To a tenant, which hops `Fresh` with it: the successor is a tree child of the level.
@@ -49,6 +54,10 @@ enum Shape {
     TenantShares,
     /// To a `Fresh` child asked to keep its result, which hands the list back up.
     KeptResult,
+    /// To a `Fresh` child, which lays a list of it and hops `Shares` to a tenant of this level; the
+    /// tenant lays a list of that in this level's region and hops `Fresh` to the next such child.
+    /// After the last, it reports this level's reach steps rather than a branch length.
+    Cycle,
 }
 
 /// The list of the handed type, interned through `step`'s chain and handed on in its place.
@@ -56,6 +65,12 @@ fn mint_list(step: &Step<'_, '_, '_, '_, '_, Native>) {
     let handed = HANDED.with(Cell::get);
     let minted = step.types().list(handed);
     HANDED.with(|slot| slot.set(minted));
+}
+
+/// How many reach steps the merges into `step`'s write home's branch have taken, or 0 where it has
+/// none.
+fn reach_steps(step: &Step<'_, '_, '_, '_, '_, Native>) -> usize {
+    step.header().get().map_or(0, Branch::reach_steps)
 }
 
 /// The length of `step`'s write home's branch, or 0 where it has none.
@@ -232,6 +247,7 @@ fn hand_down<'graph>(
             fresh(hand_back, Use::Keeps, list),
             relay_measuring as TestStep<'graph>,
         ),
+        Shape::Cycle => (fresh(cycle_frame, Use::Reads, list), wake),
     };
     let asked = step.spawn(request);
     step.park(asked, wake, KValue::Null, None)
@@ -249,38 +265,49 @@ fn hop_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
     )
 }
 
-/// Lay a list of the state and hop `Fresh` with it to [`measures`].
-fn wrap_and_hop_fresh<'graph>(
+/// Lay a list of the state and hop with it as `placement` says, to `next`.
+fn wrap_and_tail<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, Native>,
+    placement: Placement,
+    next: TestStep<'graph>,
 ) -> Action<'graph, Native> {
     let (step, state) = step.state();
     let types = step.types();
     let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
     let state = KValue::List(list);
-    step.tail(
-        Placement::Fresh,
-        Work {
-            step: measures,
-            state,
-        },
-    )
+    step.tail(placement, Work { step: next, state })
+}
+
+/// Lay a list of the state and hop `Fresh` with it to [`measures`].
+fn wrap_and_hop_fresh<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    wrap_and_tail(step, Placement::Fresh, measures)
 }
 
 /// Lay a list of the state and hop `Shares` with it to [`measures`].
 fn wrap_and_hop_shares<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
-    let (step, state) = step.state();
-    let types = step.types();
-    let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
-    let state = KValue::List(list);
-    step.tail(
-        Placement::Shares,
-        Work {
-            step: measures,
-            state,
-        },
-    )
+    wrap_and_tail(step, Placement::Shares, measures)
+}
+
+/// A cycle's frame: lay a list of the state and hop `Shares` to a tenant of the level, whose
+/// branch the hop merges this frame's into.
+fn cycle_frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    FRAMES.with(|frames| frames.set(frames.get() + 1));
+    wrap_and_tail(step, Placement::Shares, cycle_tenant)
+}
+
+/// A cycle's tenant of the level: lay a list of the state in the level's region and hop `Fresh`
+/// to the next frame, whose birth links the level's branch; after the last frame, report the
+/// level's reach steps before the result crosses back.
+fn cycle_tenant<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    if FRAMES.with(Cell::get) < CYCLE_FRAMES {
+        return wrap_and_tail(step, Placement::Fresh, cycle_frame);
+    }
+    record(reach_steps(&step).to_string());
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// The hop's successor: report its branch's length.
@@ -311,6 +338,7 @@ fn handed_under(depth: u32, shape: Shape) -> Vec<String> {
     SHAPE.with(|slot| slot.set(Some(shape)));
     LEVEL.with(|level| level.set(0));
     DEPTH.with(|limit| limit.set(depth as usize));
+    FRAMES.with(|frames| frames.set(0));
     run(depth, first)
 }
 
@@ -331,6 +359,21 @@ fn each_way_a_deep_cell_hands_a_value_on_costs_the_same_however_deep() {
             handed_under(deep, shape),
             near,
             "{shape:?}: the landing cell's branch holds the same at depth {shallow} and {deep}"
+        );
+    }
+}
+
+/// Each frame's `Shares` hop merges the frame's branch, which links the level's, into the level's:
+/// two reach steps, at any depth. Each tenant's list lies in the level's region, so the next
+/// frame's birth links the level's branch and merges nothing.
+#[test]
+fn a_tail_cycle_checks_as_many_steps_however_deep_its_host() {
+    let (shallow, deep) = if cfg!(miri) { (2, 3) } else { (4, 16) };
+    for depth in [shallow, deep] {
+        assert_eq!(
+            handed_under(depth, Shape::Cycle),
+            [(2 * CYCLE_FRAMES).to_string()],
+            "a cycle under a host {depth} levels deep"
         );
     }
 }

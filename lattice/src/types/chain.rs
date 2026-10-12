@@ -438,9 +438,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// Whether the own tier or the region tier is the branch at `at`, or reaches it through its
     /// links, walking each of their chains only as far as `at`'s depth.
     pub(super) fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool {
-        self.half
-            .own()
-            .is_some_and(|own| own.reaches_at(at, steps))
+        self.half.own().is_some_and(|own| own.reaches_at(at, steps))
             || self
                 .region
                 .is_some_and(|region| region.reaches_at(at, steps))

@@ -17,7 +17,8 @@
 //! carried the child's birth keeps alive. A chain over a scratch habitat reads its region's
 //! branch the same way ([`RegionTier`]), re-reading the region's header on every probe so a branch
 //! the region lays during the step is seen. A link never cycles: it points at a spawner, linked
-//! before its child existed.
+//! before its child existed. A branch records its link depth and its chain's bottom as it is laid,
+//! which a merge's reach check reads ([transfer.rs](super::transfer)).
 //!
 //! How a chain reaches the tier it writes is the [`Habitat`] it is built over: a [`LaysRuns`]
 //! with the half's own tier ([`Own`]) beside it. Koan implements it for a region's writer beside
@@ -431,7 +432,7 @@ impl<'t> Branch<'t> {
     }
 
     /// Link `tier`, the branch at `home`, taking the depth and bottom it gives. Called once, as the
-    /// branch is laid, so nothing links the branch at a depth it no longer has.
+    /// branch is laid, so a branch's depth never changes once another links it.
     pub(super) fn set_link(&self, tier: &'t dyn Tier<'t>, home: ChainPosition) {
         self.link.set(Some(tier));
         self.depth.set(home.depth + 1);
