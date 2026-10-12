@@ -68,8 +68,9 @@ fn more_statements_than_the_slab_cap_run_to_completion() {
 fn a_top_level_binding_is_built_in_the_root_from_the_start() {
     // A fresh list is built in the evaluation's home, which is the root; so is a call's value,
     // through a frame whose last statement forwards it there.
+    // The call's list is long, so the verdict pins it rather than copying it out of the frame.
     let mut substrate = loaded(
-        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = #([4 5]))\nLET ys = (f 0)",
+        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = #([4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35]))\nLET ys = (f 0)",
         2,
     );
     reset();
@@ -549,8 +550,9 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
 
 #[test]
 fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
+    // `a` is long, so the verdict pins the call's value rather than copying it out of the frame.
     let mut substrate = loaded(
-        "LET a = [(FN :{y :Number} -> Any = #(a))]\nLET g = (FIRST a)\nLET r = (g 0)",
+        "LET a = [(FN :{y :Number} -> Any = #(a)) 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35]\nLET g = (FIRST a)\nLET r = (g 0)",
         2,
     );
     reset();

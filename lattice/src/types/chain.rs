@@ -41,7 +41,6 @@
 //!
 //! See [identity.md § Storage](identity.md#storage-a-root-and-its-branches).
 
-#[cfg(test)]
 use std::cell::Cell;
 use std::marker::PhantomData;
 
@@ -65,7 +64,7 @@ use super::shape::{
 use super::signatures::canonical_applications;
 use super::stored::{Content, Flags, Linked, StoredNode, copied, mapped_fields};
 use super::substitute::{rewrite_siblings, substitute_quantified};
-use super::tiers::{Habitat, Own, RegionTier, Root, Tier, lay_one};
+use super::tiers::{ChainPosition, Habitat, Own, RegionTier, Root, Tier, lay_one};
 use super::verdicts::{Relation, VerdictKey};
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_free_quantified};
@@ -436,8 +435,20 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             .or_else(|| self.region.and_then(|region| region.reach(digest)))
     }
 
+    /// Whether the own tier or the region tier is the branch at `at`, or reaches it through its
+    /// links, walking each of their chains only as far as `at`'s depth.
+    pub(super) fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool {
+        self.half
+            .own()
+            .is_some_and(|own| own.reaches_at(at, steps))
+            || self
+                .region
+                .is_some_and(|region| region.reaches_at(at, steps))
+    }
+
     /// Whether the own tier or the region tier is the branch at `address`, or reaches it through
-    /// its links: a branch whose nodes every read of the chain already finds.
+    /// its links: a branch whose nodes every read of the chain already finds. The full walk a
+    /// merge's debug check compares [`reaches_at`](Self::reaches_at) against.
     pub(super) fn reaches_branch(&self, address: *const ()) -> bool {
         self.half
             .own()

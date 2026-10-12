@@ -17,6 +17,11 @@ hashbrown = "0.17"
 # `std::vec::Vec` has no stable custom-allocator seam.
 allocator-api2 = "0.2.21"
 
+[features]
+# Counters koan's tests read across the crate boundary, where `cfg(test)` does not reach. Off by
+# default, so the shipped interpreter carries none; koan's dev-dependency turns it on.
+counters = []
+
 [dev-dependencies]
 # Generated type trees for the lattice's laws and generated spellings for the symbol classes.
 proptest = "1"

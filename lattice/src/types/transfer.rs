@@ -26,6 +26,8 @@
 //!
 //! See [identity.md § Storage](identity.md#storage-a-root-and-its-branches).
 
+use std::cell::Cell;
+
 use super::chain::{TypeChain, member_content};
 use super::component::Component;
 use super::digest::{self, ComponentMember, TypeDigest};
@@ -35,12 +37,14 @@ use super::stored::{Content, Linked, StoredNode};
 use super::tiers::{Branch, BranchTier, Habitat, Tier, lay_one};
 
 impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
-    /// Link the own branch to `home`, the spawner's branch a pinned birth crossed from, laying the
-    /// own branch if none is laid. Panics on a second link.
+    /// Lay the own branch linked to `home`, the spawner's branch a pinned birth crossed from.
+    /// Panics where the half has laid a branch, since a branch's depth and bottom are fixed as it
+    /// is laid.
     pub fn link<'h: 't>(&self, home: &'h Branch<'h>) {
         let half = self.half();
+        assert!(half.own().is_none(), "a branch links as it is laid");
         let tier: &'t dyn Tier<'t> = lay_one(half, BranchTier(home));
-        half.own_or_lay().branch().set_link(tier);
+        half.own_or_lay().branch().set_link(tier, home.position());
     }
 
     /// Make `home`'s handles resolve at a pinned birth: a [`link`](Self::link) where the half has
@@ -58,14 +62,31 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
 
     /// Enter every node `source` holds in the own tier, by reference, where the chain does not
     /// already find it, then every node of each branch `source` links, up to the first branch the
-    /// chain already reaches; the own branch is laid only if one is entered.
+    /// chain already reaches, which it finds by depth and bottom, walking its chain only as far as
+    /// the depth of the branch it checks. The own branch is laid only if one is entered.
     pub fn merge<'s: 't>(&self, source: &Branch<'s>) {
         let half = self.half();
-        source.each_until(&|address| self.reaches_branch(address), &mut |node| {
-            if self.find(node.digest()).is_none() {
-                half.own_or_lay().insert(half, node);
-            }
-        });
+        let steps = Cell::new(0);
+        source.each_until(
+            &|at| {
+                let reached = self.reaches_at(at, &steps);
+                debug_assert_eq!(
+                    reached,
+                    self.reaches_branch(at.address),
+                    "a merge's reach check disagrees with the full walk: a branch's stamps are stale"
+                );
+                reached
+            },
+            &mut |node| {
+                if self.find(node.digest()).is_none() {
+                    half.own_or_lay().insert(half, node);
+                }
+            },
+        );
+        #[cfg(any(test, feature = "counters"))]
+        if let Some(super::tiers::Own::Branch(branch)) = half.own() {
+            branch.count_reach_steps(steps.get());
+        }
     }
 
     /// Make `handle` resolve in this chain, re-laying in the own tier what the chain lacks, read

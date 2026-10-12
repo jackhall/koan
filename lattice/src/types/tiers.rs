@@ -260,6 +260,23 @@ impl<'g> Root<'g> {
     }
 }
 
+/// A branch's position on its link chain, which is what a reach check compares: its address, how
+/// many links its chain holds above it, and its chain's bottom's [tag](self::bottom_tag).
+#[derive(Clone, Copy)]
+pub(super) struct ChainPosition {
+    pub address: *const (),
+    pub depth: u32,
+    pub bottom: u32,
+}
+
+/// A chain's bottom as a branch records it: 32 bits of its address, so both stamps fit in a word.
+/// Two chains whose tags differ share no branch; two whose tags match may, and the check walks
+/// down to compare addresses, so a collision costs steps, never a wrong answer.
+fn bottom_tag(address: *const ()) -> u32 {
+    // A branch is word-aligned, so its low bits name nothing.
+    (address.addr() >> 3) as u32
+}
+
 /// The types one habitat half interned at the run: a [`DigestTable`] of its nodes laid in the
 /// half, the verdicts recorded over them, laid at the first, and the tier it links, if its cell was
 /// spawned by one whose habitat held a branch. Laid by the first door that interns into the half,
@@ -268,6 +285,15 @@ pub struct Branch<'t> {
     nodes: DigestTable<'t, StoredNode<'t>>,
     verdicts: Cell<Option<&'t DigestTable<'t, VerdictEntry>>>,
     link: Cell<Option<&'t dyn Tier<'t>>>,
+    /// How many links the branch's chain holds above it: 0 where it links nothing, one more than
+    /// its link's otherwise.
+    depth: Cell<u32>,
+    /// The [tag](self::bottom_tag) of the chain's last branch, the one that links nothing; unread at
+    /// depth 0, where the branch is its own bottom, since a branch moves after [`Branch::new`].
+    bottom: Cell<u32>,
+    /// How many reach steps the merges into the branch have taken.
+    #[cfg(any(test, feature = "counters"))]
+    reach_steps: Cell<usize>,
 }
 
 const _: () = assert!(!std::mem::needs_drop::<Branch<'static>>());
@@ -279,6 +305,10 @@ impl<'t> Branch<'t> {
             nodes: DigestTable::new(lay),
             verdicts: Cell::new(None),
             link: Cell::new(None),
+            depth: Cell::new(0),
+            bottom: Cell::new(0),
+            #[cfg(any(test, feature = "counters"))]
+            reach_steps: Cell::new(0),
         }
     }
 
@@ -327,7 +357,55 @@ impl<'t> Branch<'t> {
         (self as *const Self).cast()
     }
 
-    /// Whether the branch is the one at `address`, or reaches it through its links.
+    /// How many reach steps the merges into the branch have taken, summed. Tests read it — koan's
+    /// among them, through the `counters` feature, since `cfg(test)` does not reach a dependency.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn reach_steps(&self) -> usize {
+        self.reach_steps.get()
+    }
+
+    /// Add a merge's reach steps to the branch's count.
+    #[cfg(any(test, feature = "counters"))]
+    pub(super) fn count_reach_steps(&self, steps: usize) {
+        self.reach_steps.set(self.reach_steps.get() + steps);
+    }
+
+    /// The branch's position on its link chain.
+    pub(super) fn position(&self) -> ChainPosition {
+        ChainPosition {
+            address: self.address(),
+            depth: self.depth.get(),
+            bottom: self.bottom(),
+        }
+    }
+
+    /// The tag of the chain's bottom.
+    fn bottom(&self) -> u32 {
+        match self.depth.get() {
+            0 => bottom_tag(self.address()),
+            _ => self.bottom.get(),
+        }
+    }
+
+    /// Whether the branch is the one at `at`, or reaches it through its links, walking its chain
+    /// only as far as `at`'s depth, and not at all where `at` lies on another chain. Counts one
+    /// step in `steps` per branch it reads.
+    pub(super) fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool {
+        steps.set(steps.get() + 1);
+        let depth = self.depth.get();
+        if self.bottom() != at.bottom || depth < at.depth {
+            false
+        } else if depth == at.depth {
+            self.address() == at.address
+        } else {
+            self.link
+                .get()
+                .is_some_and(|link| link.reaches_at(at, steps))
+        }
+    }
+
+    /// Whether the branch is the one at `address`, or reaches it through its links: the full walk
+    /// a merge's debug check compares [`reaches_at`](Self::reaches_at) against.
     pub(super) fn reaches_branch(&self, address: *const ()) -> bool {
         self.address() == address
             || self
@@ -340,10 +418,10 @@ impl<'t> Branch<'t> {
     /// at the first branch `reached` answers true for.
     pub(super) fn each_until(
         &self,
-        reached: &dyn Fn(*const ()) -> bool,
+        reached: &dyn Fn(ChainPosition) -> bool,
         visit: &mut dyn FnMut(Linked<'t>),
     ) {
-        if reached(self.address()) {
+        if reached(self.position()) {
             return;
         }
         self.nodes.each(&mut *visit);
@@ -352,12 +430,12 @@ impl<'t> Branch<'t> {
         }
     }
 
-    /// Link `tier`: one per branch, since a cell has one spawner.
-    pub(super) fn set_link(&self, tier: &'t dyn Tier<'t>) {
-        assert!(
-            self.link.replace(Some(tier)).is_none(),
-            "a branch links one spawner"
-        );
+    /// Link `tier`, the branch at `home`, taking the depth and bottom it gives. Called once, as the
+    /// branch is laid, so nothing links the branch at a depth it no longer has.
+    pub(super) fn set_link(&self, tier: &'t dyn Tier<'t>, home: ChainPosition) {
+        self.link.set(Some(tier));
+        self.depth.set(home.depth + 1);
+        self.bottom.set(home.bottom);
     }
 
     pub(super) fn verdict(&self, key: VerdictKey) -> Option<bool> {
@@ -439,7 +517,15 @@ impl<'t> Own<'t> {
         }
     }
 
-    /// Whether the tier is the branch at `address`, or reaches it through its links.
+    /// [`Branch::reaches_at`] over the tier; the root builder reaches no branch.
+    pub(super) fn reaches_at(self, at: ChainPosition, steps: &Cell<usize>) -> bool {
+        match self {
+            Own::Builder(_) => false,
+            Own::Branch(branch) => branch.reaches_at(at, steps),
+        }
+    }
+
+    /// [`Branch::reaches_branch`] over the tier; the root builder reaches no branch.
     pub(super) fn reaches_branch(self, address: *const ()) -> bool {
         match self {
             Own::Builder(_) => false,
@@ -481,11 +567,18 @@ pub(super) trait Tier<'t> {
     /// Record `verdict` for `key` in the tier.
     fn record(&self, key: VerdictKey, verdict: bool);
 
-    /// Whether the tier is the branch at `address`, or reaches it through its links.
+    /// [`Branch::reaches_at`] over the tier's branch.
+    fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool;
+
+    /// [`Branch::reaches_branch`] over the tier's branch.
     fn reaches_branch(&self, address: *const ()) -> bool;
 
     /// [`Branch::each_until`] over the tier's branch, which a link always is.
-    fn each_until(&self, reached: &dyn Fn(*const ()) -> bool, visit: &mut dyn FnMut(Linked<'t>));
+    fn each_until(
+        &self,
+        reached: &dyn Fn(ChainPosition) -> bool,
+        visit: &mut dyn FnMut(Linked<'t>),
+    );
 }
 
 /// A scratch chain's region tier: the region half itself, so every call re-reads the region's
@@ -512,11 +605,19 @@ impl<'r: 't, 't, H: Habitat<'r>> Tier<'t> for RegionTier<'r, H> {
         }
     }
 
+    fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool {
+        self.0.own().is_some_and(|own| own.reaches_at(at, steps))
+    }
+
     fn reaches_branch(&self, address: *const ()) -> bool {
         self.0.own().is_some_and(|own| own.reaches_branch(address))
     }
 
-    fn each_until(&self, reached: &dyn Fn(*const ()) -> bool, visit: &mut dyn FnMut(Linked<'t>)) {
+    fn each_until(
+        &self,
+        reached: &dyn Fn(ChainPosition) -> bool,
+        visit: &mut dyn FnMut(Linked<'t>),
+    ) {
         if let Some(Own::Branch(branch)) = self.0.own() {
             branch.each_until(reached, &mut |node| visit(node));
         }
@@ -544,11 +645,19 @@ impl<'h: 't, 't> Tier<'t> for BranchTier<'h> {
 
     fn record(&self, _: VerdictKey, _: bool) {}
 
+    fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool {
+        self.0.reaches_at(at, steps)
+    }
+
     fn reaches_branch(&self, address: *const ()) -> bool {
         self.0.reaches_branch(address)
     }
 
-    fn each_until(&self, reached: &dyn Fn(*const ()) -> bool, visit: &mut dyn FnMut(Linked<'t>)) {
+    fn each_until(
+        &self,
+        reached: &dyn Fn(ChainPosition) -> bool,
+        visit: &mut dyn FnMut(Linked<'t>),
+    ) {
         self.0.each_until(reached, &mut |node| visit(node));
     }
 }
