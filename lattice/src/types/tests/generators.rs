@@ -1,12 +1,12 @@
-//! The bespoke strategy the laws run over: type trees interned into a live registry as they are
+//! The bespoke strategy the laws run over: type trees interned into a live chain as they are
 //! built, so every generated value is a real handle rather than a description of one.
 //!
 //! The alphabets are tiny on purpose — three binder names, three Type names, two keywords, two
 //! value names — because the interesting collisions are structural, and a wide alphabet makes two
 //! generated types share a shape only by accident.
 //!
-//! The registry and every scratch buffer live in the bump tier — storage outside the graph — so a
-//! test owns a bare arena. A strategy is `'static`, so the registry it interns into lives over an
+//! The chain's tiers and every scratch buffer live in the bump tier — storage outside the graph —
+//! so a test owns a bare arena. A strategy is `'static`, so the chain it interns into lives over an
 //! arena leaked for the rest of the test process. Everything transient — a generated value's
 //! scratch buffers, a sealed group's window — lives in a fresh arena dropped as soon as the value
 //! is built ([`with_scratch`]), so generation keeps nothing but interned content.
@@ -18,11 +18,11 @@
 //!
 //! A law draws its precondition by construction rather than filtering for it, since a case that
 //! passes without exercising the law is invisible to proptest. A [`Vocabulary`] says what a draw
-//! may hold — variables, and whether a shape or function binds a group of its own — and the paired
-//! strategies build what independent draws line up only by accident: two shapes over one key
-//! ([`arb_shape_pair`]), arguments a candidate admits ([`arb_argument_pair`]), a shape below
-//! another ([`arb_shape_below`]), an ordered pair or chain by [`Widening`]s ([`arb_chain`]), and a
-//! scheme with its own instance ([`arb_own_instance`]). What still misses a precondition is a
+//! may hold — variables, and whether a shape or function is drawn under a group of its own — and
+//! the paired strategies build what independent draws line up only by accident: two shapes over
+//! one key ([`arb_shape_pair`]), arguments a candidate admits ([`arb_argument_pair`]), a shape
+//! below another ([`arb_shape_below`]), an ordered pair or chain by [`Widening`]s ([`arb_chain`]),
+//! and a scheme with its own instance ([`arb_own_instance`]). What still misses a precondition is a
 //! `prop_assume!` the laws' reject budget counts.
 
 use std::collections::HashMap;
@@ -30,22 +30,27 @@ use std::rc::Rc;
 
 use proptest::prelude::*;
 
-use crate::bump::{Bump, BumpAllocator};
+use crate::bump::{Bump, BumpAllocator, LaysRuns};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
+use super::raw::RawRegistry;
+use super::raw::walk::visit;
+use super::raw::{lattice, substitute};
+use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use crate::types::kind::KKind;
 use crate::types::node::{ContentKey, TypeNode};
 use crate::types::operators::{FoldDirection, ReductionMode};
-use crate::types::registry::TypeRegistry;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::shape_slots;
 use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes};
-use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet, quantifier_bounds};
+use crate::types::tiers::{Branch, BumpHalf, Habitat, Own, Root, RootBuilder};
+use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet};
 use crate::types::walk::Variance;
-use crate::types::walk::unary::{Visit, visit};
+use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
-use crate::types::{lattice, substitute};
+
+use super::RawSchemes;
 
 /// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
 fn leaked_arena() -> BumpAllocator<'static> {
@@ -57,10 +62,69 @@ pub fn with_scratch<R>(build: impl FnOnce(BumpAllocator<'_>) -> R) -> R {
     build(&Bump::new())
 }
 
-/// One registry, one interner and the alphabets, shared by every strategy in a `proptest!` block.
+/// The half a [`World`]'s chain writes: the root builder while the world seeds its root, then a
+/// branch over the frozen root.
+#[derive(Clone, Copy)]
+pub enum WorldHalf {
+    Building(&'static RootBuilder<'static>),
+    Branch(BumpHalf<'static>),
+}
+
+impl LaysRuns<'static> for WorldHalf {
+    fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'static [T] {
+        match self {
+            WorldHalf::Building(builder) => builder.lay(len, fill),
+            WorldHalf::Branch(half) => half.lay(len, fill),
+        }
+    }
+
+    fn text(self, text: &str) -> &'static str {
+        match self {
+            WorldHalf::Building(builder) => builder.text(text),
+            WorldHalf::Branch(half) => half.text(text),
+        }
+    }
+}
+
+impl Habitat<'static> for WorldHalf {
+    fn own(self) -> Option<Own<'static>> {
+        match self {
+            WorldHalf::Building(builder) => builder.own(),
+            WorldHalf::Branch(half) => half.own(),
+        }
+    }
+
+    fn own_or_lay(self) -> Own<'static> {
+        match self {
+            WorldHalf::Building(builder) => builder.own_or_lay(),
+            WorldHalf::Branch(half) => half.own_or_lay(),
+        }
+    }
+}
+
+impl World {
+    /// The branch the world's chain writes, once anything has landed in it.
+    pub fn branch(&self) -> Option<&'static Branch<'static>> {
+        match self.types.half() {
+            WorldHalf::Building(_) => None,
+            WorldHalf::Branch(half) => half.branch(),
+        }
+    }
+}
+
+/// How many generated types a world's root is seeded with before its laws draw.
+const SEEDED: usize = 256;
+
+/// One chain, one interner and the alphabets, shared by every strategy in a `proptest!` block.
+///
+/// The chain is a branch over a root seeded with types drawn from the generators themselves, so a
+/// law's types span two tiers: what repeats the seed's content resolves in the root, and what is
+/// new lands in the branch over it.
 #[derive(Clone)]
 pub struct World {
-    pub types: Rc<TypeRegistry<'static>>,
+    pub types: Rc<TypeChain<'static, WorldHalf>>,
+    /// The frozen root under `types`, seeded from the generators.
+    pub root: &'static Root<'static>,
     pub symbols: Rc<SymbolInterner>,
     pub binders: Rc<Vec<BinderSymbol>>,
     pub type_names: Rc<Vec<TypeSymbol>>,
@@ -78,8 +142,12 @@ impl World {
             |text: &str| KeywordSymbol::declared(text, &symbols).expect("a keyword token");
         let declare_value =
             |text: &str| ValueSymbol::declared(text, &symbols).expect("a value token");
-        World {
-            types: Rc::new(TypeRegistry::in_region(leaked_arena())),
+        let arena = leaked_arena();
+        let builder = RootBuilder::in_region(arena);
+        let seeding = World {
+            types: Rc::new(TypeChain::building(WorldHalf::Building(builder))),
+            // Read by no seeding draw; the frozen root replaces it below.
+            root: Root::seeded(arena),
             binders: Rc::new(vec![
                 declare_binder("x"),
                 declare_binder("y"),
@@ -93,6 +161,23 @@ impl World {
             keywords: Rc::new(vec![declare_keyword("PURE"), declare_keyword("WRAP")]),
             values: Rc::new(vec![declare_value("a"), declare_value("b")]),
             symbols,
+        };
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let pool = arb_any(seeding.clone(), 3);
+        for _ in 0..SEEDED {
+            pool.new_tree(&mut runner)
+                .expect("a generated type")
+                .current();
+        }
+        drop(pool);
+        let root = builder.freeze();
+        World {
+            types: Rc::new(TypeChain::new(
+                root,
+                WorldHalf::Branch(BumpHalf::new(arena)),
+            )),
+            root,
+            ..seeding
         }
     }
 
@@ -227,11 +312,11 @@ pub struct Vocabulary {
     /// Rigid variables outside sealed content: lexical variables and whatever an enclosing shape's
     /// group or signature's head hands down.
     pub variables: bool,
-    /// Whether a shape or function may (or must) bind a quantifier group of its own.
+    /// Whether a shape or function may (or must) be drawn under a quantifier group of its own.
     pub groups: Groups,
 }
 
-/// Whether a drawn shape or function binds a quantifier group of its own.
+/// Whether a shape or function is drawn as a scheme's body, under a quantifier group of its own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Groups {
     Never,
@@ -589,9 +674,12 @@ fn arb_binding(world: &World) -> impl Strategy<Value = Binding> + use<> {
         })
 }
 
-/// Whether a quantified binder — a shape or function over a group of its own — is reachable from
-/// `kt`.
-fn holds_binder(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: Handle) -> bool {
+/// Whether a scheme is reachable from `kt`.
+fn holds_binder<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+    scratch: BumpAllocator<'_>,
+    kt: Handle,
+) -> bool {
     visit(types, scratch, kt, &mut |_, node, _| {
         if node.binds_quantifiers() {
             Visit::Stop
@@ -648,8 +736,8 @@ fn arb_shape(
         .boxed()
 }
 
-/// An expression shape over `key`, over a quantifier group of its own where `vocabulary` allows or
-/// demands one. Every variable is minted under a variable-free bound.
+/// An expression shape over `key`, the body of a scheme over a quantifier group of its own where
+/// `vocabulary` allows or demands one. Every variable is minted under a variable-free bound.
 ///
 /// Each variable is planted at **two** positions on purpose — two slots, or a slot and the return,
 /// so a one-slot shape binds a group too — so the laws about quantified shapes run over variables
@@ -723,7 +811,7 @@ fn arb_shape_over(
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_group(scratch, &names, &bounds, &run, classes, ret)
+                            .shape_scheme_raw(scratch, &names, &bounds, &run, classes, ret)
                             .0
                     })
                 })
@@ -755,8 +843,9 @@ fn arb_plantings(
         })
 }
 
-/// A function type of one to three parameters, over a quantifier group of its own where
-/// `vocabulary` allows or demands one. Every variable is minted under a variable-free bound.
+/// A function type of one to three parameters, the body of a scheme over a quantifier group of its
+/// own where `vocabulary` allows or demands one. Every variable is minted under a variable-free
+/// bound.
 ///
 /// A variable is planted at **two** positions — two parameters, or a parameter and the return —
 /// for the reason [`arb_shape_over`] plants one at two, so the group has at most
@@ -813,7 +902,7 @@ fn arb_function(
                     with_scratch(|scratch| {
                         world
                             .types
-                            .function_group(scratch, &names, &bounds, &params, ret)
+                            .function_scheme_raw(scratch, &names, &bounds, &params, ret)
                             .0
                     })
                 })
@@ -1114,13 +1203,19 @@ pub fn arb_argument_pair(
             let (
                 TypeNode::ExpressionShape { classes, .. },
                 TypeNode::ExpressionShape { elements, ret, .. },
-            ) = (types.node(a), types.node(unrelated))
+            ) = (
+                types.node(types.split(a).1),
+                types.node(types.split(unrelated).1),
+            )
             else {
                 unreachable!("a drawn shape is one");
             };
             let b = with_scratch(|scratch| {
                 let bind = |lexical: bool| -> Vec<Handle> {
-                    substitute::quantifier_bounds(types, a)
+                    types
+                        .split(a)
+                        .0
+                        .bounds
                         .iter()
                         .zip(&picks)
                         .enumerate()
@@ -1141,7 +1236,7 @@ pub fn arb_argument_pair(
                             let instance =
                                 substitute::substitute_quantified(types, scratch, slot, bindings);
                             DispatchTokenElement::Slot(if holds_binder(types, scratch, instance) {
-                                *unrelated
+                                unrelated
                             } else {
                                 narrowing
                                     .map(|index| {
@@ -1154,10 +1249,10 @@ pub fn arb_argument_pair(
                                     .unwrap_or(instance)
                             })
                         }
-                        keyword => *keyword,
+                        keyword => keyword,
                     })
                     .collect();
-                types.shape_group(scratch, &[], &[], &run, classes, ret).0
+                types.shape_type(&run, classes.copied_into(scratch), ret)
             });
             (world.declared(a), world.declared(b))
         })
@@ -1188,8 +1283,7 @@ pub fn arb_shape_below(
                 elements,
                 classes,
                 ret,
-                ..
-            } = world.types.node(b)
+            } = world.types.node(world.types.split(b).1)
             else {
                 unreachable!("a drawn shape is one");
             };
@@ -1201,12 +1295,12 @@ pub fn arb_shape_below(
                         DispatchTokenElement::Slot(slot) => {
                             DispatchTokenElement::Slot(match widenings.next() {
                                 Some(Some(widening)) => {
-                                    widen(&world, scratch, &pool, *slot, widening)
+                                    widen(&world, scratch, &pool, slot, widening)
                                 }
-                                _ => *slot,
+                                _ => slot,
                             })
                         }
-                        keyword => *keyword,
+                        keyword => keyword,
                     })
                     .collect();
                 let ret = match narrowing {
@@ -1215,8 +1309,7 @@ pub fn arb_shape_below(
                 };
                 world
                     .types
-                    .shape_group(scratch, &[], &[], &run, classes, ret.raw())
-                    .0
+                    .shape_type(&run, classes.copied_into(scratch), ret.raw())
             });
             (world.declared(a), world.declared(b))
         })
@@ -1289,7 +1382,9 @@ pub fn arb_own_instance(
         .prop_map(move |(scheme, picks, widening)| {
             with_scratch(|scratch| {
                 let types = &world.types;
-                let bindings: Vec<Handle> = quantifier_bounds(types, scheme)
+                let bindings: Vec<Handle> = scheme
+                    .group(types)
+                    .bounds
                     .iter()
                     .zip(&picks)
                     .enumerate()
@@ -1450,14 +1545,14 @@ fn step(
         TypeNode::List { element } => types.list(at(element, Variance::Co)),
         TypeNode::Dict { key, value } if index % 2 == 0 => types.dict(key, at(value, Variance::Co)),
         TypeNode::Dict { key, value } => types.dict(at(key, Variance::Co), value),
-        TypeNode::Record { fields } if !fields.raw().is_empty() => {
-            let mut fields = fields.raw().to_vec();
+        TypeNode::Record { fields } if !fields.is_empty() => {
+            let mut fields = fields.iter().collect::<Vec<_>>();
             let chosen = index % fields.len();
             fields[chosen].1 = at(fields[chosen].1, Variance::Co);
             types.record(scratch, &fields)
         }
         TypeNode::Union { members } => {
-            let mut members = members.to_vec();
+            let mut members = members.iter().collect::<Vec<_>>();
             let chosen = index % members.len();
             members[chosen] = at(members[chosen], Variance::Co);
             types.union_of(scratch, &members)
@@ -1465,20 +1560,15 @@ fn step(
         TypeNode::ConstructorApply {
             constructor,
             arguments,
-        } if !arguments.raw().is_empty() => {
-            let mut arguments = arguments.raw().to_vec();
+        } if !arguments.is_empty() => {
+            let mut arguments = arguments.iter().collect::<Vec<_>>();
             let chosen = index % arguments.len();
             arguments[chosen].1 = at(arguments[chosen].1, Variance::Co);
             types.constructor_apply(scratch, world.concrete(constructor), &arguments)
         }
         // A parameter is contravariant and the return, the last position, covariant.
-        TypeNode::KFunction {
-            quantifiers: &[],
-            params,
-            ret,
-            ..
-        } => {
-            let mut params = params.raw().to_vec();
+        TypeNode::KFunction { params, ret } => {
+            let mut params = params.iter().collect::<Vec<_>>();
             let chosen = index % (params.len() + 1);
             if chosen == params.len() {
                 return types.function_type(scratch, &params, at(ret, Variance::Co));
@@ -1488,22 +1578,20 @@ fn step(
         }
         // A monomorphic shape's slot is contravariant and its return, the last position, covariant.
         TypeNode::ExpressionShape {
-            quantifiers: &[],
             elements,
             classes,
             ret,
-            ..
         } => {
             let slots = elements
                 .iter()
                 .filter(|element| matches!(element, DispatchTokenElement::Slot(_)))
                 .count();
             let chosen = index % (slots + 1);
+            let ranking = classes.copied_into(scratch);
             if chosen == slots {
                 let ret = at(ret, Variance::Co);
-                return types
-                    .shape_group(scratch, &[], &[], &elements[..], classes, ret)
-                    .0;
+                let run: Vec<DispatchTokenElement> = elements.iter().collect();
+                return types.shape_type(&run, ranking, ret);
             }
             let mut seen = 0;
             let run: Vec<DispatchTokenElement> = elements
@@ -1511,17 +1599,17 @@ fn step(
                 .map(|element| match element {
                     DispatchTokenElement::Slot(slot) => {
                         let slot = if seen == chosen {
-                            at(*slot, Variance::Contra)
+                            at(slot, Variance::Contra)
                         } else {
-                            *slot
+                            slot
                         };
                         seen += 1;
                         DispatchTokenElement::Slot(slot)
                     }
-                    keyword => *keyword,
+                    keyword => keyword,
                 })
                 .collect();
-            types.shape_group(scratch, &[], &[], &run, classes, ret).0
+            types.shape_type(&run, ranking, ret)
         }
         _ => beside(index),
     }
@@ -1555,32 +1643,24 @@ fn step_width(
         fields
     };
     Some(match (types.node(kt), way) {
-        (TypeNode::Record { fields }, Way::Up) if !fields.raw().is_empty() => {
-            types.record(scratch, &drop(fields.raw()))
+        (TypeNode::Record { fields }, Way::Up) if !fields.is_empty() => {
+            types.record(scratch, &drop(&fields.iter().collect::<Vec<_>>()))
         }
-        (TypeNode::Record { fields }, Way::Down) => types.record(scratch, &gain(fields.raw())?),
-        (
-            TypeNode::KFunction {
-                quantifiers: &[],
-                params,
-                ret,
-                ..
-            },
-            Way::Up,
-        ) => types.function_type(scratch, &gain(params.raw())?, ret),
-        (
-            TypeNode::KFunction {
-                quantifiers: &[],
-                params,
-                ret,
-                ..
-            },
-            Way::Down,
-        ) if params.raw().len() >= 2 => types.function_type(scratch, &drop(params.raw()), ret),
+        (TypeNode::Record { fields }, Way::Down) => {
+            types.record(scratch, &gain(&fields.iter().collect::<Vec<_>>())?)
+        }
+        (TypeNode::KFunction { params, ret }, Way::Up) => {
+            types.function_type(scratch, &gain(&params.iter().collect::<Vec<_>>())?, ret)
+        }
+        (TypeNode::KFunction { params, ret }, Way::Down) if params.len() >= 2 => {
+            types.function_type(scratch, &drop(&params.iter().collect::<Vec<_>>()), ret)
+        }
         (TypeNode::SignatureApply { signature, pins }, Way::Up) => {
-            types.signature_apply(scratch, signature, &drop(pins.raw()))
+            types.signature_apply(scratch, signature, &drop(&pins.iter().collect::<Vec<_>>()))
         }
-        (TypeNode::SignatureMeet { members }, Way::Up) => members[index % members.len()],
+        (TypeNode::SignatureMeet { members }, Way::Up) => {
+            members.get(index % members.len()).expect("a member")
+        }
         (TypeNode::ConstructorApply { constructor, .. }, Way::Up)
             if matches!(
                 types.node(constructor),
@@ -1588,6 +1668,139 @@ fn step_width(
             ) =>
         {
             constructor
+        }
+        _ => return None,
+    })
+}
+
+/// The key of the carrier [`under_with`] mints: no drawn carrier shares it.
+const FRESH_KEY: ContentKey = ContentKey(u128::MAX);
+
+/// A type lying under `b` and holding a fresh carrier, built where one move reaches one: `Any` to
+/// the carrier; `Value` to a list of it; a record gains a field at it; a bare family is applied at
+/// it; a signature, or an application of one, pins an unpinned head parameter at it; a function's
+/// or shape's first parameter or slot not typed `Any` widens to a union with it; and otherwise a
+/// list, dict, union, family application, or function or shape return is rebuilt over a child the
+/// move reaches. `None` where no move does — the porosity law's targeted draw.
+pub fn under_with(world: &World, scratch: BumpAllocator<'_>, b: Handle) -> Option<Handle> {
+    let types = &world.types;
+    let name = world.type_names[0];
+    let carrier = || types.carrier(name, KType::ANY, FRESH_KEY).raw();
+    let widened = |slot: Handle| types.union_of(scratch, &[slot, carrier()]);
+    let pin_one = |signature: Handle, pins: Vec<(BinderSymbol, Handle)>| -> Option<Handle> {
+        let TypeNode::Signature { schema, .. } = types.node(signature) else {
+            unreachable!("an application applies a signature");
+        };
+        let open = schema
+            .parameters
+            .iter()
+            .map(|(name, _)| BinderSymbol::Type(*name))
+            .find(|name| pins.iter().all(|(pinned, _)| pinned != name))?;
+        let mut pins = pins;
+        pins.push((open, carrier()));
+        Some(types.signature_apply(scratch, world.concrete(signature), &pins))
+    };
+    Some(match types.node(b) {
+        TypeNode::Any => carrier(),
+        TypeNode::AnyValue => types.list(carrier()),
+        TypeNode::Record { fields } => {
+            let mut fields = fields.iter().collect::<Vec<_>>();
+            let gained = world
+                .binders
+                .iter()
+                .copied()
+                .find(|name| fields.iter().all(|(taken, _)| taken != name))?;
+            fields.push((gained, carrier()));
+            types.record(scratch, &fields)
+        }
+        TypeNode::SetMember {
+            kind: KKind::TypeConstructor,
+            ..
+        } => types.constructor_apply(
+            scratch,
+            world.concrete(b),
+            &[(BinderSymbol::Type(name), carrier())],
+        ),
+        TypeNode::Signature { schema, .. } if schema.origin == SigOrigin::Declared => {
+            pin_one(b, Vec::new())?
+        }
+        TypeNode::SignatureApply { signature, pins } => {
+            pin_one(signature.raw(), pins.iter().collect())?
+        }
+        TypeNode::SignatureMeet { members } => {
+            let mut members = members.iter().collect::<Vec<_>>();
+            let (chosen, under) = members
+                .iter()
+                .enumerate()
+                .find_map(|(at, member)| Some((at, under_with(world, scratch, *member)?)))?;
+            members[chosen] = under;
+            types.signature_meet(scratch, &members)
+        }
+        TypeNode::KFunction { params, ret } => {
+            let mut params = params.iter().collect::<Vec<_>>();
+            match params.iter().position(|(_, kt)| *kt != Handle::ANY) {
+                Some(at) => params[at].1 = widened(params[at].1),
+                None => {
+                    return Some(types.function_type(
+                        scratch,
+                        &params,
+                        under_with(world, scratch, ret)?,
+                    ));
+                }
+            }
+            types.function_type(scratch, &params, ret)
+        }
+        TypeNode::ExpressionShape {
+            elements,
+            classes,
+            ret,
+        } => {
+            let ranking = classes.copied_into(scratch);
+            let mut widen = elements.iter().any(
+                |element| matches!(element, DispatchTokenElement::Slot(slot) if slot != Handle::ANY),
+            );
+            let ret = if widen {
+                ret
+            } else {
+                under_with(world, scratch, ret)?
+            };
+            let run: Vec<DispatchTokenElement> = elements
+                .iter()
+                .map(|element| match element {
+                    DispatchTokenElement::Slot(slot) if widen && slot != Handle::ANY => {
+                        widen = false;
+                        DispatchTokenElement::Slot(widened(slot))
+                    }
+                    other => other,
+                })
+                .collect();
+            types.shape_type(&run, ranking, ret)
+        }
+        TypeNode::List { element } => types.list(under_with(world, scratch, element)?),
+        TypeNode::Dict { key, value } => match under_with(world, scratch, value) {
+            Some(value) => types.dict(key, value),
+            None => types.dict(under_with(world, scratch, key)?, value),
+        },
+        TypeNode::Union { members } => {
+            let mut members = members.iter().collect::<Vec<_>>();
+            let (chosen, under) = members
+                .iter()
+                .enumerate()
+                .find_map(|(at, member)| Some((at, under_with(world, scratch, *member)?)))?;
+            members[chosen] = under;
+            types.union_of(scratch, &members)
+        }
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => {
+            let mut arguments = arguments.iter().collect::<Vec<_>>();
+            let (chosen, under) = arguments
+                .iter()
+                .enumerate()
+                .find_map(|(at, (_, kt))| Some((at, under_with(world, scratch, *kt)?)))?;
+            arguments[chosen].1 = under;
+            types.constructor_apply(scratch, world.concrete(constructor), &arguments)
         }
         _ => return None,
     })
@@ -1606,7 +1819,10 @@ pub fn arb_ordered_pair(world: World, depth: u32) -> BoxedStrategy<(KType, KType
             let b = with_scratch(|scratch| match widening {
                 Some(widening) => widen(&world, scratch, &pool, a.raw(), &widening),
                 None if union => world.types.union_of(scratch, &[a.raw()]),
-                None => world.types.intern(scratch, world.types.node(a.raw())),
+                None => world
+                    .types
+                    .intern(scratch, world.types.enter(a.raw()).view())
+                    .handle(),
             });
             (a, world.concrete(b))
         })
@@ -1779,7 +1995,7 @@ pub fn arb_instance_chain(
                         let classes = dense_classes(scratch, &ranks);
                         world
                             .types
-                            .shape_group(
+                            .shape_scheme_raw(
                                 scratch,
                                 quantifiers,
                                 &[KType::ANY][..quantifiers.len()],
@@ -1796,7 +2012,7 @@ pub fn arb_instance_chain(
                         }
                         world
                             .types
-                            .function_group(
+                            .function_scheme_raw(
                                 scratch,
                                 quantifiers,
                                 &[KType::ANY][..quantifiers.len()],

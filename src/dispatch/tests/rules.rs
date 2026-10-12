@@ -14,10 +14,10 @@ use crate::program::Program;
 use crate::scope::BuiltinIndex;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Interval, KType, Parametric, SchemaDraft, TypeNode, TypeRegistry, display_name, is_subtype_of,
-    shape_return, shape_slots,
+    Interval, KType, Parametric, SchemaDraft, TypeNode, display_name, is_subtype_of, shape_return,
+    shape_slots,
 };
-use crate::values::record_type;
+use crate::values::{Types, record_type};
 
 use super::super::builtins::Native;
 use super::super::rules::{Given, typed};
@@ -25,6 +25,7 @@ use super::ascription::{WHICH, ends};
 use super::generate::{Desc, NAMES, RETYPED_ONLY, chain};
 use super::run;
 use super::statics::{body, loaded};
+use crate::values::tests::reading;
 
 /// One slot as drawn: pinned at most its declared type in both intervals, or a chain `J.lower ≤
 /// I.lower ≤ I.upper ≤ J.upper`, a lower end the load never computes read as `Never`; and the
@@ -59,7 +60,7 @@ fn slot() -> impl Strategy<Value = Slot> {
 /// What the test interns into.
 struct World<'x, 'graph> {
     program: &'x Program<'graph>,
-    types: &'graph TypeRegistry<'graph>,
+    types: &'x Types<'x, 'x>,
     scratch: &'x Bump,
 }
 
@@ -190,8 +191,11 @@ fn every_rule_obeys_the_law() {
                 cases: crate::tests::case_share(1, 2),
                 ..ProptestConfig::default()
             };
-            let slots =
-                prop::collection::vec(slot(), shape_slots(declared, program.types()).count());
+            let bump = Bump::new();
+            let slots = prop::collection::vec(
+                slot(),
+                shape_slots(declared, &reading(program.root(), &bump)).count(),
+            );
             TestRunner::new(config)
                 .run(&slots, |slots| law(program, native, declared, &slots))
                 .unwrap_or_else(|failure| panic!("{native:?}: {failure}"));
@@ -206,10 +210,11 @@ fn law(
     declared: KType,
     slots: &[Slot],
 ) -> Result<(), TestCaseError> {
-    let scratch = Bump::new();
+    let (scratch, tier) = (Bump::new(), Bump::new());
+    let types = reading(program.root(), &tier);
     let world = World {
         program,
-        types: program.types(),
+        types: &types,
         scratch: &scratch,
     };
     let declared_slots: Vec<KType> = shape_slots(declared, world.types).collect();

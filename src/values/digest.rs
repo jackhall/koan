@@ -38,11 +38,11 @@
 use std::hash::{Hash, Hasher};
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Edge, bump_table};
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType};
 
 use super::circular::{Circular, Resolved};
 use super::surface::Parts;
-use super::{Knotted, Nothing, Seen, Surface, Value};
+use super::{Knotted, Nothing, Seen, Surface, Types, Value};
 
 /// A value's content identity: the low 128 bits of a BLAKE3 hash of its content, held as bytes so a
 /// node storing one keeps a word's alignment.
@@ -209,8 +209,8 @@ fn composite(tag: Tag, ktype: KType, contents: ContentDigest) -> ContentDigest {
 /// Nothing a walk reads is freed or moved while it runs, so an address names one part of a shape
 /// for the walk's life, and the shape keeps two kinds of resident that could share an address
 /// apart.
-pub struct Digests<'a, 'run, X> {
-    types: &'a TypeRegistry<'run>,
+pub struct Digests<'a, 'g, 'run, X> {
+    types: &'a Types<'g, 'run>,
     scratch: BumpAllocator<'a>,
     composites: BumpBackedMap<'a, MemoKey, ContentDigest>,
     knots: BumpBackedMap<'a, X, ContentDigest>,
@@ -251,10 +251,10 @@ struct Stacks<'a, 'cell, X> {
     held: BumpVec<'a, Seen<'cell, X>>,
 }
 
-impl<'a, 'run, X: Knotted> Digests<'a, 'run, X> {
+impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
     /// A demand's memo, reading types in `types` and staging its walks and its tables over
     /// `scratch`.
-    pub fn new(types: &'a TypeRegistry<'run>, scratch: BumpAllocator<'a>) -> Self {
+    pub fn new(types: &'a Types<'g, 'run>, scratch: BumpAllocator<'a>) -> Self {
         Digests {
             types,
             scratch,

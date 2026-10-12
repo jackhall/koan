@@ -17,8 +17,7 @@ use crate::knot::{KActivation, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::scope::{Position, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::TypeRegistry;
-use crate::values::{List, Value};
+use crate::values::{List, Types, Value};
 
 use super::layout;
 
@@ -44,7 +43,7 @@ pub fn surface<'graph, 'cell>(
     writer: Writer<'cell>,
     module: Knotted<'graph, 'cell>,
     block: &KActivation<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Unsurfaceable> {
     debug_assert_eq!(block.shape().kind(), ShapeKind::Block);

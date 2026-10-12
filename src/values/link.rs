@@ -51,7 +51,7 @@ impl<'cell, X: Knotted> Link<'cell, X> {
 
     /// The link's digest: a value's own, through `memo`, or an edge's index, since the edge names a
     /// sibling its knot's digest covers.
-    pub fn digest(&self, memo: &mut Digests<'_, '_, X>) -> ContentDigest {
+    pub fn digest(&self, memo: &mut Digests<'_, '_, '_, X>) -> ContentDigest {
         match self {
             Link::Value(value) => value.digest_in(memo),
             Link::Edge(at) => edge(*at),

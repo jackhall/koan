@@ -21,8 +21,9 @@ use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, GroupIntern, KType, NodeSchema, Parametric, SigOrigin,
-    TypeNode, TypeRegistry, constructor_param_names, dense_classes, meet, member, tied_members,
+    TypeNode, constructor_param_names, dense_classes, meet, member, tied_members,
 };
+use crate::values::Types;
 
 /// The connector keywords of the formless composites.
 struct Connectors {
@@ -51,7 +52,7 @@ static CONNECTORS: Connectors = Connectors {
 pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
     part: &ExpressionPart<'graph>,
     reader: &R,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Parametric, Elaboration> {
     let groups = Groups {
@@ -132,9 +133,9 @@ pub(super) struct Fellow<'f> {
 }
 
 /// What elaborating one expression reads through.
-pub(super) struct Elaborator<'e, 'run, 'x, R: ?Sized> {
+pub(super) struct Elaborator<'e, 'g, 'run, 'x, R: ?Sized> {
     pub(super) reader: &'e R,
-    pub(super) types: &'e TypeRegistry<'run>,
+    pub(super) types: &'e Types<'g, 'run>,
     pub(super) scratch: BumpAllocator<'x>,
     /// Fellow members of the component being declared, each at the relative handle it is named by
     /// until the group seals: a member's own sibling, or a `UNION` binder's union of its variants'
@@ -150,7 +151,7 @@ pub(super) struct Elaborator<'e, 'run, 'x, R: ?Sized> {
     pub(super) binder: Cell<bool>,
 }
 
-impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
+impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, R> {
     /// `part` as a type. A quantified callable's type is refused here: it is written only as the
     /// whole type of a signature member, which [`part_declared`](Self::part_declared) reads.
     pub(super) fn part(
@@ -890,7 +891,7 @@ pub(super) fn walk_head<'p, 'graph, E>(
 /// `owner` or it declares no `name`; a ring of newtypes with no record under it, `NEWTYPE Loop =
 /// Loop`, is peeled once round and then refused.
 pub fn declared_field(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     owner: KType,
     name: Symbol,
@@ -898,12 +899,11 @@ pub fn declared_field(
     let mut peeled = BumpVec::new_in(scratch);
     let mut layer = owner;
     loop {
-        match types.node(layer) {
-            TypeNode::Record { fields } => return fields.get(name),
-            TypeNode::SetMember {
-                schema: NodeSchema::NewType(repr),
-                ..
-            } if !peeled.contains(&repr) => {
+        if let TypeNode::Record { fields } = types.node(layer) {
+            return fields.get(name);
+        }
+        match types.member_schema(layer) {
+            Some(NodeSchema::NewType(repr)) if !peeled.contains(&repr) => {
                 peeled.push(layer);
                 layer = repr;
             }

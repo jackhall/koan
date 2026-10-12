@@ -936,9 +936,11 @@ tutorial snippet is checked against its shown output by
   values, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
   and `Result`.
-- [Path types](../../roadmap/rewrite/path-types.md) — a type member named at
+- [Path types](../../roadmap/gradual-typing/path-types.md) — a type member named at
   load through a module-valued expression, and a quantified member over an
   unpinned head parameter instantiated through its path.
+- [Shape branches](../../roadmap/type-tiers/shape-branches.md) — the atom-born
+  bit per value binder, and the ties it marks.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, and a warning for an
   overload never selected.

@@ -16,7 +16,7 @@ use crate::scheduler::{Action, Step, StepError};
 use crate::scope::{Coordinate, Target};
 use crate::type_lattice::display_name;
 use crate::values::tests::parts;
-use crate::values::{Knotted as _, Link, Value};
+use crate::values::{Knotted as _, Link, Types, Value};
 
 use evaluator::{Mini, record};
 
@@ -134,7 +134,8 @@ fn digesting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
     };
     let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
     let scratch = Bump::new();
-    let digest = wanted(program, &view, &name).digest(program.types(), &scratch);
+    let types = &step.types();
+    let digest = wanted(program, &view, &name).digest(types, &scratch);
     record(format!("{digest:?}"));
     step.leave(birth)
 }
@@ -158,7 +159,8 @@ fn typing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph,
     };
     let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
     let value = wanted(program, &view, &name);
-    record(display_name(value.ktype(), program.types(), program.symbols()).to_string());
+    let types = &step.types();
+    record(display_name(value.ktype(), types, program.symbols()).to_string());
     step.leave(birth)
 }
 
@@ -169,8 +171,9 @@ fn inspecting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gr
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
     };
+    let types = &step.types();
     for name in WANTED.with(|wanted| wanted.borrow().clone()) {
-        record(describe(wanted(program, &view, &name), program));
+        record(describe(wanted(program, &view, &name), program, types));
     }
     step.leave(birth)
 }
@@ -184,7 +187,8 @@ fn comparing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
     let names = WANTED.with(|wanted| wanted.borrow().clone());
     let [left, right] = [&names[0], &names[1]].map(|name| wanted(program, &view, name));
     let bump = Bump::new();
-    record(format!("{:?}", left.equals(&right, program.types(), &bump)));
+    let types = &step.types();
+    record(format!("{:?}", left.equals(&right, types, &bump)));
     step.leave(birth)
 }
 
@@ -202,7 +206,11 @@ fn wanted<'graph, 'cell>(
 }
 
 /// A value in a form a test can assert on.
-fn describe<'graph>(value: KValue<'graph, '_>, program: &'graph Program<'graph>) -> String {
+fn describe<'graph>(
+    value: KValue<'graph, '_>,
+    program: &'graph Program<'graph>,
+    types: &Types<'_, '_>,
+) -> String {
     match value {
         Value::Number(number) => number.to_string(),
         Value::Bool(flag) => flag.to_string(),
@@ -210,16 +218,14 @@ fn describe<'graph>(value: KValue<'graph, '_>, program: &'graph Program<'graph>)
         Value::Str(text) => format!("{text:?}"),
         Value::List(list) => {
             let scratch = Bump::new();
-            let cells: Vec<_> = parts(value, program.types(), &scratch)
+            let cells: Vec<_> = parts(value, types, &scratch)
                 .into_iter()
-                .map(|cell| describe(cell, program))
+                .map(|cell| describe(cell, program, types))
                 .collect();
             format!("[{}]@{:p}", cells.join(" "), list)
         }
-        Value::Type(value) => {
-            display_name(value.handle(), program.types(), program.symbols()).to_string()
-        }
-        Value::Knotted(member) => describe_member(member, program),
+        Value::Type(value) => display_name(value.handle(), types, program.symbols()).to_string(),
+        Value::Knotted(member) => describe_member(member, program, types),
         _ => String::from("other"),
     }
 }
@@ -229,6 +235,7 @@ fn describe<'graph>(value: KValue<'graph, '_>, program: &'graph Program<'graph>)
 fn describe_member<'graph>(
     member: Knotted<'graph, '_>,
     program: &'graph Program<'graph>,
+    types: &Types<'_, '_>,
 ) -> String {
     let knot = member
         .member()
@@ -241,7 +248,7 @@ fn describe_member<'graph>(
         let members: Vec<_> = module
             .members()
             .iter()
-            .map(|value| describe(*value, program))
+            .map(|value| describe(*value, program, types))
             .collect();
         return format!("module({})", members.join(", "));
     }
@@ -256,7 +263,7 @@ fn describe_member<'graph>(
                 let value = match link {
                     Link::Edge(edge) if member.sibling(*edge) == member => String::from("self"),
                     Link::Edge(_) => String::from("edge"),
-                    Link::Value(value) => describe(*value, program),
+                    Link::Value(value) => describe(*value, program, types),
                 };
                 format!("{}={value}", program.symbols().display(name.symbol()))
             })

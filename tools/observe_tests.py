@@ -294,6 +294,8 @@ SLATE_WHITELIST_RE = re.compile(
 SLATE_WHITELIST_PATH_RE = re.compile(r"^- `((?:[a-z_]+/)?src/[^`]+\.rs)`", re.MULTILINE)
 
 UNSAFE_RE = re.compile(r"\bunsafe\b")
+# Embedded crates whose `unsafe` koan's slate pins; cellgraph carries a slate of its own.
+EMBEDDED_UNSAFE_ROOTS = (Path("lattice/src"),)
 
 FINGERPRINT_RE = re.compile(
     r"<!--\s*slate-fingerprint\s*\n(.*?)\n-->",
@@ -368,6 +370,10 @@ def cmd_slate_audit(args):
     src_root = Path(args.src)
 
     live_counts = count_unsafe(src_root)
+    # The embedded crates' production `unsafe` is pinned by koan's slate too.
+    for crate_root in EMBEDDED_UNSAFE_ROOTS:
+        if crate_root.exists():
+            live_counts.update(count_unsafe(crate_root))
     slate_files = parse_slate_groups(slate_text)
     safe_anchors = parse_safe_anchors(slate_text)
     fingerprints = parse_fingerprint(slate_text)

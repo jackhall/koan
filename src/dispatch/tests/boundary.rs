@@ -16,6 +16,7 @@ const PREFIXES: &[&str] = &[
     "crate::scope",
     "crate::source",
     "crate::symbols",
+    "crate::tests::allocation_count",
     "crate::tests::boundary",
     "crate::tests::case_share",
     "crate::type_lattice",

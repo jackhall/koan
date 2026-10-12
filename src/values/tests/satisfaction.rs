@@ -9,8 +9,9 @@ use super::{List, Tagged, Value, pin, text, with_fixture};
 #[test]
 fn leaves_any_and_never_answer_by_the_order() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let string = text(context.writer(), "s");
             assert!(satisfies(
                 KType::NUMBER,
@@ -47,8 +48,9 @@ fn a_union_slot_takes_what_any_member_takes() {
 #[test]
 fn a_list_slot_reads_the_memoized_list_type() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let numbers = [Value::Number(1.0), Value::Number(2.0)];
             let list = Value::List(List::new(
                 context.writer(),
@@ -72,8 +74,9 @@ fn a_list_slot_reads_the_memoized_list_type() {
 #[test]
 fn a_kind_slot_takes_a_type_value_of_that_kind() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let number = Value::Type(TypeValue::new(context.writer(), KType::NUMBER, types));
             assert!(satisfies(
                 KType::of_kind(KKind::ProperType),
@@ -107,9 +110,10 @@ fn a_kind_slot_takes_a_type_value_of_that_kind() {
 fn a_circular_value_satisfies_by_its_node_memo() {
     use super::{Holding, ring};
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let ring_type = fixture.ring_type("Ring", "next");
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let member = Holding::Knotted(ring(fixture, context.writer(), ring_type, &[None])[0]);
             assert!(satisfies(ring_type, &member, types, scratch));
             assert!(satisfies(KType::ANY, &member, types, scratch));
@@ -123,9 +127,10 @@ fn a_value_a_type_and_a_quote_each_satisfy_their_family_alone() {
     use super::{Stand, quote};
     use crate::values::Value as Holding;
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let quote = quote(fixture, "#(a)");
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let number = Holding::Number(1.0);
             let type_value = Holding::Type(TypeValue::new(writer, KType::NUMBER, types));
@@ -251,8 +256,9 @@ fn a_quote_satisfies_its_own_kind_and_every_kind_above_it() {
 #[test]
 fn a_code_slot_takes_no_value() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let string = text(context.writer(), "y");
             assert!(!satisfies(KType::NAME, &string, types, scratch));
             assert!(!satisfies(

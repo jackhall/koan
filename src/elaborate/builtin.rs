@@ -16,15 +16,16 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{BuiltinShape, ShapeElement};
 use crate::symbols::{BinderSymbol, StaticName, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    DispatchTokenElement, KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
+    DispatchTokenElement, KKind, KType, RecursiveGroupWindow, RelativeSchema,
 };
+use crate::values::Types;
 
 /// The handle of each overload of `shape`, in overload order. Empty for a reserved bucket, which
 /// nothing registers under: its slot types exist to keep its parts raw so its miss stays a miss,
 /// not to name a callable anything can reach.
 pub fn builtin_shape_types<'x>(
     shape: &'static BuiltinShape,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     if shape.reserved {
@@ -42,7 +43,7 @@ pub fn builtin_shape_types<'x>(
             });
         }
         let ret = shape.returns[overload];
-        handles.push(types.shape_type(scratch, &elements, &[], ret));
+        handles.push(types.shape_type(&elements, &[], ret));
     }
     handles.leak()
 }
@@ -56,7 +57,7 @@ static MESSAGE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "mess
 /// sealed through the window that declaration seals through, its names recorded in `symbols`.
 /// Each variant is a family over both parameters wrapping the one it is named for.
 pub fn builtin_result(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> KType {
@@ -97,7 +98,7 @@ pub fn builtin_result(
 /// window that declaration seals through, its names recorded in `symbols`. A koan error value is a
 /// tagged value of it.
 pub fn builtin_error(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> KType {

@@ -15,9 +15,9 @@ use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, res
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeySymbol};
-use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
+use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{CodeView, ContentDigest, Link, List, Seen, Value, Weight};
+use crate::values::{CodeView, ContentDigest, Link, List, Seen, Types, Value, Weight};
 
 use super::{KActivationView, KValue, Knotted, Node};
 
@@ -303,7 +303,7 @@ pub fn using<'graph, 'cell>(
     writer: Writer<'cell>,
     code: Knotted<'graph, 'cell>,
     source: KValue<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Knotted<'graph, 'cell>, UsingRefused> {
     let node = code
@@ -356,7 +356,7 @@ fn keyed<'graph, 'cell>(
     shape: &BodyShape<'graph>,
     key: KeySymbol,
     source: KValue<'graph, 'cell>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {
@@ -366,24 +366,11 @@ fn keyed<'graph, 'cell>(
     for member in super::module::layout::functions_at(module, key, types, scratch) {
         let registered = super::module::layout::registered_shape(member)
             .expect("a registration member is a function");
-        // Only the ranking is read, which a scheme's node spells as a type's does.
-        let node = registered.node(types);
-        let TypeNode::ExpressionShape {
-            elements, classes, ..
-        } = node
-        else {
+        // Only the ranking is read, which a scheme's body spells as a type's does.
+        let TypeNode::ExpressionShape { classes, .. } = registered.view(types).body else {
             unreachable!("a registered shape is an expression shape")
         };
-        // The lattice stores written order as no classes; the shape spells every class out.
-        let ranking = if classes.is_empty() {
-            let slots = elements
-                .iter()
-                .filter(|element| matches!(element, DispatchTokenElement::Slot(_)))
-                .count();
-            scratch.alloc_slice_fill_iter((0..slots).map(|class| class as u8))
-        } else {
-            classes
-        };
+        let ranking = classes.copied_into(scratch);
         if !shape.ranks_alike(key, ranking) {
             return Err(UsingRefused::Ranking { key });
         }

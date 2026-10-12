@@ -26,7 +26,7 @@ names the type a value carries in type position: `TYPE OF` has no shape.
 
 **Requires:**
 
-- [Path types](../rewrite/path-types.md) — a parameter's member is a path
+- [Path types](path-types.md) — a parameter's member is a path
   through a leaf.
 
 **Unblocks:** none — a leaf.

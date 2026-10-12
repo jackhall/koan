@@ -16,11 +16,11 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table};
 use crate::symbols::{Symbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
+use crate::type_lattice::{KType, display_name};
 
 use super::circular::Resolved;
 use super::surface::Parts;
-use super::{Key, Knotted, Seen, Surface, Value};
+use super::{Key, Knotted, Seen, Surface, Types, Value};
 
 impl<'a, X: Knotted> Value<'a, X> {
     /// Render the value into `out`. A string writes its text bare, a dict key quoted; a list reads
@@ -35,7 +35,7 @@ impl<'a, X: Knotted> Value<'a, X> {
     pub fn render(
         &self,
         out: &mut impl fmt::Write,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
@@ -80,9 +80,9 @@ struct Marks<'x, X> {
 }
 
 /// The write's state.
-struct Render<'o, 'env, 'run, 'x, O, X> {
+struct Render<'o, 'env, 'g, 'run, 'x, O, X> {
     out: &'o mut O,
-    types: &'env TypeRegistry<'run>,
+    types: &'env Types<'g, 'run>,
     symbols: &'env SymbolInterner,
     scratch: BumpAllocator<'x>,
     marks: Marks<'x, X>,
@@ -90,7 +90,7 @@ struct Render<'o, 'env, 'run, 'x, O, X> {
     labelled: BumpBackedMap<'x, Node<X>, usize>,
 }
 
-impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, 'x, O, X> {
+impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, 'x, O, X> {
     fn value<'a>(&mut self, root: Seen<'a, X>) -> fmt::Result {
         let mut pieces = BumpVec::new_in(self.scratch);
         pieces.push(Piece::Value(root));

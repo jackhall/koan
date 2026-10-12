@@ -6,14 +6,16 @@
 //! producer's delivery completes it, and the consumer wakes exactly once.
 
 use crate::knot::{KValue, KValueFamily};
+use crate::memory::Bump;
 use crate::memory::{Active, Writer};
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, with_types};
+use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph};
 use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
 use crate::scheduler::{
     Action, Placement, Received, Request, Scheduler, Step, StepError, Taken, Use,
 };
+use crate::type_lattice::Root;
 
 /// Which end a producer takes, encoded with the `Use` it is asked with into the number a test's
 /// root work is born holding: a native step is a bare `fn`, so what it is to do reaches it as data.
@@ -30,7 +32,7 @@ fn use_of(code: u32) -> Use {
 }
 
 /// The number a root work is born holding, for a producer that ends by `end` under `use_`.
-fn code_of(end: u32, use_: Use) -> KValue<'static, 'static> {
+fn code_of<'graph>(end: u32, use_: Use) -> KValue<'graph, 'graph> {
     let use_ = match use_ {
         Use::Reads => 0,
         Use::Keeps => 1,
@@ -71,14 +73,12 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
         return step.failed(StepError::Stale);
     };
     match code - code % 10 {
-        FINISH_FRESH => step.finish_fresh(seven),
-        FINISH_IN_HOME => with_types(|types| {
-            step.finish_in_home(types, [], |writer, [], witness| seven(writer, witness))
-        }),
+        FINISH_FRESH => step.finish_fresh(|writer, _, witness| seven(writer, witness)),
+        FINISH_IN_HOME => step.finish_in_home([], |writer, _, [], witness| seven(writer, witness)),
         _ => {
             let value = crate::values::text(step.writer(), "seven");
             record(format!("built {}", where_text(value)));
-            with_types(|types| step.finish(value, types))
+            step.finish(value)
         }
     }
 }
@@ -121,7 +121,7 @@ fn record_received(received: Result<Received<'_, '_, '_>, StepError>) -> Result<
 
 /// The consumer, woken: read its one slot back.
 fn read_back<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    for received in with_types(|types| step.results(types).collect::<Vec<_>>()) {
+    for received in step.results().collect::<Vec<_>>() {
         if let Err(error) = record_received(received) {
             return step.failed(error);
         }
@@ -131,9 +131,10 @@ fn read_back<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'
 
 /// Run one consumer over one producer, and hand back what they recorded: the producer's build,
 /// then the consumer's read.
-fn one_call(end: u32, use_: Use, consumer: TestStep<'static>) -> Vec<String> {
+fn one_call(end: u32, use_: Use, consumer: AnyStep) -> Vec<String> {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(4);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(4, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -242,11 +243,11 @@ fn middle<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, 
 
 /// The middle, woken: read the leaf's result and hand it on, kept, to the grandparent.
 fn middle_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let Some(Ok(Received::Here(value))) = with_types(|types| step.results(types).next()) else {
+    let Some(Ok(Received::Here(value))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("middle read here {}", where_text(value)));
-    with_types(|types| step.finish(value, types))
+    step.finish(value)
 }
 
 /// The grandparent, woken: a second marker, then the result.
@@ -257,7 +258,7 @@ fn grandparent_woken<'graph>(
         "marker {}",
         where_text(crate::values::text(step.writer(), "marker"))
     ));
-    let Some(Ok(Received::Here(value))) = with_types(|types| step.results(types).next()) else {
+    let Some(Ok(Received::Here(value))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("grandparent read here {}", describe(value)));
@@ -278,7 +279,8 @@ fn address(entry: &str) -> usize {
 /// one after — and the result reached the top as the same text.
 fn forwards(end: u32) {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(4);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(4, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -333,7 +335,8 @@ fn a_build_in_home_forwarded_is_built_in_the_spawners_home() {
 #[test]
 fn a_finished_value_forwarded_reaches_the_spawners_home() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(4);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(4, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -386,12 +389,12 @@ fn scale<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
     let KValue::Number(born) = state else {
         return step.failed(StepError::Stale);
     };
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(born * 10.0)))
+    step.finish_fresh(move |_, _, _| Active::new(KValue::Number(born * 10.0)))
 }
 
 /// The consumer, woken: read every slot of the run it registered.
 fn drain_the_run<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let results: Vec<_> = with_types(|types| step.results(types).collect());
+    let results: Vec<_> = step.results().collect();
     record(format!("woke on {}", results.len()));
     for received in results {
         match received {
@@ -405,7 +408,8 @@ fn drain_the_run<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Acti
 #[test]
 fn a_consumer_parked_on_three_producers_wakes_once_when_the_last_slot_fills() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(4);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(4, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler

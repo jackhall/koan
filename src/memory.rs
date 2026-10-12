@@ -27,7 +27,8 @@ mod tests;
 
 pub use knot::{Edge, Knot, KnotPlan, Member};
 pub use lattice::bump::{
-    Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, strongly_connected_components,
+    Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, LaysRuns,
+    strongly_connected_components,
 };
 pub(crate) use lattice::bump::{bump_set, bump_table};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};

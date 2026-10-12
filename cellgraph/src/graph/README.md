@@ -433,7 +433,10 @@ What each thing carries:
   into an absorbed bump again, so a long chain keeps each link's headroom rather
   than compacting it. The memoized closure below lives in that storage too — a
   run of ids in the sealed cell's own bump, written once — so the sealed cell's
-  bookkeeping is its own bytes and its price says so.
+  bookkeeping is its own bytes and its price says so. The region's
+  [header slot](../../README.md#the-contract-four-embedder-types) travels with
+  it, so an operand redeemed out of sealed storage crosses with the header its
+  region was sealed with.
 - **Per slab slot** — one sparse reverse-naming set, one reach table (interned
   on content, named by index, and the only durable habitat a slab-side mask
   has), and one head word naming the lineage of departed cells whose dormant

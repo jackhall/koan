@@ -7,9 +7,9 @@ use crate::scope::{BodyShape, Position, Site, Slot, Which};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, Scheme,
-    TypeRegistry, display_name,
+    display_name,
 };
-use crate::values::Value;
+use crate::values::{Types, Value};
 
 use super::super::{callable_type, type_expression};
 use super::{Held, Program, nulls, scalars, with_program};
@@ -91,7 +91,7 @@ LET Bare = Alias";
             ];
             assert_eq!(
                 elaborated(&program, 6),
-                Ok(types.shape_type(scratch, &twice, &[], KType::NUMBER))
+                Ok(types.shape_type(&twice, &[], KType::NUMBER))
             );
             assert_eq!(elaborated(&program, 7), Ok(KType::STR));
         },
@@ -108,14 +108,14 @@ LET Scaled = :(EXPR #(MOVE 20 :Number TO 10 :Str) -> Number)
 LET Written = :(EXPR #(MOVE _ :Number TO _ :Str) -> Number)
 LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
     with_program(source, scalars, nulls, |program| {
-        let (types, scratch) = (program.types, program.scratch);
+        let types = program.types;
         let elements = [
             keyword("MOVE", program.symbols),
             DispatchTokenElement::Slot(KType::NUMBER),
             keyword("TO", program.symbols),
             DispatchTokenElement::Slot(KType::STR),
         ];
-        let ranked = types.shape_type(scratch, &elements, &[1, 0], KType::NUMBER);
+        let ranked = types.shape_type(&elements, &[1, 0], KType::NUMBER);
         assert_eq!(elaborated(&program, 0), Ok(ranked));
         assert_eq!(elaborated(&program, 1), Ok(ranked));
         assert_ne!(elaborated(&program, 2), Ok(ranked));
@@ -129,7 +129,7 @@ LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
 
 /// A union `Shape` of two singleton members, `Circle` and `Square`.
 fn shapes(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     symbols: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
@@ -233,7 +233,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                 .into())
         );
         let shape = |elements: &[DispatchTokenElement<KType>], ret| {
-            DeclaredType::from(types.shape_type(scratch, elements, &[], ret))
+            DeclaredType::from(types.shape_type(elements, &[], ret))
         };
         let number = DispatchTokenElement::Slot(KType::NUMBER);
         // Every definition is typed by its function type, over its head's **slot names**: a call
@@ -439,7 +439,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
 
 /// The scalars and the value family's top, which a bound most often names.
 fn with_value(
-    _: &TypeRegistry<'_>,
+    _: &Types<'_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
@@ -448,8 +448,8 @@ fn with_value(
 
 /// Each variable's bound in `scheme`'s own group, sorted, so a canonical order the test does not
 /// pin reads the same either way.
-fn sorted_bounds(types: &TypeRegistry<'_>, scheme: Scheme) -> Vec<KType> {
-    let mut bounds = crate::type_lattice::quantifier_bounds(types, scheme).to_vec();
+fn sorted_bounds(types: &Types<'_, '_>, scheme: Scheme) -> Vec<KType> {
+    let mut bounds = scheme.group(types).bounds.to_vec();
     bounds.sort();
     bounds
 }
@@ -509,13 +509,12 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
             "`Held` is named first; `Unused`, named by no position, comes after"
         );
         assert_eq!(
-            crate::type_lattice::quantifier_bounds(
-                types,
-                which
-                    .ktype
-                    .as_scheme()
-                    .expect("a `FOR ALL` callable is a scheme")
-            ),
+            which
+                .ktype
+                .as_scheme()
+                .expect("a `FOR ALL` callable is a scheme")
+                .group(types)
+                .bounds,
             &[KType::ANY, KType::ANY_VALUE]
         );
     });
@@ -583,12 +582,7 @@ fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
         assert_eq!(
             registered.shape,
             types
-                .shape_type(
-                    scratch,
-                    &[number, keyword("~", symbols), number],
-                    &[],
-                    KType::NUMBER
-                )
+                .shape_type(&[number, keyword("~", symbols), number], &[], KType::NUMBER)
                 .into()
         );
         assert_eq!(registered.parameters, ParameterBinding::Operands);

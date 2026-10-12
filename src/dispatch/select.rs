@@ -26,10 +26,10 @@ use crate::scope::{Candidate, Coordinate, IMPLICIT};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeRegistry, Verdict, admit_by_class, outranks, satisfied_by,
-    scheme_slots, select_by_class, shape_slots, solving_slots, substitute_quantified,
+    DeclaredType, KType, Parametric, Verdict, admit_by_class, outranks, satisfied_by, scheme_slots,
+    select_by_class, shape_slots, solving_slots, substitute_quantified,
 };
-use crate::values::{List, Record, TypeValue, Value};
+use crate::values::{List, Record, TypeValue, Types, Value};
 
 use super::{Evaluation, Operand};
 
@@ -65,7 +65,7 @@ pub(super) fn selected<'x, 'graph, 'here>(
     contributed: &[Option<KType>],
     scratch: &'x Bump,
 ) -> Selection<'x, 'graph, 'here> {
-    let types = at.program.types();
+    let types = &at.types;
     let mut admitted: BumpVec<'_, Admitted<'x, 'graph, 'here>> = BumpVec::new_in(scratch);
     let mut consider = |callee: KValue<'graph, 'here>, verdict: Verdict| {
         let Some(shape) = registered_shape(callee) else {
@@ -159,7 +159,7 @@ pub(super) fn winner(
 /// that one admits too and eliminates it there. Only the first class is safe: past it, a survivor
 /// that would eliminate it may itself be gone.
 pub(super) fn never_runs(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: &Bump,
     maybe: DeclaredType<Parametric>,
     always: impl IntoIterator<Item = DeclaredType<Parametric>>,
@@ -196,7 +196,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
     contributed: &[Option<KType>],
     scratch: &'x Bump,
 ) -> Selection<'x, 'graph, 'here> {
-    let types = at.program.types();
+    let types = &at.types;
     let callee = at.view.read(coordinate);
     let member = callee
         .as_callable()
@@ -225,7 +225,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
 /// The types `shape`'s group is solved from: at each slot the solve reads, the argument's
 /// contribution where the load recorded one, and its carried type everywhere else.
 fn solved_from<'x>(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: &'x Bump,
     shape: DeclaredType<KType>,
     carried: &'x [KType],
@@ -249,7 +249,7 @@ fn solved_from<'x>(
 /// Whether each of `carried` lies under its slot of `shape` at `solution`. Not gated on
 /// `debug_assertions`: its one caller is a `debug_assert!`, which type-checks in every profile.
 pub(super) fn carried_fit(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: &Bump,
     shape: DeclaredType<KType>,
     solution: &[KType],
@@ -291,7 +291,7 @@ fn registered_shape(candidate: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
 /// The argument record of a keyworded call of `registered`'s function over `operands`, with each
 /// type parameter the shape's group solved to `solution`, built in `writer`'s region.
 pub(super) fn arguments<'graph, 'here>(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'here>,
     writer: Writer<'here>,
     registered: Registered<'_, KType>,
     operands: &[Operand<'graph, 'here>],

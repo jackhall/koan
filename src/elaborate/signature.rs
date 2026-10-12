@@ -19,11 +19,12 @@ use crate::scope::{
 };
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol};
 use crate::type_lattice::{
-    DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, TypeNode, TypeRegistry,
+    DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, TypeNode,
 };
 
 use super::expression::{Elaborator, Groups, HeadElement, QuantifierGroup, walk_head};
 use super::reads::Reads;
+use crate::values::Types;
 
 /// The type of the callable whose body sits in `form`, its signature's names read through
 /// `reader` — the activation the form runs in — born for `registration`, or for no registration.
@@ -35,7 +36,7 @@ use super::reads::Reads;
 pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
     form: &KExpression<'graph>,
     reader: &R,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
     registration: Option<&Registration<'_>>,
 ) -> Result<Callable<'x>, Elaboration> {
@@ -172,7 +173,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
 /// channel, which a bodyless `GROUP` head fills and this builder does not write — see
 /// [operator groups](../scope/README.md#operator-groups).
 pub(super) fn operator_shape<'graph, R: Reads<'graph> + ?Sized>(
-    elaborator: &Elaborator<'_, '_, '_, R>,
+    elaborator: &Elaborator<'_, '_, '_, '_, R>,
     unary: bool,
     symbol: &ExpressionPart<'graph>,
     operand: &ExpressionPart<'graph>,
@@ -199,7 +200,7 @@ pub(super) fn operator_shape<'graph, R: Reads<'graph> + ?Sized>(
 /// `UNARY OP`, since its body takes the whole run. The parameter names are the ones the shape
 /// builder binds in the operator's body.
 fn operator_function<'graph, R: Reads<'graph> + ?Sized>(
-    elaborator: &Elaborator<'_, '_, '_, R>,
+    elaborator: &Elaborator<'_, '_, '_, '_, R>,
     unary: bool,
     symbol: &ExpressionPart<'graph>,
     operand: &ExpressionPart<'graph>,
@@ -269,12 +270,12 @@ impl Head<'_, '_> {
 /// declaration-order quantifier map is `map`: the shape [`registered_shape`] builds over `head`
 /// ranked by `classes`, `map` read through into that shape's group, and the parameter binding.
 fn registered<'x>(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
     function: DeclaredType<Parametric>,
     map: FunctionGroupMap<'_>,
     head: Head<'_, '_>,
-    classes: &[u8],
+    classes: &[u16],
 ) -> Registered<'x> {
     let (shape, parameters) = registered_shape(types, scratch, function, head, classes);
     Registered {
@@ -306,20 +307,14 @@ fn shape_group_map<'x>(
 /// one `:(EXPR …)` spells for the same head, although `function` numbered it in its parameters'
 /// sorted order; the returned map translates `function`'s group into the shape's.
 fn registered_shape<'x>(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
     function: DeclaredType<Parametric>,
     head: Head<'_, '_>,
-    classes: &[u8],
+    classes: &[u16],
 ) -> (GroupIntern<'x>, ParameterBinding<'x>) {
-    let node = function.node(types);
-    let TypeNode::KFunction {
-        quantifiers,
-        bounds,
-        params,
-        ret,
-    } = node
-    else {
+    let view = function.view(types);
+    let TypeNode::KFunction { params, ret } = view.body else {
         unreachable!("a definition is typed by its function type")
     };
     let slot = |name: Symbol| {
@@ -378,6 +373,13 @@ fn registered_shape<'x>(
             ParameterBinding::Operands
         }
     };
-    let shape = types.shape_scheme(scratch, quantifiers, bounds, &elements, classes, ret);
+    let shape = types.shape_scheme(
+        scratch,
+        view.group.names,
+        view.group.bounds,
+        &elements,
+        classes,
+        ret,
+    );
     (shape, parameters)
 }

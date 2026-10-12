@@ -56,16 +56,16 @@ use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeRegistry, display_name,
+    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, display_name,
 };
-use crate::values::{ContentDigest, Knotted};
+use crate::values::{ContentDigest, Knotted, Types};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::typed::{
-    Elaboration, InstanceRead, Static, StaticCallable, StaticRegistered, StaticSolution,
+    BodyClass, Elaboration, InstanceRead, Static, StaticCallable, StaticRegistered, StaticSolution,
     StaticType, Statics, UseStatics,
 };
 
@@ -267,7 +267,7 @@ pub struct Registration<'graph> {
     /// Each slot's dense priority class, in element order: the ranking of the declaration visible
     /// where the definition is written, an operator's chaining, a surfaced head's own ranking, or
     /// written order.
-    pub classes: &'graph [u8],
+    pub classes: &'graph [u16],
     pub which: Which,
     /// In a `USING … SCOPE` block, every head its operand declares at the key; `None` for a
     /// definition's registration.
@@ -316,7 +316,7 @@ pub struct Ranking<'graph> {
     pub key: KeySymbol,
     pub elements: &'graph [KeyElement],
     pub at: Position,
-    pub classes: &'graph [u8],
+    pub classes: &'graph [u16],
 }
 
 /// One callable, or list of callables, a keyworded use may select.
@@ -337,7 +337,7 @@ pub enum Candidate {
 pub struct CandidateList<'graph> {
     pub key: KeySymbol,
     pub elements: &'graph [KeyElement],
-    pub classes: &'graph [u8],
+    pub classes: &'graph [u16],
     pub candidates: &'graph [Candidate],
 }
 
@@ -600,7 +600,7 @@ impl<'graph> BodyShape<'graph> {
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, X>,
-        types: &TypeRegistry<'graph>,
+        types: &Types<'graph, 'graph>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -954,6 +954,19 @@ impl<'graph> BodyShape<'graph> {
             .map_or(UseStatics::UNFIXED, |(_, fixed)| *fixed)
     }
 
+    /// The class the load fixed for this frame body; `None` for a block or a module body, or where
+    /// the load fixed nothing.
+    pub fn class(&self) -> Option<BodyClass> {
+        self.statics.get()?.class
+    }
+
+    /// Whether the load recorded `site` as one of this shape's own minting sites.
+    pub fn mints_at(&self, site: Site) -> bool {
+        self.statics
+            .get()
+            .is_some_and(|statics| statics.minting.get(site).is_some())
+    }
+
     /// Whether the load settled the ascription at `site`: its operand's static upper end lies under
     /// its type, so the run checks nothing. `false` where the load fixed nothing.
     pub fn settled(&self, site: Site) -> bool {
@@ -1017,7 +1030,7 @@ impl<'graph> BodyShape<'graph> {
     /// Whether every keyworded use at `key` that lists a candidate of its own beside a spread —
     /// here, and in each body nested here short of another quote's code — carries the ranking
     /// `classes`: what a `USING` filling this code's hole at `key` must agree with.
-    pub fn ranks_alike(&self, key: KeySymbol, classes: &[u8]) -> bool {
+    pub fn ranks_alike(&self, key: KeySymbol, classes: &[u16]) -> bool {
         let own = self.candidates.iter().all(|(_, list)| {
             list.key != key
                 || list.classes == classes
@@ -1406,11 +1419,11 @@ impl ShapeError<'_> {
 
     /// The error rendered, led by where it was found (`path:line:col: `), with its names spelled
     /// through `symbols` and its types through `types`.
-    pub fn display<'x, 'run>(
+    pub fn display<'x, 'g, 'run>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x TypeRegistry<'run>,
-    ) -> ShapeErrorDisplay<'x, 'run> {
+        types: &'x Types<'g, 'run>,
+    ) -> ShapeErrorDisplay<'x, 'g, 'run> {
         ShapeErrorDisplay {
             error: self,
             symbols,
@@ -1421,13 +1434,13 @@ impl ShapeError<'_> {
 
 /// A [`ShapeError`] beside the interner its names render through and the registry its types
 /// render through.
-pub struct ShapeErrorDisplay<'x, 'run> {
+pub struct ShapeErrorDisplay<'x, 'g, 'run> {
     error: &'x ShapeError<'x>,
     symbols: &'x SymbolInterner,
-    types: &'x TypeRegistry<'run>,
+    types: &'x Types<'g, 'run>,
 }
 
-impl fmt::Display for ShapeErrorDisplay<'_, '_> {
+impl fmt::Display for ShapeErrorDisplay<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
@@ -1706,7 +1719,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
     }
 }
 
-impl ShapeErrorDisplay<'_, '_> {
+impl ShapeErrorDisplay<'_, '_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
     }
@@ -1720,7 +1733,7 @@ pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
     arguments: &[A],
     ambiguous: Option<usize>,
     symbols: &SymbolInterner,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
 ) -> fmt::Result {
     let key = spelled(key, symbols);
     match ambiguous {
@@ -1754,7 +1767,7 @@ pub fn view_refused(
     f: &mut fmt::Formatter<'_>,
     refused: ViewRefused,
     symbols: &SymbolInterner,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
 ) -> fmt::Result {
     match refused {
         ViewRefused::NotAModule(value) => {

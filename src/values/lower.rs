@@ -2,9 +2,8 @@
 
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::parse::{ExpressionPart, KLiteral};
-use crate::type_lattice::TypeRegistry;
 
-use super::{Dict, Key, Knotted, List, Record, Value, text};
+use super::{Dict, Key, Knotted, List, Record, Types, Value, text};
 
 impl<'cell, X: Knotted> Value<'cell, X> {
     /// The value a region-pure part denotes: a scalar or string literal, or a container literal
@@ -15,7 +14,7 @@ impl<'cell, X: Knotted> Value<'cell, X> {
     pub fn lower_part(
         writer: Writer<'cell>,
         part: &ExpressionPart<'_>,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Value<'cell, X>> {
         lowers(part).then(|| lower(writer, part, types, scratch))
@@ -52,7 +51,7 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
 fn lower<'cell, X: Knotted>(
     writer: Writer<'cell>,
     part: &ExpressionPart<'_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Value<'cell, X> {
     match part {

@@ -19,11 +19,13 @@
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer};
 use crate::symbols::Symbol;
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, TypeNode, TypeRegistry, fits, meet, satisfied_by,
+    DeclaredType, Interval, KType, Parametric, TypeNode, fits, meet, satisfied_by,
 };
 
 use super::circular::{Circular, Resolved};
-use super::{Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Value, representation};
+use super::{
+    Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Types, Value, representation,
+};
 
 /// Why the type a container, a tagged value or a data node is seen at is concrete: its memo is a
 /// type, and so is every type a holder names for a part. Only a callable is typed by a scheme.
@@ -66,7 +68,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn satisfies(
         &self,
         slot: KType,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> bool {
         satisfied_by(types, scratch, slot, self.ktype)
@@ -80,7 +82,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn seen_at(
         self,
         declared: KType,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Self {
         let Some(kind) = kind(self.value) else {
@@ -150,7 +152,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     /// every knot member but a data node.
     pub fn surface<'x>(
         &self,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'x>,
     ) -> Option<Surface<'x, 'cell, X>> {
         let (node, raw) = raw(self.value)?;
@@ -193,7 +195,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn field(
         &self,
         name: Symbol,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Self> {
         let Some((_, Raw::Record(names, cells))) = raw(self.value) else {
@@ -211,7 +213,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     /// This value opened at its own memo: [`Seen::surface`].
     pub fn surface<'x>(
         &self,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'x>,
     ) -> Option<Surface<'x, 'cell, X>> {
         Seen::of(*self).surface(types, scratch)
@@ -221,7 +223,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     pub fn field(
         &self,
         name: Symbol,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Seen<'cell, X>> {
         Seen::of(*self).field(name, types, scratch)
@@ -234,7 +236,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
         self,
         writer: Writer<'cell>,
         declared: KType,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> Value<'cell, X> {
         Seen::of(self)
@@ -305,7 +307,7 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
     pub fn child(
         &self,
         at: usize,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Seen<'a, X> {
         match self.parts {
@@ -335,6 +337,20 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
                     None => Seen::of(payload.get(0)),
                 }
             }
+        }
+    }
+
+    /// The part at `at`, below [`len`](Self::len), as its cell holds it, at its own memo — before a
+    /// read sees it at the type its holder names.
+    pub(super) fn raw(&self, at: usize) -> Value<'a, X> {
+        match self.parts {
+            Parts::List { cells, .. } | Parts::Dict { cells, .. } => cells.get(at),
+            Parts::Record {
+                fields,
+                names,
+                cells,
+            } => cells.get(held_at(names, fields[at].0)),
+            Parts::Tagged { payload, .. } => payload.get(0),
         }
     }
 
@@ -457,6 +473,30 @@ fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X
     Some((None, plain))
 }
 
+/// Every part `value` holds, hidden or not, at its own memo: a container's cells, a tagged value's
+/// payload. Nothing for a knot member, whose parts its knot lists. What the crossing's habitat
+/// check walks.
+#[cfg(debug_assertions)]
+pub(super) fn raw_parts<'a, X: Knotted + 'a>(
+    value: Value<'a, X>,
+    out: &mut impl FnMut(Value<'a, X>),
+) {
+    if matches!(value, Value::Knotted(_)) {
+        return;
+    }
+    let Some((_, raw)) = raw(value) else {
+        return;
+    };
+    let cells = match raw {
+        Raw::List(cells) | Raw::Dict(_, cells) | Raw::Record(_, cells) | Raw::Tagged(cells) => {
+            cells
+        }
+    };
+    for at in 0..cells.len() {
+        out(cells.get(at));
+    }
+}
+
 /// The kinds of value a read narrows its seen type within.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -491,7 +531,7 @@ fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
 /// record type for a container of that kind, and a nominal type or a family's application for a
 /// tagged value under its constructor. `None` for every other type, which a value satisfying it
 /// keeps its own type under.
-fn retyped_kind(types: &TypeRegistry<'_>, declared: Parametric) -> Option<Kind> {
+fn retyped_kind(types: &Types<'_, '_>, declared: Parametric) -> Option<Kind> {
     match types.node(declared) {
         TypeNode::List { .. } => Some(Kind::List),
         TypeNode::Dict { .. } => Some(Kind::Dict),
@@ -506,7 +546,7 @@ fn retyped_kind(types: &TypeRegistry<'_>, declared: Parametric) -> Option<Kind> 
 /// record type, a family or its application, a newtype or a union's variant — and at most
 /// `declared` otherwise; a union keeps each variant's own type. It reads the predicate
 /// [`Seen::seen_at`] retypes by.
-pub fn retyped_to(types: &TypeRegistry<'_>, declared: Parametric) -> Interval {
+pub fn retyped_to(types: &Types<'_, '_>, declared: Parametric) -> Interval {
     match retyped_kind(types, declared) {
         Some(_) => Interval::point(declared),
         None => under(declared),

@@ -52,7 +52,7 @@ fn placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach() {
             // The placed value *is* the operand's borrow, so it genuinely reads the producer's
             // storage from the consumer's region.
             let placed = context
-                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, _, views| {
                     Active::new(pinned(&views[0]))
                 })
                 .unwrap();
@@ -110,10 +110,12 @@ fn a_reattached_borrow_survives_the_live_region_it_names_growing_under_it() {
     graph
         .enter(keeper, |context| {
             let value = context
-                .alloc_into::<Number, Number>(host, &[], |writer, _| Active::new(one(writer, 41)))
+                .alloc_into::<Number, Number>(host, &[], |writer, _, _| {
+                    Active::new(one(writer, 41))
+                })
                 .unwrap();
             let captured =
-                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+                context.alloc_here(&[operand(&value)], |_writer, _, views| pinned(&views[0]));
             context.store_successor(captured);
         })
         .unwrap();
@@ -126,7 +128,7 @@ fn a_reattached_borrow_survives_the_live_region_it_names_growing_under_it() {
             // through the bump rather than inside it.
             for value in 0..GROWTH {
                 context
-                    .alloc_into::<Number, Number>(host, &[], |writer, _| {
+                    .alloc_into::<Number, Number>(host, &[], |writer, _, _| {
                         Active::new(one(writer, value as u32))
                     })
                     .unwrap();
@@ -253,7 +255,7 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
     let kept = graph
         .enter(producer, |context| {
             let placed = context
-                .alloc_into::<Number, Number>(consumer, &[], |writer, _| {
+                .alloc_into::<Number, Number>(consumer, &[], |writer, _, _| {
                     Active::new(one(writer, 41))
                 })
                 .unwrap();
@@ -690,12 +692,12 @@ fn a_continuation_store_takes_no_reach_table_entry() {
             .enter(cell, |context| {
                 context.continuation();
                 let carrier = context
-                    .alloc_into::<Number, Number>(over, &[], |writer, _| {
+                    .alloc_into::<Number, Number>(over, &[], |writer, _, _| {
                         Active::new(one(writer, value))
                     })
                     .unwrap();
                 let captured =
-                    context.alloc_here(&[operand(&carrier)], |_writer, views| pinned(&views[0]));
+                    context.alloc_here(&[operand(&carrier)], |_writer, _, views| pinned(&views[0]));
                 context.store_successor(captured);
             })
             .unwrap();
@@ -799,11 +801,14 @@ fn a_writer_taken_at_entry_writes_after_every_own_cell_door() {
             let writer = context.writer();
 
             let foreign = context
-                .alloc_into::<Number, Number>(other, &[], |writer, _| Active::new(one(writer, 41)))
+                .alloc_into::<Number, Number>(other, &[], |writer, _, _| {
+                    Active::new(one(writer, 41))
+                })
                 .unwrap();
-            let here = context.alloc_here(&[operand(&foreign)], |_writer, views| pinned(&views[0]));
+            let here =
+                context.alloc_here(&[operand(&foreign)], |_writer, _, views| pinned(&views[0]));
             let placed = context
-                .alloc_into::<Number, Number>(third, &[operand(&foreign)], |_writer, views| {
+                .alloc_into::<Number, Number>(third, &[operand(&foreign)], |_writer, _, views| {
                     Active::new(pinned(&views[0]))
                 })
                 .unwrap();
@@ -873,9 +878,12 @@ fn a_pinned_view_at_the_cell_brand_survives_its_home_sealing() {
     graph
         .enter(cell, |context| {
             let foreign = context
-                .alloc_into::<Number, Number>(home, &[], |writer, _| Active::new(one(writer, 41)))
+                .alloc_into::<Number, Number>(home, &[], |writer, _, _| {
+                    Active::new(one(writer, 41))
+                })
                 .unwrap();
-            let held = context.alloc_here(&[operand(&foreign)], |_writer, views| pinned(&views[0]));
+            let held =
+                context.alloc_here(&[operand(&foreign)], |_writer, _, views| pinned(&views[0]));
             context.store_successor(held);
         })
         .unwrap();
@@ -903,7 +911,7 @@ fn a_placement_into_the_executing_cell_writes_beside_the_steps_own_writer() {
             // interior-mutable bump coexist; an exclusive one anywhere in the chain would not.
             let own = context.writer();
             let placed = context
-                .alloc_into::<Number, Number>(cell, &[], move |writer, _| {
+                .alloc_into::<Number, Number>(cell, &[], move |writer, _, _| {
                     let early = one(own, 7u32);
                     Active::new(one(writer, *early + 1))
                 })

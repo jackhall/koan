@@ -1,32 +1,39 @@
 //! [`TypeNode`] — one interned type's content, the thing a [`Handle`] names.
 //!
 //! A node stores its variant tag, its scalar payload (names, [`ContentKey`]s, a signature's schema
-//! shape), and **handles to its child types** — never owned substructure. Every run a node holds —
-//! a union's members, a shape's elements, a record's fields, a schema's tables — is a slice in the
-//! run region, so a node is `Copy` and carries no drop glue. Nodes are immutable from the moment
-//! they are interned, and the registry that owns them is insert-only for the life of a run, so a
-//! handle stays dereferenceable as long as its registry lives.
+//! shape), and **references to its child types' nodes** — never owned substructure. Every run a
+//! node holds — a union's members, a shape's elements, a record's fields, a schema's tables — is a
+//! slice in the half its node was laid in, so a view is `Copy` and carries no drop glue. Nodes are
+//! immutable from the moment they are interned, and every tier is insert-only for its life, so a
+//! handle stays dereferenceable in a chain whose tiers hold it.
 //!
-//! A node is stored raw and read through a handle `H`: each child comes back as `H` — read through
-//! a [`KType`], a node's children are concrete, and through a [`Parametric`], parametric —
-//! while every bound, a lexical variable's lower end, a code kind and an application's signature
-//! are always a [`KType`]. [`TypeNode::view`] is the one rewrapping, one exhaustive match.
-//! [`Variable`] views the three variable variants as one, and owns the rule for their two ends.
+//! A `TypeNode` is the read view of a node: every field by value, its children read as `H`.
+//! Outside the lattice `H` is a handle — read through a [`KType`], a node's children are concrete,
+//! and through a [`Parametric`], parametric — while every bound, a lexical variable's lower end, a
+//! code kind and an application's signature are always a [`KType`]. Inside the lattice `H` is a
+//! reference to the child's node ([`Linked`]), and so is every one of those concrete fields. A
+//! tier's table stores a node in its own layout ([`stored`](super::stored)), whose `view_as`
+//! is the one conversion. [`Variable`] views the three variable variants as one, and owns the rule
+//! for their two ends.
 //!
-//! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
+//! Interning and node reads live on [`TypeChain`](super::chain::TypeChain); the digest
 //! recipe per variant lives in [`digest`](super::digest).
 //!
 //! See [README.md](README.md) § The node vocabulary.
 
 use crate::symbols::{BinderSymbol, TypeSymbol};
 
+use super::chain::TypeChain;
+use super::component::Component;
 use super::digest::TypeDigest;
-use super::handle::{Handle, KType, Parametric, TypeHandle, wrap};
+use super::handle::{Handle, KType, Naming, Parametric, TypeHandle};
 use super::kind::KKind;
 use super::record::Record;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
-use super::shape::DeferredReturnSurface;
+use super::shape::{Classes, DeferredReturnSurface};
+use super::stored::Linked;
+use super::tiers::Habitat;
 use super::unify::Interval;
 
 /// An opaque identity a carrier is keyed on: what a module layer computes from an opaque view's
@@ -35,11 +42,28 @@ use super::unify::Interval;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ContentKey(pub u128);
 
-/// The content of one interned type, its children read as `H`. Every run is a `'run` slice under a
-/// view, so reading a node out of the registry copies its scalar payload and a few fat pointers,
-/// never a type subtree.
+/// A scheme's quantifier group: each variable's name and bound, in group order — the order the
+/// scheme door numbered them in. The names are render-only; the arity and the bounds are identity.
+/// Laid in the region when its scheme is first interned.
+#[derive(Clone, Copy, Debug)]
+pub struct Group<'run> {
+    pub names: &'run [TypeSymbol],
+    pub bounds: &'run [KType],
+}
+
+impl Group<'_> {
+    /// The group a type that is not a scheme binds: none.
+    pub const EMPTY: Group<'static> = Group {
+        names: &[],
+        bounds: &[],
+    };
+}
+
+/// The content of one interned type, its children read as `H` and its concrete fields as
+/// `H::Bound`. Every run is a `'run` slice under a view, so reading a node out of its tier
+/// copies its scalar payload and a few fat pointers, never a type subtree.
 #[derive(Clone, Copy)]
-pub enum TypeNode<'run, H = Handle> {
+pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     Number,
     Str,
     Bool,
@@ -82,10 +106,10 @@ pub enum TypeNode<'run, H = Handle> {
     /// `:(Expression NEEDING #[y])`: the carried type of a quote whose `\` marks no binder in its
     /// own code fills. Below `Code`, above the same kind needing more, and below the same kind
     /// needing fewer; the bare kind is the kind needing nothing, so `names` is never empty. Build
-    /// through [`TypeRegistry::code_needing`](super::registry::TypeRegistry::code_needing).
+    /// through [`TypeChain::code_needing`](super::chain::TypeChain::code_needing).
     CodeNeeding {
         /// A code kind below `Code`.
-        kind: KType,
+        kind: H::Bound,
         /// Symbol-sorted and deduplicated: the needed names are a set.
         names: &'run [BinderSymbol],
     },
@@ -107,7 +131,7 @@ pub enum TypeNode<'run, H = Handle> {
     /// Every field is identity.
     Parameter {
         name: TypeSymbol,
-        bound: KType,
+        bound: H::Bound,
     },
     /// The **carrier** an opaque `:|` view hides a head parameter `name` behind, keyed on content
     /// the lattice never interprets (a [`ContentKey`]: two views of equal content share one
@@ -123,7 +147,7 @@ pub enum TypeNode<'run, H = Handle> {
     Carrier {
         name: TypeSymbol,
         key: ContentKey,
-        met: KType,
+        met: H::Bound,
     },
     /// `List<element>`. Bare `List` lowers to `List<Any>`.
     List {
@@ -143,57 +167,50 @@ pub enum TypeNode<'run, H = Handle> {
     /// A function type `(params) -> ret`. koan has no positional call syntax, so a
     /// function-typed slot records the names a caller must use to invoke what it receives.
     ///
-    /// A non-empty `quantifiers` makes it a **binder** of its own, exactly as an
-    /// [`Self::ExpressionShape`] is: the group keeps every variable it declares, its names are
-    /// render-only, and the digest feeds the arity and the bounds. An empty one binds nothing and is
-    /// transparent — an unquantified
-    /// function type written inside a quantified head keeps reading that head's variables.
+    /// A function type binds nothing: a `Quantified` inside it reads the enclosing
+    /// [`Self::Scheme`]'s group, so a function type written inside a quantified head keeps reading
+    /// that head's variables.
     KFunction {
-        /// The type parameters this function binds, in `Quantified` index order. Render-only, as
-        /// a shape's are.
-        quantifiers: &'run [TypeSymbol],
-        /// Each quantifier's bound, in the same order.
-        bounds: &'run [KType],
         params: Record<'run, H>,
         ret: H,
     },
     /// An **expression shape** — the type of a keyworded, positional definition reached by
-    /// dispatch: the interleaved element sequence a call must spell, the type parameters the
-    /// shape binds ahead of it, and the return type.
+    /// dispatch: the interleaved element sequence a call must spell, and the return type.
     ///
     /// Distinct from [`Self::KFunction`] as a matter of representation: a lambda takes a record of
     /// named arguments and is reached by name, a shape is reached by its keyword/argument sequence
     /// and its argument *positions* are load-bearing, which a canonically ordered params record
     /// erases. So no shape is ever equal to, satisfies, or is satisfied by a lambda type.
     ///
-    /// Argument **names** are binder-side only and are absent here. Quantifier names are
-    /// render-only too: the digest feeds the arity and the bounds, so alpha-variants intern once and
-    /// `quantifiers` holds whichever spelling was interned first. A variable no position names
-    /// carries its bound in `bounds` alone.
-    ///
-    /// A non-empty `quantifiers` makes it a binder, as it does a [`Self::KFunction`]. An empty one
-    /// binds nothing and is transparent: a free `Quantified` inside reads the enclosing group.
+    /// Argument **names** are binder-side only and are absent here. A shape binds nothing: a
+    /// `Quantified` inside it reads the enclosing [`Self::Scheme`]'s group.
     ExpressionShape {
-        /// The type parameters this shape binds, in `Quantified` index order. Render-only:
-        /// the arity is identity, the names are not.
-        quantifiers: &'run [TypeSymbol],
-        /// Each quantifier's bound, in the same order.
-        bounds: &'run [KType],
         /// The call shape: fixed keywords interleaved with the argument positions' declared types.
         elements: Elements<'run, H>,
         /// Each slot's priority class, in slot order, dense from 0 — the ranking a dispatch admits
-        /// and ranks the slots by, class by class. Empty for written order, the canonical spelling
-        /// of `0..n`, so an unranked shape stores and digests nothing for it.
-        classes: &'run [u8],
+        /// and ranks the slots by, class by class. Written order reads `0..n`, and the digest
+        /// feeds nothing for it.
+        classes: Classes<'run>,
         ret: H,
     },
-    /// A **rigid variable bound by the enclosing binder** — a [`Self::ExpressionShape`], or a
-    /// [`Self::KFunction`] carrying a group: the `index`-th member of that group, bounded by
-    /// `bound`. Positional rather than named, so two binders alpha-equivalent under a renaming of
-    /// their parameters intern to one node.
+    /// A **scheme** — a quantified callable's type, and the one binder: `group` binds the free
+    /// `Quantified` positions of `body`, a [`Self::KFunction`] or a [`Self::ExpressionShape`]. The
+    /// body's node says which. The group is non-empty: the two scheme doors answer the plain body
+    /// for an empty one. The digest feeds the group's arity and bounds and the body's digest, never
+    /// the names, so alpha-variants intern once and `group` holds whichever spelling was interned
+    /// first. Build through
+    /// [`TypeChain::function_scheme`](super::chain::TypeChain::function_scheme) or
+    /// [`TypeChain::shape_scheme`](super::chain::TypeChain::shape_scheme).
+    Scheme {
+        group: &'run Group<'run>,
+        body: H,
+    },
+    /// A **rigid variable bound by the enclosing [`Self::Scheme`]**: the `index`-th member of its
+    /// group, bounded by `bound`. Positional rather than named, so two schemes alpha-equivalent
+    /// under a renaming of their parameters intern to one node.
     Quantified {
         index: usize,
-        bound: KType,
+        bound: H::Bound,
     },
     /// A **lexical variable**: a name only a run binds — a `FOR ALL` or `:Type` parameter, a name a
     /// `USING` surfaces, a quote's hole, a type binder the load left unknown — read where the
@@ -208,13 +225,13 @@ pub enum TypeNode<'run, H = Handle> {
     Lexical {
         level: usize,
         name: TypeSymbol,
-        lower: KType,
-        bound: KType,
+        lower: H::Bound,
+        bound: H::Bound,
     },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
     /// deduplicated, no nested `Union`, no member below the rest, always two or more, in the order
     /// first written. Identity is order-blind. Build through
-    /// [`TypeRegistry::union_of`](super::registry::TypeRegistry::union_of).
+    /// [`TypeChain::union_of`](super::chain::TypeChain::union_of).
     Union {
         members: Run<'run, H>,
     },
@@ -240,17 +257,17 @@ pub enum TypeNode<'run, H = Handle> {
     /// An **application** of a declared signature: `signature` with some of its head parameters
     /// pinned, spelled `Stack WITH {Elt = Number}`. `signature` is a [`Self::Signature`] of origin
     /// `Declared`; `pins` is non-empty and keyed by the parameters' names. Build through
-    /// [`TypeRegistry::signature_apply`](super::registry::TypeRegistry::signature_apply), which
+    /// [`TypeChain::signature_apply`](super::chain::TypeChain::signature_apply), which
     /// answers `signature` itself for no pins.
     SignatureApply {
-        signature: KType,
+        signature: H::Bound,
         pins: Record<'run, H>,
     },
     /// A **set of applications**, two or more, none lying above another, sorted by handle so the
     /// set's identity is order-blind: what the meet of two signature types is. Each member is a
     /// [`Self::Signature`] or a [`Self::SignatureApply`], never the empty signature and never a
     /// meet. Build through
-    /// [`TypeRegistry::signature_meet`](super::registry::TypeRegistry::signature_meet).
+    /// [`TypeChain::signature_meet`](super::chain::TypeChain::signature_meet).
     SignatureMeet {
         members: Run<'run, H>,
     },
@@ -258,43 +275,33 @@ pub enum TypeNode<'run, H = Handle> {
     /// only the hashable surface shadow, and admits nothing on its own.
     DeferredReturn(DeferredReturnSurface<'run>),
     /// A relative sibling reference inside a pre-seal recursive-group window: the sibling's bare
-    /// index, meaningful only against the ambient window. Ordinary registry content, and the
+    /// index, meaningful only against the ambient window. Ordinary interned content, and the
     /// order relates it as an atom with the same profile as the member it will become — which is
-    /// what lets a relative schema's unions canonicalize before their members exist. It never
-    /// appears in a sealed schema.
+    /// what lets a relative schema's unions canonicalize before their members exist. A sealed
+    /// [`Component`] holds its schemas in this relative form only while it is tied; an absolute
+    /// schema never holds one.
     Sibling(usize),
     /// One sealed member of a recursive group. Identity is its strongly-connected component's
     /// digest plus its index in that component's canonical order — the numeric order of the
     /// members' name symbols — so two independently built components with the same content intern
     /// to the same nodes.
     ///
-    /// `scc_size`, `name`, `kind`, and `schema` are excluded from the digest because they are
-    /// exactly the inputs `scc_digest` was computed over — a handle determines them.
+    /// `name`, `kind` and the schema are excluded from the digest because the component's digest
+    /// was computed over them — a handle determines them. The schema is read absolute through
+    /// [`TypeChain::member_schema`](super::chain::TypeChain::member_schema).
     SetMember {
-        scc_digest: TypeDigest,
+        component: &'run Component<'run>,
         index: usize,
-        scc_size: usize,
         name: TypeSymbol,
         kind: KKind,
-        schema: NodeSchema<'run>,
     },
 }
 
-impl<'run, H> TypeNode<'run, H> {
-    /// The quantifier group a binder variant carries — a shape's or a function type's names and
-    /// bounds, empty where it binds none — or `None` for every other node.
-    pub fn group(&self) -> Option<(&'run [TypeSymbol], &'run [KType])> {
+impl<'run, H: Naming<'run>> TypeNode<'run, H> {
+    /// The quantifier group a scheme binds, or `None` for every other node.
+    pub fn group(&self) -> Option<&'run Group<'run>> {
         match self {
-            TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
-                ..
-            }
-            | TypeNode::KFunction {
-                quantifiers,
-                bounds,
-                ..
-            } => Some((quantifiers, bounds)),
+            TypeNode::Scheme { group, .. } => Some(group),
             // No wildcard: a new binder variant must say so here, or every walk reads its own
             // variables as free.
             TypeNode::Number
@@ -326,6 +333,8 @@ impl<'run, H> TypeNode<'run, H> {
             | TypeNode::List { .. }
             | TypeNode::Dict { .. }
             | TypeNode::Record { .. }
+            | TypeNode::KFunction { .. }
+            | TypeNode::ExpressionShape { .. }
             | TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
             | TypeNode::DeferredReturn(_)
@@ -337,20 +346,20 @@ impl<'run, H> TypeNode<'run, H> {
         }
     }
 
-    /// Whether this node binds a quantifier group of its own: a shape or a function only when it
-    /// carries one. An empty group binds nothing, so a `Quantified` under it reads the enclosing
-    /// group. This is what every walk asks before stepping into a child, so a `Quantified` under it
-    /// reads against the right group.
+    /// Whether this node binds a quantifier group: a scheme, and nothing else. Every walk asks this
+    /// before stepping into a child, so a `Quantified` under it reads against the right group.
     pub fn binds_quantifiers(&self) -> bool {
-        self.group().is_some_and(|(names, _)| !names.is_empty())
+        self.group().is_some()
     }
 
     /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or a
     /// [`Self::Parameter`]'s — or `None` for any other node.
-    pub fn rigid_bound(&self) -> Option<KType> {
+    pub fn rigid_bound(&self) -> Option<H::Bound> {
         Variable::of(self).map(Variable::bound)
     }
+}
 
+impl<'run, H: TypeHandle> TypeNode<'run, H> {
     /// A rigid variable's lower end: a [`Self::Lexical`]'s own, `Never` for the other two, `None`
     /// for any other node.
     pub fn rigid_lower(&self) -> Option<KType> {
@@ -363,25 +372,43 @@ impl<'run, H> TypeNode<'run, H> {
     }
 }
 
-/// A free variable a read through intervals meets, as its node spells it.
+impl<'run> TypeNode<'run, Linked<'run>> {
+    /// [`rigid_lower`](TypeNode::rigid_lower) by reference: `Never` is the chain's own node.
+    pub(super) fn rigid_lower_in(
+        &self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> Option<Linked<'run>> {
+        Variable::of(self).map(|variable| variable.lower_in(types))
+    }
+
+    /// [`rigid_interval`](TypeNode::rigid_interval) by reference.
+    pub(super) fn rigid_interval_in(
+        &self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> Option<Interval<Linked<'run>>> {
+        Variable::of(self).map(|variable| variable.interval_in(types))
+    }
+}
+
+/// A free variable a read through intervals meets, as its node spells it, its ends read as `B`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Variable {
-    /// A binder's own variable, read where no binder captures it.
-    Quantified { index: usize, bound: KType },
+pub enum Variable<B = KType> {
+    /// A scheme's own variable, read where no scheme captures it.
+    Quantified { index: usize, bound: B },
     /// A lexical variable at `level` along the chain of bodies that declares it.
     Lexical {
         level: usize,
         name: TypeSymbol,
-        lower: KType,
-        bound: KType,
+        lower: B,
+        bound: B,
     },
     /// A signature's head parameter.
-    Parameter { name: TypeSymbol, bound: KType },
+    Parameter { name: TypeSymbol, bound: B },
 }
 
-impl Variable {
+impl<B: Copy> Variable<B> {
     /// The variable `node` is, or `None` for any other node.
-    pub(super) fn of<H>(node: &TypeNode<'_, H>) -> Option<Self> {
+    pub(super) fn of<'run, H: Naming<'run, Bound = B>>(node: &TypeNode<'run, H>) -> Option<Self> {
         Some(match *node {
             TypeNode::Quantified { index, bound } => Variable::Quantified { index, bound },
             TypeNode::Lexical {
@@ -401,14 +428,16 @@ impl Variable {
     }
 
     /// The variable's bound.
-    pub fn bound(self) -> KType {
+    pub fn bound(self) -> B {
         match self {
             Variable::Quantified { bound, .. }
             | Variable::Lexical { bound, .. }
             | Variable::Parameter { bound, .. } => bound,
         }
     }
+}
 
+impl Variable {
     /// The variable's lower end: a lexical variable's own, `Never` for the other two.
     pub fn lower(self) -> KType {
         match self {
@@ -426,124 +455,48 @@ impl Variable {
     }
 }
 
-impl<'run, H: TypeHandle> TypeNode<'run, H> {
-    /// This node with its children read as `C` — **the view table**, one exhaustive match, so a
-    /// new variant is a compile error here. The caller answers for `C`'s promise: the registry
-    /// reads a node as the handle it was named by, and a scheme's positions as [`Parametric`].
-    pub(super) fn view<C: TypeHandle>(self) -> TypeNode<'run, C> {
-        let child = |h: H| wrap::<C>(h.raw());
+impl<'run> Variable<Linked<'run>> {
+    /// The variable with its ends read as handles.
+    pub(super) fn typed(self) -> Variable {
         match self {
-            TypeNode::Number => TypeNode::Number,
-            TypeNode::Str => TypeNode::Str,
-            TypeNode::Bool => TypeNode::Bool,
-            TypeNode::Null => TypeNode::Null,
-            TypeNode::Identifier => TypeNode::Identifier,
-            TypeNode::Symbol => TypeNode::Symbol,
-            TypeNode::TypeNameToken => TypeNode::TypeNameToken,
-            TypeNode::Expression => TypeNode::Expression,
-            TypeNode::SigiledTypeExpr => TypeNode::SigiledTypeExpr,
-            TypeNode::RecordType => TypeNode::RecordType,
-            TypeNode::Literal => TypeNode::Literal,
-            TypeNode::Block => TypeNode::Block,
-            TypeNode::Declaration => TypeNode::Declaration,
-            TypeNode::Binder => TypeNode::Binder,
-            TypeNode::Name => TypeNode::Name,
-            TypeNode::Keyword => TypeNode::Keyword,
-            TypeNode::Any => TypeNode::Any,
-            TypeNode::AnyValue => TypeNode::AnyValue,
-            TypeNode::AnyCode => TypeNode::AnyCode,
-            TypeNode::CodeNeeding { kind, names } => TypeNode::CodeNeeding { kind, names },
-            TypeNode::Never => TypeNode::Never,
-            TypeNode::OfKind(kind) => TypeNode::OfKind(kind),
-            TypeNode::Parameter { name, bound } => TypeNode::Parameter { name, bound },
-            TypeNode::Carrier { name, key, met } => TypeNode::Carrier { name, key, met },
-            TypeNode::List { element } => TypeNode::List {
-                element: child(element),
+            Variable::Quantified { index, bound } => Variable::Quantified {
+                index,
+                bound: KType::read(bound),
             },
-            TypeNode::Dict { key, value } => TypeNode::Dict {
-                key: child(key),
-                value: child(value),
-            },
-            TypeNode::Record { fields } => TypeNode::Record {
-                fields: Record::over(fields.raw()),
-            },
-            TypeNode::KFunction {
-                quantifiers,
-                bounds,
-                params,
-                ret,
-            } => TypeNode::KFunction {
-                quantifiers,
-                bounds,
-                params: Record::over(params.raw()),
-                ret: child(ret),
-            },
-            TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
-                elements,
-                classes,
-                ret,
-            } => TypeNode::ExpressionShape {
-                quantifiers,
-                bounds,
-                elements: Elements::over(elements.raw()),
-                classes,
-                ret: child(ret),
-            },
-            TypeNode::Quantified { index, bound } => TypeNode::Quantified { index, bound },
-            TypeNode::Lexical {
+            Variable::Lexical {
                 level,
                 name,
                 lower,
                 bound,
-            } => TypeNode::Lexical {
+            } => Variable::Lexical {
                 level,
                 name,
-                lower,
-                bound,
+                lower: KType::read(lower),
+                bound: KType::read(bound),
             },
-            TypeNode::Union { members } => TypeNode::Union {
-                members: Run::over(members.raw()),
-            },
-            TypeNode::ConstructorApply {
-                constructor,
-                arguments,
-            } => TypeNode::ConstructorApply {
-                constructor: child(constructor),
-                arguments: Record::over(arguments.raw()),
-            },
-            TypeNode::Signature {
-                schema,
-                schema_digest,
-            } => TypeNode::Signature {
-                schema,
-                schema_digest,
-            },
-            TypeNode::SignatureApply { signature, pins } => TypeNode::SignatureApply {
-                signature,
-                pins: Record::over(pins.raw()),
-            },
-            TypeNode::SignatureMeet { members } => TypeNode::SignatureMeet {
-                members: Run::over(members.raw()),
-            },
-            TypeNode::DeferredReturn(surface) => TypeNode::DeferredReturn(surface),
-            TypeNode::Sibling(index) => TypeNode::Sibling(index),
-            TypeNode::SetMember {
-                scc_digest,
-                index,
-                scc_size,
+            Variable::Parameter { name, bound } => Variable::Parameter {
                 name,
-                kind,
-                schema,
-            } => TypeNode::SetMember {
-                scc_digest,
-                index,
-                scc_size,
-                name,
-                kind,
-                schema,
+                bound: KType::read(bound),
             },
+        }
+    }
+
+    /// [`lower`](Variable::lower) by reference: `Never` is the chain's own node.
+    pub(super) fn lower_in(self, types: &TypeChain<'run, impl Habitat<'run>>) -> Linked<'run> {
+        match self {
+            Variable::Lexical { lower, .. } => lower,
+            Variable::Quantified { .. } | Variable::Parameter { .. } => types.never(),
+        }
+    }
+
+    /// [`interval`](Variable::interval) by reference.
+    pub(super) fn interval_in(
+        self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+    ) -> Interval<Linked<'run>> {
+        Interval {
+            lower: self.lower_in(types),
+            upper: self.bound(),
         }
     }
 }

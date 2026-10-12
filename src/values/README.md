@@ -145,7 +145,7 @@ their barriers, see the payload.
 
 A value borrows at one lifetime, `Value<'cell>`: what a writer laid down in a
 cell's region, following
-[cellgraph's contract](../../cellgraph/README.md#the-contract-three-embedder-types).
+[cellgraph's contract](../../cellgraph/README.md#the-contract-four-embedder-types).
 No arm holds program storage. A quote's body lives there, but a quote is a knot
 member, and what a member holds of program storage — a function's body shape, a
 quote's body and code shape — sits inside the member, at the lifetime the layer
@@ -165,7 +165,7 @@ cells, a record the record type of its fields in written order, a type value
 knot member reports its own. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
 `Value::ktype` copies that handle or names a leaf constant, and reads no
-registry and walks nothing. It answers a
+type tier and walks nothing. It answers a
 [`DeclaredType`](../../lattice/src/types/identity.md#typed-handles): a concrete `KType`
 for every value but a quantified callable, which answers its `Scheme`. A
 quantified callable is read only at the head of a call or as a `MODULE` or
@@ -306,9 +306,41 @@ down at the type it is seen at, holding only what that type names, and weighed
 by what it lays down, so a part a retype hid is dropped. A knot's data node seen
 at its own memo copies with its knot; one seen at another type is laid down as a
 plain value of its kind at that type, as a retype lays it down, its visible
-links resolved through it. The crossing doors therefore take the type registry
-the copy reads its types in, and the scheduler's step doors that cross a value
-take it from their callers.
+links resolved through it. The crossing doors therefore take the
+destination's type chain, which the copy reads its types in, and the
+scheduler's step doors that cross a value build that chain inside the build,
+over the graph's frozen type root and the build's writer and header.
+
+**A crossing carries types with the value.** A type the run builds lives in the
+branch of the habitat its value is laid down in
+([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
+The branch is the habitat half's header, [`TypeHeader`](habitat.rs), and a
+[`Types`](habitat.rs) chain pairs a half's writer with its header door at one
+brand, so a value door handed one half's writer and another half's chain does
+not compile. What a reader sees of a value is bounded only by the value: under
+`Any`, a union, a function type or a carrier a part keeps its own memo, so the
+types a value reaches are the closure over its parts' memos. A copied operand
+therefore adopts each part's own memo into the destination's branch before the
+type it is seen at is read off it — re-laying, from the home's branch, what the
+destination lacks — and adopts nothing for a part the seen type hides; a type
+value's payload, and every type a knot's nodes carry
+(`KnottedFamily::carried_types`), are adopted before they are laid. A pinned
+operand is not walked. A pinned birth links the destination's branch to its
+home's — one pointer a read by handle follows and caches — where the
+destination has laid no branch: a spawned child always, and a hop's successor
+or what a root work leaves when it lands in a new cell. A pinned result or
+view, and a pinned birth into a branch already laid — a tenant's, which is its
+host's — merges its home's branch into the destination's, with each branch the
+home links up to one the destination already reaches, a cost in the types
+those branches hold, never in the value.
+
+**A debug build checks every crossing.** After each crossing door, a debug
+build asserts that every type the crossed value carries — each part's memo,
+each type value's payload, each type a knot carries — resolves in the
+destination's chain, reading and caching nothing. A copy, which walked the
+value already, is checked whole; a pin, which a release build never walks, is
+checked over the first sixteen parts a depth-first walk reaches, which finds a
+crossing that missed a tier unless every type that tier holds lies past them.
 
 **The deep copy runs over an explicit stack**, in a bump of its own, since no
 step scratch reaches a birth's crossing; so a value of any depth copies without
@@ -588,8 +620,11 @@ a name the rest of the stack retired.
 ## Testing
 
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
-over a fixture that owns program storage, a bump for the type registry, and a
-cell graph over that storage to run steps in. Circular values are exercised
+over a fixture that owns program storage, a seeded root beside a root builder
+the test's load-time work interns into, and a cell graph over that storage to
+run steps in; each cell's chain reads the root, then the builder, then the
+cell's own branch, so a type a value door builds in a cell lands in that cell's
+branch. Circular values are exercised
 without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
 by hand, and the suites cover the door over each kind, a payload seen at its
@@ -599,15 +634,21 @@ rule and the seal ([tests/construction.rs](tests/construction.rs)), bisimilar an
 ([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
 ([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin,
 two members of one ring crossing as one copy of it, and a copy laying down only
-what each part's seen type shows ([tests/crossing.rs](tests/crossing.rs)), `satisfies` by a node's memo
+what each part's seen type shows ([tests/crossing.rs](tests/crossing.rs)), a
+result merging its home's branch, a copy adopting each laid part's memo and
+none hidden, a copied type value read after its home is released, and the
+habitat check refusing a value no crossing carried ([tests/habitat.rs](tests/habitat.rs)), `satisfies` by a node's memo
 ([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
 hundred thousand deep rendered, compared, crossed and digested on the default
-test thread ([tests/depth.rs](tests/depth.rs)). One test joins the koan
-[Miri slate](../../observe/miri_slate.md): `a_copied_list_outlives_its_home`,
-the one path only `values` drives — a deep copy laying down strings, a list and
+test thread ([tests/depth.rs](tests/depth.rs)). Two tests join the koan
+[Miri slate](../../observe/miri_slate.md), the paths only `values` drives:
+`a_copied_list_outlives_its_home` — a deep copy laying down strings, a list and
 a dict whose string keys are written inside its key run's `fill`, read after
-the region it was copied from is released. The pinned and kept paths it would
-otherwise pair with are `cellgraph`'s own slate.
+the region it was copied from is released — and
+`a_copied_type_value_names_a_type_its_destination_resolves`, a type node
+re-laid in the destination's branch and read after its home is released. The
+pinned and kept paths they would otherwise pair with are `cellgraph`'s own
+slate.
 
 The digest recipe is [tests/digest.rs](tests/digest.rs): equal content alike
 across cells, key order and field-order blindness, a retype changing the digest

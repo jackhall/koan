@@ -156,7 +156,7 @@ fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
         .enter(tree, |context| {
             let value = number_in(context, 1);
             context
-                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
+                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, _, views| {
                     Active::new(take(&views[0], writer))
                 })
                 .unwrap();
@@ -200,10 +200,14 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
                 CellHandle::Slab(stranger),
             ] {
                 context
-                    .alloc_into::<Number, Number>(dest, &[kept_operand(&value)], |writer, views| {
-                        copied.push(matches!(views[0], CrossedOperand::Copied { .. }));
-                        Active::new(take(&views[0], writer))
-                    })
+                    .alloc_into::<Number, Number>(
+                        dest,
+                        &[kept_operand(&value)],
+                        |writer, _, views| {
+                            copied.push(matches!(views[0], CrossedOperand::Copied { .. }));
+                            Active::new(take(&views[0], writer))
+                        },
+                    )
                     .unwrap();
             }
             copied
@@ -251,7 +255,7 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
         .enter(home, |context| {
             let value = number_in(context, 9);
             context
-                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
+                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, _, views| {
                     Active::new(take(&views[0], writer))
                 })
                 .unwrap();
@@ -290,13 +294,13 @@ fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
                 .alloc_into::<Number, Number>(
                     parent,
                     &[kept_operand(&first), kept_operand(&second)],
-                    |writer, views| Active::new(take(&views[0], writer)),
+                    |writer, _, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
             // And then a pin further up. The shallower destination wins, so the bump goes to the
             // root rather than stopping at the parent it was first pledged to.
             context
-                .alloc_into::<Number, Number>(root, &[kept_operand(&first)], |writer, views| {
+                .alloc_into::<Number, Number>(root, &[kept_operand(&first)], |writer, _, views| {
                     Active::new(take(&views[0], writer))
                 })
                 .unwrap();
@@ -336,7 +340,7 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
         .enter(source, |context| {
             let value = number_in(context, 4);
             context
-                .alloc_into::<Number, Number>(tree, &[kept_operand(&value)], |writer, views| {
+                .alloc_into::<Number, Number>(tree, &[kept_operand(&value)], |writer, _, views| {
                     Active::new(one(writer, number(&views[0]) + 1))
                 })
                 .unwrap();
@@ -453,7 +457,7 @@ fn spliced_into_root(
             let value = number_in(context, 21);
             let kept = context.keep(value.clone());
             context
-                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
+                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, _, views| {
                     Active::new(take(&views[0], writer))
                 })
                 .unwrap();
@@ -628,7 +632,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
                         .alloc_into::<Number, Number>(
                             up,
                             &[kept_operand(&value)],
-                            |writer, views| Active::new(take(&views[0], writer)),
+                            |writer, _, views| Active::new(take(&views[0], writer)),
                         )
                         .unwrap();
                     context.keep(placed)
@@ -680,7 +684,7 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
     graph
         .enter(destination, |context| {
             let carrier = context.redeem(kept).unwrap();
-            let captured = context.alloc_here(&[kept_operand(&carrier)], |writer, views| {
+            let captured = context.alloc_here(&[kept_operand(&carrier)], |writer, _, views| {
                 take(&views[0], writer)
             });
             context.store_successor(captured);
@@ -715,7 +719,7 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
         .enter(hop, |context| {
             let value = number_in(context, 6);
             let placed = context
-                .alloc_into::<Number, Number>(next, &[kept_operand(&value)], |writer, views| {
+                .alloc_into::<Number, Number>(next, &[kept_operand(&value)], |writer, _, views| {
                     assert!(
                         matches!(views[0], CrossedOperand::Copied { .. }),
                         "a sibling is off the chain"

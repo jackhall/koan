@@ -47,13 +47,13 @@ since the load has no type to instantiate it at.
 - *Two different paths — decided*, per the
   [module design](../../design/modules.md#comparing-two-paths). The load
   compares their content trees, whose nodes are content and whose leaves are
-  what it cannot see. A path over a constant tree is the carrier itself, and a
+  what it cannot see. A path over a closed tree is the carrier itself, and a
   path over a tree with a leaf is a rigid of the load alone, which the run binds
   to the carrier it computes and no value carries.
 - *A call unfolds — decided.* No builtin yields a fresh value, so a call over
   the same trees builds the same content, and the load substitutes its
   arguments into the tree its function builds. A call it cannot unfold is a
-  leaf, so no node stands for an application. [Effects](effects.md) leave an
+  leaf, so no node stands for an application. [Effects](../rewrite/effects.md) leave an
   effectful call folded.
 - *Where a path in a type expression is typed — open.* The type channel fixes
   every type expression before the static pass selects a callee, and a call
@@ -67,7 +67,7 @@ since the load has no type to instantiate it at.
   a level past every name level, which leaves the
   [type lattice](../../lattice/src/types/vocabulary.md) unchanged and reads two
   paths with leaves as *maybe* wherever they differ, so the design's *never*
-  between trees differing at content holds only for constant trees; or a
+  between trees differing at content holds only for closed trees; or a
   lattice node holding the tree, which keeps that *never* at the cost of a node
   variant, a tree vocabulary in the registry, and its walk arms and laws.
 
@@ -77,6 +77,6 @@ since the load has no type to instantiate it at.
 
 **Unblocks:**
 
-- [Effects](effects.md) — an effectful call is a leaf only where calls unfold.
-- [Dependent signatures](../gradual-typing/dependent-signatures.md) — a
+- [Effects](../rewrite/effects.md) — an effectful call is a leaf only where calls unfold.
+- [Dependent signatures](dependent-signatures.md) — a
   signature reads a parameter's member through a path.

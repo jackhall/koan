@@ -1,7 +1,7 @@
 //! The laws.
 //!
 //! Every statement here is a property of the algebra, not a pin on a particular input: a rewrite of
-//! any walk has these as its oracle. One registry per test thread, so handles generated inside one
+//! any walk has these as its oracle. One chain per test thread, so handles generated inside one
 //! law all name content the same table holds; each case brings its own scratch region, dropped with
 //! the case.
 //!
@@ -16,43 +16,45 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
+use super::raw::RawRegistry;
+use super::raw::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
+use super::raw::shape::{keys_equal, shape_classes, shape_of};
+use super::raw::sig_relations::{admits_shape, shape_specificity, sig_fits};
+use super::raw::signatures::{applications, applications_under, is_signature_type};
+use super::raw::substitute::{
+    Side, bound_above, read_through, substitute_parameters, substitute_quantified,
+};
+use super::raw::unify::{admits, most_determined_first, ties};
+use super::raw::walk::{visit, visit_free_quantified};
+use super::raw::{lattice, order};
 use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
-use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle};
+use crate::types::chain::TypeChain;
+use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::types::kind::KKind;
 use crate::types::node::{TypeNode, Variable};
-use crate::types::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
-use crate::types::registry::TypeRegistry;
 use crate::types::schema::{Members, canonical_overloads};
-use crate::types::shape::{Shape, Specificity, keys_equal, shape_classes, shape_slots};
+use crate::types::shape::{DispatchTokenElement, Specificity, shape_slots};
 use crate::types::sig_relations::InstanceFailure;
-use crate::types::sig_relations::{admits_shape, shape_specificity, sig_fits};
-use crate::types::signatures::{applications, applications_under, is_signature_type};
-use crate::types::substitute::{
-    Side, bound_above, quantifier_bounds, read_through, substitute_parameters,
-    substitute_quantified,
-};
+use crate::types::tiers::{BumpHalf, Habitat};
 use crate::types::typed::{
     fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
 };
-use crate::types::unify::{
-    Collector, Interval, UnifyFailure, admits, intervals, most_determined_first, ties,
-};
+use crate::types::unify::{Collector, Interval, UnifyFailure, intervals};
 use crate::types::walk::Variance;
-use crate::types::walk::unary::{Visit, visit, visit_free_quantified};
+use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
-use crate::types::{lattice, order};
 
 use super::generators::{
     Groups, Vocabulary, World, arb_any, arb_any_with, arb_argument_pair, arb_arguments,
     arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain, arb_function_type,
     arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair, arb_over_head_parameter,
     arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
-    arb_signature_type, arb_wanted_instance,
+    arb_signature_type, arb_wanted_instance, under_with,
 };
 
 thread_local! {
-    /// One live registry and one alphabet per test thread — proptest runs each `#[test]` on its
+    /// One live chain and one alphabet per test thread — proptest runs each `#[test]` on its
     /// own, so a law's generated handles all name content one table holds.
     static WORLD: World = World::new();
 }
@@ -61,7 +63,7 @@ fn world() -> World {
     WORLD.with(|world| world.clone())
 }
 
-fn registry() -> std::rc::Rc<TypeRegistry<'static>> {
+fn registry() -> std::rc::Rc<TypeChain<'static, super::generators::WorldHalf>> {
     world().types
 }
 
@@ -423,7 +425,7 @@ proptest! {
             "a run binds every lexical variable"
         );
         prop_assert!(order::fits(&types, scratch, run_made, run_wanted));
-        for (entry, bound) in run_solution.iter().zip(quantifier_bounds(&types, scheme.raw())) {
+        for (entry, bound) in run_solution.iter().zip(types.split(scheme.raw()).0.bounds) {
             prop_assert!(order::fits(&types, scratch, *entry, bound.raw()));
         }
         prop_assert_eq!(
@@ -516,13 +518,13 @@ proptest! {
         prop_assert_eq!(types.list(a), types.list(a));
         prop_assert_eq!(types.dict(a, b), types.dict(a, b));
         // A node read back out and re-interned names the same handle.
-        prop_assert_eq!(types.intern(scratch, types.node(a)), a);
-        prop_assert_eq!(types.intern(scratch, types.node(b)), b);
+        prop_assert_eq!(types.intern(scratch, types.enter(a).view()).handle(), a);
+        prop_assert_eq!(types.intern(scratch, types.enter(b).view()).handle(), b);
     }
 
     /// The probe flags interning stores beside a node answer what a walk over the type would: a free
     /// quantifier reachable without crossing a shape's binder, any rigid variable reachable at all,
-    /// anything parametric, and an opaque carrier.
+    /// anything parametric, an opaque carrier, and the two porosity answers, each its definition.
     #[test]
     fn the_probe_flags_are_their_walks(declared in one()) {
         let types = registry();
@@ -559,6 +561,8 @@ proptest! {
         prop_assert_eq!(types.contains_rigid(a), rigid);
         prop_assert_eq!(types.is_concrete(a), !parametric);
         prop_assert_eq!(types.contains_carrier(a), carrier);
+        prop_assert_eq!(types.is_porous(a), porous_walk(&types, a));
+        prop_assert_eq!(types.is_exposing(a), exposing_walk(&types, a));
         // The checked conversion agrees: a scheme is never concrete, and a type is where no
         // variable is reachable from it.
         let concrete = match declared {
@@ -566,6 +570,121 @@ proptest! {
             DeclaredType::Scheme(_) => false,
         };
         prop_assert_eq!(concrete, !parametric);
+    }
+
+    /// A type holding a carrier lies under, or fits, a type only where that type is porous, over
+    /// drawn pairs.
+    #[test]
+    fn a_carrier_lies_only_under_a_porous_type(
+        a in concrete().prop_filter("holds a carrier", |a| registry().holds_carrier(*a)),
+        b in concrete().prop_filter("holds no carrier", |b| !registry().holds_carrier(*b)),
+    ) {
+        let (a, b) = (a.raw(), b.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        if order::is_subtype_of(&types, scratch, a, b) || order::fits(&types, scratch, a, b) {
+            prop_assert!(types.is_porous(b), "a carrier reached a type that is not porous");
+        }
+    }
+
+    /// The same law over a type built under a drawn one by widening it with a fresh carrier, so it
+    /// cannot pass by the generators' luck in lining a pair up.
+    #[test]
+    fn widening_with_a_carrier_reaches_only_a_porous_type((a, b) in widened_with_a_carrier()) {
+        let (world, types) = (world(), registry());
+        let bump = Bump::new();
+        let scratch = &bump;
+        prop_assert!(types.contains_carrier(a), "the move holds its carrier");
+        prop_assert!(order::is_subtype_of(&types, scratch, a, b), "the move builds a type under b");
+        prop_assert!(
+            types.is_porous(b),
+            "{} reached {}, which is not porous",
+            crate::types::display_name(wrap::<Parametric>(a), &world.types, &world.symbols),
+            crate::types::display_name(wrap::<Parametric>(b), &world.types, &world.symbols),
+        );
+    }
+}
+
+/// A drawn concrete type `b` beside the type [`under_with`] builds under it, holding a fresh
+/// carrier; a draw no move reaches is redrawn.
+fn widened_with_a_carrier() -> BoxedStrategy<(Handle, Handle)> {
+    concrete()
+        .prop_filter_map("no move reaches under the draw", |b| {
+            let bump = Bump::new();
+            under_with(&world(), &bump, b.raw()).map(|a| (a, b.raw()))
+        })
+        .boxed()
+}
+
+/// [`TypeChain::porous`] by its definition, as a descent: whether a type minted at run, or one
+/// built over it, can lie under or fit `kt`.
+fn porous_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> bool {
+    let at = |child: Handle| porous_walk(types, child);
+    match types.node(kt) {
+        TypeNode::Any
+        | TypeNode::AnyValue
+        | TypeNode::Record { .. }
+        | TypeNode::Signature { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. }
+        | TypeNode::Quantified { .. }
+        | TypeNode::Lexical { .. }
+        | TypeNode::Parameter { .. }
+        | TypeNode::DeferredReturn(_)
+        | TypeNode::Sibling(_) => true,
+        // An application lies under the bare family it applies.
+        TypeNode::SetMember { kind, .. } => kind == KKind::TypeConstructor,
+        TypeNode::List { element } => at(element),
+        TypeNode::Dict { key, value } => at(key) || at(value),
+        TypeNode::Union { members } => members.iter().any(at),
+        // What lies under an application differs from it only in its arguments.
+        TypeNode::ConstructorApply { arguments, .. } => arguments.values().any(at),
+        TypeNode::Scheme { body, .. } => at(body),
+        // A parameter or slot not typed `Any` admits a union with a minted type.
+        TypeNode::KFunction { params, ret } => params.values().any(|p| p != Handle::ANY) || at(ret),
+        TypeNode::ExpressionShape { elements, ret, .. } => elements.iter().any(
+            |element| matches!(element, DispatchTokenElement::Slot(slot) if slot != Handle::ANY),
+        ) || at(ret),
+        _ => false,
+    }
+}
+
+/// [`TypeChain::exposing`] by its definition, as a descent: whether a value seen at `kt` can
+/// expose a part or payload of a type minted at run.
+fn exposing_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> bool {
+    let part = |child: Handle| {
+        exposing_walk(types, child)
+            || (matches!(
+                types.node(child),
+                TypeNode::KFunction { .. }
+                    | TypeNode::ExpressionShape { .. }
+                    | TypeNode::Scheme { .. }
+            ) && porous_walk(types, child))
+    };
+    match types.node(kt) {
+        TypeNode::Any
+        | TypeNode::AnyValue
+        | TypeNode::OfKind(_)
+        | TypeNode::Signature { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. }
+        | TypeNode::Quantified { .. }
+        | TypeNode::Lexical { .. }
+        | TypeNode::Parameter { .. }
+        | TypeNode::Carrier { .. }
+        | TypeNode::DeferredReturn(_)
+        | TypeNode::SetMember { .. }
+        | TypeNode::Sibling(_) => true,
+        TypeNode::Union { members } => porous_walk(types, kt) || members.iter().any(part),
+        TypeNode::List { element } => part(element),
+        TypeNode::Dict { key, value } => part(key) || part(value),
+        TypeNode::Record { fields } => fields.values().any(part),
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => part(constructor.raw()) || arguments.values().any(part),
+        _ => false,
     }
 }
 
@@ -648,24 +767,30 @@ proptest! {
 proptest! {
     #![proptest_config(strict())]
 
-    /// Re-interning a shape through its door with the group it already carries returns the very
-    /// handle: the group order is idempotent.
+    /// Re-minting a shape through its scheme door with the group it already carries returns the
+    /// very handle: the group order is idempotent.
     #[test]
     fn interning_a_shapes_own_content_is_a_fixed_point(a in shape()) {
-        let a = a.raw();
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
+        let view = a.view(&types);
         if let TypeNode::ExpressionShape {
-            quantifiers,
-            bounds,
             elements,
             classes,
             ret,
-        } = types.node(a)
+        } = view.body
         {
-            let again = types.shape_group(scratch, quantifiers, bounds, &elements[..], classes, ret);
-            prop_assert_eq!(again.0, a);
+            let elements: Vec<_> = elements.iter().collect();
+            let again = types.shape_scheme(
+                scratch,
+                view.group.names,
+                view.group.bounds,
+                &elements,
+                classes.copied_into(scratch),
+                ret,
+            );
+            prop_assert_eq!(again.handle, a);
         }
     }
 
@@ -676,7 +801,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let stored = quantifier_bounds(&types, a);
+        let stored = types.split(a).0.bounds;
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
         visit(&types, scratch, a, &mut |_, node, context| match *node {
             TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
@@ -697,20 +822,60 @@ proptest! {
     /// The function twin of [`interning_a_shapes_own_content_is_a_fixed_point`].
     #[test]
     fn interning_a_functions_own_content_is_a_fixed_point(a in function()) {
-        let a = a.raw();
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        if let TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            params,
-            ret,
-        } = types.node(a)
-        {
-            let again = types.function_group(scratch, quantifiers, bounds, params.raw(), ret);
-            prop_assert_eq!(again.0, a);
+        let view = a.view(&types);
+        if let TypeNode::KFunction { params, ret } = view.body {
+            let params: Vec<_> = params.iter().collect();
+            let again =
+                types.function_scheme(scratch, view.group.names, view.group.bounds, &params, ret);
+            prop_assert_eq!(again.handle, a);
         }
+    }
+
+    /// One type, one handle: a scheme's quantifier names are render-only, so re-minting it through
+    /// its door under fresh names returns the very handle.
+    #[test]
+    fn a_scheme_is_one_handle_whatever_its_names(a in prop_oneof![shape(), function()]) {
+        if a.as_scheme().is_none() {
+            return Ok(());
+        }
+        let world = world();
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let view = a.view(&types);
+        // Outside the drawn alphabet, so every name changes.
+        let renamed: Vec<TypeSymbol> = (0..view.group.names.len())
+            .map(|index| {
+                TypeSymbol::declared(&format!("Renamed{index}"), &world.symbols)
+                    .expect("a Type token")
+            })
+            .collect();
+        let again = match view.body {
+            TypeNode::KFunction { params, ret } => {
+                let params: Vec<_> = params.iter().collect();
+                types.function_scheme(scratch, &renamed, view.group.bounds, &params, ret)
+            }
+            TypeNode::ExpressionShape {
+                elements,
+                classes,
+                ret,
+            } => {
+                let elements: Vec<_> = elements.iter().collect();
+                types.shape_scheme(
+                    scratch,
+                    &renamed,
+                    view.group.bounds,
+                    &elements,
+                    classes.copied_into(scratch),
+                    ret,
+                )
+            }
+            _ => unreachable!("a scheme's body is a function type or a shape"),
+        };
+        prop_assert_eq!(again.handle, a);
     }
 
     /// The function twin of [`a_shape_stores_the_bounds_its_occurrences_carry`].
@@ -720,7 +885,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let stored = quantifier_bounds(&types, a);
+        let stored = types.split(a).0.bounds;
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
         visit(&types, scratch, a, &mut |_, node, context| match *node {
             TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
@@ -769,8 +934,9 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         // Two things that are not both shapes share no bucket to rank under. The empty element run
-        // a non-shape reads as would otherwise make every pair of leaves compare `Equal`.
-        if !matches!(types.node(a.raw()), TypeNode::ExpressionShape { .. }) {
+        // a non-shape reads as would otherwise make every pair of leaves compare `Equal`. A shape
+        // scheme is a shape: specificity reads through it.
+        if shape_of(&types, a.raw()).is_none() {
             let (a, b) = (a.raw(), b.raw());
             prop_assert_eq!(shape_specificity(&types, scratch, a, b), Specificity::Incomparable);
             prop_assert_eq!(shape_specificity(&types, scratch, b, a), Specificity::Incomparable);
@@ -792,8 +958,8 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         prop_assert!(
-            Shape::of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
-                && Shape::of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
+            shape_of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
+                && shape_of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
                 && keys_equal(a, b, &types),
             "the pair is two monomorphic shapes over one key"
         );
@@ -805,7 +971,7 @@ proptest! {
         }
         let left: Vec<Handle> = shape_slots(a, &types).collect();
         let right: Vec<Handle> = shape_slots(b, &types).collect();
-        let class = |index: usize| ranking.get(index).map_or(index, |c| usize::from(*c));
+        let class = |index: usize| usize::from(ranking.get(index));
         let mut expected = Specificity::Equal;
         for current in 0..left.len() {
             let in_class = || (0..left.len()).filter(|index| class(*index) == current);
@@ -834,8 +1000,8 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         prop_assert!(
-            Shape::of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
-                && Shape::of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
+            shape_of(&types, a).is_some_and(|shape| shape.quantifiers.is_empty())
+                && shape_of(&types, b).is_some_and(|shape| shape.quantifiers.is_empty())
                 && keys_equal(a, b, &types),
             "the pair is two monomorphic shapes over one key"
         );
@@ -857,13 +1023,13 @@ proptest! {
 }
 
 /// Whether `shape` admits one argument tuple at its slot positions.
-fn admits_tuple(
-    types: &TypeRegistry<'_>,
+fn admits_tuple<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     shape: Handle,
     arguments: &[KType],
 ) -> bool {
-    let mut collector = Collector::<Handle>::new(scratch, quantifier_bounds(types, shape));
+    let mut collector = Collector::<Handle>::new(types, scratch, types.split(shape).0.bounds);
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
         if admits(
             types,
@@ -895,7 +1061,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let mut collector = Collector::<Handle>::new(scratch, &[]);
+        let mut collector = Collector::<Handle>::new(&types, scratch, &[]);
         let admitted = admits(&types, scratch, a, b, Variance::Co, &mut collector).is_ok();
         prop_assert_eq!(admitted, order::satisfied_by(&types, scratch, a, b));
     }
@@ -914,7 +1080,7 @@ proptest! {
         let scratch = &bump;
         let holding = a == carrier
             || a == Handle::ANY
-            || matches!(types.node(a), TypeNode::Union { members } if members.contains(&carrier));
+            || matches!(types.node(a), TypeNode::Union { members } if members.contains(carrier));
         prop_assert_eq!(order::is_subtype_of(&types, scratch, carrier, a), holding);
         let atom = |x: Handle| x == carrier || x == Handle::NEVER;
         prop_assert_eq!(order::is_subtype_of(&types, scratch, a, carrier), atom(a));
@@ -933,13 +1099,13 @@ proptest! {
         // `a`'s members and the list reaches its member-by-member fallback.
         let variable = types.list(types.quantified(0, KType::ANY).raw());
         for declared in [a, types.union_of(scratch, &[a, variable])] {
-            let mut through_bound = Collector::<Handle>::new(scratch, &[KType::ANY]);
+            let mut through_bound = Collector::<Handle>::new(&types, scratch, &[KType::ANY]);
             if admits(&types, scratch, declared, bound.raw(), Variance::Co, &mut through_bound)
                 .is_err()
             {
                 continue;
             }
-            let mut collector = Collector::<Handle>::new(scratch, &[KType::ANY]);
+            let mut collector = Collector::<Handle>::new(&types, scratch, &[KType::ANY]);
             prop_assert!(
                 admits(&types, scratch, declared, b, Variance::Co, &mut collector).is_ok(),
                 "a position its bound fills refused the variable",
@@ -959,10 +1125,10 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let bounds = quantifier_bounds(&types, a);
+        let bounds = types.split(a).0.bounds;
         for slot in shape_slots(a, &types) {
             for (carried, variance) in [(Handle::NEVER, Variance::Co), (Handle::ANY, Variance::Contra)] {
-                let mut collector = Collector::<Handle>::new(scratch, bounds);
+                let mut collector = Collector::<Handle>::new(&types, scratch, bounds);
                 prop_assert!(
                     admits(&types, scratch, slot, carried, variance, &mut collector).is_ok(),
                     "a slot refused an extreme of the order",
@@ -990,12 +1156,12 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let bounds = quantifier_bounds(&types, a);
+        let bounds = types.split(a).0.bounds;
         prop_assert!(!bounds.is_empty(), "the candidate binds a group");
         let slots: Vec<Handle> = shape_slots(a, &types).collect();
         let arguments: Vec<Handle> = shape_slots(b, &types).collect();
         prop_assert!(keys_equal(a, b, &types), "the pair shares one key");
-        let mut collector = Collector::<Handle>::new(scratch, bounds);
+        let mut collector = Collector::<Handle>::new(&types, scratch, bounds);
         prop_assume!(slots.iter().zip(arguments.iter()).all(|(slot, argument)| {
             admits(&types, scratch, *slot, *argument, Variance::Co, &mut collector).is_ok()
         }));
@@ -1014,7 +1180,7 @@ proptest! {
             prop_assert!(order::satisfied_by(&types, scratch, solved, *argument));
         }
         // Admission does not depend on the order the slots are read.
-        let mut backwards = Collector::<Handle>::new(scratch, bounds);
+        let mut backwards = Collector::<Handle>::new(&types, scratch, bounds);
         for (slot, argument) in slots.iter().zip(arguments.iter()).rev() {
             prop_assert!(
                 admits(&types, scratch, *slot, *argument, Variance::Co, &mut backwards).is_ok()
@@ -1122,8 +1288,8 @@ fn draw_from(source: impl Strategy<Value = u8>) -> impl Strategy<Value = Draw> {
 /// `kt` as the run carries it: each lexical variable replaced by the type the run binds its level
 /// to — its bound, its lower end, or the bound met with a pool type and joined with the lower end,
 /// as `draw` says.
-fn instance(
-    types: &TypeRegistry<'_>,
+fn instance<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     kt: Handle,
     draw: &Draw,
@@ -1164,8 +1330,8 @@ fn instance(
 /// and meets a drawn type above `Never`, is bounded below by that meet, which it carries; anything
 /// else is within the static type, carrying it met with a drawn type, or as the run carries it where
 /// that meet is `Never`. `None` where some static type is `Never`.
-fn static_and_carried(
-    types: &TypeRegistry<'_>,
+fn static_and_carried<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     a: Handle,
     b: Handle,
@@ -1174,7 +1340,7 @@ fn static_and_carried(
     // Each slot at its group's bounds: the instance a call reaches when every variable takes its
     // bound.
     let at_bounds = |shape: Handle| -> Vec<Handle> {
-        let bounds = quantifier_bounds(types, shape);
+        let bounds = types.split(shape).0.bounds;
         shape_slots(shape, types)
             .map(|slot| substitute_quantified(types, scratch, slot, bounds))
             .collect()
@@ -1221,8 +1387,8 @@ fn static_and_carried(
 }
 
 /// `interval` with each end as the run carries it.
-fn carried_interval(
-    types: &TypeRegistry<'_>,
+fn carried_interval<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     interval: Interval<Handle>,
     draw: &Draw,
@@ -1234,8 +1400,8 @@ fn carried_interval(
 }
 
 /// Whether `kt` lies within `interval`.
-fn within(
-    types: &TypeRegistry<'_>,
+fn within<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     kt: Handle,
     interval: Interval<Handle>,
@@ -1245,8 +1411,8 @@ fn within(
 }
 
 /// `shape`'s group solved jointly over one argument per slot, or `None`.
-fn solve_jointly<'s>(
-    types: &TypeRegistry<'_>,
+fn solve_jointly<'s, 'run: 's>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     shape: Handle,
     arguments: &[Handle],
@@ -1255,13 +1421,13 @@ fn solve_jointly<'s>(
 }
 
 /// [`solve_jointly`]'s solution beside the collector it ran in.
-fn collect_jointly<'s>(
-    types: &TypeRegistry<'_>,
+fn collect_jointly<'s, 'run: 's>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     shape: Handle,
     arguments: &[Handle],
-) -> (Option<BumpVec<'s, Handle>>, Collector<'s, Handle>) {
-    let mut collector = Collector::<Handle>::new(scratch, quantifier_bounds(types, shape));
+) -> (Option<BumpVec<'s, Handle>>, Collector<'s, 'run, Handle>) {
+    let mut collector = Collector::<Handle>::new(types, scratch, types.split(shape).0.bounds);
     for (slot, argument) in shape_slots(shape, types).zip(arguments) {
         if admits(
             types,
@@ -1310,7 +1476,7 @@ proptest! {
             &types,
             scratch,
             &slots,
-            quantifier_bounds(&types, a),
+            types.split(a).0.bounds,
             &statics,
             all_exact,
         );
@@ -1510,7 +1676,7 @@ proptest! {
                     .iter()
                     .copied()
                     .find(|member| {
-                        let mut collector = Collector::<Handle>::new(scratch, &[]);
+                        let mut collector = Collector::<Handle>::new(&types, scratch, &[]);
                         admits(&types, scratch, *member, one, Variance::Co, &mut collector).is_ok()
                     })
             };
@@ -1551,8 +1717,8 @@ proptest! {
 /// Seal a group of newtypes over `reprs`, each also referencing its successor as a sibling, in
 /// announcement order or reversed, over a window hosted in `scratch`. Returns the member handles in
 /// announcement order.
-fn seal(
-    types: &TypeRegistry<'_>,
+fn seal<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     names: &[TypeSymbol],
     reprs: &[KType],
@@ -1685,5 +1851,78 @@ proptest! {
                 "an overload was dropped with no survivor below it",
             );
         }
+    }
+}
+
+// --- Tiers ---
+
+/// A fresh branch chain over the world's root, in `region`.
+fn beside<'r>(world: &World, region: &'r Bump) -> TypeChain<'r, BumpHalf<'r>> {
+    TypeChain::new(world.root, BumpHalf::new(region))
+}
+
+/// Whether `kt` reads in `there` exactly as in the world: one digest recomputed off its content,
+/// one set of flags, one rendering — which enters every handle a side table holds.
+fn reads_alike<'r>(
+    world: &World,
+    there: &TypeChain<'r, BumpHalf<'r>>,
+    kt: DeclaredType<Parametric>,
+) -> bool {
+    let scratch = Bump::new();
+    let (here, laid) = (world.types.enter(kt.raw()), there.enter(kt.raw()));
+    crate::types::digest::node_digest(&scratch, &laid.view()) == here.digest()
+        && laid.flags() == here.flags()
+        && crate::types::display_name(kt, there, &world.symbols).to_string()
+            == crate::types::display_name(kt, &world.types, &world.symbols).to_string()
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// A copy's transfer re-lays a type at its own digest and flags: adopted into a fresh branch
+    /// over the same root, every generated type reads as it did where it was built.
+    #[test]
+    fn an_adopted_type_reads_as_its_source(kt in one()) {
+        let world = world();
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        there.adopt(world.branch(), kt);
+        prop_assert!(reads_alike(&world, &there, kt));
+    }
+
+    /// A merge enters every node of its source: each then resolves without a link.
+    #[test]
+    fn a_merge_finds_every_source_entry(kt in one()) {
+        let world = world();
+        world.types.enter(kt.raw());
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        let Some(branch) = world.branch() else {
+            return Ok(());
+        };
+        there.merge(branch);
+        let mut every = true;
+        branch.each_digest(|digest| every &= there.find(digest).is_some());
+        prop_assert!(every);
+    }
+
+    /// A chain linked to the generating chain's branch reads every generated type as the world
+    /// does, and holds exactly the handles it read: one, unless the root holds it.
+    #[test]
+    fn a_linked_chain_reads_through_and_holds_what_it_read(kt in one()) {
+        let world = world();
+        world.types.enter(kt.raw());
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        if let Some(branch) = world.branch() {
+            there.link(branch);
+        }
+        prop_assert!(reads_alike(&world, &there, kt));
+        let rooted = world.root.find(kt.raw().digest()).is_some();
+        let read = there.own_len();
+        prop_assert!(read >= usize::from(!rooted));
+        let before = read;
+        there.enter(kt.raw());
+        prop_assert_eq!(there.own_len(), before, "a second read caches nothing more");
     }
 }

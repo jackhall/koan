@@ -16,7 +16,7 @@ fn the_builder_records_each_type_expression_once() {
                   MATCH 1 -> :Number WITH #{Number: (1), :(Str): (2), _: (3)}";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(|writer| {
+        fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
             let shape = BodyShape::of_program(
                 fixture.program,

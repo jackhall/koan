@@ -198,6 +198,7 @@ changes what a reader sees and which overload runs.
 | A value's carried type, `satisfies`, retyping | [values: the type memo](../src/values/README.md#the-type-memo-and-satisfies) |
 | Binding arguments and holding the return contract | [program: the body runner](../src/program/README.md#the-body-runner) |
 | Where a load-time type is stored | [scope: load-time types](../src/scope/README.md#load-time-types) |
+| Where a run-built type lives, and how it crosses with a value | [type lattice: storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches), [values: crossing](../src/values/README.md#crossing) |
 
 ## Open work
 
@@ -205,3 +206,5 @@ changes what a reader sees and which overload runs.
   items.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)
+- [Activation typing](../roadmap/gradual-typing/activation-typing.md) — the
+  type pass re-entered at a frame whose argument closes a leaf.

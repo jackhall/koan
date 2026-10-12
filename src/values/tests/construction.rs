@@ -14,8 +14,9 @@ const WORD: Weight = Weight::flat::<Value<'static>>();
 fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let (types, scratch) = (types, fixture.scratch());
             let strings = [text(writer, "ab"), text(writer, "cde")];
             let list = List::new(writer, strings.into_iter(), types, scratch);
             assert_eq!(list.len(), 2);
@@ -44,8 +45,9 @@ fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
 fn a_list_mixing_a_value_and_a_type_joins_their_families() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let (types, scratch) = (types, fixture.scratch());
             let mixed = [
                 Value::Number(1.0),
                 Value::Type(TypeValue::new(writer, KType::NUMBER, types)),
@@ -63,8 +65,9 @@ fn a_list_mixing_a_value_and_a_type_joins_their_families() {
 fn a_record_sorts_its_fields_and_memoizes_the_record_of_their_types() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+            let (types, scratch, symbols) = (types, fixture.scratch(), fixture.symbols);
             let y = BinderSymbol::declared("y", symbols).unwrap();
             let x = BinderSymbol::declared("x", symbols).unwrap();
             let fields = [(y, text(writer, "b")), (x, Value::Number(1.0))];
@@ -93,8 +96,9 @@ fn a_record_sorts_its_fields_and_memoizes_the_record_of_their_types() {
 fn a_dict_keeps_the_last_of_a_repeated_key_and_reads_in_key_order() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let (types, scratch) = (types, fixture.scratch());
             let entries = [
                 (Key::str("b"), Value::Number(1.0)),
                 (Key::number(2.0).unwrap(), Value::Number(2.0)),
@@ -134,12 +138,8 @@ fn a_dict_keeps_the_last_of_a_repeated_key_and_reads_in_key_order() {
 fn a_key_refuses_nan_and_non_scalars_and_folds_the_zeros() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
-            let list = List::new(
-                context.writer(),
-                [].into_iter(),
-                fixture.types,
-                fixture.scratch(),
-            );
+            let types = &fixture.tiers.of(context);
+            let list = List::new(context.writer(), [].into_iter(), types, fixture.scratch());
             assert_eq!(Key::of(&Value::Number(f64::NAN)), Err(KeyRejected::NaN));
             assert_eq!(
                 Key::of(&Value::List(list)),
@@ -176,7 +176,8 @@ fn peeling_replaces_one_tagged_layer_and_holding_keeps_every_layer() {
 fn a_type_value_weighs_its_kind() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
-            let value = TypeValue::new(context.writer(), KType::NUMBER, fixture.types);
+            let types = &fixture.tiers.of(context);
+            let value = TypeValue::new(context.writer(), KType::NUMBER, types);
             assert_eq!(value.handle(), KType::NUMBER);
             assert_eq!(value.ktype(), KType::of_kind(KKind::ProperType));
             assert_eq!(
@@ -191,8 +192,9 @@ fn a_type_value_weighs_its_kind() {
 fn retyping_swaps_the_handle_over_the_same_cells() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let (types, scratch) = (types, fixture.scratch());
             let numbers = [Value::Number(1.0), Value::Number(2.0)];
             let list = List::new(writer, numbers.into_iter(), types, scratch);
             let Value::List(retyped) =
@@ -217,8 +219,9 @@ fn retyping_swaps_the_handle_over_the_same_cells() {
 fn a_tagged_value_takes_the_member_naming_its_constructor_it_lies_under() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let (types, scratch) = (types, fixture.scratch());
             let union = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
             let tagged = Tagged::hold(writer, Value::Number(1.0), KType::STR);
             let Value::Tagged(stamped) =
@@ -241,8 +244,9 @@ fn a_tagged_value_takes_the_member_naming_its_constructor_it_lies_under() {
 fn a_retype_reads_a_union_member_by_member() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch) = (fixture.types, fixture.scratch());
+            let (types, scratch) = (types, fixture.scratch());
             let union = |members: &[KType]| types.union_of(scratch, members);
             let number_or_str = union(&[KType::NUMBER, KType::STR]);
             let wider = |third| union(&[KType::NUMBER, KType::STR, third]);
@@ -318,11 +322,12 @@ fn a_tagged_value_takes_the_application_it_lies_under() {
                 ),
             )
         });
-        let applied = |argument| {
-            let name = TypeSymbol::declared("Type", symbols).unwrap();
-            types.constructor_apply(scratch, boxed, &[(BinderSymbol::Type(name), argument)])
-        };
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let applied = |argument| {
+                let name = TypeSymbol::declared("Type", symbols).unwrap();
+                types.constructor_apply(scratch, boxed, &[(BinderSymbol::Type(name), argument)])
+            };
             let writer = context.writer();
             let head = TypeValue::new(writer, boxed, types);
             let built =
@@ -350,12 +355,13 @@ fn a_tagged_value_takes_the_application_it_lies_under() {
 #[test]
 fn lowering_builds_nested_literals_and_refuses_names_and_quotes() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let nested = fixture.part("[[1 2] [\"a\"]]");
         let dict = fixture.part("{\"k\": \"s\", 2: {y = true}}");
         let named = fixture.part("[1 x]");
         let quoted = fixture.part("[#(x)]");
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let Some(Value::List(outer)) = Value::lower_part(writer, &nested, types, scratch)
             else {
@@ -390,8 +396,9 @@ fn each_linked_door_stores_its_memo_and_weighs_its_links() {
     type LinkedTagged = crate::values::Tagged<'static, Node<'static>, Link<'static>>;
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+            let (types, scratch, symbols) = (types, fixture.scratch(), fixture.symbols);
             let edge = Link::Edge(KnotPlan::new(1).edge(0).unwrap());
             let link = Weight::flat::<Link<'static>>();
             let word = Link::Value(crate::values::text(writer, "abc"));
@@ -438,12 +445,13 @@ fn each_linked_door_stores_its_memo_and_weighs_its_links() {
 fn a_newtype_construction_is_checked_against_its_representation() {
     use crate::values::{ConstructionRefused, construction};
     with_fixture(|fixture| {
-        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
         let ring = fixture.ring_type("Ring", "next");
         let distance = fixture.newtype("Distance", KType::NUMBER);
         let next = BinderSymbol::declared("next", symbols).unwrap();
         let other = BinderSymbol::declared("other", symbols).unwrap();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let head = |handle| TypeValue::new(writer, handle, types);
             let inner = Value::Tagged(Tagged::hold(writer, Value::Null, ring));
@@ -504,6 +512,7 @@ fn a_family_construction_takes_the_application_its_payload_solves() {
 
         let boxed = fixture.family("Boxed", &["Type"], |names| Some(parameter(names, "Type")));
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let head = TypeValue::new(writer, boxed, types);
             let built = Tagged::construct(writer, head, Value::Number(7.0), types, scratch);
@@ -582,6 +591,7 @@ fn a_member_seals_under_a_carrier_its_source_binding_admits() {
         let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
         let hidden = types.carrier(carrier, KType::ANY, ContentKey(1));
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let sealed = Tagged::seal(
                 writer,

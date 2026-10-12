@@ -9,8 +9,8 @@
 //! supplies, by level — which [`solutions`] reads through an activation for one substitution.
 //!
 //! The value channel's records live here too: the [`Statics`] the language's load pass fixes for a
-//! body, and the [`UseStatics`] of each keyworded use: its candidates' [`Narrowing`] and its
-//! arguments' contributions.
+//! body, the [`UseStatics`] of each keyworded use: its candidates' [`Narrowing`] and its
+//! arguments' contributions, and a frame body's [`BodyClass`].
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
@@ -18,10 +18,8 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
-use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, TypeRegistry, Verdict, display_name,
-};
-use crate::values::{KnottedFamily, Value};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, display_name};
+use crate::values::{KnottedFamily, Types, Value};
 
 use super::activation::ActivationView;
 use super::keyed::Keyed;
@@ -157,11 +155,11 @@ impl Elaboration {
 
     /// The refusal as an error value's message, with its names spelled through `symbols` and its
     /// types through `types`.
-    pub fn display<'x, 'run>(
+    pub fn display<'x, 'g, 'run>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x TypeRegistry<'run>,
-    ) -> ElaborationDisplay<'x, 'run> {
+        types: &'x Types<'g, 'run>,
+    ) -> ElaborationDisplay<'x, 'g, 'run> {
         ElaborationDisplay {
             error: self,
             symbols,
@@ -171,13 +169,13 @@ impl Elaboration {
 }
 
 /// An [`Elaboration`] beside the interner and registry it renders through.
-pub struct ElaborationDisplay<'x, 'run> {
+pub struct ElaborationDisplay<'x, 'g, 'run> {
     error: &'x Elaboration,
     symbols: &'x SymbolInterner,
-    types: &'x TypeRegistry<'run>,
+    types: &'x Types<'g, 'run>,
 }
 
-impl fmt::Display for ElaborationDisplay<'_, '_> {
+impl fmt::Display for ElaborationDisplay<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.error {
             Elaboration::NotAType { name, .. } => {
@@ -304,6 +302,19 @@ impl UseStatics<'_> {
     }
 }
 
+/// What the load fixed about a frame body's minted types — the program's, a callable's or a quote's
+/// code's: whether one can leave it, and how many minting sites it and the blocks and module bodies
+/// it runs hold ([type tiers](../../design/type-tiers.md#two-classes-of-body)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BodyClass {
+    /// No porous exit: nothing it mints is reachable once it returns. It lays a shape branch where
+    /// it mints and is placed `Shares`.
+    Sealed { mints: u32, lays_branch: bool },
+    /// A porous exit: its return, or an argument of a call it makes into a frame, can carry a
+    /// minted type out.
+    Porous { mints: u32 },
+}
+
 /// The value channel's load-time facts for one body: a static type for every value expression and
 /// statement — under which every type the run carries there lies — and each keyworded use's
 /// narrowing and contributions.
@@ -334,6 +345,12 @@ pub struct Statics<'graph> {
     /// parameter of its callee in symbol order, the static type that parameter is solved from —
     /// `Unknown` where the frame reads the carried type.
     pub named: Keyed<'graph, (Site, &'graph [StaticType<'graph>])>,
+    /// A frame body's class; `None` for a block or a module body, which count toward the frame
+    /// body enclosing them.
+    pub class: Option<BodyClass>,
+    /// This shape's own minting sites, sorted: each `:|` ascription, and each component of nominal
+    /// declarations the load leaves unknown, by its first member's declaration node.
+    pub minting: Keyed<'graph, Site>,
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

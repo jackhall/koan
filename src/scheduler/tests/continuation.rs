@@ -5,10 +5,12 @@
 //! [`Step::park`](crate::scheduler::Step::park) — over the graph a [`Graph`] wraps.
 
 use crate::knot::KValue;
+use crate::memory::Bump;
 use crate::memory::CellHandle;
 use crate::scheduler::continuation::{Continuation, Provenance, Rested};
 use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph};
-use crate::scheduler::{Action, Graph, Step};
+use crate::scheduler::{Action, Step};
+use crate::type_lattice::Root;
 
 fn place(cell: CellHandle) -> Provenance {
     Provenance {
@@ -25,7 +27,8 @@ fn inert<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
 
 #[test]
 fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to_the_next_step() {
-    let mut graph: TestGraph<'static> = Graph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root: CellHandle = graph.root().expect("a fresh slab admits a root").into();
     let cells = graph.cells();
     let cell = cells

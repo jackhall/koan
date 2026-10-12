@@ -23,8 +23,8 @@ use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
-use crate::values::Weight;
+use crate::type_lattice::{DeclaredType, KType};
+use crate::values::{Types, Weight};
 
 use super::data::{self, Stager};
 use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
@@ -41,7 +41,7 @@ pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell>,
     activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'x>> {

@@ -161,7 +161,8 @@ A shape's slots sit in **priority classes**: dense ranks, one per slot in
 element order, normalized by [`dense_classes`](shape.rs) from what a bucket
 declaration writes — `2 1` and `20 10` are one ranking, `_` slots come after the
 numbered ones in written order, and slots sharing an integer share a class.
-Written order puts each slot in a class of its own. The ranking is part of the
+Written order puts each slot in a class of its own. A class is a `u16`, so a
+shape holds up to 65,536 slots. The ranking is part of the
 shape's identity, fed to its digest and rendered in `_`'s place, so
 `:(EXPR #(MOVE 2 :Any TO 1 :Any) -> Any)` and the written-order
 `:(EXPR #(MOVE _ :Any TO _ :Any) -> Any)` are two types, and the binary walks
@@ -204,7 +205,7 @@ The classes order **ranking**. [`class_at_least`](ranking.rs) is the verdict
 admit `a`'s, with each variable an earlier class admitted read, as
 `admits_shape` reads it, as a lexical variable between the ends of its interval,
 and each one an earlier class did not admit read as its bound. It reads two
-shape handles and a class, so the registry records it in the verdict table (`Relation::ClassAtLeast`) the first time a pair meets.
+shape handles and a class, so the chain records it in a verdict table (`Relation::ClassAtLeast`) the first time a pair meets.
 [`select_by_class`](ranking.rs) eliminates over a candidate list class by
 class: every candidate another strictly beats at a class drops out, and a
 class that orders neither of two leaves both to the next. The strict win is

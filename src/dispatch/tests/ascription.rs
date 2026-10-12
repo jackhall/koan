@@ -10,11 +10,20 @@ use crate::type_lattice::display_name;
 
 use super::run;
 use super::statics::{body, interval, let_narrowing, loaded, module_body, slot};
+use crate::memory::Bump;
+use crate::values::tests::reading;
 
 /// Both ends of the static type of the binder `name` in `shape`, rendered.
 pub(super) fn ends(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> (String, String) {
     let typed = interval(program, shape, name);
-    let render = |handle| display_name(handle, program.types(), program.symbols()).to_string();
+    let render = |handle| {
+        display_name(
+            handle,
+            &reading(program.root(), &Bump::new()),
+            program.symbols(),
+        )
+        .to_string()
+    };
     (render(typed.lower), render(typed.upper))
 }
 
@@ -372,7 +381,14 @@ fn a_call_in_tail_position_is_typed_as_any_call() {
         let tail = body(program, top, "outer")
             .statement_type(0)
             .expect("the load typed the tail");
-        let render = |handle| display_name(handle, program.types(), program.symbols()).to_string();
+        let render = |handle| {
+            display_name(
+                handle,
+                &reading(program.root(), &Bump::new()),
+                program.symbols(),
+            )
+            .to_string()
+        };
         let numbers = ":(LIST OF Number)".to_string();
         assert_eq!(
             (render(tail.lower), render(tail.upper)),

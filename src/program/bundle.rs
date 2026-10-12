@@ -8,11 +8,11 @@
 //! [README.md § The bundle](README.md#the-bundle).
 
 use crate::knot::{KActivationView, KValue, KnottedFamily};
-use crate::memory::{CrossedOperand, DropFree, Writer, collect, covariant, reattachable};
-use crate::scheduler::StepBundle;
+use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
+use crate::scheduler::{Born, StepBundle};
 use crate::scope::{BodyShape, Site};
-use crate::type_lattice::KType;
-use crate::values::copy_severed;
+use crate::type_lattice::{KType, Root};
+use crate::values::{Half, TypeHeader, Types, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -74,6 +74,31 @@ pub enum KBirth<'graph, 'cell> {
     },
 }
 
+impl<'graph, 'cell> KBirth<'graph, 'cell> {
+    /// Every value the birth carries itself — not those an activation it views holds — for the
+    /// crossing's habitat check.
+    #[cfg(debug_assertions)]
+    fn values(&self, out: &mut impl FnMut(&KValue<'graph, 'cell>)) {
+        match self {
+            KBirth::Call {
+                callee, arguments, ..
+            } => {
+                out(callee);
+                out(arguments);
+            }
+            KBirth::Eval { code, offered, .. } => {
+                out(code);
+                out(offered);
+            }
+            KBirth::Block {
+                module: Some(module),
+                ..
+            } => out(module),
+            _ => {}
+        }
+    }
+}
+
 /// What a cell holds at a step and parks with.
 #[derive(Clone, Copy)]
 pub enum KState<'graph, 'cell> {
@@ -132,15 +157,33 @@ impl<'graph> StepBundle<'graph> for KBundle {
         }
     }
 
+    /// A pinned birth embeds as it is, and its home's branch reaches the cell's: a spawned child's
+    /// branch links it, and a hop's successor or a left birth links it too where it has laid no
+    /// branch yet, and merges it where it has — a tenant, whose branch is its host's. A copied one
+    /// is rebuilt, each type its values carry adopted from the home's branch.
     fn cross<'cell>(
         writer: Writer<'cell>,
-        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily>,
+        header: Header<'graph, 'cell, TypeHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, TypeHeader>,
+        born: Born,
+        type_root: &'graph Root<'graph>,
     ) -> KBirth<'graph, 'cell>
     where
         'graph: 'cell,
     {
         match view {
-            CrossedOperand::Pinned { view, .. } => *view,
+            CrossedOperand::Pinned { view, home, .. } => {
+                let types = Types::new(type_root, Half::of(writer, header));
+                home.read(|header, _| match born {
+                    Born::Child => types.link(header.into_value()),
+                    Born::Hop | Born::Left => types.link_or_merge(header.into_value()),
+                });
+                #[cfg(debug_assertions)]
+                view.values(&mut |value| {
+                    crate::values::check_pinned_habitat::<KnottedFamily>(&types, value)
+                });
+                *view
+            }
             CrossedOperand::Copied { view: copied, .. } => match *copied {
                 KBirth::Program { program } => KBirth::Program { program },
                 // The values of one birth cross through one copy, so they share each knot.
@@ -152,11 +195,12 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     contributed,
                     owed,
                 } => {
+                    let types = Types::new(type_root, Half::of(writer, header));
                     let [callee, arguments] = copy_severed::<_, KnottedFamily, 2>(
                         writer,
+                        &types,
                         view,
                         [&callee, &arguments],
-                        program.types(),
                     );
                     KBirth::Call {
                         program,
@@ -173,11 +217,12 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     offered,
                     contract,
                 } => {
+                    let types = Types::new(type_root, Half::of(writer, header));
                     let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
                         writer,
+                        &types,
                         view,
                         [&code, &offered],
-                        program.types(),
                     );
                     KBirth::Eval {
                         program,

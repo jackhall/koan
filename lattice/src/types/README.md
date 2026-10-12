@@ -1,7 +1,8 @@
 # The type lattice
 
 A closed algebra over interned type nodes. The node vocabulary, the interning
-registry, the identity recipe, the structural relations between types, and the
+registry — a frozen root and a branch per habitat half, read through a chain —
+the identity recipe, the structural relations between types, and the
 unifier that solves a quantified position. Nothing else.
 
 Everything that matches a type against something that is *not* a type — a value,
@@ -49,7 +50,7 @@ breaks without it.
 | Doc | Holds |
 |---|---|
 | [The laws](laws.md) | each law, what rests on it, what breaks without it, and what enforces it |
-| [Identity and storage](identity.md) | the content digest, typed handles, the one region, records and schemas, recursive groups |
+| [Identity and storage](identity.md) | the content digest, typed handles, the root and its branches, records and schemas, recursive groups |
 | [The node vocabulary](vocabulary.md) | every node variant, the kind order, the three families, the code family |
 | [The relations](relations.md) | the order, *fits*, `join` and `meet`, signature types, quantified binders |
 | [Solving](solving.md) | substitution, the unifier, and priority classes: admission, ranking and judging |
@@ -78,8 +79,8 @@ composite the table spells — the code containers `List(Name)`,
 `List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)` and
 `Dict(Name, TypeCode)`, the unions `TypeCode` and `List(Name) | Dict(Name,
 TypeCode)` (`QUANTIFIER_CODE`, a `FOR ALL` group), and the empty record — is
-pinned the same way, and every registry pre-seeds them, so the table's static
-data names no type a registry must first intern.
+pinned the same way, and every root is seeded with them as it is built, so the
+table's static data names no type a chain must first intern.
 `KType::same_as` is the equality that comparison uses, handle against handle in
 `const` context, where the derived `PartialEq` cannot go. Nothing but the handles,
 that comparison and the code order's walk over them ([The code
@@ -90,20 +91,26 @@ family](vocabulary.md#the-code-family)) crosses back.
 Every structural recursion here goes through one of the two drivers in
 [walk](walk.rs), with rendering the single hand-written exhaustive match. Adding
 a compound node variant is a compile error at the drivers' arm tables, in the
-renderer, and at [`TypeNode::view`](node.rs), which reads a node's children as
-another typed handle — **and nowhere else**. That is the
+renderer, and at the stored node's three conversions in [stored.rs](stored.rs) —
+`Content::lay`; `StoredNode::view_as`, which reads a node back with its
+children as handles outside the lattice and as references inside; and
+`Content::transfer`, which re-lays a node in another tier for a copy — **and
+nowhere else**. That is the
 property the drivers exist for. Adding any variant, leaf or compound, is also a
 compile error at [`family_top`](order.rs), [`leaf_name`](handle.rs) and
 [`TypeNode::group`](node.rs), which have no wildcard arm, so no type goes
 without a family, no leaf without its spelling, and no binder without its
 group.
 
-Ask first whether the walk is unary or binary, then whether it rebuilds.
+Ask first whether the walk is unary or binary, then whether it rebuilds. Every
+driver walks nodes by reference, from node to child, so a walk looks up no
+handle.
 
 - **Unary rebuild** ([walk/unary.rs](walk/unary.rs)) — supply a leaf rule
-  `FnMut(Handle, &TypeNode, &Context) -> Option<Handle>`: `Some(k)` replaces the
-  node and stops, `None` lets the driver descend, and the one knob picks which
-  union door reassembles a union. A signature and a sealed member are leaves to
+  `FnMut(Linked, &TypeNode<Linked>, &Context) -> Option<Linked>`: `Some(k)`
+  replaces the node and stops, and `None` lets the driver descend. A rebuilt
+  composite re-interns through the chain's ordinary doors, a union through
+  the canonicalizing one. A signature and a sealed member are leaves to
   both unary drivers: one is closed content, the other content-addressed by its
   component. Substitution and sibling rewriting are this.
 - **Unary visit** — supply a pre-order rule returning descend / skip / stop.
@@ -115,27 +122,33 @@ Ask first whether the walk is unary or binary, then whether it rebuilds.
   reads the arm's width verdict generically. The order — serving *fits* too —
   the solver's meet, which the public `meet` runs over concrete operands, and
   the unifier's collector are the three instances. Two signature
-  types, and two callables of which one is quantified, reach the leaf verdict
-  rather than a child pairing, because their relations are application-level and
-  instantiation-level doors.
+  types, and a pair holding a scheme, reach the leaf verdict rather than a
+  child pairing, because their relations are application-level and
+  instantiation-level doors. A union on either side is taken set-wise first,
+  so a scheme meets each member at the leaf.
 
 The context a unary rule is handed answers the two questions the arm table
-alone cannot: how many binders lie between the root and here — `binder_depth`,
-which counts shapes and quantified function types alike — and the variance of
-the current position.
+alone cannot: how many schemes lie between the root and here — `binder_depth`
+— and the variance of the current position. A scheme's one child is its body,
+at the scheme's own variance, and the body's node flips its own parameters and
+slots.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
-*between* children and inherits the quantifier binder from above, which neither
-driver expresses. It spells a type as a program writes it: a quantifier group
+*between* children and inherits the enclosing scheme's group from above, which
+neither driver expresses. It spells a type as a program writes it: a quantifier group
 as `FOR ALL #[Elt Key]`, or as a dict of each name to its bound,
 `FOR ALL #{Elt: Number, Key: Any}`, once any bound is not `Any`; a signature's
 head parameters as a bounded group, `SIG FOR ALL #{Elt: Any} (top: Elt)`, and an
 application in a meet parenthesized, `(… WITH {Elt = Number}) & (… WITH {Elt = Str})`;
-and an expression shape's head quoted, `#(PURE _ :Elt)`. Every entry point takes the registry and the symbol interner,
+and an expression shape's head quoted, `#(PURE _ :Elt)`. Every entry point takes the chain and the symbol interner,
 never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Open work
 
+- [Presizing a branch](../../../roadmap/type-tiers/branch-presizing.md) — a
+  branch's table laid at a predicted size, and the width of its slots.
+- [Shape branches](../../../roadmap/type-tiers/shape-branches.md) — a chain over
+  four tiers, one of them reset in place under a count.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.

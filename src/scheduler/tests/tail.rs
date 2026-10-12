@@ -6,9 +6,11 @@ use std::cell::Cell;
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep, with_types};
+use crate::memory::Bump;
+use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{describe, fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Taken, Use, Work};
+use crate::type_lattice::Root;
 
 /// Enough hops that a per-hop cost would be unmissable in the allocation count.
 const MANY: usize = 10_000;
@@ -87,12 +89,12 @@ fn deliver<'graph>(
         return step.failed(StepError::Stale);
     };
     let length = text.len() as f64;
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(length)))
+    step.finish_fresh(move |_, _, _| Active::new(KValue::Number(length)))
 }
 
 /// The caller, woken by the loop's last cell.
 fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let first = with_types(|types| step.results(types).next());
+    let first = step.results().next();
     match first {
         Some(Ok(Received::Scratch(value))) => record(describe(value)),
         _ => return step.failed(StepError::Unredeemable),
@@ -126,10 +128,11 @@ struct Run {
 
 /// One loop of `hops` turns, on a slab of one — its root — so a second slab cell would be
 /// refused, and a loop that grew its slab footprint could not finish.
-fn run(hops: usize, start: TestStep<'static>) -> Run {
+fn run(hops: usize, start: AnyStep) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
-    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     let before = crate::tests::allocation_count();

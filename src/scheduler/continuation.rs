@@ -14,10 +14,12 @@
 use std::marker::PhantomData;
 
 use crate::memory::{
-    CellHandle, Covariant, CrossedOperand, Dormant, DropFree, Reattachable, ReattachableOverBoth,
-    Writer, reattachable,
+    CellHandle, Covariant, CrossedOperand, Dormant, DropFree, Header, Reattachable,
+    ReattachableOverBoth, Writer, reattachable,
 };
 use crate::scheduler::action::{Action, Step, Use};
+use crate::type_lattice::Root;
+use crate::values::TypeHeader;
 
 /// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
 /// the family it holds at a step and parks with, the family of what a parked cell keeps in its
@@ -43,11 +45,15 @@ pub trait StepBundle<'graph>: 'graph {
         'graph: 'cell;
 
     /// `view` at the destination's brand: the pinned view as it is, a copied view rebuilt through
-    /// `writer`. The one place above the scheduler a birth is copied, and the veneer calls it only
-    /// from inside a priced crossing.
+    /// `writer`, its types made to resolve in the half `header` names, over the graph's
+    /// `type_root`, as `born` says. The one place above the scheduler a birth is copied, and the
+    /// veneer calls it only from inside a priced crossing.
     fn cross<'cell>(
         writer: Writer<'cell>,
-        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth>,
+        header: Header<'graph, 'cell, TypeHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, TypeHeader>,
+        born: Born,
+        type_root: &'graph Root<'graph>,
     ) -> BirthAt<'graph, 'cell, Self>
     where
         'graph: 'cell;
@@ -123,8 +129,23 @@ where
     /// state at `'graph`, born from what it was handed.
     Awake(StateAt<'graph, 'cell, B>),
     /// A birth at rest as a carrier: what a spawn or a tail hop hands the new cell, or what a root
-    /// work left for a later one, woken by its first entry at the verdict's price.
-    Dormant(Dormant<'graph, B::Birth>),
+    /// work left for a later one, woken by its first entry at the verdict's price, beside how it
+    /// was handed over.
+    Dormant(Dormant<'graph, B::Birth>, Born),
+}
+
+/// How a birth at rest was handed to its cell, which decides how the types it carries reach the
+/// cell: a spawned child's pinned birth links its spawner's branch, a tail hop's merges its
+/// predecessor's ([README.md § Crossing](../values/README.md#crossing)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Born {
+    /// A spawn, or a root work resumed from what an earlier one left: the cell is born under the
+    /// one that handed the birth over.
+    Child,
+    /// A tail hop's successor, handed its predecessor's birth.
+    Hop,
+    /// A root work's end, leaving its birth at rest in its home for a later one.
+    Left,
 }
 
 /// What a cell carries about itself for the drain's use: where it sits, where its result goes and

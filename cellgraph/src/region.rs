@@ -27,6 +27,10 @@
 //! there for the next birth, so a release-then-create loop stays off the allocator. Both are reset
 //! only through the table's `&mut` doors, outside any step.
 //!
+//! Each half of a habitat also carries a **header slot**, the embedder's one value about that half
+//! ([`header`](crate::header)): the region's travels with it, and the scratch half's is cleared at
+//! every reset. The substrate never reads either.
+//!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
 //! ([graph/README.md § Locality tactics](graph/README.md#locality-tactics)) —
@@ -34,7 +38,7 @@
 //! relies on carries a borrow across the merge unchanged.
 
 use std::alloc::Layout;
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -43,6 +47,8 @@ use bumpalo::Bump;
 
 use crate::carrier::CellHome;
 use crate::graph::Config;
+use crate::header::{HabitatHeader, Header, HeaderSlot};
+use crate::reattach::Erased;
 use crate::sealed::SealedId;
 
 #[cfg(test)]
@@ -62,7 +68,7 @@ struct BumpRun<T: Copy> {
 
 /// One cell's storage: the bump it writes into, plus the bumps it has absorbed. An empty bump
 /// claims no chunk, so a region a cell never writes into costs nothing to have.
-pub(crate) struct Region {
+pub(crate) struct Region<'graph, H: HabitatHeader<'graph>> {
     bump: Bump,
     /// Bumps merged in from regions this one absorbed. Read-only from here on — nothing is ever
     /// allocated into an absorbed bump again — but their chunks stay at their addresses, which is
@@ -77,16 +83,33 @@ pub(crate) struct Region {
     /// go stale. Region state because its bytes are region bytes: the sealed cell's price counts
     /// them like any other chunk.
     memo: OnceCell<BumpRun<SealedId>>,
+    /// The embedder's header for this region. Region state because it must travel where the
+    /// region does — into a sealed cell — and a splice or absorb keeps the absorber's. A `Cell`
+    /// rather than a `OnceCell`: the door copies the erased value in and out and never lends a
+    /// reference into the slot.
+    header: HeaderSlot<'graph, H>,
 }
 
-impl Region {
+impl<'graph, H: HabitatHeader<'graph>> Region<'graph, H> {
     pub(crate) fn new() -> Self {
         Region {
             bump: Bump::new(),
             absorbed: Vec::new(),
             absorbed_bytes: 0,
             memo: OnceCell::new(),
+            header: Cell::new(None),
         }
+    }
+
+    /// The door onto this region's header slot, for as long as this borrow lasts — handed out
+    /// beside [`writer`](Self::writer) from the same borrow.
+    pub(crate) fn header(&self) -> Header<'graph, '_, H> {
+        Header::new(&self.header)
+    }
+
+    /// The erased header, for an operand that crosses out of this region.
+    pub(crate) fn laid_header(&self) -> Option<Erased<'graph, H>> {
+        self.header.get()
     }
 
     /// The memoized sealed-cell set, or `None` while nothing has primed it.
@@ -123,7 +146,7 @@ impl Region {
     /// The write surface for as long as this borrow lasts: a placement's, for the length of its
     /// build, or the executing cell's, for the length of the step that borrowed the table.
     pub(crate) fn writer(&self) -> Writer<'_> {
-        Writer(&self.bump)
+        Writer(&self.bump, PhantomData)
     }
 
     /// Take `other`'s chunks into this bundle — the storage half of every merge. The bumps move;
@@ -140,14 +163,18 @@ impl Region {
     /// when the source took it over whole, or the source's when nothing was written into it. Either
     /// holds no value, and a warm one still owns a chunk, so the caller retires it rather than
     /// letting it drop.
+    ///
+    /// The absorber keeps its own header, laid or not, and the source's is discarded.
     #[must_use = "a bump left out of the bundle may own a chunk, which its caller retires"]
-    pub(crate) fn absorb(&mut self, mut other: Region) -> Option<Bump> {
+    pub(crate) fn absorb(&mut self, mut other: Region<'graph, H>) -> Option<Bump> {
         // An unwritten bundle takes the source over whole rather than listing it, which is what
         // keeps a merge into a cell that never wrote off the allocator. Nothing of this region's
-        // is lost: a bump that handed out no byte holds no value, and a memo would have cost
-        // bytes.
+        // is lost: a bump that handed out no byte holds no value, a memo would have cost bytes,
+        // and the header stays.
         if self.is_unwritten() && self.absorbed.is_empty() {
+            let header = self.header.take();
             let displaced = std::mem::replace(self, other);
+            self.header.set(header);
             return Some(displaced.bump);
         }
         if self.absorbed.len() < other.absorbed.len() {
@@ -183,10 +210,15 @@ impl Region {
         self.bump.allocated_bytes() == self.bump.chunk_capacity()
     }
 
-    /// Whether the region is as it was built: no chunk claimed, nothing absorbed, no memo. Such a
-    /// region owns nothing, so a slot that recycles with one can keep it rather than build another.
+    /// Whether the region is as it was built: no chunk claimed, nothing absorbed, no memo, no
+    /// header. Such a region owns nothing, so a slot that recycles with one can keep it rather than
+    /// build another — which a laid header forbids even with no byte written, since its referents
+    /// may not outlive the cell that laid it.
     fn is_untouched(&self) -> bool {
-        self.bump.allocated_bytes() == 0 && self.absorbed.is_empty() && self.memo.get().is_none()
+        self.bump.allocated_bytes() == 0
+            && self.absorbed.is_empty()
+            && self.memo.get().is_none()
+            && self.header.get().is_none()
     }
 }
 
@@ -197,18 +229,21 @@ impl Region {
 /// seals, splices and absorbs and a scratch bump is none of that — it is pinned to its index and
 /// never travels, so an absorb leaves the absorber's scratch alone and a seal retains no scratch,
 /// by construction.
-struct Habitat {
-    region: Region,
+struct Habitat<'graph, H: HabitatHeader<'graph>> {
+    region: Region<'graph, H>,
     /// The second bump a step writes, at its `'scratch` brand, reset at a step's end once nothing
     /// names it. Its bytes are in no price: a hold never extends a scratch byte's life.
     scratch: Bump,
+    /// The embedder's header for the scratch half, cleared with the bump at every reset.
+    scratch_header: HeaderSlot<'graph, H>,
 }
 
-impl Habitat {
+impl<'graph, H: HabitatHeader<'graph>> Habitat<'graph, H> {
     fn new() -> Self {
         Habitat {
             region: Region::new(),
             scratch: Bump::new(),
+            scratch_header: Cell::new(None),
         }
     }
 }
@@ -223,13 +258,13 @@ impl Habitat {
 /// names a bump nothing can move or drop for as long as it is out, by the borrow checker's word;
 /// and since no `&mut` into the table exists inside a step, every write a step makes into a bump
 /// descends from a shared borrow, which a bump's interior-mutable bytes tolerate.
-pub(crate) struct Regions {
+pub(crate) struct Regions<'graph, H: HabitatHeader<'graph>> {
     /// One habitat per slab slot, its region replaced with an empty one when the slot recycles.
-    slab: Box<[Habitat]>,
+    slab: Box<[Habitat<'graph, H>]>,
     /// One habitat per tree-pool index, every index up to the table's capacity filled. The table
     /// starts a slab's width long, like the pool itself, and doubles from there in step with it;
     /// a cell's creation finds its region already waiting, and pays a length check for it.
-    tree: Vec<Habitat>,
+    tree: Vec<Habitat<'graph, H>>,
     /// Reset bumps a reclaim gave up, each still owning its chunk, for the next birth to draw:
     /// last in, first out, so a cell born right after a death writes into the chunk that death
     /// freed, and a push past [`bound`](Self::bound) evicts from the other end, the oldest first. Always empty under Miri, where a reclaimed
@@ -247,7 +282,7 @@ pub(crate) struct Regions {
     spare_window_shift: u32,
 }
 
-impl Regions {
+impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
     pub(crate) fn new(config: Config) -> Self {
         Regions {
             slab: (0..config.cap).map(|_| Habitat::new()).collect(),
@@ -261,14 +296,14 @@ impl Regions {
     }
 
     /// One index's habitat.
-    fn habitat(&self, home: CellHome) -> &Habitat {
+    fn habitat(&self, home: CellHome) -> &Habitat<'graph, H> {
         match home {
             CellHome::Slab(slot) => &self.slab[slot as usize],
             CellHome::Tree(index) => &self.tree[index as usize],
         }
     }
 
-    fn habitat_mut(&mut self, home: CellHome) -> &mut Habitat {
+    fn habitat_mut(&mut self, home: CellHome) -> &mut Habitat<'graph, H> {
         match home {
             CellHome::Slab(slot) => &mut self.slab[slot as usize],
             CellHome::Tree(index) => &mut self.tree[index as usize],
@@ -314,7 +349,7 @@ impl Regions {
     /// Give up a region nothing reaches: every bump of its bundle is retired, its own last, so the
     /// next birth draws the chunk the departing cell wrote into most recently. The memo goes with
     /// the region, before any of its bytes can be handed out again.
-    pub(crate) fn retire(&mut self, region: Region) {
+    pub(crate) fn retire(&mut self, region: Region<'graph, H>) {
         let Region { bump, absorbed, .. } = region;
         for absorbed in absorbed {
             self.retire_bump(absorbed);
@@ -344,19 +379,19 @@ impl Regions {
     }
 
     /// How many bumps the spare list holds.
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     pub(crate) fn spare_len(&self) -> usize {
         self.spare.len()
     }
 
     /// What [`bound`](Self::bound) reads right now.
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     pub(crate) fn spare_bound(&self) -> usize {
         self.bound()
     }
 
     /// The region a step homed in `home` writes.
-    pub(crate) fn region(&self, home: CellHome) -> &Region {
+    pub(crate) fn region(&self, home: CellHome) -> &Region<'graph, H> {
         &self.habitat(home).region
     }
 
@@ -366,16 +401,25 @@ impl Regions {
 
     /// The write surface of `home`'s scratch bump, which a step takes at its `'scratch` brand.
     pub(crate) fn scratch_writer(&self, home: CellHome) -> Writer<'_> {
-        Writer(self.scratch_bump(home))
+        Writer(self.scratch_bump(home), PhantomData)
     }
 
-    /// Hand `home`'s scratch bump back whole. The caller has established that nothing at rest names
-    /// a byte of it, and that no step is running.
+    /// The door onto `home`'s scratch header, which a step takes at its `'scratch` brand.
+    pub(crate) fn scratch_header(&self, home: CellHome) -> Header<'graph, '_, H> {
+        Header::new(&self.habitat(home).scratch_header)
+    }
+
+    /// Hand `home`'s scratch bump back whole, and clear its header. The caller has established
+    /// that nothing at rest names a byte of it, and that no step is running.
+    ///
+    /// The header goes whether or not a byte was written: one can be laid with none.
     ///
     /// Under Miri the bump is rebuilt rather than reset, so its chunk goes back to the allocator
     /// and a stale `'scratch` reference is an error Miri can see.
     pub(crate) fn reset_scratch(&mut self, home: CellHome) {
-        let bump = &mut self.habitat_mut(home).scratch;
+        let habitat = self.habitat_mut(home);
+        habitat.scratch_header.set(None);
+        let bump = &mut habitat.scratch;
         if bump.allocated_bytes() > 0 {
             if cfg!(miri) {
                 *bump = Bump::new();
@@ -417,7 +461,7 @@ impl Regions {
     /// Take a slab cell's storage off it, leaving an empty region behind — for the seal, the
     /// merge or the drop that disposal performs. The scratch bump stays where it is: a seal
     /// retains no scratch.
-    pub(crate) fn take_slab(&mut self, slot: u32) -> Region {
+    pub(crate) fn take_slab(&mut self, slot: u32) -> Region<'graph, H> {
         std::mem::replace(&mut self.slab[slot as usize].region, Region::new())
     }
 
@@ -432,19 +476,19 @@ impl Regions {
 
     /// Take a tree cell's storage off it, leaving an empty region behind — for the splice or the
     /// drop that disposal performs.
-    pub(crate) fn take_tree(&mut self, index: u32) -> Region {
+    pub(crate) fn take_tree(&mut self, index: u32) -> Region<'graph, H> {
         std::mem::replace(&mut self.tree[index as usize].region, Region::new())
     }
 
     /// Splice a departing cell's bump into a slab cell's bundle.
-    pub(crate) fn splice_into_slab(&mut self, slot: u32, from: Region) {
+    pub(crate) fn splice_into_slab(&mut self, slot: u32, from: Region<'graph, H>) {
         if let Some(bump) = self.slab[slot as usize].region.absorb(from) {
             self.retire_bump(bump);
         }
     }
 
     /// Splice a departing cell's bump into a tree cell's bundle.
-    pub(crate) fn splice_into_tree(&mut self, index: u32, from: Region) {
+    pub(crate) fn splice_into_tree(&mut self, index: u32, from: Region<'graph, H>) {
         if let Some(bump) = self.tree[index as usize].region.absorb(from) {
             self.retire_bump(bump);
         }
@@ -467,8 +511,12 @@ impl Regions {
 /// handing back the region borrow once the producer is done. Every simpler shape — one value, a
 /// copied slice, a run collected from an iterator of known length — is the embedder's, derived
 /// from these.
+///
+/// Invariant in its brand: a writer at one habitat half's brand cannot stand in for another's, so
+/// a value meant for a shorter-lived half is never laid in a longer-lived one's bytes, and a writer
+/// is never paired with a [`Header`](crate::Header) of another half.
 #[derive(Clone, Copy)]
-pub struct Writer<'cell>(&'cell Bump);
+pub struct Writer<'cell>(&'cell Bump, PhantomData<fn(&'cell ()) -> &'cell ()>);
 
 impl<'cell> Writer<'cell> {
     /// Write a run of `len` values, each built from its index, and hand back the borrow of it that
@@ -560,7 +608,7 @@ impl Storage {
 
     /// A writer at this storage's borrow — `'graph`, for a graph built over it.
     pub fn writer(&self) -> Writer<'_> {
-        Writer(&self.0)
+        Writer(&self.0, PhantomData)
     }
 }
 

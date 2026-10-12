@@ -5,9 +5,9 @@
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, Writer, resident};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::KType;
 
-use super::{Knotted, Link, Nothing, Value, Weight, list_type};
+use super::{Knotted, Link, Nothing, Types, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
 #[derive(Clone, Copy, Debug)]
@@ -25,7 +25,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     pub fn new(
         writer: Writer<'cell>,
         items: impl ExactSizeIterator<Item = Value<'cell, X>>,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell List<'cell, X> {
         let mut items = items;

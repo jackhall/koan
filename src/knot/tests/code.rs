@@ -7,7 +7,7 @@ use std::ptr;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::display_name;
 use crate::values::tests::parts;
-use crate::values::{Knotted as _, Link, Value};
+use crate::values::{Knotted as _, Link, Types, Value};
 
 use super::super::{Knotted, UsingRefused, using};
 use super::{Fixture, bound, pin, with_fixture};
@@ -23,10 +23,10 @@ fn code<'graph, 'cell>(
         .unwrap_or_else(|| panic!("`{name}` is bound to code"))
 }
 
-fn rendered(fixture: &Fixture<'_, '_>, member: Knotted<'_, '_>) -> String {
+fn rendered(fixture: &Fixture<'_, '_>, types: &Types<'_, '_>, member: Knotted<'_, '_>) -> String {
     let mut out = String::new();
     Value::Knotted(member)
-        .render(&mut out, fixture.types, fixture.symbols, fixture.scratch())
+        .render(&mut out, types, fixture.symbols, fixture.scratch())
         .unwrap();
     out
 }
@@ -36,7 +36,8 @@ fn a_quote_binds_its_dollar_names_where_it_is_written_and_prints_its_marks() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET k = 7\nLET q = #($k PLUS hole PLUS \\it)");
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let q = code(fixture, activation, "q");
             let node = q.code().expect("a quote's node");
             assert_eq!(q.member().knot().len(), 1, "a quote is a one-node knot");
@@ -46,11 +47,11 @@ fn a_quote_binds_its_dollar_names_where_it_is_written_and_prints_its_marks() {
             ));
             assert!(node.supplied().is_empty());
             assert_eq!(
-                display_name(q.ktype(), fixture.types, fixture.symbols).to_string(),
+                display_name(q.ktype(), types, fixture.symbols).to_string(),
                 ":(Expression NEEDING #[it])"
             );
             assert_eq!(
-                rendered(fixture, q),
+                rendered(fixture, types, q),
                 "$k PLUS hole PLUS \\it",
                 "code prints each mark as written, and never a binding"
             );
@@ -61,7 +62,7 @@ fn a_quote_binds_its_dollar_names_where_it_is_written_and_prints_its_marks() {
 #[test]
 fn code_compares_by_its_text_and_the_values_its_names_bind() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let [one, again, two, hole] = [
             "LET a = 1\nLET q = #($a MINUS 1)",
             "LET a = 1\nLET q = #($a MINUS 1)",
@@ -70,9 +71,11 @@ fn code_compares_by_its_text_and_the_values_its_names_bind() {
         ]
         .map(|source| fixture.parse(source));
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let [one, again, two, hole] = [&one, &again, &two, &hole]
-                .map(|lines| Value::Knotted(code(fixture, fixture.run(writer, lines, &[]), "q")));
+            let [one, again, two, hole] = [&one, &again, &two, &hole].map(|lines| {
+                Value::Knotted(code(fixture, fixture.run(writer, types, lines, &[]), "q"))
+            });
             assert_eq!(one.equals(&again, types, scratch), Ok(true));
             assert_eq!(
                 one.equals(&two, types, scratch),
@@ -92,9 +95,10 @@ fn code_compares_by_its_text_and_the_values_its_names_bind() {
 fn a_quote_reading_its_own_binder_is_a_one_node_knot() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET echo = #(PRINT $echo)");
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
-            let activation = fixture.run(context.writer(), &lines, &[]);
+            let types = &fixture.tiers.of(context);
+            let activation = fixture.run(context.writer(), types, &lines, &[]);
             let echo = code(fixture, activation, "echo");
             assert_eq!(echo.member().knot().len(), 1);
             let [(_, Link::Edge(edge))] = echo.code().expect("a quote's node").bound() else {
@@ -105,7 +109,7 @@ fn a_quote_reading_its_own_binder_is_a_one_node_knot() {
                 Value::Knotted(echo).equals(&Value::Knotted(echo), types, scratch),
                 Ok(true)
             );
-            assert_eq!(rendered(fixture, echo), "PRINT $echo");
+            assert_eq!(rendered(fixture, types, echo), "PRINT $echo");
         });
     });
 }
@@ -119,10 +123,11 @@ fn using_fills_the_holes_a_record_names_and_ignores_the_rest() {
              LET second = {x = 5, y = 2}\n\
              LET other = {x = 9}",
         );
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let q = code(fixture, activation, "q");
             let record = |name| bound(fixture, activation, name);
             let supplied = |member: Knotted<'_, '_>| -> Vec<_> {
@@ -175,10 +180,11 @@ fn using_reads_a_module_by_member_name_and_keeps_refused_code_unchanged() {
              LET q = #(x PLUS 1)\n\
              LET bad = #((LET x = 1) (LET x = 2) (PRINT x))",
         );
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = bound(fixture, activation, "m");
             let q = using(writer, code(fixture, activation, "q"), m, types, scratch)
                 .expect("the fill agrees");
@@ -211,10 +217,11 @@ fn using_fills_a_keyworded_hole_with_a_module_s_registrations_at_its_key() {
              MODULE none = (LET y = 1)\n\
              LET q = #(GREET \"bob\")",
         );
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let q = code(fixture, activation, "q");
             let m = bound(fixture, activation, "m");
             let greet = BinderSymbol::Key(fixture.symbols.key("GREET _").expect("a key"));
@@ -252,10 +259,11 @@ fn using_refuses_registrations_ranked_other_than_the_code_s_own() {
             "MODULE m = ((EXPR #(MOVE 2 TO 1)) (EXPR #(MOVE x :Number TO y :Number) -> Number = #(x)))\n\
              LET q = #((EXPR #(MOVE x :Str TO y :Str) -> Str = #(x)) (MOVE \"a\" TO \"b\"))",
         );
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let q = code(fixture, activation, "q");
             let m = bound(fixture, activation, "m");
             assert_eq!(

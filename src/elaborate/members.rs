@@ -20,9 +20,10 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, TypeRegistry, bound_above,
+    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, bound_above,
     substitute_parameters,
 };
+use crate::values::Types;
 
 /// How many members of a module of signature `schema` are values — the index the type channel
 /// starts at.
@@ -81,7 +82,7 @@ fn rank<N: Ord + Copy, T>(table: &[(N, T)], name: N) -> Option<usize> {
 }
 
 /// The schema of the signature `handle` is, if it is one.
-pub fn schema_of<'run>(handle: KType, types: &TypeRegistry<'run>) -> Option<SigSchema<'run>> {
+pub fn schema_of<'run>(handle: KType, types: &Types<'_, 'run>) -> Option<SigSchema<'run>> {
     match types.node(handle) {
         TypeNode::Signature { schema, .. } => Some(schema),
         _ => None,
@@ -103,7 +104,7 @@ pub struct SignatureMember {
 /// through a rigid variable's bound — a union's value member joined over its members: `None` where
 /// `upper` is no such type, or declares no such member.
 pub fn signature_member(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     upper: Parametric,
     name: BinderSymbol,

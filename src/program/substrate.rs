@@ -4,13 +4,14 @@ use std::cell::Cell;
 
 use self_cell::self_cell;
 
-use crate::elaborate::type_channel;
+use crate::elaborate::{builtin_error, type_channel};
 use crate::memory::{Bump, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident};
 use crate::parse::parse_with_path;
 use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
 use crate::scope::BodyShape;
 use crate::symbols::SymbolInterner;
-use crate::type_lattice::TypeRegistry;
+use crate::type_lattice::RootBuilder;
+use crate::values::{Half, Types};
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
@@ -25,9 +26,9 @@ pub const STACK_BYTES: usize = 64 << 20;
 /// What the substrate owns outright. It borrows nothing, and `self_cell` boxes it and only ever
 /// lends it shared, so everything that borrows it lives in [`Running`].
 ///
-/// `registry` is the bump the [type lattice](crate::type_lattice)'s registry is built over — the
-/// one tier that still needs a collections arena rather than program storage's write surface. It
-/// is released whole with the rest, and the registry's destructor never runs.
+/// `registry` is the bump the [type lattice](crate::type_lattice)'s root is built over — the one
+/// tier that still needs a collections arena rather than program storage's write surface. It is
+/// released whole with the rest, and nothing laid in it runs a destructor.
 struct Owner {
     storage: ProgramStorage,
     registry: Bump,
@@ -36,14 +37,13 @@ struct Owner {
 
 /// Everything that names `'graph`: the graph by value, since reclaiming a region needs exclusive
 /// access, and its root, the region every root work is born under and the top level's bindings
-/// live in; the registry and the program record in program storage, so what a step reads is a
-/// `'graph` borrow; and what the top level left at rest when it last ran.
+/// live in; the program record in program storage, holding the types' frozen root, so what a step
+/// reads is a `'graph` borrow; and what the top level left at rest when it last ran.
 pub struct Running<'graph> {
     graph: Graph<'graph, KBundle>,
     root: SlabHandle,
     brand: ProgramBrand<'graph>,
     symbols: &'graph SymbolInterner,
-    types: &'graph TypeRegistry<'graph>,
     program: &'graph Program<'graph>,
     resting: Option<Resting<'graph, KBundle>>,
 }
@@ -98,17 +98,13 @@ impl<'graph> Running<'graph> {
         self.root
     }
 
-    /// The program storage this substrate's AST and registry rest in.
+    /// The program storage this substrate's AST and program record rest in.
     pub fn brand(&self) -> ProgramBrand<'graph> {
         self.brand
     }
 
     pub fn symbols(&self) -> &'graph SymbolInterner {
         self.symbols
-    }
-
-    pub fn types(&self) -> &'graph TypeRegistry<'graph> {
-        self.types
     }
 }
 
@@ -130,9 +126,10 @@ impl CellSubstrate {
     /// shape over it and checked by the language, the root, and the [`Program`] record writing to
     /// `output`. `cap` is at least one.
     ///
-    /// A refused shape is rendered into its [`LoadError`] on the way out, while the interner and
-    /// registry its names and types render through still stand; a load that succeeds renders
-    /// nothing.
+    /// The load builds the types' root through one chain over a root builder, and freezes it when
+    /// the load ends, so no step can intern into it. A refused shape is rendered into its
+    /// [`LoadError`] on the way out, while the interner and the chain its names and types render
+    /// through still stand; a load that succeeds renders nothing.
     pub fn load<L: Language>(
         source: &str,
         path: &str,
@@ -148,11 +145,10 @@ impl CellSubstrate {
             let brand = owner.storage.brand();
             let parsed =
                 parse_with_path(brand, &owner.symbols, source, path).map_err(LoadError::Parse)?;
-            // The registry's destructor never runs: everything it owns is bumped into the owner's
-            // registry arena, which releases it whole.
-            let types = &*owner
-                .registry
-                .alloc(TypeRegistry::in_region(&owner.registry));
+            // Everything the root owns is laid in the owner's registry arena, which releases it
+            // whole. The load's chain never leaves the load: its end freezes the root.
+            let builder = RootBuilder::in_region(&owner.registry);
+            let types: &Types<'_, '_> = &Types::building(Half::Load(builder));
             let scratch = Bump::new();
             let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
             let refused = |error: crate::scope::ShapeError<'_>| LoadError::Shape {
@@ -163,20 +159,23 @@ impl CellSubstrate {
                     .map_err(refused)?;
             type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
             L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
+            let error = builtin_error(types, &owner.symbols, &scratch);
+            let root = builder.freeze();
             let writer = brand.writer();
             let program = resident(
                 writer,
                 Program::new(
                     shape,
                     builtins,
-                    types,
+                    root,
+                    error,
                     &owner.symbols,
                     L::evaluator(),
                     output,
                     &writer.fill(1, |_| Cell::new(false))[0],
                 ),
             );
-            let mut graph = Graph::new(cap);
+            let mut graph = Graph::new(cap, root);
             let root = graph
                 .root()
                 .expect("a fresh slab of at least one cell admits its root");
@@ -185,7 +184,6 @@ impl CellSubstrate {
                 root,
                 brand,
                 symbols: &owner.symbols,
-                types,
                 program,
                 resting: None,
             })
@@ -194,7 +192,7 @@ impl CellSubstrate {
     }
 
     /// Reach the running state. `'graph` is fresh per call and names the same storage every time,
-    /// so what one call leaves in the graph or the registry the next call finds.
+    /// so what one call leaves in the graph or the types' root the next call finds.
     pub fn with<R>(&mut self, f: impl for<'graph> FnOnce(&mut Running<'graph>) -> R) -> R {
         self.0.with_dependent_mut(|_, running| f(running))
     }

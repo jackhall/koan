@@ -62,9 +62,9 @@ use crate::symbols::{
     BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, SymbolInterner, TypeSymbol,
     ValueSymbol,
 };
-use crate::values::{ContentDigest, Knotted, admits_part};
+use crate::values::{ContentDigest, Knotted, Types, admits_part};
 
-use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, TypeRegistry, dense_classes};
+use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
 
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
@@ -118,7 +118,7 @@ pub(super) fn program<'graph, X: Knotted>(
     brand: ProgramBrand<'graph>,
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, X>,
-    types: &TypeRegistry<'graph>,
+    types: &Types<'graph, 'graph>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -170,7 +170,7 @@ fn declared_parameters(
 fn written_as_read<'e>(
     form: &'static BuiltinShape,
     node: &KExpression<'_>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
 ) -> Result<(), ShapeError<'e>> {
     let declarator = matches!(
         form.id,
@@ -490,7 +490,7 @@ struct Registered<'graph> {
     at: Position,
     key: KeySymbol,
     elements: &'graph [KeyElement],
-    classes: &'graph [u8],
+    classes: &'graph [u16],
     which: Which,
     surfaced: Option<&'graph [SurfacedHead<'graph>]>,
 }
@@ -503,7 +503,7 @@ enum Seen<'a, 'graph> {
 }
 
 impl<'graph> Seen<'_, 'graph> {
-    fn classes(self) -> &'graph [u8] {
+    fn classes(self) -> &'graph [u16] {
         match self {
             Seen::Declaration(ranking) => ranking.classes,
             Seen::Registration(registered) => registered.classes,
@@ -527,7 +527,7 @@ fn slots(key: &[KeyElement]) -> usize {
 }
 
 /// Whether `classes` rank their slots in written order, as every builtin overload's do.
-fn written_order(classes: &[u8]) -> bool {
+fn written_order(classes: &[u16]) -> bool {
     classes
         .iter()
         .enumerate()
@@ -697,7 +697,7 @@ struct Builder<'graph, 'x, 'e> {
     builtins: &'e dyn BuiltinNames,
     /// The program's type registry, which the static check admits written parts through and a
     /// quote's carried type is interned in.
-    types: &'e TypeRegistry<'graph>,
+    types: &'e Types<'graph, 'graph>,
     /// The program's interner, which records the spelling of each key a quote's code leaves open,
     /// so its carried type renders the key as written.
     symbols: &'e SymbolInterner,
@@ -733,7 +733,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         brand: ProgramBrand<'graph>,
         scratch: BumpAllocator<'x>,
         builtins: &'e dyn BuiltinNames,
-        types: &'e TypeRegistry<'graph>,
+        types: &'e Types<'graph, 'graph>,
         symbols: &'e SymbolInterner,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,
@@ -1148,8 +1148,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// An operator registration's ranking, from how a run of its symbol chains: a fold-right
     /// operand first on the right, every other binary one left to right, and a unary key's one slot.
-    fn operator_classes(&self, elements: &[KeyElement]) -> &'graph [u8] {
-        let classes: &[u8] = match elements {
+    fn operator_classes(&self, elements: &[KeyElement]) -> &'graph [u16] {
+        let classes: &[u16] = match elements {
             [
                 KeyElement::Slot,
                 KeyElement::Keyword(symbol),
@@ -1171,7 +1171,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         own: Own<'_, 'graph>,
         key: KeySymbol,
         entry: SurfacedKey<'graph>,
-    ) -> &'graph [u8] {
+    ) -> &'graph [u16] {
         match entry.head {
             SurfacedHead::Signature { head, .. } => match head_run(head) {
                 Some(run) => self.head_classes(run),
@@ -1184,7 +1184,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// The ranking a signature member's head `run` writes: an integer per slot, or written order
     /// where it writes none.
-    fn head_classes(&self, run: &KExpression<'graph>) -> &'graph [u8] {
+    fn head_classes(&self, run: &KExpression<'graph>) -> &'graph [u16] {
         let parts = run.parts;
         let mut raw = BumpVec::with_capacity_in(parts.len() / 2, self.scratch);
         let mut index = 0;
@@ -1206,13 +1206,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// A definition's ranking: the classes of the nearest bucket declaration of `key` it sees, or
     /// written order over its `slots`.
-    fn adopted(&self, own: Own<'_, 'graph>, key: KeySymbol, slots: usize) -> &'graph [u8] {
+    fn adopted(&self, own: Own<'_, 'graph>, key: KeySymbol, slots: usize) -> &'graph [u16] {
         let declared = self.visible(own, self.chain.len(), key, |seen| match seen {
             Seen::Declaration(ranking) => Some(ranking.classes),
             Seen::Registration(_) => None,
         });
         declared
-            .unwrap_or_else(|| collect(self.brand.writer(), (0..slots).map(|class| class as u8)))
+            .unwrap_or_else(|| collect(self.brand.writer(), (0..slots).map(|class| class as u16)))
     }
 
     /// Refuse `classes` for `key` where it meets another ranking of the key: a builtin overload's,
@@ -1222,7 +1222,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         own: Own<'_, 'graph>,
         key: KeySymbol,
         elements: &'graph [KeyElement],
-        classes: &[u8],
+        classes: &[u16],
         at: SourceRef,
     ) -> Result<(), ShapeError<'graph>> {
         let disagrees = ShapeError::RankingDisagrees { key: elements, at };
@@ -2536,7 +2536,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         elements: &'graph [KeyElement],
         source: SourceRef,
         candidates: &mut BumpVec<'x, Candidate>,
-    ) -> Result<&'graph [u8], ShapeError<'graph>> {
+    ) -> Result<&'graph [u16], ShapeError<'graph>> {
         let key = KeyElement::key(elements.iter().copied());
         let before = candidates.len();
         candidates.extend(
@@ -2559,8 +2559,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         elements: &'graph [KeyElement],
         source: SourceRef,
         candidates: &mut BumpVec<'x, Candidate>,
-        mut classes: Option<&'graph [u8]>,
-    ) -> Result<&'graph [u8], ShapeError<'graph>> {
+        mut classes: Option<&'graph [u16]>,
+    ) -> Result<&'graph [u16], ShapeError<'graph>> {
         let key = KeyElement::key(elements.iter().copied());
         let mut found = BumpVec::new_in(self.scratch);
         if !listing.closed {
@@ -2613,10 +2613,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// Written-order classes over the slots of `elements`.
-    fn written(&self, elements: &[KeyElement]) -> &'graph [u8] {
+    fn written(&self, elements: &[KeyElement]) -> &'graph [u16] {
         collect(
             self.brand.writer(),
-            (0..slots(elements)).map(|class| class as u8),
+            (0..slots(elements)).map(|class| class as u16),
         )
     }
 

@@ -6,9 +6,9 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::KType;
 
-use super::{Knotted, Link, Nothing, Value, Weight, dict_type};
+use super::{Knotted, Link, Nothing, Types, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with
@@ -159,7 +159,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
     pub fn new(
         writer: Writer<'cell>,
         entries: &[(Key<'_>, Value<'cell, X>)],
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let kept = kept_entries(entries, scratch);

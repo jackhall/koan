@@ -19,7 +19,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
     assert_eq!(size_of::<ActivationView<'static, 'static>>(), 48);
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = 1\nLET b = a");
-        fixture.in_cell(|writer| {
+        fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
             let shape = BodyShape::of_program(
                 fixture.program,
@@ -53,7 +53,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
 fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = 1\nLET b = a");
-        fixture.in_cell(|writer| {
+        fixture.in_cell(|writer, _| {
             let table: &Builtins = Builtins::empty();
             let shape = BodyShape::of_program(
                 fixture.program,
@@ -73,7 +73,7 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
 #[test]
 fn the_builtin_table_sorts_each_channel_and_counts_types_after_values() {
     with_fixture(|fixture| {
-        fixture.in_cell(|writer| {
+        fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
             let names = BUILTIN_VALUES.len() + BUILTIN_TYPES.len();
             assert_eq!(table.len(), names + BUILTIN_KEYS.len());

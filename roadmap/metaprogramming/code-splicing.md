@@ -33,7 +33,8 @@ without bound.
   composed code evaluated in a loop does not grow program storage.
 - Code composed at run time has its shape typed by
   [the load pass](../../src/elaborate/README.md#the-type-channel-at-load) before
-  an `EVAL` runs it, so the overlap check reads every closed registration in it.
+  an `EVAL` runs it, so the overlap check reads every closed registration in it,
+  and classified as a written quote's code shape is.
 - Composing code whose syntax would nest deeper than the parser's
   [depth limit](../../src/parse/README.md#the-syntax-depth-limit) yields an
   error value naming the limit, never a crash.

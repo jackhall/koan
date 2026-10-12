@@ -23,7 +23,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-42 tests, grouped by the unsafe site each pins down. Names below are the exact
+53 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -225,6 +225,32 @@ allocation leaves a chunk borrow issued to a different cell alone.
 - `graph::tests::tenancy::a_slab_hosts_borrow_survives_a_tenant_appending_under_it`
 - `graph::tests::tenancy::a_tree_hosts_borrow_survives_a_tenant_appending_under_it`
 
+**Header slots — `Header::get` and the home read** ([src/header.rs](../src/header.rs),
+[src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) — the same `retype` primitive
+at two more places. `Header::get` reattaches a stored header at its habitat half's brand, as
+`enter` does the continuation; `HomeHeader::read` anchors a home's header at the operand's brand
+through `Active`, for a closure generic over a brand outliving it. Every header here is a `Cell`
+laid in the half it describes, pointing at a number laid beside it, so each read is a read of a
+real borrow into region bytes held across the slot. What Miri checks: a header read back a step
+later, by a tenant and by a placement; a scratch header read across a park and gone after the
+reset, including one a delivery laid; no header surviving into a recycled region, slab or tree,
+including a header-only one; a header borrow crossing a pin into a destination and read there
+after its home sealed, and one crossing out of sealed storage, before and after a `keep`; the
+absorber's header kept through an absorb, a takeover and a tree splice; and a tail loop whose
+every birth finds no header in a slot whose previous occupant laid one.
+
+- `graph::tests::headers::a_header_laid_in_a_step_comes_back_at_the_next_step`
+- `graph::tests::headers::a_tenant_reads_its_hosts_header`
+- `graph::tests::headers::a_placement_reads_and_lays_its_destinations_header`
+- `graph::tests::headers::a_scratch_header_lasts_while_its_bump_does`
+- `graph::tests::headers::a_delivered_build_lays_its_consumers_scratch_header`
+- `graph::tests::headers::a_recycled_region_starts_with_no_header`
+- `graph::tests::headers::a_pinned_and_a_copied_operand_carry_their_homes_header`
+- `graph::tests::headers::an_operand_homed_in_its_destination_carries_no_header`
+- `graph::tests::headers::an_operand_redeemed_from_sealed_storage_carries_the_sealed_header`
+- `graph::tests::headers::a_splice_and_an_absorb_keep_the_absorbers_header`
+- `graph::tests::headers::a_tail_loop_lays_a_header_on_every_hop`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute,
@@ -244,10 +270,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-10-09: 271.37s — 181 tests, 0 leaks, 0 UB
 - 2026-09-21: 298.18s — 165 tests, 0 leaks, 0 UB
 - 2026-09-19: 276.90s — 164 tests, 0 leaks, 0 UB
 - 2026-09-18: 287.00s — 164 tests, 0 leaks, 0 UB
 - 2026-09-18: 287.08s — 164 tests, 0 leaks, 0 UB
-- 2026-09-17: 284.76s — 149 tests, 0 leaks, 0 UB
-- 2026-09-14: 222.81s — 123 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

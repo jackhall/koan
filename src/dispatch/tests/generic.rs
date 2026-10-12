@@ -2,10 +2,12 @@
 //! ranking at load, an `EVAL`'s declared type, returns read through a group's intervals, and a
 //! union in a group's parameter: its members tried most specific first, and a tie refused.
 
+use crate::memory::Bump;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
 use crate::scope::{BodyShape, ShapeKind, Site, Static};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
+use crate::values::tests::reading;
 
 use super::run;
 use super::statics::{
@@ -97,7 +99,7 @@ fn typing_a_quote_s_code_a_second_time_interns_no_type() {
                  PRINT y\n  \
                  x\n\
                  ))))";
-    let count = |source: &str| loaded(source, |program| program.types().node_count());
+    let count = |source: &str| loaded(source, |program| program.root().len());
     assert_eq!(
         count(&format!("LET q = {quote}")),
         count(&format!("LET q = {quote}\nLET r = {quote}"))
@@ -112,7 +114,8 @@ fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
             Static::Rigid { value, .. } => value.shape,
             _ => panic!("`INNER` is rigid over `Elt`"),
         };
-        let types = program.types();
+        let bump = Bump::new();
+        let types = &reading(program.root(), &bump);
         let DeclaredType::Type(registered) = registered else {
             panic!("an overload over an enclosing name binds no group of its own")
         };

@@ -25,7 +25,7 @@ fn shaped<R>(
             KeywordSymbol::declared(name, fixture.symbols).expect("a keyword token");
         }
         let lines = fixture.parse(source);
-        fixture.in_cell(|writer| {
+        fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
             let shape = BodyShape::of_program(
                 fixture.program,

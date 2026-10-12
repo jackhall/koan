@@ -238,5 +238,5 @@ lattice, not an unknown type, so nothing here is checked by consistency.
 
 ## Open work
 
-- [Path types](../roadmap/rewrite/path-types.md) — a quantified member over a
+- [Path types](../roadmap/gradual-typing/path-types.md) — a quantified member over a
   head parameter its signature leaves unpinned, instantiated through its path.

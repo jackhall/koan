@@ -22,12 +22,27 @@ use crate::scope::{BuiltinGroup, Component, Elaboration, Site, Which, is_equalit
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, FoldDirection, KKind, KType, Parametric, RecursiveGroupWindow,
-    ReductionMode, RelativeSchema, SchemaDraft, SigOrigin, TypeRegistry,
+    ReductionMode, RelativeSchema, SchemaDraft, SigOrigin,
 };
 
 use super::expression::{Elaborator, Fellow, Groups};
 use super::reads::Reads;
 use super::signature::operator_shape;
+use crate::values::Types;
+
+/// Whether the declaration node `node` declares a nominal type — a `NEWTYPE` of either spelling
+/// or a `UNION` — the member kinds that name a fresh identity, and so the ones a body declaring
+/// them where they run mints.
+pub fn declares_nominal(node: &KExpression<'_>) -> bool {
+    node.cache().builtin_shape().is_some_and(|form| {
+        matches!(
+            form.id,
+            BuiltinShapeId::NewTypeDefinition
+                | BuiltinShapeId::NewTypeDeclaration
+                | BuiltinShapeId::Union
+        )
+    })
+}
 
 /// One `KType` per member of `component`, in member order: a `NEWTYPE`'s newtype over its
 /// representation, a `NEWTYPE (Key Val AS Pair)`'s constructor family, a `UNION`'s canonical union
@@ -43,7 +58,7 @@ use super::signature::operator_shape;
 pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
     component: &Component<'graph>,
     reader: &R,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<&'x [KType], Elaboration> {
     let shape = reader.shape();
@@ -222,7 +237,7 @@ const TOP: Groups<'static> = Groups {
 const DECLARED: &str = "a declared type reads no variable";
 
 /// A declared type, read under [`TOP`] with no head parameter in reach: concrete.
-fn closed(types: &TypeRegistry<'_>, declared: Parametric) -> KType {
+fn closed(types: &Types<'_, '_>, declared: Parametric) -> KType {
     types.concrete(declared).expect(DECLARED)
 }
 
@@ -343,7 +358,7 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
     fn standalone<R: Reads<'graph> + ?Sized>(
         &self,
         reader: &R,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<KType, Elaboration> {
         let elaborator = Elaborator {
@@ -375,7 +390,7 @@ pub(super) type HeadShape = (Site, Which, DeclaredType<Parametric>);
 pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
     node: &'graph KExpression<'graph>,
     reader: &R,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<(KType, BumpVec<'x, HeadShape>), Elaboration> {
     let declaration = Declaration::of(node, scratch)?;
@@ -459,7 +474,7 @@ fn last_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
 /// `OP` or `UNARY OP` head is a keyworded member, pushed onto `heads` by its site under each of
 /// its keys; a bodyless `GROUP` is the operator channel's.
 fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
-    elaborator: &Elaborator<'_, '_, '_, R>,
+    elaborator: &Elaborator<'_, '_, '_, '_, R>,
     group: Option<&'graph ExpressionPart<'graph>>,
     body: &'graph ExpressionPart<'graph>,
     site: Site,
@@ -655,7 +670,7 @@ fn group_mode(
 /// it is read. A group's body is binary operator heads and nothing else, and a head stating a
 /// result of its own belongs only to a pairwise group.
 fn group_members<'graph, 'x, R: Reads<'graph> + ?Sized>(
-    elaborator: &Elaborator<'_, '_, '_, R>,
+    elaborator: &Elaborator<'_, '_, '_, '_, R>,
     definition: &'graph ExpressionPart<'graph>,
     mode: ReductionMode,
     draft: &mut SchemaDraft<'x>,

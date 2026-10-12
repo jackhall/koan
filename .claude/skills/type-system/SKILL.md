@@ -60,7 +60,7 @@ options and ask; do not pick one to make a test pass.
 ## Tells that a change is wrong
 
 - a raw `Handle` wrapped into a typed handle outside the lattice's own doors;
-- a new `TypeRegistry::concrete` call with no named invariant behind it;
+- a new `TypeChain::concrete` call with no named invariant behind it;
 - a concrete type compared with a parametric one by reading the variable as
   its upper bound: this is the usual way transitivity is lost;
 - a scheme or variable inside a type a value carries or a container is built

@@ -2,29 +2,33 @@
 //!
 //! Each test here says which law would have covered it and why it cannot: a panic that has no
 //! algebraic statement, a byte layout whose whole point is that it never moves, or a worked example
-//! that pins the *edge* of a law rather than the law itself. Each builds its own registry over a
+//! that pins the *edge* of a law rather than the law itself. Each builds its own chain over a
 //! region of its own, which doubles as its scratch.
 
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
-use crate::types::digest::{TypeDigest, node_digest, schema_content_digest};
+use super::raw::RawRegistry;
+use super::raw::lattice::{join, meet_through_variables as meet};
+use super::raw::order::{fits, is_subtype_of};
+use super::raw::unify::admits;
+use crate::types::chain::TypeChain;
+use crate::types::digest::{ComponentMember, TypeDigest, node_digest, schema_content_digest};
 use crate::types::handle::{Handle, KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;
-use crate::types::lattice::{join, meet_through_variables as meet};
 use crate::types::node::{NodeSchema, TypeNode};
-use crate::types::order::{fits, is_subtype_of};
 use crate::types::record::Record;
-use crate::types::registry::TypeRegistry;
 use crate::types::render::display_handle;
-use crate::types::run::Elements;
 use crate::types::schema::{SchemaDraft, SigOrigin, SigSchema};
 use crate::types::shape::shape_slots;
 use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement};
+use crate::types::tiers::Habitat;
 use crate::types::typed;
-use crate::types::unify::{Collector, UnifyFailure, admits};
+use crate::types::unify::{Collector, UnifyFailure};
 use crate::types::verdicts::Relation;
 use crate::types::walk::Variance;
+
+use super::RawSchemes;
 
 /// No law: a handle that names no interned node is a bug in whoever minted it, not a value the
 /// algebra relates. The panic is the contract.
@@ -32,7 +36,7 @@ use crate::types::walk::Variance;
 #[should_panic(expected = "names no interned node")]
 fn reading_an_uninterned_handle_panics() {
     let bump = Bump::new();
-    let types = TypeRegistry::in_region(&bump);
+    let types = crate::types::tests::tiered(&bump);
     let stranger = Handle::from_digest(TypeDigest(0xdead_beef));
     types.node(stranger);
 }
@@ -43,7 +47,7 @@ fn reading_an_uninterned_handle_panics() {
 fn a_union_of_nothing_is_never() {
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     assert_eq!(types.union_of::<Handle>(region, &[]), Handle::NEVER);
     assert_eq!(
         types.union_of(region, &[Handle::NEVER, Handle::NEVER]),
@@ -58,7 +62,7 @@ fn a_union_of_nothing_is_never() {
 fn the_empty_schema_digest_is_the_module_top() {
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let empty = types.signature(region, SchemaDraft::new(region));
     assert_eq!(empty, KType::EMPTY_SIGNATURE);
     match types.node(empty) {
@@ -76,12 +80,12 @@ fn a_twice_used_variable_takes_the_join() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     let element = types.quantified(0, KType::ANY).raw();
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let shape = types
-        .shape_group(
+        .shape_scheme_raw(
             region,
             &[name],
             &[KType::ANY],
@@ -137,7 +141,7 @@ fn a_variable_reached_from_above_takes_the_meet() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let takes = |t: Handle| types.function_type(region, &[(x, t)], KType::NULL.raw());
     let position = takes(types.quantified(0, KType::ANY).raw());
@@ -164,7 +168,7 @@ fn a_solve_fails_only_where_its_pair_denotes_nothing() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let variable = types.quantified(0, KType::NUMBER).raw();
     assert_eq!(
@@ -198,13 +202,13 @@ fn fits_closes_through_a_joined_instance() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let takes = |group: &[TypeSymbol], first: Handle, second: Handle| {
         types
-            .function_group(
+            .function_scheme_raw(
                 region,
                 group,
                 &[KType::ANY][..group.len()],
@@ -227,14 +231,14 @@ fn fits_closes_through_a_joined_instance() {
 /// Admit each of `arguments` into its slot of `slots` through one collector bounded by `bounds`,
 /// then solve. `Ok` carries the solution; `Err` carries the index of a variable whose pair denotes
 /// nothing, or `None` for a mismatch.
-fn solve_over(
-    types: &TypeRegistry<'_>,
+fn solve_over<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     region: &Bump,
     slots: &[Handle],
     bounds: &[KType],
     arguments: &[Handle],
 ) -> Result<Vec<Handle>, Option<usize>> {
-    let mut collector = Collector::<Handle>::new(region, bounds);
+    let mut collector = Collector::<Handle>::new(types, region, bounds);
     for (slot, argument) in slots.iter().zip(arguments) {
         if admits(
             types,
@@ -265,13 +269,13 @@ fn a_binder_keeps_every_variable_it_declares() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
     let head = |names: &[TypeSymbol], bounds: &[KType], slot: Handle, ret: Handle| {
         types
-            .shape_group(
+            .shape_scheme_raw(
                 region,
                 names,
                 bounds,
@@ -294,17 +298,7 @@ fn a_binder_keeps_every_variable_it_declares() {
         in_slot,
         head(&[], &[], KType::NUMBER.raw(), KType::NULL.raw())
     );
-    let renamed = head(
-        &[other],
-        &[KType::NUMBER],
-        types.quantified(0, KType::NUMBER).raw(),
-        KType::NULL.raw(),
-    );
-    assert_eq!(in_slot, renamed, "the names are render-only");
-    let TypeNode::ExpressionShape { bounds, .. } = types.node(in_slot) else {
-        panic!("the shape door interned something else");
-    };
-    assert_eq!(bounds, &[KType::NUMBER]);
+    assert_eq!(types.split(in_slot).0.bounds, &[KType::NUMBER]);
     let in_return = head(
         &[elt],
         &[KType::NUMBER],
@@ -349,7 +343,7 @@ fn a_shape_with_no_group_is_transparent() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
@@ -359,7 +353,7 @@ fn a_shape_with_no_group_is_transparent() {
             run.push(DispatchTokenElement::Keyword(keyword));
             run.push(DispatchTokenElement::Slot(*slot));
         }
-        types.shape_group(
+        types.shape_scheme_raw(
             region,
             names,
             &vec![KType::ANY; names.len()],
@@ -383,7 +377,7 @@ fn a_shape_with_no_group_is_transparent() {
     );
     assert_eq!(scheme.1, &[1, 0]);
     let first = shape_slots(scheme.0, &types).next().expect("a slot");
-    let opened = crate::types::substitute::substitute_quantified(
+    let opened = super::raw::substitute::substitute_quantified(
         &types,
         region,
         first,
@@ -406,12 +400,20 @@ fn a_record_is_order_blind_in_identity_and_ordered_in_presentation() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let forwards = [(x, KType::NUMBER.raw()), (y, KType::STR.raw())];
     let backwards = [(y, KType::STR.raw()), (x, KType::NUMBER.raw())];
-    assert_eq!(Record::<Handle>::over(&forwards), Record::over(&backwards));
+    let node = |kt: KType| types.enter(kt.raw());
+    let forwards_nodes =
+        region.alloc_slice_copy(&[(x, node(KType::NUMBER)), (y, node(KType::STR))]);
+    let backwards_nodes =
+        region.alloc_slice_copy(&[(y, node(KType::STR)), (x, node(KType::NUMBER))]);
+    assert_eq!(
+        Record::<Handle>::over(forwards_nodes),
+        Record::over(backwards_nodes)
+    );
     let record = types.record(region, &forwards);
     assert_eq!(record, types.record(region, &backwards));
     let TypeNode::Record { fields } = types.node(record) else {
@@ -431,7 +433,7 @@ fn width_runs_the_way_each_arm_declares() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let wide = types.record(region, &[(x, KType::NUMBER.raw()), (y, KType::STR.raw())]);
@@ -457,32 +459,30 @@ fn width_runs_the_way_each_arm_declares() {
     assert!(!is_subtype_of(&types, region, many, few));
 }
 
-/// No law: a quantified function's identity is a claim about worked spellings — which renamings
-/// and which written orders collapse to one handle — and a generated pair almost never spells two
-/// of them.
+/// No law: which written orders of a quantified function's fields collapse to one handle is a claim
+/// about worked spellings, and a generated pair almost never spells two of them. The renaming half
+/// is a law of its own ([`a_scheme_is_one_handle_whatever_its_names`](super::properties)).
 #[test]
-fn a_quantified_function_interns_by_shape_whatever_its_names() {
+fn a_quantified_function_interns_whatever_its_field_order() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
-    let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
     let variable = types.quantified(0, KType::ANY).raw();
 
-    // `FN FOR ALL (Elt) :{x :Elt} -> Elt` under either spelling, and with the fields in either
-    // written order, is one handle: the names are render-only and the record is order-blind.
+    // `FN FOR ALL (Elt) :{x :Elt y :Str} -> Elt` with the fields in either written order is one
+    // handle: the record is order-blind.
     let identity = |group, param| {
         types
-            .function_group(region, group, &[KType::ANY], &[(x, param)], param)
+            .function_scheme_raw(region, group, &[KType::ANY], &[(x, param)], param)
             .0
     };
-    let (as_elt, as_other) = ([elt], [other]);
-    assert_eq!(identity(&as_elt, variable), identity(&as_other, variable));
+    let as_elt = [elt];
     let forward = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY],
@@ -491,7 +491,7 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         )
         .0;
     let reversed = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY],
@@ -519,7 +519,7 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         quantified_identity
     ));
     let to_any = types
-        .function_group(region, &[elt], &[KType::ANY], &[(x, variable)], Handle::ANY)
+        .function_scheme_raw(region, &[elt], &[KType::ANY], &[(x, variable)], Handle::ANY)
         .0;
     assert!(fits(&types, region, quantified_identity, to_any));
     assert!(!is_subtype_of(&types, region, quantified_identity, to_any));
@@ -535,11 +535,9 @@ fn each_node_kind_lies_under_its_family_top() {
     let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
-    // Declared ahead of the registry, so it outlives the shape node interned over it.
-    let elements = [DispatchTokenElement::Keyword(keyword)];
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let tops = [Handle::ANY_VALUE, Handle::ANY_TYPE, Handle::ANY_CODE];
     let under = |ktype: Handle| -> Vec<Handle> {
         tops.into_iter()
@@ -556,29 +554,22 @@ fn each_node_kind_lies_under_its_family_top() {
         KType::DICT_ANY_ANY.raw(),
         types.record(region, &[(x, Handle::ANY)]),
         types.function_type(region, &[(x, Handle::ANY)], Handle::ANY),
-        types.intern(
-            region,
-            TypeNode::ExpressionShape {
-                quantifiers: &[],
-                bounds: &[],
-                elements: Elements::over(&elements),
-                classes: &[],
-                ret: KType::NUMBER.raw(),
-            },
+        types.shape_type(
+            &[DispatchTokenElement::Keyword(keyword)],
+            &[],
+            KType::NUMBER.raw(),
         ),
         types.constructor_apply(region, KType::NUMBER, &[(x, Handle::ANY)]),
         Handle::EMPTY_SIGNATURE,
-        types.intern(
-            region,
-            TypeNode::SetMember {
-                scc_digest: node_digest(region, &TypeNode::Number),
-                index: 0,
-                scc_size: 1,
+        {
+            let scc_digest = node_digest(region, &TypeNode::<Handle>::Number);
+            let member = ComponentMember {
                 name,
                 kind: KKind::NewType,
                 schema: NodeSchema::NewType(KType::NUMBER),
-            },
-        ),
+            };
+            types.seal_component(region, scc_digest, &[member])[0].handle()
+        },
         types.sibling(0).raw(),
         Handle::ANY_VALUE,
     ];
@@ -620,7 +611,7 @@ fn each_node_kind_lies_under_its_family_top() {
         under(types.quantified(0, KType::ANY_VALUE).raw()),
         [Handle::ANY_VALUE]
     );
-    let sealed = types.parameter(name, KType::ANY);
+    let sealed = types.parameter(name, KType::ANY).handle();
     assert!(under(sealed).is_empty());
     // A union answers by its members, and a deferred return, whose return is unknown, by none.
     let mixed = types.union_of(region, &[KType::NUMBER.raw(), KType::PROPER_TYPE.raw()]);
@@ -654,7 +645,7 @@ fn each_node_kind_lies_under_its_family_top() {
 fn the_code_kinds_form_a_tree_under_code() {
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let below = |a: Handle, b: Handle| is_subtype_of(&types, region, a, b);
     let edges = [
         (Handle::BLOCK, Handle::ANY_CODE),
@@ -746,7 +737,7 @@ fn the_code_kinds_form_a_tree_under_code() {
 fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let symbols = SymbolInterner::new();
     let name = |text: &str| BinderSymbol::declared(text, &symbols).expect("a bindable token");
     let (y, z) = (name("y"), name("z"));
@@ -818,7 +809,7 @@ fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
 fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let elt = types.quantified(0, number_or_str).raw();
     let number_or_str = number_or_str.raw();
@@ -834,7 +825,7 @@ fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
     // types only, so the variable stays beside the members its bound lies under.
     let spelled = types.union_of(region, &[elt, KType::NUMBER.raw(), KType::STR.raw()]);
     assert!(
-        matches!(types.node(spelled), TypeNode::Union { members } if members[..] == [elt, KType::NUMBER.raw(), KType::STR.raw()])
+        matches!(types.node(spelled), TypeNode::Union { members } if members.iter().eq([elt, KType::NUMBER.raw(), KType::STR.raw()]))
     );
     let elt_or_bool = types.union_of(region, &[elt, KType::BOOL.raw()]);
     assert_ne!(elt_or_bool, types.union_of(region, &[KType::BOOL.raw()]));
@@ -852,30 +843,33 @@ fn a_carrier_meets_a_head_parameter_s_bound_through_the_bound_its_source_met() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let under_number = types.carrier(name, KType::NUMBER, crate::types::ContentKey(1));
     let under_either = types.carrier(name, number_or_str, crate::types::ContentKey(2));
-    let solve = |mut collector: Collector<'_, KType>, carrier: KType| {
-        collector.pin(0, KType::NUMBER, carrier);
-        collector.solve(&types).map(|solution| solution.to_vec())
-    };
+    fn solve<'run>(
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        mut collector: Collector<'_, 'run, KType>,
+        carrier: KType,
+    ) -> Result<Vec<KType>, UnifyFailure<KType>> {
+        collector.pin(types, 0, KType::NUMBER, carrier);
+        collector.solve(types).map(|solution| solution.to_vec())
+    }
+    let number = [types.enter(KType::NUMBER.raw())];
     assert_eq!(
-        solve(
-            Collector::heads(region, &[KType::NUMBER], &[]),
-            under_number
-        ),
+        solve(&types, Collector::heads(region, &number, &[]), under_number),
         Ok(vec![under_number])
     );
+    assert!(solve(&types, Collector::heads(region, &number, &[]), under_either).is_err());
     assert!(
         solve(
-            Collector::heads(region, &[KType::NUMBER], &[]),
-            under_either
+            &types,
+            Collector::new(&types, region, &[KType::NUMBER]),
+            under_number
         )
         .is_err()
     );
-    assert!(solve(Collector::new(region, &[KType::NUMBER]), under_number).is_err());
     assert!(!is_subtype_of(
         &types,
         region,
@@ -895,7 +889,7 @@ fn a_carrier_at_a_contravariant_position_does_not_meet_the_bound_it_hides() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
     let wanted = TypeSymbol::declared("Wanted", &symbols).expect("a Type token");
     let k = ValueSymbol::declared("k", &symbols).expect("a value token");
@@ -946,12 +940,12 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let name = TypeSymbol::declared("Held", &symbols).expect("a Type token");
     let list_of_number = types.list(KType::NUMBER);
-    let carried = types.parameter(name, list_of_number);
+    let carried = types.parameter(name, list_of_number).handle();
     let declared = types.list(types.quantified(0, KType::ANY).raw());
-    let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+    let mut collector = Collector::<Handle>::new(&types, region, &[KType::ANY]);
     assert_eq!(
         admits(
             &types,
@@ -975,7 +969,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     let z = BinderSymbol::declared("z", &symbols).expect("a bindable token");
     let x_name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let each_list = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[x_name],
             &[KType::ANY],
@@ -990,7 +984,7 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     );
     let bounded = types.quantified(0, list_of_number).raw();
     let each_bounded = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[name],
             &[list_of_number],
@@ -1001,9 +995,9 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     // A bound spanning two declared members is admitted member by member: `Held` bounded by
     // `LIST OF Number | Str` fills `LIST OF X | Str`, though neither member alone takes it.
     let spanning_bound = types.union_of(region, &[list_of_number, KType::STR]);
-    let spanning = types.parameter(name, spanning_bound);
+    let spanning = types.parameter(name, spanning_bound).handle();
     let either = types.union_of(region, &[declared, KType::STR.raw()]);
-    let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+    let mut collector = Collector::<Handle>::new(&types, region, &[KType::ANY]);
     assert_eq!(
         admits(
             &types,
@@ -1033,13 +1027,13 @@ fn a_carried_deferred_return_fills_no_slot_it_is_not_under() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let deferred = types
         .deferred_return(DeferredReturnSurface::Type(name))
         .raw();
     let admits = |declared: Handle| {
-        let mut collector = Collector::<Handle>::new(region, &[KType::ANY]);
+        let mut collector = Collector::<Handle>::new(&types, region, &[KType::ANY]);
         admits(
             &types,
             region,
@@ -1062,7 +1056,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let a = BinderSymbol::declared("a", &symbols).expect("a bindable token");
     let b = BinderSymbol::declared("b", &symbols).expect("a bindable token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
@@ -1070,7 +1064,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     let value_bounded = types.quantified(0, KType::ANY_VALUE).raw();
     let free = types.quantified(1, KType::ANY).raw();
     let pair = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt, key],
             &[KType::ANY_VALUE, KType::ANY],
@@ -1084,7 +1078,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
         ":(FN FOR ALL #{Key: Any, Elt: Value} :{a :Elt b :Key} -> :(MAP Elt -> Key))"
     );
     let alone = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY_VALUE],
@@ -1097,7 +1091,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let union_bounded = types.quantified(0, number_or_str).raw();
     let spanning = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[number_or_str],
@@ -1120,8 +1114,8 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
-    let above = |kt| crate::types::substitute::bound_above(&types, region, kt);
+    let types = crate::types::tests::tiered(region);
+    let above = |kt| super::raw::substitute::bound_above(&types, region, kt);
     let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let tee = TypeSymbol::declared("Tee", &symbols).expect("a Type token");
     let elt = types.quantified(0, KType::ANY).raw();
@@ -1137,7 +1131,7 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
     );
 
     let closed = types
-        .function_group(region, &[tee], &[KType::ANY], &[(y, elt)], elt)
+        .function_scheme_raw(region, &[tee], &[KType::ANY], &[(y, elt)], elt)
         .0;
     assert_eq!(above(closed), closed);
     let list_of_number = types.list(KType::NUMBER.raw());
@@ -1145,15 +1139,13 @@ fn bounding_above_reads_a_free_variable_by_its_position() {
 }
 
 /// `#(<keyword> _ :<slot>) -> <ret>`, unranked and unquantified.
-fn head(
-    types: &TypeRegistry<'_>,
-    region: &Bump,
+fn head<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     keyword: KeywordSymbol,
     slot: Handle,
     ret: Handle,
 ) -> Handle {
     types.shape_type(
-        region,
         &[
             DispatchTokenElement::Keyword(keyword),
             DispatchTokenElement::Slot(slot),
@@ -1164,8 +1156,8 @@ fn head(
 }
 
 /// A signature over `shapes`, declared over `parameters` or a module's when `module`.
-fn keyworded(
-    types: &TypeRegistry<'_>,
+fn keyworded<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     region: &Bump,
     module: bool,
     parameters: &[(TypeSymbol, Parametric)],
@@ -1194,7 +1186,7 @@ fn a_key_s_overloads_are_tried_one_at_a_time() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let push = KeywordSymbol::declared("PUSH", &symbols).expect("a keyword token");
     let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let parameter = types.head_parameter(elt, KType::ANY);
@@ -1204,12 +1196,12 @@ fn a_key_s_overloads_are_tried_one_at_a_time() {
         region,
         false,
         &[(elt, parameter)],
-        &[head(&types, region, push, raw, types.list(raw))],
+        &[head(&types, push, raw, types.list(raw))],
     );
     let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
     let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));
     let both = typed::meet(&types, region, numbers, strs);
-    let at = |kt| head(&types, region, push, kt, types.list(kt));
+    let at = |kt| head(&types, push, kt, types.list(kt));
     let two = keyworded(
         &types,
         region,
@@ -1234,10 +1226,10 @@ fn a_tie_under_an_asked_member_still_fits() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let f = KeywordSymbol::declared("FIT", &symbols).expect("a keyword token");
     let either = |other| types.union_of(region, &[KType::NUMBER.raw(), other]);
-    let at = |slot| head(&types, region, f, slot, KType::NUMBER.raw());
+    let at = |slot| head(&types, f, slot, KType::NUMBER.raw());
     let m = keyworded(
         &types,
         region,
@@ -1260,7 +1252,7 @@ fn the_order_never_solves_and_fits_does() {
     let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     let below = |a: Handle, b: Handle| is_subtype_of(&types, region, a, b);
 
     // `Stack WITH {Elt = Number}` lies under `Stack`; its `Str` application is unordered with it,
@@ -1274,7 +1266,7 @@ fn the_order_never_solves_and_fits_does() {
         region,
         false,
         &[(elt, parameter)],
-        &[head(&types, region, push, raw, types.list(raw))],
+        &[head(&types, push, raw, types.list(raw))],
     );
     let pin = |kt| types.signature_apply(region, stack, &[(BinderSymbol::Type(elt), kt)]);
     let (numbers, strs) = (pin(KType::NUMBER), pin(KType::STR));
@@ -1296,7 +1288,7 @@ fn the_order_never_solves_and_fits_does() {
         types.quantified(1, KType::ANY).raw(),
     );
     let same = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[elt],
             &[KType::ANY],
@@ -1305,7 +1297,7 @@ fn the_order_never_solves_and_fits_does() {
         )
         .0;
     let either = types
-        .function_group(
+        .function_scheme_raw(
             region,
             &[left, right],
             &[KType::ANY, KType::ANY],

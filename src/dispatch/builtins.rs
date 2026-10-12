@@ -26,10 +26,8 @@ use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
 use crate::scope::{Builtins, InstanceRead, Site};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
-use crate::type_lattice::{
-    DispatchTokenElement, KType, TypeNode, TypeRegistry, builtin_types, meet,
-};
-use crate::values::{Circular, Seen, TypeValue, Value, record_type};
+use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, builtin_types, meet};
+use crate::values::{Circular, Seen, TypeValue, Types, Value, record_type};
 
 use super::errors::Raised;
 use super::rules;
@@ -218,7 +216,7 @@ const _: () = {
 pub(super) fn table<'graph>(
     writer: Writer<'graph>,
     symbols: &'graph SymbolInterner,
-    types: &'graph TypeRegistry<'graph>,
+    types: &Types<'graph, 'graph>,
     scratch: BumpAllocator<'_>,
 ) -> &'graph KBuiltins<'graph, 'graph> {
     let type_value = |handle| Value::Type(TypeValue::new(writer, handle, types));
@@ -244,7 +242,7 @@ pub(super) fn table<'graph>(
             Element::Slot(Takes::Is(slot)) => DispatchTokenElement::Slot(*slot),
             Element::Slot(Takes::ListOf(item)) => DispatchTokenElement::Slot(types.list(*item)),
         }));
-        let shape = types.shape_type(scratch, &elements, &[], overload.returns);
+        let shape = types.shape_type(&elements, &[], overload.returns);
         let function = builtin(writer, shape, overload.native as u32);
         overloads.push((key, Value::Knotted(function)));
     }
@@ -273,7 +271,7 @@ pub(super) fn run<'graph, 'here>(
     scratch: &Bump,
 ) -> KValue<'graph, 'here> {
     let program = at.program;
-    let types = program.types();
+    let types = &at.types;
     let value = |index: usize| {
         operands[index]
             .value()
@@ -294,7 +292,7 @@ pub(super) fn run<'graph, 'here>(
             .handle()
     };
     let type_value = |handle| Value::Type(TypeValue::new(writer, handle, types));
-    let raise = |raised: Raised<'_>| raised.raise(program, writer);
+    let raise = |raised: Raised<'_>| raised.raise(program, writer, types);
     match native {
         Native::Print => {
             let mut prose = writer.prose();
@@ -448,7 +446,7 @@ pub(super) fn run<'graph, 'here>(
 /// The elements of a list a slot admitted, read through its surface into `scratch`.
 pub(super) fn listed<'graph, 'here, 'x>(
     value: KValue<'graph, 'here>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KValue<'graph, 'here>] {
     let list = value
@@ -480,7 +478,7 @@ fn field<'graph, 'here>(
     value: KValue<'graph, 'here>,
     name: Symbol,
     writer: Writer<'here>,
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, 'here>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'here>> {
     let mut seen = Seen::of(value);

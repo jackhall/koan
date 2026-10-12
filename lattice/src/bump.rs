@@ -1,14 +1,18 @@
-//! The **bump tier**: storage outside any cell graph, for the type lattice's registry and for the
+//! The **bump tier**: storage outside any cell graph, for the type lattice's root and for the
 //! scratch a caller passes. A bump here has no reach and no cell; it is released whole when its
 //! owner drops.
 //!
-//! The tier is a collections arena — growable vectors and a hash table and hash set over `&Bump` as an
-//! [`Allocator`](allocator_api2::alloc::Allocator) — which a cell's `Writer` has no verbs for, so
-//! it does not pretend to be a region.
+//! The tier is a collections arena — growable vectors, a hash map, a bare hash table and a hash set
+//! over `&Bump` as an [`Allocator`](allocator_api2::alloc::Allocator) — which a cell's `Writer`
+//! has no verbs for, so it does not pretend to be a region.
 //! Callers use bumpalo's own verbs (`alloc`, `alloc_slice_copy`, `alloc_slice_fill_iter`,
 //! `alloc_str`) through [`BumpAllocator`]; there is no door layer over them.
 //!
 //! [`strongly_connected_components`] is the index-graph walk staged here.
+//!
+//! [`DigestTable`] is the one structure here that grows without an allocator: it lays fixed runs
+//! through [`LaysRuns`], which a bump implements here and a region's writer implements in koan, so
+//! a cell's region can host it.
 //!
 //! This is the crate's only import of `bumpalo`, `allocator_api2` and `hashbrown`.
 //!
@@ -19,8 +23,10 @@
 use std::hash::BuildHasher;
 
 mod components;
+mod digest_table;
 
 pub use components::strongly_connected_components;
+pub use digest_table::{DigestTable, Keyed, LaysRuns};
 
 /// The arena the tier allocates from; its owner releases it whole.
 pub type Bump = bumpalo::Bump;
@@ -29,12 +35,32 @@ pub type Bump = bumpalo::Bump;
 /// receiver and the [`Allocator`](allocator_api2::alloc::Allocator) the tier's collections take.
 pub type BumpAllocator<'a> = &'a Bump;
 
+impl<'r> LaysRuns<'r> for BumpAllocator<'r> {
+    fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'r [T] {
+        const {
+            assert!(
+                !std::mem::needs_drop::<T>(),
+                "a bump-laid run must carry no drop glue: the bump runs no destructor",
+            )
+        };
+        self.alloc_slice_fill_with(len, fill)
+    }
+
+    fn text(self, text: &str) -> &'r str {
+        self.alloc_str(text)
+    }
+}
+
 /// A growable vector whose buffer lives in a bump.
 pub type BumpVec<'a, T> = allocator_api2::vec::Vec<T, BumpAllocator<'a>>;
 
 /// A hash table whose buckets live in a bump. Built through `bump_table`.
 pub type BumpBackedMap<'a, K, V, S = hashbrown::DefaultHashBuilder> =
     hashbrown::HashMap<K, V, S, BumpAllocator<'a>>;
+
+/// A hash table of bare entries whose buckets live in a bump: the caller hashes each entry and
+/// finds one by comparing what it holds. Built through `bump_hash_table`.
+pub type BumpHashTable<'a, T> = hashbrown::HashTable<T, BumpAllocator<'a>>;
 
 /// A hash set whose buckets live in a bump. Built through `bump_set`.
 pub type BumpBackedSet<'a, T, S = hashbrown::DefaultHashBuilder> =
@@ -54,6 +80,18 @@ pub fn bump_table<'a, K, V, S: BuildHasher + Default>(
         )
     };
     hashbrown::HashMap::with_hasher_in(S::default(), bump)
+}
+
+/// Build a hash table over `bump`, proving at compile time that its entries carry no drop glue,
+/// as [`bump_table`] does.
+pub fn bump_hash_table<'a, T>(bump: BumpAllocator<'a>) -> BumpHashTable<'a, T> {
+    const {
+        assert!(
+            !std::mem::needs_drop::<T>(),
+            "a bump-backed table's entries must carry no drop glue: the bump runs no destructor",
+        )
+    };
+    hashbrown::HashTable::new_in(bump)
 }
 
 /// Build a set over `bump`, proving at compile time that its members carry no drop glue, as

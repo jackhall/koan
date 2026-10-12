@@ -55,7 +55,7 @@ pub use shape::{
     source_of, spelled, view_refused,
 };
 pub use typed::{
-    Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, InstanceRead, Narrowing,
-    ParameterBinding, Registered, ShapeGroupMap, Static, StaticCallable, StaticRegistered,
-    StaticSolution, StaticType, Statics, UseStatics, Variable, solutions,
+    BodyClass, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, InstanceRead,
+    Narrowing, ParameterBinding, Registered, ShapeGroupMap, Static, StaticCallable,
+    StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable, solutions,
 };

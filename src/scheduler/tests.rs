@@ -2,6 +2,7 @@
 //! koan's above present.
 
 mod boundary;
+mod branches;
 mod bundle;
 mod continuation;
 mod delivery;

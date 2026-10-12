@@ -11,8 +11,8 @@
 //! itself, since a table is only ever built sorted — the keyworded channel in
 //! [`canonical_overloads`] order, the operator channel in [`canonical_groups`] order. A reader walks
 //! a table in that order and never sorts one; a lookup by name is a binary search ([`member`]). The
-//! two unnamed channels' order is fixed in one place, [`TypeRegistry::signature`], the door a
-//! schema enters the lattice through.
+//! two unnamed channels' order is fixed in one place, [`TypeChain::signature`], the door a schema
+//! enters the lattice through.
 //!
 //! A `SigSchema` is what the [`TypeNode::Signature`] node owns; the node computes and stores the
 //! schema's content digest once at intern time, so the schema itself carries no digest field.
@@ -23,15 +23,16 @@
 
 use std::ops::Deref;
 
-use crate::bump::{BumpAllocator, BumpVec};
+use crate::bump::{BumpAllocator, BumpVec, LaysRuns};
 use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
-use super::handle::{DeclaredType, Handle, KType, Parametric};
-use super::kind::KKind;
+use super::chain::TypeChain;
+use super::handle::{DeclaredType, KType, Parametric};
 use super::node::{NodeSchema, TypeNode};
 use super::operators::ReductionMode;
 use super::order::{Dropped, unsubsumed};
-use super::registry::TypeRegistry;
+use super::stored::{Linked, copied};
+use super::tiers::Habitat;
 
 /// A named member table: `(name, T)` pairs, symbol-sorted by name with each name once. The shape
 /// every name-keyed channel of a schema is stored in, and the shape a substitution's bindings
@@ -73,14 +74,10 @@ impl<'a, N: Copy, T: Copy> Members<'a, N, T> {
     /// The table binding nothing.
     pub const EMPTY: Self = Members(&[]);
 
-    /// This table copied into `bump`, in its stored order — how a table staged in scratch moves
-    /// into the region that keeps it.
-    pub(super) fn copied_into<'b>(self, bump: BumpAllocator<'b>) -> Members<'b, N, T> {
-        if self.0.is_empty() {
-            Members(&[])
-        } else {
-            Members(bump.alloc_slice_copy(self.0))
-        }
+    /// This table copied through `lay`, in its stored order — how a table staged in scratch moves
+    /// into the half that keeps it.
+    pub(super) fn copied_into<'b>(self, lay: impl LaysRuns<'b>) -> Members<'b, N, T> {
+        Members(copied(lay, self.0))
     }
 }
 
@@ -162,6 +159,26 @@ pub struct DeclaredGroup<'run> {
 }
 
 impl SigSchema<'_> {
+    /// This schema with every channel copied through `lay`, in its stored order — how a schema
+    /// moves into the half that keeps its node.
+    pub(super) fn copied_into<'b>(self, lay: impl LaysRuns<'b>) -> SigSchema<'b> {
+        SigSchema {
+            origin: self.origin,
+            parameters: self.parameters.copied_into(lay),
+            manifest_members: self.manifest_members.copied_into(lay),
+            value_slots: self.value_slots.copied_into(lay),
+            keyworded: copied(lay, self.keyworded),
+            operators: if self.operators.is_empty() {
+                &[]
+            } else {
+                lay.lay(self.operators.len(), |at| DeclaredGroup {
+                    members: copied(lay, self.operators[at].members),
+                    mode: self.operators[at].mode,
+                })
+            },
+        }
+    }
+
     /// The member-free schema — the module-lattice top the `:Module` name lowers to, and the
     /// content any declaration with no parameter and no member normalizes to.
     pub const EMPTY: SigSchema<'static> = SigSchema {
@@ -185,7 +202,7 @@ impl SigSchema<'_> {
 }
 
 /// A signature schema under construction, staged in scratch. Built by a declaration, a module or
-/// a view, and consumed by [`TypeRegistry::signature`], which fixes every channel's canonical order
+/// a view, and consumed by [`TypeChain::signature`], which fixes every channel's canonical order
 /// and interns the result — so a draft may be filled in any order.
 ///
 /// A named insert replaces an earlier binding for the same name, so each name lands once. A member
@@ -277,7 +294,7 @@ pub(super) fn canonical_groups(groups: &mut BumpVec<'_, DeclaredGroup<'_>>) {
 /// Put a keyworded member set in canonical order — sorted by content digest, exact duplicates
 /// collapsed, and every shape another member **is below** dropped.
 ///
-/// Subsumption is by the order, as [`union_of`](super::registry::TypeRegistry::union_of)
+/// Subsumption is by the order, as [`union_of`](super::chain::TypeChain::union_of)
 /// canonicalizes a union by, but from the other side: a member below another promises everything
 /// that other one does, so keeping the upper one says nothing new. That is what
 /// makes an interface canonical — two schemas that satisfy each other are one schema, so a module's
@@ -287,8 +304,8 @@ pub(super) fn canonical_groups(groups: &mut BumpVec<'_, DeclaredGroup<'_>>) {
 ///
 /// The order is antisymmetric, so two mutually-subsuming shapes are one handle and the dedup above
 /// has already collapsed them; nothing here can drop both sides of a pair.
-pub(super) fn canonical_overloads(
-    types: &TypeRegistry<'_>,
+pub(super) fn canonical_overloads<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     overloads: &mut BumpVec<'_, DeclaredType<Parametric>>,
 ) {
@@ -300,17 +317,17 @@ pub(super) fn canonical_overloads(
     // Quadratic in a bucket's width, which is the width an interface declares overloads at. The
     // order runs the other way from a union's: a shape *above* another is the one dropped. A
     // parametric overload — over a head parameter, or a scheme — is deduplicated by handle alone.
-    let mut raw = BumpVec::with_capacity_in(overloads.len(), scratch);
-    raw.extend(overloads.iter().map(|overload| overload.raw()));
-    let keep = unsubsumed(types, scratch, &raw, Dropped::Above);
+    let mut nodes = BumpVec::with_capacity_in(overloads.len(), scratch);
+    nodes.extend(overloads.iter().map(|overload| types.enter(overload.raw())));
+    let keep = unsubsumed(types, scratch, &nodes, Dropped::Above);
     let mut keep = keep.iter();
     overloads.retain(|_| *keep.next().unwrap_or(&true));
 }
 
 /// The bound a head parameter is declared with. `parameter` is a [`TypeNode::Parameter`], as every
 /// entry of [`SigSchema::parameters`] is.
-pub(super) fn parameter_bound(types: &TypeRegistry<'_>, parameter: Handle) -> KType {
-    match types.node(parameter) {
+pub(super) fn parameter_bound(parameter: Linked<'_>) -> Linked<'_> {
+    match parameter.view() {
         TypeNode::Parameter { bound, .. } => bound,
         _ => unreachable!("a head parameter is a Parameter node"),
     }
@@ -321,14 +338,10 @@ pub(super) fn parameter_bound(types: &TypeRegistry<'_>, parameter: Handle) -> KT
 /// Arity is the returned list's length; the list is symbol-sorted.
 pub fn constructor_param_names<'run>(
     kt: KType,
-    types: &TypeRegistry<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
 ) -> Option<&'run [TypeSymbol]> {
-    match types.node(kt) {
-        TypeNode::SetMember {
-            kind: KKind::TypeConstructor,
-            schema: NodeSchema::TypeConstructor { param_names, .. },
-            ..
-        } => Some(param_names),
-        _ => None,
+    match types.member_schema(kt)? {
+        NodeSchema::TypeConstructor { param_names, .. } => Some(param_names),
+        NodeSchema::NewType(_) => None,
     }
 }

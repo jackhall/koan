@@ -4,8 +4,10 @@
 //! a fold cannot express, so it is exempt from the driver rule: one exhaustive match per surface,
 //! the binder threaded top-down, and a new node variant must be spelled here.
 //!
-//! Every entry point takes the registry and the symbol interner, never a bundle: the lattice
-//! knows about types and symbols and nothing else.
+//! Every entry point takes the chain and the symbol interner, never a bundle: the lattice
+//! knows about types and symbols and nothing else. An entry point enters its handle once; the
+//! recursion reads nodes by reference from there, and enters only the handles a group's bounds and
+//! a signature's schema hold.
 
 use std::fmt::Write as _;
 
@@ -13,14 +15,17 @@ use crate::symbols::{
     BinderSymbol, KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeSymbol,
 };
 
+use super::chain::TypeChain;
 use super::handle::{DeclaredType, Handle, KType, MODULE_NAME, Parametric, TypeHandle, leaf_name};
-use super::node::TypeNode;
+use super::node::{Group, TypeNode};
 use super::operators::{FoldDirection, ReductionMode};
 use super::record::Record;
-use super::registry::TypeRegistry;
+use super::run::Elements;
 use super::schema::{DeclaredGroup, SigSchema, parameter_bound};
-use super::shape::{DispatchTokenElement, Shape};
+use super::shape::{Classes, DispatchTokenElement, Shape, StoredElement};
 use super::sig_relations::FitsFailure;
+use super::stored::Linked;
+use super::tiers::Habitat;
 
 /// A symbol's text, resolved through the run's interner. Rendering stays total: a miss prints a
 /// placeholder rather than panicking, because error formatting must never be the thing that fails.
@@ -35,14 +40,14 @@ pub fn display_symbol(symbol: Symbol, symbols: &SymbolInterner) -> SymbolDisplay
 }
 
 /// One type's surface under the quantifier binder `binder`, as a `Display` view.
-struct NameIn<'x, 'run> {
-    kt: Handle,
-    types: &'x TypeRegistry<'run>,
+struct NameIn<'x, 'run, H> {
+    kt: Linked<'run>,
+    types: &'x TypeChain<'run, H>,
     symbols: &'x SymbolInterner,
     binder: &'x [TypeSymbol],
 }
 
-impl std::fmt::Display for NameIn<'_, '_> {
+impl<'run, H: Habitat<'run>> std::fmt::Display for NameIn<'_, 'run, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_name_in(self.kt, f, self.types, self.symbols, self.binder)
     }
@@ -67,18 +72,18 @@ impl std::fmt::Write for Unsigiled<'_, '_> {
 
 /// Surface-syntax rendering, straight into `f`. The one place the surface arms are written.
 ///
-/// `binder` is the quantifier binder in force — the enclosing shape's parameter names, which its
-/// element and return positions dereference through [`TypeNode::Quantified`]. Threaded rather than
-/// looked up, because a quantified leaf carries an index and nothing else; a nested shape rebinds
-/// it with its own list, exactly as it shadows one in the relations.
-fn write_name_in(
-    kt: Handle,
+/// `binder` is the quantifier group in force — the enclosing scheme's names, which its body's
+/// positions dereference through [`TypeNode::Quantified`]. Threaded rather than looked up, because a
+/// quantified leaf carries an index and nothing else; a nested scheme rebinds it with its own names,
+/// exactly as it shadows them in the relations.
+fn write_name_in<'run>(
+    kt: Linked<'run>,
     f: &mut std::fmt::Formatter<'_>,
-    types: &TypeRegistry<'_>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
-    let node = types.node(kt);
+    let node = kt.view();
     match &node {
         TypeNode::Number
         | TypeNode::Str
@@ -107,7 +112,7 @@ fn write_name_in(
         TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
         TypeNode::CodeNeeding { kind, names } => {
             f.write_str(":(")?;
-            write_name_in(kind.raw(), f, types, symbols, binder)?;
+            write_name_in(kind, f, types, symbols, binder)?;
             f.write_str(" NEEDING #[")?;
             for (index, name) in names.iter().enumerate() {
                 if index > 0 {
@@ -122,14 +127,14 @@ fn write_name_in(
         }
         TypeNode::List { element } => {
             f.write_str(":(LIST OF ")?;
-            write_name_in(*element, f, types, symbols, binder)?;
+            write_name_in(element, f, types, symbols, binder)?;
             f.write_str(")")
         }
         TypeNode::Dict { key, value } => {
             f.write_str(":(MAP ")?;
-            write_name_in(*key, f, types, symbols, binder)?;
+            write_name_in(key, f, types, symbols, binder)?;
             f.write_str(" -> ")?;
-            write_name_in(*value, f, types, symbols, binder)?;
+            write_name_in(value, f, types, symbols, binder)?;
             f.write_str(")")
         }
         // `:{x :Number y :Str}` — the braced type-sigil surface. Fields render space-separated like
@@ -139,38 +144,21 @@ fn write_name_in(
             write_param_record(f, *fields, types, symbols, binder)?;
             f.write_str("}")
         }
-        // `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`, and without the group where it binds none — the
-        // group writer emits its own trailing space and nothing at all for an empty group, so the
-        // monomorphic surface is unchanged. Params and return read against the function's own
-        // group where it has one, and against the enclosing binder's where it has none.
-        TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            params,
-            ret,
-        } => {
-            let inner = if quantifiers.is_empty() {
-                binder
-            } else {
-                quantifiers
-            };
-            f.write_str(":(FN ")?;
-            write_quantifier_group(f, quantifiers, bounds, types, symbols)?;
-            f.write_str(":{")?;
-            write_param_record(f, *params, types, symbols, inner)?;
-            f.write_str("} -> ")?;
-            write_name_in(*ret, f, types, symbols, inner)?;
-            f.write_str(")")
+        TypeNode::KFunction { params, ret } => {
+            write_function(f, Group::EMPTY, *params, ret, types, symbols, binder)
         }
-        TypeNode::ExpressionShape { .. } => {
-            f.write_str(":(EXPR ")?;
-            let shape = Shape::of(types, kt).expect("the ExpressionShape arm");
-            write_shape_surface(f, shape, types, symbols, binder)?;
-            f.write_str(")")
-        }
-        // A quantified position renders as the name its enclosing binder bound it to. The
-        // placeholder is diagnostic-only: a bare leaf outside a binder is unreachable from any
-        // spelling, since the only doors that mint one are the two canonicalizing interns.
+        // A scheme spells its group inside its body's own surface.
+        TypeNode::Scheme { group, body } => match body.view() {
+            TypeNode::KFunction { params, ret } => {
+                write_function(f, **group, params, ret, types, symbols, binder)
+            }
+            TypeNode::ExpressionShape { .. } => write_shape(f, kt, types, symbols, binder),
+            _ => unreachable!("a scheme's body is a function type or a shape"),
+        },
+        TypeNode::ExpressionShape { .. } => write_shape(f, kt, types, symbols, binder),
+        // A quantified position renders as the name its enclosing scheme bound it to. The
+        // placeholder is diagnostic-only: a bare leaf outside a scheme is unreachable from any
+        // spelling, since the only doors that mint one are the two scheme doors.
         TypeNode::Quantified { index, .. } => match binder.get(*index) {
             Some(name) => write!(f, "{}", display_symbol(name.symbol(), symbols)),
             None => write!(f, "<quantified {index}>"),
@@ -185,7 +173,7 @@ fn write_name_in(
                     f.write_str(" | ")?;
                 }
                 let member = NameIn {
-                    kt: *member,
+                    kt: member,
                     types,
                     symbols,
                     binder,
@@ -199,7 +187,7 @@ fn write_name_in(
             arguments,
         } => {
             f.write_str(":(")?;
-            write_name_in(*constructor, f, types, symbols, binder)?;
+            write_name_in(constructor, f, types, symbols, binder)?;
             f.write_str(" {")?;
             for (index, (name, argument)) in arguments.iter().enumerate() {
                 if index > 0 {
@@ -233,7 +221,7 @@ fn write_name_in(
         }
         // `<signature> WITH {Elt = Number}`, the pins in their written order.
         TypeNode::SignatureApply { signature, pins } => {
-            write_name_in(signature.raw(), f, types, symbols, binder)?;
+            write_name_in(signature, f, types, symbols, binder)?;
             f.write_str(" WITH {")?;
             for (index, (name, pinned)) in pins.iter().enumerate() {
                 if index > 0 {
@@ -251,11 +239,11 @@ fn write_name_in(
                 if index > 0 {
                     f.write_str(" & ")?;
                 }
-                let pinned = matches!(types.node(*member), TypeNode::SignatureApply { .. });
+                let pinned = matches!(member.view(), TypeNode::SignatureApply { .. });
                 if pinned {
                     f.write_str("(")?;
                 }
-                write_name_in(*member, f, types, symbols, binder)?;
+                write_name_in(member, f, types, symbols, binder)?;
                 if pinned {
                     f.write_str(")")?;
                 }
@@ -270,13 +258,13 @@ fn write_name_in(
 
 /// A [`display_name`] view: one handle plus the registries its content and symbols live in. The one
 /// render: `Display` writes it straight into the caller's formatter, `to_string` owns it.
-pub struct TypeNameDisplay<'r, 'run> {
-    ktype: Handle,
-    types: &'r TypeRegistry<'run>,
+pub struct TypeNameDisplay<'r, 'run, H> {
+    ktype: Linked<'run>,
+    types: &'r TypeChain<'run, H>,
     symbols: &'r SymbolInterner,
 }
 
-impl std::fmt::Display for TypeNameDisplay<'_, '_> {
+impl<'run, H: Habitat<'run>> std::fmt::Display for TypeNameDisplay<'_, 'run, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_name_in(self.ktype, f, self.types, self.symbols, &[])
     }
@@ -285,20 +273,29 @@ impl std::fmt::Display for TypeNameDisplay<'_, '_> {
 /// Surface-syntax rendering as a `Display` view — what a `format!` argument naming a type uses,
 /// so the surface lands in the message's own buffer with nothing owned on the way. Any declared
 /// type renders: a concrete one, a parametric one, or a scheme.
-pub fn display_name<'r, 'run>(
+pub fn display_name<'r, 'run, H: Habitat<'run>>(
     kt: impl Into<DeclaredType<Parametric>>,
-    types: &'r TypeRegistry<'run>,
+    types: &'r TypeChain<'run, H>,
     symbols: &'r SymbolInterner,
-) -> TypeNameDisplay<'r, 'run> {
+) -> TypeNameDisplay<'r, 'run, H> {
     display_handle(kt.into().raw(), types, symbols)
 }
 
 /// [`display_name`] over a raw handle, for the lattice's own diagnostics.
-pub(super) fn display_handle<'r, 'run>(
+pub(super) fn display_handle<'r, 'run, H: Habitat<'run>>(
     kt: Handle,
-    types: &'r TypeRegistry<'run>,
+    types: &'r TypeChain<'run, H>,
     symbols: &'r SymbolInterner,
-) -> TypeNameDisplay<'r, 'run> {
+) -> TypeNameDisplay<'r, 'run, H> {
+    display_node(types.enter(kt), types, symbols)
+}
+
+/// [`display_name`] over a node.
+fn display_node<'r, 'run, H: Habitat<'run>>(
+    kt: Linked<'run>,
+    types: &'r TypeChain<'run, H>,
+    symbols: &'r SymbolInterner,
+) -> TypeNameDisplay<'r, 'run, H> {
     TypeNameDisplay {
         ktype: kt,
         types,
@@ -306,15 +303,57 @@ pub(super) fn display_handle<'r, 'run>(
     }
 }
 
+/// `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`, and without the group where `group` is empty — the
+/// group writer emits its own trailing space and nothing at all for an empty group, so the
+/// monomorphic surface is unchanged. Params and return read against the scheme's own group where
+/// it has one, and against the enclosing `binder` where it has none.
+fn write_function<'run>(
+    f: &mut std::fmt::Formatter<'_>,
+    group: Group<'_>,
+    params: Record<'run, Linked<'run>>,
+    ret: Linked<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    symbols: &SymbolInterner,
+    binder: &[TypeSymbol],
+) -> std::fmt::Result {
+    let inner = if group.names.is_empty() {
+        binder
+    } else {
+        group.names
+    };
+    f.write_str(":(FN ")?;
+    write_quantifier_group(f, group.names, group.bounds, types, symbols)?;
+    f.write_str(":{")?;
+    write_param_record(f, params, types, symbols, inner)?;
+    f.write_str("} -> ")?;
+    write_name_in(ret, f, types, symbols, inner)?;
+    f.write_str(")")
+}
+
+/// `:(EXPR …)` — a shape's type surface, or a shape scheme's, read through [`Shape::of`].
+fn write_shape<'run>(
+    f: &mut std::fmt::Formatter<'_>,
+    kt: Linked<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    symbols: &SymbolInterner,
+    binder: &[TypeSymbol],
+) -> std::fmt::Result {
+    f.write_str(":(EXPR ")?;
+    let shape = Shape::of(kt).expect("a shape or a shape scheme");
+    write_shape_surface(f, shape, types, symbols, binder)?;
+    f.write_str(")")
+}
+
 /// Whether this type's surface opens with the type sigil `:` — the predicate a parameter position
 /// consults to decide whether to prefix one of its own, without inspecting rendered text.
-pub(super) fn surface_opens_sigil(kt: Handle, types: &TypeRegistry<'_>) -> bool {
-    match &types.node(kt) {
+pub(super) fn surface_opens_sigil(kt: Linked<'_>) -> bool {
+    match &kt.view() {
         TypeNode::List { .. }
         | TypeNode::Dict { .. }
         | TypeNode::Record { .. }
         | TypeNode::KFunction { .. }
         | TypeNode::ExpressionShape { .. }
+        | TypeNode::Scheme { .. }
         | TypeNode::Union { .. }
         | TypeNode::ConstructorApply { .. } => true,
         TypeNode::DeferredReturn(surface) => surface.opens_sigil(),
@@ -326,10 +365,10 @@ pub(super) fn surface_opens_sigil(kt: Handle, types: &TypeRegistry<'_>) -> bool 
 /// record type's own body, and the parameter list of an `:(FN :{…} -> _)`. A leaf type surface gets
 /// a `:` prefix; one that already opens a sigil is left as-is, decided by [`surface_opens_sigil`]
 /// rather than by looking at text already written.
-fn write_param_record(
+fn write_param_record<'run>(
     f: &mut std::fmt::Formatter<'_>,
-    params: Record<'_>,
-    types: &TypeRegistry<'_>,
+    params: Record<'run, Linked<'run>>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
@@ -338,7 +377,7 @@ fn write_param_record(
             f.write_str(" ")?;
         }
         write!(f, "{} ", display_symbol(key.symbol(), symbols))?;
-        if !surface_opens_sigil(kt, types) {
+        if !surface_opens_sigil(kt) {
             f.write_str(":")?;
         }
         write_name_in(kt, f, types, symbols, binder)?;
@@ -351,13 +390,13 @@ fn write_param_record(
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.
 ///
-/// The group's bounds are read as the shape node stores them, one per quantifier. Slots and return
-/// read against the shape's own group where it has one, and against the enclosing `binder`'s where
+/// The group's bounds are read as the scheme stores them, one per quantifier. Slots and return
+/// read against the scheme's own group where it has one, and against the enclosing `binder`'s where
 /// it has none, as a function type's do.
-fn write_shape_surface(
+fn write_shape_surface<'run>(
     f: &mut std::fmt::Formatter<'_>,
-    shape: Shape<'_>,
-    types: &TypeRegistry<'_>,
+    shape: Shape<'run>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
@@ -373,15 +412,15 @@ fn write_shape_surface(
     write_name_in(shape.ret, f, types, symbols, inner)
 }
 
-/// `FOR ALL #[<names>] ` — the quantifier group a binder's surface opens with, or nothing at all
+/// `FOR ALL #[<names>] ` — the quantifier group a scheme's surface opens with, or nothing at all
 /// when it quantifies over nothing. A group where some variable's bound is not `Any` is a dict of
 /// each name to its bound, `FOR ALL #{Elt: Number, Key: Any} `. The trailing space is the group's,
 /// so the head that follows spells the same either way.
-fn write_quantifier_group(
+fn write_quantifier_group<'ty>(
     f: &mut std::fmt::Formatter<'_>,
     quantifiers: &[TypeSymbol],
     bounds: &[KType],
-    types: &TypeRegistry<'_>,
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     symbols: &SymbolInterner,
 ) -> std::fmt::Result {
     if quantifiers.is_empty() {
@@ -397,7 +436,7 @@ fn write_quantifier_group(
         write!(f, "{}", display_symbol(name.symbol(), symbols))?;
         if bounded {
             f.write_str(": ")?;
-            write_name_in(bound_of(index).raw(), f, types, symbols, &[])?;
+            write_name_in(types.enter(bound_of(index).raw()), f, types, symbols, &[])?;
         }
     }
     f.write_str(if bounded { "} " } else { "] " })
@@ -407,16 +446,17 @@ fn write_quantifier_group(
 /// Every argument position is the wildcard `_`, as the type carries no argument names — or, in a
 /// ranked shape, its priority class counted from 1, as a `SIG` member writes it (`#(MOVE 2 :Any TO
 /// 1 :Any)`).
-fn write_shape_head(
+fn write_shape_head<'run>(
     f: &mut std::fmt::Formatter<'_>,
-    elements: &[DispatchTokenElement],
-    classes: &[u8],
-    types: &TypeRegistry<'_>,
+    elements: Elements<'run, Linked<'run>>,
+    classes: Classes<'_>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
     f.write_str("#(")?;
-    let mut slot = 0;
+    let ranked = !classes.is_written_order();
+    let mut classes = classes.iter();
     for (index, element) in elements.iter().enumerate() {
         if index > 0 {
             f.write_str(" ")?;
@@ -426,15 +466,16 @@ fn write_shape_head(
                 write!(f, "{}", display_symbol(symbol.symbol(), symbols))?;
             }
             DispatchTokenElement::Slot(kt) => {
-                match classes.get(slot) {
-                    Some(class) => write!(f, "{} ", u32::from(*class) + 1)?,
-                    None => f.write_str("_ ")?,
+                let class = classes.next().expect("one class per slot");
+                if ranked {
+                    write!(f, "{} ", u32::from(class) + 1)?;
+                } else {
+                    f.write_str("_ ")?;
                 }
-                slot += 1;
-                if !surface_opens_sigil(*kt, types) {
+                if !surface_opens_sigil(kt) {
                     f.write_str(":")?;
                 }
-                write_name_in(*kt, f, types, symbols, binder)?;
+                write_name_in(kt, f, types, symbols, binder)?;
             }
         }
     }
@@ -445,10 +486,10 @@ fn write_shape_head(
 /// its head parameters in the group as a `SIG` declares them and every other member the schema
 /// names in the parentheses — manifest members, then value slots, each table in its stored symbol
 /// order, which is deterministic across runs because a symbol is a digest of its text.
-fn write_sig_schema(
+fn write_sig_schema<'ty>(
     f: &mut std::fmt::Formatter<'_>,
     schema: SigSchema<'_>,
-    types: &TypeRegistry<'_>,
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     symbols: &SymbolInterner,
 ) -> std::fmt::Result {
     let members = schema
@@ -468,12 +509,12 @@ fn write_sig_schema(
             if index > 0 {
                 f.write_str(", ")?;
             }
-            let bound = parameter_bound(types, parameter.raw());
+            let bound = parameter_bound(types.enter(parameter.raw()));
             write!(
                 f,
                 "{}: {}",
                 display_symbol(name.symbol(), symbols),
-                display_name(bound, types, symbols)
+                display_node(bound, types, symbols)
             )?;
         }
         f.write_str("} ")?;
@@ -498,7 +539,7 @@ fn write_sig_schema(
     // printing it twice would spell an interface no signature can be written to declare.
     let mut heads: Vec<String> = Vec::new();
     for member in schema.keyworded {
-        let head = keyworded_head(member.raw(), schema.operators, types, symbols);
+        let head = keyworded_head(types.enter(member.raw()), schema.operators, types, symbols);
         if !heads.contains(&head) {
             heads.push(head);
         }
@@ -531,44 +572,44 @@ fn write_sig_schema(
 /// The one diagnostic currency for a keyworded member: the subtyping failures name a head with it,
 /// and a schema's rendered members read from the same spelling, so a declaration and the error
 /// naming it read alike.
-pub fn render_keyworded_head(
+pub fn render_keyworded_head<'ty>(
     shape: impl Into<DeclaredType<Parametric>>,
     operators: &[DeclaredGroup<'_>],
-    types: &TypeRegistry<'_>,
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     symbols: &SymbolInterner,
 ) -> String {
-    keyworded_head(shape.into().raw(), operators, types, symbols)
+    keyworded_head(types.enter(shape.into().raw()), operators, types, symbols)
 }
 
-/// [`render_keyworded_head`] over a raw handle.
-fn keyworded_head(
-    shape: Handle,
+/// [`render_keyworded_head`] over a node.
+fn keyworded_head<'run>(
+    shape: Linked<'run>,
     operators: &[DeclaredGroup<'_>],
-    types: &TypeRegistry<'_>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     symbols: &SymbolInterner,
 ) -> String {
     if let Some(head) = render_operator_head(shape, operators, types, symbols) {
         return head;
     }
-    match Shape::of(types, shape) {
+    match Shape::of(shape) {
         Some(shape) => ShapeSurface {
             shape,
             types,
             symbols,
         }
         .to_string(),
-        None => display_handle(shape, types, symbols).to_string(),
+        None => display_node(shape, types, symbols).to_string(),
     }
 }
 
 /// [`write_shape_surface`] as a `Display` view, for the diagnostics that keep the text.
-struct ShapeSurface<'r, 'run> {
+struct ShapeSurface<'r, 'run, H> {
     shape: Shape<'run>,
-    types: &'r TypeRegistry<'run>,
+    types: &'r TypeChain<'run, H>,
     symbols: &'r SymbolInterner,
 }
 
-impl std::fmt::Display for ShapeSurface<'_, '_> {
+impl<'run, H: Habitat<'run>> std::fmt::Display for ShapeSurface<'_, 'run, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_shape_surface(f, self.shape, self.types, self.symbols, &[])
     }
@@ -580,23 +621,20 @@ impl std::fmt::Display for ShapeSurface<'_, '_> {
 /// `[Slot, Keyword(s), Slot]` or `[Keyword(s), Slot]` — **and** `s` is a member of one of the
 /// schema's declared chaining records. That second half is what keeps the plain `EXPR`-head
 /// spelling of an operator key reading as an `EXPR` head.
-fn render_operator_head(
-    shape: Handle,
+fn render_operator_head<'run>(
+    shape: Linked<'run>,
     operators: &[DeclaredGroup<'_>],
-    types: &TypeRegistry<'_>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
     symbols: &SymbolInterner,
 ) -> Option<String> {
-    let shape = Shape::of(types, shape)?;
-    let (symbol, is_list_form) = match shape.elements {
+    let shape = Shape::of(shape)?;
+    let (symbol, is_list_form) = match shape.elements.raw() {
         [
-            DispatchTokenElement::Slot(_),
-            DispatchTokenElement::Keyword(symbol),
-            DispatchTokenElement::Slot(_),
+            StoredElement::Slot(..),
+            StoredElement::Keyword(symbol),
+            StoredElement::Slot(..),
         ] => Some((*symbol, false)),
-        [
-            DispatchTokenElement::Keyword(symbol),
-            DispatchTokenElement::Slot(_),
-        ] => Some((*symbol, true)),
+        [StoredElement::Keyword(symbol), StoredElement::Slot(..)] => Some((*symbol, true)),
         _ => None,
     }?;
     let mode = operators
@@ -607,7 +645,7 @@ fn render_operator_head(
     let first_slot = shape.slots().next()?;
     // The list form's sole parameter is the whole run, so the declared operand is its element.
     let operand = if is_list_form {
-        match types.node(first_slot) {
+        match first_slot.view() {
             TypeNode::List { element } => element,
             _ => return None,
         }
@@ -615,11 +653,11 @@ fn render_operator_head(
         first_slot
     };
     let symbol = display_symbol(symbol.symbol(), symbols);
-    let operand = display_handle(operand, types, symbols);
+    let operand = display_node(operand, types, symbols);
     Some(if mode == ReductionMode::Unary {
         format!(
             "UNARY OP #({symbol}) OVER {operand} -> {}",
-            display_handle(ret, types, symbols)
+            display_node(ret, types, symbols)
         )
     } else if ret == first_slot {
         // A fold member's result is its operand type, which the bare head already says.
@@ -627,7 +665,7 @@ fn render_operator_head(
     } else {
         format!(
             "OP #({symbol}) OVER {operand} -> {}",
-            display_handle(ret, types, symbols)
+            display_node(ret, types, symbols)
         )
     })
 }
@@ -711,10 +749,10 @@ fn render_mode(mode: ReductionMode, symbols: &SymbolInterner) -> String {
 ///
 /// `operators` is the declaring side's chaining channel, so a keyworded head renders as the `OP`
 /// surface that declared it rather than as a bare `EXPR` head.
-pub fn render_fits_failure(
+pub fn render_fits_failure<'ty>(
     failure: &FitsFailure<'_, '_>,
     operators: &[DeclaredGroup<'_>],
-    types: &TypeRegistry<'_>,
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
     symbols: &SymbolInterner,
 ) -> String {
     let head =

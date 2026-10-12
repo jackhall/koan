@@ -42,3 +42,5 @@ dhat = { version = "0.3.3", optional = true }
 
 [dev-dependencies]
 proptest = "1"
+# The lattice's test counters, which koan's tests read.
+lattice = { path = "lattice", features = ["counters"] }

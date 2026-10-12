@@ -4,13 +4,13 @@ Part of [the type lattice](README.md)'s design.
 
 Two relations, and the split is the point. [`is_subtype_of`](order.rs) is **the
 order**: reflexive, transitive and antisymmetric, memoized through the
-registry's verdict edges, and it **never solves**. It relates **concrete types
+verdict tables, and it **never solves**. It relates **concrete types
 and nothing else** — it takes `KType`s — and two signature types compare by
 their applications' pins. It is what every construction reads: interning, a
 canonical union, `join`, `meet`, an overload set's subsumption, a cache key.
 [`fits`](order.rs) is what every **question** reads: admission, a static
 verdict, ranking, a settled ascription, the return check, the view door. It
-takes parametric types and schemes, and solves: a quantified binder fits
+takes parametric types and schemes, and solves: a scheme fits
 another when some instantiation of its group puts the instance under the other,
 and a module's signature fits a declared one when its members do. It holds the
 **rigid rule**: a variable lies under its bound and everything above it, and
@@ -43,7 +43,7 @@ ordered argument by argument, covariantly, and an application lies strictly
 under the bare family it applies, which stands for every application of it.
 Covariance is sound because a family's representation is covariant in its
 parameters: the elaborator refuses one placing a parameter at a contravariant
-position, which [`quantifies_contravariantly`](registry.rs) finds.
+position, which [`quantifies_contravariantly`](chain.rs) finds.
 
 [`join`](lattice.rs) **is not a walk.** It is the larger operand when the two are
 ordered and their canonical union otherwise, which is what makes it associative —
@@ -58,7 +58,7 @@ parameter is refused where the program writes it
 solves the variable, so the meet cannot be taken at load, and no intersection
 type keeps it symbolic.
 
-**A union holding a variable keeps it.** [`union_of`](registry.rs) reduces the
+**A union holding a variable keeps it.** [`union_of`](chain.rs) reduces the
 concrete members among themselves by the order and keeps every parametric
 member beside them, even one whose bound lies under a concrete member:
 `Elt | Number | Str` stays three members with `Elt` bounded by `Number | Str`,
@@ -77,7 +77,7 @@ survives: with `Elt` bounded by `Number | Str`, `(Elt | Bool)` met with
 
 Because the order never solves, its laws hold **by handle over every concrete
 type**, signature types included: two handles that lie under each other are one
-handle. A quantified binder never reaches the order, and two that admit each
+handle. A scheme never reaches the order, and two that admit each
 other do so in *fits* alone — `∀Elt :{x :Elt, y :Elt} -> Elt` fits
 `∀A B :{x :A, y :B} -> A | B` at its instance over `A | B`. A union and an
 overload set keep the first of two concrete members that lie under each other,
@@ -159,13 +159,22 @@ member whose offered bucket ranks its slots otherwise fails as
 
 ## Quantified binders
 
-A quantified binder relates to another of its kind only in *fits*, and there by
-**instantiation**, not structurally: some instantiation of the subject's variables, each under its
-bound, must put the instance below the other with the other's variables rigid.
-[`admits_shape`](sig_relations.rs) is that clause for two shapes, position by
-position; [`admits_function`](sig_relations.rs) is its twin for two function
-types, name by name — each parameter pair asking the candidate's parameter to
-lie under the declared one and the return pair the reverse, then one `solve`.
+A scheme is the one quantified binder. It relates to another type only in
+*fits*, and there by **instantiation**, not structurally: some instantiation of
+the subject's variables, each under its bound, must put the instance below the
+other with the other's variables rigid. So a pair holding a scheme never pairs
+child by child. The binary walk takes a union on either side set-wise first,
+which keeps *fits* transitive through a union — a scheme that fits a function
+type fits a union holding that type — and hands every other pair holding a
+scheme to the leaf, which reads both bodies, a plain type being its own. [`admits_shape`](sig_relations.rs) is the clause for two shapes,
+position by position; [`admits_function`](sig_relations.rs) is its twin for two
+function types, name by name — each parameter pair asking the candidate's
+parameter to lie under the declared one and the return pair the reverse, then
+one `solve`. A function and a shape never fit each other, a scheme over either
+included. The typed handles keep a scheme out of the order's doors, and the
+order itself puts one under no callable type but itself, which the equality
+guard answers, and under its family top, `Value`.
+
 The solve asks only that each variable's pair of ends denote some type
 ([the unifier](solving.md#the-unifier-collects-it-does-not-bind)); it picks no instance.
 [`instance_under`](sig_relations.rs) shares `admits_function`'s walk and picks
@@ -179,20 +188,29 @@ signature asking for no member without lying under it. Where the wanted type
 names lexical variables, the instance fits it at every binding of them, each
 entry of the solution so bound within its variable's bound.
 Width is the order's own either way: a function subtype asks for no name its
-supertype does not. A quantified binder is a `Scheme`, which the order never
-takes.
+supertype does not.
 
-**A binder keeps every variable it declares.** Both doors that mint one —
-[`shape_scheme`](registry.rs) and [`function_scheme`](registry.rs) — number a group
-over the positions it binds: first the variables some position names, by first
-occurrence, a shape walking its slots in element order and a function its
-parameters in **symbol-sorted key order** — a record's identity is order-blind,
-so the numbering must be too — and then the return; then every variable no
-position names, in declared order. No variable is dropped, so a call solves each
-one: under `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`, `KIND 1` binds
-`Elt` to `Number`. The names are render-only, and the digest feeds the group's
-arity and each variable's bound, so two alpha-variants are one handle. The door
-hands its caller back the declaration-index → group-index map alongside the
-handle, which is what a call needs to bind each type parameter to its solution.
+**Instantiating a scheme substitutes its body.** The body's positions read the
+scheme's variables free, so one substitution of the body through a call's
+solution, in group order, is the plain callable that call has, function or
+shape alike.
+
+**A scheme keeps every variable it declares.** Both doors that mint one —
+[`shape_scheme`](chain.rs) and [`function_scheme`](chain.rs) — intern the
+plain body first, its `Quantified` positions indexed in declaration order. Then
+they number the group over the body's positions: first the variables some
+position names, by first occurrence, a shape walking its slots in element order
+and a function its parameters in **symbol-sorted key order** — a record's
+identity is order-blind, so the numbering must be too — and then the return;
+then every variable no position names, in declared order. The body is
+substituted into that order, and the scheme interned over it. No variable is
+dropped, so a call solves each one: under
+`EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`, `KIND 1` binds `Elt` to
+`Number`. The names are render-only, and the digest feeds the group's arity and
+each variable's bound, so two alpha-variants are one handle. The door hands its
+caller back the declaration-index → group-index map alongside the handle, which
+is what a call needs to bind each type parameter to its solution. A rebuild
+that reaches inside a scheme numbers its group again the same way, so a rebuilt
+scheme is the one the doors would mint for it.
 A variable no argument reaches binds its bound, the least instance of
 `[Never, bound]`.

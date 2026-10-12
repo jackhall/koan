@@ -529,6 +529,8 @@ bound run, one binding an edge to itself.
 
 ## Open work
 
+- [Shape branches](../../roadmap/type-tiers/shape-branches.md) — the merge of a
+  shape branch into the region's at a lambda's birth.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) —
   union-variant construction in a cycle, and a cycle through a family
   construction, which has no cut.

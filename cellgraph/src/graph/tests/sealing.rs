@@ -47,7 +47,7 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
             .enter(source, |context| {
                 let local = number_here(context, value as u32);
                 let carrier = context
-                    .alloc_into::<Number, Number>(holder, &[operand(&local)], |writer, views| {
+                    .alloc_into::<Number, Number>(holder, &[operand(&local)], |writer, _, views| {
                         Active::new(one(writer, *pinned(&views[0])))
                     })
                     .unwrap();
@@ -143,15 +143,15 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
     let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| {
+                .alloc_into::<Number, Number>(producer, &[], |writer, _, _| {
                     Active::new(one(writer, 41))
                 })
                 .unwrap();
             let captured =
-                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+                context.alloc_here(&[operand(&value)], |_writer, _, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
-                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, _, views| {
                     Active::new(pinned(&views[0]))
                 })
                 .unwrap();
@@ -197,21 +197,25 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     let kept = graph
         .enter(consumer, |context| {
             let from_first = context
-                .alloc_into::<Number, Number>(first, &[], |writer, _| Active::new(one(writer, 1)))
+                .alloc_into::<Number, Number>(first, &[], |writer, _, _| {
+                    Active::new(one(writer, 1))
+                })
                 .unwrap();
             let from_second = context
-                .alloc_into::<Number, Number>(second, &[], |writer, _| Active::new(one(writer, 2)))
+                .alloc_into::<Number, Number>(second, &[], |writer, _, _| {
+                    Active::new(one(writer, 2))
+                })
                 .unwrap();
             let captured = context.alloc_here(
                 &[operand(&from_first), operand(&from_second)],
-                |_writer, views| pinned(&views[1]),
+                |_writer, _, views| pinned(&views[1]),
             );
             context.store_successor(captured);
             let bundled = context
                 .alloc_into::<Number, Number>(
                     consumer,
                     &[operand(&from_first), operand(&from_second)],
-                    |_writer, views| Active::new(pinned(&views[1])),
+                    |_writer, _, views| Active::new(pinned(&views[1])),
                 )
                 .unwrap();
             context.keep(bundled)

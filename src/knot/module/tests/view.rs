@@ -1,6 +1,6 @@
 //! The view door: what `:!` and `:|` build over a module, and what refuses one.
 
-use crate::knot::tests::{declared, pin, with_fixture};
+use crate::knot::tests::{TestGraph, declared, pin, with_fixture};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{FitsFailure, KType, TypeNode, sig_fits};
 use crate::values::{Value, satisfies};
@@ -19,10 +19,11 @@ MODULE m = ((LET Carrier = Number) (LET zero = 0) (LET name = \"m\") (NEWTYPE Di
 fn a_transparent_view_carries_what_the_signature_names_and_drops_the_rest() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             // `Ord` declares `zero :Carrier`; `m` binds `zero` to a number, so *fits* solves
             // `Carrier` to `Number`.
@@ -70,10 +71,11 @@ MODULE other = (LET zero = 1)";
 fn an_opaque_view_keys_its_carrier_on_content() {
     with_fixture(|fixture| {
         let lines = fixture.parse(TWINS);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let ord = declared(fixture, activation, "Ord");
             let opaque = |name| {
                 let source = module(fixture, activation, name);
@@ -118,10 +120,11 @@ fn an_opaque_view_keys_its_carrier_on_content() {
 fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let view = |mode| {
@@ -150,10 +153,11 @@ fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
 fn a_carrier_carries_its_parameters_name_and_bound() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let view = ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
@@ -183,10 +187,11 @@ MODULE m = (LET zero = 0)
 LET f = (FN :{} -> Number = #(1))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let wider = declared(fixture, activation, "Wider");
@@ -211,20 +216,20 @@ LET f = (FN :{} -> Number = #(1))";
 #[test]
 fn a_view_copies_across_a_cell_like_any_module() {
     use crate::knot::KValueFamily;
-    use crate::knot::tests::{Step, copy};
+    use crate::knot::tests::copy;
     use crate::memory::{CellGraph, ReleaseAbsorption};
-    use crate::values::cross;
 
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let scratch = fixture.scratch();
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let (dormant, mint) = graph
             .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, &[]);
+                let activation = fixture.run(writer, types, &lines, &[]);
                 let m = module(fixture, activation, "m");
                 let ord = declared(fixture, activation, "Ord");
                 let view = ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
@@ -233,7 +238,7 @@ fn a_view_copies_across_a_cell_like_any_module() {
                     panic!("`Carrier` is a type member");
                 };
                 let source = context.lift::<KValueFamily>(Value::Knotted(view));
-                let crossed = cross(context, dest, &source, types).unwrap();
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 (context.keep(crossed), carrier.handle())
             })
             .unwrap();
@@ -271,10 +276,11 @@ MODULE m = ((LET Carrier = Number) (LET zero = 0))
 MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let (m, s) = (
                 module(fixture, activation, "m"),
                 module(fixture, activation, "s"),
@@ -317,10 +323,11 @@ MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
 fn an_opaque_view_keeps_a_pin() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let pinned =
@@ -352,10 +359,11 @@ MODULE one = (EXPR #(PUSH x :Number) -> :(LIST OF Number) = #([x]))";
 fn a_view_carries_each_overload_its_keyworded_members_admit() {
     with_fixture(|fixture| {
         let lines = fixture.parse(KEYWORDED);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let two = module(fixture, activation, "two");
             let boxes = declared(fixture, activation, "Boxes");
             let view = ascribe(writer, two, boxes, Ascription::Transparent, types, scratch)
@@ -384,10 +392,11 @@ fn a_view_carries_each_overload_its_keyworded_members_admit() {
 fn an_opaque_view_wraps_an_overload_over_a_carrier_in_a_barrier() {
     with_fixture(|fixture| {
         let lines = fixture.parse(KEYWORDED);
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, &[]);
+            let activation = fixture.run(writer, types, &lines, &[]);
             let one = module(fixture, activation, "one");
             let stack = declared(fixture, activation, "Stack");
             let view = ascribe(writer, one, stack, Ascription::Opaque, types, scratch)

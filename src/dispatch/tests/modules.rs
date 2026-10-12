@@ -6,6 +6,8 @@ use crate::type_lattice::display_name;
 
 use super::run;
 use super::statics::{interval, loaded};
+use crate::memory::Bump;
+use crate::values::tests::reading;
 
 /// `SIG Counter`, and `MODULE ints`, which fits it.
 const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
@@ -176,7 +178,12 @@ fn a_module_binder_is_exactly_the_signature_the_run_ties() {
     let at_load = loaded(source, |program| {
         let typed = interval(program, program.shape(), "m");
         assert!(typed.is_exact(), "every member is exact");
-        display_name(typed.upper, program.types(), program.symbols()).to_string()
+        display_name(
+            typed.upper,
+            &reading(program.root(), &Bump::new()),
+            program.symbols(),
+        )
+        .to_string()
     });
     assert_eq!(run(&format!("{source}PRINT m")), at_load);
     // A member whose static type is at most another makes the binder at most `Module`.
@@ -185,7 +192,12 @@ fn a_module_binder_is_exactly_the_signature_the_run_ties() {
         let typed = interval(program, program.shape(), "m");
         assert!(!typed.is_exact());
         assert_eq!(
-            display_name(typed.upper, program.types(), program.symbols()).to_string(),
+            display_name(
+                typed.upper,
+                &reading(program.root(), &Bump::new()),
+                program.symbols()
+            )
+            .to_string(),
             "Module"
         );
     });

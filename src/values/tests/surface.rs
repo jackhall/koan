@@ -13,8 +13,9 @@ use super::{List, Record, Tagged, Value, pin, text, with_fixture};
 fn a_retype_is_a_seen_type_restamped_over_the_same_runs() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+            let (types, scratch, symbols) = (types, fixture.scratch(), fixture.symbols);
             let x = BinderSymbol::declared("x", symbols).unwrap();
             let y = BinderSymbol::declared("y", symbols).unwrap();
             let fields = [(x, Value::Number(1.0)), (y, text(writer, "a"))];
@@ -43,8 +44,9 @@ fn a_retype_is_a_seen_type_restamped_over_the_same_runs() {
 fn a_record_shows_only_the_fields_its_seen_type_names() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+            let (types, scratch, symbols) = (types, fixture.scratch(), fixture.symbols);
             let x = BinderSymbol::declared("x", symbols).unwrap();
             let y = BinderSymbol::declared("y", symbols).unwrap();
             let fields = [(x, Value::Number(1.0)), (y, text(writer, "a"))];
@@ -69,8 +71,9 @@ fn a_record_shows_only_the_fields_its_seen_type_names() {
 fn an_element_is_seen_at_the_type_its_list_names() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+            let (types, scratch, symbols) = (types, fixture.scratch(), fixture.symbols);
             let x = BinderSymbol::declared("x", symbols).unwrap();
             let y = BinderSymbol::declared("y", symbols).unwrap();
             let fields = [(x, Value::Number(1.0)), (y, Value::Number(2.0))];
@@ -101,6 +104,7 @@ fn a_payload_is_seen_at_its_identitys_representation() {
         let representation = types.record(scratch, &[(x, KType::NUMBER), (y, KType::NUMBER)]);
         let point = fixture.newtype("Point", representation);
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let fields = [
                 (x, Value::Number(1.0)),

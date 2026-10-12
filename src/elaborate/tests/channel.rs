@@ -8,14 +8,15 @@ use crate::scope::{
     Static, StaticType, Target, TypeExpression, Variable,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
+use crate::values::Types;
 
 use super::super::type_channel;
 use super::{Held, Program, with_program};
 
 /// The scalars and `Type`, which a `:Type` parameter names.
 fn with_type(
-    _: &TypeRegistry<'_>,
+    _: &Types<'_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
@@ -38,7 +39,7 @@ fn loaded<R>(
             let typed = type_channel(
                 program.activation.shape(),
                 program.activation.builtins(),
-                program.types,
+                program.load,
                 program.storage,
                 program.scratch,
             );
@@ -306,7 +307,10 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
         };
         assert_eq!(levels, [0]);
         let scheme = value.ktype.as_scheme().expect("`g` is quantified");
-        let TypeNode::KFunction { params, .. } = program.types.scheme_node(scheme) else {
+        let TypeNode::KFunction { params, .. } = DeclaredType::<Parametric>::from(scheme)
+            .view(program.types)
+            .body
+        else {
             panic!("a function type")
         };
         assert!(
@@ -479,7 +483,10 @@ fn a_quote_s_holes_are_rigid_variables() {
         let [first, second] = codes[..] else {
             panic!("two quotes")
         };
-        let (hole, alias) = if first.captures()[0].mark.is_none() {
+        // Nested shapes are ordered by address, so the two quotes are told apart by their
+        // captures: both open with `PRINT`'s key, and only the alias quote's `$` name is marked.
+        let unmarked = |code: &BodyShape<'_>| code.captures().iter().all(|c| c.mark.is_none());
+        let (hole, alias) = if unmarked(first) {
             (first, second)
         } else {
             (second, first)

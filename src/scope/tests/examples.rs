@@ -26,7 +26,7 @@ fn shaped<R>(
 ) -> R {
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(|writer| {
+        fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
             let shape = BodyShape::of_program(
                 fixture.program,

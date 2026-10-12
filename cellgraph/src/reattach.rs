@@ -1,8 +1,9 @@
 //! The reattachable contract: a family generic over region lifetimes, beside the graph lifetime
 //! `'graph` it may also borrow through; its erased form at `'graph`; and the single lifetime-retype
-//! that moves those lifetimes between the two. The cell graph stores a continuation erased in a
-//! slot free of every step brand and hands it back re-anchored at the step's, which is the only
-//! reason this seam exists — see [../README.md](../README.md) § The contract: three embedder types.
+//! that moves those lifetimes between the two. The cell graph stores a continuation, or a habitat
+//! header, erased in a slot free of every step brand and hands it back re-anchored at the step's,
+//! which is the only reason this seam exists — see [../README.md](../README.md) § The contract:
+//! four embedder types.
 //!
 //! The contract comes in two arities. [`Reattachable`] is over one region lifetime, `'cell`, and is
 //! what the storage continuation, value and delivery families carry. [`ReattachableOverBoth`] is

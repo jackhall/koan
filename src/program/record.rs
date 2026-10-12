@@ -10,7 +10,6 @@
 use std::cell::Cell;
 use std::fmt;
 
-use crate::elaborate::builtin_error;
 use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
@@ -18,9 +17,9 @@ use crate::scheduler::{NativeStep, Work};
 use crate::scope::{BodyShape, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
-    DeclaredType, KType, TypeNode, TypeRegistry, display_name, satisfied_by, substitute_quantified,
+    DeclaredType, KType, Root, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
-use crate::values::{Record, Tagged, Value, satisfies};
+use crate::values::{Record, Tagged, Types, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle};
 
@@ -36,7 +35,7 @@ pub trait Language {
     fn builtins<'graph>(
         writer: Writer<'graph>,
         symbols: &'graph SymbolInterner,
-        types: &'graph TypeRegistry<'graph>,
+        types: &Types<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph>;
 
@@ -49,7 +48,7 @@ pub trait Language {
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &'graph TypeRegistry<'graph>,
+        types: &Types<'graph, 'graph>,
         writer: Writer<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
@@ -93,7 +92,7 @@ impl Contract {
     /// before its frame solves, a quantified callee keeps nothing. The one answer for every call.
     pub fn kept_by(
         self,
-        types: &TypeRegistry<'_>,
+        types: &Types<'_, '_>,
         callee: DeclaredType<KType>,
         solution: Option<&[KType]>,
     ) -> bool {
@@ -103,8 +102,9 @@ impl Contract {
             (DeclaredType::Scheme(_), Some(solution)) => solution,
             (DeclaredType::Scheme(_), None) => return false,
         };
-        let node = callee.node(types);
-        let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) = node else {
+        let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) =
+            callee.view(types).body
+        else {
             return false;
         };
         // A run-time solution is concrete, and a scheme holds only its own group's variables.
@@ -131,15 +131,15 @@ pub enum Evaluated<'graph> {
     Part(&'graph ExpressionPart<'graph>),
 }
 
-/// A loaded program's facts, laid down in program storage: its shape, its builtin table, the
-/// registry and interner its names and types live in, the step that evaluates a node, the sinks it
-/// writes to, the builtin `Error` type, and whether its last run ended uncaught. `Copy` and without
-/// drop glue, so it rests in program storage beside the table it names.
+/// A loaded program's facts, laid down in program storage: its shape, its builtin table, the frozen
+/// root of the types the load built and the interner its names live in, the step that evaluates a
+/// node, the sinks it writes to, the builtin `Error` type, and whether its last run ended uncaught.
+/// `Copy` and without drop glue, so it rests in program storage beside the table it names.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
     shape: &'graph BodyShape<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
-    types: &'graph TypeRegistry<'graph>,
+    root: &'graph Root<'graph>,
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
     output: Output,
@@ -154,7 +154,8 @@ impl<'graph> Program<'graph> {
     pub(super) fn new(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &'graph TypeRegistry<'graph>,
+        root: &'graph Root<'graph>,
+        error: KType,
         symbols: &'graph SymbolInterner,
         evaluator: NativeStep<'graph, KBundle>,
         output: Output,
@@ -163,11 +164,11 @@ impl<'graph> Program<'graph> {
         Program {
             shape,
             builtins,
-            types,
+            root,
             symbols,
             evaluator,
             output,
-            error: builtin_error(types, symbols, &Bump::new()),
+            error,
             uncaught,
         }
     }
@@ -181,8 +182,10 @@ impl<'graph> Program<'graph> {
         self.builtins
     }
 
-    pub fn types(&self) -> &'graph TypeRegistry<'graph> {
-        self.types
+    /// The frozen root of the types the load built: what the program's graph hands every step's
+    /// chain to read first, and what a reader outside a step reads over.
+    pub fn root(&self) -> &'graph Root<'graph> {
+        self.root
     }
 
     pub fn symbols(&self) -> &'graph SymbolInterner {
@@ -223,21 +226,26 @@ impl<'graph> Program<'graph> {
         }
     }
 
-    /// An error value carrying `message`, rendered into `writer`'s region.
+    /// An error value carrying `message`, rendered into `writer`'s region, its types in `types`.
     pub fn error<'cell>(
         &self,
         writer: Writer<'cell>,
+        types: &Types<'_, 'cell>,
         message: impl fmt::Display,
     ) -> KValue<'graph, 'cell> {
         let scratch = Bump::new();
         let field = BinderSymbol::declared("message", self.symbols).expect("a value name");
         let text = Value::Str(rendered(writer, message));
-        let payload = Record::new(writer, &[(field, text)], self.types, &scratch);
+        let payload = Record::new(writer, &[(field, text)], types, &scratch);
         Value::Tagged(Tagged::hold(writer, Value::Record(payload), self.error))
     }
 
-    /// The message `value` carries, if it is an error value.
-    pub fn message<'cell>(&self, value: &KValue<'graph, 'cell>) -> Option<&'cell str> {
+    /// The message `value` carries, if it is an error value, read through `types`.
+    pub fn message<'cell>(
+        &self,
+        value: &KValue<'graph, 'cell>,
+        types: &Types<'_, '_>,
+    ) -> Option<&'cell str> {
         let Value::Tagged(tagged) = value else {
             return None;
         };
@@ -246,10 +254,8 @@ impl<'graph> Program<'graph> {
         }
         let field = BinderSymbol::declared("message", self.symbols)?.symbol();
         let scratch = Bump::new();
-        let payload = value
-            .surface(self.types, &scratch)?
-            .child(0, self.types, &scratch);
-        payload.field(field, self.types, &scratch)?.value().as_str()
+        let payload = value.surface(types, &scratch)?.child(0, types, &scratch);
+        payload.field(field, types, &scratch)?.value().as_str()
     }
 
     /// `value` held to `contract`: an error value passes unchanged, a value satisfying the
@@ -258,21 +264,23 @@ impl<'graph> Program<'graph> {
     pub fn fulfilled<'cell>(
         &self,
         writer: Writer<'cell>,
+        types: &Types<'_, 'cell>,
         value: KValue<'graph, 'cell>,
         contract: Contract,
     ) -> KValue<'graph, 'cell> {
-        if self.message(&value).is_some() {
+        if self.message(&value, types).is_some() {
             return value;
         }
         let scratch = Bump::new();
-        if satisfies(contract.returns, &value, self.types, &scratch) {
-            return value.retyped(writer, contract.retype, self.types, &scratch);
+        if satisfies(contract.returns, &value, types, &scratch) {
+            return value.retyped(writer, contract.retype, types, &scratch);
         }
-        let name = |handle: DeclaredType<KType>| display_name(handle, self.types, self.symbols);
+        let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
         let (value, returns) = (name(value.ktype()), name(contract.returns.into()));
         match contract.callee {
             Some(callee) => self.error(
                 writer,
+                types,
                 format_args!(
                     "{} returned {value}, which does not satisfy {returns}",
                     name(callee)
@@ -280,6 +288,7 @@ impl<'graph> Program<'graph> {
             ),
             None => self.error(
                 writer,
+                types,
                 format_args!("`EVAL`'s code returned {value}, which does not satisfy {returns}"),
             ),
         }
@@ -291,24 +300,26 @@ impl<'graph> Program<'graph> {
     pub fn annotated<'cell>(
         &self,
         writer: Writer<'cell>,
+        types: &Types<'_, 'cell>,
         value: KValue<'graph, 'cell>,
         annotation: KType,
         settled: bool,
     ) -> KValue<'graph, 'cell> {
-        if self.message(&value).is_some() {
+        if self.message(&value, types).is_some() {
             return value;
         }
         let scratch = Bump::new();
         debug_assert!(
-            !settled || satisfies(annotation, &value, self.types, &scratch),
+            !settled || satisfies(annotation, &value, types, &scratch),
             "a settled annotation always holds"
         );
-        if settled || satisfies(annotation, &value, self.types, &scratch) {
-            return value.retyped(writer, annotation, self.types, &scratch);
+        if settled || satisfies(annotation, &value, types, &scratch) {
+            return value.retyped(writer, annotation, types, &scratch);
         }
-        let name = |handle: DeclaredType<KType>| display_name(handle, self.types, self.symbols);
+        let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
         self.error(
             writer,
+            types,
             format_args!(
                 "{} does not satisfy its annotation {}",
                 name(value.ktype()),
@@ -337,8 +348,8 @@ pub(super) fn rendered<'cell>(writer: Writer<'cell>, message: impl fmt::Display)
 pub enum LoadError {
     Parse(ParseError),
     /// The shape error, rendered. The error borrows program storage and names symbols and types
-    /// through the interner and registry, all of which a refused load drops, so it is rendered
-    /// while they stand.
+    /// through the interner and the load's chain, all of which a refused load drops, so it is
+    /// rendered while they stand.
     Shape {
         rendered: String,
     },

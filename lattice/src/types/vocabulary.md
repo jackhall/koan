@@ -4,8 +4,8 @@ Part of [the type lattice](README.md)'s design.
 
 A [`TypeNode`](node.rs) is one interned type's content: a variant tag, a scalar
 payload, and **handles to its child types** — never owned substructure. Every run
-a node holds is a slice in the run region, so a node is `Copy` and carries no
-drop glue, and reading one out of the registry copies a few words rather than a
+a node holds is a slice laid in the node's tier, so a node is `Copy` and carries
+no drop glue, and reading one out of a tier copies a few words rather than a
 subtree.
 
 - **Leaves** — `Number`, `Str`, `Bool`, `Null`, the two bounds `Any` (the top,
@@ -30,32 +30,38 @@ subtree.
   *value*, never a runtime instance. A value is matched by a type, never by a
   kind.
 - **Composites** — `List`, `Dict`, `Record` (structural, width- and
-  depth-subtyped), `KFunction` (a named-parameter record plus a return, over a quantifier
-  group of its own where a `FOR ALL` declared one),
+  depth-subtyped), `KFunction` (a named-parameter record plus a return),
   `Union` (canonical: deduplicated, no nesting, no member below the rest, two or
   more, in the order first written), and `ConstructorApply`.
 - **`ExpressionShape`** — the type of a keyworded, positional definition reached
   by dispatch: the interleaved keyword/argument element sequence a call must
-  spell, each slot's [priority class](solving.md#priority-classes), the type parameters
-  bound ahead of it, and the return. It is
-  *representationally* distinct from `KFunction`: a lambda takes a record of named
-  arguments and is reached by name; a shape is reached by its keyword sequence and
-  its argument *positions* are load-bearing, which a canonically ordered record
-  erases. So no shape is ever equal to, satisfies, or is satisfied by a lambda
-  type. What the two *share* is the binder: both carry a quantifier group, and
-  every walk asks [`binds_quantifiers`](node.rs) rather than naming either arm.
-  Only a non-empty group binds: a shape or a function type with none binds
-  nothing, so a `Quantified` inside one reads the enclosing group, and one
-  holding no variable is concrete.
+  spell, each slot's [priority class](solving.md#priority-classes), and the
+  return. It is *representationally* distinct from `KFunction`: a lambda takes a
+  record of named arguments and is reached by name; a shape is reached by its
+  keyword sequence and its argument *positions* are load-bearing, which a
+  canonically ordered record erases. So no shape is ever equal to, satisfies, or
+  is satisfied by a lambda type. Neither binds a variable: a `Quantified` inside a function type or a
+  shape reads the enclosing scheme's group, and one holding no variable is
+  concrete.
+- **`Scheme`** — a quantified callable's type, and the one **binder**: a
+  quantifier group over a body, a `KFunction` or an `ExpressionShape` whose
+  free `Quantified` positions read that group. The group is one reference into
+  the region, holding each variable's name and bound in group order; the names
+  are render-only. The body is the scheme's one child, and its node says whether
+  the scheme is a function or a shape. Only the two scheme doors,
+  `function_scheme` and `shape_scheme`, mint one, and only over a non-empty
+  group: for an empty one they answer the plain body. Every walk asks
+  [`binds_quantifiers`](node.rs), true of a scheme alone, rather than naming
+  the arm.
 - **Three rigid variables**, and the split is deliberate. `Quantified` is
-  positional and bound by the enclosing binder, so two binders alpha-equivalent
+  positional and bound by the enclosing scheme, so two schemes alpha-equivalent
   under a renaming intern to one node, and a free one in a declared slot is what
   a call solves. `Parameter` is *named*: a signature's head parameter, which its
   members read and `WITH` pins by name. A **lexical variable**
   (`Lexical`) is a name only a run binds, read where the program loads
   ([the type channel at load](../../../src/elaborate/README.md#the-type-channel-at-load)):
   it is positional by its level along the lexical chain that declares it, and
-  carries its name, which renders it. No binder captures it and no solve binds
+  carries its name, which renders it. No scheme captures it and no solve binds
   it. The three share the rigid rule in
   *fits*, the substitution mechanism, and the role of the rigid side in a
   specificity check. Each is **bounded by** a closed type — a `KType` that holds
@@ -115,7 +121,7 @@ shape, per the table in [`family_top`](order.rs):
 
 | Family top | Node variants |
 |---|---|
-| `Value` | `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `Record`, `KFunction`, `ExpressionShape`, `ConstructorApply`, the three signature types (a module is a value), `SetMember`, `Sibling` |
+| `Value` | `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `Record`, `KFunction`, `ExpressionShape`, `Scheme`, `ConstructorApply`, the three signature types (a module is a value), `SetMember`, `Sibling` |
 | `Code` | every code kind: `Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`, `Identifier`, `TypeNameToken`, `SigiledTypeExpr`, `RecordType` |
 | `Type` | every `OfKind` |
 
@@ -130,7 +136,7 @@ none, since its return is not known. So no type but `Never` lies under two tops.
 A pair of tops is their union: `Value | Type` is the top of values and types
 together, since a named node for it would be a second node for one type. A
 union holding all three tops is canonicalized to `Any` by
-[`union_of`](registry.rs), so the three families together are the whole
+[`union_of`](chain.rs), so the three families together are the whole
 lattice. Left uncollapsed, that union would be a second top strictly below
 `Any`, missing only the variables bounded by `Any`, which lie under no member.
 
@@ -166,7 +172,7 @@ own: a union drops a member under another, so `Literal | Expression` is
 `Expression`, and two kinds on different branches meet at `Never`.
 
 **A code kind needing names** is `CodeNeeding`, built through
-[`TypeRegistry::code_needing`](registry.rs), which sorts and deduplicates the
+[`TypeChain::code_needing`](chain.rs), which sorts and deduplicates the
 names and answers the bare kind for none. A bare kind is the kind needing
 nothing, so one order covers both: a code type lies under a kind needing names
 when its kind lies under that kind and every name it needs is among them. So

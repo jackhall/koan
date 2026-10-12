@@ -50,7 +50,8 @@ use crate::program::{Contract, KBirth, KBundle, Language, Program};
 use crate::scheduler::NativeStep;
 use crate::scope::{BodyShape, ShapeError};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::KType;
+use crate::values::Types;
 
 /// Koan's language: what [`CellSubstrate::load`](crate::program::CellSubstrate::load) runs a
 /// program under.
@@ -60,7 +61,7 @@ impl Language for Koan {
     fn builtins<'graph>(
         writer: Writer<'graph>,
         symbols: &'graph SymbolInterner,
-        types: &'graph TypeRegistry<'graph>,
+        types: &Types<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph> {
         builtins::table(writer, symbols, types, scratch)
@@ -73,7 +74,7 @@ impl Language for Koan {
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &'graph TypeRegistry<'graph>,
+        types: &Types<'graph, 'graph>,
         writer: Writer<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
@@ -83,13 +84,14 @@ impl Language for Koan {
 }
 
 /// What one evaluation is born over: the program, the view it reads names through, the contract
-/// it owes a frame it finishes, and the birth it parks with.
-#[derive(Clone, Copy)]
+/// it owes a frame it finishes, and the birth it parks with — beside the chain the step reads and
+/// interns types through, built at the step's entry and never parked.
 struct Evaluation<'graph, 'here> {
     program: &'graph Program<'graph>,
     view: KActivationView<'graph, 'here>,
     contract: Option<Contract>,
     birth: KBirth<'graph, 'here>,
+    types: Types<'graph, 'here>,
 }
 
 /// What one of a call's operands came to: a value, or — an `ATTR` label written bare — the name

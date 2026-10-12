@@ -3,13 +3,15 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, TestGraph, with_types};
+use crate::memory::Bump;
+use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph};
 use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
 use crate::scheduler::{
     Action, DrainStalled, Placement, Received, Scheduler, Step, StepError, Use,
 };
+use crate::type_lattice::Root;
 
 /// A step that records the number or text it holds, and finishes.
 fn record_state<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
@@ -26,7 +28,8 @@ fn fail<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Na
 #[test]
 fn one_root_work_runs_dies_and_leaves_the_root_live() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -50,7 +53,8 @@ fn one_root_work_runs_dies_and_leaves_the_root_live() {
 #[test]
 fn a_birth_state_reaches_the_step_that_runs_the_root_work() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(
@@ -89,7 +93,7 @@ fn hand_over_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Actio
 fn take_over<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     record(format!("woke {}", where_text(state)));
-    step.finish_fresh(|_, _| Active::new(KValue::Null))
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// A consumer woken by its children, with nothing more to do.
@@ -101,9 +105,10 @@ fn woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
 /// the very bytes its spawner built.
 #[test]
 fn a_spawned_child_wakes_holding_the_state_its_spawner_handed_over() {
-    for spawner in [hand_over_fresh as _, hand_over_shares as _] {
+    for spawner in [hand_over_fresh as AnyStep, hand_over_shares] {
         reset();
-        let mut graph: TestGraph<'static> = TestGraph::new(2);
+        let type_region = Bump::new();
+        let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
         let root = graph.root().expect("a fresh slab admits a root");
         Scheduler::over(&mut graph)
             .run(work(spawner, KValue::Null), root, Placement::Fresh)
@@ -130,7 +135,7 @@ fn named<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
     };
     record(name.to_owned());
     if name.len() == 2 {
-        return step.finish_fresh(|_, _| Active::new(KValue::Null));
+        return step.finish_fresh(|_, _, _| Active::new(KValue::Null));
     }
     let children: [&str; 2] = if name == "root" {
         ["A", "B"]
@@ -162,13 +167,14 @@ fn named_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gr
     if name == "root" {
         return step.done();
     }
-    step.finish_fresh(|_, _| Active::new(KValue::Null))
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 #[test]
 fn two_children_asked_in_one_park_run_one_subtree_after_the_other() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(named, KValue::Str("root")), root, Placement::Fresh)
@@ -191,8 +197,9 @@ fn two_children_asked_in_one_park_run_one_subtree_after_the_other() {
     );
 }
 
-/// How deep the recursion goes below its root work.
-const DEPTH: f64 = 8.0;
+/// How deep the recursion goes below its root work. Under Miri two levels are enough: a parked
+/// inner node woken by two leaves, under a root parked on two inner nodes.
+const DEPTH: f64 = if cfg!(miri) { 2.0 } else { 8.0 };
 
 /// One level of a recursion that asks for two children at every level, down to a leaf.
 fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
@@ -201,7 +208,7 @@ fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Na
         return step.failed(StepError::Stale);
     };
     if depth == 0.0 {
-        return step.finish_fresh(|_, _| Active::new(KValue::Number(1.0)));
+        return step.finish_fresh(|_, _, _| Active::new(KValue::Number(1.0)));
     }
     step.spawn(fresh(node, Use::Reads, KValue::Number(depth - 1.0)));
     let asked = step.spawn(fresh(node, Use::Reads, KValue::Number(depth - 1.0)));
@@ -215,7 +222,7 @@ fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
         return step.failed(StepError::Stale);
     };
     let mut leaves = 0.0;
-    for received in with_types(|types| step.results(types).collect::<Vec<_>>()) {
+    for received in step.results().collect::<Vec<_>>() {
         let Ok(Received::Scratch(KValue::Number(count))) = received else {
             return step.failed(StepError::Unredeemable);
         };
@@ -225,19 +232,24 @@ fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
         record(leaves.to_string());
         return step.done();
     }
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(leaves)))
+    step.finish_fresh(move |_, _, _| Active::new(KValue::Number(leaves)))
 }
 
 #[test]
 fn a_recursion_asking_two_children_per_level_peaks_at_its_depth() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .run(work(node, KValue::Number(DEPTH)), root, Placement::Fresh)
         .expect("the root work ends");
-    assert_eq!(recorded(), ["256"], "every leaf answered");
+    assert_eq!(
+        recorded(),
+        [(1u32 << DEPTH as u32).to_string()],
+        "every leaf answered"
+    );
     // The running leaf and its parked ancestors, up to and including the root work: a sibling
     // whose turn has not come has no cell.
     assert_eq!(scheduler.peak_live_cells(), DEPTH as usize + 1);
@@ -267,12 +279,12 @@ fn sibling<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
         return step.failed(StepError::Stale);
     };
     record(index.to_string());
-    step.finish_fresh(move |_, _| Active::new(KValue::Number(index)))
+    step.finish_fresh(move |_, _, _| Active::new(KValue::Number(index)))
 }
 
 /// The spawner, woken: count what arrived.
 fn count_them<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let arrived = with_types(|types| step.results(types).filter(Result::is_ok).count());
+    let arrived = step.results().filter(Result::is_ok).count();
     record(format!("{arrived} arrived"));
     step.done()
 }
@@ -280,7 +292,8 @@ fn count_them<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<
 #[test]
 fn a_hundred_siblings_asked_in_one_park_run_one_at_a_time() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -301,7 +314,8 @@ fn a_hundred_siblings_asked_in_one_park_run_one_at_a_time() {
 #[test]
 fn a_step_that_cannot_proceed_stalls_the_drain() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     assert_eq!(
@@ -323,7 +337,8 @@ fn park_on_a_silent_child<'graph>(
 #[test]
 fn a_child_that_ends_without_delivering_leaves_the_drain_unfinished() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     assert_eq!(
@@ -349,7 +364,8 @@ fn ask_and_leave<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Acti
 #[test]
 fn a_step_that_asks_and_does_not_park_is_refused() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     assert_eq!(
@@ -366,10 +382,12 @@ fn a_step_that_asks_and_does_not_park_is_refused() {
 #[test]
 fn two_schedulers_run_beside_each_other_sharing_nothing() {
     reset();
-    let mut first_graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut first_graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let first_root = first_graph.root().expect("a fresh slab admits a root");
     let mut first = Scheduler::over(&mut first_graph);
-    let mut second_graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut second_graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let second_root = second_graph.root().expect("a fresh slab admits a root");
     let mut second = Scheduler::over(&mut second_graph);
 
@@ -407,7 +425,8 @@ fn two_schedulers_run_beside_each_other_sharing_nothing() {
 #[test]
 fn two_views_over_one_graph_run_in_turn() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(
@@ -443,7 +462,8 @@ fn park_behind_a_failure<'graph>(
 #[test]
 fn a_view_dropped_with_a_queued_cell_leaves_cells_the_roots_release_does_not_empty() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     assert_eq!(
         Scheduler::over(&mut graph)
@@ -486,7 +506,8 @@ fn read_what_was_left<'graph>(
 /// through a second view over the same graph.
 fn leave_then_resume(placement: Placement) -> Vec<String> {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let resting = Scheduler::over(&mut graph)
         .run(work(write_and_leave, KValue::Null), root, placement)
@@ -539,7 +560,8 @@ fn spawn_a_leaver<'graph>(
 #[test]
 fn a_cell_that_reports_to_somebody_cannot_leave() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     assert_eq!(
         Scheduler::over(&mut graph)

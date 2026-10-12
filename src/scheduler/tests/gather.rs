@@ -9,9 +9,11 @@
 
 use crate::knot::KValue;
 use crate::memory::Active;
-use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph, with_types};
+use crate::memory::Bump;
+use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph};
 use crate::scheduler::tests::native::{record, recorded, reset, shares, where_text, work};
 use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Slot, Step, StepError, Use};
+use crate::type_lattice::Root;
 
 /// The three texts the producers write, one per spawn, in the order the consumer asks for them.
 const TEXTS: [&str; 3] = ["first", "second", "third"];
@@ -37,7 +39,7 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
     let KValue::Str(text) = state else {
         return step.failed(StepError::Stale);
     };
-    step.finish_fresh(move |writer, _| {
+    step.finish_fresh(move |writer, _, _| {
         let value: KValue<'graph, '_> = crate::values::text(writer, text);
         Active::new(value)
     })
@@ -56,10 +58,7 @@ fn gather_two<'graph, 'here, 'scratch>(
     mut step: Step<'_, 'graph, '_, 'here, 'scratch, Native>,
 ) -> Action<'graph, Native> {
     let mut gathered = [KValue::Null; 2];
-    for (held, received) in gathered
-        .iter_mut()
-        .zip(with_types(|types| step.results(types).collect::<Vec<_>>()))
-    {
+    for (held, received) in gathered.iter_mut().zip(step.results().collect::<Vec<_>>()) {
         // Homed in this very cell, so the verdict pins and nothing is copied: the value reads at
         // this step's `'here` over the bytes the producer wrote.
         let Ok(Received::Here(value)) = received else {
@@ -87,7 +86,7 @@ fn build<'graph, 'here>(step: Step<'_, 'graph, '_, 'here, '_, Native>) -> Action
     let Some(ScratchState::Gathered(run)) = scratch else {
         return step.failed(StepError::Unredeemable);
     };
-    let Some(Ok(Received::Here(third))) = with_types(|types| step.results(types).next()) else {
+    let Some(Ok(Received::Here(third))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
     // The gathered values go into storage as they are — the whole point of holding them at
@@ -105,7 +104,8 @@ fn build<'graph, 'here>(step: Step<'_, 'graph, '_, 'here, '_, Native>) -> Action
 #[test]
 fn a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage() {
     reset();
-    let mut graph: TestGraph<'static> = TestGraph::new(8);
+    let type_region = Bump::new();
+    let mut graph: TestGraph<'_> = TestGraph::new(8, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(ask_for_two, KValue::Null), root, Placement::Fresh)

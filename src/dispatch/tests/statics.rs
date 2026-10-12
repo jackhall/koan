@@ -11,6 +11,7 @@ use crate::type_lattice::{
 };
 
 use super::{Koan, output, run};
+use crate::values::tests::reading;
 
 /// Load `source` under dispatch and hand `inspect` its program, or the load's refusal.
 pub(super) fn loaded<R>(source: &str, inspect: impl FnOnce(&Program<'_>) -> R) -> R {
@@ -43,7 +44,12 @@ pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -
         DeclaredType::Type(interval) => DeclaredType::Type(interval.upper),
         DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
     };
-    display_name(rendered, program.types(), program.symbols()).to_string()
+    display_name(
+        rendered,
+        &reading(program.root(), &Bump::new()),
+        program.symbols(),
+    )
+    .to_string()
 }
 
 /// The static type of the binder `name` in `shape`, which binds no quantified callable.
@@ -63,7 +69,7 @@ pub(super) fn top(source: &str, name: &str) -> String {
 /// The lexical variable at `level` named `name`, bounded by `bound`.
 pub(super) fn lexical(program: &Program<'_>, level: usize, name: &str, bound: KType) -> Parametric {
     let name = TypeSymbol::declared(name, program.symbols()).expect("a Type token");
-    program.types().lexical(level, name, bound)
+    reading(program.root(), &Bump::new()).lexical(level, name, bound)
 }
 
 /// The upper end of the static type of the binder `name` in `shape`.
@@ -446,7 +452,12 @@ fn a_surfaced_head_is_typed_at_load_and_returns_at_most() {
                 KType::NEVER.into(),
                 "`{name}` is at most its return"
             );
-            display_name(typed.upper, program.types(), program.symbols()).to_string()
+            display_name(
+                typed.upper,
+                &reading(program.root(), &Bump::new()),
+                program.symbols(),
+            )
+            .to_string()
         };
         assert_eq!(at_most("a"), ":(LIST OF Number)");
         assert_eq!(at_most("b"), ":(LIST OF Str)");
@@ -464,7 +475,12 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
         let typed = interval(program, block, "a");
         assert_eq!(typed.lower, KType::NEVER.into());
         assert_eq!(
-            display_name(typed.upper, program.types(), program.symbols()).to_string(),
+            display_name(
+                typed.upper,
+                &reading(program.root(), &Bump::new()),
+                program.symbols()
+            )
+            .to_string(),
             ":(LIST OF Number)"
         );
     });
@@ -478,7 +494,12 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
     using_block(&open, |program, block| {
         let typed = interval(program, block, "a");
         assert_eq!(
-            display_name(typed.upper, program.types(), program.symbols()).to_string(),
+            display_name(
+                typed.upper,
+                &reading(program.root(), &Bump::new()),
+                program.symbols()
+            )
+            .to_string(),
             ":(LIST OF Elt)",
             "an unpinned parameter reads as the block's own type name"
         );
@@ -540,9 +561,12 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
                 .find_map(
                     |registration| match shape.registered_type(registration.slot) {
                         Static::Closed(registered) => {
-                            let rendered =
-                                display_name(registered.shape, program.types(), program.symbols())
-                                    .to_string();
+                            let rendered = display_name(
+                                registered.shape,
+                                &reading(program.root(), &Bump::new()),
+                                program.symbols(),
+                            )
+                            .to_string();
                             (rendered.contains("PICK") && rendered.contains("size") == sized)
                                 .then_some(registered.shape)
                         }
@@ -554,7 +578,13 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
         let (crates, boxes) = (pick(true), pick(false));
         let scratch = Bump::new();
         let (crates, boxes) = (crates.into(), boxes.into());
-        assert!(outranks(program.types(), &scratch, crates, boxes, 0));
+        assert!(outranks(
+            &reading(program.root(), &Bump::new()),
+            &scratch,
+            crates,
+            boxes,
+            0
+        ));
     });
     let module = "MODULE crate = (\
                   (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(LIST OF Elt) = #([x])) (LET size = 1))\n";

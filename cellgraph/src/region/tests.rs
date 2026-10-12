@@ -14,6 +14,10 @@
 //! arithmetic has an edge at: empty, zero-sized, over-aligned, interleaved and outgrown.
 
 use super::*;
+use crate::header::NoHeader;
+
+/// The region these tests exercise, over a graph that keeps no header.
+type Region = super::Region<'static, NoHeader>;
 
 fn ids(indices: impl IntoIterator<Item = u32>) -> Vec<SealedId> {
     indices

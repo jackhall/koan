@@ -5,20 +5,24 @@
 //! a leaf verdict, a set-wise rule for unions, and a structural combine that reads the width
 //! verdict generically. The order, the meet and the unifier's collector are the three.
 //!
-//! Two signatures, and two callables of which one is quantified, reach the leaf verdict rather
-//! than a child pairing, because their relations are schema-level and instantiation-level doors.
+//! Two signatures, and a pair holding a scheme, reach the leaf verdict rather than a child
+//! pairing, because their relations are schema-level and instantiation-level doors.
 //!
-//! Every pairing's buffers are built in the scratch allocator the walk is handed.
+//! Every pairing's buffers are built in the scratch allocator the walk is handed. The walk reads
+//! nodes by reference, from node to child.
 
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 
 use super::Variance;
-use crate::types::handle::{Handle, wrap};
+use crate::types::chain::TypeChain;
+use crate::types::handle::Handle;
 use crate::types::node::TypeNode;
 use crate::types::record::Record;
-use crate::types::registry::TypeRegistry;
-use crate::types::shape::{DispatchTokenElement, map_slots};
+use crate::types::run::Elements;
+use crate::types::shape::{Classes, DispatchTokenElement, map_slots};
+use crate::types::stored::Linked;
+use crate::types::tiers::Habitat;
 
 /// What an arm's leftover children mean. The instance reads it rather than knowing which arm it is
 /// looking at: the order turns each into an emptiness requirement, the meet into a keep-or-drop.
@@ -39,7 +43,7 @@ impl Width {
     /// Whether this arm's leftovers permit `a ≤ b`. The one reading of a width verdict, so an
     /// instance never has to know which arm it is looking at — and a walk asking the *reverse*
     /// question passes the leftovers the other way round.
-    pub fn permits(self, only_a: &[Leftover], only_b: &[Leftover]) -> bool {
+    pub fn permits(self, only_a: &[Leftover<'_>], only_b: &[Leftover<'_>]) -> bool {
         match self {
             Width::Positional => true,
             Width::ASupersetOfB => only_b.is_empty(),
@@ -62,20 +66,20 @@ impl Width {
 }
 
 /// A leftover child — one side's field that the other side does not name.
-pub type Leftover = (BinderSymbol, Handle);
+pub type Leftover<'run> = (BinderSymbol, Linked<'run>);
 
 /// What an instance implements to become a binary walk.
-pub trait Lockstep {
+pub trait Lockstep<'run> {
     type Out;
 
     /// Run before the arm dispatch at every pair. `Some(out)` decides the pair outright — handle
     /// equality, a top or bottom, a fast path with nothing to solve.
     fn enter(
         &mut self,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
-        a: Handle,
-        b: Handle,
+        a: Linked<'run>,
+        b: Linked<'run>,
         v: Variance,
     ) -> Option<Self::Out>;
 
@@ -83,31 +87,31 @@ pub trait Lockstep {
     /// two callables of which one is quantified, or two arms of different shape.
     fn leaf(
         &mut self,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
-        a: Handle,
-        b: Handle,
+        a: Linked<'run>,
+        b: Linked<'run>,
         v: Variance,
     ) -> Self::Out;
 
     /// The verdict when either side is a union. A non-union side arrives as a one-element slice.
     fn set_wise(
         &mut self,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'run, impl Habitat<'run>>,
         scratch: BumpAllocator<'_>,
-        a: &[Handle],
-        b: &[Handle],
+        a: &[Linked<'run>],
+        b: &[Linked<'run>],
         v: Variance,
-        recurse: &mut dyn FnMut(&mut Self, Handle, Handle, Variance) -> Self::Out,
+        recurse: &mut dyn FnMut(&mut Self, Linked<'run>, Linked<'run>, Variance) -> Self::Out,
     ) -> Self::Out;
 
     /// The verdict for a structurally paired arm, from its children's verdicts and the arm itself.
-    fn structural(
+    fn structural<H: Habitat<'run>>(
         &mut self,
-        types: &TypeRegistry<'_>,
+        types: &TypeChain<'run, H>,
         scratch: BumpAllocator<'_>,
         paired: &[Self::Out],
-        arm: Arm<'_, '_>,
+        arm: Arm<'_, 'run, H>,
     ) -> Self::Out;
 
     /// Whether a child's verdict decides the whole arm, so the driver can stop pairing.
@@ -117,18 +121,18 @@ pub trait Lockstep {
 }
 
 /// Walk `a` against `b` under `v` through `rules`.
-pub fn lockstep<L: Lockstep>(
-    types: &TypeRegistry<'_>,
+pub fn lockstep<'run, L: Lockstep<'run>, H: Habitat<'run>>(
+    types: &TypeChain<'run, H>,
     scratch: BumpAllocator<'_>,
-    a: Handle,
-    b: Handle,
+    a: Linked<'run>,
+    b: Linked<'run>,
     v: Variance,
     rules: &mut L,
 ) -> L::Out {
     if let Some(out) = rules.enter(types, scratch, a, b, v) {
         return out;
     }
-    let (na, nb) = (types.node(a), types.node(b));
+    let (na, nb) = (a.view(), b.view());
     match pairing(scratch, &na, &nb, v) {
         Pairing::Leaf => rules.leaf(types, scratch, a, b, v),
         Pairing::SetWise => {
@@ -178,12 +182,12 @@ pub fn lockstep<L: Lockstep>(
 
 /// One structurally paired arm, as an instance reads it: what its children's verdicts mean, which
 /// leftovers each side had, the polarity it was reached at, and the door back to a rebuilt node.
-pub struct Arm<'n, 'run> {
+pub struct Arm<'n, 'run, H> {
     pub width: Width,
-    pub only_a: &'n [Leftover],
-    pub only_b: &'n [Leftover],
+    pub only_a: &'n [Leftover<'run>],
+    pub only_b: &'n [Leftover<'run>],
     pub variance: Variance,
-    pub rebuild: Rebuilder<'n, 'run>,
+    pub rebuild: Rebuilder<'n, 'run, H>,
 }
 
 /// How two nodes correspond.
@@ -192,32 +196,34 @@ pub struct Arm<'n, 'run> {
 /// compound node touches no heap; boxing it to even out the variants would put a heap allocation on
 /// the hot path of every relation in the lattice.
 #[allow(clippy::large_enum_variant)]
-enum Pairing<'n> {
+enum Pairing<'n, 'run> {
     Leaf,
     SetWise,
     Structural {
-        pairs: BumpVec<'n, (Handle, Handle, Variance)>,
+        pairs: BumpVec<'n, (Linked<'run>, Linked<'run>, Variance)>,
         width: Width,
-        only_a: BumpVec<'n, Leftover>,
-        only_b: BumpVec<'n, Leftover>,
-        assembly: Assembly<'n>,
+        only_a: BumpVec<'n, Leftover<'run>>,
+        only_b: BumpVec<'n, Leftover<'run>>,
+        assembly: Assembly<'n, 'run>,
     },
 }
 
 /// **The pairing table.** A new compound variant is a compile error here and in
 /// [`Rebuilder::compose`], and nowhere else in this file.
-fn pairing<'n>(
+fn pairing<'n, 'run>(
     scratch: BumpAllocator<'n>,
-    a: &TypeNode<'n>,
-    b: &TypeNode<'n>,
+    a: &TypeNode<'run, Linked<'run>>,
+    b: &TypeNode<'run, Linked<'run>>,
     v: Variance,
-) -> Pairing<'n> {
+) -> Pairing<'n, 'run> {
     // A union on either side is set-wise, ahead of every structural arm: a union of records is not
     // a record, and pairing it as one would relate the wrong children.
     if matches!(a, TypeNode::Union { .. }) || matches!(b, TypeNode::Union { .. }) {
         return Pairing::SetWise;
     }
     match (*a, *b) {
+        // A scheme relates by instantiation, which is a leaf door: its body never pairs as a child.
+        (TypeNode::Scheme { .. }, _) | (_, TypeNode::Scheme { .. }) => Pairing::Leaf,
         (TypeNode::List { element: x }, TypeNode::List { element: y }) => {
             positional(scratch, [(x, y, v)].into_iter(), Assembly::List)
         }
@@ -233,23 +239,14 @@ fn pairing<'n>(
         }
         (
             TypeNode::KFunction {
-                quantifiers: xq,
                 params: xp,
                 ret: xr,
-                ..
             },
             TypeNode::KFunction {
-                quantifiers: yq,
                 params: yp,
                 ret: yr,
-                ..
             },
         ) => {
-            // A quantified function relates to another by instantiation, which is a leaf door,
-            // not a child pairing — as a quantified shape does.
-            if !xq.is_empty() || !yq.is_empty() {
-                return Pairing::Leaf;
-            }
             let mut paired = by_name(
                 scratch,
                 xp,
@@ -266,30 +263,25 @@ fn pairing<'n>(
         }
         (
             TypeNode::ExpressionShape {
-                quantifiers: xq,
                 elements: xe,
                 classes: xc,
                 ret: xr,
-                ..
             },
             TypeNode::ExpressionShape {
-                quantifiers: yq,
                 elements: ye,
                 classes: yc,
                 ret: yr,
-                ..
             },
         ) => {
-            // A quantified shape relates to another by instantiation, which is a leaf door, not a
-            // child pairing; two rankings of one key are two buckets' orders, which relate not at all.
-            if !xq.is_empty() || !yq.is_empty() || xe.len() != ye.len() || xc != yc {
+            // Two rankings of one key are two buckets' orders, which relate not at all.
+            if xe.len() != ye.len() || xc != yc {
                 return Pairing::Leaf;
             }
             let mut pairs = BumpVec::with_capacity_in(xe.len() + 1, scratch);
             for (x, y) in xe.iter().zip(ye.iter()) {
                 match (x, y) {
                     (DispatchTokenElement::Slot(sx), DispatchTokenElement::Slot(sy)) => {
-                        pairs.push((*sx, *sy, v.flipped()))
+                        pairs.push((sx, sy, v.flipped()))
                     }
                     (DispatchTokenElement::Keyword(kx), DispatchTokenElement::Keyword(ky))
                         if kx == ky => {}
@@ -304,7 +296,7 @@ fn pairing<'n>(
                 width: Width::Positional,
                 only_a: BumpVec::new_in(scratch),
                 only_b: BumpVec::new_in(scratch),
-                assembly: Assembly::Shape(xe.raw(), xc),
+                assembly: Assembly::Shape(xe, xc),
             }
         }
         (
@@ -328,11 +320,11 @@ fn pairing<'n>(
 }
 
 /// A structural arm whose children pair by position and leave nothing over.
-fn positional<'n>(
+fn positional<'n, 'run>(
     scratch: BumpAllocator<'n>,
-    pairs: impl ExactSizeIterator<Item = (Handle, Handle, Variance)>,
-    assembly: Assembly<'n>,
-) -> Pairing<'n> {
+    pairs: impl ExactSizeIterator<Item = (Linked<'run>, Linked<'run>, Variance)>,
+    assembly: Assembly<'n, 'run>,
+) -> Pairing<'n, 'run> {
     let mut paired = BumpVec::with_capacity_in(pairs.len(), scratch);
     paired.extend(pairs);
     Pairing::Structural {
@@ -348,15 +340,15 @@ fn positional<'n>(
 /// fields of each side ride out as its leftovers, for the instance to read against `width`.
 /// `extra` is how many more pairs the arm adds around the named ones — a return, a constructor —
 /// so the pair buffer is sized once.
-fn by_name<'n>(
+fn by_name<'n, 'run>(
     scratch: BumpAllocator<'n>,
-    a: Record<'_>,
-    b: Record<'_>,
+    a: Record<'run, Linked<'run>>,
+    b: Record<'run, Linked<'run>>,
     child: Variance,
     width: Width,
     extra: usize,
-    assemble: fn(&'n [BinderSymbol]) -> Assembly<'n>,
-) -> Pairing<'n> {
+    assemble: fn(&'n [BinderSymbol]) -> Assembly<'n, 'run>,
+) -> Pairing<'n, 'run> {
     let mut pairs = BumpVec::with_capacity_in(a.len() + extra, scratch);
     let mut keys = BumpVec::with_capacity_in(a.len(), scratch);
     let mut only_a = BumpVec::with_capacity_in(a.len(), scratch);
@@ -380,7 +372,7 @@ fn by_name<'n>(
     }
 }
 
-fn union_members<'run>(node: &TypeNode<'run>) -> Option<&'run [Handle]> {
+fn union_members<'run>(node: &TypeNode<'run, Linked<'run>>) -> Option<&'run [Linked<'run>]> {
     match *node {
         TypeNode::Union { members } => Some(members.raw()),
         _ => None,
@@ -389,28 +381,28 @@ fn union_members<'run>(node: &TypeNode<'run>) -> Option<&'run [Handle]> {
 
 /// The shape of the arm being paired, so an instance that rebuilds can put one back together
 /// without knowing which arm it is in.
-enum Assembly<'n> {
+enum Assembly<'n, 'run> {
     List,
     Dict,
     Record(&'n [BinderSymbol]),
     Function(&'n [BinderSymbol]),
-    Shape(&'n [DispatchTokenElement], &'n [u8]),
+    Shape(Elements<'run, Linked<'run>>, Classes<'run>),
     Apply(&'n [BinderSymbol]),
 }
 
 /// The door [`Lockstep::structural`] rebuilds its arm through. Handed to every instance; only the
 /// ones whose `Out` is a type ever call it.
-pub struct Rebuilder<'n, 'run> {
-    types: &'n TypeRegistry<'run>,
+pub struct Rebuilder<'n, 'run, H> {
+    types: &'n TypeChain<'run, H>,
     scratch: BumpAllocator<'n>,
-    assembly: Assembly<'n>,
+    assembly: Assembly<'n, 'run>,
 }
 
-impl Rebuilder<'_, '_> {
+impl<'run, H: Habitat<'run>> Rebuilder<'_, 'run, H> {
     /// Rebuild this arm from its paired children, in the order the driver produced them, plus
     /// `extra` fields to carry over on a name-keyed arm. `extra` is ignored where the arm has no
     /// names to carry.
-    pub fn compose(&self, paired: &[Handle], extra: &[Leftover]) -> Handle {
+    pub fn compose(&self, paired: &[Linked<'run>], extra: &[Leftover<'run>]) -> Linked<'run> {
         let (types, scratch) = (self.types, self.scratch);
         match self.assembly {
             Assembly::List => types.list(paired[0]),
@@ -422,30 +414,30 @@ impl Rebuilder<'_, '_> {
             }
             Assembly::Shape(elements, classes) => {
                 let mut slots = paired.iter();
-                let rebuilt = map_slots(scratch, elements, |_| {
+                let rebuilt = map_slots(scratch, elements.iter(), |_| {
                     *slots.next().expect("one child per slot position")
                 });
                 let ret = *slots.next().expect("the return follows the slots");
-                types.shape_type(scratch, &rebuilt, classes, ret)
+                types.shape_type(&rebuilt, classes.copied_into(scratch), ret)
             }
             // Two constructors with no common refinement apply to nothing: no application is
             // headed by `Never`.
-            Assembly::Apply(_) if paired[0] == Handle::NEVER => Handle::NEVER,
+            Assembly::Apply(_) if paired[0] == Handle::NEVER => types.never(),
             Assembly::Apply(keys) => types.constructor_apply(
                 scratch,
-                wrap(paired[0]),
+                paired[0],
                 &named(scratch, keys, &paired[1..], extra),
             ),
         }
     }
 }
 
-fn named<'s>(
+fn named<'s, 'run>(
     scratch: BumpAllocator<'s>,
     keys: &[BinderSymbol],
-    values: &[Handle],
-    extra: &[Leftover],
-) -> BumpVec<'s, (BinderSymbol, Handle)> {
+    values: &[Linked<'run>],
+    extra: &[Leftover<'run>],
+) -> BumpVec<'s, (BinderSymbol, Linked<'run>)> {
     let mut fields = BumpVec::with_capacity_in(keys.len() + extra.len(), scratch);
     fields.extend(keys.iter().copied().zip(values.iter().copied()));
     fields.extend_from_slice(extra);

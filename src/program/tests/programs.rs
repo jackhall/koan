@@ -11,7 +11,7 @@ use super::evaluator::{Mini, contribute, recorded, reset};
 use super::{compare_back, loaded, output, read_back, run_and_read, type_back, written};
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
-const DEPTH: u32 = if cfg!(miri) { 8 } else { 300 };
+const DEPTH: u32 = if cfg!(miri) { 2 } else { 300 };
 
 /// How many top-level statements the slab-cap test writes.
 const STATEMENTS: usize = if cfg!(miri) { 8 } else { 200 };
@@ -68,8 +68,9 @@ fn more_statements_than_the_slab_cap_run_to_completion() {
 fn a_top_level_binding_is_built_in_the_root_from_the_start() {
     // A fresh list is built in the evaluation's home, which is the root; so is a call's value,
     // through a frame whose last statement forwards it there.
+    // The call's list is long, so the verdict pins it rather than copying it out of the frame.
     let mut substrate = loaded(
-        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = #([4 5]))\nLET ys = (f 0)",
+        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = #([4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35]))\nLET ys = (f 0)",
         2,
     );
     reset();
@@ -385,7 +386,7 @@ fn a_call_whose_argument_does_not_fit_its_parameter_is_refused() {
 #[test]
 fn a_quantified_return_places_as_shares() {
     let arena = crate::memory::Bump::new();
-    let types = crate::type_lattice::TypeRegistry::in_region(&arena);
+    let types = crate::values::tests::TestTypes::new(&arena).load();
     assert_eq!(
         crate::program::placement_of(types.quantified(0, crate::type_lattice::KType::ANY)),
         crate::scheduler::Placement::Shares
@@ -395,9 +396,17 @@ fn a_quantified_return_places_as_shares() {
 #[test]
 fn a_quantified_return_shares_its_frame() {
     // A quantified return places as `Shares`, so the frame forwards the argument rather than
-    // copying it: `r` reads back at the very address `xs` was built at.
+    // copying it: `r` reads back at the very address `xs` was built at. The list is long enough
+    // that copying it never costs less than pinning the calling evaluation's region, which holds
+    // the types the call builds beside its own work.
+    let elements = (1..=24)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET xs = [1 2]\nLET r = (id xs)",
+        &format!(
+            "LET id = (FN FOR ALL #[Elt] :{{x :Elt}} -> Elt = #(x))\nLET xs = [{elements}]\nLET r = (id xs)"
+        ),
         2,
     );
     let read = run_and_read(&mut substrate, &["xs", "r"]);
@@ -469,14 +478,23 @@ fn a_lambda_reads_a_later_binding_when_it_is_born() {
 fn a_lambda_returned_from_a_frame_keeps_its_captures() {
     // Each lambda is born as its frame's last statement, in its calling evaluation's region, and
     // crosses into the root when that evaluation finishes. `constantly`'s region holds only what
-    // its lambda reaches, so the lambda pins and the region splices in; `wasteful`'s also holds a
-    // long list the lambda never reaches, so the lambda's knot copies, its capture deep-copied, and
-    // the region is reclaimed. Each is called after, reading its capture where it now lies.
-    let long = vec!["x"; 256].join(" ");
+    // its lambda reaches and the types the call builds, so the lambda pins and the region splices
+    // in; `wasteful`'s also holds a long list the lambda never reaches, so the lambda's knot
+    // copies, its capture deep-copied, and the region is reclaimed. Each is called after, reading
+    // its capture where it now lies. The captures are long enough that copying either costs more
+    // than pinning a region of the call's own work and types, and the unreached list far longer.
+    let capture = |from: usize| {
+        (from..from + 8)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let (first, second) = (capture(1), capture(100));
+    let long = vec!["x"; 32].join(" ");
     let source = format!(
         "LET constantly = (FN :{{x :Any}} -> Any = #(FN :{{y :Number}} -> Any = #(x)))\n\
          LET wasteful = (FN :{{x :Any}} -> Any = #((LET big = [{long}]) (FN :{{y :Number}} -> Any = #(x))))\n\
-         LET pinned = (constantly [1 2])\nLET copied = (wasteful [3 4])\n\
+         LET pinned = (constantly [{first}])\nLET copied = (wasteful [{second}])\n\
          LET r = (pinned 0)\nLET s = (copied 0)"
     );
     let mut substrate = loaded(&source, 2);
@@ -526,14 +544,15 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
         born[1].0,
         "the copied lambda's knot is re-tied in the root"
     );
-    assert!(read[2].starts_with("[1 2]@"), "{read:?}");
-    assert!(read[3].starts_with("[3 4]@"), "{read:?}");
+    assert!(read[2].starts_with(&format!("[{first}]@")), "{read:?}");
+    assert!(read[3].starts_with(&format!("[{second}]@")), "{read:?}");
 }
 
 #[test]
 fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
+    // `a` is long, so the verdict pins the call's value rather than copying it out of the frame.
     let mut substrate = loaded(
-        "LET a = [(FN :{y :Number} -> Any = #(a))]\nLET g = (FIRST a)\nLET r = (g 0)",
+        "LET a = [(FN :{y :Number} -> Any = #(a)) 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35]\nLET g = (FIRST a)\nLET r = (g 0)",
         2,
     );
     reset();
@@ -797,6 +816,7 @@ fn a_self_call_in_tail_position_holds_its_cells_constant_however_deep() {
     // The frame tails its `WHEN` into the evaluator under its contract, the `WHEN` tails its branch,
     // and the call — whose callee returns `Number`, which the contract asks — tails into the next
     // frame, so no frame waits on the one after it.
-    let deep = if cfg!(miri) { 64 } else { 10_000 };
-    assert_eq!(peak_counting_down(deep), peak_counting_down(4));
+    // Under Miri one hop past the shallow count is enough to exercise the hop's crossing.
+    let (deep, shallow) = if cfg!(miri) { (3, 2) } else { (10_000, 4) };
+    assert_eq!(peak_counting_down(deep), peak_counting_down(shallow));
 }

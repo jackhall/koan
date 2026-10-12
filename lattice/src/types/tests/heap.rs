@@ -1,20 +1,20 @@
-//! The registry's allocation contract, as a count.
+//! The lattice's allocation contract, as a count.
 //!
 //! No law: whether a door reaches the global heap is a fact about where it builds its buffers, not
 //! about the algebra, so it is pinned by a bracket around a battery. The lib-test binary's counting
 //! allocator ([`allocation_count`]) tallies this thread's heap allocations. Every region the
-//! battery touches is first grown to a chunk it fits in — the verdict table is laid in the registry's
-//! region, too — so any allocation inside the bracket is the lattice's own, and the test names it by
-//! failing.
+//! battery touches is first grown to a chunk it fits in — the root, its verdict table and the
+//! branch are laid in one region, too — so any allocation inside the bracket is the lattice's own,
+//! and the test names it by failing.
 
 use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::tests::allocation_count;
 
+use super::raw::RawRegistry;
 use crate::types::handle::{KType, TypeHandle};
 use crate::types::kind::KKind;
 use crate::types::operators::ReductionMode;
-use crate::types::registry::TypeRegistry;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::DispatchTokenElement::{Keyword, Slot};
 use crate::types::sig_relations::FitsFailure;
@@ -45,15 +45,15 @@ fn interning_and_relations_touch_no_heap() {
     let plus = KeywordSymbol::declared("PLUS", &symbols).expect("a keyword token");
     let a = ValueSymbol::declared("a", &symbols).expect("a value token");
 
-    // The registry's region, the relations' scratch, and the declaring frame a window lives in.
-    let (registry_bump, scratch_bump, host_bump) = (Bump::new(), Bump::new(), Bump::new());
-    let region = &registry_bump;
+    // The tiers' region, the relations' scratch, and the declaring frame a window lives in.
+    let (tier_bump, scratch_bump, host_bump) = (Bump::new(), Bump::new(), Bump::new());
+    let region = &tier_bump;
     let scratch = &scratch_bump;
     let host = &host_bump;
     for bump in [region, scratch, host] {
         warm(bump);
     }
-    let types = TypeRegistry::in_region(region);
+    let types = crate::types::tests::tiered(region);
     // What the two pair solves read: an unbounded variable, the union its lower contributions
     // join to, and a function position it reaches from above with two unrelated arguments.
     let open = types.quantified(0, KType::ANY);
@@ -90,7 +90,6 @@ fn interning_and_relations_touch_no_heap() {
         )
         .handle;
     let plain = types.shape_type(
-        scratch,
         &[Keyword(pure), Slot(KType::NUMBER), Slot(KType::NUMBER)],
         &[],
         KType::NUMBER,
@@ -98,12 +97,7 @@ fn interning_and_relations_touch_no_heap() {
 
     // A signature with a head parameter, a member of every kind and a chaining record.
     let member = types.head_parameter(elt, KType::ANY);
-    let operator = types.shape_type(
-        scratch,
-        &[Slot(member), Keyword(plus), Slot(member)],
-        &[],
-        member,
-    );
+    let operator = types.shape_type(&[Slot(member), Keyword(plus), Slot(member)], &[], member);
     let mut draft = SchemaDraft::new(scratch);
     draft.origin = SigOrigin::Declared;
     draft.insert_parameter(elt, member);
@@ -117,18 +111,8 @@ fn interning_and_relations_touch_no_heap() {
     draft.insert_manifest(elt, KType::NUMBER);
     let module = types.signature(scratch, draft);
     // A keyworded interface, and a module whose only overload under that key misses it.
-    let wants = types.shape_type(
-        scratch,
-        &[Keyword(pure), Slot(KType::NUMBER)],
-        &[],
-        KType::NUMBER,
-    );
-    let offers = types.shape_type(
-        scratch,
-        &[Keyword(pure), Slot(KType::STR)],
-        &[],
-        KType::NUMBER,
-    );
+    let wants = types.shape_type(&[Keyword(pure), Slot(KType::NUMBER)], &[], KType::NUMBER);
+    let offers = types.shape_type(&[Keyword(pure), Slot(KType::STR)], &[], KType::NUMBER);
     let mut draft = SchemaDraft::new(scratch);
     draft.origin = SigOrigin::Declared;
     draft.push_keyworded(wants);
@@ -192,7 +176,7 @@ fn interning_and_relations_touch_no_heap() {
     assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);
     assert_ne!(meet(&types, scratch, module, clashing), KType::NEVER);
 
-    let mut collector = Collector::<KType>::new(scratch, &[KType::ANY]);
+    let mut collector = Collector::<KType>::new(&types, scratch, &[KType::ANY]);
     assert!(
         admits_with(
             &types,
@@ -205,7 +189,7 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(collector.solve(&types).is_ok());
-    let mut least = Collector::<KType>::least(scratch, 2);
+    let mut least = Collector::<KType>::least(&types, scratch, 2);
     assert!(
         admits_with(
             &types,
@@ -218,12 +202,12 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(least.solve(&types).is_ok());
-    let mut split = Collector::<KType>::new(scratch, &[KType::ANY]);
+    let mut split = Collector::<KType>::new(&types, scratch, &[KType::ANY]);
     for argument in [KType::NUMBER, KType::STR] {
         assert!(admits_with(&types, scratch, open, argument, Variance::Co, &mut split).is_ok());
     }
     assert!(split.solve(&types).is_ok_and(|s| s.as_slice() == [mixed]));
-    let mut from_above = Collector::<KType>::new(scratch, &[KType::ANY]);
+    let mut from_above = Collector::<KType>::new(&types, scratch, &[KType::ANY]);
     for argument in [takes_number, takes_str] {
         assert!(
             admits_with(

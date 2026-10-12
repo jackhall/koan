@@ -4,6 +4,7 @@
 mod annotation;
 mod ascription;
 mod boundary;
+mod classes;
 mod contributions;
 mod digests;
 mod generate;

@@ -4,34 +4,14 @@
 //! run gathered there over values at rest in storage — so the tests drive both of the scratch
 //! family's positions.
 //!
-//! The crossing doors read a type registry, and a test step, a bare `fn`, has no program to take
-//! one from, so each thread keeps one of its own ([`with_types`]). The tests build no container,
-//! so a crossing never reads it.
-
-use self_cell::self_cell;
+//! A test seeds a root of its own over a local bump and builds its graph over it; the drain hands
+//! it to every step and crossing, so a bare `fn` step reads types with no program around it.
 
 use crate::knot::{KValue, KValueFamily};
-use crate::memory::{Bump, CrossedOperand, Writer, reattachable};
-use crate::scheduler::{Graph, NativeStep, StepBundle};
-use crate::type_lattice::TypeRegistry;
-
-self_cell!(
-    /// A type registry over a bump of its own.
-    struct TestTypes {
-        owner: Bump,
-        #[not_covariant]
-        dependent: TypeRegistry,
-    }
-);
-
-thread_local! {
-    static TYPES: TestTypes = TestTypes::new(Bump::new(), |bump| TypeRegistry::in_region(bump));
-}
-
-/// Run `body` over this thread's test registry.
-pub fn with_types<R>(body: impl for<'run> FnOnce(&TypeRegistry<'run>) -> R) -> R {
-    TYPES.with(|types| types.with_dependent(|_, registry| body(registry)))
-}
+use crate::memory::{CrossedOperand, Header, Writer, reattachable};
+use crate::scheduler::{Action, Born, Graph, NativeStep, Step, StepBundle};
+use crate::type_lattice::Root;
+use crate::values::{Half, TypeHeader, Types};
 
 /// The bundle the scheduler's tests run over.
 pub struct Native;
@@ -48,14 +28,32 @@ impl<'graph> StepBundle<'graph> for Native {
         state.weight().bytes()
     }
 
+    /// As koan's own bundle crosses a birth: a pinned birth links its home's branch, or merges it
+    /// where a hop's or a left birth's half has already laid a branch; a copied one goes through
+    /// the value crossing.
     fn cross<'cell>(
         writer: Writer<'cell>,
-        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily>,
+        header: Header<'graph, 'cell, TypeHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, TypeHeader>,
+        born: Born,
+        type_root: &'graph Root<'graph>,
     ) -> KValue<'graph, 'cell>
     where
         'graph: 'cell,
     {
-        with_types(|types| crate::values::cross_view(writer, view, types))
+        let types = Types::new(type_root, Half::of(writer, header));
+        match view {
+            CrossedOperand::Pinned { view, home, .. } => {
+                home.read(|header, _| match born {
+                    Born::Child => types.link(header.into_value()),
+                    Born::Hop | Born::Left => types.link_or_merge(header.into_value()),
+                });
+                #[cfg(debug_assertions)]
+                crate::values::check_pinned_habitat::<crate::knot::KnottedFamily>(&types, view);
+                *view
+            }
+            _ => crate::values::cross_view(writer, &types, view),
+        }
     }
 
     fn born<'cell>(birth: KValue<'graph, 'cell>) -> KValue<'graph, 'cell>
@@ -68,6 +66,12 @@ impl<'graph> StepBundle<'graph> for Native {
 
 /// A native step over the test bundle.
 pub type TestStep<'graph> = NativeStep<'graph, Native>;
+
+/// A test step over every graph: what a helper that builds its own graph, over a root it seeds,
+/// takes to start a root work at.
+pub type AnyStep = for<'graph, 'step, 'here, 'scratch> fn(
+    Step<'_, 'graph, 'step, 'here, 'scratch, Native>,
+) -> Action<'graph, Native>;
 
 /// A graph over the test bundle.
 pub type TestGraph<'graph> = Graph<'graph, Native>;

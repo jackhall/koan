@@ -90,36 +90,51 @@
 //! contribution does, and the run reads the type it binds there. So a part's and a statement's
 //! static type is never a scheme.
 //!
+//! The pass classifies every **frame body** — the program, a callable, a quote's code — as it
+//! fixes the body's cell, the arms and module bodies it runs counted with it
+//! ([type tiers](../../design/type-tiers.md#two-classes-of-body)). A value is porous where its
+//! static type's upper end is porous or exposing, and, where that type is exact and closed, where it
+//! is exposing ([`porous_site`]). A body is [porous](BodyClass::Porous) where a porous value leaves
+//! it at a porous slot: its last statement at its declared return — a quote's code read as
+//! returning `Any` — or an argument of a call it makes into a frame: a registration, a function
+//! called by name, a surfaced head, a candidate the load cannot read, or any `EVAL`. A builtin's
+//! native runs in the caller's step and enters no frame. Any other body is sealed, and lays a
+//! shape branch where it mints and is placed `Shares`. The cell records each `:|` ascription and
+//! each component of nominal declarations the load leaves unknown as a **minting site**, which the
+//! run's doors check in debug builds.
+//!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
 //! one.
 //!
 //! See [README.md § Static types](README.md#static-types).
 
-use crate::elaborate::{SignatureMember, module_signature, signature_member};
+use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
 use crate::knot::module::view::{self, Ascription, transparent_view_type};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::program::placement_of;
+use crate::scheduler::Placement;
 use crate::scope::{
-    BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate,
-    InstanceRead, Keyed, Listed, Narrowing, Position, ShapeError, ShapeKind, Site, Slot, Static,
-    StaticSolution, StaticType, Statics, SurfacedHead, Target, UnitWork, UseStatics,
+    BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
+    Coordinate, InstanceRead, Keyed, Listed, Narrowing, Position, ShapeError, ShapeKind, Site,
+    Slot, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, UnitWork, UseStatics,
     Variable as Located, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KKind, KType,
-    Parametric, Scheme, Side, TypeNode, TypeRegistry, Variable, Variance, Verdict, admits_with,
-    bound_above, class_of, fits, instance_under, instantiate_quantified, intervals, judge_by_class,
-    meet, quantifier_bounds, read_through, scheme_bound_above, scheme_return, scheme_slots,
-    select_by_class, shape_return, shape_slots, solving_slots,
+    Parametric, Scheme, Side, TypeNode, Variable, Variance, Verdict, admits_with, bound_above,
+    fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet, read_through,
+    scheme_bound_above, scheme_return, scheme_slots, select_by_class, shape_return, shape_slots,
+    solving_slots,
 };
 use crate::values::{
-    ConstructionRefused, Value, construction, dict_type, list_type, record_type, retyped_to, under,
-    unknown,
+    ConstructionRefused, Types, Value, construction, dict_type, list_type, record_type, retyped_to,
+    under, unknown,
 };
 
 use super::builtins::Native;
@@ -133,7 +148,7 @@ use super::select;
 pub(super) fn statics<'graph>(
     root: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'graph, 'graph>,
-    types: &TypeRegistry<'graph>,
+    types: &Types<'graph, 'graph>,
     writer: Writer<'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
@@ -182,7 +197,7 @@ type Bound = DeclaredType<Interval>;
 /// static type `value` can ever satisfy `wanted`. `None` where one might. Each end is named
 /// through its bound, since a variable's name is its binder's.
 fn never_satisfies(
-    types: &TypeRegistry<'_>,
+    types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
     value: Parametric,
     wanted: Parametric,
@@ -192,6 +207,23 @@ fn never_satisfies(
         bound_above(types, scratch, wanted),
     );
     (meet(types, scratch, value, wanted) == KType::NEVER).then_some((value, wanted))
+}
+
+/// Whether a value of the static type `typed` can reach a type minted at run: where its upper end
+/// is porous or exposing, and, where that is exact and closed, where it is exposing — an exact
+/// closed site carries that very type, and the surface door hides what the type does not name.
+fn porous_site(types: &Types<'_, '_>, typed: Interval) -> bool {
+    if typed.is_exact() && types.concrete(typed.upper).is_some() {
+        types.exposing(typed.upper)
+    } else {
+        types.porous(typed.upper) || types.exposing(typed.upper)
+    }
+}
+
+/// Whether a value held to the declared type `slot` — a return, a parameter — can carry a type
+/// minted at run.
+fn porous_slot(types: &Types<'_, '_>, slot: Parametric) -> bool {
+    types.porous(slot) || types.exposing(slot)
 }
 
 /// Where a coordinate lands, its captures followed to their sources.
@@ -241,12 +273,19 @@ struct Level<'p, 'graph> {
     /// Each type capture's variable's name, and the use that added it, ride beside it: a module
     /// body's `OVER` list must name it.
     type_captures: BumpVec<'p, (usize, Coordinate, (TypeSymbol, SourceRef))>,
+    /// Whether a porous value leaves the shape: through its return, or an argument of a call it
+    /// makes into a frame. A block's and a module body's are folded into the shape enclosing them.
+    exits: bool,
+    /// The shape's own minting sites.
+    minting: BumpVec<'p, Site>,
+    /// The minting sites of the blocks and module bodies the shape runs, folded in.
+    folded: u32,
 }
 
 /// The walk's state: the chain of enclosing shapes.
 struct Pass<'p, 'x, 'graph> {
     builtins: &'x KBuiltins<'graph, 'graph>,
-    types: &'x TypeRegistry<'graph>,
+    types: &'x Types<'graph, 'graph>,
     writer: Writer<'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
@@ -370,12 +409,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             instances: BumpVec::new_in(scratch),
             named: BumpVec::new_in(scratch),
             type_captures: BumpVec::new_in(scratch),
+            exits: false,
+            minting: BumpVec::new_in(scratch),
+            folded: 0,
         });
     }
 
-    /// Type the shape at chain level `level` — its code first — fix its cell, then type every
-    /// shape nested in it. A `USING … SCOPE` body's `surfacing` is the static upper end of the
-    /// module it surfaces, which types its surfaced names.
+    /// Type the shape at chain level `level` — its code first — then every shape nested in it, and
+    /// fix its cell last, once each block and module body it runs has folded its class in. A
+    /// `USING … SCOPE` body's `surfacing` is the static upper end of the module it surfaces, which
+    /// types its surfaced names.
     fn visit(
         &mut self,
         level: usize,
@@ -402,7 +445,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         self.returns(level)?;
-        self.fix(level);
+        self.return_exits(level);
 
         for (_, nested) in shape.nested_shapes() {
             if !done(nested) {
@@ -418,6 +461,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 at.type_captures.iter().map(|(_, source, _)| *source),
             ));
         }
+        // The cell is fixed last, once every block the shape runs has folded its class into it.
+        self.fix(level);
+        let at = &self.chain[level];
         // A module body reads a type its enclosing callable binds only where its `OVER` list
         // names it.
         if at.shape.kind() == ShapeKind::Module {
@@ -471,7 +517,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         self.push(nested, roots_chain);
         let visited = self.visit(level + 1, surfacing);
         let last = self.chain[level + 1].statements.last().copied();
-        self.chain.pop();
+        let popped = self.chain.pop().expect("the shape was pushed");
+        if nested.kind() == ShapeKind::Block {
+            self.fold(level, &popped);
+        }
         visited.map(|_| last)
     }
 
@@ -488,7 +537,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let (types, scratch) = (self.types, self.scratch);
         self.push(body, false);
         let visited = self.visit(level + 1, None);
-        let binders = self.chain.pop().expect("the body was pushed").binders;
+        let popped = self.chain.pop().expect("the body was pushed");
+        self.fold(level, &popped);
+        let binders = popped.binders;
         visited?;
         let mut members = BumpVec::with_capacity_in(binders.len(), scratch);
         let mut keyworded = BumpVec::new_in(scratch);
@@ -533,6 +584,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return;
         }
         let (writer, scratch) = (self.writer, self.scratch);
+        let class = self.class(level);
         let at = &mut self.chain[level];
         let mut uses = BumpVec::new_in(scratch);
         uses.extend(
@@ -550,7 +602,74 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             settled: Keyed::sorted(writer, &mut at.settled),
             instances: Keyed::sorted(writer, &mut at.instances),
             named: Keyed::sorted(writer, &mut at.named),
+            class,
+            minting: Keyed::sorted(writer, &mut at.minting),
         });
+    }
+
+    /// Fold `inner`, a block or module body the shape at `level` runs, into it: its exits and
+    /// its minting sites count toward the frame body enclosing it.
+    fn fold(&mut self, level: usize, inner: &Level<'p, 'graph>) {
+        let at = &mut self.chain[level];
+        at.exits |= inner.exits;
+        at.folded += inner.minting.len() as u32 + inner.folded;
+    }
+
+    /// The class of the shape at `level` where it is a frame body: porous where a porous value
+    /// leaves it, and otherwise sealed, laying a shape branch where it mints and is placed
+    /// `Shares` — a callable by its declared return, a quote's code always, the program never.
+    fn class(&self, level: usize) -> Option<BodyClass> {
+        let at = &self.chain[level];
+        let mints = at.minting.len() as u32 + at.folded;
+        let shares = match at.shape.kind() {
+            ShapeKind::Block | ShapeKind::Module => return None,
+            ShapeKind::Program => false,
+            ShapeKind::Code => true,
+            ShapeKind::Callable => self
+                .declared_return(at.shape)
+                .is_some_and(|returns| placement_of(returns) == Placement::Shares),
+        };
+        Some(match at.exits {
+            true => BodyClass::Porous { mints },
+            false => BodyClass::Sealed {
+                mints,
+                lays_branch: mints > 0 && shares,
+            },
+        })
+    }
+
+    /// A callable body's declared return, read off the function type its body runs at, where the
+    /// load typed the callable.
+    fn declared_return(&self, shape: &BodyShape<'graph>) -> Option<Parametric> {
+        match self.types.node(self.in_body(shape)?) {
+            TypeNode::KFunction { ret, .. } => Some(ret),
+            _ => None,
+        }
+    }
+
+    /// Mark the shape at `level` porous where its return carries a porous value out: a callable
+    /// whose last statement's value is porous and whose declared return — `Any` where the load did
+    /// not type it — is too, and a quote's code whose last statement's value is porous, its
+    /// `EVAL`'s declared return unknown to the shape. A body that never arrives returns nothing.
+    fn return_exits(&mut self, level: usize) {
+        let at = &self.chain[level];
+        let Some(last) = at.statements.last().copied() else {
+            return;
+        };
+        if last.upper == KType::NEVER.into() {
+            return;
+        }
+        let types = self.types;
+        let slot = match at.shape.kind() {
+            ShapeKind::Callable => {
+                (self.declared_return(at.shape)).unwrap_or_else(|| KType::ANY.into())
+            }
+            ShapeKind::Code => KType::ANY.into(),
+            ShapeKind::Program | ShapeKind::Module | ShapeKind::Block => return,
+        };
+        if porous_site(types, last) && porous_slot(types, slot) {
+            self.chain[level].exits = true;
+        }
     }
 
     /// Where the lexical variable at `variable`'s level is read from the shape at chain level
@@ -763,7 +882,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             DeclaredType::Type(ktype) => Some(ktype),
             DeclaredType::Scheme(scheme) => {
                 debug_assert_eq!(
-                    crate::type_lattice::quantifier_bounds(self.types, scheme).len(),
+                    scheme.group(self.types).bounds.len(),
                     shape.group_levels().len(),
                     "the type channel numbered the callable's own group"
                 );
@@ -783,7 +902,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn component(&mut self, level: usize, index: usize) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         let component = &shape.components()[index];
-        if shape.declarations(component.members[0]).is_some() {
+        if let Some(first) = shape.declarations(component.members[0]) {
+            // A nominal declared where it runs, a fresh identity each time its unit does.
+            let nominal = (component.members.iter())
+                .any(|member| shape.declarations(*member).is_some_and(declares_nominal));
+            let closed = (component.members.iter())
+                .all(|member| matches!(shape.declared_type(*member), Static::Closed(_)));
+            if nominal && !closed {
+                self.chain[level].minting.push(Site::of_node(first));
+            }
             return Ok(());
         }
         for member in component.members {
@@ -906,9 +1033,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         at: SourceRef,
     ) -> Result<Made<'p>, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
-        let TypeNode::KFunction { quantifiers, .. } = types.scheme_node(scheme) else {
-            unreachable!("a scheme is a function type over a group")
-        };
+        let quantifiers = scheme.group(types).names;
         let Some(wanted) =
             wanted.filter(|wanted| matches!(types.node(*wanted), TypeNode::KFunction { .. }))
         else {
@@ -1062,10 +1187,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             named.extend((0..bounds.len()).filter(|variable| names(slot, *variable)));
             Unsolved::Open(named)
         };
-        let mut collector = Collector::<Parametric>::new(scratch, bounds);
+        let mut collector = Collector::<Parametric>::new(types, scratch, bounds);
         for (variable, bound) in bounds.iter().enumerate() {
             if let Some(to) = fixed(variable) {
-                collector.pin(variable, *bound, to);
+                collector.pin(types, variable, *bound, to);
             }
         }
         let mut declared = BumpVec::with_capacity_in(others.len(), scratch);
@@ -1170,11 +1295,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         let mut slots = BumpVec::new_in(scratch);
         slots.extend(scheme_slots(scheme, types));
-        let bounds = quantifier_bounds(types, scheme);
-        let TypeNode::ExpressionShape { classes, .. } = types.scheme_node(scheme) else {
+        let view = shape.view(types);
+        let bounds = view.group.bounds;
+        let TypeNode::ExpressionShape { classes, .. } = view.body else {
             unreachable!("a candidate's shape is an expression shape")
         };
-        let class = |slot: usize| class_of(classes, slot);
+        let class = |slot: usize| classes.get(slot);
         let solving = solving_slots(types, scratch, shape);
         let names = |slot: usize, variable: usize| {
             types.references_quantifier(scratch, slots[slot], variable)
@@ -1214,10 +1340,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let mut fixed = BumpVec::with_capacity_in(bounds.len(), scratch);
         fixed.resize(bounds.len(), None);
         for current in earlier_classes.iter().copied() {
-            let mut collector = Collector::<Parametric>::new(scratch, bounds);
+            let mut collector = Collector::<Parametric>::new(types, scratch, bounds);
             for (variable, to) in fixed.iter().enumerate() {
                 if let Some(to) = to {
-                    collector.pin(variable, bounds[variable], *to);
+                    collector.pin(types, variable, bounds[variable], *to);
                 }
             }
             let mut admitted_any = false;
@@ -1319,11 +1445,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             DeclaredType::Scheme(scheme) => {
                 slots.extend(scheme_slots(scheme, types));
-                let quantifiers = match types.scheme_node(scheme) {
-                    TypeNode::ExpressionShape { quantifiers, .. } => quantifiers,
-                    _ => &[],
-                };
-                (quantifier_bounds(types, scheme), quantifiers)
+                let group = scheme.group(types);
+                (group.bounds, group.names)
             }
         };
         let read = self.solved_from(shape, arguments, contributions);
@@ -1368,11 +1491,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         at: SourceRef,
     ) -> ShapeError<'graph> {
         let (types, scratch) = (self.types, self.scratch);
-        let TypeNode::KFunction { quantifiers, .. } = types.scheme_node(scheme) else {
-            unreachable!("a scheme is a function type over a group")
-        };
         ShapeError::Unfixed {
-            variables: quantifiers,
+            variables: scheme.group(types).names,
             wanted: wanted.map(|wanted| bound_above(types, scratch, wanted)),
             at,
         }
@@ -1574,6 +1694,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let operand = bound_above(types, scratch, typed.upper);
         let bounded = declared.map_or(KType::ANY, |declared| bound_above(types, scratch, declared));
         if view::views(types, mode, operand, bounded) {
+            // An opaque view hides each unpinned head parameter behind a carrier it mints.
+            if mode == Ascription::Opaque {
+                self.chain[level].minting.push(Site::of_node(node));
+            }
             return self.viewed(level, node, mode, typed, declared);
         }
         let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
@@ -1748,6 +1872,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if typed.upper == KType::NEVER.into() {
             return Ok(Interval::point(KType::NEVER.into()));
         }
+        // Every `EVAL` enters a frame whose code the load may not see.
+        self.chain[level].exits = true;
         let (types, scratch) = (self.types, self.scratch);
         if let Some((value, _)) =
             never_satisfies(types, scratch, typed.upper, KType::ANY_CODE.into())
@@ -2018,7 +2144,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         match self.callee(callee) {
             Some(callee) => self.called(level, callee, argument, node),
             None => {
-                self.part(level, argument)?;
+                let typed = self.part(level, argument)?;
+                if porous_site(self.types, typed) {
+                    self.chain[level].exits = true;
+                }
                 Ok(unknown())
             }
         }
@@ -2029,25 +2158,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// the load knows of no function there.
     fn callee(&self, head: Bound) -> Option<Callee<'p>> {
         let (types, scratch) = (self.types, self.scratch);
-        let (node, function, exact) = match head {
-            DeclaredType::Type(interval) => (
-                types.node(interval.upper),
-                DeclaredType::Type(interval.upper),
-                interval.is_exact(),
-            ),
-            DeclaredType::Scheme(scheme) => (
-                types.scheme_node(scheme),
-                DeclaredType::Scheme(scheme),
-                true,
-            ),
+        let (function, exact) = match head {
+            DeclaredType::Type(interval) => {
+                (DeclaredType::Type(interval.upper), interval.is_exact())
+            }
+            DeclaredType::Scheme(scheme) => (DeclaredType::Scheme(scheme), true),
         };
-        let TypeNode::KFunction {
-            quantifiers,
-            bounds,
-            params,
-            ret,
-        } = node
-        else {
+        let view = function.view(types);
+        let TypeNode::KFunction { params, ret } = view.body else {
             return None;
         };
         let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
@@ -2059,11 +2177,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .iter()
                 .map(|(_, param)| DispatchTokenElement::Slot(*param)),
         );
-        let classes = scratch.alloc_slice_fill_copy(sorted.len(), 0u8);
+        let classes = scratch.alloc_slice_fill_copy(sorted.len(), 0u16);
         // The shape's group may be numbered otherwise than the callee's, and nothing reads one
         // through the other: the shape is judged and returns through its own group, and the frame
         // solves the callee's.
-        let shape = types.shape_scheme(scratch, quantifiers, bounds, &elements, classes, ret);
+        let shape = types.shape_scheme(
+            scratch,
+            view.group.names,
+            view.group.bounds,
+            &elements,
+            classes,
+            ret,
+        );
         let wanted = match function {
             DeclaredType::Type(_) => Some(record_type(types, scratch, params.iter())),
             DeclaredType::Scheme(_) => None,
@@ -2073,7 +2198,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             shape: shape.handle,
             names: scratch.alloc_slice_fill_iter(sorted.iter().map(|(name, _)| *name)),
             wanted,
-            exact: exact && (function.as_type().is_none() || bounds.is_empty()),
+            exact,
         })
     }
 
@@ -2139,10 +2264,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 if payload.upper == KType::NEVER.into() {
                     return Ok(never);
                 }
+                // A callee known at most may bind a function whose parameters admit more.
+                let inexact = !callee.exact && porous_site(self.types, payload);
                 let Some(arguments) = self.laid_out(callee, payload) else {
                     return match callee.exact {
                         true => Err(self.never(callee, payload.upper, node)),
-                        false => at_most(self),
+                        false => {
+                            self.chain[level].exits |= inexact;
+                            at_most(self)
+                        }
                     };
                 };
                 if arguments
@@ -2152,6 +2282,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     return Ok(never);
                 }
                 if !callee.exact {
+                    self.chain[level].exits |= inexact;
                     return at_most(self);
                 }
                 let contributions =
@@ -2164,6 +2295,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             self.chain[level].named.push((Site::of(argument), recorded));
         }
         let (types, scratch) = (self.types, self.scratch);
+        if self.slot_exits(callee.shape, arguments) {
+            self.chain[level].exits = true;
+        }
         let read = self.solved_from(callee.shape, arguments, contributions);
         let judged = judge_by_class(types, scratch, callee.shape, read);
         if judged.verdict == Verdict::Never {
@@ -2570,6 +2704,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         // The narrowing law's unnarrowed load: see `unnarrowed`.
         #[cfg(test)]
         if UNNARROWED.with(std::cell::Cell::get) {
+            self.use_exits(level, arguments, &sites, &judged);
             return Ok(unknown());
         }
         if judged.is_empty() {
@@ -2650,6 +2785,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let Candidate::One(coordinate) = chosen.candidate else {
                     unreachable!("an always candidate is no spread");
                 };
+                self.use_exits(level, arguments, &sites, &[chosen]);
                 self.made(level, node, list, &sites, &[chosen])?;
                 self.chain[level].uses[index].narrowing = Narrowing::Selected(coordinate);
                 return Ok(self.candidate_return(chosen));
@@ -2668,6 +2804,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             );
             self.chain[level].uses[index].narrowing = Narrowing::Kept(kept);
         }
+        self.use_exits(level, arguments, &sites, &judged);
         self.made(level, node, list, &sites, &judged)?;
         let mut returns = BumpVec::with_capacity_in(judged.len(), scratch);
         for judgement in judged.iter() {
@@ -2677,6 +2814,51 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             returns.push(self.candidate_return(*judgement).upper);
         }
         Ok(under(types.union_of(scratch, &returns)))
+    }
+
+    /// Mark the shape at `level` porous where the keyworded use whose arguments are typed
+    /// `arguments` hands a porous value to a porous slot of a frame it may enter: at a kept
+    /// candidate that is not a builtin — a builtin's native runs in the caller's step — whose slot
+    /// at that argument is porous, or which the load cannot read: an unknown one, a spread, a hole
+    /// or a surfaced key. Each instance argument is read at the instance its candidate makes.
+    fn use_exits(
+        &mut self,
+        level: usize,
+        arguments: &[Interval],
+        sites: &[InstanceArgument<'graph>],
+        kept: &[Judgement<'_>],
+    ) {
+        let scratch = self.scratch;
+        let exits = kept.iter().any(|judgement| {
+            if self.builtin(judgement.candidate).is_some() {
+                return false;
+            }
+            let mut here = BumpVec::with_capacity_in(arguments.len(), scratch);
+            here.extend(arguments.iter().copied());
+            for (site, (instance, _)) in sites.iter().zip(judgement.instances) {
+                here[site.position] = *instance;
+            }
+            match (judgement.candidate, judgement.known.shape()) {
+                (Candidate::One(_), Some(shape)) => self.slot_exits(shape, &here),
+                _ => here.iter().any(|typed| porous_site(self.types, *typed)),
+            }
+        });
+        if exits {
+            self.chain[level].exits = true;
+        }
+    }
+
+    /// Whether some argument of the static types `arguments` is porous where `shape`'s slot at it
+    /// is too.
+    fn slot_exits(&self, shape: DeclaredType<Parametric>, arguments: &[Interval]) -> bool {
+        let types = self.types;
+        let mut slots = BumpVec::new_in(self.scratch);
+        match shape {
+            DeclaredType::Type(shape) => slots.extend(shape_slots(shape, types)),
+            DeclaredType::Scheme(scheme) => slots.extend(scheme_slots(scheme, types)),
+        }
+        (slots.iter().zip(arguments))
+            .any(|(slot, typed)| porous_site(types, *typed) && porous_slot(types, *slot))
     }
 
     /// Record the instance each of `sites`, the instance arguments of the keyworded use `node`,

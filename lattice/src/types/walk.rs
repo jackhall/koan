@@ -1,7 +1,7 @@
 //! The two drivers every structural recursion in the lattice goes through.
 //!
 //! [`unary`] owns the arm table — which children a compound node has, in which order, and the
-//! registry door that puts one back together — behind two entry points: [`unary::rebuild`] takes a
+//! chain door that puts one back together — behind two entry points: [`unary::rebuild`] takes a
 //! leaf rule and re-interns each rebuilt composite, [`unary::visit`] takes a pre-order rule that
 //! descends, skips or stops. [`binary`] owns the pairing policy — positional, by name, or set-wise
 //! — the variance flip, the width verdict per arm, and the mismatch case, behind one
@@ -11,22 +11,27 @@
 //! Rendering is the one recursion written by hand: it spells syntax *between* children and
 //! inherits the quantifier binder from above, which neither driver expresses. Adding a compound
 //! variant is a compile error at [`unary`]'s `children` / `reassemble` pair, at [`binary`]'s
-//! pairing table, in the rendering match, and at `TypeNode::view`'s table — nowhere else.
+//! pairing table, in the rendering match, and at the stored node's three conversion tables —
+//! nowhere else. The third, the transfer a crossing's copy re-lays a node by, maps a node's
+//! children as it re-lays them and descends no further, so it is a conversion, not a walk.
 //!
 //! # Writing a new walk
 //!
 //! Ask first whether the walk is unary or binary, then whether it rebuilds.
 //!
-//! - A **unary rebuild** supplies a leaf rule `FnMut(Handle, &TypeNode, &Context) -> Option<Handle>`:
-//!   `Some(k)` replaces the node and stops there, `None` lets the driver descend. Pick the union
-//!   door that reassembles a union. Substitution and sibling rewriting are both this.
-//! - A **unary visit** supplies `FnMut(Handle, &TypeNode, &Context) -> Visit` and reads the
-//!   context. Occurrence censuses and reference folds are this.
+//! - A **unary rebuild** supplies a leaf rule
+//!   `FnMut(Linked, &TypeNode<Linked>, &Context) -> Option<Linked>`: `Some(k)` replaces the node
+//!   and stops there, `None` lets the driver descend. Substitution and sibling rewriting are both
+//!   this.
+//! - A **unary visit** supplies `FnMut(Linked, &TypeNode<Linked>, &Context) -> Visit` and reads
+//!   the context. Occurrence censuses and reference folds are this.
+//!
+//! Both drivers walk nodes by reference: a walk is handed nodes and never looks a handle up.
 //! - A **binary walk** implements [`binary::Lockstep`]. The order, the meet and the unifier's
 //!   collector are its three instances.
 //!
 //! The context a unary rule is handed answers two questions the arm table alone cannot: how many
-//! shape binders lie between the root and here, and the variance of the current position.
+//! schemes lie between the root and here, and the variance of the current position.
 
 pub mod binary;
 pub mod unary;

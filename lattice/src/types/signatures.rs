@@ -5,42 +5,52 @@
 //! some of its head parameters pinned — through [`applications`]: a signature is the one
 //! application pinning nothing, except the empty signature, which is the empty set; an application
 //! is itself; a meet is its members. The order ([`applications_under`]), the meet
-//! ([`canonical_applications`], what [`TypeRegistry::signature_meet`] interns) and *fits* (in
-//! [`sig_relations`](super::sig_relations)) all read signature types through here and nothing
-//! else, so none of them solves: two applications compare by their pins alone.
+//! ([`canonical_applications`], what
+//! [`TypeChain::signature_meet`](super::chain::TypeChain::signature_meet) interns) and *fits* (in
+//! [`sig_relations`](super::sig_relations)) all read signature types through here and nothing else,
+//! so none of them solves: two applications compare by their pins alone.
 
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol};
 
-use super::handle::{Handle, TypeHandle, wrap};
+use super::chain::TypeChain;
+use super::handle::Handle;
 use super::node::TypeNode;
-use super::record::Record;
-use super::registry::TypeRegistry;
+use super::stored::Linked;
+use super::tiers::Habitat;
 
 /// One application: `signature`, a [`TypeNode::Signature`], with `pins` fixing some of its head
-/// parameters by name. Empty pins for the signature on its own.
+/// parameters by name. Empty pins for the signature on its own. The pins live in `'p`: the region
+/// for an application read off a node, a scratch for one a caller assembles.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Application<'run> {
-    pub(super) signature: Handle,
-    pub(super) pins: &'run [(BinderSymbol, Handle)],
+pub(super) struct Application<'p, 'run> {
+    pub(super) signature: Linked<'run>,
+    pub(super) pins: &'p [(BinderSymbol, Linked<'run>)],
 }
 
-impl Application<'_> {
-    /// The handle this application interns to: the signature itself for no pins.
-    pub(super) fn handle(self, types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>) -> Handle {
-        types.signature_apply(scratch, wrap(self.signature), self.pins)
+impl<'run> Application<'_, 'run> {
+    /// The node this application interns to: the signature itself for no pins.
+    pub(super) fn node(
+        self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'_>,
+    ) -> Linked<'run> {
+        types.signature_apply(scratch, self.signature, self.pins)
     }
 
     /// The type `self` pins the parameter named `name` to, if it pins it.
-    pub(super) fn pin(self, name: Symbol) -> Option<Handle> {
-        Record::<Handle>::over(self.pins).get(name)
+    pub(super) fn pin(self, name: Symbol) -> Option<Linked<'run>> {
+        self.pins
+            .iter()
+            .find(|(key, _)| key.symbol() == name)
+            .map(|(_, pinned)| *pinned)
     }
 }
 
 /// Whether `kt` is a signature type — one of the three nodes [`applications`] reads.
-pub(super) fn is_signature_type(types: &TypeRegistry<'_>, kt: Handle) -> bool {
+pub(super) fn is_signature_type(kt: Linked<'_>) -> bool {
     matches!(
-        types.node(kt),
+        kt.view(),
         TypeNode::Signature { .. }
             | TypeNode::SignatureApply { .. }
             | TypeNode::SignatureMeet { .. }
@@ -50,12 +60,11 @@ pub(super) fn is_signature_type(types: &TypeRegistry<'_>, kt: Handle) -> bool {
 /// The applications `kt` holds, or `None` where `kt` is no signature type. The empty signature
 /// holds none.
 pub(super) fn applications<'run, 's>(
-    types: &TypeRegistry<'run>,
     scratch: BumpAllocator<'s>,
-    kt: Handle,
-) -> Option<BumpVec<'s, Application<'run>>> {
+    kt: Linked<'run>,
+) -> Option<BumpVec<'s, Application<'run, 'run>>> {
     let mut set = BumpVec::new_in(scratch);
-    let mut one = |kt: Handle| match types.node(kt) {
+    let mut one = |kt: Linked<'run>| match kt.view() {
         TypeNode::Signature { .. } if kt == Handle::EMPTY_SIGNATURE => true,
         TypeNode::Signature { .. } => {
             set.push(Application {
@@ -66,14 +75,14 @@ pub(super) fn applications<'run, 's>(
         }
         TypeNode::SignatureApply { signature, pins } => {
             set.push(Application {
-                signature: signature.raw(),
+                signature,
                 pins: pins.raw(),
             });
             true
         }
         _ => false,
     };
-    match types.node(kt) {
+    match kt.view() {
         TypeNode::SignatureMeet { members } => {
             for member in members.iter() {
                 let read = one(*member);
@@ -89,7 +98,10 @@ pub(super) fn applications<'run, 's>(
 /// R-5 for two applications: `lower` lies under `upper` when both apply one signature and `lower`'s
 /// pins include `upper`'s, each at an equal type. Two different pins of one parameter are
 /// unordered, whatever their types' own order.
-pub(super) fn application_under(lower: Application<'_>, upper: Application<'_>) -> bool {
+pub(super) fn application_under<'run>(
+    lower: Application<'_, 'run>,
+    upper: Application<'_, 'run>,
+) -> bool {
     lower.signature == upper.signature
         && upper
             .pins
@@ -99,25 +111,27 @@ pub(super) fn application_under(lower: Application<'_>, upper: Application<'_>) 
 
 /// R-5 for two sets: `lower` lies under `upper` when each application of `upper` lies above some
 /// application of `lower`. The empty set — `Module` — is the top.
-pub(super) fn applications_under(lower: &[Application<'_>], upper: &[Application<'_>]) -> bool {
+pub(super) fn applications_under<'run>(
+    lower: &[Application<'_, 'run>],
+    upper: &[Application<'_, 'run>],
+) -> bool {
     upper
         .iter()
         .all(|u| lower.iter().any(|l| application_under(*l, *u)))
 }
 
-/// The meet of the signature types `members` as the handles of its applications: every application
+/// The meet of the signature types `members` as the nodes of its applications: every application
 /// any member holds, less each one lying above another — of two equal, the first — sorted by
-/// handle. What [`TypeRegistry::signature_meet`] interns, and exact: it is the greatest set lying
-/// under every member.
-pub(super) fn canonical_applications<'s>(
-    types: &TypeRegistry<'_>,
+/// handle. What [`TypeChain::signature_meet`](super::chain::TypeChain::signature_meet) interns, and
+/// exact: it is the greatest set lying under every member.
+pub(super) fn canonical_applications<'s, 'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
-    members: &[Handle],
-) -> BumpVec<'s, Handle> {
+    members: &[Linked<'run>],
+) -> BumpVec<'s, Linked<'run>> {
     let mut all = BumpVec::new_in(scratch);
     for member in members {
-        let set = applications(types, scratch, *member)
-            .expect("a signature meet is over signature types");
+        let set = applications(scratch, member).expect("a signature meet is over signature types");
         all.extend_from_slice(&set);
     }
     let mut kept = BumpVec::with_capacity_in(all.len(), scratch);
@@ -128,7 +142,7 @@ pub(super) fn canonical_applications<'s>(
                 && (other < index || !application_under(*application, *peer))
         });
         if !above_another {
-            kept.push(application.handle(types, scratch));
+            kept.push(application.node(types, scratch));
         }
     }
     kept.sort_unstable();

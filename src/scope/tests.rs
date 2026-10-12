@@ -22,9 +22,10 @@ use crate::memory::{
 use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{DeclaredType, KType, TypeRegistry};
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{ContentDigest, Seen};
+use crate::values::tests::TestTypes;
+use crate::values::{ContentDigest, Seen, Types};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
@@ -50,19 +51,15 @@ impl Knotted for Probe {
     }
 
     /// A probe holds no value: every probe is a member of one empty knot, told apart by its index.
-    fn held<'a>(
-        &self,
-        _: &TypeRegistry<'_>,
-        _: BumpAllocator<'_>,
-        _: &mut dyn FnMut(Seen<'a, Self>),
-    ) where
+    fn held<'a>(&self, _: &Types<'_, '_>, _: BumpAllocator<'_>, _: &mut dyn FnMut(Seen<'a, Self>))
+    where
         Self: 'a,
     {
     }
 
     fn digest_held(
         &self,
-        _: &TypeRegistry<'_>,
+        _: &Types<'_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -108,6 +105,12 @@ impl<'graph> KnottedFamily<'graph> for ProbeFamily {
     {
     }
 
+    fn carried_types<'from>(_: &Probe, _: &mut dyn FnMut(DeclaredType<Parametric>))
+    where
+        'graph: 'from,
+    {
+    }
+
     fn copy_into<'from, 'to>(
         _: Writer<'to>,
         member: &Probe,
@@ -126,7 +129,8 @@ covariant!(ValueFamily<ProbeFamily>);
 
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
-    pub types: &'f TypeRegistry<'graph>,
+    /// The load's chain, which every shape a test builds goes through.
+    pub types: &'f Types<'graph, 'graph>,
     pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
@@ -142,12 +146,17 @@ impl<'graph> Fixture<'_, 'graph> {
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"))
     }
 
-    /// Run `step` in one cell of a graph over this fixture's storage, handing it the cell's writer.
-    pub fn in_cell<R>(&self, step: impl for<'cell> FnOnce(Writer<'cell>) -> R) -> R {
+    /// Run `step` in one cell of a graph over this fixture's storage, handing it the cell's writer
+    /// and a witness that the fixture's storage outlives the cell — the writer is invariant, so an
+    /// activation over a program shape takes the cell's brand only where that is known.
+    pub fn in_cell<R>(
+        &self,
+        step: impl for<'cell> FnOnce(Writer<'cell>, &'cell &'graph ()) -> R,
+    ) -> R {
         let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, |_| Verdict::Pin);
         let cell = graph.create(None).expect("the graph has a free slot");
         let out = graph
-            .enter(cell, |context| step(context.writer()))
+            .enter(cell, |context| step(context.writer(), &&()))
             .expect("a fresh cell is enterable");
         graph
             .release(cell, ReleaseAbsorption::IntoHolder)
@@ -160,10 +169,11 @@ impl<'graph> Fixture<'_, 'graph> {
 pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>) -> R) -> R {
     let storage = program_storage();
     let program = storage.brand();
-    // The lattice's registry is a collections arena, so it keeps a bump of its own; program
-    // storage is the one `cellgraph` store everything else here is written into.
+    // The lattice's tiers keep a bump of their own; program storage is the one `cellgraph` store
+    // everything else here is written into.
     let registry = Bump::new();
-    let types = TypeRegistry::in_region(&registry);
+    let tiers = TestTypes::new(&registry);
+    let types = tiers.load();
     let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     test(&Fixture {

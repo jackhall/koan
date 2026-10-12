@@ -140,6 +140,7 @@ pub(super) fn evaluate<'graph>(
         view,
         contract,
         birth,
+        types: step.types(),
     };
     if stage == FINISHING {
         return finishing(step, &at);
@@ -156,11 +157,13 @@ pub(super) fn evaluate<'graph>(
             let site = Site::of_body(node).expect("a `FN` has a body");
             let scratch = Bump::new();
             let writer = step.writer();
-            let value = match lambda(writer, &view, site, program.types(), &scratch) {
+            let value = match lambda(writer, &view, site, &at.types, &scratch) {
                 Ok(member) => Value::Knotted(member),
-                Err(refused) => {
-                    program.error(writer, refused.display(program.symbols(), program.types()))
-                }
+                Err(refused) => program.error(
+                    writer,
+                    &at.types,
+                    refused.display(program.symbols(), &at.types),
+                ),
             };
             finish(step, &at, value)
         }
@@ -178,7 +181,7 @@ pub(super) fn evaluate<'graph>(
             apply(step, &at, &head.value, &argument.value, stage)
         }
         Form::Unevaluable(node) => {
-            let error = Raised::Unevaluable { node }.raise(program, step.writer());
+            let error = Raised::Unevaluable { node }.raise(program, step.writer(), &at.types);
             finish(step, &at, error)
         }
     }
@@ -265,7 +268,7 @@ fn leaf<'graph, 'here>(
     stage: u32,
 ) -> Action<'graph, KBundle> {
     let program = at.program;
-    let types = program.types();
+    let types = &at.types;
     let scratch = Bump::new();
     match part {
         ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => read(step, at, part),
@@ -273,7 +276,9 @@ fn leaf<'graph, 'here>(
             let writer = step.writer();
             let value = match denoted(part, &at.view, types, &scratch) {
                 Ok(handle) => Value::Type(TypeValue::new(writer, handle, types)),
-                Err(refused) => program.error(writer, refused.display(program.symbols(), types)),
+                Err(refused) => {
+                    program.error(writer, types, refused.display(program.symbols(), types))
+                }
             };
             finish(step, at, value)
         }
@@ -311,7 +316,7 @@ fn ascribe<'graph, 'here>(
     stage: u32,
 ) -> Action<'graph, KBundle> {
     let program = at.program;
-    let types = program.types();
+    let types = &at.types;
     let scratch = Bump::new();
     let [operand, _, ascribed] = node.parts else {
         unreachable!("an ascription has an operand, its keyword and a type")
@@ -328,16 +333,21 @@ fn ascribe<'graph, 'here>(
     let ascribed = match denoted(&ascribed.value, &at.view, types, &scratch) {
         Ok(ascribed) => ascribed,
         Err(refused) => {
-            let error = program.error(writer, refused.display(program.symbols(), types));
+            let error = program.error(writer, types, refused.display(program.symbols(), types));
             return finish(step, at, error);
         }
     };
     if view::views(types, mode, value.concrete_ktype(), ascribed) {
+        debug_assert!(
+            mode != Ascription::Opaque || at.view.shape().mints_at(Site::of_node(node)),
+            "the load recorded the opaque view at {:?} as a minting site",
+            node.source,
+        );
         let Some(module) = value.as_module() else {
             let raised = Raised::NotAModule {
                 value: value.concrete_ktype(),
             };
-            return finish(step, at, raised.raise(program, writer));
+            return finish(step, at, raised.raise(program, writer, &at.types));
         };
         let raised = match view::ascribe(writer, module, ascribed, mode, types, &scratch) {
             Ok(view) => return finish(step, at, Value::Knotted(view)),
@@ -352,7 +362,7 @@ fn ascribe<'graph, 'here>(
             },
             Err(Unascribable::NotAModule) => unreachable!("the operand is a module"),
         };
-        return finish(step, at, raised.raise(program, writer));
+        return finish(step, at, raised.raise(program, writer, &at.types));
     }
     if at.view.shape().settled(Site::of_node(node)) {
         debug_assert!(
@@ -364,7 +374,7 @@ fn ascribe<'graph, 'here>(
             value: value.concrete_ktype(),
             ascribed,
         };
-        return finish(step, at, raised.raise(program, writer));
+        return finish(step, at, raised.raise(program, writer, &at.types));
     }
     finish(step, at, value.retyped(writer, ascribed, types, &scratch))
 }
@@ -395,7 +405,7 @@ fn using<'graph, 'here>(
         let raised = Raised::NotAModule {
             value: module.concrete_ktype(),
         };
-        let error = raised.raise(program, step.writer());
+        let error = raised.raise(program, step.writer(), &at.types);
         return finish(step, at, error);
     }
     let body = Site::of_body(node)
@@ -416,7 +426,7 @@ fn evaluated<'graph, 'here>(
     stage: u32,
 ) -> Action<'graph, KBundle> {
     let program = at.program;
-    let (types, symbols) = (program.types(), program.symbols());
+    let (types, symbols) = (&at.types, program.symbols());
     let scratch = Bump::new();
     let [_, operand, _, declared] = node.parts else {
         unreachable!("an `EVAL` has its keyword, its code, `->` and a type")
@@ -434,12 +444,12 @@ fn evaluated<'graph, 'here>(
         let raised = Raised::NotCode {
             value: value.concrete_ktype(),
         };
-        return finish(step, at, raised.raise(program, writer));
+        return finish(step, at, raised.raise(program, writer, &at.types));
     };
     let returns = match denoted(&declared.value, &at.view, types, &scratch) {
         Ok(returns) => returns,
         Err(refused) => {
-            let error = program.error(writer, refused.display(symbols, types));
+            let error = program.error(writer, types, refused.display(symbols, types));
             return finish(step, at, error);
         }
     };
@@ -448,17 +458,17 @@ fn evaluated<'graph, 'here>(
         return finish(
             step,
             at,
-            program.error(writer, error.display(symbols, types)),
+            program.error(writer, types, error.display(symbols, types)),
         );
     }
     let offered = offered(at, writer, &operand.value, &scratch);
-    match crate::program::eval(program, code, offered, returns, Use::Forwards) {
+    match crate::program::eval(program, &at.types, code, offered, returns, Use::Forwards) {
         Ok(request) => {
             let asked = step.spawn(request);
             park(step, at, asked, FINISHING)
         }
         Err(refused) => {
-            let error = program.error(writer, refused.display(symbols, types));
+            let error = program.error(writer, types, refused.display(symbols, types));
             finish(step, at, error)
         }
     }
@@ -472,7 +482,7 @@ fn offered<'graph, 'here>(
     operand: &'graph ExpressionPart<'graph>,
     scratch: &Bump,
 ) -> KValue<'graph, 'here> {
-    let types = at.program.types();
+    let types = &at.types;
     let offers = at.view.shape().offers(Site::of(operand));
     let mut fields = BumpVec::with_capacity_in(offers.len(), scratch);
     for (name, offer) in offers {
@@ -507,7 +517,7 @@ fn container<'graph, 'here>(
     part: &'graph ExpressionPart<'graph>,
     stage: u32,
 ) -> Action<'graph, KBundle> {
-    let types = at.program.types();
+    let types = &at.types;
     let scratch = Bump::new();
     if stage == BORN
         && let Some(value) = Value::lower_part(step.writer(), part, types, &scratch)
@@ -550,7 +560,8 @@ fn container<'graph, 'here>(
                 match Key::of(&pair[0]) {
                     Ok(key) => entries.push((key, pair[1])),
                     Err(rejected) => {
-                        let error = Raised::NotAKey { rejected }.raise(at.program, writer);
+                        let error =
+                            Raised::NotAKey { rejected }.raise(at.program, writer, &at.types);
                         return finish(step, at, error);
                     }
                 }
@@ -582,7 +593,7 @@ fn call<'graph, 'here>(
     stage: u32,
 ) -> Action<'graph, KBundle> {
     let program = at.program;
-    let types = program.types();
+    let types = &at.types;
     let scratch = Bump::new();
     let wanted = slots(node, &scratch);
     let operands = match gathered(&mut step, at, &wanted, stage, &scratch) {
@@ -627,6 +638,7 @@ fn call<'graph, 'here>(
             let call = |owed| {
                 crate::program::call(
                     program,
+                    &at.types,
                     callee,
                     arguments,
                     CallKind::Keyworded,
@@ -658,7 +670,7 @@ fn call<'graph, 'here>(
             count,
         },
     };
-    let error = raised.raise(program, writer);
+    let error = raised.raise(program, writer, &at.types);
     finish(step, at, error)
 }
 
@@ -669,7 +681,7 @@ fn contributed<'x, 'graph>(
     recorded: &[StaticType<'graph>],
     scratch: &'x Bump,
 ) -> BumpVec<'x, Option<KType>> {
-    let types = at.program.types();
+    let types = &at.types;
     let mut contributed = BumpVec::with_capacity_in(recorded.len(), scratch);
     contributed.extend(recorded.iter().map(|each| {
         match each {
@@ -725,7 +737,7 @@ fn apply<'graph, 'here>(
     stage: u32,
 ) -> Action<'graph, KBundle> {
     let program = at.program;
-    let types = program.types();
+    let types = &at.types;
     let scratch = Bump::new();
     let wanted = [Wanted::Evaluated(head), Wanted::Evaluated(argument)];
     let operands = match gathered(&mut step, at, &wanted, stage, &scratch) {
@@ -742,6 +754,7 @@ fn apply<'graph, 'here>(
             Ok(tagged) => Value::Tagged(tagged),
             Err(refused) => program.error(
                 writer,
+                types,
                 refused_construction(&refused, program.symbols(), types),
             ),
         };
@@ -752,6 +765,7 @@ fn apply<'graph, 'here>(
     let call = |owed| {
         crate::program::call(
             program,
+            &at.types,
             head,
             argument,
             CallKind::ByName,
@@ -762,7 +776,7 @@ fn apply<'graph, 'here>(
     };
     if let Some(contract) = at.contract
         && (head.as_callable().and_then(Knotted::function))
-            .is_some_and(|function| contract.kept_by(program.types(), function.ktype(), None))
+            .is_some_and(|function| contract.kept_by(&at.types, function.ktype(), None))
     {
         let request = call(Some(contract));
         return step.tail(request.placement, request.work);
@@ -779,7 +793,7 @@ fn carried_under_static<'graph, 'here>(
     at: &Evaluation<'graph, 'here>,
     value: &KValue<'graph, 'here>,
 ) {
-    if at.program.message(value).is_some() {
+    if at.program.message(value, &at.types).is_some() {
         return;
     }
     let shape = at.view.shape();
@@ -796,7 +810,7 @@ fn carried_under_static<'graph, 'here>(
     let Some(expected) = expected else {
         return;
     };
-    let types = at.program.types();
+    let types = &at.types;
     let scratch = Bump::new();
     let carried = value.ktype();
     debug_assert!(
@@ -829,7 +843,7 @@ fn in_place<'graph, 'here>(
     scratch: &Bump,
 ) -> Option<KValue<'graph, 'here>> {
     let writer = step.writer();
-    let types = at.program.types();
+    let types = &at.types;
     match part {
         ExpressionPart::Literal(_) => Value::lower_part(writer, part, types, scratch),
         ExpressionPart::QuotedExpression(_) => {
@@ -879,10 +893,10 @@ fn gathered<'x, 'graph, 'here>(
         }
     }
     let mut received = BumpVec::new_in(scratch);
-    for result in step.results(at.program.types()) {
+    for result in step.results() {
         match result {
             Ok(Received::Here(value)) => {
-                if at.program.message(&value).is_some() {
+                if at.program.message(&value, &at.types).is_some() {
                     return Gathered::Raised(value);
                 }
                 received.push(value);
@@ -923,7 +937,7 @@ fn unready<'graph, 'here>(
 ) -> Action<'graph, KBundle> {
     match gathered {
         Gathered::Asked(asked) => park(step, at, asked, GATHERED),
-        Gathered::Raised(error) => step.finish(error, at.program.types()),
+        Gathered::Raised(error) => step.finish(error),
         Gathered::Broken(error) => step.failed(error),
         Gathered::Ready(_) => unreachable!("a ready gathering is not unready"),
     }
@@ -952,7 +966,7 @@ fn finishing<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_>,
     at: &Evaluation<'graph, 'here>,
 ) -> Action<'graph, KBundle> {
-    let received = step.results(at.program.types()).next();
+    let received = step.results().next();
     match received {
         Some(Ok(Received::Here(value))) => finish(step, at, value),
         _ => step.failed(StepError::Unredeemable),
@@ -968,8 +982,10 @@ fn finish<'graph, 'here>(
     #[cfg(debug_assertions)]
     carried_under_static(at, &value);
     let value = match at.contract {
-        Some(contract) => at.program.fulfilled(step.writer(), value, contract),
+        Some(contract) => at
+            .program
+            .fulfilled(step.writer(), &at.types, value, contract),
         None => value,
     };
-    step.finish(value, at.program.types())
+    step.finish(value)
 }

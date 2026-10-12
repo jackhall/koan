@@ -100,9 +100,10 @@ fn a_built_node_computes_its_key_and_a_synthesized_one_takes_its_origin() {
 #[test]
 fn admission_reads_each_part_kind() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
+        let scratch = fixture.scratch();
         let ast = fixture.parse("x 1");
         fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let working = WorkingExpression::from_ast(writer, &ast);
             let name = working.parts[0].value;

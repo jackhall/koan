@@ -30,16 +30,11 @@ fn family<'p>(
     program: &Program<'p, '_, '_>,
     handle: KType,
 ) -> (Option<Parametric>, &'p [TypeSymbol]) {
-    match program.types.node(handle) {
-        TypeNode::SetMember {
-            kind: KKind::TypeConstructor,
-            schema:
-                NodeSchema::TypeConstructor {
-                    representation,
-                    param_names,
-                },
-            ..
-        } => (representation, param_names),
+    match program.types.member_schema(handle) {
+        Some(NodeSchema::TypeConstructor {
+            representation,
+            param_names,
+        }) => (representation, param_names),
         _ => panic!("the handle is a family member"),
     }
 }

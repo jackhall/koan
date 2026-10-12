@@ -13,10 +13,12 @@ use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
 };
 use crate::scheduler::continuation::{
-    Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt, StepBundle,
-    Work,
+    Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt,
+    StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::type_lattice::Root;
+use crate::values::TypeHeader;
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -24,43 +26,51 @@ use crate::scheduler::delivery::KDelivery;
 /// A newtype rather than an alias, so the families stay the scheduler's own: what owns a graph
 /// makes one, takes its roots from it, keeps it across calls and asks what is left in it, and
 /// reaches every other cell only through a [`Scheduler`] over it.
-pub struct Graph<'graph, B: StepBundle<'graph>>(
-    CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery>,
-);
+///
+/// It holds the frozen type root every step's chain reads first, so a step and a crossing take it
+/// from the graph they run over rather than from a program or a static.
+pub struct Graph<'graph, B: StepBundle<'graph>> {
+    cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
+    type_root: &'graph Root<'graph>,
+}
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
-    /// A graph over a slab of `cap` cells, under koan's own crossing verdict.
-    pub fn new(cap: u32) -> Self {
-        Graph(CellGraph::new(cap, crate::values::verdict))
+    /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
+    /// over `type_root`.
+    pub fn new(cap: u32, type_root: &'graph Root<'graph>) -> Self {
+        Graph {
+            cells: CellGraph::new(cap, crate::values::verdict),
+            type_root,
+        }
     }
 
     /// A storage-only slab cell no drain enters or releases: the region a root work is born under
     /// and builds its results in. Refused when the slab is full.
     pub fn root(&mut self) -> Result<SlabHandle, CreateError> {
-        self.0.create(None)
+        self.cells.create(None)
     }
 
     /// Give a root back. Refused for a root that is not live.
     pub fn release_root(&mut self, root: SlabHandle) -> Result<(), ReleaseError> {
-        self.0.release(root, ReleaseAbsorption::IntoHolder)
+        self.cells.release(root, ReleaseAbsorption::IntoHolder)
     }
 
     /// Whether every cell of this graph, roots included, has been reclaimed.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.cells.is_empty()
     }
 
     /// Whether the named cell is still live — what a test reads to watch a release land.
     pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
-        self.0.is_live(cell)
+        self.cells.is_live(cell)
     }
 
     /// The graph itself, for a test that drives the raw slot doors a step never reaches.
     #[cfg(test)]
     pub(super) fn cells(
         &mut self,
-    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery> {
-        &mut self.0
+    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader> {
+        &mut self.cells
     }
 }
 
@@ -141,7 +151,12 @@ where
         under: impl Into<CellHandle>,
         placement: Placement,
     ) -> Result<Option<Resting<'graph, B>>, DrainStalled> {
-        self.drive(step, Rested::Dormant(resting.0), under.into(), placement)
+        self.drive(
+            step,
+            Rested::Dormant(resting.0, Born::Child),
+            under.into(),
+            placement,
+        )
     }
 
     /// The drain loop both root works share: born under `under`, reporting to nobody, run until
@@ -177,7 +192,14 @@ where
                     provenance,
                     asked,
                     release_after,
-                } => (self.create(provenance, asked)?, release_after),
+                } => {
+                    let born = if release_after.is_some() {
+                        Born::Hop
+                    } else {
+                        Born::Child
+                    };
+                    (self.create(provenance, asked, born)?, release_after)
+                }
             };
             let (action, provenance) = self.step(cell)?;
             // A hop's successor has woken what its predecessor kept, so the predecessor can go.
@@ -244,11 +266,13 @@ where
         }
     }
 
-    /// Give a request its cell, under the parent its provenance names.
+    /// Give a request its cell, under the parent its provenance names, its birth crossing as
+    /// `born` says.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
+        born: Born,
     ) -> Result<CellHandle, DrainStalled> {
         self.born(
             provenance.parent,
@@ -256,7 +280,7 @@ where
             Continuation {
                 step: asked.step,
                 provenance,
-                state: Rested::Dormant(asked.state),
+                state: Rested::Dormant(asked.state, born),
             },
         )
     }
@@ -267,8 +291,9 @@ where
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
+        let type_root = graph.type_root;
         graph
-            .0
+            .cells
             .enter(cell, |context| {
                 let Continuation {
                     step,
@@ -284,14 +309,23 @@ where
                 let scratch = context.scratch_state();
                 let state = match state {
                     Rested::Awake(state) => state,
-                    Rested::Dormant(dormant) => match wake::<B>(context, dormant) {
-                        Ok(state) => state,
-                        Err(_) => {
-                            return (Action::refused(StepError::Unredeemable), provenance);
+                    Rested::Dormant(dormant, born) => {
+                        match wake::<B>(context, type_root, dormant, born) {
+                            Ok(state) => state,
+                            Err(_) => {
+                                return (Action::refused(StepError::Unredeemable), provenance);
+                            }
                         }
-                    },
+                    }
                 };
-                let step = step(Step::new(context, &provenance, spawns, state, scratch));
+                let step = step(Step::new(
+                    context,
+                    type_root,
+                    &provenance,
+                    spawns,
+                    state,
+                    scratch,
+                ));
                 (step, provenance)
             })
             .map_err(|_| DrainStalled::Unenterable)
@@ -307,12 +341,12 @@ where
         let born = match placement {
             Placement::Fresh => self
                 .graph
-                .0
+                .cells
                 .create_tree(under, Some(continuation))
                 .map(CellHandle::from),
             Placement::Shares => self
                 .graph
-                .0
+                .cells
                 .create_tenant(under, Some(continuation))
                 .map(CellHandle::from),
         }
@@ -328,8 +362,8 @@ where
     fn retire(&mut self, cell: CellHandle) -> Result<(), DrainStalled> {
         let released = match cell {
             CellHandle::Slab(_) => false,
-            CellHandle::Tree(handle) => self.graph.0.release_tree(handle).is_ok(),
-            CellHandle::Tenant(handle) => self.graph.0.release_tenant(handle).is_ok(),
+            CellHandle::Tree(handle) => self.graph.cells.release_tree(handle).is_ok(),
+            CellHandle::Tenant(handle) => self.graph.cells.release_tenant(handle).is_ok(),
         };
         if !released {
             return Err(DrainStalled::Unreleasable);
@@ -358,7 +392,9 @@ where
 /// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
 fn wake<'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, B>,
+    type_root: &'graph Root<'graph>,
     dormant: Dormant<'graph, B::Birth>,
+    born: Born,
 ) -> Result<StateAt<'graph, 'here, B>, RedeemError>
 where
     'graph: 'step + 'here,
@@ -372,7 +408,7 @@ where
             carrier: &carrier,
             copy_bytes,
         }],
-        |writer, views| B::cross(writer, &views[0]),
+        |writer, header, views| B::cross(writer, header, &views[0], born, type_root),
     );
     Ok(B::born(birth))
 }

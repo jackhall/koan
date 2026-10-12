@@ -7,6 +7,8 @@ use crate::type_lattice::display_name;
 
 use super::run;
 use super::statics::{interval, loaded, slot, top, using_block};
+use crate::memory::Bump;
+use crate::values::tests::reading;
 
 #[test]
 fn an_annotated_binder_holds_its_value_at_its_type() {
@@ -69,7 +71,9 @@ fn a_using_over_an_annotated_binder_surfaces_its_annotation_s_names() {
                   )";
     using_block(source, |program, block| {
         let typed = interval(program, block, "a");
-        let rendered = display_name(typed.upper, program.types(), program.symbols());
+        let bump = Bump::new();
+        let types = reading(program.root(), &bump);
+        let rendered = display_name(typed.upper, &types, program.symbols());
         assert_eq!(rendered.to_string(), ":(LIST OF Number)");
     });
 }
