@@ -216,7 +216,9 @@ impl ViewTypes<'_> {
         let (Some(held), Some(from)) = (self.held, self.from) else {
             return;
         };
-        let held = crate::elaborate::schema_of(held, types).expect("a module's own signature");
+        let Some(held) = module_schema(held, types) else {
+            return;
+        };
         for (name, declared) in self.sig.value_slots.iter().copied() {
             let member = held.value_slots.iter().find(|(held, _)| *held == name);
             let member = member.and_then(|(_, member)| member.as_type());
@@ -252,7 +254,17 @@ impl ViewTypes<'_> {
             return;
         };
         match (declared.view(types).body, types.node(held)) {
-            (TypeNode::SignatureApply { .. }, _) => {
+            // A list's cells of several signatures join to their union, each member one cell's.
+            (TypeNode::SignatureApply { .. }, TypeNode::Union { members }) => {
+                for held in members.iter() {
+                    if module_schema(held, types).is_some()
+                        && let Ok(nested) = nested_types(held, src, dst, types, scratch)
+                    {
+                        nested.lay_members(types, scratch);
+                    }
+                }
+            }
+            (TypeNode::SignatureApply { .. }, _) if module_schema(held, types).is_some() => {
                 if let Ok(nested) = nested_types(held, src, dst, types, scratch) {
                     nested.lay_members(types, scratch);
                 }
@@ -273,6 +285,17 @@ impl ViewTypes<'_> {
             _ => {}
         }
     }
+}
+
+/// `held`'s schema where it is a module's own signature, declaring no head parameter: the only
+/// type the load knows a nested module's view from. A slot's application, a list's element type
+/// joined over modules of several signatures, or an empty list's `Never` is none — the nested
+/// module's own signature is then the value's alone, and its view's types are interned at run.
+fn module_schema<'run>(held: KType, types: &Types<'_, 'run>) -> Option<SigSchema<'run>> {
+    if !matches!(types.node(held), TypeNode::Signature { .. }) {
+        return None;
+    }
+    crate::elaborate::schema_of(held, types).filter(|schema| schema.parameters.is_empty())
 }
 
 /// What a nested module of signature `held` binds when re-viewed at a slot whose application

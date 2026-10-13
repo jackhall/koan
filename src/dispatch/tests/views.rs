@@ -81,3 +81,44 @@ fn a_view_over_a_record_holding_a_module_lays_its_nested_view_at_load() {
         "the root holds the nested view's types"
     );
 }
+
+/// `Inner`, an `Outer` holding a list of its applications, and modules of two signatures, for a view over a list of nested modules.
+const NESTED_LIST: &str = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
+                           SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+                           (VAL inners :(LIST OF (Inner WITH {Elem = Carrier})))]\n\
+                           MODULE a = ((LET Elem = Number) (LET item = 5))\n\
+                           MODULE b = ((LET Elem = Number) (LET item = 6) (LET more = 7))\n";
+
+/// An empty list's element type is `Never`, which names no module to re-view.
+#[test]
+fn a_view_over_an_empty_list_of_modules_lays_no_type_at_run() {
+    let source = format!(
+        "{NESTED_LIST}MODULE ints = ((LET zero = 0) (LET inners = []))\nLET m = (ints :| Outer)\n"
+    );
+    assert_eq!(branch_after(&source), 0);
+}
+
+/// A list of modules of two signatures has its element type at their union, and the load lays the
+/// nested view of each.
+#[test]
+fn a_view_over_a_list_of_modules_of_two_signatures_lays_each_nested_view_at_load() {
+    let source = format!(
+        "{NESTED_LIST}MODULE ints = ((LET zero = 0) (LET inners = [a b]))\nLET m = (ints :| Outer)\n"
+    );
+    assert_eq!(branch_after(&source), 0);
+}
+
+/// A view of a transparent view: the source's signature declares the nested module only at an
+/// application, which is not the module's own signature, so the load lays nothing for it and the
+/// run re-views it.
+#[test]
+fn a_view_of_a_transparent_view_holding_a_module_runs() {
+    let source = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
+                  SIG Outer FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL inner :(Inner WITH {Elem = Carrier}))]\n\
+                  MODULE a = ((LET Elem = Number) (LET item = 5))\n\
+                  MODULE ints = ((LET zero = 0) (LET inner = a))\n\
+                  LET t = (ints :! (Outer WITH {Carrier = Number}))\n\
+                  LET m = (t :| Outer)\n";
+    branch_after(source);
+}
