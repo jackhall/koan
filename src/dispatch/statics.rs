@@ -115,7 +115,9 @@
 //! The pass reads each `:|` ascription's operand as a [content tree](crate::scope::Tree) —
 //! [`trees`] — and the cell records it by the ascription's site. Over a closed tree it lays every
 //! type the view door computes from types alone ([`view_types`](view::view_types)) in the root,
-//! and the run's door checks in debug builds that the tree reads the operand's digest.
+//! each nested module's re-view among them, read off what the tree shows each member carries
+//! ([`views`]); at an exact `:!` likewise. The run's door checks in debug builds that the tree
+//! reads the operand's digest.
 //!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
@@ -125,7 +127,7 @@
 
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
 use crate::knot::module::ModuleContent;
-use crate::knot::module::view::{self, Ascription, opaque_view_type, transparent_view_type};
+use crate::knot::module::view::{self, Ascription, opaque_view_type, transparent_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
@@ -158,6 +160,7 @@ use crate::values::{
 
 mod paths;
 mod trees;
+mod views;
 
 use trees::Written;
 
@@ -189,6 +192,7 @@ pub(super) fn statics<'graph>(
         typing: BumpVec::new_in(scratch),
         recursive: bump_set(scratch),
         summaries: bump_table(scratch),
+        signatures: bump_table(scratch),
         selections: bump_table(scratch),
         paths: BumpVec::new_in(scratch),
     };
@@ -345,6 +349,9 @@ struct Pass<'p, 'x, 'graph> {
     recursive: BumpBackedSet<'p, usize>,
     /// Each typed callable body's summary: the tree of its last statement.
     summaries: BumpBackedMap<'p, usize, Option<Tree<'graph>>>,
+    /// Each `MODULE` or `GROUP` body the pass typed exactly, by its address: the signature every
+    /// run of it ties, which its content tree does not record.
+    signatures: BumpBackedMap<'p, usize, KType>,
     /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
     selections: BumpBackedMap<'p, Site, &'p [Option<KType>]>,
@@ -694,6 +701,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             members.push((slot, exact));
         }
         let signature = module_signature(body, members, &keyworded, types, scratch);
+        if !self.unfilled {
+            self.signatures.insert(address(body), signature);
+        }
         Ok(Interval::point(signature.into()))
     }
 
@@ -1985,22 +1995,35 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.chain[level].minting.push(Site::of_node(node));
                 let tree = self.tree(level, &operand_part.value)?;
                 let tree = resident(self.writer, tree);
-                self.chain[level].trees.push((Site::of_node(node), tree));
+                let site = Site::of_node(node);
+                self.chain[level].trees.push((site, tree));
                 // Over a closed tree the load lays every type the view door computes from types
                 // alone, so the run's view interns none of its own.
                 if let (Some(digest), Some(signature)) = (
                     tree.digest(),
                     declared.and_then(|declared| types.concrete(declared)),
                 ) {
-                    let held = typed
+                    let exact = typed
                         .is_exact()
                         .then(|| types.concrete(typed.upper))
                         .flatten();
+                    // What the operand carries, read off its tree, else by its exact type.
+                    let seen = self.carried_type(views::Carried::Tree(*tree), site)?;
+                    debug_assert!(
+                        exact.is_none() || seen.is_none() || exact == seen,
+                        "a tree reads the type its operand carries"
+                    );
+                    let carried = match (seen, exact) {
+                        (Some(_), _) => views::Carried::Tree(*tree),
+                        (None, Some(exact)) => views::Carried::Typed(exact),
+                        (None, None) => views::Carried::Tree(*tree),
+                    };
                     let key =
                         ModuleContent::view(Operator::Opaque, signature, digest).carrier_key();
+                    let held = seen.or(exact);
                     if let Ok(viewed) = view::view_types(held, signature, mode, key, types, scratch)
                     {
-                        viewed.lay_members(types, scratch);
+                        self.lay(&viewed, carried, site)?;
                     }
                 }
             }
@@ -2082,11 +2105,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 at: node.source,
             });
         }
-        let view = types
+        let viewed = types
             .concrete(declared)
             .filter(|_| mode == Ascription::Transparent)
-            .and_then(|declared| transparent_view_type(exact, declared, types, scratch));
-        Ok(view.map_or_else(|| under(declared), |view| Interval::point(view.into())))
+            .and_then(|declared| transparent_view_types(exact, declared, types, scratch));
+        let Some(viewed) = viewed else {
+            return Ok(under(declared));
+        };
+        // The load lays what the run's view reads, so it interns nothing of its own.
+        self.lay(&viewed, views::Carried::Typed(exact), Site::of_node(node))?;
+        Ok(Interval::point(viewed.view.into()))
     }
 
     /// `LET <name> <type> = <value>`, the binder at `member` of the shape at `level`, whose value

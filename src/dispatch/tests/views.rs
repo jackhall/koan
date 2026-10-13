@@ -121,3 +121,95 @@ fn a_view_of_a_transparent_view_lays_its_nested_view_at_load() {
                   LET m = (t :| Outer)\n";
     assert_eq!(branch_after(source), 0);
 }
+
+/// `Deep` nested in `Inner` nested in `Outer`, and modules of each, for views two deep.
+const DEEP: &str = "SIG Deep FOR ALL #[Depth] = #[(VAL v :Depth)]\n\
+                    SIG Inner FOR ALL #[Elem] = \
+                    #[(VAL item :Elem) (VAL deep :(Deep WITH {Depth = Elem}))]\n\
+                    SIG Outer FOR ALL #[Carrier] = \
+                    #[(VAL zero :Carrier) (VAL inner :(Inner WITH {Elem = Carrier}))]\n\
+                    MODULE d = ((LET Depth = Number) (LET v = 1))\n\
+                    MODULE a = ((LET Elem = Number) (LET item = 5) (LET deep = d))\n\
+                    MODULE ints = ((LET zero = 0) (LET inner = a))\n";
+
+/// A module two deep under a transparent view: the load reads what each carries off the view's
+/// source.
+#[test]
+fn a_module_two_deep_under_a_transparent_view_lays_its_nested_views_at_load() {
+    let source = format!(
+        "{DEEP}LET t = (ints :! (Outer WITH {{Carrier = Number}}))\nLET m = (t :| Outer)\n"
+    );
+    assert_eq!(branch_after(&source), 0);
+}
+
+/// A transparent view of a transparent view carries each member as its source does.
+#[test]
+fn a_transparent_view_of_a_transparent_view_lays_its_nested_views_at_load() {
+    let source = format!(
+        "{DEEP}LET t = (ints :! (Outer WITH {{Carrier = Number}}))\nLET u = (t :! Outer)\n\
+         LET m = (u :| Outer)\n"
+    );
+    assert_eq!(branch_after(&source), 0);
+}
+
+/// An opaque view's nested modules carry their re-views, which the load computes again.
+#[test]
+fn a_view_of_an_opaque_view_lays_its_nested_views_at_load() {
+    let source = format!("{DEEP}LET o = (ints :| Outer)\nLET m = (o :| Outer)\n");
+    assert_eq!(branch_after(&source), 0);
+}
+
+/// A module in a record, a list or a dict under a transparent view.
+#[test]
+fn a_container_of_modules_under_a_transparent_view_lays_its_nested_views_at_load() {
+    let inner = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
+                 MODULE a = ((LET Elem = Number) (LET item = 5))\n";
+    for (slot, value) in [
+        ("{inner :(Inner WITH {Elem = Carrier})}", "{inner = a}"),
+        ("(LIST OF (Inner WITH {Elem = Carrier}))", "[a a]"),
+        ("(MAP Str -> (Inner WITH {Elem = Carrier}))", "{\"k\": a}"),
+    ] {
+        let source = format!(
+            "{inner}SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL held :{slot})]\n\
+             MODULE ints = ((LET zero = 0) (LET held = {value}))\n\
+             LET t = (ints :! (Outer WITH {{Carrier = Number}}))\nLET m = (t :| Outer)\n"
+        );
+        assert_eq!(branch_after(&source), 0, "{slot}");
+    }
+}
+
+/// A slot that leaves a parameter of the nested signature unset: the module's own signature fixes
+/// it, which the load reads off the view's source.
+#[test]
+fn a_slot_leaving_a_nested_parameter_unset_lays_its_nested_view_at_load() {
+    let source = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL item :Elem) (VAL extra :Extra)]\n\
+                  SIG Outer FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL inner :(Inner WITH {Elem = Carrier}))]\n\
+                  MODULE a = ((LET Elem = Number) (LET Extra = Str) (LET item = 5) \
+                  (LET extra = \"s\"))\n\
+                  MODULE ints = ((LET zero = 0) (LET inner = a))\n\
+                  LET t = (ints :! (Outer WITH {Carrier = Number}))\n\
+                  LET m = (t :| Outer)\n";
+    assert_eq!(branch_after(source), 0);
+}
+
+/// A view inside a record literal has no tree, so its own nested modules are read as its
+/// signature declares them, and re-viewed at run.
+#[test]
+fn a_view_inside_a_record_literal_runs() {
+    let source = format!(
+        "{DEEP}SIG Holder FOR ALL #[Carrier] = \
+         #[(VAL zero :Carrier) (VAL pair :{{inner :(Inner WITH {{Elem = Carrier}})}})]\n\
+         MODULE held = ((LET zero = 0) \
+         (LET pair = {{inner = (a :! (Inner WITH {{Elem = Number}}))}}))\n\
+         LET m = (held :| Holder)\n"
+    );
+    branch_after(&source);
+}
+
+/// A transparent view over a module the load types exactly lays its bindings at load.
+#[test]
+fn a_transparent_view_lays_its_types_at_load() {
+    let source = format!("{DEEP}LET t = (ints :! (Outer WITH {{Carrier = Number}}))\n");
+    assert_eq!(branch_after(&source), 0);
+}

@@ -29,16 +29,15 @@
 //! [`view_types`] is the half of an ascription computed from types alone: the bindings either side
 //! and the view's signature. The load calls it at a `:|` site over a content tree it sees all of,
 //! so the root holds each type the run's view would otherwise intern; [`nested_types`] is the
-//! same half of a nested re-view, which [`ViewTypes::lay_members`] lays wherever the source's
-//! signature shows a nested module.
+//! same half of a nested re-view, which the load lays wherever it knows what a nested module
+//! carries (`dispatch/statics/views.rs`).
 
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    ContentKey, DeclaredType, FitsFailure, KKind, KType, Members, Parametric, SchemaDraft,
-    SigSchema, TypeNode, fits_application, member as bound_member, satisfied_by,
-    substitute_parameters,
+    ContentKey, FitsFailure, KKind, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
+    fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
 use crate::values::{ContentDigest, TypeValue, Types, Value};
 
@@ -201,126 +200,11 @@ pub fn view_types<'run: 'x, 'x>(
     })
 }
 
-impl ViewTypes<'_> {
-    /// Intern each member's declared type read under either side, as the coercion walk reads it
-    /// before it rebuilds a member: each value slot's and each keyworded member's. Where the
-    /// source's signature is known, a value slot holding a nested module the walk re-views lays
-    /// that view's types too, at the type the source's signature gives the member.
-    pub fn lay_members(&self, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) {
-        let declared = self.sig.value_slots.iter().map(|(_, declared)| *declared);
-        for declared in declared.chain(self.sig.keyworded.iter().copied()) {
-            for side in self.from.iter().chain([&self.to]) {
-                substitute_parameters(types, scratch, declared, side.bindings);
-            }
-        }
-        let (Some(held), Some(from)) = (self.held, self.from) else {
-            return;
-        };
-        let Some(held) = module_schema(held, types) else {
-            return;
-        };
-        for (name, declared) in self.sig.value_slots.iter().copied() {
-            let member = held.value_slots.iter().find(|(held, _)| *held == name);
-            let member = member.and_then(|(_, member)| member.as_type());
-            if let Some(member) = member.and_then(|member| types.concrete(member)) {
-                self.lay_nested(from, declared, member, types, scratch);
-            }
-        }
-    }
-
-    /// Lay what the coercion walk interns re-viewing each nested module a member of type `held`,
-    /// declared `declared`, holds: in the slot itself, or in a record's field, a list's element
-    /// or a dict's value, at the type `held` gives it there. A list or dict whose cells are
-    /// modules of several signatures has its element type at their join, which no cell carries.
-    fn lay_nested(
-        &self,
-        from: Substitution<'_>,
-        declared: DeclaredType<Parametric>,
-        held: KType,
-        types: &Types<'_, '_>,
-        scratch: BumpAllocator<'_>,
-    ) {
-        let (src, dst) = (
-            substitute_parameters(types, scratch, declared, from.bindings),
-            substitute_parameters(types, scratch, declared, self.to.bindings),
-        );
-        if src == dst {
-            return;
-        }
-        let (Some(src), Some(dst)) = (
-            src.as_type().and_then(|src| types.concrete(src)),
-            dst.as_type().and_then(|dst| types.concrete(dst)),
-        ) else {
-            return;
-        };
-        match (declared.view(types).body, types.node(held)) {
-            // A list's cells of several signatures join to their union, each member one cell's.
-            (TypeNode::SignatureApply { .. }, TypeNode::Union { members }) => {
-                for held in members.iter() {
-                    if module_schema(held, types).is_some()
-                        && let Ok(nested) = nested_types(held, src, dst, types, scratch)
-                    {
-                        nested.lay_members(types, scratch);
-                    }
-                }
-            }
-            (TypeNode::SignatureApply { .. }, _)
-                if module_schema(held, types).is_some() || fully_pinned(held, types) =>
-            {
-                if let Ok(nested) = nested_types(held, src, dst, types, scratch) {
-                    nested.lay_members(types, scratch);
-                }
-            }
-            (TypeNode::List { element }, TypeNode::List { element: held }) => {
-                self.lay_nested(from, element.into(), held, types, scratch);
-            }
-            (TypeNode::Dict { value, .. }, TypeNode::Dict { value: held, .. }) => {
-                self.lay_nested(from, value.into(), held, types, scratch);
-            }
-            (TypeNode::Record { fields }, TypeNode::Record { fields: held }) => {
-                for (binder, field) in fields.iter() {
-                    if let Some(held) = held.get(binder.symbol()) {
-                        self.lay_nested(from, field.into(), held, types, scratch);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// `held`'s schema where it is a module's own signature, declaring no head parameter: the only
-/// type the load knows a nested module's view from, beside a [`fully_pinned`] application. A
-/// list's element type joined over modules of several signatures, or an empty list's `Never`, is
-/// neither.
-fn module_schema<'run>(held: KType, types: &Types<'_, 'run>) -> Option<SigSchema<'run>> {
-    if !matches!(types.node(held), TypeNode::Signature { .. }) {
-        return None;
-    }
-    crate::elaborate::schema_of(held, types).filter(|schema| schema.parameters.is_empty())
-}
-
-/// Whether `held` is an application fixing every head parameter of its signature: the type a
-/// transparent view's signature gives a nested module. *Fits* solves a re-view from it to its pins,
-/// the bindings a re-view from the module's own signature solves at the same slot, so the load
-/// lays the view the run builds.
-fn fully_pinned(held: KType, types: &Types<'_, '_>) -> bool {
-    let TypeNode::SignatureApply { signature, pins } = types.node(held) else {
-        return false;
-    };
-    crate::elaborate::schema_of(signature, types).is_some_and(|schema| {
-        schema
-            .parameters
-            .iter()
-            .all(|(name, _)| pins.get(BinderSymbol::Type(*name).symbol()).is_some())
-    })
-}
-
 /// What a nested module of signature `held` binds when re-viewed at a slot whose application
 /// reads `src` under the source's bindings and `dst` under the view's: *fits* solves the source's
 /// side against `src`, and the view's side takes each parameter `dst` pins, the rest kept as
-/// solved. The coercion walk and the load's [`ViewTypes::lay_members`] both compute it here.
-pub(super) fn nested_types<'run: 'x, 'x>(
+/// solved. The coercion walk and the load's lay of a view both compute it here.
+pub(crate) fn nested_types<'run: 'x, 'x>(
     held: KType,
     src: KType,
     dst: KType,
@@ -347,18 +231,25 @@ pub(super) fn nested_types<'run: 'x, 'x>(
     })
 }
 
-/// The signature a transparent view of a module whose signature is `source` carries, seen as
-/// `signature` — what the load types `m :! Sig` as, where it knows `m`'s signature exactly. The
-/// very handle [`ascribe`] lays down, since both are one computation. `None` where the view door
-/// would refuse.
-pub fn transparent_view_type(
+/// What a transparent view at `signature` of a module whose signature is `source` binds: the
+/// source's bindings either side, and the signature the view carries — what the load types
+/// `m :! Sig` as, where it knows `m`'s signature exactly. The very handles [`ascribe`] lays down,
+/// since both are one computation. `None` where the view door would refuse.
+pub fn transparent_view_types<'run>(
     source: KType,
     signature: KType,
-    types: &Types<'_, '_>,
+    types: &Types<'_, 'run>,
     scratch: BumpAllocator<'_>,
-) -> Option<KType> {
+) -> Option<ViewTypes<'run>> {
     let (sig, from, _) = fitted(source, signature, types, scratch).ok()?;
-    Some(view_signature(&sig, from, types, scratch))
+    let interned = Substitution::interned(from, types, scratch);
+    Some(ViewTypes {
+        held: Some(source),
+        sig,
+        from: Some(interned),
+        to: interned,
+        view: view_signature(&sig, from, types, scratch),
+    })
 }
 
 /// The signature an opaque view at `signature` carries over a source whose digest is `source`,
