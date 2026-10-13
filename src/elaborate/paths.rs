@@ -1,9 +1,10 @@
 //! What a **path** — a type member read through a module-valued expression — is where it runs, and
 //! what the load records to compute it ([design/modules.md § Carriers and paths](../../design/modules.md#carriers-and-paths)).
 //!
-//! A path through a root whose declared type is an application leaving the path's label an
-//! unpinned head parameter is what the module fits that application at: the solution *fits* gives,
-//! as the view door's does. Every other path reads the module's own type member. The load records
+//! A path through a root whose declared type is an application naming the path's label a head
+//! parameter is what the module fits that application at: the solution *fits* gives, as the view
+//! door's does — the pin, where the application pins the label. Every other path reads the
+//! module's own type member. The load records
 //! the application once per path, as [`declared_through`] reads it off the root's declared type;
 //! the run binds a path variable through [`path_binding`], and the run's elaborator reads a path
 //! written in a type it left unknown through the same function.
@@ -19,9 +20,9 @@ use crate::values::{KnottedFamily, Types};
 use super::members::{SignatureMember, schema_of, signature_member};
 
 /// The application a path is read through: `declared`, a root's declared type, walked through the
-/// value members `chain` names, where the walk ends at an application of a signature leaving
-/// `label` an unpinned head parameter. `None` where it ends anywhere else, and the path reads the
-/// module's own type member.
+/// value members `chain` names, where the walk ends at an application of a signature naming
+/// `label` a head parameter. `None` where it ends anywhere else, and the path reads the module's
+/// own type member.
 pub fn declared_through(
     types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
@@ -39,16 +40,13 @@ pub fn declared_through(
             _ => return None,
         }
     }
-    let (signature, pinned) = match types.node(held) {
-        TypeNode::Signature { .. } => (types.concrete(held)?, false),
-        TypeNode::SignatureApply { signature, pins } => (
-            signature,
-            pins.get(BinderSymbol::Type(label).symbol()).is_some(),
-        ),
+    let signature = match types.node(held) {
+        TypeNode::Signature { .. } => types.concrete(held)?,
+        TypeNode::SignatureApply { signature, .. } => signature,
         _ => return None,
     };
     let schema = schema_of(signature, types)?;
-    (!pinned && member(schema.parameters, label).is_some()).then_some(held)
+    member(schema.parameters, label).is_some().then_some(held)
 }
 
 /// The type a path binds to where it runs: through the module of signature `held` — its root's —

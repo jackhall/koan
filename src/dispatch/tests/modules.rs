@@ -764,6 +764,28 @@ fn a_path_through_a_parameter_is_what_its_module_fits_the_declared_type_at() {
     );
 }
 
+/// Through a parameter declared at an application pinning the label, the path is the pin: at load,
+/// which refuses a value off it, and at run, over a module that names no such type member.
+#[test]
+fn a_path_through_a_parameter_reads_the_pin_of_its_declared_application() {
+    let program = |value: &str| {
+        format!(
+            "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier)]\n\
+             MODULE plain = (LET seed = 1)\n\
+             LET carrier = (FN :{{p :(Mapper WITH {{Carrier = Number}})}} -> Any = #(:(p.Carrier)))\n\
+             PRINT (carrier {{p = plain}})\n\
+             LET keep = (FN :{{p :(Mapper WITH {{Carrier = Number}})}} -> Any = \
+             #((LET x :(p.Carrier) = {value}) (PRINT x)))\n\
+             keep {{p = plain}}"
+        )
+    };
+    assert_eq!(run(&program("2")), "Number\n2");
+    assert_eq!(
+        run(&program("\"s\"")),
+        "load: <test>:5:66: this value is Str, which can never satisfy its annotation Number"
+    );
+}
+
 /// A pin of one head parameter decides which of a module's overloads fits a keyworded member, and
 /// so what another parameter solves to: the path reads through the declared application, pins and
 /// all, even where a pin names a type the run binds and the reader names it nowhere.

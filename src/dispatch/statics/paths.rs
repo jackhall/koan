@@ -5,7 +5,8 @@
 //! A path **resolves** off the content tree of the module its root names, walked through its member
 //! chain. It is **closed** — one type at every run — where the load knows that module's signature
 //! exactly, from the root's exact static type or a closed opaque view's tree, and reads the path
-//! off it as the run does ([`path_binding`]), or where it reads a type member a body binds closed.
+//! off it as the run does ([`path_binding`]), where its application pins its label, or where it
+//! reads a type member a body binds closed.
 //! Any other path is its **class**: the path variable of the first path resolved over a tree like
 //! its own, at the same label, through the same application. A path written in a type through a
 //! module built in place that does not resolve closed refuses the load, since the run builds no
@@ -319,6 +320,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     _ => None,
                 })
         });
+        // A label the application pins is that pin, which *fits* solves it to at every run.
+        let pinned = through
+            .flatten()
+            .and_then(|through| match types.node(through) {
+                TypeNode::SignatureApply { pins, .. } => {
+                    pins.get(BinderSymbol::Type(entry.label).symbol())
+                }
+                _ => None,
+            });
         // A type member a body binds closed, read as the module's own.
         let bound = || match (tree, entry.through) {
             (Tree::Body { shape, .. }, None) => {
@@ -330,7 +340,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             _ => None,
         };
-        let resolved = match closed.or_else(bound) {
+        let resolved = match pinned.or(closed).or_else(bound) {
             Some(closed) => Resolved::Closed(closed),
             None => Resolved::Class(self.class_of(level, entry, tree)),
         };
