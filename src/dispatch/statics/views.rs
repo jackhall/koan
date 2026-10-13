@@ -24,7 +24,7 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::scope::{Print, ShapeError, Site, Tree};
 use crate::symbols::{BinderSymbol, Symbol, ValueSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, SigSchema, TypeNode, substitute_parameters,
+    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
 };
 use crate::values::Types;
 use crate::values::digest::Operator;
@@ -156,11 +156,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         match declared.view(types).body {
             TypeNode::SignatureApply { .. } => {
-                for module in self.modules(cell, site)? {
+                for module in self.modules(cell, site)?.iter().copied() {
                     let Some(held) = self.carried_type(module, site)? else {
                         continue;
                     };
-                    if (module_schema(held, types).is_some() || fully_pinned(held, types))
+                    if re_viewable(held, types)
                         && let Ok(nested) = view::nested_types(held, src, dst, types, scratch)
                     {
                         self.lay(&nested, module, site)?;
@@ -265,8 +265,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Sides::Open => (None, None),
             Sides::Apart(src, dst) => match declared.view(types).body {
                 TypeNode::SignatureApply { .. } => {
+                    // A union of cells' signatures is re-viewed cell by cell (`modules`).
                     let held = self.carried_type(source, site)?;
                     let nested = held
+                        .filter(|held| re_viewable(*held, types))
                         .and_then(|held| view::nested_types(held, src, dst, types, scratch).ok());
                     (nested.map(|nested| nested.view), nested)
                 }
@@ -336,9 +338,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         name: ValueSymbol,
         site: Site,
     ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
-        let types = self.types;
+        let (types, scratch) = (self.types, self.scratch);
         Ok(match carried {
-            Carried::Typed(held) => slot_type(held, name, types).map(Carried::Typed),
+            Carried::Typed(held) => slot_type(held, name, types, scratch).map(Carried::Typed),
             Carried::Tree(Tree::Body {
                 shape, captures, ..
             }) => {
@@ -353,7 +355,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     Some(Carried::Tree(tree))
                 } else {
                     (self.signatures.get(&address(shape)))
-                        .and_then(|held| slot_type(*held, name, types))
+                        .and_then(|held| slot_type(*held, name, types, scratch))
                         .map(Carried::Typed)
                 }
             }
@@ -388,14 +390,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         inner: Option<Carried<'graph, 'p>>,
         site: Site,
     ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
-        let Some(ViewTypes {
-            sig,
-            from: Some(from),
-            to,
-            ..
-        }) = viewed
-        else {
+        let Some(viewed) = viewed else {
             return Ok(None);
+        };
+        // Over a source the load does not know, the member by the type the view declares for it.
+        let (ViewTypes { sig, to, .. }, Some(from)) = (viewed, viewed.from) else {
+            return Ok(slot_type(viewed.view, name, self.types, self.scratch).map(Carried::Typed));
         };
         let declared = sig.value_slots.iter().find(|(slot, _)| *slot == name);
         match (declared, inner) {
@@ -430,30 +430,36 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The modules a value carrying `carried` may be: a list's cells of several signatures carry
-    /// their union, each member one cell's.
+    /// their union, each member one cell's. Memoized on a rebuilt union.
     fn modules(
         &mut self,
         carried: Carried<'graph, 'p>,
         site: Site,
-    ) -> Read<'graph, BumpVec<'p, Carried<'graph, 'p>>> {
+    ) -> Read<'graph, &'p [Carried<'graph, 'p>]> {
         let (types, scratch) = (self.types, self.scratch);
-        let mut modules = BumpVec::new_in(scratch);
-        match carried {
-            Carried::Typed(held) => match types.node(held) {
-                TypeNode::Union { members } => {
-                    modules.extend(members.iter().map(Carried::Typed));
-                }
-                _ => modules.push(carried),
-            },
-            Carried::Tree(_) => modules.push(carried),
-            Carried::Across(across) => {
-                for module in self.modules(across.source, site)? {
-                    let module =
-                        self.across(across.declared, across.from, across.to, module, site)?;
-                    modules.push(module);
-                }
+        let across = match carried {
+            Carried::Typed(held) => {
+                return Ok(match types.node(held) {
+                    TypeNode::Union { members } => {
+                        scratch.alloc_slice_fill_iter(members.iter().map(Carried::Typed))
+                    }
+                    _ => scratch.alloc_slice_copy(&[carried]),
+                });
             }
+            // A rebuilt module whose type the load knows is one module.
+            Carried::Across(across) if across.held.is_none() => across,
+            _ => return Ok(scratch.alloc_slice_copy(&[carried])),
+        };
+        let key = Identity::Across(std::ptr::from_ref(across).addr());
+        if let Some(modules) = self.modules.get(&key) {
+            return Ok(modules);
         }
+        let mut modules = BumpVec::new_in(scratch);
+        for module in self.modules(across.source, site)? {
+            modules.push(self.across(across.declared, across.from, across.to, *module, site)?);
+        }
+        let modules: &'p [Carried<'graph, 'p>] = scratch.alloc_slice_copy(&modules);
+        self.modules.insert(key, modules);
         Ok(modules)
     }
 }
@@ -504,11 +510,44 @@ fn declared_inside(
     }
 }
 
-/// The type a module whose own signature is `held` gives its value member `name`.
-fn slot_type(held: KType, name: ValueSymbol, types: &Types<'_, '_>) -> Option<KType> {
-    let schema = module_schema(held, types)?;
-    let (_, member) = schema.value_slots.iter().find(|(slot, _)| *slot == name)?;
-    member.as_type().and_then(|member| types.concrete(member))
+/// The type a module of type `held` gives its value member `name`, where the load knows what the
+/// member carries or re-views alike: under its own signature, that signature's; under an
+/// application fixing every parameter ([`fully_pinned`]), the signature's declared type read under
+/// the pins, itself such an application wherever the member is a nested module.
+fn slot_type(
+    held: KType,
+    name: ValueSymbol,
+    types: &Types<'_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> Option<KType> {
+    let read = match module_schema(held, types) {
+        Some(schema) => {
+            let (_, member) = schema.value_slots.iter().find(|(slot, _)| *slot == name)?;
+            *member
+        }
+        None => {
+            let TypeNode::SignatureApply { signature, pins } = types.node(held) else {
+                return None;
+            };
+            let schema = crate::elaborate::schema_of(signature, types)?;
+            let (_, declared) = schema.value_slots.iter().find(|(slot, _)| *slot == name)?;
+            let mut fixed = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
+            for (parameter, _) in schema.parameters.iter() {
+                fixed.push((
+                    *parameter,
+                    pins.get(BinderSymbol::Type(*parameter).symbol())?,
+                ));
+            }
+            let fixed = Members::from_pairs(scratch, fixed);
+            substitute_parameters(types, scratch, *declared, fixed)
+        }
+    };
+    read.as_type().and_then(|member| types.concrete(member))
+}
+
+/// Whether the load re-views a nested module whose type is `held` as the run does.
+fn re_viewable(held: KType, types: &Types<'_, '_>) -> bool {
+    module_schema(held, types).is_some() || fully_pinned(held, types)
 }
 
 /// `held`'s schema where it is a module's own signature, declaring no head parameter: a type the

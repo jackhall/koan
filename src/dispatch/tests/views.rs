@@ -213,3 +213,42 @@ fn a_transparent_view_lays_its_types_at_load() {
     let source = format!("{DEEP}LET t = (ints :! (Outer WITH {{Carrier = Number}}))\n");
     assert_eq!(branch_after(&source), 0);
 }
+
+/// A list or a map of modules of two signatures under an opaque view, viewed again: each cell is
+/// re-viewed at its own signature, as the run re-views it.
+#[test]
+fn a_view_of_an_opaque_view_over_modules_of_two_signatures_lays_each_at_load() {
+    let inner = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
+                 MODULE a = ((LET Elem = Number) (LET item = 5))\n\
+                 MODULE b = ((LET Elem = Number) (LET item = 6) (LET more = 1))\n";
+    for (slot, value) in [
+        ("(LIST OF (Inner WITH {Elem = Carrier}))", "[a b]"),
+        (
+            "(MAP Str -> (Inner WITH {Elem = Carrier}))",
+            "{\"k\": a, \"j\": b}",
+        ),
+    ] {
+        let source = format!(
+            "{inner}SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL held :{slot})]\n\
+             MODULE ints = ((LET zero = 0) (LET held = {value}))\n\
+             LET o = (ints :| Outer)\nLET m = (o :| Outer)\n"
+        );
+        assert_eq!(branch_after(&source), 0, "{slot}");
+    }
+}
+
+/// An opaque view over a module the load does not type exactly re-views its nested modules at run,
+/// but a view of it reads each member at the type it declares, so the later views of the chain
+/// add nothing at run.
+#[test]
+fn a_chain_of_views_over_a_module_typed_at_most_re_views_only_its_first_at_run() {
+    let source = format!(
+        "{DEEP}MODULE w = ((LET zero = 0) (LET inner :(Inner WITH {{Elem = Number}}) = a))\n\
+         LET v = (w :| Outer)\nLET v2 = (v :| Outer)\nLET v3 = (v2 :| Outer)\n"
+    );
+    let first = format!(
+        "{DEEP}MODULE w = ((LET zero = 0) (LET inner :(Inner WITH {{Elem = Number}}) = a))\n\
+         LET v = (w :| Outer)\n"
+    );
+    assert!(branch_after(&source) <= branch_after(&first));
+}

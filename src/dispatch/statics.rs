@@ -198,6 +198,7 @@ pub(super) fn statics<'graph>(
         views: bump_table(scratch),
         steps: bump_table(scratch),
         rebuilds: bump_table(scratch),
+        modules: bump_table(scratch),
         selections: bump_table(scratch),
         paths: BumpVec::new_in(scratch),
     };
@@ -364,6 +365,8 @@ struct Pass<'p, 'x, 'graph> {
     steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'graph, 'p>>>,
     /// Each value a view rebuilt, by what it was rebuilt from.
     rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'graph, 'p>>,
+    /// The modules each rebuilt union of cells' signatures may be, cell by cell.
+    modules: BumpBackedMap<'p, views::Identity, &'p [views::Carried<'graph, 'p>]>,
     /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
     selections: BumpBackedMap<'p, Site, &'p [Option<KType>]>,
