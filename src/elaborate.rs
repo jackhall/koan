@@ -51,12 +51,12 @@ mod signature;
 mod tests;
 
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
-pub use channel::{type_channel, writes_for_all};
+pub use channel::{path_base, type_channel, writes_for_all};
 pub use declaration::{declares_nominal, type_declarations};
 pub use expression::{declared_field, type_expression};
 pub use members::{
-    SignatureMember, member_count, schema_member, schema_of, signature_member, type_members,
-    value_count,
+    SignatureMember, applied_member, member_count, schema_member, schema_of, signature_member,
+    type_members, value_count,
 };
 pub use module::{module_signature, self_signature};
 pub use paths::{bound_path, declared_through, path_binding};

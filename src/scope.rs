@@ -52,13 +52,13 @@ pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
     Position, QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead,
-    Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, selection_refused,
-    source_of, spelled, view_refused,
+    Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, part_of,
+    selection_refused, source_of, spelled, view_refused,
 };
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, InstanceRead,
-    Narrowing, ParameterBinding, PathEntry, PathRead, Paths, Registered, Root, ShapeGroupMap,
-    Source, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics,
-    UseStatics, Variable, solutions,
+    Narrowing, ParameterBinding, PathEntry, PathRead, Paths, Registered, Resolution, Resolved,
+    Root, ShapeGroupMap, Source, Static, StaticCallable, StaticRegistered, StaticSolution,
+    StaticType, Statics, UseStatics, Variable, solutions,
 };

@@ -278,7 +278,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, R> {
                 // A path's root written in place: a call, say, whose module the path reads.
                 _ => {
                     chain.reverse();
-                    let read = self.reader.inline_member(site, &chain, *name);
+                    let read = self
+                        .reader
+                        .inline_member(site, Site::of(root), &chain, *name);
                     return Some(path_type(site, *name, read, KType::EMPTY_SIGNATURE));
                 }
             }

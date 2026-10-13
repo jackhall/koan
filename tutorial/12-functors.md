@@ -208,7 +208,7 @@ LET kept :(view.Carrier) = 5
 ```
 
 ```text
-error: Number does not satisfy its annotation Carrier
+error: <input>:4:1: this value is Number, which can never satisfy its annotation Carrier
 ```
 
 ## Signatures over a type: `SIG … FOR ALL` and `WITH`
@@ -553,7 +553,7 @@ PRINT (counter.zero + 1)
 ```
 
 ```text
-error: no overload of `_ + _` admits (Carrier, Number)
+error: <input>:7:7: no overload of `_ + _` admits (Carrier, Number)
 ```
 
 Only the module's own functions, reached through the view, work with the

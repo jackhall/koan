@@ -89,7 +89,7 @@ mod locate;
 mod rewrite;
 mod surface;
 
-pub(in crate::scope) use locate::source_within;
+pub(in crate::scope) use locate::{part_within, source_within};
 
 use rewrite::{Built, BuiltKind, chained};
 use surface::{Quantified, Surfaced, SurfacedKey, quantified_value};

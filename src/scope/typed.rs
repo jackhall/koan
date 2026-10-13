@@ -14,9 +14,10 @@
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
+use std::cell::Cell;
 use std::fmt;
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, display_name};
 use crate::values::{KnottedFamily, Types, Value};
@@ -249,11 +250,12 @@ impl PartialEq for Source<'_> {
 
 impl Eq for Source<'_> {}
 
-/// One path spelling of a chain — a type member `label` read through a module-valued expression —
-/// typed as a lexical variable of its own, its **path variable**, at a level past every name level
-/// of the chain ([design/modules.md § Carriers and paths](../../design/modules.md#carriers-and-paths)).
-/// The type channel mints one per distinct root, member chain and label, and lays the chain's
-/// entries on its root shape.
+/// One path of a chain — a type member `label` read through a module-valued expression — typed as
+/// a lexical variable of its own, its **path variable**, at a level past every name level of the
+/// chain ([design/modules.md § Carriers and paths](../../design/modules.md#carriers-and-paths)).
+/// The type channel mints one per distinct root, member chain and label its type expressions
+/// spell, and the static pass one more per path it pins a module's type through; the chain's root
+/// holds them all. The static pass resolves each one.
 #[derive(Clone, Copy)]
 pub struct PathEntry<'graph> {
     pub root: Root<'graph>,
@@ -262,11 +264,54 @@ pub struct PathEntry<'graph> {
     pub label: TypeSymbol,
     /// The path variable's level.
     pub level: usize,
-    /// The application the root's declared type gives the module `chain` reaches, where it leaves
-    /// `label` an unpinned head parameter: the path is then what the module fits it at. Over the
-    /// chain's lexical variables; a shape reading the path locates them in its own
-    /// [`Statics::throughs`]. `None` where the path reads the module's own type member.
+    /// The application the path is read through: the module `chain` reaches is fitted to it, and
+    /// the path is what it fits `label` at. Over the chain's lexical variables; a shape reading the
+    /// path locates them in its own [`Statics::throughs`]. `None` where the path reads the module's
+    /// own type member.
     pub through: Option<Parametric>,
+    /// What the static pass resolved the path to. Written once.
+    resolution: &'graph Cell<Option<Resolution<'graph>>>,
+}
+
+impl<'graph> PathEntry<'graph> {
+    /// A new entry, unresolved, laid down through `writer`.
+    pub fn new(
+        writer: Writer<'graph>,
+        root: Root<'graph>,
+        chain: &[ValueSymbol],
+        label: TypeSymbol,
+        level: usize,
+        through: Option<Parametric>,
+    ) -> &'graph PathEntry<'graph> {
+        let mut entry = Some(PathEntry {
+            root,
+            chain: collect(writer, chain.iter().copied()),
+            label,
+            level,
+            through,
+            resolution: &writer.fill(1, |_| Cell::new(None))[0],
+        });
+        &writer.fill(1, |_| entry.take().expect("filled once"))[0]
+    }
+
+    /// What the static pass resolved the path to, once it has.
+    pub fn resolution(&self) -> Option<Resolution<'graph>> {
+        self.resolution.get()
+    }
+
+    /// Written once, by the static pass.
+    pub fn fix_resolution(&self, resolution: Resolution<'graph>) {
+        debug_assert!(self.resolution.get().is_none());
+        self.resolution.set(Some(resolution));
+    }
+
+    /// The type the path is at every run, where the static pass resolved it to one.
+    pub fn closed(&self) -> Option<KType> {
+        match self.resolution()?.resolved {
+            Resolved::Closed(closed) => Some(closed),
+            Resolved::Class(_) => None,
+        }
+    }
 }
 
 impl fmt::Debug for PathEntry<'_> {
@@ -277,6 +322,25 @@ impl fmt::Debug for PathEntry<'_> {
             .field("label", &self.label)
             .finish()
     }
+}
+
+/// What the static pass resolved a path to: the content tree of the module it reads its member
+/// off, and the type that tree gives it.
+#[derive(Clone, Copy)]
+pub struct Resolution<'graph> {
+    pub tree: Tree<'graph>,
+    pub resolved: Resolved,
+}
+
+/// The type a path is at load.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Resolved {
+    /// The same type at every run.
+    Closed(KType),
+    /// The path variable at this level: the first path the pass resolved over a tree like this
+    /// one's, read at the same label through the same application. Every path of one class is one
+    /// type at every run.
+    Class(usize),
 }
 
 /// A path's root: the binder a name lands at, or an expression written in place, by its site.
@@ -442,8 +506,8 @@ pub type Paths<'f, 'graph> = &'f dyn Fn(Coordinate, &'graph PathEntry<'graph>) -
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry
 /// per level up to the largest, each variable's the handle of the type its coordinate holds — or,
 /// for a path variable, the type `paths` reads through its root — and `Never` where no variable is
-/// listed: a gap no free variable of the rigid value names. `None` when a coordinate holds
-/// anything but a type, or a path reads none.
+/// listed: a gap no free variable of the rigid value names. A path the load resolved closed is that
+/// type, with no read. `None` when a coordinate holds anything but a type, or a path reads none.
 pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
     variables: &[Variable<'graph>],
     view: &ActivationView<'graph, '_, XF>,
@@ -459,7 +523,10 @@ pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
                 Value::Type(value) => value.handle(),
                 _ => return None,
             },
-            Source::Path { at, entry } => paths(at?, entry)?,
+            Source::Path { at, entry } => match entry.closed() {
+                Some(closed) => closed,
+                None => paths(at?, entry)?,
+            },
         };
     }
     Some(bindings)

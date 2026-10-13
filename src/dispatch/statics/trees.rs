@@ -36,7 +36,7 @@ use crate::type_lattice::KType;
 use crate::values::digest::{Operator, literal_digest, type_digest};
 
 use super::super::evaluate::{Form, Wanted, of_node, of_part, slots};
-use super::{Landing, Pass, channel, done};
+use super::{Landing, Pass, done};
 use crate::knot::module::view::Ascription;
 
 type Read<'graph, T> = Result<T, ShapeError<'graph>>;
@@ -57,6 +57,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         match scope {
             Scope::Chain(level) => self.chain[level].shape,
             Scope::Body { shape, .. } => shape,
+        }
+    }
+
+    /// A chain level whose chain `scope` reads in: a body read through its tree sits on the chain
+    /// being typed.
+    fn scope_level(&self, scope: Scope<'graph>) -> usize {
+        match scope {
+            Scope::Chain(level) => level,
+            Scope::Body { .. } => self.chain.len() - 1,
         }
     }
 
@@ -105,7 +114,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The tree of what the evaluator reads as `form`, written at `site` in `scope`.
-    fn tree_form(
+    pub(super) fn tree_form(
         &mut self,
         scope: Scope<'graph>,
         form: Form<'graph>,
@@ -137,7 +146,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let [operand, _, ascribed] = node.parts else {
                     unreachable!("an ascription has an operand, its keyword and a type")
                 };
-                match shape.typed_expression(Site::of(&ascribed.value)) {
+                let typed = shape.typed_expression(Site::of(&ascribed.value));
+                match self.resolved_type(self.scope_level(scope), typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
                         Tree::View {
@@ -154,7 +164,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             Form::Leaf(ExpressionPart::Literal(literal)) => Tree::Digest(literal_digest(literal)),
             Form::Leaf(ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)) => {
-                match shape.typed_expression(site) {
+                match self.resolved_type(self.scope_level(scope), shape.typed_expression(site)) {
                     Static::Closed(handle) => Tree::Digest(type_digest(handle)),
                     _ => self.fallback(scope, named, site)?,
                 }
@@ -221,7 +231,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The tree of what the binder at `slot` of `scope`'s shape holds, read at the part at `site`.
-    fn slot_tree(
+    pub(super) fn slot_tree(
         &mut self,
         scope: Scope<'graph>,
         slot: Slot,
@@ -324,7 +334,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// one value per run of the body, and the body's captures say which run, so its leaf is keyed
     /// on them wherever it is read: on the chain, as the shape enclosing the body resolves them,
     /// and through a body's tree, as the tree holds them.
-    fn leaf_on(&mut self, scope: Scope<'graph>, slot: Slot) -> Read<'graph, Tree<'graph>> {
+    pub(super) fn leaf_on(
+        &mut self,
+        scope: Scope<'graph>,
+        slot: Slot,
+    ) -> Read<'graph, Tree<'graph>> {
         let shape = self.scope_shape(scope);
         let key = match scope {
             _ if shape.kind() != ShapeKind::Module => &[][..],
@@ -357,7 +371,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// `tree`'s value member `label`, read at the part at `site`: through a body, the member's
     /// binding there; through a leaf, the leaf with its chain extended. `None` through anything
     /// else.
-    fn read_member(
+    pub(super) fn read_member(
         &mut self,
         tree: Tree<'graph>,
         label: ValueSymbol,
@@ -451,7 +465,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if !self.typed_on_demand(body)? {
                 return Ok(None);
             }
-            let Some(instance) = born_at(body, keeps_scheme) else {
+            let Some(instance) = self.born_at(self.scope_level(scope), body, keeps_scheme) else {
                 return Ok(None);
             };
             let mut captures = BumpVec::with_capacity_in(body.capture_count(), self.scratch);
@@ -483,6 +497,28 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }))
     }
 
+    /// The solution the closure `body`, born in the chain `level` sits on, is born at: its born
+    /// instance where the load fixed one closed, and nothing where it is born unquantified or, its
+    /// binder keeping its scheme, quantified. `None` where the load cannot say.
+    fn born_at(
+        &self,
+        level: usize,
+        body: &'graph BodyShape<'graph>,
+        keeps_scheme: bool,
+    ) -> Option<&'graph [KType]> {
+        match body.born_instance() {
+            Some(StaticSolution::Closed(solution)) => Some(solution),
+            Some(StaticSolution::Rigid { .. }) => None,
+            None => match self.resolved_callable(level, body.callable_type()) {
+                Static::Closed(callable) if callable.ktype.as_type().is_some() => Some(&[]),
+                Static::Rigid { value, .. } if value.ktype.as_type().is_some() => Some(&[]),
+                Static::Closed(_) | Static::Rigid { .. } if keeps_scheme => Some(&[]),
+                // A scheme born with no instance is not typed yet, or never typed.
+                _ => None,
+            },
+        }
+    }
+
     /// The tree of the keyworded use `node` of the shape at `level`, unfolded where the pass
     /// selected one registration there whose solve is closed: `None` where it does not unfold.
     fn keyworded(
@@ -508,7 +544,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if followed.crossed || callee.kind() != ShapeKind::Callable {
             return Ok(None);
         }
-        let Static::Closed(registered) = declaring.registered_type(slot) else {
+        let Static::Closed(registered) =
+            self.resolved_registered(home, declaring.registered_type(slot))
+        else {
             return Ok(None);
         };
         let ParameterBinding::Named(names) = registered.parameters else {
@@ -565,8 +603,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(None);
         };
         let callee = members[index as usize].shape;
-        if !matches!(callee.callable_type(), Static::Closed(callable) if callable.ktype.as_type().is_some())
-        {
+        let typed = self.resolved_callable(level, callee.callable_type());
+        if !matches!(typed, Static::Closed(callable) if callable.ktype.as_type().is_some()) {
             return Ok(None);
         }
         let mut arguments = BumpVec::with_capacity_in(fields.len(), self.scratch);
@@ -799,23 +837,6 @@ fn source_of_capture(body: &BodyShape<'_>, capture: CaptureSlot) -> CaptureSourc
     match builder.get(capture.index()) {
         Some(spec) => spec.source,
         None => CaptureSource::Read(body.type_captures()[capture.index() - builder.len()]),
-    }
-}
-
-/// The solution the closure `body` is born at: its born instance where the load fixed one closed,
-/// and nothing where it is born unquantified or, its binder keeping its scheme, quantified. `None`
-/// where the load cannot say.
-fn born_at<'graph>(body: &'graph BodyShape<'graph>, keeps_scheme: bool) -> Option<&'graph [KType]> {
-    match body.born_instance() {
-        Some(StaticSolution::Closed(solution)) => Some(solution),
-        Some(StaticSolution::Rigid { .. }) => None,
-        None => match channel(body.callable_type()) {
-            Static::Closed(callable) if callable.ktype.as_type().is_some() => Some(&[]),
-            Static::Rigid { value, .. } if value.ktype.as_type().is_some() => Some(&[]),
-            Static::Closed(_) | Static::Rigid { .. } if keeps_scheme => Some(&[]),
-            // A scheme born with no instance is not typed yet, or never typed.
-            _ => None,
-        },
     }
 }
 

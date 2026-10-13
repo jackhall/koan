@@ -56,7 +56,7 @@ pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
 pub use code::{Code, UsingRefused, quote, using};
-pub use function::{Function, instance, lambda};
+pub use function::{Function, barrier_instance, instance, lambda};
 pub use module::{Coerced, Module, body_activation};
 pub use tie::tie;
 

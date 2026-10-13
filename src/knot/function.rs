@@ -28,7 +28,7 @@ use crate::type_lattice::{
 use crate::values::digest::function_content;
 use crate::values::{ContentDigest, Knotted as _, Link, Seen, Types, Value, Weight};
 
-use super::{KActivationView, Knotted, Node, Untieable, composed};
+use super::{Coerced, KActivationView, Knotted, Node, Untieable, composed};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -534,6 +534,41 @@ pub fn lambda<'graph, 'cell, 'x>(
         ))
     });
     Ok(Knotted::of(knot, 0))
+}
+
+/// `member`, a quantified function behind an opaque view's barrier, read where the load solved its
+/// group to `solution`: a barrier of its own at the instance — what a caller sees, and the types its
+/// arguments cross at — before the same function, which solves its own group where it runs. Each
+/// lexical variable `solution` names is read through `activation`.
+pub fn barrier_instance<'graph, 'cell>(
+    writer: Writer<'cell>,
+    member: Knotted<'graph, 'cell>,
+    solution: StaticSolution<'graph>,
+    activation: &KActivationView<'graph, '_>,
+    types: &Types<'_, 'cell>,
+    scratch: BumpAllocator<'_>,
+) -> Knotted<'graph, 'cell> {
+    let solution = solved(solution, activation, types, scratch);
+    let barrier = member
+        .coerced()
+        .expect("a barrier instance is read of a member behind a barrier");
+    let (DeclaredType::Scheme(scheme), DeclaredType::Scheme(declared)) =
+        (barrier.ktype(), barrier.declared())
+    else {
+        unreachable!("a barrier instance is read of a quantified member")
+    };
+    let instance = instantiate_quantified(types, scratch, scheme, solution);
+    let ktype = DeclaredType::Type(types.concrete(instance).expect(INSTANCE));
+    let declared = DeclaredType::Type(instantiate_quantified(types, scratch, declared, solution));
+    let knot = Coerced::tie(
+        writer,
+        barrier.underlying(),
+        ktype,
+        declared,
+        barrier.from(),
+        barrier.to(),
+    );
+    Knotted::of(knot, 0)
 }
 
 /// `member`, a quantified function, read where the load solved its group to `solution`: a one-node

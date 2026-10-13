@@ -73,6 +73,7 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch> =
     Step<'a, 'graph, 'step, 'here, 'scratch, KBundle, Taken, Taken>;
 
 /// What a node is to the evaluator.
+#[derive(Clone, Copy)]
 pub(super) enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
     /// A name: an identifier, a type name or a marked name, read through its mention.

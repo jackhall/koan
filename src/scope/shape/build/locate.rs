@@ -64,3 +64,39 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, site: Site) -> Option
         | ExpressionPart::Literal(_) => None,
     }
 }
+
+/// The part at `site` within `node`, at any depth. `None` when `node` does not hold it.
+pub(in crate::scope) fn part_within<'a>(
+    node: &'a KExpression<'a>,
+    site: Site,
+) -> Option<&'a ExpressionPart<'a>> {
+    node.parts
+        .iter()
+        .find_map(|part| part_in(&part.value, site))
+}
+
+/// [`part_within`] for one part.
+fn part_in<'a>(part: &'a ExpressionPart<'a>, site: Site) -> Option<&'a ExpressionPart<'a>> {
+    if Site::of(part) == site {
+        return Some(part);
+    }
+    match part {
+        ExpressionPart::Expression(node)
+        | ExpressionPart::SigiledTypeExpr(node)
+        | ExpressionPart::RecordType(node)
+        | ExpressionPart::QuotedExpression(node)
+        | ExpressionPart::MarkedUse(_, node) => part_within(node.reference(), site),
+        ExpressionPart::ListLiteral(items) => items.iter().find_map(|item| part_in(item, site)),
+        ExpressionPart::DictLiteral(pairs) => pairs
+            .iter()
+            .find_map(|(key, value)| part_in(key, site).or_else(|| part_in(value, site))),
+        ExpressionPart::RecordLiteral(fields) => {
+            fields.iter().find_map(|(_, value)| part_in(value, site))
+        }
+        ExpressionPart::Keyword(_)
+        | ExpressionPart::Identifier(_)
+        | ExpressionPart::Type(_)
+        | ExpressionPart::MarkedName(..)
+        | ExpressionPart::Literal(_) => None,
+    }
+}

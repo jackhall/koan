@@ -555,7 +555,7 @@ pub struct BodyShape<'graph> {
     /// root, and its entry. Written once, by the type channel.
     path_reads: &'graph Cell<Keyed<'graph, (Site, PathRead<'graph>)>>,
     /// Every path entry of the chain this body roots, by level: empty for a body rooting none.
-    /// Written once, by the type channel.
+    /// Written by the type channel, then by the static pass, which adds its own.
     paths: &'graph Cell<&'graph [&'graph PathEntry<'graph>]>,
     /// The value channel's static types and each keyworded use's statics, fixed by the language's
     /// load pass.
@@ -1000,6 +1000,17 @@ impl<'graph> BodyShape<'graph> {
         self.paths.set(paths);
     }
 
+    /// Written once, by the static pass, on a chain's root: every entry, the type channel's first.
+    pub fn fix_paths(&self, paths: &'graph [&'graph PathEntry<'graph>]) {
+        debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
+        debug_assert!(
+            (self.paths.get().iter())
+                .zip(paths)
+                .all(|(channel, all)| std::ptr::eq(*channel, *all))
+        );
+        self.paths.set(paths);
+    }
+
     /// Where this body reads each lexical variable of the path at `level`'s
     /// [`through`](PathEntry::through), where it names any.
     pub fn through_at(&self, level: usize) -> Option<&'graph [Variable<'graph>]> {
@@ -1149,6 +1160,11 @@ impl<'graph> BodyShape<'graph> {
 /// or node's around it. `None` when `node` does not hold the part.
 pub fn source_of(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
     build::source_within(node, site)
+}
+
+/// The part at `site` within `node`, at any depth. `None` when `node` does not hold it.
+pub fn part_of<'a>(node: &'a KExpression<'a>, site: Site) -> Option<&'a ExpressionPart<'a>> {
+    build::part_within(node, site)
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible
@@ -1347,6 +1363,9 @@ pub enum ShapeError<'graph> {
     /// a top-level statement — where its `OVER` list does not name it. A registration is named by
     /// its key.
     Unlisted { name: BinderSymbol, at: SourceRef },
+    /// A type expression reading a type member through a module built by an expression written in
+    /// place, at `at`, whose content the load cannot see: the run builds no module there.
+    OpenPathInType { at: SourceRef },
     /// A quantified member read anywhere but a call's head whose scheme names `parameter`, a head
     /// parameter its module's signature leaves unpinned, which the load cannot name there.
     UnpinnedMember {
@@ -1491,6 +1510,7 @@ impl ShapeError<'_> {
             | ShapeError::NoField { at, .. }
             | ShapeError::NoMember { at, .. }
             | ShapeError::Unlisted { at, .. }
+            | ShapeError::OpenPathInType { at }
             | ShapeError::UnpinnedMember { at, .. }
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
@@ -1730,6 +1750,10 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_> {
                     name(read)
                 )
             }
+            ShapeError::OpenPathInType { .. } => f.write_str(
+                "this type reads a member of a module built by a call written in place, which \
+                 the run never makes; bind the call with `LET` to name its type",
+            ),
             ShapeError::UnpinnedMember {
                 member, parameter, ..
             } => write!(

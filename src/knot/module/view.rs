@@ -33,7 +33,7 @@ use crate::type_lattice::{
     ContentKey, FitsFailure, KKind, KType, Members, Parametric, SchemaDraft, SigSchema, TypeNode,
     fits_application, member as bound_member, satisfied_by, substitute_parameters,
 };
-use crate::values::{TypeValue, Types, Value};
+use crate::values::{ContentDigest, TypeValue, Types, Value};
 
 use super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
 use super::{Module, ModuleContent, Operator, layout};
@@ -131,6 +131,44 @@ pub fn transparent_view_type(
 ) -> Option<KType> {
     let (sig, from, _) = fitted(source, signature, types, scratch).ok()?;
     Some(view_signature(&sig, from, types, scratch))
+}
+
+/// The signature an opaque view at `signature` carries over a source whose digest is `source`,
+/// computed from types alone, as the load computes it over a source it sees all of: each carrier
+/// keyed on the view's content and each pinned parameter at its pin. The very handle [`ascribe`]
+/// lays down where the source fits. `None` where the view door would refuse the signature.
+pub fn opaque_view_type(
+    signature: KType,
+    source: ContentDigest,
+    types: &Types<'_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> Option<KType> {
+    if !takes(types, signature) {
+        return None;
+    }
+    let mut pins = BumpVec::new_in(scratch);
+    let declared = match types.node(signature) {
+        TypeNode::SignatureApply {
+            signature,
+            pins: pinned,
+        } => {
+            pins.extend(pinned.iter());
+            signature
+        }
+        _ => signature,
+    };
+    let sig = crate::elaborate::schema_of(declared, types)?;
+    // `carriers` reads a pinned parameter's binding from what fits solved, which is its pin.
+    let from = Members::from_pairs(
+        scratch,
+        pins.iter().filter_map(|(name, pin)| match name {
+            BinderSymbol::Type(name) => Some((*name, *pin)),
+            _ => None,
+        }),
+    );
+    let content = ModuleContent::view(Operator::Opaque, signature, source);
+    let to = carriers(&sig, from, &pins, content.carrier_key(), types, scratch);
+    Some(view_signature(&sig, to, types, scratch))
 }
 
 /// The ascribed signature's schema, what a module of signature `held` binds its head parameters

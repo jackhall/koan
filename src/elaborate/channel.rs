@@ -18,7 +18,7 @@
 //! A **path** — a type member read through a module-valued expression, `m.Carrier` — is a lexical
 //! variable of its own, its *path variable*, at a level past every name level of its chain: one
 //! [`PathEntry`] per root, member chain and label, laid on the chain's root, and each spelling a
-//! shape reads recorded beside where it reads the root. An entry whose root's declared type leaves
+//! shape reads recorded beside where it reads the root. The static pass resolves each one. An entry whose root's declared type leaves
 //! the label an unpinned head parameter keeps that application, which the run fits the module to
 //! ([`paths`](super::paths)).
 //!
@@ -135,7 +135,7 @@ impl<'p, 'graph> Level<'p, 'graph> {
 /// that share its chain, the sum of each one's type-name slots, its own `FOR ALL` names among them,
 /// and, at the root, its type-named captures — an upper bound on the levels the channel numbers
 /// there ([`number`](Pass::number)). A code shape roots a chain of its own.
-fn path_base(root: &BodyShape<'_>) -> usize {
+pub fn path_base(root: &BodyShape<'_>) -> usize {
     fn names(shape: &BodyShape<'_>) -> usize {
         (0..shape.slots())
             .filter(|index| matches!(shape.slot_name(Slot(*index as u32)), BinderSymbol::Type(_)))
@@ -240,10 +240,16 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
         Some((self.path(site, Some(at), entry), KType::EMPTY_SIGNATURE))
     }
 
-    fn inline_member(&self, site: Site, chain: &[ValueSymbol], label: TypeSymbol) -> TypeAt {
+    fn inline_member(
+        &self,
+        site: Site,
+        root: Site,
+        chain: &[ValueSymbol],
+        label: TypeSymbol,
+    ) -> TypeAt {
         let entry = self
             .pass
-            .path(self.from, Root::Inline(site), chain, label, || None);
+            .path(self.from, Root::Inline(root), chain, label, || None);
         self.path(site, None, entry)
     }
 }
@@ -391,16 +397,8 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             declared_through(self.types, self.scratch, declared, chain, label)
         });
         edit(paths, self.scratch, |paths| {
-            let entry = resident(
-                self.writer,
-                PathEntry {
-                    root,
-                    chain: collect(self.writer, chain.iter().copied()),
-                    label,
-                    level: base + paths.len(),
-                    through,
-                },
-            );
+            let entry =
+                PathEntry::new(self.writer, root, chain, label, base + paths.len(), through);
             paths.push(entry);
             entry
         })

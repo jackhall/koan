@@ -132,13 +132,33 @@ pub fn signature_member(
         }
         _ => return None,
     };
-    let schema = schema_of(declared, types)?;
+    let mut pins = BumpVec::new_in(scratch);
+    pins.extend(
+        (pinned.iter())
+            .flat_map(|pins| pins.iter())
+            .map(|(name, pin)| (name, Parametric::from(pin))),
+    );
+    applied_member(types, scratch, declared, &pins, name)
+}
+
+/// The member `name` of every module fitting `signature`, a declared signature, at `pinned`: its
+/// declared type with each pin substituted as it is, a variable kept. `None` where `signature`
+/// declares no such member.
+pub fn applied_member(
+    types: &Types<'_, '_>,
+    scratch: BumpAllocator<'_>,
+    signature: KType,
+    pinned: &[(BinderSymbol, Parametric)],
+    name: BinderSymbol,
+) -> Option<SignatureMember> {
+    let schema = schema_of(signature, types)?;
     let (_, read) = schema_member(&schema, scratch, name)?;
     let mut pins = BumpVec::new_in(scratch);
     let mut open = BumpVec::new_in(scratch);
     for (parameter, _) in schema.parameters.iter() {
-        match pinned.and_then(|pins| pins.get(BinderSymbol::Type(*parameter).symbol())) {
-            Some(pin) => pins.push((*parameter, pin)),
+        let pin = (pinned.iter()).find(|(pin, _)| *pin == BinderSymbol::Type(*parameter));
+        match pin {
+            Some((_, pin)) => pins.push((*parameter, *pin)),
             None => open.push(*parameter),
         }
     }

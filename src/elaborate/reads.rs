@@ -61,10 +61,17 @@ pub trait Reads<'graph> {
         Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE))
     }
 
-    /// The type member `name` of the module an expression written in place builds, reached through
-    /// the value members `chain` names — the path spelled at `site`. The load answers the path's
-    /// variable; where it runs, the run never builds that module, and the type is unknown.
-    fn inline_member(&self, _site: Site, _chain: &[ValueSymbol], _name: TypeSymbol) -> TypeAt {
+    /// The type member `name` of the module the expression at `root`, written in place, builds,
+    /// reached through the value members `chain` names — the path spelled at `site`. The load
+    /// answers the path's variable; where it runs, the run never builds that module, and the type
+    /// is unknown.
+    fn inline_member(
+        &self,
+        _site: Site,
+        _root: Site,
+        _chain: &[ValueSymbol],
+        _name: TypeSymbol,
+    ) -> TypeAt {
         TypeAt::Unknown
     }
 }
@@ -129,6 +136,22 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
             signature,
         ))
     }
+
+    /// A path through a module built in place reads as the type the load resolved it to: the run
+    /// builds no module there.
+    fn inline_member(
+        &self,
+        site: Site,
+        _root: Site,
+        _chain: &[ValueSymbol],
+        _name: TypeSymbol,
+    ) -> TypeAt {
+        let read = self.shape().path_read(site);
+        match read.and_then(|read| read.entry.closed()) {
+            Some(closed) => TypeAt::Type(closed),
+            None => TypeAt::Unknown,
+        }
+    }
 }
 
 impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_, XF> {
@@ -149,6 +172,16 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
         types: &Types<'_, '_>,
     ) -> Option<(TypeAt, KType)> {
         ActivationView::member_type(self, at, site, chain, name, types)
+    }
+
+    fn inline_member(
+        &self,
+        site: Site,
+        root: Site,
+        chain: &[ValueSymbol],
+        name: TypeSymbol,
+    ) -> TypeAt {
+        ActivationView::inline_member(self, site, root, chain, name)
     }
 }
 
