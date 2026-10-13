@@ -82,7 +82,8 @@ fn a_view_over_a_record_holding_a_module_lays_its_nested_view_at_load() {
     );
 }
 
-/// `Inner`, an `Outer` holding a list of its applications, and modules of two signatures, for a view over a list of nested modules.
+/// `Inner`, an `Outer` holding a list of its applications, and modules of two signatures, for a
+/// view over a list of nested modules.
 const NESTED_LIST: &str = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
                            SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
                            (VAL inners :(LIST OF (Inner WITH {Elem = Carrier})))]\n\
@@ -194,9 +195,9 @@ fn a_slot_leaving_a_nested_parameter_unset_lays_its_nested_view_at_load() {
 }
 
 /// A view inside a record literal has no tree, so its own nested modules are read as its
-/// signature declares them, and re-viewed at run.
+/// signature declares them: at applications fixing every parameter, which the load re-views alike.
 #[test]
-fn a_view_inside_a_record_literal_runs() {
+fn a_view_inside_a_record_literal_lays_its_nested_views_at_load() {
     let source = format!(
         "{DEEP}SIG Holder FOR ALL #[Carrier] = \
          #[(VAL zero :Carrier) (VAL pair :{{inner :(Inner WITH {{Elem = Carrier}})}})]\n\
@@ -204,7 +205,24 @@ fn a_view_inside_a_record_literal_runs() {
          (LET pair = {{inner = (a :! (Inner WITH {{Elem = Number}}))}}))\n\
          LET m = (held :| Holder)\n"
     );
-    branch_after(&source);
+    assert_eq!(branch_after(&source), 0);
+}
+
+/// Past the tree's horizon, a nested module whose slot leaves a parameter of its signature open:
+/// the load cannot read what the module fixes it to, so the run re-views it.
+#[test]
+fn a_view_inside_a_record_literal_over_an_open_slot_runs() {
+    let source = "SIG Deep FOR ALL #[Depth Extra] = #[(VAL v :Depth) (VAL x :Extra)]\n\
+                  SIG Inner FOR ALL #[Elem] = \
+                  #[(VAL item :Elem) (VAL deep :(Deep WITH {Depth = Elem}))]\n\
+                  SIG Holder FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL pair :{inner :(Inner WITH {Elem = Carrier})})]\n\
+                  MODULE d = ((LET Depth = Number) (LET Extra = Str) (LET v = 1) (LET x = \"s\"))\n\
+                  MODULE a = ((LET Elem = Number) (LET item = 5) (LET deep = d))\n\
+                  MODULE held = ((LET zero = 0) \
+                  (LET pair = {inner = (a :! (Inner WITH {Elem = Number}))}))\n\
+                  LET m = (held :| Holder)\n";
+    branch_after(source);
 }
 
 /// A transparent view over a module the load types exactly lays its bindings at load.

@@ -14,7 +14,9 @@
 //!
 //! Where no tree shows a cell — a container literal's, a parameter's, a call's the load does not
 //! unfold — its exact type stands for it, and a view that type is is read as its signature declares
-//! its members: one level, through an application fixing every parameter ([`fully_pinned`]).
+//! its members. A member declared at an application fixing every parameter ([`fully_pinned`]) is
+//! re-viewed from it as from what it carries, at any depth; one whose application leaves a
+//! parameter open is re-viewed at run.
 //!
 //! See [the module design](../../../design/modules.md#the-load-and-the-run).
 
