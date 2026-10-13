@@ -264,7 +264,9 @@ impl ViewTypes<'_> {
                     }
                 }
             }
-            (TypeNode::SignatureApply { .. }, _) if module_schema(held, types).is_some() => {
+            (TypeNode::SignatureApply { .. }, _)
+                if module_schema(held, types).is_some() || fully_pinned(held, types) =>
+            {
                 if let Ok(nested) = nested_types(held, src, dst, types, scratch) {
                     nested.lay_members(types, scratch);
                 }
@@ -288,14 +290,30 @@ impl ViewTypes<'_> {
 }
 
 /// `held`'s schema where it is a module's own signature, declaring no head parameter: the only
-/// type the load knows a nested module's view from. A slot's application, a list's element type
-/// joined over modules of several signatures, or an empty list's `Never` is none — the nested
-/// module's own signature is then the value's alone, and its view's types are interned at run.
+/// type the load knows a nested module's view from, beside a [`fully_pinned`] application. A
+/// list's element type joined over modules of several signatures, or an empty list's `Never`, is
+/// neither.
 fn module_schema<'run>(held: KType, types: &Types<'_, 'run>) -> Option<SigSchema<'run>> {
     if !matches!(types.node(held), TypeNode::Signature { .. }) {
         return None;
     }
     crate::elaborate::schema_of(held, types).filter(|schema| schema.parameters.is_empty())
+}
+
+/// Whether `held` is an application fixing every head parameter of its signature: the type a
+/// transparent view's signature gives a nested module. *Fits* solves a re-view from it to its pins,
+/// the bindings a re-view from the module's own signature solves at the same slot, so the load
+/// lays the view the run builds.
+fn fully_pinned(held: KType, types: &Types<'_, '_>) -> bool {
+    let TypeNode::SignatureApply { signature, pins } = types.node(held) else {
+        return false;
+    };
+    crate::elaborate::schema_of(signature, types).is_some_and(|schema| {
+        schema
+            .parameters
+            .iter()
+            .all(|(name, _)| pins.get(BinderSymbol::Type(*name).symbol()).is_some())
+    })
 }
 
 /// What a nested module of signature `held` binds when re-viewed at a slot whose application

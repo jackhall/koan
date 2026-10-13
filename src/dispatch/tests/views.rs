@@ -108,11 +108,10 @@ fn a_view_over_a_list_of_modules_of_two_signatures_lays_each_nested_view_at_load
     assert_eq!(branch_after(&source), 0);
 }
 
-/// A view of a transparent view: the source's signature declares the nested module only at an
-/// application, which is not the module's own signature, so the load lays nothing for it and the
-/// run re-views it.
+/// A view of a transparent view: the source's signature declares the nested module at an
+/// application fixing each parameter, which the load re-views as the run does the module.
 #[test]
-fn a_view_of_a_transparent_view_holding_a_module_runs() {
+fn a_view_of_a_transparent_view_lays_its_nested_view_at_load() {
     let source = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
                   SIG Outer FOR ALL #[Carrier] = \
                   #[(VAL zero :Carrier) (VAL inner :(Inner WITH {Elem = Carrier}))]\n\
@@ -120,5 +119,5 @@ fn a_view_of_a_transparent_view_holding_a_module_runs() {
                   MODULE ints = ((LET zero = 0) (LET inner = a))\n\
                   LET t = (ints :! (Outer WITH {Carrier = Number}))\n\
                   LET m = (t :| Outer)\n";
-    branch_after(source);
+    assert_eq!(branch_after(source), 0);
 }
