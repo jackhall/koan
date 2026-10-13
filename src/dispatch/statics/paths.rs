@@ -27,7 +27,6 @@
 use crate::elaborate::{
     SignatureMember, applied_member, path_base, path_binding, signature_member,
 };
-use crate::knot::module::view::opaque_view_types;
 use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
@@ -41,7 +40,6 @@ use crate::type_lattice::{
     DeclaredType, Interval, KType, Parametric, Scheme, Side, TypeNode, Variable, read_through,
     substitute_levels,
 };
-use crate::values::digest::Operator;
 
 use super::trees::Scope;
 use super::{Bound, Pass, under, unknown};
@@ -302,26 +300,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         // The signature of the module the root names, or the chain reaches, where the load knows
         // it exactly: the path is then what the run reads off it.
+        let view = match tree {
+            Tree::View { .. } => self.view_of(tree, site)?.map(|viewed| viewed.view),
+            _ => None,
+        };
         let closed = through.and_then(|through| {
             let read = |held: KType, chain: &[ValueSymbol]| {
                 path_binding(types, scratch, held, chain, entry.label, through)
             };
             held.and_then(|held| read(held, entry.chain))
-                .or_else(|| match tree {
-                    Tree::View {
-                        operator: Operator::Opaque,
-                        application,
-                        source,
-                        ..
-                    } => source
-                        .digest()
-                        .and_then(|digest| {
-                            opaque_view_types(None, application, digest, types, scratch)
-                        })
-                        .map(|viewed| viewed.view)
-                        .and_then(|view| read(view, &[])),
-                    _ => None,
-                })
+                .or_else(|| view.and_then(|view| read(view, &[])))
         });
         // A label the application pins is that pin, which *fits* solves it to at every run.
         let pinned = through

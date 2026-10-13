@@ -594,8 +594,9 @@ carried; the site of each
 so the run checks nothing there; what the load fixed at each
 [instance site](../dispatch/README.md#static-types) — the solution it is
 instantiated at, closed or rigid, or, for a member read at a call's head, that
-the run reads it as it is (`InstanceRead`); each `:|` ascription's operand's
-**content tree**, by the ascription's site (`view_tree`); where the run reads
+the run reads it as it is (`InstanceRead`); the **content tree** of the view
+each `:|` ascription at a closed signature builds, by the ascription's site
+(`view_tree`); where the run reads
 each lexical variable of a path's declared application, per path
 (`through_at`);
 and each call by name's contributions, by its argument's site, a static type
@@ -610,7 +611,8 @@ candidate of every use in it is *maybe*, and no ascription in it is settled.
 vocabulary: what the load knows of a module-valued expression's content
 ([the module design](../../design/modules.md#the-load-and-the-run)). A
 `Tree` is a digest the load computes, a `MODULE` or `GROUP` body over the trees
-of what it composes, a knot of closures, a view over its operand's tree, or a
+of what it composes, a knot of closures, an opaque view over its operand's tree,
+a retype — a knot member under a header — over its bare member's tree, or a
 **leaf** for what the load cannot see: a binder and a value-member chain read
 through it (`Leaf::Bound`), keyed too on which run of the binder's body holds
 it — a body's builder captures, or a call the load unfolded — or an expression

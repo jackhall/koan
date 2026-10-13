@@ -20,8 +20,10 @@ const LABELS: &str = "SIG HasLabel = #[(VAL label :Str)]\n\
                       MODULE named = ((LET label = \"n\") (LET other = 1))\n\
                       MODULE plain = (LET other = 1)\n";
 
+/// `:!` re-stamps a module at the application it fits, each head parameter pinned at what *fits*
+/// solves.
 #[test]
-fn a_transparent_view_shows_what_each_parameter_solves_to() {
+fn a_retype_at_a_signature_shows_what_each_parameter_solves_to() {
     let source = format!(
         "{COUNTER}LET t = (ints :! Counter)\n\
          PRINT t\n\
@@ -30,7 +32,29 @@ fn a_transparent_view_shows_what_each_parameter_solves_to() {
     );
     assert_eq!(
         run(&source),
-        "SIG (Carrier: Number, zero: Number, succ: :(FN :{x :Number} -> Number))\n1\nNumber"
+        "SIG FOR ALL #{Carrier: Any} (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) \
+         WITH {Carrier = Number}\n1\nNumber"
+    );
+}
+
+/// A module under a meet re-stamps at the meet of the applications it fits, each pinned, and reads
+/// each member at the meet of what the applications declaring it declare.
+#[test]
+fn a_retype_at_a_meet_pins_each_application() {
+    let source = "SIG Aa = #[(VAL x :Number)]\n\
+                  SIG Cc FOR ALL #[Elt] = #[(VAL first :Elt)]\n\
+                  MODULE m = ((LET x = 1) (LET first = \"f\") (LET z = 3))\n\
+                  LET both = (m :! (Aa & Cc))\n\
+                  PRINT both\nPRINT both.x\nPRINT both.first\nPRINT both.Elt";
+    assert_eq!(
+        run(source),
+        "(SIG FOR ALL #{Elt: Any} (first: Elt) WITH {Elt = Str}) & SIG (x: Number)\n1\nf\nStr"
+    );
+    assert_eq!(
+        run(&format!("{source}\nPRINT both.z")),
+        "load: <test>:9:7: (SIG FOR ALL #{Elt: Any} (first: Elt) WITH {Elt = Str}) & \
+         SIG (x: Number) has no member z",
+        "a member neither application declares"
     );
 }
 
@@ -101,7 +125,7 @@ fn a_type_path_through_a_view_reads_the_member_a_stepwise_read_does() {
 }
 
 /// A view the view door refuses at every run refuses the load: an operand that can never be a
-/// module, and a type that is no one application of a signature.
+/// module, and a type that is no one application of a signature. A retype at a meet is no view.
 #[test]
 fn a_view_every_run_refuses_refuses_the_load() {
     assert_eq!(
@@ -112,7 +136,7 @@ fn a_view_every_run_refuses_refuses_the_load() {
         run("SIG Aa = #[(VAL x :Number)]\n\
              SIG Bb = #[(VAL y :Number)]\n\
              MODULE m = ((LET x = 1) (LET y = 2))\n\
-             PRINT (m :! (Aa & Bb))"),
+             PRINT (m :| (Aa & Bb))"),
         "load: <test>:4:7: SIG (y: Number) & SIG (x: Number) is no signature"
     );
 }
@@ -365,9 +389,19 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
          PRINT (v.succ {{x = (v.succ {{x = v.zero}})}})"
     );
     assert_eq!(run(&source), "Carrier(1)\nCarrier(2)");
+    // The load sees the view exactly, so it refuses an argument the view never sealed; through
+    // `Any` the barrier refuses it where it runs.
     assert_eq!(
         run(&format!(
             "{COUNTER}LET v = (ints :| Counter)\nPRINT (v.succ {{x = 1}})"
+        )),
+        "load: <test>:4:7: :(FN :{x :Carrier} -> Carrier) can never be called with :{x :Number}",
+        "an argument the view never sealed, at load"
+    );
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}LET call = (FN :{{v :Any}} -> Any = #(v.succ {{x = 1}}))\n\
+             PRINT (call {{v = (ints :| Counter)}})"
         )),
         "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Number}: it is not \
          sealed under Carrier",
@@ -398,7 +432,8 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
 /// member is opaque, so no `Number` slot, builtin or annotation takes it, while the view's own
 /// functions see its payload behind their barriers, and the view still fits its signature. A view
 /// of a module the load sees all of is known at load, carrier and all, so a use of its member no
-/// `Number` slot takes refuses the load; one through a parameter is refused where it runs.
+/// `Number` slot takes refuses the load; one through a parameter is refused where it runs, the
+/// view seen at the parameter's signature.
 #[test]
 fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
     let source = |program: &str| {
@@ -419,7 +454,9 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
     let refused_take = "no overload of `TAKE _` admits (SIG (Carrier: Carrier, zero: Carrier, \
                         succ: :(FN :{x :Carrier} -> Carrier)))";
     let loaded_take = format!("load: <test>:10:7: {refused_take}");
-    let ran_take = format!("error: {refused_take}");
+    // Through `p :Counter`, the view is seen at `Counter` pinned at its own carrier.
+    let ran_take = "error: no overload of `TAKE _` admits (SIG FOR ALL #{Carrier: Number} \
+                    (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) WITH {Carrier = Carrier})";
     for (program, printed) in [
         (
             "PRINT (c.zero + 1)",
@@ -442,7 +479,7 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
         // A bounded parameter offers no `Number`, so neither the view nor a `Counter` fits `Plain`.
         ("PRINT (TAKE ints)", "5"),
         ("PRINT (TAKE c)", &loaded_take),
-        ("PRINT (PASS c)", &ran_take),
+        ("PRINT (PASS c)", ran_take),
     ] {
         assert_eq!(run(&source(program)), printed, "{program}");
     }
@@ -468,6 +505,13 @@ fn an_opaque_view_of_an_opaque_view_reseals_and_stacks_its_barriers() {
     );
     assert_eq!(
         run(&source("PRINT (d.succ {x = c.zero})")),
+        "load: <test>:6:7: :(FN :{x :Carrier} -> Carrier) can never be called with :{x :Carrier}"
+    );
+    assert_eq!(
+        run(&source(
+            "LET call = (FN :{e :Any, z :Any} -> Any = #(e.succ {x = z}))\n\
+             PRINT (call {e = d, z = c.zero})"
+        )),
         "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Carrier}: its value \
          does not satisfy Carrier"
     );
@@ -514,6 +558,14 @@ fn an_argument_crossing_a_union_slot_inwards_unseals_by_the_member_over_the_carr
     );
     assert_eq!(
         run(&format!("{source}PRINT (v.show {{x = 1}})")),
+        "load: <test>:4:7: :(FN :{x :(Carrier | Str)} -> Str) can never be called with \
+         :{x :Number}"
+    );
+    assert_eq!(
+        run(&format!(
+            "{source}LET call = (FN :{{w :Any}} -> Any = #(w.show {{x = 1}}))\n\
+             PRINT (call {{w = v}})"
+        )),
         "error: :(FN :{x :(Carrier | Str)} -> Str) cannot be called with :{x :Number}: no member \
          of its union admits it"
     );
@@ -696,8 +748,9 @@ fn a_carrier_is_keyed_on_content() {
              MODULE other = ((LET zero = 0) \
              (LET succ = (FN :{{x :Number}} -> Number = #(x + 2))))\n\
              LET a = (ints :| Counter)\nLET b = (twin :| Counter)\nLET c = (other :| Counter)\n\
+             LET call = (FN :{{f :Any, z :Any}} -> Any = #(f {{x = z}}))\n\
              PRINT (a.Carrier == b.Carrier)\nPRINT (a.Carrier == c.Carrier)\n\
-             PRINT (a.succ {{x = c.zero}})"
+             PRINT (call {{f = a.succ, z = c.zero}})"
         )),
         "true\nfalse\nerror: :(FN :{x :Carrier} -> Carrier) cannot be called with \
          :{x :Carrier}: it is not sealed under Carrier",

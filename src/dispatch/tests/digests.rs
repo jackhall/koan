@@ -154,15 +154,15 @@ fn one_text_whose_use_resolves_apart_digests_apart() {
 
 #[test]
 fn a_view_is_its_operator_and_application_over_its_source() {
-    let [first, second, transparent, other] = digests(
+    let [first, second, retyped, other] = digests(
         "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
          MODULE ints = (LET zero = 0)\nMODULE strs = (LET zero = \"\")\n\
          LET first = (ints :| Counter)\nLET second = (ints :| Counter)\n\
-         LET transparent = (ints :! Counter)\nLET other = (strs :| Counter)",
-        ["first", "second", "transparent", "other"],
+         LET retyped = (ints :! Counter)\nLET other = (strs :| Counter)",
+        ["first", "second", "retyped", "other"],
     );
     assert_eq!(first, second, "two evaluations of one ascription");
-    assert_ne!(first, transparent, "the operator");
+    assert_ne!(first, retyped, "a view is no header");
     assert_ne!(first, other, "the source");
 }
 
@@ -221,5 +221,24 @@ fn a_literal_digests_as_the_value_it_evaluates_to() {
         format!("{:?}", literal_digest(&KLiteral::Boolean(true)))
     );
     assert_eq!(null, format!("{:?}", literal_digest(&KLiteral::Null)));
-    assert_eq!(named, format!("{:?}", type_digest(KType::NUMBER)));
+    let kind = KType::of_kind(crate::type_lattice::KKind::ProperType);
+    assert_eq!(named, format!("{:?}", type_digest(KType::NUMBER, kind)));
+}
+
+/// A header digests over its bare member: two modules of one body, branded apart by what they
+/// capture, digest apart under one signature that hides the brand, and a header digests apart
+/// from its own member.
+#[test]
+fn headers_over_modules_branded_apart_digest_apart() {
+    let [m, f, bare, again] = digests(
+        "SIG Plain = #[(VAL zero :Number)]\n\
+         LET metric = 1\nLET imperial = 2\n\
+         MODULE meters OVER #[metric] = (LET zero = 0)\n\
+         MODULE feet OVER #[imperial] = (LET zero = 0)\n\
+         LET m = (meters :! Plain)\nLET f = (feet :! Plain)\nLET again = (meters :! Plain)",
+        ["m", "f", "meters", "again"],
+    );
+    assert_ne!(m, f, "a header keeps the brand its signature hides");
+    assert_ne!(m, bare, "a retype changes the digest");
+    assert_eq!(m, again, "one retype of one member digests alike");
 }

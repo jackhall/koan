@@ -83,6 +83,10 @@ pub struct Contract {
     /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
     /// that frame's caller asked for it.
     pub retype: KType,
+    /// Whether the value must satisfy `retype` too: a callee called past the type it shows, where
+    /// either is quantified, so the order does not promise the node's return lies under the shown
+    /// one.
+    pub checked: bool,
 }
 
 impl Contract {
@@ -272,11 +276,15 @@ impl<'graph> Program<'graph> {
             return value;
         }
         let scratch = Bump::new();
-        if satisfies(contract.returns, &value, types, &scratch) {
+        let returns = match contract.checked {
+            true if satisfies(contract.returns, &value, types, &scratch) => contract.retype,
+            _ => contract.returns,
+        };
+        if satisfies(returns, &value, types, &scratch) {
             return value.retyped(writer, contract.retype, types, &scratch);
         }
         let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
-        let (value, returns) = (name(value.ktype()), name(contract.returns.into()));
+        let (value, returns) = (name(value.ktype()), name(returns.into()));
         match contract.callee {
             Some(callee) => self.error(
                 writer,

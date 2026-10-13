@@ -232,7 +232,7 @@ impl<'graph> Fixture<'_, 'graph> {
             .expect("the component ties");
             for (index, slot) in component.members.iter().enumerate() {
                 activation
-                    .bind(*slot, Value::Knotted(Knotted::of(knot, index)))
+                    .bind(*slot, Value::Knotted(Knotted::of(knot.knot, index)))
                     .expect("an empty slot binds");
             }
             return;
@@ -295,7 +295,7 @@ impl<'graph> Fixture<'_, 'graph> {
         )
         .expect("the module ties");
         activation
-            .bind(slot, Value::Knotted(Knotted::of(knot, 0)))
+            .bind(slot, Value::Knotted(Knotted::of(knot.knot, 0)))
             .expect("an empty slot binds");
     }
 

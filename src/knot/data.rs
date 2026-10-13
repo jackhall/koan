@@ -27,11 +27,11 @@ use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected
 use crate::parse::{ExpressionPart, KExpression, KLiteral, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, Site, Target};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType};
+use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{
     CALL_ONLY, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue,
     Types, Value, construction, dict_type, kept_entries, list_type, part_ktype, record_type,
-    solves_identity,
+    retype_target, solves_identity,
 };
 
 use super::{Eager, KActivationView, KValue, Knotted, Supplied, Untieable};
@@ -452,15 +452,27 @@ fn is_derived(staged: &Staged<'_, '_, '_>, types: &Types<'_, '_>) -> bool {
 }
 
 /// Every node's memo: `memos[i]` is `Some` for a function node on entry, and on success every
-/// node's memo is `Some`. A cycle of derived nodes refuses with the members holding it, and a
+/// node's memo is `Some`. Member `i`'s root is born at `annotations[i]`'s retype of its memo, set
+/// before any fellow derives its own over an edge into it. A cycle of derived nodes refuses with the members holding it, and a
 /// construction the rule refuses while its memo is derived refuses as it would at the check.
 pub(super) fn memos<'x>(
     nodes: &Nodes<'_, '_, '_>,
     memos: &mut [Option<DeclaredType<KType>>],
+    annotations: &[Option<KType>],
     names: &dyn Fn(u32) -> BinderSymbol,
     types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<(), Untieable<'x>> {
+    // A member's root is born at its annotation where its own memo satisfies it; where it does
+    // not, the slot's annotation faults as at the top level.
+    let annotated = |index: usize, memo: KType| match annotations.get(index).copied().flatten() {
+        Some(annotation) if satisfied_by(types, scratch, annotation, memo) => {
+            retype_target(types, scratch, memo.into(), annotation)
+                .as_type()
+                .expect("a data node's memo is concrete")
+        }
+        _ => memo,
+    };
     let derived = |node: &Option<Node<'_, '_, '_>>| {
         node.as_ref()
             .is_some_and(|node| is_derived(&node.shape, types))
@@ -472,7 +484,7 @@ pub(super) fn memos<'x>(
         }) = node
             && !derived(node)
         {
-            memos[index] = Some(head.handle().into());
+            memos[index] = Some(annotated(index, head.handle()).into());
         }
     }
     let mut rows: BumpVec<'x, BumpVec<'x, usize>> = BumpVec::with_capacity_in(nodes.len(), scratch);
@@ -521,7 +533,7 @@ pub(super) fn memos<'x>(
                         refused,
                     }
                 })?;
-            memos[first] = Some(memo.into());
+            memos[first] = Some(annotated(first, memo).into());
         }
     }
     Ok(())

@@ -122,7 +122,25 @@ reads its arguments' carried types and does whatever the load left:
    to the declared return.
 
 A retype is what makes a declaration a contract at run time: after it, the
-value's type is what the declaration says, at every depth a reader sees.
+value's type is what the declaration says, at every depth a reader sees. Every
+type that is one type re-stamps the value at itself — a list, dict or record
+type, a nominal or a family's application, a function type or an expression
+shape, a code kind, a kind, a signature type — so a member read through a
+module and a call through a function see exactly the declared type, as a field
+read through a record does. A signature type re-stamps a module at each of its
+applications the module fits, pinned at what *fits* solves for each head
+parameter left open; each run pins afresh, so the load calls such a retype
+exact only where it computes the pins itself. A union keeps each variant's own
+type, and `Any` re-stamps nothing, nor do `Module` and `Code`, which every
+module and every quote satisfies. A knot member — a function, a module, a
+quote's code, a data node — takes the type as a header beside it, as a record
+carries its own
+([the type memo](../src/values/README.md#the-type-memo-and-satisfies)), and a
+member a cyclic component ties under an annotation is born at it, so a fellow
+reaching it through the knot sees the declared type too. A callee seen at a
+type other than the one its body declares is called at the type it shows: its
+arguments are admitted and retyped there before it binds them, and its result
+is retyped to the return it shows.
 
 ## The load and the run agree
 

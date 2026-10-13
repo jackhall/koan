@@ -21,7 +21,9 @@
 
 use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
 use crate::knot::module::layout;
-use crate::knot::{KBuiltins, KValue, UsingRefused, barrier_instance, builtin, instance, using};
+use crate::knot::{
+    KBuiltins, KValue, UsingRefused, barrier_instance, builtin, header_instance, instance, using,
+};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
 use crate::scope::{Builtins, InstanceRead, Site};
@@ -343,11 +345,12 @@ pub(super) fn run<'graph, 'here>(
             type_value(met)
         }
         Native::ModuleMember => {
-            let module = value(0)
-                .as_module()
-                .expect("a module slot admits modules alone");
+            debug_assert!(
+                value(0).as_module().is_some(),
+                "a module slot admits modules alone"
+            );
             let name = label(operands[1]);
-            let Some(member) = layout::member(module, name, types, scratch) else {
+            let Some(member) = layout::member(writer, value(0), name, types, scratch) else {
                 return raise(Raised::NoMember {
                     of: value(0).concrete_ktype(),
                     member: name.symbol(),
@@ -357,6 +360,13 @@ pub(super) fn run<'graph, 'here>(
             // is at a call's head.
             match at.view.shape().instance_at(Site::of_node(node)) {
                 Some(InstanceRead::AsIs) => member,
+                // Through a header at a scheme: a header at its instance over the same member.
+                Some(InstanceRead::Solved(solution))
+                    if let Value::Retyped(header) = member
+                        && header.ktype().as_scheme().is_some() =>
+                {
+                    header_instance(writer, header, solution, &at.view, types, scratch)
+                }
                 Some(InstanceRead::Solved(solution)) => match member.as_callable() {
                     Some(function) if function.function().is_some() => Value::Knotted(instance(
                         writer, function, solution, &at.view, types, scratch,
@@ -493,7 +503,6 @@ fn field<'graph, 'here>(
 fn tagged(value: KValue<'_, '_>) -> bool {
     match value {
         Value::Tagged(_) => true,
-        Value::Knotted(_) => matches!(value.as_circular(), Some((_, Circular::Tagged(_)))),
-        _ => false,
+        _ => matches!(value.as_circular(), Some((_, Circular::Tagged(_)))),
     }
 }

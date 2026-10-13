@@ -77,7 +77,7 @@ the link in each section to the relevant chapter.
 | `SIG <Name> FOR ALL #[<names>] = #[...]`         | A signature over head parameters, each one type per module, which its members name. |
 | `VAL <name> :<Type>`                             | A required value member, inside a `SIG`; its type may be a quantified function type. |
 | `EXPR #(<head>) -> <Type>`                       | A required keyworded member, inside a `SIG` (bodyless; `FOR ALL` twin included, for a type each use works out afresh). |
-| `<module> :! <Sig>`                              | Transparent ascription.            |
+| `<module> :! <Sig>`                              | Transparent ascription: the module seen at the signature, each head parameter visible. |
 | `<module> :\| <Sig>`                             | Opaque ascription.                 |
 | `USING <module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
 | `EXPR #(<KW> <p> :<Sig>) -> Module = #(<body>)`    | A functor: a function returning a module (a module parameterized by a module). |

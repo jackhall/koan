@@ -23,13 +23,13 @@ use crate::memory::{
     Delivery, HomeHeader, Operand, Prices, Reattachable, ReattachableOverBoth, Stale, StepContext,
     Verdict, Writer, bump_table, collect,
 };
-use crate::type_lattice::{Branch, DeclaredType, Parametric, Root};
+use crate::type_lattice::{Branch, DeclaredType, KType, Parametric, Root};
 
 use super::habitat::{Half, TypeHeader, Types};
 use super::surface::Parts;
 use super::{
-    Dict, Knotted, KnottedFamily, List, Record, Seen, Surface, Tagged, Value, ValueCarrier,
-    ValueFamily, text,
+    Dict, Knotted, KnottedFamily, List, Record, Retyped, Seen, Surface, Tagged, Value,
+    ValueCarrier, ValueFamily, text,
 };
 
 /// How many copy bytes one pin byte is worth: an operand copies while its copy costs less than a
@@ -269,7 +269,8 @@ fn check_parts<'graph, 'cell, XF: KnottedFamily<'graph>>(
         check(value.ktype().into());
         match value {
             Value::Type(type_value) => check(type_value.handle().into()),
-            Value::Knotted(member) => {
+            Value::Knotted(_) | Value::Retyped(_) => {
+                let member = value.knot_member().expect("a knot member");
                 if knots.insert(member.root()) {
                     XF::carried_types(&member, &mut |kt| check(kt));
                     XF::held(&member, &mut |held| stack.push(held));
@@ -284,17 +285,17 @@ fn check_parts<'graph, 'cell, XF: KnottedFamily<'graph>>(
 /// them have been started, and where its finished children begin on the copy's `done` stack.
 #[derive(Clone, Copy)]
 enum Frame<'x, 'from, X> {
-    /// A list, dict, record or tagged value, or a data node seen at a type other than its memo,
-    /// opened at the type it is seen at.
+    /// A list, dict, record or tagged value, opened at the type it is seen at.
     Composite {
         surface: Surface<'x, 'from, X>,
         next: usize,
         base: usize,
     },
     /// A knot member whose knot is not yet copied: its held values sit on the copy's `held` stack
-    /// from `held` to `end`.
+    /// from `held` to `end`, and `retype` is the type it is seen at where that is not its own.
     Knot {
         member: X,
+        retype: Option<DeclaredType<KType>>,
         held: usize,
         end: usize,
         next: usize,
@@ -386,8 +387,8 @@ where
     }
 
     /// Begin copying `seen`: a leaf, or a knot already copied, is finished at once; any other
-    /// value pushes its frame. A data node seen at a type other than its memo is laid down as a
-    /// plain value of its kind at that type, so it pushes a composite frame, not its knot's.
+    /// value pushes its frame. A knot member copies with its knot, bare or under a header, and one
+    /// seen at a type other than its own arrives as a header at that type.
     fn start(
         &mut self,
         seen: Seen<'from, XF::Closed<'from>>,
@@ -395,23 +396,18 @@ where
         let writer = self.writer;
         let base = self.done.len();
         let value = seen.value();
-        let composite = match value {
-            Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => true,
-            Value::Knotted(member) => member.ktype() != seen.ktype(),
-            _ => false,
-        };
-        if composite {
-            let surface = seen
-                .surface(self.types, self.scratch)
-                .expect("a container, a tagged value or a data node opens");
-            self.frames.push(Frame::Composite {
-                surface,
-                next: 0,
-                base,
-            });
-            return None;
-        }
         let finished = match value {
+            Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => {
+                let surface = seen
+                    .surface(self.types, self.scratch)
+                    .expect("a container or a tagged value opens");
+                self.frames.push(Frame::Composite {
+                    surface,
+                    next: 0,
+                    base,
+                });
+                return None;
+            }
             Value::Number(number) => Value::Number(number),
             Value::Bool(flag) => Value::Bool(flag),
             Value::Null => Value::Null,
@@ -420,27 +416,44 @@ where
                 self.adopt(type_value.handle());
                 Value::Type(type_value.copied(writer))
             }
-            Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => {
-                unreachable!("a composite pushed its frame above")
-            }
-            Value::Knotted(member) => {
-                if let Some(root) = self.knots.get(&member.root()) {
-                    Value::Knotted(root.sibling(member.index()))
-                } else {
-                    let held = self.held.len();
-                    XF::held(&member, &mut |value| self.held.push(value));
-                    self.frames.push(Frame::Knot {
-                        member,
-                        held,
-                        end: self.held.len(),
-                        next: 0,
-                        base,
-                    });
-                    return None;
+            Value::Knotted(_) | Value::Retyped(_) => {
+                let member = value.knot_member().expect("a knot member");
+                let retype = (member.ktype() != seen.ktype()).then(|| seen.ktype());
+                match self.knots.get(&member.root()) {
+                    Some(root) => self.retyped(root.sibling(member.index()), retype),
+                    None => {
+                        let held = self.held.len();
+                        XF::held(&member, &mut |value| self.held.push(value));
+                        self.frames.push(Frame::Knot {
+                            member,
+                            retype,
+                            held,
+                            end: self.held.len(),
+                            next: 0,
+                            base,
+                        });
+                        return None;
+                    }
                 }
             }
         };
         Some(finished)
+    }
+
+    /// A copied member, under a header at `retype` where it is seen at a type other than its own,
+    /// that type adopted before the header is laid.
+    fn retyped(
+        &self,
+        member: XF::Closed<'to>,
+        retype: Option<DeclaredType<KType>>,
+    ) -> Value<'to, XF::Closed<'to>> {
+        match retype {
+            Some(target) => {
+                self.adopt(target);
+                Value::Retyped(Retyped::of(self.writer, member, target))
+            }
+            None => Value::Knotted(member),
+        }
     }
 
     /// The next child `frame` has not started, if any, its own memo adopted before the type it is
@@ -501,6 +514,7 @@ where
             }
             Frame::Knot {
                 member,
+                retype,
                 held,
                 end,
                 base,
@@ -522,7 +536,7 @@ where
                 );
                 self.knots.insert(member.root(), copied.root());
                 self.held.truncate(held);
-                (base, Value::Knotted(copied))
+                (base, self.retyped(copied, retype))
             }
         };
         self.done.truncate(base);
@@ -544,6 +558,7 @@ fn same_word<X: Knotted>(a: &Value<'_, X>, b: &Value<'_, X>) -> bool {
         (Value::Record(a), Value::Record(b)) => std::ptr::eq(*a, *b),
         (Value::Tagged(a), Value::Tagged(b)) => std::ptr::eq(*a, *b),
         (Value::Knotted(a), Value::Knotted(b)) => a == b,
+        (Value::Retyped(a), Value::Retyped(b)) => std::ptr::eq(*a, *b),
         _ => false,
     }
 }

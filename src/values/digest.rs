@@ -46,7 +46,6 @@ use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Edge, bump_table};
 use crate::parse::KLiteral;
 use crate::type_lattice::{DeclaredType, KType};
 
-use super::circular::{Circular, Resolved};
 use super::surface::Parts;
 use super::{Knotted, Nothing, Seen, Surface, Types, Value};
 
@@ -95,6 +94,8 @@ pub enum Tag {
     Barrier = 0x17,
     Code = 0x18,
     Data = 0x19,
+    /// A knot member seen at a type other than its own: the type, then the member's digest.
+    Retyped = 0x1A,
     /// A body's code, digested as resolved, where its shape is built.
     Shape = 0x20,
     /// A name read in a body's own activation or a block it hops out of.
@@ -120,8 +121,7 @@ pub enum Tag {
     Untyped = 0x2B,
     /// A mark on a name or a use, by which mark.
     Mark = 0x2C,
-    /// A view's operator: `:!`, `:|`, or the re-view a nested module takes at an opaque boundary.
-    Transparent = 0x2D,
+    /// A view's operator: `:|`, or the re-view a nested module takes at an opaque boundary.
     Opaque = 0x2E,
     Reviewed = 0x2F,
     /// What the load cannot see of a module's content, keyed on its binder: a load-time key, never
@@ -233,8 +233,7 @@ type MemoKey = (u8, usize, DeclaredType<KType>);
 /// finished parts begin on the walk's `done` stack.
 #[derive(Clone, Copy)]
 enum Frame<'x, 'cell, X> {
-    /// A list, dict, record or tagged value, or a data node seen at a type other than its memo,
-    /// opened at the type it is seen at, beside its memo key.
+    /// A list, dict, record or tagged value, opened at the type it is seen at, beside its memo key.
     Composite {
         surface: Surface<'x, 'cell, X>,
         key: MemoKey,
@@ -247,6 +246,14 @@ enum Frame<'x, 'cell, X> {
         member: X,
         held: usize,
         end: usize,
+        next: usize,
+        base: usize,
+    },
+    /// A knot member seen at `carried`, a type other than its own: its one part is the bare
+    /// member at its own type.
+    Retyped {
+        carried: DeclaredType<KType>,
+        member: X,
         next: usize,
         base: usize,
     },
@@ -291,8 +298,11 @@ impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
         while let Some(&frame) = stacks.frames.last() {
             match self.next_part(frame, &stacks) {
                 Some(part) => {
-                    if let Some(Frame::Composite { next, .. } | Frame::Knot { next, .. }) =
-                        stacks.frames.last_mut()
+                    if let Some(
+                        Frame::Composite { next, .. }
+                        | Frame::Knot { next, .. }
+                        | Frame::Retyped { next, .. },
+                    ) = stacks.frames.last_mut()
                     {
                         *next += 1;
                     }
@@ -314,9 +324,9 @@ impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
     }
 
     /// Begin digesting `seen`: a leaf, or a composite or knot this demand already digested, is
-    /// finished at once; any other composite or knot member pushes its frame. A data node seen at a
-    /// type other than its memo digests as the plain value of its kind a copy lays down, so it
-    /// pushes a composite frame, not its knot's.
+    /// finished at once; any other composite or knot member pushes its frame. A knot member seen at
+    /// a type other than its own pushes a frame over the bare member, which digests beside that
+    /// type.
     fn start<'cell>(
         &mut self,
         seen: Seen<'cell, X>,
@@ -329,8 +339,17 @@ impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
         let value = seen.value();
         match value {
             Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => {}
-            Value::Knotted(member) if member.ktype() != seen.ktype() => {}
-            Value::Knotted(member) => {
+            Value::Knotted(_) | Value::Retyped(_) => {
+                let member = value.knot_member().expect("a knot member");
+                if member.ktype() != seen.ktype() {
+                    stacks.frames.push(Frame::Retyped {
+                        carried: seen.ktype(),
+                        member,
+                        next: 0,
+                        base,
+                    });
+                    return None;
+                }
                 if let Some(knot) = self.knots.get(&member.root()) {
                     return Some(beside_index(*knot, member));
                 }
@@ -354,7 +373,7 @@ impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
         }
         let surface = seen
             .surface(self.types, self.scratch)
-            .expect("a container, a tagged value or a data node opens");
+            .expect("a container or a tagged value opens");
         stacks.frames.push(Frame::Composite {
             surface,
             key,
@@ -380,12 +399,16 @@ impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
             Frame::Knot {
                 held, end, next, ..
             } => (held + next < end).then(|| stacks.held[held + next]),
+            Frame::Retyped { member, next, .. } => {
+                (next == 0).then(|| Seen::of(Value::Knotted(member)))
+            }
         }
     }
 
     /// `frame`'s digest over its finished parts, memoized, and its parts popped: a composite's
     /// kind, seen type and contents; a knot member's knot, from its member's
-    /// [`digest_held`](Knotted::digest_held), beside its index there.
+    /// [`digest_held`](Knotted::digest_held), beside its index there; a retyped member's type,
+    /// over its bare member's digest.
     fn finish<'cell>(
         &mut self,
         frame: Frame<'a, 'cell, X>,
@@ -418,6 +441,9 @@ impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
                 self.knots.insert(member.root(), knot);
                 stacks.held.truncate(held);
                 (base, beside_index(knot, member))
+            }
+            Frame::Retyped { carried, base, .. } => {
+                (base, retyped_content(carried, stacks.done[base]))
             }
         };
         stacks.done.truncate(base);
@@ -517,23 +543,23 @@ pub fn body_content(
 /// Which door a view came through, a part of its content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Operator {
-    /// `:!`.
-    Transparent,
     /// `:|`.
     Opaque,
     /// The re-view a nested module takes at an opaque boundary.
     Reviewed,
 }
 
-/// A view's content: its `operator` and the `application` it was built at, over its `source`'s
-/// digest.
+/// A view's content: its `operator` and the `application` it was built at, over its source's bare
+/// member's digest and `from`, the substitution its fit solved — a signature declaring each
+/// binding a manifest member. The load keys a view whose fit it cannot compute on no `from`, a key
+/// no run digests.
 pub fn view_content(
     operator: Operator,
     application: KType,
     source: ContentDigest,
+    from: Option<KType>,
 ) -> ContentDigest {
     let operator = match operator {
-        Operator::Transparent => Tag::Transparent,
         Operator::Opaque => Tag::Opaque,
         Operator::Reviewed => Tag::Reviewed,
     };
@@ -541,6 +567,17 @@ pub fn view_content(
         .tag(operator)
         .feed(application)
         .digest(source)
+        .feed(from)
+        .finished()
+}
+
+/// A knot member's digest where it is seen at `carried`, a type other than its own: the type, over
+/// the bare `member`'s digest. A member's content is its knot's, never the members a type shows,
+/// so a type hiding a brand keeps the brand in the digest.
+pub fn retyped_content(carried: DeclaredType<KType>, member: ContentDigest) -> ContentDigest {
+    DigestHasher::new(Tag::Retyped)
+        .feed(carried)
+        .digest(member)
         .finished()
 }
 
@@ -554,9 +591,13 @@ pub fn literal_digest(literal: &KLiteral<'_>) -> ContentDigest {
     }
 }
 
-/// A type value's digest, from the handle of the type it names.
-pub fn type_digest(named: KType) -> ContentDigest {
-    DigestHasher::new(Tag::Type).feed(named).finished()
+/// A type value's digest, from the handle of the type it names and the kind it carries: its own
+/// kind's, or one a retype stamped.
+pub fn type_digest(named: KType, kind: KType) -> ContentDigest {
+    DigestHasher::new(Tag::Type)
+        .feed(named)
+        .feed(kind)
+        .finished()
 }
 
 fn number_digest(number: f64) -> ContentDigest {
@@ -591,13 +632,12 @@ pub(super) fn scalar<X>(value: Value<'_, X>) -> ContentDigest {
         Value::Bool(flag) => bool_digest(flag),
         Value::Null => literal_digest(&KLiteral::Null),
         Value::Str(text) => str_digest(text),
-        Value::Type(value) => type_digest(value.handle()),
+        Value::Type(value) => type_digest(value.handle(), value.ktype()),
         _ => unreachable!("a composite or a knot member is no leaf"),
     }
 }
 
-/// The kind's tag and the address of the resident `value` opens as: a plain composite's own, or
-/// its data node's.
+/// The kind's tag and the address of the resident a plain composite `value` opens as.
 fn resident<X: Knotted>(value: Value<'_, X>) -> (Tag, usize) {
     fn at<T>(resident: &T) -> usize {
         std::ptr::from_ref(resident).addr()
@@ -607,13 +647,6 @@ fn resident<X: Knotted>(value: Value<'_, X>) -> (Tag, usize) {
         Value::Dict(dict) => (Tag::Dict, at(dict)),
         Value::Record(record) => (Tag::Record, at(record)),
         Value::Tagged(tagged) => (Tag::Tagged, at(tagged)),
-        Value::Knotted(member) => match member.resolve() {
-            Resolved::Circular(Circular::List(list)) => (Tag::List, at(list)),
-            Resolved::Circular(Circular::Dict(dict)) => (Tag::Dict, at(dict)),
-            Resolved::Circular(Circular::Record(record)) => (Tag::Record, at(record)),
-            Resolved::Circular(Circular::Tagged(tagged)) => (Tag::Tagged, at(tagged)),
-            _ => unreachable!("only a data node opens"),
-        },
-        _ => unreachable!("a leaf opens no resident"),
+        _ => unreachable!("only a plain composite opens a resident"),
     }
 }

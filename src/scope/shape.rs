@@ -1064,8 +1064,8 @@ impl<'graph> BodyShape<'graph> {
             .is_some_and(|statics| statics.minting.get(site).is_some())
     }
 
-    /// The content tree of the operand of the `:|` ascription whose node sits at `site`, once the
-    /// load has run.
+    /// The content tree of the view the `:|` ascription whose node sits at `site` builds, where its
+    /// signature is closed, once the load has run.
     pub fn view_tree(&self, site: Site) -> Option<&'graph Tree<'graph>> {
         self.statics.get()?.trees.get(site).map(|(_, tree)| *tree)
     }

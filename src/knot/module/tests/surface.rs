@@ -60,7 +60,7 @@ fn a_surfaced_name_reads_the_member_it_names() {
             let m = module(fixture, activation, "m");
             let block = entered(writer, activation);
 
-            surface(writer, m, block, types, scratch)
+            surface(writer, Value::Knotted(m), block, types, scratch)
                 .expect("the block's parameters are `m`'s members");
 
             let read = |name: &str| {
@@ -101,7 +101,7 @@ USING m SCOPE (zero name)";
             assert_eq!(
                 surface(
                     writer,
-                    module(fixture, activation, "n"),
+                    Value::Knotted(module(fixture, activation, "n")),
                     block,
                     types,
                     scratch
@@ -114,7 +114,7 @@ USING m SCOPE (zero name)";
             assert_eq!(
                 surface(
                     writer,
-                    module(fixture, activation, "o"),
+                    Value::Knotted(module(fixture, activation, "o")),
                     block,
                     types,
                     scratch
@@ -150,7 +150,7 @@ USING m SCOPE (zero)";
             let f = crate::knot::tests::callable(fixture, activation, "f");
             let block = entered(writer, activation);
             assert_eq!(
-                surface(writer, f, block, types, scratch),
+                surface(writer, Value::Knotted(f), block, types, scratch),
                 Err(Unsurfaceable::NotAModule)
             );
         })
@@ -231,11 +231,12 @@ fn every_member_is_read_by_its_name() {
                 let activation = fixture.run(writer, types, &lines, &[]);
                 let m = module(fixture, activation, "m");
                 let block = entered(writer, activation);
-                surface(writer, m, block, types, scratch)
+                surface(writer, Value::Knotted(m), block, types, scratch)
                     .expect("the block's parameters are `m`'s members");
                 for (text, bound) in bound {
                     let name = fixture.name(text);
-                    let member = layout::member(m, name, types, scratch).expect("a member");
+                    let member = layout::member(writer, Value::Knotted(m), name, types, scratch)
+                        .expect("a member");
                     assert!(holds(member, *bound), "`{source}`: `{text}` is {bound:?}");
                     let (slot, _) = block.shape().slot(name).expect("a surfaced parameter");
                     assert!(

@@ -9,7 +9,7 @@ use crate::values::tests::parts;
 use crate::values::{Knotted as _, Record, Resolved, Value};
 
 use super::super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
-use super::super::view::{Ascription, Unascribable, ascribe};
+use super::super::view::{Unascribable, ascribe};
 use super::{member, module};
 
 const BAG: &str = "\
@@ -45,7 +45,7 @@ fn every_slot_that_names_the_carrier_is_born_at_it() {
             let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
-            let view = ascribe(writer, m, bag, Ascription::Opaque, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), bag, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Bag`: {error:?}"));
             let read = |name| member(fixture, view, name, types, scratch);
 
@@ -153,7 +153,7 @@ fn a_function_member_is_born_behind_a_barrier() {
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let source_step = member(fixture, m, "step", types, scratch);
-            let view = ascribe(writer, m, bag, Ascription::Opaque, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), bag, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Bag`: {error:?}"));
 
             let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
@@ -195,53 +195,6 @@ fn a_function_member_is_born_behind_a_barrier() {
 }
 
 #[test]
-fn a_transparent_view_coerces_nothing() {
-    with_fixture(|fixture| {
-        let lines = fixture.parse(BAG);
-        let scratch = fixture.scratch();
-        fixture.in_cell(pin, |context| {
-            let types = &fixture.tiers.of(context);
-            let writer = context.writer();
-            let activation = fixture.run(writer, types, &lines, &[]);
-            let m = module(fixture, activation, "m");
-            let bag = declared(fixture, activation, "Bag");
-            let view = ascribe(writer, m, bag, Ascription::Transparent, types, scratch)
-                .unwrap_or_else(|error| panic!("`m` satisfies `Bag`: {error:?}"));
-
-            // Both sides of every slot substitute to the same type, so each member is the source's
-            // own word — the same pointer, not an equal rebuild.
-            for name in ["many", "by_name", "pair", "step"] {
-                let (before, after) = (
-                    member(fixture, m, name, types, scratch),
-                    member(fixture, view, name, types, scratch),
-                );
-                assert_eq!(before.ktype(), after.ktype(), "`{name}` keeps its type");
-                assert!(
-                    same_referent(before, after),
-                    "`{name}` is carried, not rebuilt"
-                );
-            }
-        })
-    });
-}
-
-/// Whether two values point at the same thing — a stronger claim than equality, and the one a
-/// transparent view makes.
-fn same_referent<'graph>(
-    left: Value<'_, crate::knot::Knotted<'graph, '_>>,
-    right: Value<'_, crate::knot::Knotted<'graph, '_>>,
-) -> bool {
-    match (left, right) {
-        (Value::List(left), Value::List(right)) => ptr::eq(left, right),
-        (Value::Dict(left), Value::Dict(right)) => ptr::eq(left, right),
-        (Value::Record(left), Value::Record(right)) => ptr::eq(left, right),
-        (Value::Tagged(left), Value::Tagged(right)) => ptr::eq(left, right),
-        (Value::Knotted(left), Value::Knotted(right)) => ptr::eq(left.node(), right.node()),
-        _ => false,
-    }
-}
-
-#[test]
 fn a_signature_typed_slot_naming_no_member_is_carried() {
     // A declared signature is closed, so one standing in another's slot names none of the
     // enclosing signature's parameters unless an application pins one to it. Where none does,
@@ -261,7 +214,7 @@ MODULE m = ((LET Carrier = Number) (LET one = 1) \
             let m = module(fixture, activation, "m");
             let outer = declared(fixture, activation, "Outer");
             let source_inner = member(fixture, m, "inner", types, scratch);
-            let view = ascribe(writer, m, outer, Ascription::Opaque, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), outer, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Outer`: {error:?}"));
 
             let (Value::Knotted(before), Value::Knotted(after)) =
@@ -422,7 +375,7 @@ MODULE m = ((LET Carrier = Any) (LET ring = [1 spin]) \
             let bag = declared(fixture, activation, "Bag");
             assert!(
                 matches!(
-                    ascribe(writer, m, bag, Ascription::Opaque, types, scratch),
+                    ascribe(writer, Value::Knotted(m), bag, types, scratch),
                     Err(Unascribable::Coercion {
                         refused: CoercionRefused::Unsupported(_),
                         ..
@@ -452,7 +405,7 @@ fn a_union_member_naming_a_hidden_parameter_takes_the_value_whatever_the_union_s
             let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let either = declared(fixture, activation, "Either");
-            let view = ascribe(writer, m, either, Ascription::Opaque, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), either, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Either`: {error:?}"));
             let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
                 panic!("`Carrier` is a type member");
@@ -464,7 +417,7 @@ fn a_union_member_naming_a_hidden_parameter_takes_the_value_whatever_the_union_s
             );
 
             let twins = declared(fixture, activation, "Twins");
-            let refused = ascribe(writer, m, twins, Ascription::Opaque, types, scratch);
+            let refused = ascribe(writer, Value::Knotted(m), twins, types, scratch);
             assert!(
                 matches!(
                     refused,

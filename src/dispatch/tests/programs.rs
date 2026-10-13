@@ -441,12 +441,12 @@ fn a_callable_over_a_run_bound_type_is_born_with_the_solution() {
                   #(FN :{y :Elt} -> Elt = #(y)))) \
                   (LET g = (mk {x = 1})) \
                   (PRINT g) \
-                  (PRINT (g {y = 2})) \
-                  (PRINT (g {y = \"s\"})))";
-    assert_eq!(
-        run(source),
-        ":(FN :{y :Number} -> Number)\n2\n\
-         error: :(FN :{y :Number} -> Number) cannot be called with :{y :Str}"
+                  (PRINT (g {y = 2})))";
+    assert_eq!(run(source), ":(FN :{y :Number} -> Number)\n2");
+    let misfit = source.replace("(PRINT (g {y = 2}))", "(PRINT (g {y = \"s\"}))");
+    assert!(
+        run(&misfit).contains(":(FN :{y :Number} -> Number) can never be called with :{y :Str}"),
+        "the solution makes `g` exact, so the load refuses the misfit"
     );
 }
 

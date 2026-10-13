@@ -303,7 +303,7 @@ fn a_bare_definition_is_the_run_tail_and_a_keyworded_member_of_the_signature() {
             let activation = fixture.run(context.writer(), types, &lines, &[]);
             let m = module(fixture, activation, "m");
             assert_eq!(m.module().expect("a module node").members().len(), 2);
-            let [twice] = layout::registrations(m, types, scratch) else {
+            let [twice] = layout::registrations(Value::Knotted(m), types, scratch) else {
                 panic!("one registration past the named members");
             };
             let shape = twice

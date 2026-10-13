@@ -36,7 +36,7 @@ use crate::elaborate::{declares_nominal, denoted, type_declarations};
 use crate::knot::body_activation;
 use crate::knot::module::coerce::{self, CoercionRefused};
 use crate::knot::module::surface::surface;
-use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Untieable, tie};
+use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Tied, Untieable, tie};
 use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scheduler::{
@@ -47,10 +47,10 @@ use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
 use crate::scope::{ParameterBinding, Static};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    Collector, DeclaredType, KType, Parametric, TypeNode, Variance, admits_with, display_name,
-    substitute_quantified,
+    Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
+    Variance, admits_with, display_name, substitute_quantified,
 };
-use crate::values::{CALL_ONLY, Link, List, TypeValue, Types, Value};
+use crate::values::{CALL_ONLY, Link, List, Record, TypeValue, Types, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
@@ -71,7 +71,7 @@ pub struct Runner<'graph, 'cell> {
     /// What a called frame or an `EVAL`'s owes; `None` everywhere else.
     contract: Option<Contract>,
     /// The outermost barrier a frame was called through, which its value crosses outwards.
-    barrier: Option<Knotted<'graph, 'cell>>,
+    barrier: Option<Barrier<'graph, 'cell>>,
     stage: Stage,
 }
 
@@ -185,10 +185,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             // module cannot disagree on: a refusal is an invariant break.
             if let Some(module) = module {
                 let (types, bump) = (&step.types(), Bump::new());
-                let surfaced = module
-                    .as_module()
-                    .map(|module| surface(writer, module, activation, types, &bump));
-                if !matches!(surfaced, Some(Ok(()))) {
+                if surface(writer, module, activation, types, &bump).is_err() {
                     return step.failed(StepError::Refused);
                 }
             }
@@ -220,10 +217,11 @@ pub fn call<'graph, 'here>(
     owed: Option<Contract>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
+    // The return the caller sees: the value is retyped to it, a header's included.
     let returns = callee
         .as_callable()
-        .and_then(Knotted::function)
-        .and_then(|function| match function.ktype().view(types).body {
+        .filter(|member| member.function().is_some())
+        .and_then(|_| match callee.ktype().view(types).body {
             TypeNode::KFunction { ret, .. } => Some(ret),
             _ => None,
         });
@@ -377,6 +375,7 @@ pub fn eval<'graph, 'here>(
                     callee: None,
                     returns,
                     retype: returns,
+                    checked: false,
                 },
             },
         },
@@ -496,8 +495,15 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 /// carried in `arguments`, or, for a call by name, the one solved here while each argument is
 /// admitted against its parameter's declared type — at its entry in `contributed`, per parameter
 /// in symbol order, and its carried type where there is none — beside the contract the frame ends
-/// under. The error value's message when the callee is no function, the arguments do not name its
-/// parameters exactly, an argument does not fit its parameter, or the group has no solution.
+/// under, and the barrier its value crosses out through. The error value's message when the callee
+/// is no function, the arguments do not name its parameters exactly, an argument does not fit its
+/// parameter, or the group has no solution.
+///
+/// A callee has two types: the one it shows, `callee.ktype()`, and the one its body was checked
+/// against, [`Knotted::declared`]. Where they differ — a header, or a member born at its annotation
+/// — and through a barrier, the arguments are admitted and retyped at the shown parameters, the
+/// node is called by name past them over the parameters it declares, and its value is retyped to
+/// the shown return: through the contract, or past a barrier once it has crossed out.
 #[allow(clippy::type_complexity)]
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
@@ -511,85 +517,118 @@ fn frame<'graph, 'here>(
     (
         &'here KActivation<'graph, 'here>,
         Contract,
-        Option<Knotted<'graph, 'here>>,
+        Option<Barrier<'graph, 'here>>,
     ),
     &'here str,
 > {
     let types = &step.types();
     let writer = step.writer();
     let name = |handle| display_name(handle, types, program.symbols());
-    // A barrier stands before the function a call runs: the arguments cross each one inwards, and
-    // the function behind them is called by name, admitting and solving as a call by name does.
-    let barrier = callee
-        .as_callable()
-        .filter(|member| member.coerced().is_some());
-    let (callee, arguments, kind, contributed) = match barrier {
-        Some(outermost) => {
-            let crossed = crossed_in(writer, types, outermost, arguments).map_err(|refusal| {
-                rendered(
-                    writer,
-                    format_args!(
-                        "{} cannot be called with {}: {}",
-                        name(callee.ktype()),
-                        name(arguments.ktype()),
-                        refusal.display(types, program.symbols())
-                    ),
-                )
-            })?;
-            (crossed.0, crossed.1, CallKind::ByName, &[][..])
-        }
-        None => (callee, arguments, kind, contributed),
-    };
-    let Some((member, function)) = callee
-        .as_callable()
-        .and_then(|member| Some((member, member.function()?)))
-    else {
+    let shown = callee.ktype();
+    let Some(node) = callee.as_callable() else {
         return Err(rendered(
             writer,
-            format_args!("{} is not callable", name(callee.ktype())),
+            format_args!("{} is not callable", name(shown)),
         ));
     };
-    let misnamed = || {
+    // `Bump::new` claims no chunk until something is put in it, so a callee with no group pays
+    // nothing for having one in reach.
+    let bump = Bump::new();
+    let scratch = &bump;
+    let outermost = node.coerced().is_some().then_some(node);
+    // A bare barrier admits its arguments as they cross it, at the type it shows.
+    let header = shown != node.declared();
+    let past = outermost.is_some() || header;
+    let unfit_at = |handle: DeclaredType<KType>, refused: Option<&dyn fmt::Display>| {
+        let refused = refused
+            .map(|refused| format!(": {refused}"))
+            .unwrap_or_default();
+        rendered(
+            writer,
+            format_args!(
+                "{} cannot be called with {}{refused}",
+                name(handle),
+                name(arguments.ktype())
+            ),
+        )
+    };
+    let misnamed_at = |handle: DeclaredType<KType>| {
         rendered(
             writer,
             format_args!(
                 "arguments {} do not name the parameters of {}",
                 name(arguments.ktype()),
-                name(function.ktype())
+                name(handle)
             ),
         )
     };
-    let unfit = || {
-        rendered(
+    // The shown side: admitted and retyped at the parameters the callee shows, and the return its
+    // caller sees. A keyworded call's selection admitted its arguments at the shape shown already,
+    // and carried the solution of its group beside them.
+    let (arguments, contributed, shown_return) = match (past, kind) {
+        (false, _) => (arguments, contributed, None),
+        (true, CallKind::ByName) if !header => {
+            (arguments, contributed, shown_returns(types, shown))
+        }
+        (true, CallKind::ByName) => {
+            let (admitted, returns) =
+                shown_admitted(writer, types, scratch, shown, arguments, contributed).map_err(
+                    |miss| match miss {
+                        Miss::Misnamed => misnamed_at(shown),
+                        Miss::Unfit | Miss::Unsolved => unfit_at(shown, None),
+                    },
+                )?;
+            (admitted, &[][..], Some(returns))
+        }
+        (true, CallKind::Keyworded) => {
+            let returns = shown_keyworded_returns(types, scratch, shown, arguments);
+            (arguments, contributed, returns)
+        }
+    };
+    // A barrier stands before the function a call runs: the arguments cross each one inwards, and
+    // the function behind them is called by name, admitting and solving as a call by name does.
+    let (member, arguments, kind, contributed) = match outermost {
+        Some(outermost) => {
+            let crossed = crossed_in(writer, types, outermost, arguments).map_err(|refusal| {
+                unfit_at(shown, Some(&refusal.display(types, program.symbols())))
+            })?;
+            (crossed.0, crossed.1, CallKind::ByName, &[][..])
+        }
+        None if past => (node, arguments, CallKind::ByName, &[][..]),
+        None => (node, arguments, kind, contributed),
+    };
+    let Some(function) = member.function() else {
+        return Err(rendered(
             writer,
-            format_args!(
-                "{} cannot be called with {}",
-                name(function.ktype()),
-                name(arguments.ktype())
-            ),
-        )
+            format_args!("{} is not callable", name(shown)),
+        ));
     };
+    let declared = member.declared();
+    let misnamed = || misnamed_at(declared);
+    let unfit = || unfit_at(declared, None);
     let unsolved = || {
         rendered(
             writer,
             format_args!(
                 "{} cannot be solved against {}",
-                name(function.ktype()),
+                name(declared),
                 name(arguments.ktype())
             ),
         )
     };
     arguments.as_record().ok_or_else(misnamed)?;
     let shape = function.shape();
-    let quantified = matches!(function.ktype(), DeclaredType::Scheme(_));
-    let view = function.ktype().view(types);
+    let quantified = matches!(declared, DeclaredType::Scheme(_));
+    let view = declared.view(types);
     let TypeNode::KFunction { params, ret } = view.body else {
         unreachable!("a function's type is a function type")
     };
-    // `Bump::new` claims no chunk until something is put in it, so a callee with no group pays
-    // nothing for having one in reach.
-    let bump = Bump::new();
-    let scratch = &bump;
+    // Past the shown type, the node binds only the parameters it declares: a function type's
+    // parameters are a width subset of what a slot of it may show.
+    let arguments = match past {
+        true => restricted(writer, types, scratch, arguments, params),
+        false => arguments,
+    };
     let argument = |name: Symbol| arguments.field(name, types, scratch).ok_or_else(misnamed);
     let carried = |name: TypeSymbol| {
         arguments
@@ -621,43 +660,23 @@ fn frame<'graph, 'here>(
             solution = Some(solved);
         }
         CallKind::Keyworded => {}
+        // A header's arguments were admitted at the parameters it shows, which the order puts
+        // under the node's own where neither type is quantified: nothing is left to solve.
+        CallKind::ByName
+            if header
+                && outermost.is_none()
+                && !quantified
+                && matches!(shown, DeclaredType::Type(_)) => {}
         CallKind::ByName => {
-            let mut collector = Collector::<KType>::new(types, scratch, view.group.bounds);
-            // The load laid the parameters of the callee it saw out in symbol order, and records
-            // contributions only where its argument names no field but those: a record as long as
-            // both that list and this callee's parameters, naming each (read below), names the
-            // same ones. Any other call is misnamed.
-            let named = (arguments.surface(types, scratch)).map_or(0, |record| record.len());
-            if !contributed.is_empty()
-                && (contributed.len() != params.len() || named != params.len())
-            {
-                return Err(misnamed());
-            }
-            for (parameter, declared) in params.iter() {
-                let argument = argument(parameter.symbol())?;
-                let carried = argument.ktype().as_type().expect(CALL_ONLY);
-                let solved_from = match contributed {
-                    [] => carried,
-                    // The load laid the parameters out in symbol order: this one's place is how
-                    // many sort before it.
-                    _ => contributed[params
-                        .keys()
-                        .filter(|other| other.symbol() < parameter.symbol())
-                        .count()]
-                    .unwrap_or(carried),
-                };
-                admits_with(
-                    types,
-                    scratch,
-                    declared,
-                    solved_from,
-                    Variance::Co,
-                    &mut collector,
-                )
-                .map_err(|_| unfit())?;
-            }
+            let solved = admitted(types, scratch, view, arguments, contributed).map_err(
+                |miss| match miss {
+                    Miss::Misnamed => misnamed(),
+                    Miss::Unfit => unfit(),
+                    Miss::Unsolved => unsolved(),
+                },
+            )?;
             if quantified {
-                solution = Some(collector.solve(types).map_err(|_| unsolved())?);
+                solution = solved;
             }
         }
     }
@@ -741,12 +760,197 @@ fn frame<'graph, 'here>(
         None => ret,
     };
     let returns = types.concrete(returns).expect(SOLVED);
-    let contract = Contract {
-        callee: Some(function.ktype()),
-        returns,
-        retype: owed.map_or(returns, |outer| outer.retype),
+    // A barrier's value is retyped to the shown return once it crosses out; any other callee's
+    // through its contract, where the order does not promise the node's return lies under the
+    // shown one when either is quantified.
+    let (retype, checked) = match (outermost, shown_return) {
+        (None, Some(shown_return)) => (
+            owed.map_or(shown_return, |outer| outer.retype),
+            quantified || matches!(shown, DeclaredType::Scheme(_)),
+        ),
+        _ => (owed.map_or(returns, |outer| outer.retype), false),
     };
+    let contract = Contract {
+        callee: Some(declared),
+        returns,
+        retype,
+        checked,
+    };
+    let barrier = outermost.map(|outermost| Barrier {
+        outermost,
+        returns: shown_return,
+    });
     Ok((activation, contract, barrier))
+}
+
+/// The return `shown`, a callee's type, gives every call where its group leaves it concrete: what
+/// a barrier's value is retyped to once it crosses out. `None` for a quantified return, which the
+/// barrier's own crossing types.
+fn shown_returns(types: &Types<'_, '_>, shown: DeclaredType<KType>) -> Option<KType> {
+    match shown.view(types).body {
+        TypeNode::ExpressionShape { ret, .. } | TypeNode::KFunction { ret, .. } => {
+            types.concrete(ret)
+        }
+        _ => None,
+    }
+}
+
+/// The return `shown`, the expression shape a keyworded call selected a header or a barrier at,
+/// gives the call over `arguments`: at a scheme, under the solution the selection carried by the
+/// shape's own names. `None` where it carried none.
+fn shown_keyworded_returns(
+    types: &Types<'_, '_>,
+    scratch: &Bump,
+    shown: DeclaredType<KType>,
+    arguments: KValue<'_, '_>,
+) -> Option<KType> {
+    let DeclaredType::Scheme(_) = shown else {
+        return shown_returns(types, shown);
+    };
+    let view = shown.view(types);
+    let mut solution = BumpVec::with_capacity_in(view.group.names.len(), scratch);
+    for name in view.group.names {
+        let seen = arguments.field(name.symbol(), types, scratch)?;
+        solution.push(seen.value().as_type()?.handle());
+    }
+    let TypeNode::ExpressionShape { ret, .. } = view.body else {
+        return None;
+    };
+    types.concrete(substitute_quantified(types, scratch, ret, &solution))
+}
+
+/// Why arguments do not reach a frame: they do not name its parameters, one does not fit its
+/// parameter, or the group has no solution.
+enum Miss {
+    Misnamed,
+    Unfit,
+    Unsolved,
+}
+
+/// Admit `arguments`, a call by name's record, against the parameters of `view`, a function type,
+/// every value parameter's declared type against its argument's carried type — or what the load
+/// contributed for it, per parameter in symbol order — under one collector: the group's solution
+/// where it is quantified.
+fn admitted<'x, 'cell: 'x>(
+    types: &Types<'_, 'cell>,
+    scratch: &'x Bump,
+    view: DeclaredView<'_>,
+    arguments: KValue<'_, '_>,
+    contributed: &[Option<KType>],
+) -> Result<Option<BumpVec<'x, KType>>, Miss> {
+    let TypeNode::KFunction { params, .. } = view.body else {
+        return Err(Miss::Misnamed);
+    };
+    let mut collector = Collector::<KType>::new(types, scratch, view.group.bounds);
+    // The load laid the parameters of the callee it saw out in symbol order, and records
+    // contributions only where its argument names no field but those: a record as long as both
+    // that list and this callee's parameters, naming each (read below), names the same ones. Any
+    // other call is misnamed.
+    let named = (arguments.surface(types, scratch)).map_or(0, |record| record.len());
+    if !contributed.is_empty() && (contributed.len() != params.len() || named != params.len()) {
+        return Err(Miss::Misnamed);
+    }
+    for (parameter, declared) in params.iter() {
+        let argument = arguments
+            .field(parameter.symbol(), types, scratch)
+            .ok_or(Miss::Misnamed)?;
+        let carried = argument.ktype().as_type().expect(CALL_ONLY);
+        let solved_from = match contributed {
+            [] => carried,
+            // The load laid the parameters out in symbol order: this one's place is how many
+            // sort before it.
+            _ => contributed[params
+                .keys()
+                .filter(|other| other.symbol() < parameter.symbol())
+                .count()]
+            .unwrap_or(carried),
+        };
+        admits_with(
+            types,
+            scratch,
+            declared,
+            solved_from,
+            Variance::Co,
+            &mut collector,
+        )
+        .map_err(|_| Miss::Unfit)?;
+    }
+    if view.group.names.is_empty() {
+        return Ok(None);
+    }
+    collector.solve(types).map(Some).map_err(|_| Miss::Unsolved)
+}
+
+/// `arguments` admitted at `shown`, the function type a callee shows, each retyped to its shown
+/// parameter under the solution, beside the shown return under it: what a call by name hands a
+/// callee past the type it shows.
+fn shown_admitted<'graph, 'here>(
+    writer: Writer<'here>,
+    types: &Types<'_, 'here>,
+    scratch: &Bump,
+    shown: DeclaredType<KType>,
+    arguments: KValue<'graph, 'here>,
+    contributed: &[Option<KType>],
+) -> Result<(KValue<'graph, 'here>, KType), Miss> {
+    let view = shown.view(types);
+    let TypeNode::KFunction { params, ret } = view.body else {
+        return Err(Miss::Misnamed);
+    };
+    arguments.as_record().ok_or(Miss::Misnamed)?;
+    let named = (arguments.surface(types, scratch)).map_or(0, |record| record.len());
+    if named != params.len() {
+        return Err(Miss::Misnamed);
+    }
+    let solution = admitted(types, scratch, view, arguments, contributed)?;
+    let solved = |declared: Parametric| {
+        let declared = match &solution {
+            Some(solution) => substitute_quantified(types, scratch, declared, solution),
+            None => declared,
+        };
+        types.concrete(declared).expect(SOLVED)
+    };
+    let mut fields = BumpVec::with_capacity_in(params.len(), scratch);
+    for (parameter, declared) in params.iter() {
+        let argument = arguments
+            .field(parameter.symbol(), types, scratch)
+            .ok_or(Miss::Misnamed)?;
+        let retyped = argument
+            .seen_at(solved(declared), types, scratch)
+            .restamped(writer);
+        fields.push((parameter, retyped));
+    }
+    let record = Record::new(writer, &fields, types, scratch);
+    Ok((Value::Record(record), solved(ret)))
+}
+
+/// `arguments`, a record, holding only the fields `params` names: what a node called past the type
+/// it shows binds, since it may declare fewer parameters than its slot shows.
+fn restricted<'graph, 'here>(
+    writer: Writer<'here>,
+    types: &Types<'_, 'here>,
+    scratch: &Bump,
+    arguments: KValue<'graph, 'here>,
+    params: TypeRecord<'_, Parametric>,
+) -> KValue<'graph, 'here> {
+    let named = (arguments.surface(types, scratch)).map_or(0, |record| record.len());
+    if named == params.len() {
+        return arguments;
+    }
+    let mut fields = BumpVec::with_capacity_in(params.len(), scratch);
+    for (parameter, _) in params.iter() {
+        if let Some(seen) = arguments.field(parameter.symbol(), types, scratch) {
+            fields.push((parameter, seen.restamped(writer)));
+        }
+    }
+    Value::Record(Record::new(writer, &fields, types, scratch))
+}
+
+/// The barrier a frame was called through, which its value crosses outwards, beside the return
+/// its caller sees, which the crossed value is retyped to.
+#[derive(Clone, Copy)]
+struct Barrier<'graph, 'cell> {
+    outermost: Knotted<'graph, 'cell>,
+    returns: Option<KType>,
 }
 
 /// `arguments`, handed to a call through the barrier `outermost`, crossed inwards through it and
@@ -756,7 +960,7 @@ fn crossed_in<'graph, 'here>(
     types: &Types<'graph, 'here>,
     outermost: Knotted<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
-) -> Result<(KValue<'graph, 'here>, KValue<'graph, 'here>), CoercionRefused> {
+) -> Result<(Knotted<'graph, 'here>, KValue<'graph, 'here>), CoercionRefused> {
     let bump = Bump::new();
     // A keyworded member's slots bind the names the function behind every barrier registers.
     let innermost = outermost.behind_barriers();
@@ -770,7 +974,7 @@ fn crossed_in<'graph, 'here>(
     for barrier in outermost.barriers() {
         arguments = coerce::inward(writer, barrier, arguments, parameters, types, &bump)?;
     }
-    Ok((Value::Knotted(innermost), arguments))
+    Ok((innermost, arguments))
 }
 
 /// `value`, what the function behind the barrier `outermost` returned, crossed outwards through
@@ -956,16 +1160,8 @@ fn tied<'graph, 'here>(
         },
     );
     match tied {
-        Ok(knot) => {
-            for (index, slot) in component.members.iter().enumerate() {
-                let value = held(
-                    step,
-                    runner,
-                    *slot,
-                    Value::Knotted(Knotted::of(knot, index)),
-                )?;
-                runner.bind(unit, *slot, value);
-            }
+        Ok(tied) => {
+            bound_members(step, runner, unit, component, &tied)?;
             Ok(())
         }
         Err(Untieable::Eager { .. }) => {
@@ -973,6 +1169,35 @@ fn tied<'graph, 'here>(
         }
         Err(error) => Err(untied(step, runner, &error)),
     }
+}
+
+/// Bind every member of `component` from `tied`, each held to its annotation as the tie resolved
+/// it. The tie births an annotated member at its annotation, so each slot binds the bare member.
+fn bound_members<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_>,
+    runner: &mut Runner<'graph, 'here>,
+    unit: Unit,
+    component: &Component<'graph>,
+    tied: &Tied<'graph, 'here, '_>,
+) -> Result<(), Stopped<'here>> {
+    let shape = runner.shape();
+    for (index, slot) in component.members.iter().enumerate() {
+        let member = Value::Knotted(Knotted::of(tied.knot, index));
+        let resolved = tied.annotations.get(index).copied().flatten();
+        let value = match (shape.annotation(*slot), resolved) {
+            (Some(written), Some(annotation)) => {
+                held_at(step, runner, written, annotation, member)?
+            }
+            // An annotation the tie could not resolve faults as `held` resolves it.
+            _ => held(step, runner, *slot, member)?,
+        };
+        debug_assert!(
+            !matches!(value, Value::Retyped(_)),
+            "a member is born at its annotation"
+        );
+        runner.bind(unit, *slot, value);
+    }
+    Ok(())
 }
 
 /// `value`, about to be bound at `slot`, held to the type its `LET <name> <type> = …` states, if
@@ -984,18 +1209,32 @@ fn held<'graph, 'here>(
     value: KValue<'graph, 'here>,
 ) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
     let shape = runner.shape();
-    let Some(annotation) = shape.annotation(slot) else {
+    let Some(written) = shape.annotation(slot) else {
         return Ok(value);
     };
     let program = runner.program;
     let (types, writer, scratch) = (&step.types(), step.writer(), Bump::new());
-    let held = match denoted(annotation, &runner.activation.view(), types, &scratch) {
-        Ok(annotated) => {
-            let settled = shape.settled(Site::of(annotation));
-            program.annotated(writer, types, value, annotated, settled)
+    match denoted(written, &runner.activation.view(), types, &scratch) {
+        Ok(annotation) => held_at(step, runner, written, annotation, value),
+        Err(refused) => {
+            let error = program.error(writer, types, refused.display(program.symbols(), types));
+            runner.check(&error, types)?;
+            Ok(error)
         }
-        Err(refused) => program.error(writer, types, refused.display(program.symbols(), types)),
-    };
+    }
+}
+
+/// `value` held to `annotation`, what the annotation `written` denotes.
+fn held_at<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_>,
+    runner: &Runner<'graph, 'here>,
+    written: &'graph ExpressionPart<'graph>,
+    annotation: KType,
+    value: KValue<'graph, 'here>,
+) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
+    let types = &step.types();
+    let settled = runner.shape().settled(Site::of(written));
+    let held = (runner.program).annotated(step.writer(), types, value, annotation, settled);
     runner.check(&held, types)?;
     Ok(held)
 }
@@ -1124,16 +1363,8 @@ fn first_tie<'graph, 'here, 'scratch>(
         },
     );
     match tied {
-        Ok(knot) => {
-            for (index, slot) in component.members.iter().enumerate() {
-                let value = held(
-                    step,
-                    runner,
-                    *slot,
-                    Value::Knotted(Knotted::of(knot, index)),
-                )?;
-                runner.bind(unit, *slot, value);
-            }
+        Ok(tied) => {
+            bound_members(step, runner, unit, component, &tied)?;
             Ok(None)
         }
         Err(Untieable::Eager { .. }) if !missed.is_empty() => {
@@ -1260,7 +1491,11 @@ fn left<'graph, 'here>(
         ..body
     };
     let unit = resumed.current();
-    resumed.bind(unit, outer.binder, Value::Knotted(Knotted::of(knot, 0)));
+    resumed.bind(
+        unit,
+        outer.binder,
+        Value::Knotted(Knotted::of(knot.knot, 0)),
+    );
     resumed.unit += 1;
     Ok(resumed)
 }
@@ -1285,7 +1520,21 @@ fn ended<'graph, 'here>(
                 .program
                 .fulfilled(step.writer(), &types, value, contract);
             let value = match runner.barrier {
-                Some(barrier) => crossed_out(step.writer(), &types, runner.program, barrier, value),
+                Some(barrier) => {
+                    let crossed = crossed_out(
+                        step.writer(),
+                        &types,
+                        runner.program,
+                        barrier.outermost,
+                        value,
+                    );
+                    match barrier.returns {
+                        Some(returns) if runner.program.message(&crossed, &types).is_none() => {
+                            crossed.retyped(step.writer(), returns, &types, &Bump::new())
+                        }
+                        _ => crossed,
+                    }
+                }
                 None => value,
             };
             step.finish(value)

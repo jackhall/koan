@@ -130,3 +130,32 @@ fn a_cycle_labels_its_target_and_a_shared_node_prints_inline() {
         })
     });
 }
+
+#[test]
+fn a_header_over_a_cyclic_node_renders_its_cycle_labelled_at_the_top() {
+    use super::{Holding, Link, ring};
+    use crate::values::{Circular, Knotted};
+    with_fixture(|fixture| {
+        let (symbols, scratch) = (fixture.symbols, fixture.scratch());
+        let ring_type = fixture.ring_type("Ring", "next");
+        let next = BinderSymbol::declared("next", symbols).unwrap();
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let member = ring(fixture, writer, ring_type, &[Some(Holding::Number(1.0))])[0];
+            let Some((_, Circular::Tagged(tagged))) = Holding::Knotted(member).as_circular() else {
+                panic!("a ring member is a tagged node");
+            };
+            let Link::Edge(payload) = *tagged.payload() else {
+                panic!("over an edge to its record node");
+            };
+            let record = member.sibling(payload);
+            let representation = types.record(scratch, &[(next, ring_type)]);
+            let header = Holding::Knotted(record).retyped(writer, representation, types, scratch);
+            assert!(matches!(header, Holding::Retyped(_)));
+            let mut out = String::new();
+            header.render(&mut out, types, symbols, scratch).unwrap();
+            assert_eq!(out, "@0 = {next = Ring(@0)}");
+        })
+    });
+}

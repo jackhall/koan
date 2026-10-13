@@ -150,8 +150,9 @@ faults or prints alike.
 The lexical-variable law runs a site naming a quantified variable by a type with and without the
 contexts drawn around it, the bare program its oracle.
 The retype law ([`retypes.rs`](src/dispatch/tests/retypes.rs)) retypes a value drawn under a drawn
-type — a dict or a nominal type among them — at each retype site, the evaluator's debug net its
-oracle: the value lies within the static type the load gives it there.
+type — a dict or a nominal type among them — and a quote's code or a type value under a drawn code
+kind or kind, at each retype site, the evaluator's debug net its oracle: the value lies within the
+static type the load gives it there.
 
 ## Tutorial snippets
 

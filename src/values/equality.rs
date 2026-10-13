@@ -87,7 +87,7 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
     if this.value().as_opaque().is_some() || that.value().as_opaque().is_some() {
         return Err(Incomparable);
     }
-    if let (Value::Knotted(left), Value::Knotted(right)) = (this.value(), that.value()) {
+    if let (Some(left), Some(right)) = (this.value().knot_member(), that.value().knot_member()) {
         let entered = ((left, this.ktype()), (right, that.ktype()));
         match (left.resolve(), right.resolve()) {
             (

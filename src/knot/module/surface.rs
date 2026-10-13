@@ -3,8 +3,8 @@
 //! The shape builder read the surfaced names off the module's declaration where the `USING` was
 //! shaped, and laid them down as the block's **parameters** — so a mention of one resolves through
 //! the ordinary local read and a callable nested in the block captures it the ordinary way. What
-//! is left at run time is the binding: each parameter is placed by name, at the index the module's
-//! signature gives that member ([`schema_member`]).
+//! is left at run time is the binding: each parameter is bound by name to the member the module's
+//! carried signature names ([`layout::member`]), at the type it declares there.
 //!
 //! A block declares locals of its own beside its parameters, and a local sorts in among them
 //! rather than after, so the parameters are picked out by declared position — `Position::PARAMETER`
@@ -12,8 +12,7 @@
 //! the list of the functions the module offers at it ([`layout::functions_at`]), which a use at
 //! the key spreads.
 
-use crate::elaborate::{member_count, schema_member, schema_of};
-use crate::knot::{KActivation, Knotted};
+use crate::knot::{KActivation, KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::scope::{Position, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
@@ -36,19 +35,21 @@ pub enum Unsurfaceable {
     Unnamed { name: BinderSymbol },
 }
 
-/// Bind each surfaced parameter of `block` to the member of `module` it names, and each surfaced
-/// key to the list of the functions `module` offers there, laid down through `writer`. A refusal
-/// binds nothing.
+/// Bind each surfaced parameter of `block` to the member of `module` it names, read at the type
+/// `module`'s carried signature declares it ([`layout::member`]), and each surfaced key to the list
+/// of the functions `module` offers there, laid down through `writer`. A refusal binds nothing.
 pub fn surface<'graph, 'cell>(
     writer: Writer<'cell>,
-    module: Knotted<'graph, 'cell>,
+    module: KValue<'graph, 'cell>,
     block: &KActivation<'graph, 'cell>,
     types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Unsurfaceable> {
     debug_assert_eq!(block.shape().kind(), ShapeKind::Block);
-    let node = module.module().ok_or(Unsurfaceable::NotAModule)?;
-    let schema = schema_of(node.ktype(), types).expect("a module's type is its signature");
+    let carried = (module.knot_member())
+        .and_then(Knotted::module)
+        .and_then(|_| module.ktype().as_type())
+        .ok_or(Unsurfaceable::NotAModule)?;
     let shape = block.shape();
 
     // Staged first: a refusal binds nothing, so nothing is written until the whole walk agrees.
@@ -68,17 +69,17 @@ pub fn surface<'graph, 'cell>(
                 .registration(slot)
                 .expect("a registration parameter is a surfaced key")
                 .key;
-            let functions = layout::functions_at(module, key, types, scratch);
+            let functions = layout::functions_at(writer, module, key, types, scratch);
             let list = List::of_candidates(writer, functions.iter().copied());
             bindings.push((slot, Value::List(list)));
             continue;
         }
-        let (index, _) =
-            schema_member(&schema, scratch, name).ok_or(Unsurfaceable::Unnamed { name })?;
+        let member = layout::member(writer, module, name, types, scratch)
+            .ok_or(Unsurfaceable::Unnamed { name })?;
         named += 1;
-        bindings.push((slot, node.members()[index]));
+        bindings.push((slot, member));
     }
-    let held = member_count(&schema, scratch);
+    let held = layout::named_count(carried, types, scratch);
     if named != held {
         return Err(Unsurfaceable::Count {
             expected: held,

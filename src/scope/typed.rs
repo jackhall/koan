@@ -514,7 +514,7 @@ pub struct Statics<'graph> {
     /// This shape's own minting sites, sorted: each `:|` ascription, and each component of nominal
     /// declarations the load leaves unknown, by its first member's declaration node.
     pub minting: Keyed<'graph, Site>,
-    /// Each `:|` ascription's site, sorted, beside its operand's content tree.
+    /// Each `:|` ascription's site at a closed signature, sorted, beside its view's content tree.
     pub trees: Keyed<'graph, (Site, &'graph Tree<'graph>)>,
     /// Each path this shape's type expressions read whose [`through`](PathEntry::through) names a
     /// lexical variable, by the path's level, beside where this shape reads each of them.

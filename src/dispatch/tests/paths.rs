@@ -223,7 +223,7 @@ const MAPPER: &str = "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier) \
 
 /// A quantified member read through any module-valued expression is instanced at load where the
 /// load can name every head parameter it is over, and refused where it cannot: through a call's
-/// result whose type leaves one unpinned, and through a name the load reads across a quote's code,
+/// result over a module it does not know, and through a name the load reads across a quote's code,
 /// whose refusal `EVAL` raises. A call's head reads the member as it is, and the run solves the
 /// call.
 #[test]
@@ -237,9 +237,19 @@ fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_pa
     );
     let unpinned = "is quantified over `Carrier`, which the load cannot name here; call it, or \
                     ascribe its module with `Carrier` pinned";
+    // The load computes what `nums` fits `Mapper` at, as the run does, so `LOOSE`'s header pins
+    // `Carrier`; over a parameter, whose module the load does not know, it does not.
     assert_eq!(
-        run(&format!("{MAPPER}{wanted} = (LOOSE nums).apply")),
-        format!("load: <test>:5:50: `apply` {unpinned}")
+        run(&format!(
+            "{MAPPER}{wanted} = (LOOSE nums).apply\nPRINT (go {{x = 1, y = 2}})"
+        )),
+        "2"
+    );
+    assert_eq!(
+        run(&format!(
+            "{MAPPER}EXPR #(VIA m :Mapper) -> Any = #({wanted} = (LOOSE m).apply)"
+        )),
+        format!("load: <test>:5:83: `apply` {unpinned}")
     );
     assert_eq!(
         run(&format!(
@@ -289,8 +299,10 @@ fn each_open_path_reads_back_its_tree() {
     });
 }
 
-/// `SIG Counter`, `SIG Zeroed`, `SAME`, and two functors over a `Counter`: `WRAP` views a body
-/// capturing its parameter, `BUILD` one capturing a local `LET` of a member read.
+/// `SIG Counter`, `SIG Zeroed`, `SAME`, two functors over a `Counter` — `WRAP` views a body
+/// capturing its parameter, `BUILD` one capturing a local `LET` of a member read — `HOLD`, which
+/// views its argument retyped at its signature-typed parameter, and `LIFT`, which views a body
+/// capturing `step` retyped at its function-typed parameter.
 const FUNCTORS: &str = "SIG Counter FOR ALL #[Carrier] = \
                         #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
                         SIG Zeroed FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
@@ -301,7 +313,12 @@ const FUNCTORS: &str = "SIG Counter FOR ALL #[Carrier] = \
                         EXPR #(BUILD p :Counter) -> Module = #(\n  \
                         (LET start = p.zero)\n  \
                         (MODULE built OVER #[start] = (LET zero = start))\n  \
-                        (built :| Zeroed))\n";
+                        (built :| Zeroed))\n\
+                        EXPR #(HOLD p :Counter) -> Module = #(p :| Counter)\n\
+                        LET step = (FN :{x :Any} -> Number = #(7))\n\
+                        EXPR #(LIFT f :(FN :{x :Number} -> Number)) -> Module = #(\n  \
+                        (MODULE built OVER #[f] = ((LET zero = 0) (LET succ = f)))\n  \
+                        (built :| Counter))\n";
 
 /// A functor's argument: a `MODULE`, or an earlier binding that is a `Counter`, each picked by
 /// index modulo what there is.
@@ -320,11 +337,17 @@ enum Binding {
     /// `(m :| Counter)`.
     Opaque(usize),
     /// `(m :! Counter)`.
-    Transparent(usize),
+    Retyped(usize),
+    /// `((m :! Counter) :| Counter)`: a view through a header.
+    Reviewed(usize),
+    /// `(HOLD <argument>)`: a `Counter` viewed through a signature-typed parameter.
+    Hold(Argument),
     /// `(WRAP <argument>)`: a `Counter`.
     Wrap(Argument),
     /// `(BUILD <argument>)`: a `Zeroed`, so no functor's argument.
     Build(Argument),
+    /// `(LIFT step)`: a `Counter` capturing a closure under a header.
+    Lift,
 }
 
 /// A drawn functor program: `MODULE`s over drawn literals, top-level bindings over them, and the
@@ -345,9 +368,12 @@ fn functors() -> impl Strategy<Value = Functors> {
     let binding = prop_oneof![
         (0..3usize).prop_map(Binding::Module),
         (0..3usize).prop_map(Binding::Opaque),
-        (0..3usize).prop_map(Binding::Transparent),
+        (0..3usize).prop_map(Binding::Retyped),
+        (0..3usize).prop_map(Binding::Reviewed),
+        argument.clone().prop_map(Binding::Hold),
         argument.clone().prop_map(Binding::Wrap),
         argument.prop_map(Binding::Build),
+        Just(Binding::Lift),
     ];
     (
         prop::collection::vec((0..2u8, 1..3u8), 2..=3),
@@ -389,9 +415,12 @@ impl Functors {
             let value = match *binding {
                 Binding::Module(of) => module(of),
                 Binding::Opaque(of) => format!("({} :| Counter)", module(of)),
-                Binding::Transparent(of) => format!("({} :! Counter)", module(of)),
+                Binding::Retyped(of) => format!("({} :! Counter)", module(of)),
+                Binding::Reviewed(of) => format!("(({} :! Counter) :| Counter)", module(of)),
+                Binding::Hold(of) => format!("(HOLD {})", argument(of)),
                 Binding::Wrap(of) => format!("(WRAP {})", argument(of)),
                 Binding::Build(of) => format!("(BUILD {})", argument(of)),
+                Binding::Lift => "(LIFT step)".to_string(),
             };
             source.push_str(&format!("LET b{at} = {value}\n"));
         }

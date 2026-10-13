@@ -114,7 +114,8 @@ module to a signature by **ascribing** it.
 ## Ascription
 
 Ascribing a module to a signature checks that the module provides the
-signature's members and gives back a module viewed through that signature. There
+signature's members and gives back the module seen through that signature:
+only the members the signature declares, at the types it declares them. There
 are two forms, written with the `:!` and `:|` operators:
 
 ```koan
@@ -129,13 +130,16 @@ button
 ```
 
 `:!` is **transparent** ascription and `:|` is **opaque**. Both check the
-module against the signature and expose its value members. The difference is in
-how they treat the types a signature leaves for each module to choose — its
+module against the signature and expose the value members it declares. The
+difference is in how they treat the types a signature leaves for each module to
+choose — its
 [head parameters](12-functors.md#signatures-over-a-type-sig--for-all-and-with):
 transparent ascription leaves each one visible as the type the module chose,
 while opaque ascription hides it behind the signature, so callers can only use
 it through the operations the signature provides. For a signature with no head
-parameters, the two behave the same.
+parameters, the two behave the same. A module passed to a parameter typed by a
+signature, returned from a function declaring one, or bound by
+`LET <name> :<Sig> = …` is seen as `:!` sees it.
 
 If the module is missing a required member, ascription fails:
 

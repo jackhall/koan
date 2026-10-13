@@ -1,4 +1,5 @@
-//! A first-class type as a value: the handle it names and the `OfKind` type it has.
+//! A first-class type as a value: the handle it names and the `OfKind` type it has — its kind's,
+//! or one a retype to a kind above it stamped.
 
 use super::Types;
 use crate::memory::{Writer, resident};
@@ -34,9 +35,21 @@ impl TypeValue {
         self.handle
     }
 
-    /// This value's own type: `OfKind` of the named type's kind.
+    /// This value's own type: `OfKind` of the named type's kind, or the kind a retype stamped.
     pub fn ktype(&self) -> KType {
         self.ktype
+    }
+
+    /// The type value naming the same type at `ktype`, a kind its own lies under, in `writer`'s
+    /// region: what a retype to a kind hands on.
+    pub fn with_type<'cell>(&self, writer: Writer<'cell>, ktype: KType) -> &'cell TypeValue {
+        resident(
+            writer,
+            TypeValue {
+                handle: self.handle,
+                ktype,
+            },
+        )
     }
 
     /// The same value written into another region.

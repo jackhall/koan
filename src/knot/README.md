@@ -46,8 +46,10 @@ activation. This module closes it:
   function's memoized type — a concrete type, or a quantified function's
   [scheme](../../lattice/src/types/identity.md#typed-handles) — the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and its
-  **typing record**: its quantifier map, its registered shape and, for an
-  [instance](#an-instance), the solution its group was instantiated at. The
+  **typing record**: its quantifier map, its registered shape, for an
+  [instance](#an-instance) the solution its group was instantiated at, and,
+  for a member [born at its annotation](#the-tie), the signature its body was
+  checked against. The
   **registered shape** is the expression shape a function born for a
   definition's registration puts in its bucket — beside how a keyworded call
   binds that shape's slots to the function's parameters — which the
@@ -192,6 +194,22 @@ scratch first.
 Every mention of a fellow member becomes the edge the knot's plan mints for
 that node's index.
 
+**A member is born at its annotation.** An edge names a node, so a fellow's
+mention reaches the node and never the slot. The tie therefore reads each
+member's `LET <name> <type> = …` annotation as its slot resolves it and births
+the member at the type a retype to it stamps
+([`retype_target`](../values/README.md#the-type-memo-and-satisfies)), where its
+value satisfies it: a function member takes it as its type and keeps the
+signature its body was checked against in its typing record, which its frame
+reads ([two types per callee](../program/README.md#the-body-runner)); a code
+member takes it as its carried type; and a data member's memo is its derived
+memo retyped to it as soon as it is derived, before any fellow derives its own.
+The slot then binds the bare member, and every mention sees the annotation. A
+member whose value misses its annotation is tied at its own memo, and its slot
+faults as an unannotated miss does. The tie hands each annotation it resolved
+back beside the knot (`Tied`), so the caller holds each slot to it without
+resolving it again.
+
 **Derive memos: the nominal cut.** A function node's memo is its signature
 type, a code node's its carried type and a tagged node's the head it names; all
 are declared, and
@@ -287,6 +305,12 @@ one:
   typed by the instance. An edge in the member's closure is relative to the
   member's own knot, so each is **rehomed** as the value of the sibling it
   names.
+
+A quantified member read through a header at another scheme — a module member
+whose signature declares it so — is read at an instance site as a header over
+the same node at that scheme's instance ([`header_instance`](function.rs)): no
+knot is made, and a call through it solves the node's own group, as a call by
+name past a header does.
 
 ## A builtin overload
 
@@ -402,9 +426,12 @@ names bind ([quotes](../scope/README.md#equality-and-knots)), so
 `LET echo = #(PRINT $echo)` equals its copy. A module and a barrier
 have no structural equality: a comparison that reaches one is `Incomparable`
 ([Equality](../values/README.md#equality-and-rendering)), which the `==`
-builtin reports rather than answering `false`. A function renders as its type's
-name does, `:(FN :{x :Number} -> Number)`; its closure bindings are program
-state and never print. A quote renders as its body as written, marks included,
+builtin reports rather than answering `false`. A member under a
+[header](../values/README.md#the-type-memo-and-satisfies) compares as its bare
+member, so a function passed through a function-typed slot equals the function
+it was. A function renders as the name of the type it is seen at,
+`:(FN :{x :Number} -> Number)`, a header's included; its closure bindings are
+program state and never print. A quote renders as its body as written, marks included,
 and never what a name binds. A module renders as its signature's name, and a
 barrier as the function type a caller sees. A data node compares as a bisimulation and
 renders with `@n` labels where a cycle closes, both in `values`.
@@ -426,7 +453,8 @@ call per knot. A node's content is what it is:
   type capture;
 - a **module**: the content computed where it was born
   ([birth](module/README.md#birth)) — a body-born module's code over its
-  captures, a view's operator and application over its source;
+  captures, a view's operator and application over its source's bare member and
+  what *fits* solved;
 - a **barrier**: the digest of the function it stands before, the type a caller
   sees, the declared type and both substitutions;
 - a **code** node: its quote's code digest, its carried type, and each bound and
@@ -435,7 +463,9 @@ call per knot. A node's content is what it is:
   memo — its memo, its kind and each part the memo shows, a value link by its
   digest and an edge by its index.
 
-A builtin's member digests as its overload, its native and its shape.
+A builtin's member digests as its overload, its native and its shape. A member
+under a header digests as the header's type over the bare member's digest, so a
+type that hides a capture never hides it from the digest.
 
 ## The import rule
 
@@ -511,7 +541,8 @@ carries the scalar types alone.
   otherwise; a tied data node holds one link per planned read, a lambda item
   capturing a fellow member an edge to a function node past the members; a tied
   function's closure, a member's or such a node's, follows its capture layout;
-  and every tied knot copies whole with each link's kind kept.
+  an annotated data member is born at its annotation; and every tied knot
+  copies whole with each link's kind kept.
 
 Five tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
 only `knot` drives: `a_copied_knot_outlives_its_home` — a knot's node run

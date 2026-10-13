@@ -1,8 +1,8 @@
 # Modules as values
 
-The layer that reads a module by name: the views `:|` and `:!` build, the
-coercion that births a view's members, and the binding a `USING … SCOPE` block
-enters on.
+The layer that reads a module by name: a member read through the signature a
+module carries, the view `:|` builds, the coercion that births a view's
+members, and the binding a `USING … SCOPE` block enters on.
 
 A module is one kind of [knot](../README.md) node, holding its self-signature
 and its members. This module owns that node — its payload, its doors and
@@ -14,7 +14,7 @@ through [`knot`](../README.md#what-sits-where) and rests on
 [type lattice](../../../lattice/src/types/README.md).
 
 What it does *not* do is evaluate anything.
-[Dispatch](../../dispatch/README.md) evaluates `m :| Sig`, `m :! Sig`, `m.f` and
+[Dispatch](../../dispatch/README.md) evaluates `m :| Sig`, `m.f` and
 a `USING` expression through the doors here, and a
 [frame](../../program/README.md) called through a barrier crosses it with the
 coercion walk below. What a module's types are, and when two are one, is the
@@ -35,8 +35,9 @@ and a view both go through, so the two have one representation and one copy.
 A module's node also holds its **content**, the digest its knot's
 [digest](../../values/README.md#content-digests) covers it by. A body-born
 module's is its body's code digest over the digest of each capture the code
-digest does not name, a view's its operator and signature application over its
-source's digest. `ModuleContent` ([module.rs](../module.rs)) owns that recipe
+digest does not name, a view's its operator and signature application over the
+digest of its source's bare member — the module behind any header — and what
+*fits* solved each head parameter to. `ModuleContent` ([module.rs](../module.rs)) owns that recipe
 — one constructor per kind, and `Module::tie` takes nothing else — so a
 module's content is computed one way wherever one is tied. A module keeps no
 captures to digest later, so its content is computed where it is tied, and it
@@ -73,29 +74,56 @@ content digest — not by the text of a name, so nothing may read the order as
 alphabetical.
 
 [`layout`](layout.rs) holds the readers of a module value: `member`, what `m.f`
-reads — the member's index in the signature, then that index into the node's
-run — `registrations` and `functions_at`.
+reads, `registrations` and `functions_at`.
+
+**A module is read through the signature it carries.** A module retyped to a
+signature type sits under a
+[header](../../values/README.md#the-type-memo-and-satisfies) carrying the
+application it fits, each head parameter pinned at what *fits* solves, and a
+bare module carries its own signature. `member` takes its declared type from
+that signature and its index from the node's own, and hands the member back
+retyped to its declared type — a function member as a retyped function, a
+quantified one at its declared scheme — so a field the signature hides is no
+field of it. A type member is a type value of its declared type, which the node
+need not bind: a nested module declared at `Inner WITH {Elem = Number}` reads
+`Elem` as `Number`. Under a meet, each member is read at the meet of what the
+applications declaring it declare.
+
+**A keyworded member offers its pick.** Through a header, `functions_at` offers
+at a key, per keyworded member the carried signature declares there, the
+module's overloads **covering** it — each whose registered shape satisfies the
+member's — narrowed by the selection's own ranking to those ranking first among
+themselves (`covering`), each retyped to the member's shape. Every overload
+covering a member admits every call the member admits, and their ranking does
+not depend on the arguments, so the pick made once where the module is read is
+the one every call would make: a call the declared shape refuses selects
+nothing, and two covering overloads with neither ranking first are both
+offered, and ambiguous where a call meets them.
 
 ## The view door
 
-[`ascribe`](view.rs) is what `m :! Sig` and `m :| Sig` build. A view is a module
-of its own — the same node, through the same constructor a body-born one goes
-through — holding only the members its signature names, at the types that
-signature declares. So a view and a body-born module have one representation and
-one copy, and nothing downstream asks which it holds. A keyworded member is
-carried as the source's overloads at its key that the member, read under the
-source's bindings, admits — each behind a barrier where the view reads the
-member otherwise.
+[`ascribe`](view.rs) is what `m :| Sig` builds; `m :! Sig` is a
+[retype](#layout-order), which re-stamps the module under a header and never
+comes here. A view is a module of its own — the same node, through the same
+constructor a body-born one goes through — holding only the members its
+signature names, at the types that signature declares. So a view and a
+body-born module have one representation and one copy, and nothing downstream
+asks which it holds. A keyworded member is carried as the pick a header makes
+([above](#layout-order)) among the source's overloads at its key, read under the
+source's bindings — each behind a barrier where the view reads the member
+otherwise, and retyped to the member's shape the view shows.
 
-Which ascriptions are views is one predicate, `views`: `:|` always, and `:!`
-where the operand's type and the ascribed type are both signature types. The
-run reads it over the carried type and [the load](../../dispatch/README.md#static-types)
-over the static one, so the load refuses what every run's door refuses.
+Only `:|` is a view. The run and
+[the load](../../dispatch/README.md#static-types) both read the operator
+(`Ascription::Opaque`), so the load refuses what every run's door refuses.
 
 The ascribed type must be one application of a declared signature (`takes`),
 `Counter` or `Counter WITH {Carrier = Number}`; a meet of several is refused,
-since a view lays out one signature's members. The door checks that the source's
-self-signature [*fits*](../../../lattice/src/types/relations.md#signature-types) the
+since a view lays out one signature's members. The source's signature is the
+type it carries — a header's application, or a bare module's own — and the
+door checks, through the solve a retype pins by (`values::fit_solution`), that
+it
+[*fits*](../../../lattice/src/types/relations.md#signature-types) the
 application, which solves each head parameter the application leaves unpinned
 from what the source's members offer, and then fixes two substitutions over the
 signature's head parameters:
@@ -103,25 +131,26 @@ signature's head parameters:
 - `from` — what *fits* solved each one to, or its pin: under
   `SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]`, a source binding
   `zero` to `0` gives `Carrier` the type `Number`;
-- `to` — under `:!`, `from` itself; under `:|`, a **carrier per unpinned
-  parameter**, keyed on the view's own content. A carrier records the
-  declaration's bound as the bound it met, which only the signature's fit reads,
-  so the view fits what its source did; anywhere else it lies under `Any` alone,
-  so a member sealed under it is opaque outside the view whatever its bound. A
-  pinned parameter keeps its pin either way.
+- `to` — a **carrier per unpinned parameter**, keyed on the view's own content.
+  A carrier records the declaration's bound as the bound it met, which only the
+  signature's fit reads, so the view fits what its source did; anywhere else it
+  lies under `Any` alone, so a member sealed under it is opaque outside the view
+  whatever its bound. A pinned parameter keeps its pin.
 
 Everything after that is one fit, `fitted`, and one body, [`build`](view.rs),
-which the nested case below goes through too, so the two operators are not two
-paths that agree: `:!` is the case of `:|` where `to` is `from`, and
-every coercion below stops at its first comparison. Two `:|` ascriptions of one
-signature over modules of equal content therefore produce views with one
-carrier, over modules that differ views whose carriers do not unify, while `:!`
-is a relabelling.
+which the nested case below goes through too.
 
 The carrier is a [`Carrier` node](../../../lattice/src/types/vocabulary.md)
-keyed on the view's content — its operator and application over the source's
-digest, the one `ModuleContent` the view is tied with — and the parameter's
-name keeps two parameters of one view apart.
+keyed on the view's content — its operator and application over its source's
+bare member's digest and `from`, the one `ModuleContent` the view is tied
+with — and the parameter's name keeps two parameters of one view apart. A view
+reads only its signature's members, at its own types, so the module behind a
+header is what it views: `ints :| Counter` and `m :| Counter`, `m` being `ints`
+passed through a parameter `m :Counter`, are one view with one carrier, while
+over a header that pins a parameter otherwise the fit solves otherwise, and
+keys a carrier of its own. Two ascriptions of one signature over modules of
+equal content therefore produce views with one carrier, and over modules that
+differ views whose carriers do not unify.
 
 The view carries a signature of its own — each head parameter a manifest member
 at what `to` gives it, every manifest member, value slot and keyworded member at
@@ -129,17 +158,15 @@ its declared type read under `to` — so a view's signature is a module's, with 
 parameters, and it fits the signature it was ascribed to.
 
 **The type half.** Everything the door computes from types alone — the schema,
-both substitutions and the view's signature — is [`view_types`](view.rs), which
-`ascribe` calls before it builds a member. `opaque_view_types` is that half of
-a `:|` over a source known by its digest; without the source's signature it
-computes the view's own side only: each carrier, from the pins and the declared
-bounds, and the view's signature. `transparent_view_types` is the same half of
-a `:!` over a source whose signature is known. [`nested_types`](view.rs) is the same half of a nested
-re-view (below). The load calls these at a `:|` site over a content tree it sees
-all of, and at an exact `:!`, and interns what the walk would — each member's
-declared type under either side and each nested module's re-view — so the run's
-view finds every one of those types already in the root
-([closed views at load](../../dispatch/README.md#paths)).
+both substitutions and the view's signature — is
+[`opaque_view_types`](view.rs), over a source known by its bare member's
+digest; without the source's signature it computes the view's own side only,
+and only where the application pins every parameter, whose fit solves its pins.
+[`nested_types`](view.rs) is the same half of a nested re-view (below). The load
+calls these at a `:|` site over a content tree it sees all of, and interns what
+the walk would — each member's declared type under either side and each nested
+module's re-view — so the run's view finds every one of those types already in
+the root ([closed views at load](../../dispatch/README.md#paths)).
 
 An `Unascribable` names which door refused: the operand is no module, the
 ascribed handle names no one application of a signature, the module does not fit it
@@ -159,8 +186,7 @@ in lockstep. A union interns its members in a canonical order, so the source's
 substitution and the view's do not correspond position for position; only the
 declaration lines them up. At each step the declared type read under `from` and
 under `to` says what the member is coming from and going to, and **where the two
-agree there is nothing to do** — which is the whole of `:!`, and every slot of
-`:|` that names no unpinned parameter. Where they differ and a side still names
+agree there is nothing to do** — every slot that names no unpinned parameter. Where they differ and a side still names
 a variable — a slot over the member's own `FOR ALL` group — there is no type to
 rebuild the value at, and it is refused. A barrier's
 arguments and result, and a view's keyworded members, go through this one
@@ -270,16 +296,17 @@ ties the binder with the finished activation.
   modules incomparable and rendering as their signature, and each refusal.
 - [`tests/coerced.rs`](tests/coerced.rs) — what a barrier holds, and `values`
   seeing it as the function it stands for.
-- [`tests/view.rs`](tests/view.rs) — a transparent view carries what the
-  signature names at what *fits* solves, an opaque one keys its carrier on
-  content under the parameter's name, records its bound and reveals it nowhere,
-  and keeps a pin, a view carries
-  each overload its keyworded members admit and wraps one over a carrier in a
-  barrier, each refusal, and a view copying across a cell like any module.
+- [`tests/view.rs`](tests/view.rs) — a retype at a signature reads what the
+  signature names at what *fits* solves under a header over the module's own
+  node, an opaque view keys its carrier on content under the parameter's name —
+  one through a header that fits alike, another through one that fits
+  otherwise — records its bound and reveals it nowhere, and keeps a pin, a view
+  carries the overload each keyworded member picks and wraps one over a carrier
+  in a barrier, each refusal, and a view copying across a cell like any module.
 - [`tests/coerce.rs`](tests/coerce.rs) — one program per arm: every slot that
   names the carrier born at it, a function member behind a barrier, a nested
   module re-viewed at the outer carrier, a signature-typed slot naming no member
-  carried verbatim, a transparent view coercing nothing, a union member naming
+  carried verbatim, a union member naming
   a hidden parameter taking the value whatever the union's order, and the
   refusals.
 - [`tests/surface.rs`](tests/surface.rs) — a surfaced name reading the member it

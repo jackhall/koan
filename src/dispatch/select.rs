@@ -132,7 +132,7 @@ pub(super) fn selected<'x, 'graph, 'here>(
     }
     Selection::Function {
         callee: chosen.callee,
-        registered: registration(member)
+        registered: registration(chosen.callee)
             .expect("a candidate with a shape is a builtin or a registration's function"),
         solution: chosen.solution,
     }
@@ -167,16 +167,17 @@ pub(super) fn never_runs(
     (always.into_iter()).any(|always| outranks(types, scratch, always, maybe, 0))
 }
 
-/// What a keyworded call of `member` binds its arguments by: a registration's function's own
-/// registration, or — for a function behind a view's barriers — the shape the barrier shows its
-/// caller, its slots bound to the names the function behind it registers. A barrier's call is that
+/// What a keyworded call of `callee` binds its arguments by: a registration's function's own
+/// registration, or — for a function behind a view's barriers or a header — the shape shown its
+/// caller, its slots bound to the names the function behind it registers. Such a call is that
 /// function's by name, which solves its own group, so it binds no type parameter.
-fn registration<'here>(member: Knotted<'_, 'here>) -> Option<Registered<'here, KType>> {
-    let Some(barrier) = member.coerced() else {
+fn registration<'here>(callee: KValue<'_, 'here>) -> Option<Registered<'here, KType>> {
+    let member = callee.as_callable()?;
+    if member.coerced().is_none() && !matches!(callee, Value::Retyped(_)) {
         return member.function()?.registered();
-    };
+    }
     Some(Registered {
-        shape: barrier.ktype(),
+        shape: layout::registered_shape(callee)?,
         quantifier_map: ShapeGroupMap::default(),
         parameters: member
             .behind_barriers()
@@ -204,7 +205,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
     if let Some(builtin) = member.builtin() {
         return Selection::Builtin(builtin);
     }
-    let registered = registration(member)
+    let registered = registration(callee)
         .expect("a selected candidate is a builtin or a registration's function");
     let solution = if matches!(registered.shape, DeclaredType::Type(_)) {
         &[][..]
@@ -289,7 +290,8 @@ fn registered_shape(candidate: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
 }
 
 /// The argument record of a keyworded call of `registered`'s function over `operands`, with each
-/// type parameter the shape's group solved to `solution`, built in `writer`'s region.
+/// type parameter the shape's group solved to `solution` — or, for a header or a barrier, each
+/// name of the shape's group — built in `writer`'s region.
 pub(super) fn arguments<'graph, 'here>(
     types: &Types<'_, 'here>,
     writer: Writer<'here>,
@@ -317,6 +319,16 @@ pub(super) fn arguments<'graph, 'here>(
     for (name, index) in registered.quantifier_map.iter() {
         let solved = TypeValue::new(writer, solution[index], types);
         fields.push((BinderSymbol::Type(name), Value::Type(solved)));
+    }
+    // A header's or a barrier's shape binds no type parameter, but its frame retypes the value to
+    // the shape's return under this solution: it travels by the shape's own names, as a value, so
+    // a copied birth adopts it.
+    if registered.quantifier_map.is_empty() && !solution.is_empty() {
+        let names = registered.shape.view(types).group.names;
+        for (name, solved) in names.iter().zip(solution) {
+            let solved = TypeValue::new(writer, *solved, types);
+            fields.push((BinderSymbol::Type(*name), Value::Type(solved)));
+        }
     }
     Value::Record(Record::new(writer, &fields, types, scratch))
 }

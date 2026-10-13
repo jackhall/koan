@@ -306,9 +306,9 @@ fn read<'graph, 'here>(
 }
 
 /// `<value> :! <Type>`: the operand checked against the type — where the load did not settle it —
-/// and retyped to it. A module operand ascribed a signature, or under `:|`, is seen as it through
-/// the [view door](crate::knot::module::view), which checks it fits; `:|` over anything else
-/// raises.
+/// and retyped to it, a module re-stamped at the application it fits. `<module> :| <Sig>` is seen
+/// as it through the [view door](crate::knot::module::view), which checks it fits; `:|` over
+/// anything else raises.
 fn ascribe<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_>,
     at: &Evaluation<'graph, 'here>,
@@ -338,30 +338,35 @@ fn ascribe<'graph, 'here>(
             return finish(step, at, error);
         }
     };
-    if view::views(types, mode, value.concrete_ktype(), ascribed) {
+    // `:|` views its operand; `:!` retypes it.
+    if mode == Ascription::Opaque {
         debug_assert!(
-            mode != Ascription::Opaque || at.view.shape().mints_at(Site::of_node(node)),
+            at.view.shape().mints_at(Site::of_node(node)),
             "the load recorded the opaque view at {:?} as a minting site",
             node.source,
         );
-        let Some(module) = value.as_module() else {
+        if value.as_module().is_none() {
             let raised = Raised::NotAModule {
                 value: value.concrete_ktype(),
             };
             return finish(step, at, raised.raise(program, writer, &at.types));
-        };
-        // The load lays a view's types over a closed tree, so that tree is the operand's content.
-        debug_assert!(
-            at.view
-                .shape()
-                .view_tree(Site::of_node(node))
-                .and_then(|tree| tree.digest())
-                .is_none_or(|digest| digest == Value::Knotted(module).digest(types, &scratch)),
-            "the content tree at {:?} reads the digest the run computes",
-            node.source,
-        );
-        let raised = match view::ascribe(writer, module, ascribed, mode, types, &scratch) {
-            Ok(view) => return finish(step, at, Value::Knotted(view)),
+        }
+        let raised = match view::ascribe(writer, value, ascribed, types, &scratch) {
+            Ok(view) => {
+                // The load lays a view's types over a closed tree, so that tree is the view's
+                // content.
+                debug_assert!(
+                    at.view
+                        .shape()
+                        .view_tree(Site::of_node(node))
+                        .and_then(|tree| tree.digest())
+                        .is_none_or(|digest| digest
+                            == Value::Knotted(view).digest(types, &scratch)),
+                    "the content tree at {:?} reads the digest the run computes",
+                    node.source,
+                );
+                return finish(step, at, Value::Knotted(view));
+            }
             Err(Unascribable::Unsatisfied(_)) => Raised::Unascribable {
                 value: value.concrete_ktype(),
                 ascribed,
@@ -790,9 +795,11 @@ fn apply<'graph, 'here>(
             Use::Forwards,
         )
     };
+    // A call keeps its contract by the type its callee shows; a barrier never tails, since its
+    // value crosses the barrier where its frame ends.
     if let Some(contract) = at.contract
-        && (head.as_callable().and_then(Knotted::function))
-            .is_some_and(|function| contract.kept_by(&at.types, function.ktype(), None))
+        && (head.as_callable().and_then(Knotted::function)).is_some()
+        && contract.kept_by(&at.types, head.ktype(), None)
     {
         let request = call(Some(contract));
         return step.tail(request.placement, request.work);
@@ -873,7 +880,10 @@ fn in_place<'graph, 'here>(
                 return Some(read);
             };
             let Value::Knotted(member) = read else {
-                unreachable!("an instance site reads a quantified function")
+                unreachable!(
+                    "an instance site reads a bare quantified function: a header at a scheme \
+                     comes only from a module member read, which makes its own instance"
+                )
             };
             Some(Value::Knotted(instance(
                 writer, member, solution, &at.view, types, scratch,

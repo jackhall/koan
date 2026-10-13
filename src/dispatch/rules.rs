@@ -120,7 +120,7 @@ fn returns(
                         Some(held) => Interval::point(KType::of_kind(held.kind_of(types)).into()),
                         None => under(KType::ANY_TYPE.into()),
                     },
-                    _ => under(declared),
+                    _ => member_read(types, given[0].typed, declared),
                 },
                 _ => match name {
                     BinderSymbol::Type(_) => under(KType::ANY_TYPE.into()),
@@ -142,6 +142,29 @@ fn returns(
     }
 }
 
+/// The static type of a value member a module typed `operand` declares at `declared`: exactly
+/// where the retype makes it so ([`retyped_to`]) and the operand is exact at a signature type —
+/// its node itself, never a variable's bound, since the run reads the member through that very
+/// schema and retypes it to `declared` — and at most `declared` otherwise.
+pub(super) fn member_read(
+    types: &Types<'_, '_>,
+    operand: Interval,
+    declared: Parametric,
+) -> Interval {
+    let exact = operand.is_exact()
+        && matches!(
+            types.node(operand.upper),
+            TypeNode::Signature { .. }
+                | TypeNode::SignatureApply { .. }
+                | TypeNode::SignatureMeet { .. }
+        );
+    if exact {
+        retyped_to(types, declared)
+    } else {
+        under(declared)
+    }
+}
+
 /// What the argument at `slot` of `native`'s call lacks, where a need the rule narrowed by the
 /// names the call reads dropped it: the first name, in the order written, a record lower end lacks,
 /// or the one member a module read names. `None` where the rule narrowed nothing there.
@@ -152,7 +175,13 @@ fn lacks(native: Native, given: &[Given<'_>], slot: usize, types: &Types<'_, '_>
         | (Native::Field, 0, TypeNode::Record { fields }) => (names.iter())
             .find(|name| fields.get(name.symbol()).is_none())
             .map(|name| Lacks::Field(*name)),
-        (Native::ModuleMember, 0, TypeNode::Signature { .. }) => match names {
+        (
+            Native::ModuleMember,
+            0,
+            TypeNode::Signature { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. },
+        ) => match names {
             [name @ (BinderSymbol::Value(_) | BinderSymbol::Type(_))] => Some(Lacks::Member(*name)),
             _ => None,
         },
@@ -187,14 +216,22 @@ fn needs<'x>(
         (Native::Field, Some(names @ [_]))
             if matches!(
                 types.node(given[0].typed.lower),
-                TypeNode::Record { .. } | TypeNode::Signature { .. }
+                TypeNode::Record { .. }
+                    | TypeNode::Signature { .. }
+                    | TypeNode::SignatureApply { .. }
+                    | TypeNode::SignatureMeet { .. }
             ) =>
         {
             needs[0] = holding(names);
         }
         // Over a lower end that is a signature, a module naming the label is what a read needs.
         (Native::ModuleMember, Some([name]))
-            if matches!(types.node(given[0].typed.lower), TypeNode::Signature { .. }) =>
+            if matches!(
+                types.node(given[0].typed.lower),
+                TypeNode::Signature { .. }
+                    | TypeNode::SignatureApply { .. }
+                    | TypeNode::SignatureMeet { .. }
+            ) =>
         {
             let mut draft = SchemaDraft::new(scratch);
             draft.origin = SigOrigin::Declared;

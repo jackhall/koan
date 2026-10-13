@@ -20,7 +20,7 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, bound_above,
+    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, bound_above, meet,
     substitute_parameters,
 };
 use crate::values::Types;
@@ -101,8 +101,10 @@ pub struct SignatureMember {
 }
 
 /// The member `name` of every module under `upper`, a signature or an application of one read
-/// through a rigid variable's bound — a union's value member joined over its members: `None` where
-/// `upper` is no such type, or declares no such member.
+/// through a rigid variable's bound — a union's value member joined over its members, a meet's the
+/// meet of what each application declaring it declares: `None` where `upper` is no such type, or
+/// declares no such member, or is a meet leaving a parameter the member names unpinned or
+/// declaring a type member or a scheme two ways.
 pub fn signature_member(
     types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
@@ -127,6 +129,34 @@ pub fn signature_member(
             }
             return Some(SignatureMember {
                 declared: DeclaredType::Type(types.union_of(scratch, &joined)),
+                unpinned: None,
+            });
+        }
+        // A meet's member is the meet of the types each application declaring it reads it at.
+        TypeNode::SignatureMeet { members } => {
+            let mut met = None;
+            for each in members.iter() {
+                let Some(read) = signature_member(types, scratch, each.into(), name) else {
+                    continue;
+                };
+                if read.unpinned.is_some() {
+                    return None;
+                }
+                met = Some(match met {
+                    None => read.declared,
+                    Some(held) if held == read.declared => held,
+                    // Two applications declaring a type member, or a scheme, otherwise disagree.
+                    Some(held) => match (name, held.as_type(), read.declared.as_type()) {
+                        (BinderSymbol::Value(_), Some(held), Some(read)) => {
+                            let (held, read) = (types.concrete(held)?, types.concrete(read)?);
+                            DeclaredType::Type(meet(types, scratch, held, read).into())
+                        }
+                        _ => return None,
+                    },
+                });
+            }
+            return met.map(|declared| SignatureMember {
+                declared,
                 unpinned: None,
             });
         }

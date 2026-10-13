@@ -79,6 +79,35 @@ impl Fixture<'_, '_> {
     }
 }
 
+impl Fixture<'_, '_> {
+    /// A chain of headers `depth` deep: each over a one-node knot's record node under
+    /// `{next :Any, tag :Number}`, retyped to `{next :Any}`, whose `next` holds the header below.
+    fn headers<'cell>(
+        &self,
+        writer: Writer<'cell>,
+        types: &Types<'_, 'cell>,
+        depth: usize,
+    ) -> Holding<'cell> {
+        let (types, scratch) = (types, self.scratch());
+        let next = self.next();
+        let tag = BinderSymbol::declared("tag", self.symbols).unwrap();
+        let memo = types.record(scratch, &[(next, KType::ANY), (tag, KType::NUMBER)]);
+        let shown = types.record(scratch, &[(next, KType::ANY)]);
+        (0..depth).fold(Holding::Null, |below, _| {
+            let node = tie(writer, 1, |_, _| {
+                let fields = [
+                    (next, Link::Value(below)),
+                    (tag, Link::Value(Holding::Number(1.0))),
+                ];
+                crate::values::Circular::Record(crate::values::Record::linked(
+                    writer, &fields, memo, scratch,
+                ))
+            })[0];
+            Holding::Retyped(crate::values::Retyped::of(writer, node, shown.into()))
+        })
+    }
+}
+
 /// `value` as `PRINT` writes it.
 fn rendered(fixture: &Fixture<'_, '_>, types: &Types<'_, '_>, value: Value<'_>) -> String {
     let mut out = String::new();
@@ -191,5 +220,33 @@ fn a_chain_of_knots_deeper_than_the_stack_digests() {
                 digest(fixture.knots(writer, types, DEPTH - 1))
             );
         });
+    });
+}
+
+/// A header is a frame of the walk over the member below it, so a chain of headers digests and
+/// crosses on one explicit stack.
+#[test]
+fn a_chain_of_headers_deeper_than_the_stack_digests_and_crosses() {
+    with_fixture(|fixture| {
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        graph
+            .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
+                let digest = |value: Holding<'_>| value.digest(types, &Bump::new());
+                let writer = context.writer();
+                let chain = fixture.headers(writer, types, DEPTH);
+                assert_eq!(digest(chain), digest(fixture.headers(writer, types, DEPTH)));
+                let source = context.lift::<crate::values::ValueFamily<super::NodeFamily>>(chain);
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
+                let copied = context.read(&crossed).value();
+                assert!(matches!(copied, Holding::Retyped(_)));
+                assert_eq!(digest(copied), digest(chain));
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
     });
 }

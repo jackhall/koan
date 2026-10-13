@@ -80,10 +80,11 @@ porous where a parameter or slot is not typed `Any` or where its return is;
 and a list, dict, union or family application is porous where a child is.
 
 A type is **exposing** where a value seen at it can hand a reader a part or
-payload of minted content. A part keeps its own memo under `Any`, a union, a
-function type or a carrier ([values](../src/values/README.md#the-type-memo-and-satisfies)),
-and `Value` or a variable restamps nothing; a module reports its own memo
-under any signature; a type value's payload is the type it names, whatever
+payload of minted content. A part keeps its own memo under `Any`, a union or
+a carrier ([values](../src/values/README.md#the-type-memo-and-satisfies)),
+and `Value` or a variable restamps nothing; a module seen at a signature hands
+back each member at the type the signature declares it at, which may itself be
+exposing; a type value's payload is the type it names, whatever
 its kind; a nominal's payload is read at its representation. So `Any`,
 `Value`, every kind, every signature type, every variable, a carrier and a
 nominal are exposing; a union is exposing where it is porous or a child is

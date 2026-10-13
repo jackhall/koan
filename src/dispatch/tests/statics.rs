@@ -437,21 +437,19 @@ pub(super) fn using_block<R>(
     })
 }
 
+/// A closed quantified head's return is exactly its return under the call's solution: the frame
+/// retypes the value to it under the selection's own solution.
 #[test]
-fn a_surfaced_head_is_typed_at_load_and_returns_at_most() {
+fn a_surfaced_quantified_head_returns_exactly_its_solved_return() {
     let boxes = "SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]\n";
     let source = format!(
         "{boxes}EXPR #(OPEN m :Boxes) -> Any = #(USING (m :! Boxes) SCOPE (\
          (LET a = (BOX 1)) (LET b = (BOX \"s\"))))"
     );
     using_block(&source, |program, block| {
-        let at_most = |name| {
+        let exact = |name| {
             let typed = interval(program, block, name);
-            assert_eq!(
-                typed.lower,
-                KType::NEVER.into(),
-                "`{name}` is at most its return"
-            );
+            assert_eq!(typed.lower, typed.upper, "`{name}` is exactly its return");
             display_name(
                 typed.upper,
                 &reading(program.root(), &Bump::new()),
@@ -459,8 +457,8 @@ fn a_surfaced_head_is_typed_at_load_and_returns_at_most() {
             )
             .to_string()
         };
-        assert_eq!(at_most("a"), ":(LIST OF Number)");
-        assert_eq!(at_most("b"), ":(LIST OF Str)");
+        assert_eq!(exact("a"), ":(LIST OF Number)");
+        assert_eq!(exact("b"), ":(LIST OF Str)");
     });
 }
 
@@ -470,10 +468,12 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
     let using = |ascribed: &str, body: &str| {
         format!("{stack}EXPR #(OPEN s :Stack) -> Any = #(USING (s :! {ascribed}) SCOPE ({body}))")
     };
+    // Pinned, the head is closed: every overload the header offers is retyped to it, so its
+    // return is exact and a use it never admits is refused.
     let pinned = using("(Stack WITH {Elt = Number})", "LET a = (PUSH 1)");
     using_block(&pinned, |program, block| {
         let typed = interval(program, block, "a");
-        assert_eq!(typed.lower, KType::NEVER.into());
+        assert_eq!(typed.lower, typed.upper, "a closed head's return is exact");
         assert_eq!(
             display_name(
                 typed.upper,
@@ -484,11 +484,10 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
             ":(LIST OF Number)"
         );
     });
-    // The key holds the module's own overloads, which may admit more than the head does.
-    assert_eq!(
-        run(&using("(Stack WITH {Elt = Number})", "PUSH \"s\"")),
-        "",
-        "a use the head alone never admits loads"
+    let refused = run(&using("(Stack WITH {Elt = Number})", "PUSH \"s\""));
+    assert!(
+        refused.contains("no overload of `PUSH _` admits (Str)"),
+        "{refused}"
     );
     let open = using("Stack", "LET a = (PUSH 1)");
     using_block(&open, |program, block| {
@@ -517,10 +516,10 @@ fn a_surfaced_operator_head_is_typed_at_load() {
     using_block(&using("LET a = (1 <> 2)"), |program, block| {
         assert_eq!(upper(program, block, "a"), KType::NUMBER.into());
     });
-    assert_eq!(
-        run(&using("\"s\" <> 2")),
-        "",
-        "the key holds the module's own overloads, which may admit more than the head"
+    let refused = run(&using("\"s\" <> 2"));
+    assert!(
+        refused.contains("no overload of `_ <> _` admits (Str, Number)"),
+        "every overload the header offers is retyped to the head: {refused}"
     );
 }
 

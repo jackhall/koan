@@ -26,9 +26,9 @@ use crate::type_lattice::{
     DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
 };
 use crate::values::digest::function_content;
-use crate::values::{ContentDigest, Knotted as _, Link, Seen, Types, Value, Weight};
+use crate::values::{ContentDigest, Knotted as _, Link, Retyped, Seen, Types, Value, Weight};
 
-use super::{Coerced, KActivationView, Knotted, Node, Untieable, composed};
+use super::{Coerced, KActivationView, KValue, Knotted, Node, Untieable, composed};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -74,9 +74,18 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         }
     }
 
-    /// The function's type, elaborated from its signature where it was born.
+    /// The function's type: elaborated from its signature where it was born, or the annotation's
+    /// retype where it was born at one — what a caller sees.
     pub fn ktype(&self) -> DeclaredType<KType> {
         self.ktype
+    }
+
+    /// The signature the body was checked against: the one its parameters, return and group are
+    /// read from. Its own type, unless it was born at an annotation that retypes it.
+    pub fn declared(&self) -> DeclaredType<KType> {
+        self.typing
+            .and_then(|typing| typing.declared)
+            .unwrap_or(self.ktype)
     }
 
     /// Each `FOR ALL` name the declaration wrote, with its index in the type's group; empty for an
@@ -144,6 +153,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
                 self.quantifier_map(),
                 self.registered(),
                 self.instance().unwrap_or(&[]),
+                self.typing.and_then(|typing| typing.declared),
             ),
             shape: self.shape,
             closure,
@@ -194,18 +204,23 @@ pub struct Typing<'cell> {
     registered: Option<Registered<'cell, KType>>,
     /// The solution in group order; empty for anything that is no instance.
     instance: &'cell [KType],
+    /// The signature the body was checked against, where the function was born at an annotation
+    /// its own type differs from.
+    declared: Option<DeclaredType<KType>>,
 }
 
 impl<'cell> Typing<'cell> {
-    /// `map`, `registered` and `instance` written into the region `writer` fills, or `None` where
-    /// the function has none of them.
+    /// `map`, `registered`, `instance` and `declared` written into the region `writer` fills, or
+    /// `None` where the function has none of them.
     pub(super) fn laid_down(
         writer: Writer<'cell>,
         map: FunctionGroupMap<'_>,
         registered: Option<Registered<'_, KType>>,
         instance: &[KType],
+        declared: Option<DeclaredType<KType>>,
     ) -> Option<&'cell Typing<'cell>> {
-        (!map.is_empty() || registered.is_some() || !instance.is_empty()).then(|| {
+        let empty = map.is_empty() && registered.is_none() && instance.is_empty();
+        (!empty || declared.is_some()).then(|| {
             let quantifier_map = FunctionGroupMap(writer.fill(map.0.len(), |at| map.0[at]));
             let registered = registered.map(|registered| Registered {
                 shape: registered.shape,
@@ -227,6 +242,7 @@ impl<'cell> Typing<'cell> {
                     quantifier_map,
                     registered,
                     instance: writer.fill(instance.len(), |at| instance[at]),
+                    declared,
                 },
             )
         })
@@ -237,8 +253,9 @@ impl<'cell> Typing<'cell> {
         len: usize,
         registered: Option<&Registered<'_, KType>>,
         instance: usize,
+        declared: bool,
     ) -> Weight {
-        if len == 0 && registered.is_none() && instance == 0 {
+        if len == 0 && registered.is_none() && instance == 0 && !declared {
             return Weight::ZERO;
         }
         let (map, names) = registered.map_or((0, 0), |registered| {
@@ -268,6 +285,9 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     /// The solution a quantified function is born instantiated at, bound where it is born; empty
     /// where it is born as it is.
     pub instance: &'x [KType],
+    /// The signature the body was checked against, where the node is born at an annotation that
+    /// retypes it: `ktype` is then the annotation's retype.
+    pub declared: Option<DeclaredType<KType>>,
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
 }
 
@@ -283,11 +303,18 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         Weight,
     ) {
         let closure = ClosureBindings::of(writer, &self.captures);
-        let typing = Typing::laid_down(writer, self.quantifier_map, self.registered, self.instance);
+        let typing = Typing::laid_down(
+            writer,
+            self.quantifier_map,
+            self.registered,
+            self.instance,
+            self.declared,
+        );
         let weight = closure.weight().plus(Typing::weight(
             self.quantifier_map.0.len(),
             self.registered.as_ref(),
             self.instance.len(),
+            self.declared.is_some(),
         ));
         (closure, typing, weight)
     }
@@ -339,6 +366,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         quantifier_map: callable.quantifier_map,
         registered: callable.registered,
         instance,
+        declared: None,
         captures,
     })
 }
@@ -571,6 +599,28 @@ pub fn barrier_instance<'graph, 'cell>(
     Knotted::of(knot, 0)
 }
 
+/// `header`, a function seen at a scheme other than its own — a member read through a signature
+/// declaring it so — read where the load solved that scheme's group to `solution`: a header over
+/// the same bare member at the scheme's instance. No knot is made: a call through it solves the
+/// member's own group, as a call by name does. Each lexical variable `solution` names is read
+/// through `activation`.
+pub fn header_instance<'graph, 'cell>(
+    writer: Writer<'cell>,
+    header: &Retyped<Knotted<'graph, 'cell>>,
+    solution: StaticSolution<'graph>,
+    activation: &KActivationView<'graph, '_>,
+    types: &Types<'_, 'cell>,
+    scratch: BumpAllocator<'_>,
+) -> KValue<'graph, 'cell> {
+    let solution = solved(solution, activation, types, scratch);
+    let DeclaredType::Scheme(scheme) = header.ktype() else {
+        unreachable!("a header instance is read of a header at a scheme")
+    };
+    let instance = instantiate_quantified(types, scratch, scheme, solution);
+    let ktype = DeclaredType::Type(types.concrete(instance).expect(INSTANCE));
+    Value::Retyped(Retyped::of(writer, header.member(), ktype))
+}
+
 /// `member`, a quantified function, read where the load solved its group to `solution`: a one-node
 /// knot in `writer`'s region running the same body over the same captures, typed by its instance.
 /// Each lexical variable `solution` names is read through `activation`, the activation the site
@@ -602,10 +652,10 @@ pub fn instance<'graph, 'cell>(
     }));
     let closure = ClosureBindings::of(writer, &links);
     let map = function.quantifier_map();
-    let typing = Typing::laid_down(writer, map, None, solution);
+    let typing = Typing::laid_down(writer, map, None, solution, None);
     let knot_weight = Weight::flat::<usize>()
         .plus(closure.weight())
-        .plus(Typing::weight(map.0.len(), None, solution.len()))
+        .plus(Typing::weight(map.0.len(), None, solution.len(), false))
         .plus(Weight::flat::<Node<'graph, 'cell>>());
     let knot = KnotPlan::new(1).tie(writer, |_| {
         Node::Function(Function::new(

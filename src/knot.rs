@@ -56,9 +56,9 @@ pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
 pub use code::{Code, UsingRefused, quote, using};
-pub use function::{Function, barrier_instance, instance, lambda};
+pub use function::{Function, barrier_instance, header_instance, instance, lambda};
 pub use module::{Coerced, Module, body_activation};
-pub use tie::tie;
+pub use tie::{Tied, tie};
 
 use std::fmt;
 
@@ -168,6 +168,16 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
         match self.node() {
             Node::Coerced(coerced) => Some(coerced),
             _ => None,
+        }
+    }
+
+    /// The type this member's node was checked against: a function born at an annotation declares
+    /// the signature its body was checked against, and every other node, a barrier included, its
+    /// own type.
+    pub fn declared(self) -> DeclaredType<KType> {
+        match self.node() {
+            Node::Function(function) => function.declared(),
+            _ => values::Knotted::ktype(&self),
         }
     }
 
@@ -335,8 +345,8 @@ impl values::Knotted for Knotted<'_, '_> {
     }
 }
 
-/// The value `source` holds under `name`: a record's field its type shows, restamped in `writer`'s
-/// region at the type it is seen at, or a module's member. `None` for any other value, or a name
+/// The value `source` holds under `name`: a record's field its type shows — a record data node's
+/// included — restamped in `writer`'s region at the type it is seen at, or a module's member. `None` for any other value, or a name
 /// `source` does not show.
 fn field<'graph, 'cell>(
     writer: Writer<'cell>,
@@ -345,14 +355,15 @@ fn field<'graph, 'cell>(
     types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'cell>> {
-    match source {
-        Value::Record(_) => Some(
+    match source.knot_member() {
+        Some(member) if member.module().is_some() => {
+            module::layout::member(writer, source, name, types, scratch)
+        }
+        _ => Some(
             source
                 .field(name.symbol(), types, scratch)?
                 .restamped(writer),
         ),
-        Value::Knotted(member) => module::layout::member(member, name, types, scratch),
-        _ => None,
     }
 }
 

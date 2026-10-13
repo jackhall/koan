@@ -24,6 +24,7 @@
 //! Trees on the chain are memoized per shape and site; a binder already being read reads as a leaf,
 //! so no tree is built through itself.
 
+use crate::elaborate::signature_member;
 use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
@@ -32,12 +33,13 @@ use crate::scope::{
     StaticSolution, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
-use crate::type_lattice::KType;
+use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{Operator, literal_digest, type_digest};
+use crate::values::{retype_target, retypes_by_header};
 
 use super::super::evaluate::{Form, Wanted, of_node, of_part, slots};
 use super::{Landing, Pass, address, done};
-use crate::knot::module::view::Ascription;
+use crate::knot::module::view::{self, Ascription};
 
 type Read<'graph, T> = Result<T, ShapeError<'graph>>;
 
@@ -60,7 +62,7 @@ pub(super) enum Written {
 }
 
 impl Written {
-    fn site(self) -> Site {
+    pub(super) fn site(self) -> Site {
         match self {
             Written::Part(site) | Written::Node(site) => site,
         }
@@ -174,11 +176,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 match self.resolved_type(self.scope_level(scope), typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
-                        let operator = match mode {
-                            Ascription::Opaque => Operator::Opaque,
-                            Ascription::Transparent => Operator::Transparent,
-                        };
-                        Tree::view(operator, application, resident(self.writer, source))
+                        match mode {
+                            Ascription::Opaque => self.view_tree(application, source, site)?,
+                            // `:!` is a retype.
+                            Ascription::Transparent => {
+                                let level = self.scope_level(scope);
+                                self.retyped_tree(level, source, application.into(), site)?
+                            }
+                        }
                     }
                     _ => self.fallback(scope, named, site)?,
                 }
@@ -186,7 +191,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Form::Leaf(ExpressionPart::Literal(literal)) => Tree::Digest(literal_digest(literal)),
             Form::Leaf(ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)) => {
                 match self.resolved_type(self.scope_level(scope), shape.typed_expression(site)) {
-                    Static::Closed(handle) => Tree::Digest(type_digest(handle)),
+                    Static::Closed(handle) => named_type(self.types, handle),
                     _ => self.fallback(scope, named, site)?,
                 }
             }
@@ -279,7 +284,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if let BinderSymbol::Type(_) = shape.slot_name(slot) {
             return match shape.declared_type(slot) {
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {
-                    Ok(Tree::Digest(type_digest(handle)))
+                    Ok(named_type(self.types, handle))
                 }
                 _ => self.leaf_on(scope, slot),
             };
@@ -314,9 +319,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if shape.position_of(slot) == Position::PARAMETER {
             return self.leaf_on(scope, slot);
         }
-        match shape.rhs(slot) {
-            Some(rhs) => self.tree_in(scope, rhs, Some(slot)),
-            None => self.leaf_on(scope, slot),
+        let tree = match shape.rhs(slot) {
+            Some(rhs) => self.tree_in(scope, rhs, Some(slot))?,
+            None => return self.leaf_on(scope, slot),
+        };
+        // An annotated `LET` binds its value retyped to the annotation.
+        let level = self.scope_level(scope);
+        match shape.annotation(slot) {
+            Some(annotation) => match self.declared(level, annotation) {
+                Some(declared) => self.retyped_tree(level, tree, declared, site),
+                None => self.leaf_on(scope, slot),
+            },
+            None => Ok(tree),
         }
     }
 
@@ -414,8 +428,107 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 Some(Tree::bound(binder, chain, within))
             }
             Tree::Leaf(Leaf::Unnamed(site)) => Some(Tree::Leaf(Leaf::Unnamed(site))),
+            // Through a header, the member at the type its carried signature declares it.
+            Tree::Retyped {
+                carried, source, ..
+            } => {
+                let (types, scratch) = (self.types, self.scratch);
+                let declared =
+                    signature_member(types, scratch, carried.into(), BinderSymbol::Value(label))
+                        .and_then(|read| read.declared.as_type());
+                match (self.read_member(*source, label, site)?, declared) {
+                    (Some(member), Some(declared)) => {
+                        let level = self.chain.len() - 1;
+                        Some(self.retyped_tree(level, member, declared, site)?)
+                    }
+                    _ => None,
+                }
+            }
             Tree::Digest(_) | Tree::Knot { .. } | Tree::View { .. } => None,
         })
+    }
+
+    /// `tree` retyped to `declared` where the run retypes its value — a parameter binding its
+    /// argument, a frame's return, an annotated `LET`, a member read through a header. A closure
+    /// or a module whose own type the load knows is retyped exactly, under a header only where the
+    /// run lays one, and a header's tree is re-retyped over its bare member. An open tree is keyed
+    /// on the type it is retyped to, which the run retypes one value to one way; a closed one whose
+    /// own type the load does not know, or a `declared` it cannot close, is a leaf no binder names,
+    /// at `site`. A digest is a scalar, which keeps its type, or a type value, which a kind may
+    /// re-stamp: its tree is then such a leaf.
+    pub(super) fn retyped_tree(
+        &mut self,
+        level: usize,
+        tree: Tree<'graph>,
+        declared: crate::type_lattice::Parametric,
+        site: Site,
+    ) -> Read<'graph, Tree<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let unnamed = Tree::Leaf(Leaf::Unnamed(site));
+        if let Tree::Leaf(Leaf::Unnamed(_)) = tree {
+            return Ok(tree);
+        }
+        if let Tree::Digest(_) = tree {
+            // A type value retyped to a kind may take it, and its digest names its kind.
+            let kind = matches!(types.node(declared), TypeNode::OfKind(_));
+            return Ok(if kind { unnamed } else { tree });
+        }
+        let Some(declared) = types.concrete(declared) else {
+            return Ok(if tree.closed() { unnamed } else { tree });
+        };
+        if !retypes_by_header(types, declared) {
+            return Ok(tree);
+        }
+        let (bare, own) = match tree {
+            Tree::Retyped {
+                carried, source, ..
+            } => (*source, tree.closed().then_some(carried)),
+            Tree::Knot { members, index, .. } => {
+                let node = members[index as usize];
+                let own = match self.resolved_callable(level, node.shape.callable_type()) {
+                    Static::Closed(callable) if node.instance.is_empty() => {
+                        callable.ktype.as_type()
+                    }
+                    _ => None,
+                };
+                (tree, own)
+            }
+            Tree::Body { .. } | Tree::View { .. } => (
+                tree,
+                self.carried_type(super::views::Carried::Tree(tree), site)?,
+            ),
+            _ => (tree, None),
+        };
+        Ok(match own {
+            Some(own) => {
+                let target = retype_target(types, scratch, own.into(), declared);
+                let bare_own = match tree {
+                    Tree::Retyped { .. } => None,
+                    _ => Some(own),
+                };
+                match (target.as_type(), bare_own) {
+                    (Some(target), Some(bare_own)) if target == bare_own => bare,
+                    (Some(target), _) => Tree::retyped(target, resident(self.writer, bare)),
+                    (None, _) => unnamed,
+                }
+            }
+            None if tree.closed() => unnamed,
+            None => Tree::retyped(declared, resident(self.writer, tree)),
+        })
+    }
+
+    /// The opaque view at `application` over `source`, read at the part at `site`: keyed on what
+    /// its fit solves where the load knows the source's signature, and open otherwise.
+    pub(super) fn view_tree(
+        &mut self,
+        application: KType,
+        source: Tree<'graph>,
+        site: Site,
+    ) -> Read<'graph, Tree<'graph>> {
+        let held = self.carried_type(super::views::Carried::Tree(source), site)?;
+        let from = view::fit_of(held, application, self.types, self.scratch);
+        let source = resident(self.writer, source);
+        Ok(Tree::view(Operator::Opaque, application, source, from))
     }
 
     /// The trees of what `body`, born in `scope` at the part at `site`, composes: each capture its
@@ -650,7 +763,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             solution: collect(self.writer, solution.iter().copied()),
         };
         let mut done = bump_table(self.scratch);
-        self.substituted(summary, &call, site, &mut done).map(Some)
+        let substituted = self.substituted(summary, &call, site, &mut done)?;
+        // The frame retypes its value to its declared return.
+        let level = self.chain.len() - 1;
+        let returns = match self.resolved_callable(level, callee.callable_type()) {
+            Static::Closed(callable) => match callable.ktype.view(self.types).body {
+                TypeNode::KFunction { ret, .. } => Some(ret),
+                _ => None,
+            },
+            _ => None,
+        };
+        Ok(Some(match returns {
+            Some(returns) => self.retyped_tree(level, substituted, returns, site)?,
+            None => substituted,
+        }))
     }
 
     /// The summary of `callee`, typing it first where the walk has not: `None` where it is
@@ -750,13 +876,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 Tree::knot(collect(self.writer, nodes.iter().copied()), index)
             }
             Tree::View {
-                operator,
                 application,
                 source,
                 ..
             } => {
                 let source = self.substituted(*source, call, site, done)?;
-                Tree::view(operator, application, resident(self.writer, source))
+                self.view_tree(application, source, site)?
+            }
+            Tree::Retyped {
+                carried, source, ..
+            } => {
+                let source = self.substituted(*source, call, site, done)?;
+                let level = self.chain.len() - 1;
+                self.retyped_tree(level, source, carried.into(), site)?
             }
             Tree::Leaf(Leaf::Bound {
                 binder,
@@ -786,7 +918,22 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if let Some((_, argument)) =
                 (call.arguments.iter()).find(|(slot, _)| *slot == binder.slot)
             {
-                let mut read = Some(*argument);
+                // The frame binds the argument retyped to the parameter's declared type.
+                let level = self.chain.len() - 1;
+                let declared = match self.resolved_callable(level, call.callee.callable_type()) {
+                    Static::Closed(callable) => match callable.ktype.view(self.types).body {
+                        TypeNode::KFunction { params, .. } => {
+                            params.get(binder.shape.slot_name(binder.slot).symbol())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let argument = match declared {
+                    Some(declared) => self.retyped_tree(level, *argument, declared, site)?,
+                    None => *argument,
+                };
+                let mut read = Some(argument);
                 for label in chain {
                     read = match read {
                         Some(tree) => self.read_member(tree, *label, site)?,
@@ -800,7 +947,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if let Some((_, point)) = (call.solution.iter()).find(|(slot, _)| *slot == binder.slot)
                 && chain.is_empty()
             {
-                return Ok(Tree::Digest(type_digest(*point)));
+                return Ok(named_type(self.types, *point));
             }
         }
         let within = match within {
@@ -839,6 +986,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         Ok(collect(self.writer, substituted.iter().copied()))
     }
+}
+
+/// The tree of a type value naming `named` at its own kind, as the run births it.
+fn named_type<'graph>(types: &crate::values::Types<'_, '_>, named: KType) -> Tree<'graph> {
+    Tree::Digest(type_digest(named, KType::of_kind(named.kind_of(types))))
 }
 
 /// Whether `shape` is `callee` or a body nested in it, at any depth: a binder bound once per call

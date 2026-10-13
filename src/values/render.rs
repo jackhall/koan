@@ -155,11 +155,11 @@ impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, 'x, O, X> {
     ) -> fmt::Result {
         let (types, symbols) = (self.types, self.symbols);
         let value = seen.value();
-        if let Value::Knotted(member) = value {
+        if let Some(member) = value.knot_member() {
             match member.resolve() {
                 Resolved::Code(code) => return write!(self.out, "{}", code.body.summary(symbols)),
                 Resolved::Function { .. } | Resolved::Module | Resolved::Barrier => {
-                    return write!(self.out, "{}", display_name(member.ktype(), types, symbols));
+                    return write!(self.out, "{}", display_name(seen.ktype(), types, symbols));
                 }
                 Resolved::Circular(_) => {}
             }
@@ -192,7 +192,8 @@ impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, 'x, O, X> {
             | Value::Dict(_)
             | Value::Record(_)
             | Value::Tagged(_)
-            | Value::Knotted(_) => unreachable!("a surface or an opaque member wrote above"),
+            | Value::Knotted(_)
+            | Value::Retyped(_) => unreachable!("a surface or an opaque member wrote above"),
         }
     }
 

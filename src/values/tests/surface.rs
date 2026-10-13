@@ -124,3 +124,64 @@ fn a_payload_is_seen_at_its_identitys_representation() {
         })
     });
 }
+
+/// A one-node knot: a record node under `{next :Any, value :Number}` whose `next` names itself.
+pub(super) fn looped<'cell>(
+    fixture: &super::Fixture<'_, '_>,
+    writer: crate::memory::Writer<'cell>,
+    types: &crate::values::Types<'_, 'cell>,
+    value: f64,
+) -> super::Node<'cell> {
+    let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
+    let next = BinderSymbol::declared("next", symbols).unwrap();
+    let held = BinderSymbol::declared("value", symbols).unwrap();
+    let memo = types.record(scratch, &[(next, KType::ANY), (held, KType::NUMBER)]);
+    super::tie(writer, 1, |_, edges| {
+        let fields = [
+            (next, super::Link::Edge(edges[0])),
+            (held, super::Link::Value(super::Holding::Number(value))),
+        ];
+        crate::values::Circular::Record(crate::values::Record::linked(
+            writer, &fields, memo, scratch,
+        ))
+    })[0]
+}
+
+#[test]
+fn a_data_node_restamps_under_one_header_over_its_bare_member() {
+    use super::Holding;
+    with_fixture(|fixture| {
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
+            let node = looped(fixture, writer, types, 1.0);
+            let next = BinderSymbol::declared("next", symbols).unwrap();
+            let narrow = types.record(scratch, &[(next, KType::ANY)]);
+            let Holding::Retyped(header) =
+                Holding::Knotted(node).retyped(writer, narrow, types, scratch)
+            else {
+                panic!("a data node restamps under a header");
+            };
+            assert!(header.member() == node);
+            assert_eq!(header.ktype(), narrow.into());
+            let any_record = types.record(scratch, &[]);
+            let Holding::Retyped(again) =
+                Holding::Retyped(header).retyped(writer, any_record, types, scratch)
+            else {
+                panic!("a header restamps under a header");
+            };
+            assert!(again.member() == node, "one header over the bare member");
+            assert_eq!(again.ktype(), any_record.into());
+            let own = crate::values::Knotted::ktype(&node).as_type().unwrap();
+            let either = types.union_of(scratch, &[own, KType::NULL]);
+            assert!(
+                matches!(
+                    Holding::Knotted(node).retyped(writer, either, types, scratch),
+                    Holding::Knotted(member) if member == node
+                ),
+                "a retype to the node's own type writes no header"
+            );
+        })
+    });
+}

@@ -252,8 +252,31 @@ is then bound as a call by name, so its frame admits the arguments and solves
 its group; an argument that cannot cross is the call's misfit,
 `… cannot be called with …: it is not sealed under Carrier`. The frame's value,
 once held to its contract, crosses the barriers outwards, innermost first, and
-a value that cannot is a fault. Such a frame never tails, since its value
-crosses where the frame ends.
+a value that cannot is a fault. Once out, it is retyped to the return the
+barrier shows its caller, so a field the view's signature hides is no field of
+it. Such a frame never tails, since its value crosses where the frame ends.
+
+**A callee has two types**: the one it shows, `callee.ktype()`, and the one its
+body was checked against, `Knotted::declared`. They differ where a function sits
+under a [header](../values/README.md#the-type-memo-and-satisfies) — retyped at a
+function-typed slot, or read through a signature — or was born at an annotation
+that retypes it ([the tie](../knot/README.md#the-tie)), which keeps its declared
+signature in its typing record. A call by name of such a callee admits and
+retypes the arguments at the parameters it shows, then binds them at the ones it
+declares, a call by name past the shown type that solves the node's own
+group; a function type's parameters are a width subset of what a
+slot of it may show, so the node binds only the parameters it declares. A
+keyworded call's selection admitted its arguments at the shape shown already,
+and where that shape is quantified it carries the solution of the shape's
+group in the argument record, a type field per name of the group — a value, so
+a birth's copy adopts it — which the frame reads to solve the shown return, and
+which the node, binding only its own parameters, never sees. Where neither type
+is quantified the shown parameters lie under the declared ones, so a call by
+name past a header admits its arguments once. Its value is retyped to the
+return it shows through the contract, whose
+`retype` is the shown return; where either type is quantified the order does
+not promise the node's return lies under the shown one, so the contract checks
+the value against both (`checked`).
 
 It performs the units in the order the shape emitted them
 ([Units](../scope/README.md#units)), each after every unit it reads, over a
@@ -286,7 +309,8 @@ interleaving. Per unit:
   load [settled](../dispatch/README.md#static-types) it, and retyped to it. A
   miss is a [fault](#faults-and-output),
   `:{v :Any} does not satisfy its annotation :{v :Number}`. A tied member is
-  held the same way; a function's retype is the identity.
+  held the same way, and is already born at its annotation, so its slot binds
+  the bare member.
 - **A statement that binds nothing** is one evaluation, asked with `Reads` —
   save a frame's last unit, which the runner [tails](#frames-contracts-and-tails)
   into, and a block's last statement, asked with `Forwards` so the value is

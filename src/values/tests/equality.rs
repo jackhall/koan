@@ -315,3 +315,44 @@ fn a_seal_is_read_through_nowhere_outside_its_view() {
         })
     });
 }
+
+#[test]
+fn a_header_compares_at_its_type_hiding_a_field() {
+    use super::Holding;
+    with_fixture(|fixture| {
+        let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
+        let next = BinderSymbol::declared("next", symbols).unwrap();
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let equal = |left: Holding<'_>, right: Holding<'_>| {
+                left.equals(&right, types, scratch).expect("no module")
+            };
+            let held = BinderSymbol::declared("value", symbols).unwrap();
+            let memo = types.record(scratch, &[(next, KType::NULL), (held, KType::NUMBER)]);
+            let node = |value| {
+                super::tie(writer, 1, |_, _| {
+                    let fields = [
+                        (next, super::Link::Value(Holding::Null)),
+                        (held, super::Link::Value(Holding::Number(value))),
+                    ];
+                    crate::values::Circular::Record(crate::values::Record::linked(
+                        writer, &fields, memo, scratch,
+                    ))
+                })[0]
+            };
+            let (one, two) = (node(1.0), node(2.0));
+            assert!(!equal(Holding::Knotted(one), Holding::Knotted(two)));
+            let narrow = types.record(scratch, &[(next, KType::NULL)]);
+            let hidden = |node| Holding::Knotted(node).retyped(writer, narrow, types, scratch);
+            assert!(
+                equal(hidden(one), hidden(two)),
+                "the field the header hides counts for nothing"
+            );
+            assert!(
+                !equal(hidden(one), Holding::Knotted(one)),
+                "a header shows fewer fields than its source"
+            );
+        })
+    });
+}

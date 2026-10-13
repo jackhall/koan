@@ -57,7 +57,9 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         self.shape
     }
 
-    /// The carried type: the code's kind, needing the `\` names no binder in the code fills.
+    /// The carried type: the code's kind, needing the `\` names no binder in the code fills, or the
+    /// retype of its binder's annotation where the tie births it at one. A header over the node
+    /// carries any other retype; `USING` builds code typed by its own syntax.
     pub fn ktype(&self) -> KType {
         self.ktype
     }
@@ -159,6 +161,8 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     pub body: ProgramNode<'graph>,
     pub shape: &'graph BodyShape<'graph>,
     pub bound: BumpVec<'x, Binding<'graph, 'cell>>,
+    /// The carried type: the code's own, or the annotation's retype its binder births it at.
+    pub ktype: KType,
 }
 
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
@@ -185,7 +189,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             Code {
                 body: self.body,
                 shape: self.shape,
-                ktype: self.shape.code_type(),
+                ktype: self.ktype,
                 bound,
                 supplied: &[],
                 knot_weight,
@@ -225,7 +229,12 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         bound.push((capture.name, link));
     }
     bound.sort_unstable_by_key(|(name, _)| *name);
-    Staged { body, shape, bound }
+    Staged {
+        body,
+        shape,
+        bound,
+        ktype: shape.code_type(),
+    }
 }
 
 /// Lay `code` down as a one-node knot in `writer`'s region, its runs holding value words only.
@@ -330,7 +339,7 @@ pub fn using<'graph, 'cell>(
         let value = match capture.name {
             BinderSymbol::Key(key) => {
                 keyed.clear();
-                self::keyed(shape, key, source, types, scratch, &mut keyed)?;
+                self::keyed(writer, shape, key, source, types, scratch, &mut keyed)?;
                 (!keyed.is_empty())
                     .then(|| Value::List(List::of_candidates(writer, keyed.iter().copied())))
             }
@@ -349,21 +358,19 @@ pub fn using<'graph, 'cell>(
     Ok(one_node(writer, node.body(), shape, &bound, &supplied))
 }
 
-/// Push onto `found` each function the module `source` offers at `key` — a registration, or an
-/// overload a view carries. A ranking other than the one `shape`'s own candidates at `key` carry
+/// Push onto `found` each function the module `source` offers at `key` — a registration, an
+/// overload a view carries, or one a header retypes in `writer`'s region. A ranking other than the one `shape`'s own candidates at `key` carry
 /// is refused.
 fn keyed<'graph, 'cell>(
+    writer: Writer<'cell>,
     shape: &BodyShape<'graph>,
     key: KeySymbol,
     source: KValue<'graph, 'cell>,
-    types: &Types<'_, '_>,
+    types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {
-    let Some(module) = source.as_module() else {
-        return Ok(());
-    };
-    for member in super::module::layout::functions_at(module, key, types, scratch) {
+    for member in super::module::layout::functions_at(writer, source, key, types, scratch) {
         let registered = super::module::layout::registered_shape(member)
             .expect("a registration member is a function");
         // Only the ranking is read, which a scheme's body spells as a type's does.

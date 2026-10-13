@@ -1,10 +1,9 @@
-//! Content trees: what the load reads each `:|` ascription's operand as, read back from the
-//! ascription's site once the load ends, and a closed tree's digest against the run's.
+//! Content trees: what the load reads each `:|` ascription's operand and view as, read back from
+//! the ascription's site once the load ends, and a closed tree's digest against the run's.
 
 use crate::program::tests::digest_back;
 use crate::program::{CellSubstrate, Outcome, Program};
 use crate::scope::{BodyShape, Leaf, Site, Tree};
-use crate::values::digest::{Operator, lone_member, view_content};
 
 use super::statics::{body, loaded, slot};
 use super::{Koan, output};
@@ -17,9 +16,19 @@ const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
 
 /// The content tree of the operand of the `:|` ascription that is statement `index` of `shape`.
 fn statement_tree<'graph>(shape: &BodyShape<'graph>, index: usize) -> Tree<'graph> {
-    *shape
-        .view_tree(Site::of_node(&shape.body()[index]))
-        .expect("the statement is an opaque ascription")
+    operand(
+        shape
+            .view_tree(Site::of_node(&shape.body()[index]))
+            .expect("the statement is an opaque ascription"),
+    )
+}
+
+/// The operand of the view `tree`.
+fn operand<'graph>(tree: &Tree<'graph>) -> Tree<'graph> {
+    match tree {
+        Tree::View { source, .. } => **source,
+        _ => panic!("a view's tree: {tree:?}"),
+    }
 }
 
 /// The content tree of the operand of the `:|` ascription `LET name = <ascription>` binds in
@@ -34,9 +43,11 @@ fn let_tree<'graph>(
     else {
         panic!("`{name}` is bound to a node");
     };
-    *shape
-        .view_tree(Site::of_node(node.reference()))
-        .expect("the right-hand side is an opaque ascription")
+    operand(
+        shape
+            .view_tree(Site::of_node(node.reference()))
+            .expect("the right-hand side is an opaque ascription"),
+    )
 }
 
 /// The name of the binder a leaf is keyed on, and whether the body that binds it is `shape`.
@@ -119,17 +130,7 @@ fn a_view_over_a_module_of_literals_is_closed_at_the_run_s_digest() {
         let program = running.program();
         let shape = program.shape();
         let (v, w) = (let_tree(program, shape, "v"), let_tree(program, shape, "w"));
-        let application =
-            match shape.typed_expression(Site::of(&let_node(program, shape, "v").parts[2].value)) {
-                crate::scope::Static::Closed(application) => application,
-                _ => panic!("`Counter` is closed"),
-            };
-        let view = lone_member(view_content(
-            Operator::Opaque,
-            application,
-            v.digest().expect("closed"),
-        ));
-        (v.closed(), v.same_as(&w), format!("{view:?}"))
+        (v.closed(), v.same_as(&w), view_digest(program, "v"))
     });
     assert!(closed, "a body over literals is closed");
     assert!(same, "two reads of one module are one tree");
@@ -176,17 +177,11 @@ fn ran<R>(
 /// The digest the load computes for the opaque view `LET name = (<operand> :| <Sig>)` builds.
 fn view_digest(program: &Program<'_>, name: &str) -> String {
     let shape = program.shape();
-    let tree = let_tree(program, shape, name);
-    let application =
-        match shape.typed_expression(Site::of(&let_node(program, shape, name).parts[2].value)) {
-            crate::scope::Static::Closed(application) => application,
-            _ => panic!("the signature is closed"),
-        };
-    let source = tree.digest().unwrap_or_else(|| panic!("closed: {tree:?}"));
-    format!(
-        "{:?}",
-        lone_member(view_content(Operator::Opaque, application, source))
-    )
+    let tree = shape
+        .view_tree(Site::of_node(let_node(program, shape, name)))
+        .expect("the right-hand side is an opaque ascription");
+    let digest = tree.digest().unwrap_or_else(|| panic!("closed: {tree:?}"));
+    format!("{digest:?}")
 }
 
 #[test]
@@ -364,4 +359,24 @@ fn a_module_body_s_leaf_is_keyed_on_its_captures() {
         assert!(a.same_as(&b), "one run of the body");
         assert!(!a.same_as(&c), "two runs of the body");
     });
+}
+
+/// A closure an unfolded call binds at a function-typed parameter is retyped there, as the run
+/// lays it under a header: the module capturing it is closed at the run's digest.
+#[test]
+fn a_closure_retyped_at_a_parameter_is_closed_at_the_run_s_digest() {
+    let source = "SIG Hh = #[(VAL h :(FN :{} -> Any))]\n\
+                  LET wide = (FN :{} -> :{x :Number, y :Str} = #({x = 1, y = \"s\"}))\n\
+                  EXPR #(HOLD g :(FN :{} -> :{x :Number})) -> Module = #(\n  \
+                  MODULE m OVER #[g] = (LET h = g))\n\
+                  LET p = (HOLD wide)\nLET v = (p :| Hh)";
+    let ((closed, digest), mut substrate) = ran(source, |program| {
+        let tree = let_tree(program, program.shape(), "v");
+        (tree.closed(), view_digest(program, "v"))
+    });
+    assert!(
+        closed,
+        "the closure's own type is known, so its retype is exact"
+    );
+    assert_eq!(digest, digest_back(&mut substrate, "v"));
 }

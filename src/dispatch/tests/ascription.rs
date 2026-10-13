@@ -354,10 +354,11 @@ fn a_call_the_load_cannot_solve_exactly_is_at_most_its_return() {
             "`Elt` solves to an interval that is no point"
         );
         assert_eq!(let_narrowing(program, used, "single"), "selected");
+        let _ = never;
         assert_eq!(
             ends(program, used, "called"),
-            (never, ":(LIST OF Any)".to_string()),
-            "a parameter's function may declare a smaller return"
+            (":(LIST OF Any)".to_string(), ":(LIST OF Any)".to_string()),
+            "a parameter's function is retyped to its declared type, return included"
         );
     });
     // Each node carries `LIST OF Number`, which the run's check reads against its static type.

@@ -226,17 +226,24 @@ fn a_call_by_name_whose_argument_never_fits_below_refuses_the_load_as_its_keywor
     assert!(which("WHICH x").starts_with("load:"));
 }
 
-/// `f`'s parameter record is laid onto its slots end by end: a record under `g`'s upper end may
-/// name `x`.
+/// `f`'s parameter record is laid onto its slots end by end: a value under `g`'s upper end may be
+/// a record naming `x`, and one `g`'s declared return makes exact is not.
 #[test]
 fn a_call_by_name_reads_its_argument_at_both_ends() {
     let f = "LET f = (FN :{x :Number, y :Str} -> Str = #(y))\n";
     assert_eq!(
         run(&format!(
-            "{f}LET call = (FN :{{g :(FN :{{}} -> :{{y :Str}})}} -> Str = #(f (g {{}})))\n\
+            "{f}LET call = (FN :{{g :(FN :{{}} -> Any)}} -> Str = #(f (g {{}})))\n\
              PRINT (call {{g = (FN :{{}} -> :{{x :Number, y :Str}} = #({{x = 1, y = \"s\"}}))}})"
         )),
         "s"
+    );
+    let exact = run(&format!(
+        "{f}LET call = (FN :{{g :(FN :{{}} -> :{{y :Str}})}} -> Str = #(f (g {{}})))"
+    ));
+    assert!(
+        exact.contains("can never be called with :{y :Str}"),
+        "{exact}"
     );
     let refused = |source: &str| {
         let refused = run(source);

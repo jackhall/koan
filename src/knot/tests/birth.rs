@@ -37,6 +37,7 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
         fixture.scratch(),
         eager,
     )
+    .map(|tied| tied.knot)
 }
 
 /// [`tie_with`] under an evaluator that supplies nothing.

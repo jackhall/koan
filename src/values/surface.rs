@@ -17,15 +17,14 @@
 //! `seen_at` retypes by.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer};
-use crate::symbols::Symbol;
+use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, TypeNode, fits, meet, satisfied_by,
+    DeclaredType, FitsFailure, Interval, KType, Members, Parametric, TypeNode, fits,
+    fits_application, meet, satisfied_by,
 };
 
 use super::circular::{Circular, Resolved};
-use super::{
-    Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Types, Value, representation,
-};
+use super::{Key, Knotted, Link, Nothing, Retyped, Types, Value, representation};
 
 /// Why the type a container, a tagged value or a data node is seen at is concrete: its memo is a
 /// type, and so is every type a holder names for a part. Only a callable is typed by a scheme.
@@ -45,6 +44,19 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         Seen {
             value,
             ktype: value.ktype(),
+        }
+    }
+
+    /// `function`, a registration member, at `shape`, the expression shape it registers at: what a
+    /// keyworded use reads it by, and what a header retypes it from.
+    pub fn registered(function: Value<'cell, X>, shape: DeclaredType<KType>) -> Self {
+        debug_assert!(
+            function.as_callable().is_some(),
+            "a registration member is a function"
+        );
+        Seen {
+            value: function,
+            ktype: shape,
         }
     }
 
@@ -76,73 +88,53 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
 
     /// The value seen where a holder's type names `declared` for it, after the caller has checked
     /// it satisfies `declared`. The target is read member by member — `declared`'s members, or
-    /// `declared` alone — as the meet of the members of the value's own kind that its seen type lies
-    /// under: a list, dict or record node for a container, a node naming its constructor for a
-    /// tagged value. Where `declared` has none, and for every other value, the seen type stands.
+    /// `declared` alone — as the meet of what the members of the value's own kind take it at
+    /// ([`target`]). A function declared at a scheme is seen at that scheme. Where `declared` has
+    /// none, and for every other value, the seen type stands.
     pub fn seen_at(
         self,
-        declared: KType,
+        declared: impl Into<DeclaredType<KType>>,
         types: &Types<'_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Self {
         let Some(kind) = kind(self.value) else {
             return self;
         };
-        let own = self.concrete();
-        if declared == own {
-            return self;
-        }
-        let constructor = |handle: KType| match types.node(handle) {
-            TypeNode::ConstructorApply { constructor, .. } => constructor,
-            _ => handle,
+        let ktype = match declared.into() {
+            DeclaredType::Type(declared) => {
+                target(types, scratch, kind, self.ktype, declared).map(DeclaredType::from)
+            }
+            scheme => (kind == Kind::Function
+                && self.ktype != scheme
+                && fits(types, scratch, self.ktype, scheme))
+            .then_some(scheme),
         };
-        let of_kind = |member: KType| {
-            retyped_kind(types, member.into()) == Some(kind)
-                && (kind != Kind::Tagged || constructor(member) == constructor(own))
-        };
-        let mut members = BumpVec::new_in(scratch);
-        match types.node(declared) {
-            TypeNode::Union { members: held } => members.extend(held.iter()),
-            _ => members.push(declared),
-        }
-        let target = members
-            .iter()
-            .copied()
-            .filter(|member| of_kind(*member) && fits(types, scratch, own, *member))
-            .reduce(|lower, member| {
-                if fits(types, scratch, lower, member) {
-                    lower
-                } else if fits(types, scratch, member, lower) {
-                    member
-                } else {
-                    meet(types, scratch, lower, member)
-                }
-            });
-        match target {
+        match ktype {
             Some(ktype) => Seen {
                 value: self.value,
-                ktype: ktype.into(),
+                ktype,
             },
             None => self,
         }
     }
 
     /// The value handed on as a value of its own, restamped at its seen type: a plain value takes
-    /// it as its handle over the same cells; a knot's data node, whose memo its knot cannot
-    /// restamp, is laid down as a plain value of its kind over its cells, each edge resolved to its
-    /// sibling.
+    /// it as its handle over the same cells; a knot member, whose node every holder shares, takes a
+    /// [`Retyped`] header over its bare member, or is that bare member where the seen type is its
+    /// own.
     pub fn restamped(self, writer: Writer<'cell>) -> Value<'cell, X> {
         if self.value.ktype() == self.ktype {
             return self.value;
         }
-        let target = self.concrete();
         match self.value {
-            Value::List(list) => Value::List(list.with_type(writer, target)),
-            Value::Dict(dict) => Value::Dict(dict.with_type(writer, target)),
-            Value::Record(record) => Value::Record(record.with_type(writer, target)),
-            Value::Tagged(tagged) => Value::Tagged(tagged.with_type(writer, target)),
-            other => match other.as_circular() {
-                Some((member, node)) => laid_down(writer, member, node, target),
+            Value::List(list) => Value::List(list.with_type(writer, self.concrete())),
+            Value::Dict(dict) => Value::Dict(dict.with_type(writer, self.concrete())),
+            Value::Record(record) => Value::Record(record.with_type(writer, self.concrete())),
+            Value::Tagged(tagged) => Value::Tagged(tagged.with_type(writer, self.concrete())),
+            Value::Type(value) => Value::Type(value.with_type(writer, self.concrete())),
+            other => match other.knot_member() {
+                Some(member) if member.ktype() == self.ktype => Value::Knotted(member),
+                Some(member) => Value::Retyped(Retyped::of(writer, member, self.ktype)),
                 None => unreachable!("only a value of a kind is seen at another type"),
             },
         }
@@ -451,7 +443,8 @@ fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X
         Value::Dict(dict) => Raw::Dict(dict.keys(), Cells::Plain(dict.cells())),
         Value::Record(record) => Raw::Record(record.names(), Cells::Plain(record.cells())),
         Value::Tagged(tagged) => Raw::Tagged(Cells::Plain(std::slice::from_ref(tagged.payload()))),
-        Value::Knotted(member) => {
+        Value::Knotted(_) | Value::Retyped(_) => {
+            let member = value.knot_member().expect("a knot member");
             let Resolved::Circular(node) = member.resolve() else {
                 return None;
             };
@@ -481,7 +474,7 @@ pub(super) fn raw_parts<'a, X: Knotted + 'a>(
     value: Value<'a, X>,
     out: &mut impl FnMut(Value<'a, X>),
 ) {
-    if matches!(value, Value::Knotted(_)) {
+    if value.knot_member().is_some() {
         return;
     }
     let Some((_, raw)) = raw(value) else {
@@ -504,19 +497,32 @@ enum Kind {
     Dict,
     Record,
     Tagged,
+    /// A function or a barrier over one.
+    Function,
+    /// A module, body-born or a view.
+    Module,
+    /// A quote's code.
+    Code,
+    /// A type value, typed by its kind.
+    Type,
 }
 
-/// `value`'s kind, plain or a data node; `None` for every other value.
+/// `value`'s kind, plain or a knot member; `None` for every other value.
 fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
     let node = match value {
         Value::List(_) => return Some(Kind::List),
         Value::Dict(_) => return Some(Kind::Dict),
         Value::Record(_) => return Some(Kind::Record),
         Value::Tagged(_) => return Some(Kind::Tagged),
-        Value::Knotted(member) => match member.resolve() {
-            Resolved::Circular(node) => node,
-            _ => return None,
-        },
+        Value::Type(_) => return Some(Kind::Type),
+        Value::Knotted(_) | Value::Retyped(_) => {
+            match value.knot_member().expect("a knot member").resolve() {
+                Resolved::Circular(node) => node,
+                Resolved::Function { .. } | Resolved::Barrier => return Some(Kind::Function),
+                Resolved::Module => return Some(Kind::Module),
+                Resolved::Code(_) => return Some(Kind::Code),
+            }
+        }
         _ => return None,
     };
     Some(match node {
@@ -527,29 +533,234 @@ fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
     })
 }
 
-/// The kind of value a retype to `declared` re-stamps at `declared` itself: a list, dict or
-/// record type for a container of that kind, and a nominal type or a family's application for a
-/// tagged value under its constructor. `None` for every other type, which a value satisfying it
-/// keeps its own type under.
-fn retyped_kind(types: &Types<'_, '_>, declared: Parametric) -> Option<Kind> {
+/// The type a value of `kind` and type `own` is retyped to where a holder declares `declared`, after
+/// the caller has checked it satisfies `declared`: the meet of what `declared`'s members — or
+/// `declared` alone — of that kind take it at. A container, a tagged value, a function, a quote's
+/// code or a type value is taken at each such member its type fits, a module at each application it fits, pinned
+/// ([`pinned_at_fit`]). `None` where none is.
+fn target(
+    types: &Types<'_, '_>,
+    scratch: BumpAllocator<'_>,
+    kind: Kind,
+    own: DeclaredType<KType>,
+    declared: KType,
+) -> Option<KType> {
+    if own == declared.into() {
+        return None;
+    }
+    let constructor = |handle: KType| match types.node(handle) {
+        TypeNode::ConstructorApply { constructor, .. } => constructor,
+        _ => handle,
+    };
+    let taken = |member: KType| {
+        if retyped_kind(types, member.into()) != Some(kind) {
+            return None;
+        }
+        match kind {
+            Kind::Module => pinned_at_fit(types, scratch, own.as_type().expect(SEEN), member),
+            Kind::Tagged if constructor(member) != constructor(own.as_type().expect(SEEN)) => None,
+            _ => fits(types, scratch, own, member).then_some(member),
+        }
+    };
+    let mut members = BumpVec::new_in(scratch);
     match types.node(declared) {
+        TypeNode::Union { members: held } => members.extend(held.iter()),
+        _ => members.push(declared),
+    }
+    members
+        .iter()
+        .filter_map(|member| taken(*member))
+        .reduce(|lower, member| {
+            if fits(types, scratch, lower, member) {
+                lower
+            } else if fits(types, scratch, member, lower) {
+                member
+            } else {
+                meet(types, scratch, lower, member)
+            }
+        })
+}
+
+/// The applications the signature type `carried` holds, in `scratch`: a meet's members, or
+/// `carried` alone.
+pub fn applications<'x>(
+    types: &Types<'_, '_>,
+    scratch: BumpAllocator<'x>,
+    carried: KType,
+) -> BumpVec<'x, KType> {
+    let mut applications = BumpVec::new_in(scratch);
+    match types.node(carried) {
+        TypeNode::SignatureMeet { members } => applications.extend(members.iter()),
+        _ => applications.push(carried),
+    }
+    applications
+}
+
+/// The type a module of signature `own` is retyped to at the signature type `declared`: each
+/// application `declared` holds, its head parameters pinned at what *fits* solves them to — the
+/// signature itself where it has none — and the meet of those for a meet. `None` where `own` fits
+/// one of them not, or `declared` is no signature type. The load pins an exact operand with it, so
+/// a header's type is the one the load computes.
+pub fn pinned_at_fit(
+    types: &Types<'_, '_>,
+    scratch: BumpAllocator<'_>,
+    own: KType,
+    declared: KType,
+) -> Option<KType> {
+    let (signature, pinned) = match types.node(declared) {
+        TypeNode::SignatureMeet { members } => {
+            let mut pinned = BumpVec::with_capacity_in(members.len(), scratch);
+            for member in members.iter() {
+                pinned.push(pinned_at_fit(types, scratch, own, member)?);
+            }
+            return Some(types.signature_meet(scratch, &pinned));
+        }
+        TypeNode::Signature { schema, .. } if schema.parameters.is_empty() => {
+            return fits(types, scratch, own, declared).then_some(declared);
+        }
+        TypeNode::Signature { .. } => (declared, None),
+        TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
+        _ => return None,
+    };
+    let mut pins = BumpVec::new_in(scratch);
+    pins.extend(pinned.iter().flat_map(|pins| pins.iter()));
+    let solution = fit_solution(types, scratch, own, signature, &pins).ok()?;
+    for (name, solved) in solution.iter() {
+        let name = BinderSymbol::Type(*name);
+        if pins.iter().all(|(pinned, _)| *pinned != name) {
+            pins.push((name, *solved));
+        }
+    }
+    Some(types.signature_apply(scratch, signature, &pins))
+}
+
+/// What *fits* solves the head parameters of `signature` to, under `pins`, for a module of type
+/// `own`: each concrete, since a module's type offers no stand-in to the solve. Refused where `own`
+/// does not fit the application. What both a retype's pins and a view's `from` are read from.
+pub fn fit_solution<'run: 'x, 'x>(
+    types: &Types<'_, 'run>,
+    scratch: BumpAllocator<'x>,
+    own: KType,
+    signature: KType,
+    pins: &[(BinderSymbol, KType)],
+) -> Result<Members<'x, TypeSymbol, KType>, FitsFailure<'run, 'x>> {
+    let solution = fits_application(types, scratch, own, signature, pins)?;
+    Ok(Members::from_pairs(
+        scratch,
+        solution.iter().map(|(name, solved)| {
+            let solved = types
+                .concrete(*solved)
+                .expect("a module's type offers no stand-in to what fits solves");
+            (*name, solved)
+        }),
+    ))
+}
+
+/// The type a value of type `own` is retyped to where a holder declares `declared`, after the
+/// caller has checked it satisfies `declared`: [`Seen::seen_at`]'s target, its kind read off
+/// `own`'s node, and `own` itself where nothing re-stamps — what a knot's tie births an annotated
+/// member at.
+pub fn retype_target(
+    types: &Types<'_, '_>,
+    scratch: BumpAllocator<'_>,
+    own: DeclaredType<KType>,
+    declared: KType,
+) -> DeclaredType<KType> {
+    node_kind(own.view(types).body)
+        .and_then(|kind| target(types, scratch, kind, own, declared))
+        .map_or(own, DeclaredType::from)
+}
+
+/// The kind of value a retype to `declared` re-stamps at `declared` itself: a list, dict or
+/// record type for a container of that kind, a nominal type or a family's application for a
+/// tagged value under its constructor, a function type or an expression shape for a function or a
+/// barrier, a signature type for a module, a code kind below `Code` for a quote's code, and a kind
+/// for a type value. `None` for every other type, which a value satisfying it keeps its own type
+/// under — `Module`, every module's type, and `Code`, every code kind's, among them, as `Any` is
+/// every value's.
+fn retyped_kind(types: &Types<'_, '_>, declared: Parametric) -> Option<Kind> {
+    if declared == KType::EMPTY_SIGNATURE.into() {
+        return None;
+    }
+    node_kind(types.node(declared))
+}
+
+/// Whether a retype to `declared` lays a header over a function, a module or a quote's code — the
+/// knot members a header stands over beside a data node: [`retyped_kind`] answers one of their
+/// kinds at `declared`, or at a member of the union `declared` is. What a content tree retypes.
+pub fn retypes_by_header(types: &Types<'_, '_>, declared: KType) -> bool {
+    let header = |member: KType| {
+        matches!(
+            retyped_kind(types, member.into()),
+            Some(Kind::Function | Kind::Module | Kind::Code)
+        )
+    };
+    match types.node(declared) {
+        TypeNode::Union { members } => members.iter().any(header),
+        _ => header(declared),
+    }
+}
+
+/// [`retyped_kind`] of a type's node.
+fn node_kind(node: TypeNode<'_, Parametric>) -> Option<Kind> {
+    match node {
         TypeNode::List { .. } => Some(Kind::List),
         TypeNode::Dict { .. } => Some(Kind::Dict),
         TypeNode::Record { .. } => Some(Kind::Record),
         TypeNode::ConstructorApply { .. } | TypeNode::SetMember { .. } => Some(Kind::Tagged),
+        TypeNode::KFunction { .. } | TypeNode::ExpressionShape { .. } => Some(Kind::Function),
+        TypeNode::Signature { .. }
+        | TypeNode::SignatureApply { .. }
+        | TypeNode::SignatureMeet { .. } => Some(Kind::Module),
+        TypeNode::Block
+        | TypeNode::Expression
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Literal
+        | TypeNode::Symbol
+        | TypeNode::Name
+        | TypeNode::Identifier
+        | TypeNode::TypeNameToken
+        | TypeNode::Keyword
+        | TypeNode::SigiledTypeExpr
+        | TypeNode::RecordType
+        | TypeNode::CodeNeeding { .. } => Some(Kind::Code),
+        TypeNode::OfKind(_) => Some(Kind::Type),
         _ => None,
     }
 }
 
 /// The static type of a value retyped to `declared` (an ascription's, a parameter's, a frame's
 /// return): exactly `declared` where every value satisfying it is retyped to it — a list, dict or
-/// record type, a family or its application, a newtype or a union's variant — and at most
-/// `declared` otherwise; a union keeps each variant's own type. It reads the predicate
-/// [`Seen::seen_at`] retypes by.
+/// record type, a family or its application, a newtype or a union's variant, a function type, an
+/// expression shape, a code kind below `Code`, a kind, or a signature type pinning every head
+/// parameter — and at most `declared`
+/// otherwise; a union keeps each variant's own type. A module is pinned afresh at each run where
+/// `declared` leaves a parameter unpinned, and two pins of one parameter are unordered. It reads
+/// the predicate [`Seen::seen_at`] retypes by.
 pub fn retyped_to(types: &Types<'_, '_>, declared: Parametric) -> Interval {
     match retyped_kind(types, declared) {
+        Some(Kind::Module) if !pins_every_parameter(types, declared) => under(declared),
         Some(_) => Interval::point(declared),
         None => under(declared),
+    }
+}
+
+/// Whether every application the signature type `declared` holds pins each of its head
+/// parameters, a lexical variable counting as a pin.
+fn pins_every_parameter(types: &Types<'_, '_>, declared: Parametric) -> bool {
+    let pinned = |application: Parametric| match types.node(application) {
+        TypeNode::Signature { schema, .. } => schema.parameters.is_empty(),
+        TypeNode::SignatureApply { signature, pins } => match types.node(signature) {
+            TypeNode::Signature { schema, .. } => (schema.parameters.iter())
+                .all(|(name, _)| pins.get(BinderSymbol::Type(*name).symbol()).is_some()),
+            _ => false,
+        },
+        _ => false,
+    };
+    match types.node(declared) {
+        TypeNode::SignatureMeet { members } => members.iter().all(pinned),
+        _ => pinned(declared),
     }
 }
 
@@ -572,37 +783,4 @@ pub fn under(upper: Parametric) -> Interval {
 /// `[Never, Any]`: what the load cannot bound.
 pub fn unknown() -> Interval {
     under(KType::ANY.into())
-}
-
-/// A knot's data node laid down as a plain value of its kind under `target`: each cell resolved
-/// through `member`, so an edge becomes the sibling it names; a dict's keys and a record's names
-/// shared with the node.
-fn laid_down<'cell, X: Knotted + 'cell>(
-    writer: Writer<'cell>,
-    member: X,
-    node: Circular<'cell, X>,
-    target: KType,
-) -> Value<'cell, X> {
-    let resolved =
-        |cells: &[Link<'cell, X>]| writer.fill(cells.len(), |at| cells[at].resolve(member));
-    match node {
-        Circular::List(list) => Value::List(List::weighed(writer, resolved(list.cells()), target)),
-        Circular::Dict(dict) => Value::Dict(Dict::weighed(
-            writer,
-            dict.keys(),
-            resolved(dict.cells()),
-            target,
-        )),
-        Circular::Record(record) => Value::Record(Record::weighed(
-            writer,
-            record.names(),
-            resolved(record.cells()),
-            target,
-        )),
-        Circular::Tagged(tagged) => Value::Tagged(Tagged::hold(
-            writer,
-            tagged.payload().resolve(member),
-            target,
-        )),
-    }
 }

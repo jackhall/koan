@@ -1,10 +1,12 @@
-//! Modules as values: the node a module is, the views `:|` and `:!` build, the coercion that
-//! births a view's members, and the binding a `USING … SCOPE` block enters on.
+//! Modules as values: the node a module is, the view `:|` builds, the coercion that births a
+//! view's members, the readers of a module through the type it carries, and the binding a
+//! `USING … SCOPE` block enters on.
 //!
 //! A module's node holds its self-signature, its members in layout order, its knot weight and its
 //! content — never an activation, since a view has no body to activate. Its content is what it is,
 //! not what it holds: a body-born module's code over what it captures, and a view's operator and
-//! application over its source. [`ModuleContent`] owns that recipe, and an opaque view's carriers
+//! application over its source's bare member and what its fit solved. [`ModuleContent`] owns that
+//! recipe, and an opaque view's carriers
 //! are keyed on it. It is the one content computed where the node is born, since a module keeps no
 //! captures to digest later. A module is always a one-node knot:
 //! a mention reached from a module binder's root is eager whatever body it sits in. [`birth`] is
@@ -16,16 +18,19 @@
 //! tables and a `USING` block's parameters all agree on, so a member is reached by index and never
 //! by a search through the value it sits in. [`layout`] owns that rule; nothing else here spells it.
 //!
-//! A **view** narrows: [`view::ascribe`] checks the source satisfies the signature, keeps only what
-//! the signature names, and lays a module node of its own down through the same door. Under `:!`
-//! the view's types are the source's, so every member is carried verbatim. Under `:|` each abstract
-//! member is hidden behind a carrier keyed on content, and every member is born **coerced** to it:
+//! A module seen at a signature type — a parameter's, a frame's return, `:!` — is a header over its
+//! bare node at the application it fits ([`Retyped`](crate::values::Retyped)), and every reader in
+//! [`layout`] reads it through the type it carries: a member at the type that application declares
+//! it at. A **view** narrows: [`view::ascribe`] checks the source satisfies the signature, keeps
+//! only what the signature names, and lays a module node of its own down through the same door.
+//! Each abstract member is hidden behind a carrier keyed on content, and every member is born
+//! **coerced** to it:
 //! data is re-tagged through the admission barrier, containers are rebuilt cell by cell, a nested
 //! module is re-viewed, and a function is wrapped in a [`Coerced`] barrier node a call will later
 //! go through.
 //!
 //! What this layer does *not* do is evaluate anything: dispatch evaluates
-//! `m :| Sig`, `m :! Sig` and `m.f` through the doors here.
+//! `m :| Sig` and `m.f` through the doors here.
 //!
 //! This module names its [knot vocabulary](crate::knot) through the facade and never its sibling
 //! [`function`](super::function).
@@ -152,10 +157,15 @@ impl ModuleContent {
         ModuleContent(body_content(code, captures.iter().copied()))
     }
 
-    /// A view's content: its `operator` and the `application` it was built at, over its `source`'s
-    /// digest.
-    pub fn view(operator: Operator, application: KType, source: ContentDigest) -> ModuleContent {
-        ModuleContent(view_content(operator, application, source))
+    /// A view's content: its `operator` and the `application` it was built at, over its source's
+    /// bare member's digest `source` and `from`, the substitution its fit solved, interned.
+    pub fn view(
+        operator: Operator,
+        application: KType,
+        source: ContentDigest,
+        from: KType,
+    ) -> ModuleContent {
+        ModuleContent(view_content(operator, application, source, Some(from)))
     }
 
     /// The key an opaque view's carriers are made under: its own content, so two views of equal

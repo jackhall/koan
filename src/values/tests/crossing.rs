@@ -9,7 +9,7 @@ use std::ptr;
 use crate::memory::{CellGraph, Prices, ReleaseAbsorption, Verdict};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
-use crate::values::{COPY_RATIO, Key, ValueFamily, verdict};
+use crate::values::{COPY_RATIO, Key, Knotted, ValueFamily, verdict};
 
 use super::{
     Dict, List, Record, Tagged, TestGraph, Value, copy, entry, held, pin, text, with_fixture,
@@ -391,7 +391,7 @@ fn a_copy_lays_down_each_part_at_the_type_its_holder_names() {
 /// A data node seen at a type other than its memo copies as a plain value of its kind at that
 /// type, as a retype lays it down, not as a member of a copy of its knot.
 #[test]
-fn a_data_node_seen_at_another_type_copies_as_a_plain_value() {
+fn a_data_node_seen_at_another_type_copies_under_a_header() {
     use super::{Holding, Link, NodeFamily, tie};
     use crate::values::Circular;
     with_fixture(|fixture| {
@@ -427,11 +427,16 @@ fn a_data_node_seen_at_another_type_copies_as_a_plain_value() {
                     .value()
                     .as_record()
                     .expect("a record");
-                let Some(Holding::Record(laid)) = super::held(copied, held.symbol()) else {
-                    panic!("the node copies as a plain record");
+                let Some(Holding::Retyped(header)) = super::held(copied, held.symbol()) else {
+                    panic!("the node copies under a header");
                 };
-                assert_eq!(laid.ktype(), narrow);
-                assert_eq!(laid.names(), &[value.symbol()]);
+                assert_eq!(header.ktype(), narrow.into());
+                assert_eq!(header.member().ktype(), memo.into());
+                let Some((_, Circular::Record(record))) = Holding::Retyped(header).as_circular()
+                else {
+                    panic!("the header is over a record node");
+                };
+                assert_eq!(record.names().len(), 2, "the node keeps every field");
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();

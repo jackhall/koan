@@ -94,7 +94,7 @@ as surprises, not scheduled.
   `KBirth::Block.module` is an `Option<KValue>`, so the `USING` path asks "is
   a module" three times; `Unlisted` is anchored at the use site for a type name
   and at the `OVER` list for a value name, which threads a `SourceRef` through
-  six signatures, and `surfacing: Option<Parametric>` rides through
+  six signatures, and `surfacing: Option<Interval>` rides through
   `visit`/`nested` with every caller but one passing `None`. Each wants a
   variant per meaning, or an orientation fixed once rather than passed.
 - **Write-once cells are guarded by `debug_assert` alone.**
@@ -183,14 +183,34 @@ as surprises, not scheduled.
   untouched while it restamps the dict at `MAP <carrier> -> …`, so a key read
   back from the view carries the source's scalar type rather than the carrier
   its dict type names.
-- **A `:!` view carries a nested module without its pinned parameters.** Under
-  `:!` the [coercion walk](../../src/knot/module/coerce.rs) carries a nested
-  module verbatim, so a head parameter its slot's application pins is no member
-  of it, though a top-level view lays each parameter down as one. With `inner`
-  declared at `Inner WITH {Elem = Number}` and defining no `Elem`, the load
-  types `v.inner` then `.Elem` at the pin and the run faults `has no member
-  Elem`. Re-viewing a nested module at its declared application would make the
-  pin a member.
+- **A member read through a signature leaving a head parameter unpinned is at
+  most its declared type.** A module retyped to `Counter` is re-stamped at
+  `Counter` pinned at what *fits* solves each parameter to, which each run
+  computes afresh, and two pins of one parameter are unordered, so over
+  `h :Counter` the load reads `h.zero` at most `Carrier`
+  ([static types](../../src/dispatch/README.md#static-types)), and exact only
+  where it knows the module's signature and pins it with the run's own
+  function. Carrying a pin over a path variable in a static type would make it
+  exact; that is a [type lattice](../../lattice/src/types/README.md) change,
+  blocked as paths are on how a pin is read through its bounds (below).
+- **A keyworded member through a view returns at most its declared return at
+  load.** Through a header, a lone closed head of the carried signature is
+  exactly its return under the call's solve
+  ([static types](../../src/dispatch/README.md#static-types)); through a `:|`
+  view the load reads the call at most the head's return, quantified or not,
+  though the run retypes the barrier's value to it. So with `v = (m :| Viewed)`
+  and `m`'s `GET` returning a field `Viewed`'s head hides,
+  `USING v SCOPE (ATTR (GET 1) y)` loads and faults `has no field y` at the run
+  where the same read through a header refuses the load.
+- **Whether `Module` and `Code` should re-stamp.** Every type that is one type
+  re-stamps a value at itself, `Type` included, but `Module` and `Code`, the
+  types every module and every quote satisfies, re-stamp nothing
+  ([the type memo](../../src/values/README.md#the-type-memo-and-satisfies)).
+  Were `Module` to re-stamp, a `-> Module` functor would hide all of its
+  result's members. A quantifier does not stand in: a `FOR ALL #{Out: Module}`
+  name only the return reads is solved to its bound, `Module`, so `-> Out`
+  would hide them too. Each such functor would declare its result's signature
+  or return `Any`. Undecided.
 - **A pin is read through its bounds covariantly, and ordered invariantly.**
   The [type lattice](../../lattice/src/types/README.md)'s `read_through` and
   `bound_above` read a variable a `SignatureApply` pin names through its bounds
@@ -218,7 +238,7 @@ as surprises, not scheduled.
   `ints :| Outer` over `MODULE ints = ((LET zero = 0) (LET deep = d))` with
   `MODULE d = ((LET v = [1]))` loads, then the run faults with "member deep
   cannot take its view's type: its module does not fit its view". A pin
-  `(Carrier | Str)` faults alike; a bare `Carrier` and the transparent `:!` run.
+  `(Carrier | Str)` faults alike; a bare `Carrier` and a `:!` run.
 - **A quote reading a view's quantified member loads, then faults.** Over the
   `Mapper` and `nums` of the dispatch test
   `a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_parameters`,

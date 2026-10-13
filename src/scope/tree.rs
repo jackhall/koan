@@ -4,7 +4,8 @@
 //! A tree's nodes are content — the parts the run digests — and its leaves are what the load cannot
 //! see. A **body** is a `MODULE` or `GROUP` body over the trees of what it composes, a **knot** is
 //! closures tied into one knot, a **view** is an ascription's operator and application over its
-//! operand's tree, and a **digest** is a value the load computes outright. A **leaf** is keyed on
+//! operand's tree, a **retype** is a knot member under a header over its bare member's tree, and a
+//! **digest** is a value the load computes outright. A **leaf** is keyed on
 //! the binder that names it and a value-member chain read through it, and on what says which run
 //! of the binder's body holds it: a `MODULE` or `GROUP` body's captures, or the substitution of a
 //! call the load unfolds. A leaf no binder names is unlike every tree, itself included.
@@ -27,7 +28,7 @@ use crate::type_lattice::KType;
 use crate::values::ContentDigest;
 use crate::values::digest::{
     DigestHasher, Operator, Tag, body_content, edge_at, function_content, knot_digest, lone_member,
-    member_digest, view_content,
+    member_digest, retyped_content, view_content,
 };
 
 use super::shape::{BodyShape, Site, Slot};
@@ -50,10 +51,19 @@ pub enum Tree<'graph> {
         index: u32,
         print: Print,
     },
-    /// An ascription's view: its operator and the application it is built at, over its operand.
+    /// An opaque view: its operator and the application it is built at, over its operand, digested
+    /// over the operand's bare member and what its fit solves.
     View {
         operator: Operator,
         application: KType,
+        source: &'graph Tree<'graph>,
+        print: Print,
+    },
+    /// A value retyped to `carried` over its bare member's tree: a knot member under a header.
+    /// Where the load knows the source's own type it is built only where `carried` differs from
+    /// it; otherwise it keys an open source at the type it was retyped to.
+    Retyped {
+        carried: KType,
         source: &'graph Tree<'graph>,
         print: Print,
     },
@@ -181,15 +191,38 @@ impl<'graph> Tree<'graph> {
         }
     }
 
-    /// The view `operator` builds at `application` over `source`.
-    pub fn view(operator: Operator, application: KType, source: &'graph Tree<'graph>) -> Self {
-        let print = Print::over(std::iter::once(source.print()), |digests| {
+    /// The view `operator` builds at `application` over `source`, whose fit solves `from` where
+    /// the load knows it: digested over the source's bare member, and open where `from` is unknown.
+    pub fn view(
+        operator: Operator,
+        application: KType,
+        source: &'graph Tree<'graph>,
+        from: Option<KType>,
+    ) -> Self {
+        let print = Print::over(std::iter::once(source.bare().print()), |digests| {
             let source = digests.next().expect("the source's print");
-            lone_member(view_content(operator, application, source))
+            lone_member(view_content(operator, application, source, from))
         });
+        let print = match (print, from) {
+            (Print::Closed(digest), None) => Print::Open(digest),
+            (print, _) => print,
+        };
         Tree::View {
             operator,
             application,
+            source,
+            print,
+        }
+    }
+
+    /// `source` retyped to `carried`, as the run digests a member under a header.
+    pub fn retyped(carried: KType, source: &'graph Tree<'graph>) -> Self {
+        let print = Print::over(std::iter::once(source.print()), |digests| {
+            let source = digests.next().expect("the source's print");
+            retyped_content(carried.into(), source)
+        });
+        Tree::Retyped {
+            carried,
             source,
             print,
         }
@@ -265,6 +298,7 @@ impl<'graph> Tree<'graph> {
             Tree::Body { print, .. }
             | Tree::Knot { print, .. }
             | Tree::View { print, .. }
+            | Tree::Retyped { print, .. }
             | Tree::Leaf(Leaf::Bound { print, .. }) => print,
             Tree::Leaf(Leaf::Unnamed(_)) => Print::Unnamed,
         }
@@ -273,6 +307,14 @@ impl<'graph> Tree<'graph> {
     /// Whether the tree holds no leaf, a call's key included.
     pub fn closed(&self) -> bool {
         matches!(self.print(), Print::Closed(_))
+    }
+
+    /// The tree of the bare member behind a header, or this tree where it is none.
+    pub fn bare(&self) -> Tree<'graph> {
+        match self {
+            Tree::Retyped { source, .. } => **source,
+            _ => *self,
+        }
     }
 
     /// The digest the run computes for the value this tree's expression evaluates to, where the
@@ -352,6 +394,13 @@ impl fmt::Debug for Tree<'_> {
                 .debug_struct("View")
                 .field("operator", operator)
                 .field("application", application)
+                .field("source", source)
+                .finish(),
+            Tree::Retyped {
+                carried, source, ..
+            } => f
+                .debug_struct("Retyped")
+                .field("carried", carried)
                 .field("source", source)
                 .finish(),
             Tree::Leaf(Leaf::Bound { binder, chain, .. }) => f

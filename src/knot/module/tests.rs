@@ -15,8 +15,6 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, SigSchema};
 use crate::values::Types;
 
-use super::layout;
-
 /// The module bound under `name`.
 pub(super) fn module<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
@@ -42,6 +40,8 @@ pub(super) fn member<'graph, 'cell>(
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let name: BinderSymbol = fixture.name(name);
-    layout::member(view, name, types, scratch)
-        .unwrap_or_else(|| panic!("the module holds `{name:?}`"))
+    let node = view.module().expect("a module");
+    let (index, _) = crate::elaborate::schema_member(&schema(node.ktype(), types), scratch, name)
+        .unwrap_or_else(|| panic!("the module holds `{name:?}`"));
+    node.members()[index]
 }

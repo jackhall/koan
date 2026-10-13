@@ -55,6 +55,9 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
             match node.payload() {
                 Node::Function(function) => {
                     out(function.ktype().into());
+                    if function.declared() != function.ktype() {
+                        out(function.declared().into());
+                    }
                     if let Some(registered) = function.registered() {
                         out(registered.shape.into());
                     }

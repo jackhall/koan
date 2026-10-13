@@ -109,10 +109,10 @@ fn a_view_over_a_list_of_modules_of_two_signatures_lays_each_nested_view_at_load
     assert_eq!(branch_after(&source), 0);
 }
 
-/// A view of a transparent view: the source's signature declares the nested module at an
+/// A view of a module retyped by `:!`: the header's application declares the nested module at an
 /// application fixing each parameter, which the load re-views as the run does the module.
 #[test]
-fn a_view_of_a_transparent_view_lays_its_nested_view_at_load() {
+fn a_view_of_a_retyped_module_lays_its_nested_view_at_load() {
     let source = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
                   SIG Outer FOR ALL #[Carrier] = \
                   #[(VAL zero :Carrier) (VAL inner :(Inner WITH {Elem = Carrier}))]\n\
@@ -133,19 +133,18 @@ const DEEP: &str = "SIG Deep FOR ALL #[Depth] = #[(VAL v :Depth)]\n\
                     MODULE a = ((LET Elem = Number) (LET item = 5) (LET deep = d))\n\
                     MODULE ints = ((LET zero = 0) (LET inner = a))\n";
 
-/// A module two deep under a transparent view: the load reads what each carries off the view's
-/// source.
+/// A module two deep under a header: the load reads what each carries off the header's source.
 #[test]
-fn a_module_two_deep_under_a_transparent_view_lays_its_nested_views_at_load() {
+fn a_module_two_deep_under_a_header_lays_its_nested_views_at_load() {
     let source = format!(
         "{DEEP}LET t = (ints :! (Outer WITH {{Carrier = Number}}))\nLET m = (t :| Outer)\n"
     );
     assert_eq!(branch_after(&source), 0);
 }
 
-/// A transparent view of a transparent view carries each member as its source does.
+/// A retype of a retyped module is one header over its bare member.
 #[test]
-fn a_transparent_view_of_a_transparent_view_lays_its_nested_views_at_load() {
+fn a_retype_of_a_retyped_module_lays_its_nested_views_at_load() {
     let source = format!(
         "{DEEP}LET t = (ints :! (Outer WITH {{Carrier = Number}}))\nLET u = (t :! Outer)\n\
          LET m = (u :| Outer)\n"
@@ -160,9 +159,9 @@ fn a_view_of_an_opaque_view_lays_its_nested_views_at_load() {
     assert_eq!(branch_after(&source), 0);
 }
 
-/// A module in a record, a list or a dict under a transparent view.
+/// A module in a record, a list or a dict under a header.
 #[test]
-fn a_container_of_modules_under_a_transparent_view_lays_its_nested_views_at_load() {
+fn a_container_of_modules_under_a_header_lays_its_nested_views_at_load() {
     let inner = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
                  MODULE a = ((LET Elem = Number) (LET item = 5))\n";
     for (slot, value) in [
@@ -225,9 +224,9 @@ fn a_view_inside_a_record_literal_over_an_open_slot_runs() {
     branch_after(source);
 }
 
-/// A transparent view over a module the load types exactly lays its bindings at load.
+/// A retype of a module the load types exactly lays the types its members are read at at load.
 #[test]
-fn a_transparent_view_lays_its_types_at_load() {
+fn a_retype_lays_its_types_at_load() {
     let source = format!("{DEEP}LET t = (ints :! (Outer WITH {{Carrier = Number}}))\n");
     assert_eq!(branch_after(&source), 0);
 }

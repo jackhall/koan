@@ -214,10 +214,10 @@ fn a_copy_digests_as_its_source() {
                 );
                 let plain = Record::new(writer, &[(value, Value::Number(1.0))], types, scratch);
                 let fresh = Record::new(writer, &[(held, Value::Record(plain))], types, scratch);
-                assert_eq!(
+                assert_ne!(
                     Value::Record(fresh).digest(types, scratch),
                     digest,
-                    "the node digests as the plain value the door shows"
+                    "the node digests as its knot, not as the plain value the door shows"
                 );
             })
             .unwrap();

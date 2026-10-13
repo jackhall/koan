@@ -32,7 +32,10 @@ digests, as a type's digest is composed from its children's; one demand
 digests a part shared many times over once. A module is the exception: it
 keeps no captures to digest later, so its content is digested where it is
 built. The digest covers what a value's type shows of it, as a copy of the
-value lays it down, so a copy keeps its digest. Values that reach
+value lays it down, so a copy keeps its digest. A module, a function or a quote
+retyped to a type other than its own digests as its own content beside that
+type, so a signature that hides a member never hides the capture that brands
+it. Values that reach
 one another — closures that call one another, a ring of containers a knot ties —
 digest as one strongly connected component, as a recursive type group does.
 Where a value sits in memory, which frame it was copied into, and the name a
@@ -84,12 +87,17 @@ listing one the body already reads changes nothing.
 An opaque ascription, `m :| Counter`, hides each head parameter the application
 leaves unpinned behind a **carrier**. A carrier is keyed on content — the
 opaque view's own, which is its operator and signature application over the
-ascribed module's digest, under the parameter's name — and never on when or
-how often the ascription is evaluated. A carrier lives in the
+digest of the module it views and what *fits* solves each parameter to, under
+the parameter's name — and never on when or how often the ascription is
+evaluated. The module it views is the one behind any retype: a view reads only
+its signature's members, at its own types, so `ints :| Counter` and
+`m :| Counter`, `m` being `ints` passed through a parameter `m :Counter`, are
+one view with one carrier. A carrier lives in the
 [branch](../lattice/src/types/identity.md#storage-a-root-and-its-branches) of
 the region its view is tied in, so a view minted at each hop of a loop is
 released with the hop. A transparent
-ascription, `m :! Counter`, shows what each parameter solves to.
+ascription, `m :! Counter`, is no view but a retype: it shows what each
+parameter solves to, and hides every member `Counter` does not declare.
 
 A carrier hides the parameter's bound too. Under
 `SIG Counter FOR ALL #{Carrier: Number}`, the bound decides which modules fit,
@@ -152,7 +160,8 @@ what the load cannot see:
 |---|---|
 | `MODULE n OVER #[x Elt] = (…)` | a **body**: its resolved code over the trees of what it captures |
 | a closure, or closures tied into one knot | a **knot**: each closure's code and instance solution over the trees of what it captures, a closure reaching a fellow by its index |
-| `e :\| Counter`, `e :! Counter` | a **view**: the operator and the signature application over the tree of `e` |
+| `e :\| Counter` | a **view**: the operator, the signature application and what *fits* solves, over the tree of `e` behind any retype |
+| `e :! Counter`, and wherever the run retypes a module — an annotated binder, an unfolded call's parameter or return, a member read | a **retype**: the signature application pinned at what *fits* solves, over the tree of `e` |
 | a value the load can compute, such as a literal | its digest |
 | a name bound by `LET m = e` or `MODULE m = …` | the tree of what it is bound to |
 | a member chain, `e.inner` | through a body, the tree of the member's binding |
@@ -166,7 +175,7 @@ anything but closures — a data node, a quote — is a leaf.
 
 A container literal is no node either, so a tree's **horizon** stops at a
 container, a parameter and a call the load does not unfold. A module past it —
-`inner` in `{inner = (a :! Inner)}` — is known only by the exact type the load
+`inner` in `{inner = (a :| Inner)}` — is known only by the exact type the load
 gives it, and where that type is a view's, the view's own members only as its
 signature declares them. A member declared at an application that fixes each
 parameter of its signature is read as a module of that application, at any

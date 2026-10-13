@@ -90,7 +90,9 @@ fn member_through(
 ) -> Option<TypeAt> {
     if !matches!(
         types.node(signature),
-        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
+        TypeNode::Signature { .. }
+            | TypeNode::SignatureApply { .. }
+            | TypeNode::SignatureMeet { .. }
     ) {
         return None;
     }

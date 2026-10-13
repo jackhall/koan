@@ -80,7 +80,7 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) attr: StaticName<KeywordSymbol>,
     /// The opaque ascription operator `:|`.
     pub(crate) opaque: StaticName<KeywordSymbol>,
-    /// The transparent ascription operator `:!`.
+    /// The retyping ascription operator `:!`.
     pub(crate) transparent: StaticName<KeywordSymbol>,
     /// The connector of a code kind and the names its code needs, `Expression NEEDING #[y]`.
     pub(crate) needing: StaticName<KeywordSymbol>,

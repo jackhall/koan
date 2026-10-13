@@ -66,11 +66,12 @@
 //!
 //! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
 //! binder is exactly the signature the run ties where every member is exact ([`module_signature`]),
-//! else at most `Module`. An ascription is a view where the run builds one (`:|` always, `:!` of a
-//! signature type to one; [`view::views`]): refused where every run's view door refuses it — an
-//! operand that can never be a module, a closed type that is no one application of a signature — or
-//! where an exact operand can never fit it; exactly the view's signature under `:!` over an exact
-//! operand, and at most the type otherwise. A member read `m.f` is typed by its
+//! else at most `Module`. A `:|` ascription is a view: refused where every run's
+//! view door refuses it — an operand that can never be a module, a closed type that is no one
+//! application of a signature — or where an exact operand can never fit it; exactly the view's
+//! signature over a tree the load sees all of, and at most the type otherwise. A `:!` is a retype,
+//! held to its type as an annotation is; a module exact at a closed type is exactly the
+//! application the run pins it at ([`pinned_at_fit`]), and refused where it fits none. A member read `m.f` is typed by its
 //! [rule](super::rules), which reads the member off the operand's signature, and refused where a
 //! signature its lower end is lacks the member. A `USING … SCOPE` body is typed as a block, each
 //! surfaced name at the member read it names; a key it surfaces is a spread typed by the one head
@@ -113,11 +114,12 @@
 //! run's doors check in debug builds.
 //!
 //! The pass reads each `:|` ascription's operand as a [content tree](crate::scope::Tree) —
-//! [`trees`] — and the cell records it by the ascription's site. Over a closed tree it lays every
-//! type the view door computes from types alone ([`view_types`](view::view_types)) in the root,
-//! each nested module's re-view among them, read off what the tree shows each member carries
-//! ([`views`]); at an exact `:!` likewise. The run's door checks in debug builds that the tree
-//! reads the operand's digest.
+//! [`trees`] — and the cell records the view's tree by the ascription's site. Over a closed tree it
+//! lays every type the view door computes from types alone
+//! ([`opaque_view_types`](view::opaque_view_types)) in the root, each nested module's re-view among
+//! them, read off what the tree shows each member carries ([`views`]); at an exact `:!`, the types
+//! a member read through the header reads. The run's door checks in debug builds that the tree
+//! reads the view's digest.
 //!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
@@ -126,10 +128,7 @@
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
-use crate::knot::module::ModuleContent;
-use crate::knot::module::view::{
-    self, Ascription, ViewTypes, opaque_view_types, transparent_view_types,
-};
+use crate::knot::module::view::{self, Ascription, ViewTypes, opaque_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
@@ -154,10 +153,9 @@ use crate::type_lattice::{
     scheme_bound_above, scheme_return, scheme_slots, select_by_class, shape_return, shape_slots,
     solving_slots,
 };
-use crate::values::digest::Operator;
 use crate::values::{
-    ConstructionRefused, Types, Value, construction, dict_type, list_type, record_type, retyped_to,
-    under, unknown,
+    ConstructionRefused, Types, Value, construction, dict_type, list_type, pinned_at_fit,
+    record_type, retype_target, retyped_to, under, unknown,
 };
 
 mod paths;
@@ -169,7 +167,7 @@ use trees::Written;
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
 use super::one_name;
-use super::rules::{self, Given, Lacks};
+use super::rules::{self, Given, Lacks, member_read};
 use super::select;
 
 /// Give every value expression and value binder of `root`, and of every shape nested in it, a
@@ -401,7 +399,8 @@ impl Known {
 struct Judgement<'x> {
     candidate: Candidate,
     known: Known,
-    /// Whether the candidate is a `USING … SCOPE` block's surfaced head, whose return is at most.
+    /// Whether the candidate is a `USING … SCOPE` block's surfaced head whose return is at most:
+    /// any but a closed signature head at a type.
     surfaced: bool,
     verdict: Verdict,
     intervals: Option<&'x [Interval]>,
@@ -504,12 +503,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Type the shape at chain level `level` — its code first — then every shape nested in it, and
     /// fix its cell last, once each block and module body it runs has folded its class in. A
-    /// `USING … SCOPE` body's `surfacing` is the static upper end of the module it surfaces, which
+    /// `USING … SCOPE` body's `surfacing` is the static type of the module it surfaces, which
     /// types its surfaced names.
     fn visit(
         &mut self,
         level: usize,
-        surfacing: Option<Parametric>,
+        surfacing: Option<Interval>,
     ) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         for slot in 0..shape.slots() {
@@ -636,7 +635,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         nested: &'graph BodyShape<'graph>,
         roots_chain: bool,
-        surfacing: Option<Parametric>,
+        surfacing: Option<Interval>,
     ) -> Result<Option<Interval>, ShapeError<'graph>> {
         self.push(nested, roots_chain);
         let callable = nested.kind() == ShapeKind::Callable;
@@ -987,19 +986,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// A slot's static type before any unit runs: a registration's function type, a type name's
     /// type value's, a parameter's declared type as its body reads it, a name a `USING … SCOPE`
-    /// body surfaces from a module at most `surfacing` the member it names, and `[Never, Any]` for
-    /// a local its unit sets.
-    fn seeded(&self, level: usize, slot: Slot, surfacing: Option<Parametric>) -> Bound {
+    /// body surfaces from a module typed `surfacing` the member read it names ([`member_read`]),
+    /// and `[Never, Any]` for a local its unit sets.
+    fn seeded(&self, level: usize, slot: Slot, surfacing: Option<Interval>) -> Bound {
         let shape = self.chain[level].shape;
-        if let (Some(upper), BinderSymbol::Value(_)) = (surfacing, shape.slot_name(slot))
+        if let (Some(surfacing), BinderSymbol::Value(_)) = (surfacing, shape.slot_name(slot))
             && shape.position_of(slot) == Position::PARAMETER
         {
             let name = shape.slot_name(slot);
-            return match signature_member(self.types, self.scratch, upper, name) {
+            return match signature_member(self.types, self.scratch, surfacing.upper, name) {
                 Some(SignatureMember {
                     declared: DeclaredType::Type(declared),
                     unpinned: None,
-                }) => DeclaredType::Type(under(declared)),
+                }) => DeclaredType::Type(member_read(self.types, surfacing, declared)),
                 Some(SignatureMember {
                     declared: DeclaredType::Scheme(scheme),
                     unpinned: None,
@@ -1121,11 +1120,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     typed => typed,
                 };
                 self.chain[level].binders[member.index()] = typed;
-                // A function's retype is the identity, so it keeps its own exact type.
+                // The tie births an annotated member at its annotation, so a mention through a
+                // fellow's edge reads the binder at its retype, as the slot does.
                 if let (DeclaredType::Type(typed), Some(annotation)) =
                     (typed, shape.annotation(*member))
                 {
-                    self.annotated(level, *member, annotation, typed)?;
+                    let held = self.annotated(level, *member, annotation, typed)?;
+                    self.chain[level].binders[member.index()] = DeclaredType::Type(held);
                 }
             }
         }
@@ -1390,12 +1391,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.read_declared(level, mention.coordinate).as_type()
             }
             Form::Member { operand, label, .. } => {
-                let upper = self.peeked(level, operand)?.upper;
-                match signature_member(self.types, self.scratch, upper, label)? {
+                let operand = self.peeked(level, operand)?;
+                match signature_member(self.types, self.scratch, operand.upper, label)? {
                     SignatureMember {
                         declared: DeclaredType::Type(declared),
                         unpinned: None,
-                    } => Some(under(declared)),
+                    } => Some(member_read(self.types, operand, declared)),
                     _ => None,
                 }
             }
@@ -1809,9 +1810,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// `typed`, the static type of a call, ascription or member read at `site` of the shape at
-    /// `level` the evaluator reads as `form`, where its tree is a view: exactly the view's signature
-    /// over a closed tree, and at most the view's application otherwise. Any other part's, or one
-    /// that can never be a module's, as it is.
+    /// `level` the evaluator reads as `form`, where its tree is a view or a header: exactly the
+    /// view's signature over a closed tree and the header's carried type over a closed header, and
+    /// at most the view's application otherwise. Any other part's, or one that can never be a
+    /// module's, as it is.
     fn viewed_tree(
         &mut self,
         level: usize,
@@ -1832,22 +1834,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Written::Part(site) => self.chain[level].rhs.get(&site).copied(),
             Written::Node(_) => None,
         };
-        let Tree::View {
-            operator,
-            application,
-            source,
-            ..
-        } = self.tree_form(trees::Scope::Chain(level), form, written, named)?
-        else {
+        let tree = self.tree_form(trees::Scope::Chain(level), form, written, named)?;
+        // A closed header is exactly the type the load computed for it with the run's own fit.
+        if let Tree::Retyped { carried, .. } = tree
+            && tree.closed()
+        {
+            return Ok(Interval::point(carried.into()));
+        }
+        let Tree::View { application, .. } = tree else {
             return Ok(typed);
         };
-        if operator == Operator::Opaque
-            && let Some(view) = source
-                .digest()
-                .and_then(|digest| opaque_view_types(None, application, digest, types, scratch))
-                .map(|viewed| viewed.view)
-        {
-            return Ok(Interval::point(view.into()));
+        if let Some(viewed) = self.view_of(tree, written.site())? {
+            return Ok(Interval::point(viewed.view.into()));
         }
         Ok(match types.concrete(typed.upper) {
             Some(upper) if typed.lower == KType::NEVER.into() && !typed.is_exact() => {
@@ -1986,11 +1984,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// `<value> :! <Type>` or `<module> :| <Sig>`: a view where the run builds one
-    /// ([`view::views`], read over the operand's static upper end and the type, through their
-    /// bounds), else the value held to its type ([`held`](Self::held)): that type, exactly where
-    /// the retype makes it so ([`retyped_to`]), settled where the operand's static upper end lies
-    /// under it, and refused where the two meet at `Never`.
+    /// `<value> :! <Type>` or `<module> :| <Sig>`: under `:|` a view ([`viewed`](Self::viewed)),
+    /// and under `:!` the value held to its type ([`held`](Self::held)), as an annotation holds it.
     fn ascribe(
         &mut self,
         level: usize,
@@ -2003,46 +1998,42 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let (types, scratch) = (self.types, self.scratch);
         let declared = self.declared(level, &ascribed.value);
         let typed = self.part_at(level, &operand_part.value, declared)?;
-        let operand = bound_above(types, scratch, typed.upper);
-        let bounded = declared.map_or(KType::ANY, |declared| bound_above(types, scratch, declared));
-        if view::views(types, mode, operand, bounded) {
+        if mode == Ascription::Opaque {
             // An opaque view hides each unpinned head parameter behind a carrier it mints.
-            if mode == Ascription::Opaque {
-                self.chain[level].minting.push(Site::of_node(node));
-                let tree = self.tree(level, &operand_part.value)?;
-                let tree = resident(self.writer, tree);
-                let site = Site::of_node(node);
-                self.chain[level].trees.push((site, tree));
-                // Over a closed tree the load lays every type the view door computes from types
-                // alone, so the run's view interns none of its own.
-                if let (Some(digest), Some(signature)) = (
-                    tree.digest(),
-                    declared.and_then(|declared| types.concrete(declared)),
-                ) {
-                    let exact = typed
-                        .is_exact()
-                        .then(|| types.concrete(typed.upper))
-                        .flatten();
-                    // What the operand carries, read off its tree, else by its exact type.
-                    let seen = self.carried_type(views::Carried::Tree(*tree), site)?;
-                    debug_assert!(
-                        exact.is_none() || seen.is_none() || exact == seen,
-                        "a tree reads the type its operand carries"
-                    );
-                    let carried = match (seen, exact) {
-                        (None, Some(exact)) => views::Carried::Typed(exact),
-                        _ => views::Carried::Tree(*tree),
-                    };
-                    let key =
-                        ModuleContent::view(Operator::Opaque, signature, digest).carrier_key();
-                    let held = seen.or(exact);
-                    if let Ok(viewed) = view::view_types(held, signature, mode, key, types, scratch)
-                    {
-                        self.lay(&viewed, carried, site)?;
-                    }
+            self.chain[level].minting.push(Site::of_node(node));
+            let tree = self.tree(level, &operand_part.value)?;
+            let tree = resident(self.writer, tree);
+            let site = Site::of_node(node);
+            let signature = declared.and_then(|declared| types.concrete(declared));
+            if let Some(signature) = signature {
+                let viewed = self.view_tree(signature, *tree, site)?;
+                self.chain[level]
+                    .trees
+                    .push((site, resident(self.writer, viewed)));
+            }
+            // Over a closed tree the load lays every type the view door computes from types
+            // alone, so the run's view interns none of its own.
+            if let (Some(bare), Some(signature)) = (tree.bare().digest(), signature) {
+                let exact = typed
+                    .is_exact()
+                    .then(|| types.concrete(typed.upper))
+                    .flatten();
+                // What the operand carries, read off its tree, else by its exact type.
+                let seen = self.carried_type(views::Carried::Tree(*tree), site)?;
+                debug_assert!(
+                    exact.is_none() || seen.is_none() || exact == seen,
+                    "a tree reads the type its operand carries"
+                );
+                let carried = match (seen, exact) {
+                    (None, Some(exact)) => views::Carried::Typed(exact),
+                    _ => views::Carried::Tree(*tree),
+                };
+                let held = seen.or(exact);
+                if let Some(viewed) = opaque_view_types(held, signature, bare, types, scratch) {
+                    self.lay(&viewed, carried, site)?;
                 }
             }
-            return self.viewed(level, node, mode, typed, declared);
+            return self.viewed(level, node, typed, declared);
         }
         let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
         held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
@@ -2061,18 +2052,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// | an operand that can never be a module | refused: no module |
     /// | no type | unknown |
     /// | a closed type the view door never takes | refused: no signature |
-    /// | an operand or a type a run may not view | at most the type |
     /// | an exact operand that never fits the type | refused |
-    /// | an exact operand under `:!`, a closed type | exactly the view's signature |
     /// | otherwise | at most the type |
     ///
     /// Signatures meet to a set, never to `Never`, so only an exact operand can be refused for not
-    /// fitting. Settled where the operand's upper end fits the type.
+    /// fitting. Settled where the operand's upper end fits the type. A view over a tree the load
+    /// sees all of is exact at the view's signature ([`viewed_tree`](Self::viewed_tree)).
     fn viewed(
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-        mode: Ascription,
         typed: Interval,
         declared: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'graph>> {
@@ -2106,30 +2095,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if fits(types, scratch, typed.upper, declared) {
             self.chain[level].settled.push(Site::of_node(node));
         }
-        let Some(exact) = typed
+        let exact = typed
             .is_exact()
             .then(|| types.concrete(typed.upper))
-            .flatten()
-        else {
-            return Ok(under(declared));
-        };
-        if !fits(types, scratch, exact, declared) {
+            .flatten();
+        if let Some(exact) = exact
+            && !fits(types, scratch, exact, declared)
+        {
             return Err(ShapeError::AscriptionNeverSatisfied {
                 value: exact,
                 ascribed,
                 at: node.source,
             });
         }
-        let viewed = types
-            .concrete(declared)
-            .filter(|_| mode == Ascription::Transparent)
-            .and_then(|declared| transparent_view_types(exact, declared, types, scratch));
-        let Some(viewed) = viewed else {
-            return Ok(under(declared));
-        };
-        // The load lays what the run's view reads, so it interns nothing of its own.
-        self.lay_declared(&viewed);
-        Ok(Interval::point(viewed.view.into()))
+        Ok(under(declared))
     }
 
     /// `LET <name> <type> = <value>`, the binder at `member` of the shape at `level`, whose value
@@ -2155,8 +2134,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// A value of the static type `typed` held to the type part `part`: that type, exactly where
     /// the retype makes it so ([`retyped_to`]), and settled at `site` where `typed`'s upper end
-    /// lies under it — where an exact function's, that function's own type. Where the two meet at
-    /// `Never`, both read through their bounds.
+    /// lies under it. Where the two meet at `Never`, both read through their bounds. A module exact
+    /// at a closed type is exactly what the run retypes it to, pinned by the run's own
+    /// [`pinned_at_fit`], and refused where it fits a signature type not at all.
     fn held(
         &mut self,
         level: usize,
@@ -2177,10 +2157,28 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         if fits(types, scratch, typed.upper, declared) {
             self.chain[level].settled.push(site);
-            // A function's retype is the identity, so an exact one keeps its own type.
-            if typed.is_exact() && matches!(types.node(declared), TypeNode::KFunction { .. }) {
-                return Ok(typed);
+        }
+        let exact = typed
+            .is_exact()
+            .then(|| types.concrete(typed.upper))
+            .flatten()
+            .filter(|exact| exact.kind_of(types) == KKind::Signature);
+        if let (Some(exact), Some(closed)) = (exact, types.concrete(declared)) {
+            // Signatures meet to a set, never to `Never`, so only an exact module can be refused.
+            let signature = matches!(
+                types.node(closed),
+                TypeNode::Signature { .. }
+                    | TypeNode::SignatureApply { .. }
+                    | TypeNode::SignatureMeet { .. }
+            );
+            if signature && pinned_at_fit(types, scratch, exact, closed).is_none() {
+                return Err((exact, closed));
             }
+            let carried = retype_target(types, scratch, exact.into(), closed)
+                .as_type()
+                .expect("a module's type is a type");
+            self.lay_carried(carried);
+            return Ok(Interval::point(carried.into()));
         }
         Ok(retyped_to(types, declared))
     }
@@ -2201,7 +2199,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(unknown());
         };
         Ok(self
-            .nested(level, body, false, Some(typed.upper))?
+            .nested(level, body, false, Some(typed))?
             .unwrap_or_else(unknown))
     }
 
@@ -3038,22 +3036,31 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
                 ruled = Some(typed.returns);
             }
-            // A surfaced key's list may hold functions admitting more than the head it is typed
-            // by — a view carries every overload its member admits — so it is at most *maybe*,
-            // and *never* only where one body definition is the whole of the key.
+            // A surfaced key's list is exactly its head where one head is the whole of the key: a
+            // body definition, or a closed signature head, which every function a header or view
+            // offers there is retyped to. Otherwise it may hold functions admitting more than the
+            // head it is typed by, so it is at most *maybe*.
             let surfaced = self.surfaced(level, *candidate);
-            if let Some(heads) = surfaced {
-                let exact = matches!(heads, [SurfacedHead::Body { .. }]);
+            let exact = surfaced.is_some_and(|heads| match heads {
+                [SurfacedHead::Body { .. }] => true,
+                [SurfacedHead::Signature { .. }] => matches!(known, Known::Closed(_)),
+                _ => false,
+            });
+            if surfaced.is_some() {
                 verdict = match verdict {
                     Verdict::Never if exact => Verdict::Never,
                     _ => Verdict::Maybe,
                 };
             }
+            // A header's or view's frame retypes its value to the closed signature head's return,
+            // a scheme's under the selection's own solution.
+            let retyped = matches!(surfaced, Some([SurfacedHead::Signature { .. }]))
+                && matches!(known, Known::Closed(_));
             if verdict != Verdict::Never {
                 judged.push(Judgement {
                     candidate: *candidate,
                     known,
-                    surfaced: surfaced.is_some(),
+                    surfaced: surfaced.is_some() && !retyped,
                     verdict,
                     intervals,
                     ruled,
@@ -3180,6 +3187,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         self.use_exits(level, arguments, &sites, &judged);
         self.made(level, node, list, &sites, &judged)?;
+        // A lone closed signature head, with no hole skipped, is the only list that may admit, and
+        // every function in it returns retyped to the head's return.
+        if let [only] = judged[..]
+            && !self.unfilled
+            && !only.surfaced
+            && self.surfaced(level, only.candidate).is_some()
+        {
+            return Ok(self.candidate_return(only));
+        }
         let mut returns = BumpVec::with_capacity_in(judged.len(), scratch);
         for judgement in judged.iter() {
             if let Known::Unknown = judgement.known {
@@ -3296,8 +3312,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// its return read through them — exactly that return where the retype makes it so and the
     /// solve is the call's, the shape unquantified or every interval a point, since its frame
     /// retypes its value to it, and at most it otherwise. A `surfaced` head's return is at most
-    /// whatever the solve: the module's own definition answers the call, and the signature states
-    /// only a bound on what it returns.
+    /// whatever the solve: the module's own definition answers the call, and the head states only
+    /// a bound on what it returns — save a closed signature head, which the call's frame retypes
+    /// to under the selection's solution, and which the caller passes as not `surfaced`.
     fn registered_return(
         &self,
         registered: DeclaredType<Parametric>,

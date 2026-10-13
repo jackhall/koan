@@ -77,3 +77,36 @@ fn a_using_over_an_annotated_binder_surfaces_its_annotation_s_names() {
         assert_eq!(rendered.to_string(), ":(LIST OF Number)");
     });
 }
+
+/// An annotated member of a cyclic component is born at its annotation, so a fellow's mention
+/// through a knot edge sees what the member's slot holds, as the load types it.
+#[test]
+fn an_annotated_data_member_of_a_cycle_is_born_at_its_annotation() {
+    let cycle = |body: &str| {
+        format!(
+            "LET r :{{x :Number}} = {{x = 1, f = g}}\n\
+             LET g = (FN :{{}} -> Any = #({body}))\n\
+             LET out = (g {{}})\n\
+             PRINT out"
+        )
+    };
+    assert_eq!(run(&cycle("r")), "{x = 1}");
+    assert_eq!(
+        run(&cycle("ATTR r f")),
+        "load: <test>:2:27: :{x :Number} has no field f",
+        "a hidden field refuses the load inside a cycle as at the top level"
+    );
+}
+
+/// A member whose value misses its annotation is still tied at its own memo, and its slot faults
+/// as at the top level rather than the tie refusing.
+#[test]
+fn an_annotated_data_member_of_a_cycle_that_misses_still_faults() {
+    let source = "LET r :{x :Str} = {x = 1, f = g}\n\
+                  LET g = (FN :{} -> Any = #(r))\n\
+                  PRINT \"tied\"";
+    assert_eq!(
+        run(source),
+        "error: :{x :Number f :(FN :{} -> Any)} does not satisfy its annotation :{x :Str}"
+    );
+}

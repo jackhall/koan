@@ -1,14 +1,14 @@
 //! The load's half of a `:|` view: over an operand whose content tree it sees all of, the static
 //! pass lays every type the run's view would intern in the root — the view's own
-//! ([`view_types`](view::view_types)) and each nested module's re-view
+//! ([`opaque_view_types`](view::opaque_view_types)) and each nested module's re-view
 //! ([`nested_types`](view::nested_types)) — so the run interns none of its own.
 //!
 //! The run re-views a nested module from the type the module carries, which the operand's type
-//! does not always show: a transparent view carries each member as it is, yet declares it at its
-//! slot's application. So the lay reads what each cell carries, a [`Carried`], off the operand's
+//! does not always show. So the lay reads what each cell carries, a [`Carried`], off the operand's
 //! tree: a module body's exact signature, which the pass keeps by body; a view's, computed from
-//! its source's as the run computes it; and a cell an opaque view rebuilt, as the coercion walk
-//! rebuilds it. Each step follows a view to its source or a slot into its declared type, so the
+//! its source's as the run computes it; a header's, which the load computed, each member read
+//! through it at the type it declares, as a member read retypes it; and a cell an opaque view
+//! rebuilt, as the coercion walk rebuilds it. Each step follows a view to its source or a slot into its declared type, so the
 //! lay ends at any depth. Every read of a view over a closed tree or of a rebuilt value is
 //! memoized on the pass ([`Identity`]), so a chain of views costs the load linear time.
 //!
@@ -20,6 +20,7 @@
 //!
 //! See [the module design](../../../design/modules.md#the-load-and-the-run).
 
+use crate::elaborate::signature_member;
 use crate::knot::module::coerce::Substitution;
 use crate::knot::module::view::{self, ViewTypes};
 use crate::memory::{BumpAllocator, BumpVec};
@@ -28,8 +29,8 @@ use crate::symbols::{BinderSymbol, Symbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
 };
-use crate::values::Types;
 use crate::values::digest::Operator;
+use crate::values::{Types, applications, retyped_to};
 
 use super::trees::Scope;
 use super::{Pass, address};
@@ -130,8 +131,39 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         Ok(())
     }
 
+    /// Lay each member's declared type the signature type `carried` gives it, under its pins, as a
+    /// member read through a module carrying it reads it: what a module retyped at load interns.
+    pub(super) fn lay_carried(&self, carried: KType) {
+        let (types, scratch) = (self.types, self.scratch);
+        for application in applications(types, scratch, carried) {
+            let (signature, pins) = match types.node(application) {
+                TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
+                _ => (application, None),
+            };
+            let Some(schema) = crate::elaborate::schema_of(signature, types) else {
+                continue;
+            };
+            for (name, _) in schema.value_slots.iter() {
+                signature_member(types, scratch, carried.into(), BinderSymbol::Value(*name));
+            }
+            let mut bindings = BumpVec::new_in(scratch);
+            bindings.extend(
+                pins.iter()
+                    .flat_map(|pins| pins.iter())
+                    .filter_map(|(name, pin)| match name {
+                        BinderSymbol::Type(name) => Some((name, pin)),
+                        _ => None,
+                    }),
+            );
+            let bindings = Members::from_pairs(scratch, bindings);
+            for declared in schema.keyworded.iter().copied() {
+                substitute_parameters(types, scratch, declared, bindings);
+            }
+        }
+    }
+
     /// Lay each member's declared type of the view `viewed` read under either side, as the
-    /// coercion walk reads it before it rebuilds a member: all a transparent view interns.
+    /// coercion walk reads it before it rebuilds a member.
     pub(super) fn lay_declared(&self, viewed: &ViewTypes<'graph>) {
         let (types, scratch) = (self.types, self.scratch);
         let declared = viewed.sig.value_slots.iter().map(|(_, declared)| *declared);
@@ -206,14 +238,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Carried::Tree(tree @ Tree::View { .. }) => {
                 self.view_of(tree, site)?.map(|viewed| viewed.view)
             }
+            // A closed header's type is the one the load computed for it.
+            Carried::Tree(tree @ Tree::Retyped { carried, .. }) => tree.closed().then_some(carried),
             Carried::Tree(_) => None,
             Carried::Across(across) => across.held,
         })
     }
 
-    /// What the view `tree` binds, where the load knows it: a transparent view's over its source's
-    /// type, an opaque one's over its source's digest. Memoized by print over a closed tree.
-    fn view_of(
+    /// What the view `tree` binds, where the load knows it: an opaque view's over its source's
+    /// type and its bare member's digest. Memoized by print over a closed tree.
+    pub(super) fn view_of(
         &mut self,
         tree: Tree<'graph>,
         site: Site,
@@ -234,9 +268,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         let held = self.carried_type(Carried::Tree(*source), site)?;
         let viewed = match operator {
-            Operator::Transparent => held
-                .and_then(|held| view::transparent_view_types(held, application, types, scratch)),
-            Operator::Opaque => source.digest().and_then(|digest| {
+            Operator::Opaque => source.bare().digest().and_then(|digest| {
                 view::opaque_view_types(held, application, digest, types, scratch)
             }),
             Operator::Reviewed => None,
@@ -361,19 +393,33 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         .map(Carried::Typed)
                 }
             }
-            Carried::Tree(
-                tree @ Tree::View {
-                    operator, source, ..
-                },
-            ) => {
+            Carried::Tree(tree @ Tree::View { source, .. }) => {
                 let inner = self.cell(Carried::Tree(*source), name, site)?;
-                match operator {
-                    // A transparent view carries each member as it is.
-                    Operator::Transparent => inner,
-                    _ => {
-                        let viewed = self.view_of(tree, site)?;
-                        self.rebuilt(viewed, name, inner, site)?
+                let viewed = self.view_of(tree, site)?;
+                self.rebuilt(viewed, name, inner, site)?
+            }
+            // Through a header, the member retyped to the type its carried application declares:
+            // a module's tree under a header of its own, anything else by that type where the
+            // retype makes it exact.
+            Carried::Tree(
+                tree @ Tree::Retyped {
+                    carried, source, ..
+                },
+            ) if tree.closed() => {
+                let Some(declared) = slot_type(carried, name, types, scratch) else {
+                    return Ok(None);
+                };
+                match self.cell(Carried::Tree(*source), name, site)? {
+                    Some(Carried::Tree(
+                        inner @ (Tree::Body { .. } | Tree::View { .. } | Tree::Retyped { .. }),
+                    )) => {
+                        let level = self.chain.len() - 1;
+                        let retyped = self.retyped_tree(level, inner, declared.into(), site)?;
+                        Some(Carried::Tree(retyped))
                     }
+                    _ => retyped_to(types, declared.into())
+                        .is_exact()
+                        .then_some(Carried::Typed(declared)),
                 }
             }
             Carried::Tree(_) => None,
@@ -552,10 +598,8 @@ fn module_schema<'run>(held: KType, types: &Types<'_, 'run>) -> Option<SigSchema
 }
 
 /// Whether `held` is an application fixing every head parameter of its signature: the type a
-/// transparent view's signature gives a nested module. *Fits* solves a re-view from it to its pins,
-/// the bindings a re-view from the module's own signature solves at the same slot, so the load
-/// lays the view the run builds — save where a pin sits above what the module's members realize
-/// and the slot leaves that parameter open: *fits* solves it off the members, and the run re-views.
+/// header gives a nested module it declares at one. The run re-views such a module from the
+/// application it carries, as the load does, so *fits* solves the re-view to the pins at both.
 fn fully_pinned(held: KType, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> bool {
     fixed(held, types, scratch).is_some()
 }

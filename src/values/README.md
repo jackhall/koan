@@ -27,7 +27,9 @@ captured, which is the [scope layer's](../scope/README.md#three-tiers), which
 `values` may not name. So `Value<'cell, X>` has one arm, `Knotted(X)`,
 over a type parameter a layer above closes — [`knot`](../knot/README.md)
 closes it with a sixteen-byte `(knot, index)` member, so the word stays at 24
-bytes. `values` states what it asks of `X` as a trait pair
+bytes — and a second, `Retyped`, a borrow of a [`Retyped`](retyped.rs) header
+over a bare member ([below](#the-type-memo-and-satisfies)). Every `as_*`
+accessor reads through a header to the bare member. `values` states what it asks of `X` as a trait pair
 ([values.rs](../values.rs)): per value, `Knotted` — a `Copy` type whose
 equality is node identity, with its memoized type handle, its knot's weight,
 the fellow member an edge of its own knot names, what the node holds, and the
@@ -162,7 +164,7 @@ handle, computed in the pass that lays its cells down: a list the join of its
 cells' types (`Never` when empty), a dict the joins over its keys and its
 cells, a record the record type of its fields in written order, a type value
 `OfKind` of the kind of the type it names, a tagged value its identity, and a
-knot member reports its own. A join across families is their union, so a list
+knot member reports its own, or its header's. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
 `Value::ktype` copies that handle or names a leaf constant, and reads no
 type tier and walks nothing. It answers a
@@ -204,21 +206,38 @@ value to type it, so a value's precision is whatever its type says, and **an
 ascription changes it** — a `:!`, a parameter binding its argument, a frame
 returning under its contract. `Value::retyped` reads the declared type member
 by member (a union's members, or the type alone): the value takes the meet of
-the members of its own kind that it lies under — a list, dict or record node
-for a container, a node naming its constructor for a tagged value — and keeps
-its own type where there is none, so a list ascribed `Any` stays as precise as
-it was. The target depends on the value and the type alone, never on member
-order. Which types re-stamp a value at themselves — a list, dict or record type
-for a container of that kind, a nominal type or a family's application for a
-tagged value under its constructor — is one predicate in
-[surface.rs](surface.rs), and the load's static types of a retyped value
-(`retyped_to`) and of one at most a type (`under`, `unknown`) live beside it and
-read it, so the load calls a retype exact exactly where the run makes it so. A plain value takes the target as its handle over the same shared runs.
-A knot's data node, whose memo its knot cannot restamp, is laid down as a plain
-value of its kind over its cells, each edge resolved to the sibling it names
-and a dict's keys or a record's names shared: O(width) per retype, and the
-retyped value renders its cycle one level down. The retype restamps the top node
-alone, and its cells keep their own types; a read carries it down.
+what the members of its own kind take it at — a list, dict or record node for
+a container, a node naming its constructor for a tagged value, a function type
+or an expression shape for a function or a barrier, a code kind for a quote's
+code, a kind for a type value, each it lies under, and for a module each
+signature application it fits, its head parameters pinned at what *fits*
+solves (`pinned_at_fit`, over `fit_solution`, the solve the view door reads
+too) — and keeps its own type where there is none, so a
+list ascribed `Any` stays as precise as it was. The target depends on the
+value and the type alone, never on member order. Which types re-stamp a value
+at themselves is one predicate in [surface.rs](surface.rs), `retyped_kind`:
+each of those, save `Module` and `Code`, which every module and every quote
+satisfies and which re-stamp nothing, as `Any`, `Value` and `Never` do. The
+load's static types of a retyped value (`retyped_to`) and of one at most a type
+(`under`, `unknown`) live beside it and read it, and so does
+`retypes_by_header`, which says where a retype lays a header and where the
+load's content tree takes a retype node, so the load calls a retype
+exact exactly where the run makes it so — save a signature type leaving a head
+parameter unpinned, which each run pins afresh at what its module fits, so the
+load calls it at most that type.
+
+A plain value takes the target as its handle over the same shared runs, and a
+type value its kind beside the same named type. **A knot member takes a
+header.** Its type lives in the node every holder shares, so the node cannot be
+re-stamped; a retype lays a [`Retyped`](retyped.rs) down instead — the bare
+member beside the type it shows, O(1) — and `Value::ktype` answers that type.
+The header holds the member, not a value, so a retype of a retyped value is one
+new header over the same member, and one back to the member's own type hands
+back the bare member. Only a callable's header may carry a scheme. A data node
+under a header is still a knot member: it reads, compares and renders through
+the door at the header's type and closes its cycle as a cycle. The retype
+restamps the top value alone, and its cells keep their own types; a read
+carries it down.
 
 **A value's type is its surface.** Every read of a record, list, dict or tagged
 value — a field read, `FROM`, `USING`, a frame binding its arguments, module
@@ -284,8 +303,7 @@ whole knot it sits in, since a member copies by re-tying its knot, and a data
 node's resident weighs only its own struct and links. Program storage a member
 holds weighs nothing past the pointer. A crossing reads the weight off the
 value rather than walking it; a plain retype shares the runs, so it shares the
-weight, and a laid-down data node is weighed as the plain door of its kind
-weighs the same cells. So a value whose type hides some of its cells weighs
+weight, and a header weighs its own struct beside its member's weight. So a value whose type hides some of its cells weighs
 them all, while its copy lays down and weighs only what the type shows: the
 [verdict](#crossing) may over-price such a copy, and never under-prices one.
 
@@ -303,10 +321,10 @@ parts written again through the destination's writer, and a knot member's whole
 knot re-tied by its family. The deep copy reads through
 [the door](#the-type-memo-and-satisfies) as every reader does: each part is laid
 down at the type it is seen at, holding only what that type names, and weighed
-by what it lays down, so a part a retype hid is dropped. A knot's data node seen
-at its own memo copies with its knot; one seen at another type is laid down as a
-plain value of its kind at that type, as a retype lays it down, its visible
-links resolved through it. The crossing doors therefore take the
+by what it lays down, so a part a retype hid is dropped. A knot member copies
+with its knot, bare or under a header, and one seen at a type other than its
+own arrives under a header at that type, which the copy adopts into the
+destination first. The crossing doors therefore take the
 destination's type chain, which the copy reads its types in, and the
 scheduler's step doors that cross a value build that chain inside the build,
 over the graph's frozen type root and the build's writer and header.
@@ -449,15 +467,14 @@ of equal content digest alike wherever they were built. It is what a
 the low 128 bits of a BLAKE3 hash over one recipe: a domain tag, the value's
 own scalar payload, then its parts' digests.
 
-A value digests as what [the door](#views) shows of it at the type it is seen
-at, exactly as the [deep copy](#crossing) lays it down, so a copy digests as its
-source and a cell its type hides counts for nothing:
+A plain value digests as what [the door](#views) shows of it at the type it is
+seen at, exactly as the [deep copy](#crossing) lays it down, so a copy digests
+as its source and a cell its type hides counts for nothing:
 
 - A scalar digests from its payload: a number from its bits, a bool, `null`, a
-  string length-prefixed, a type value from its handle.
-- A list, dict, record or tagged value, and a data node seen at a type other
-  than its memo, digests its kind, its seen type's handle and the contents the
-  door shows, each part at its type there — a list its elements in order, a
+  string length-prefixed, a type value from its handle and the kind it carries.
+- A list, dict, record or tagged value digests its kind, its seen type's handle
+  and the contents the door shows, each part at its type there — a list its elements in order, a
   dict each key and cell in key order, a record each shown field's name and
   cell in symbol order, so field order is blind, and a tagged value its payload
   at its representation. The seen type is part of the recipe, so a retype
@@ -470,6 +487,11 @@ source and a cell its type hides counts for nothing:
   tied into. The layer above says what a node's content is: a member
   [lists](../knot/README.md#content) the values its knot holds and hashes the
   knot over their digests.
+- A knot member seen at any other type — under a header, or a data node read
+  at a part's type — digests as that type over its bare member's digest
+  (`retyped_content`). A member's content is its knot's, never the members a
+  type shows, so a signature that hides the capture branding a module keeps
+  the brand in its digest.
 
 Inside a knot each node is digested at its own memo, so a cell a tagged node's
 representation hides still counts there, as a copy of the knot keeps it. That
@@ -493,7 +515,7 @@ hashed as syntax, not as the value it lowers to.
 
 **Every recipe is a function over digests.** `literal_digest`, `type_digest`,
 `knot_digest`, `member_digest`, `function_content`, `body_content`,
-`view_content` and `edge_at` each hash one recipe from its parts' digests, and
+`view_content`, `retyped_content` and `edge_at` each hash one recipe from its parts' digests, and
 the run's walk calls them. The load calls the same functions over a
 [content tree](../scope/README.md#load-time-types), so a closed tree digests
 as the value its expression evaluates to, and no recipe is written twice.
@@ -519,7 +541,10 @@ numbers are unequal. That makes `==` intransitive across ascriptions by design.
 side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
 A function compares by its identity and its instance solution, then its
-closure bindings under the same pair set ([knots](../knot/README.md#equality-and-rendering)).
+closure bindings under the same pair set ([knots](../knot/README.md#equality-and-rendering)). A
+knot member under a header compares as its bare member seen at the header's
+type, so a function passed through a function-typed slot equals the function
+it was.
 Every aligned pair is compared, so an unequal pair before an opaque member does
 not hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.
@@ -554,8 +579,8 @@ compares recursively, since parsed syntax nests no deeper than the parser's
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
 `{x = 1}` in field-name order, a tagged value as its seen type's name around its
 payload, a type as its name, a quote as its body's surface with each mark as
-written and never what a name binds, a function, a module or a barrier as its
-type's name, which is a module's signature — its closure bindings or members
+written and never what a name binds, a function, a module or a barrier as the
+name of the type it is seen at, a header's included, which is a module's signature — its closure bindings or members
 are program state and never print — and a data node as the plain value of its
 kind.
 
@@ -635,11 +660,13 @@ branch. Circular values are exercised
 without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
 by hand, and the suites cover the door over each kind, a payload seen at its
-representation and a retype as a seen type restamped
-([tests/surface.rs](tests/surface.rs)), the `linked` doors, the construction
-rule and the seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
-([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
+representation, a retype as a seen type restamped and a data node restamped
+under one header over its bare member ([tests/surface.rs](tests/surface.rs)), the `linked` doors, the construction
+rule and the seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings and a header
+compared at its type ([tests/equality.rs](tests/equality.rs)), labelled and
+shared-inline renders and a header over a cyclic node labelled at the top
 ([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin,
+a data node seen at another type copied under a header,
 two members of one ring crossing as one copy of it, and a copy laying down only
 what each part's seen type shows ([tests/crossing.rs](tests/crossing.rs)), a
 result merging its home's branch, a copy adopting each laid part's memo and
@@ -647,7 +674,8 @@ none hidden, a copied type value read after its home is released, and the
 habitat check refusing a value no crossing carried ([tests/habitat.rs](tests/habitat.rs)), `satisfies` by a node's memo
 ([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
 hundred thousand deep rendered, compared, crossed and digested on the default
-test thread ([tests/depth.rs](tests/depth.rs)). Two tests join the koan
+test thread, and a chain of headers as deep digested and crossed
+([tests/depth.rs](tests/depth.rs)). Two tests join the koan
 [Miri slate](../../observe/miri_slate.md), the paths only `values` drives:
 `a_copied_list_outlives_its_home` — a deep copy laying down strings, a list and
 a dict whose string keys are written inside its key run's `fill`, read after
@@ -674,3 +702,5 @@ knots as deep as the chain of newtypes digests beside it.
   the lazy transformations that run koan code.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — the lattice walks over a value's carried type, as deep as the value.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — whether
+  `Module` and `Code` re-stamp a value.

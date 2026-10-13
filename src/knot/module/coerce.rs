@@ -316,8 +316,10 @@ pub fn coerce<'graph, 'cell>(
             let member = hiding.or(plain).ok_or(CoercionRefused::NoUnionMember)?;
             coerce(cx, value, member)
         }
+        // A header's own type is superseded by the barrier's, so the barrier stands before its
+        // bare member.
         TypeNode::KFunction { .. } | TypeNode::ExpressionShape { .. } => {
-            let Value::Knotted(member) = value else {
+            let Some(member) = value.knot_member() else {
                 return Err(CoercionRefused::NotAFunction);
             };
             if member.function().is_none() && member.coerced().is_none() {
@@ -339,26 +341,32 @@ pub fn coerce<'graph, 'cell>(
         // side. An application naming none of the enclosing parameters never reaches here — its
         // two sides agree and the comparison above carried the module already.
         TypeNode::SignatureApply { .. } => {
-            let Value::Knotted(member) = value else {
-                return Err(CoercionRefused::NotAModule);
-            };
-            let Some(module) = member.module() else {
+            let Some(member) = value
+                .knot_member()
+                .filter(|member| member.module().is_some())
+            else {
                 return Err(CoercionRefused::NotAModule);
             };
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
-            let nested = view::nested_types(module.ktype(), src, dst, cx.types, cx.scratch)
+            // A header's carried application is what the module offers the nested slot, and the
+            // re-view is keyed on the bare member behind it.
+            let held = value
+                .ktype()
+                .as_type()
+                .expect("a module's type is a signature type");
+            let bare = Value::Knotted(member).digest(cx.types, cx.scratch);
+            let nested = view::nested_types(held, src, dst, cx.types, cx.scratch)
                 .map_err(|_| CoercionRefused::Nested)?;
             let from = nested
                 .from
                 .expect("a nested module's signature binds the source's side");
             // A nested view is the enclosing opaque one's, at the application its slot reads.
-            let content =
-                ModuleContent::view(Operator::Reviewed, dst, value.digest(cx.types, cx.scratch));
+            let content = ModuleContent::view(Operator::Reviewed, dst, bare, from.handle);
             view::build(
                 cx.writer,
-                member,
+                value,
                 nested.sig,
                 nested.view,
                 from,

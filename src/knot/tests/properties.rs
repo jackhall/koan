@@ -3,8 +3,8 @@
 //! knot whose closures follow its members' capture layouts and whose data nodes hold one link per
 //! planned read — an edge for a fellow member, the enclosing word otherwise, an edge to a function
 //! node past the members for a lambda capturing a fellow member, and `null` for any other part the
-//! caller evaluates — and refuses naming data members otherwise; a copy of every knot is the
-//! same knot rebuilt.
+//! caller evaluates — and refuses naming data members otherwise; an annotated data member is born
+//! at its annotation; a copy of every knot is the same knot rebuilt.
 //!
 //! The plans render a data binder of a cyclic component as a list literal: its deferred reads as
 //! name tokens, and a lambda or a call over its eager reads as parenthesized items. The law reads
@@ -269,7 +269,7 @@ fn run<'graph, 'cell>(
             synthesize(next);
             continue;
         }
-        let knot = outcome.expect("a component whose data members read acyclically ties");
+        let knot = (outcome.expect("a component whose data members read acyclically ties")).knot;
         let lambdas = data
             .iter()
             .flat_map(|index| planned_items(shape, component, component.members[*index]))
@@ -286,6 +286,13 @@ fn run<'graph, 'cell>(
             born.push((*slot, member));
             tied.push(member);
             let Some(body) = shape.births(*slot) else {
+                if shape.annotation(*slot).is_some() {
+                    assert_eq!(
+                        member.ktype(),
+                        types.list(KType::ANY).into(),
+                        "an annotated data member is born at its annotation"
+                    );
+                }
                 let (_, Circular::List(list)) = Value::Knotted(member)
                     .as_circular()
                     .expect("a data member is a data node")
@@ -366,6 +373,32 @@ fn run<'graph, 'cell>(
     }
 }
 
+/// `source` with every other data binder of a list literal annotated `:(LIST OF Any)`, so a
+/// tied component holds annotated data members beside bare ones.
+fn annotated(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    let mut annotate = false;
+    while let Some(at) = rest.find("LET ") {
+        let (before, after) = rest.split_at(at + "LET ".len());
+        out.push_str(before);
+        let name_end = after
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(after.len());
+        let (name, tail) = after.split_at(name_end);
+        out.push_str(name);
+        if tail.starts_with(" = [") {
+            if annotate {
+                out.push_str(" :(LIST OF Any)");
+            }
+            annotate = !annotate;
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: crate::tests::case_share(1, 1), ..ProptestConfig::default() })]
 
@@ -376,7 +409,7 @@ proptest! {
     /// the same knot rebuilt, each edge verbatim and each held value the original's.
     #[test]
     fn a_planned_component_ties_to_its_capture_layout_and_copies_whole(choices in plan::choices()) {
-        let source = plan::program_source(&choices);
+        let source = annotated(&plan::program_source(&choices));
         with_fixture(|fixture| {
             let lines = fixture.parse(&source);
             let mut graph: TestGraph<'_> = CellGraph::new(2, copy);

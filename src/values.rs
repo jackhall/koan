@@ -3,7 +3,8 @@
 //! A [`Value`] is one `Copy` word: a scalar, a string borrowed where it lives, or a borrow of a
 //! per-kind resident struct — [`List`], [`Dict`], [`Record`], [`Tagged`], [`TypeValue`] — or a
 //! member of a knot, which `values` does not define: the arm holds a type parameter a layer above
-//! closes, and [`Knotted`] and [`KnottedFamily`] are what `values` asks of it. A member is a
+//! closes, and [`Knotted`] and [`KnottedFamily`] are what `values` asks of it. A member retyped to
+//! a type other than its own sits under a [`Retyped`] header, its node shared with every holder. A member is a
 //! function, a quote's code, a module, a barrier, or a data node — a [`Circular`] container or
 //! tagged value whose cells are [`Link`]s, each a value word or an edge to a sibling — which
 //! equality, rendering and the deep copy read through ([`Resolved`]). The parameter defaults to [`Nothing`], so a value
@@ -39,6 +40,7 @@ mod list;
 mod lower;
 mod record;
 mod render;
+mod retyped;
 mod surface;
 mod tagged;
 mod type_value;
@@ -63,7 +65,11 @@ pub use habitat::{Half, TypeHeader, Types};
 pub use link::Link;
 pub use list::List;
 pub use record::Record;
-pub use surface::{Seen, Surface, retyped_to, under, unknown};
+pub use retyped::Retyped;
+pub use surface::{
+    Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target, retyped_to,
+    retypes_by_header, under, unknown,
+};
 pub use tagged::Tagged;
 pub use type_value::TypeValue;
 pub use weight::Weight;
@@ -102,8 +108,8 @@ pub trait Knotted: Copy + Eq + Hash {
     /// This member's knot's digest, `parts` answering each value [`held`](Self::held) listed with
     /// its finished digest, in `held`'s order. `values` asks only where the member is seen at its
     /// own type, walks the held values on its own stack, memoizes the knot at its root and digests
-    /// the member beside its index there; a data node seen at another type is digested as the plain
-    /// value of its kind the door shows.
+    /// the member beside its index there; a member seen at another type digests as that type over
+    /// this digest ([`digest::retyped_content`]).
     fn digest_held(
         &self,
         types: &Types<'_, '_>,
@@ -290,6 +296,9 @@ pub enum Value<'cell, X = Nothing> {
     /// A member of a knot a layer above `values` ties: a function, a quote's code, a module, a
     /// barrier, or a data node whose cells may name its siblings. [`Knotted::resolve`] says which.
     Knotted(X),
+    /// A bare knot member retyped to a type other than its own: the header a record has and a
+    /// member lacks. Every `as_*` accessor reads through it to the member.
+    Retyped(&'cell Retyped<X>),
 }
 
 const _: () = assert!(size_of::<Value<'static>>() == 24);
@@ -317,6 +326,7 @@ impl<'cell, X: Knotted> Value<'cell, X> {
             Value::Record(record) => record.ktype().into(),
             Value::Tagged(tagged) => tagged.ktype().into(),
             Value::Knotted(member) => member.ktype(),
+            Value::Retyped(header) => header.ktype(),
         }
     }
 
@@ -354,6 +364,16 @@ impl<'cell, X: Knotted> Value<'cell, X> {
             Value::Record(record) => record.weight(),
             Value::Tagged(tagged) => tagged.weight(),
             Value::Knotted(member) => member.weight(),
+            Value::Retyped(header) => Weight::flat::<Retyped<X>>().plus(header.member().weight()),
+        }
+    }
+
+    /// The bare knot member this value is, under a header or not.
+    pub fn knot_member(&self) -> Option<X> {
+        match self {
+            Value::Knotted(member) => Some(*member),
+            Value::Retyped(header) => Some(header.member()),
+            _ => None,
         }
     }
 }
@@ -404,61 +424,45 @@ impl<'cell, X: Copy> Value<'cell, X> {
 
 impl<'cell, X: Knotted> Value<'cell, X> {
     /// The function this value is, if it is one — a barrier over one included, which calls the
-    /// same way.
+    /// same way. Each `as_*` here answers the bare member, under a header or not.
     pub fn as_callable(&self) -> Option<X> {
-        match self {
-            Value::Knotted(member)
-                if matches!(
-                    member.resolve(),
-                    Resolved::Function { .. } | Resolved::Barrier
-                ) =>
-            {
-                Some(*member)
-            }
-            _ => None,
-        }
+        self.knot_member().filter(|member| {
+            matches!(
+                member.resolve(),
+                Resolved::Function { .. } | Resolved::Barrier
+            )
+        })
     }
 
     /// The quote's code this value is, if it is one.
     pub fn as_code(&self) -> Option<X> {
-        match self {
-            Value::Knotted(member) if matches!(member.resolve(), Resolved::Code(_)) => {
-                Some(*member)
-            }
-            _ => None,
-        }
+        self.knot_member()
+            .filter(|member| matches!(member.resolve(), Resolved::Code(_)))
     }
 
     /// The module this value is, if it is one.
     pub fn as_module(&self) -> Option<X> {
-        match self {
-            Value::Knotted(member) if matches!(member.resolve(), Resolved::Module) => Some(*member),
-            _ => None,
-        }
+        self.knot_member()
+            .filter(|member| matches!(member.resolve(), Resolved::Module))
     }
 
     /// The knot member this value is when its node is opaque to `values` — a module or a barrier.
     /// Equality refuses such a pair.
     pub fn as_opaque(&self) -> Option<X> {
-        match self {
-            Value::Knotted(member) => match member.resolve() {
-                Resolved::Module | Resolved::Barrier => Some(*member),
-                Resolved::Function { .. } | Resolved::Circular(_) | Resolved::Code(_) => None,
-            },
-            _ => None,
-        }
+        self.knot_member().filter(|member| match member.resolve() {
+            Resolved::Module | Resolved::Barrier => true,
+            Resolved::Function { .. } | Resolved::Circular(_) | Resolved::Code(_) => false,
+        })
     }
 
-    /// The data node this value is, if it is one, beside the member it is read through.
+    /// The data node this value is, if it is one, beside the bare member it is read through.
     pub fn as_circular(&self) -> Option<(X, Circular<'cell, X>)>
     where
         X: 'cell,
     {
-        match self {
-            Value::Knotted(member) => match member.resolve() {
-                Resolved::Circular(circular) => Some((*member, circular)),
-                _ => None,
-            },
+        let member = self.knot_member()?;
+        match member.resolve() {
+            Resolved::Circular(circular) => Some((member, circular)),
             _ => None,
         }
     }

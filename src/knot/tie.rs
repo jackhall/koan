@@ -10,24 +10,38 @@
 //! body, its type elaborated from its signature and its captures; a code node's `$` bindings; a
 //! data member's cells, with a
 //! part only the caller can evaluate asked of its evaluator by site —
-//! every mention of a fellow member minted as an edge into the knot about to be tied. Derived
-//! memos are computed and every construction checked, and a part the caller has not evaluated, a
-//! cycle of derived nodes or a construction the rule refuses stops the tie before a byte is
-//! written.
+//! every mention of a fellow member minted as an edge into the knot about to be tied. Each member
+//! is born at its annotation: an annotated function member takes the annotation's retype as its
+//! type and keeps the signature its body was checked against, an annotated code member takes it as
+//! its carried type, and an annotated data member's memo is its derived memo retyped as soon as it
+//! is derived — so a fellow's edge sees what the
+//! member's slot holds. Every construction is then checked, and a part the caller has not
+//! evaluated, a cycle of derived nodes or a construction the rule refuses stops the tie before a
+//! byte is written.
 //! Only then are the closure runs, bound runs and data nodes laid down, the knot's weight summed,
 //! and the nodes tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member
 //! holds that captures a fellow member is one of them, a function node staged like a function
-//! member, and so is a quote that reads one.
+//! member, and so is a quote that reads one. The tie hands back each annotation it resolved beside
+//! the knot ([`Tied`]), so the caller holds each slot to it without resolving it again.
 
+use crate::elaborate::denoted;
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType};
-use crate::values::{Types, Weight};
+use crate::type_lattice::{DeclaredType, KType, satisfied_by};
+use crate::values::{Types, Weight, retype_target};
 
 use super::data::{self, Stager};
 use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
+
+/// A knot [`tie`] laid down, beside each member's annotation as the tie resolved it, by member
+/// index: `None` where the member states none, or it does not resolve. The caller holds each slot
+/// to it without resolving it again.
+pub struct Tied<'graph, 'cell, 'x> {
+    pub knot: Knot<'cell, Node<'graph, 'cell>>,
+    pub annotations: BumpVec<'x, Option<KType>>,
+}
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born
 /// together, each closure binding and data cell a value word or an edge into this knot, each part
@@ -44,7 +58,7 @@ pub fn tie<'graph, 'cell, 'x>(
     types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
-) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'x>> {
+) -> Result<Tied<'graph, 'cell, 'x>, Untieable<'x>> {
     debug_assert!(
         component.deferred_only,
         "the shape builder refuses a component with an eager cycle"
@@ -57,7 +71,12 @@ pub fn tie<'graph, 'cell, 'x>(
         match shape.births(*slot).map(BodyShape::kind) {
             // A module is alone in its component and shares nothing with the staging below.
             Some(ShapeKind::Module) => {
-                return module::tie_member(writer, activation, component, types, scratch, eager);
+                let knot =
+                    module::tie_member(writer, activation, component, types, scratch, eager)?;
+                return Ok(Tied {
+                    knot,
+                    annotations: BumpVec::new_in(scratch),
+                });
             }
             Some(_) => {
                 roots.push(None);
@@ -92,7 +111,28 @@ pub fn tie<'graph, 'cell, 'x>(
         }
         Some(node) => node.function().map(|body| (body, None)),
     }));
-    let functions = function::stage(&plan, activation, &bodies, types, scratch)?;
+    // Each member's annotation, resolved as the slot that binds it resolves it: a member is born
+    // at it, so a fellow's edge into the node sees what the slot holds.
+    let mut annotations: BumpVec<'x, Option<KType>> =
+        BumpVec::with_capacity_in(component.members.len(), scratch);
+    annotations.extend(component.members.iter().map(|slot| {
+        let annotation = shape.annotation(*slot)?;
+        denoted(annotation, activation, types, scratch).ok()
+    }));
+    let mut functions = function::stage(&plan, activation, &bodies, types, scratch)?;
+    // An annotated function member is born at the annotation's retype, keeping the signature its
+    // body was checked against for its frame.
+    for (staged, annotation) in functions.iter_mut().zip(&annotations) {
+        if let (Some(staged), Some(annotation)) = (staged.as_mut(), *annotation)
+            && satisfied_by(types, scratch, annotation, staged.ktype)
+        {
+            let born = retype_target(types, scratch, staged.ktype, annotation);
+            if born != staged.ktype {
+                staged.declared = Some(staged.ktype);
+                staged.ktype = born;
+            }
+        }
+    }
     let mut codes = BumpVec::with_capacity_in(nodes.len(), scratch);
     codes.extend(nodes.iter().map(|node| {
         let (body, shape) = node.as_ref()?.code()?;
@@ -101,6 +141,15 @@ pub fn tie<'graph, 'cell, 'x>(
                 .expect("a member index is below the knot's count")
         }))
     }));
+    // An annotated code member is born at the annotation's retype, as a function member is.
+    for (staged, annotation) in codes.iter_mut().zip(&annotations) {
+        if let (Some(staged), Some(annotation)) = (staged.as_mut(), *annotation)
+            && satisfied_by(types, scratch, annotation, staged.ktype)
+        {
+            let born = retype_target(types, scratch, staged.ktype.into(), annotation);
+            staged.ktype = born.as_type().expect("a quote's code is typed by a type");
+        }
+    }
 
     let mut memos: BumpVec<'x, Option<DeclaredType<KType>>> =
         BumpVec::with_capacity_in(nodes.len(), scratch);
@@ -108,9 +157,9 @@ pub fn tie<'graph, 'cell, 'x>(
         function
             .as_ref()
             .map(|staged| staged.ktype)
-            .or_else(|| code.as_ref().map(|staged| staged.shape.code_type().into()))
+            .or_else(|| code.as_ref().map(|staged| staged.ktype.into()))
     }));
-    data::memos(&nodes, &mut memos, &names, types, scratch)?;
+    data::memos(&nodes, &mut memos, &annotations, &names, types, scratch)?;
     data::check(&nodes, &memos, &names, types, scratch)?;
 
     let mut knot_weight = Weight::flat::<usize>();
@@ -151,7 +200,7 @@ pub fn tie<'graph, 'cell, 'x>(
     knot_weight = (0..nodes.len()).fold(knot_weight, |weight, _| {
         weight.plus(Weight::flat::<Node<'graph, 'cell>>())
     });
-    Ok(plan.tie(writer, |edge| {
+    let knot = plan.tie(writer, |edge| {
         let index = edge.index() as usize;
         if let Some((staged, run)) = codes[index].as_ref().zip(bound[index]) {
             return staged.tied(writer, run, knot_weight);
@@ -170,7 +219,8 @@ pub fn tie<'graph, 'cell, 'x>(
             },
             (None, None) => unreachable!("every node is a function, a code or a data node"),
         }
-    }))
+    });
+    Ok(Tied { knot, annotations })
 }
 
 impl<'graph, 'cell> Knotted<'graph, 'cell> {
