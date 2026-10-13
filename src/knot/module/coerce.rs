@@ -370,6 +370,10 @@ pub fn coerce<'graph, 'cell>(
             // A nested view is the enclosing opaque one's, at the application its slot reads.
             let content =
                 ModuleContent::view(Operator::Reviewed, dst, value.digest(cx.types, cx.scratch));
+            let (from, to) = (
+                Substitution::interned(from, cx.types, cx.scratch),
+                Substitution::interned(to, cx.types, cx.scratch),
+            );
             view::build(
                 cx.writer, member, schema, view, from, to, content, cx.types, cx.scratch,
             )

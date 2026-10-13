@@ -350,6 +350,16 @@ fn ascribe<'graph, 'here>(
             };
             return finish(step, at, raised.raise(program, writer, &at.types));
         };
+        // The load lays a view's types over a closed tree, so that tree is the operand's content.
+        debug_assert!(
+            at.view
+                .shape()
+                .view_tree(Site::of_node(node))
+                .and_then(|tree| tree.digest())
+                .is_none_or(|digest| digest == Value::Knotted(module).digest(types, &scratch)),
+            "the content tree at {:?} reads the digest the run computes",
+            node.source,
+        );
         let raised = match view::ascribe(writer, module, ascribed, mode, types, &scratch) {
             Ok(view) => return finish(step, at, Value::Knotted(view)),
             Err(Unascribable::Unsatisfied(_)) => Raised::Unascribable {

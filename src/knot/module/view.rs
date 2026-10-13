@@ -25,6 +25,10 @@
 //! so the nested view's identities are the outer carriers, arriving through the declared type
 //! rather than being made again. [`fitted`] and [`build`] are the one fit and the one body both
 //! the outer ascription and the nested case go through.
+//!
+//! [`view_types`] is the half of an ascription computed from types alone: the bindings either side
+//! and the view's signature. The load calls it at a `:|` site over a content tree it sees all of,
+//! so the root holds each type the run's view would otherwise intern.
 
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
@@ -98,7 +102,6 @@ pub fn ascribe<'graph, 'cell: 'x, 'x>(
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'cell, 'x>> {
     let held = source.module().ok_or(Unascribable::NotAModule)?.ktype();
-    let (sig, from, pins) = fitted(held, signature, types, scratch)?;
     // A view is its operator and its application over its source. A module's digest is its knot's
     // over the content it was born with: no walk.
     let operator = match mode {
@@ -107,16 +110,102 @@ pub fn ascribe<'graph, 'cell: 'x, 'x>(
     };
     let source_digest = Value::Knotted(source).digest(types, scratch);
     let content = ModuleContent::view(operator, signature, source_digest);
+    let viewed = view_types(
+        Some(held),
+        signature,
+        mode,
+        content.carrier_key(),
+        types,
+        scratch,
+    )?;
+    let from = viewed
+        .from
+        .expect("a held signature binds the source's side");
+    build(
+        writer,
+        source,
+        viewed.sig,
+        viewed.view,
+        from,
+        viewed.to,
+        content,
+        types,
+        scratch,
+    )
+}
+
+/// The types a view at `signature` of a module of signature `held` carries, computed from types
+/// alone — everything [`ascribe`] interns before it builds a member. The load computes them at a
+/// `:|` site over a content tree it sees all of, so the run finds each in the root.
+pub struct ViewTypes<'run> {
+    /// The ascribed signature's schema.
+    pub sig: SigSchema<'run>,
+    /// What the source binds the head parameters to: what *fits* solves. `None` where `held` was.
+    pub from: Option<Substitution<'run>>,
+    /// What the view binds them to: the carriers under `:|`, the source's own under `:!`.
+    pub to: Substitution<'run>,
+    /// The view's own signature.
+    pub view: KType,
+}
+
+/// What a view at `signature` of a module whose signature is `held` binds, its carriers keyed on
+/// `key`, the key of the view's content. Without `held` only an opaque view's own side: each
+/// carrier and each pin, which is all [`carriers`] reads of the source's side. Refused where
+/// `signature` names no one application of a signature, or `held` does not fit it.
+pub fn view_types<'run: 'x, 'x>(
+    held: Option<KType>,
+    signature: KType,
+    mode: Ascription,
+    key: ContentKey,
+    types: &Types<'_, 'run>,
+    scratch: BumpAllocator<'x>,
+) -> Result<ViewTypes<'run>, Unascribable<'run, 'x>> {
+    debug_assert!(
+        held.is_some() || mode == Ascription::Opaque,
+        "a transparent view binds what its source does"
+    );
+    let (sig, from, pins) = match held {
+        Some(held) => fitted(held, signature, types, scratch)?,
+        None => {
+            let (sig, _, pins) = applied(signature, types, scratch)?;
+            // `carriers` reads a pinned parameter's binding from what fits solved, which is its pin.
+            let from = Members::from_pairs(
+                scratch,
+                pins.iter().filter_map(|(name, pin)| match name {
+                    BinderSymbol::Type(name) => Some((*name, *pin)),
+                    _ => None,
+                }),
+            );
+            (sig, from, pins)
+        }
+    };
     let to = match mode {
         // Transparent: the parameters keep the source's bindings, so every slot type reads the
         // same either side and the coercion walk stops at its first comparison.
         Ascription::Transparent => from,
         // A carrier is keyed on the view's content. Two views of equal content share one, and the
         // parameter's name keeps two of one view apart.
-        Ascription::Opaque => carriers(&sig, from, &pins, content.carrier_key(), types, scratch),
+        Ascription::Opaque => carriers(&sig, from, &pins, key, types, scratch),
     };
-    let view = view_signature(&sig, to, types, scratch);
-    build(writer, source, sig, view, from, to, content, types, scratch)
+    Ok(ViewTypes {
+        sig,
+        from: held.map(|_| Substitution::interned(from, types, scratch)),
+        to: Substitution::interned(to, types, scratch),
+        view: view_signature(&sig, to, types, scratch),
+    })
+}
+
+impl ViewTypes<'_> {
+    /// Intern each member's declared type read under either side, as the coercion walk reads it
+    /// before it rebuilds a member: each value slot's and each keyworded member's.
+    pub fn lay_members(&self, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) {
+        let declared = self.sig.value_slots.iter().map(|(_, declared)| *declared);
+        for declared in declared.chain(self.sig.keyworded.iter().copied()) {
+            for side in self.from.iter().chain([&self.to]) {
+                substitute_parameters(types, scratch, declared, side.bindings);
+            }
+        }
+    }
 }
 
 /// The signature a transparent view of a module whose signature is `source` carries, seen as
@@ -143,32 +232,9 @@ pub fn opaque_view_type(
     types: &Types<'_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KType> {
-    if !takes(types, signature) {
-        return None;
-    }
-    let mut pins = BumpVec::new_in(scratch);
-    let declared = match types.node(signature) {
-        TypeNode::SignatureApply {
-            signature,
-            pins: pinned,
-        } => {
-            pins.extend(pinned.iter());
-            signature
-        }
-        _ => signature,
-    };
-    let sig = crate::elaborate::schema_of(declared, types)?;
-    // `carriers` reads a pinned parameter's binding from what fits solved, which is its pin.
-    let from = Members::from_pairs(
-        scratch,
-        pins.iter().filter_map(|(name, pin)| match name {
-            BinderSymbol::Type(name) => Some((*name, *pin)),
-            _ => None,
-        }),
-    );
-    let content = ModuleContent::view(Operator::Opaque, signature, source);
-    let to = carriers(&sig, from, &pins, content.carrier_key(), types, scratch);
-    Some(view_signature(&sig, to, types, scratch))
+    let key = ModuleContent::view(Operator::Opaque, signature, source).carrier_key();
+    let viewed = view_types(None, signature, Ascription::Opaque, key, types, scratch).ok()?;
+    Some(viewed.view)
 }
 
 /// The ascribed signature's schema, what a module of signature `held` binds its head parameters
@@ -188,6 +254,26 @@ pub(super) fn fitted<'run: 'x, 'x>(
     ),
     Unascribable<'run, 'x>,
 > {
+    let (sig, declared, pins) = applied(signature, types, scratch)?;
+    // The empty signature asks nothing, and every module fits it.
+    let from = if sig.is_empty() {
+        Members::EMPTY
+    } else {
+        let solution = fits_application(types, scratch, held, declared, &pins)
+            .map_err(Unascribable::Unsatisfied)?;
+        solved(types, scratch, solution)
+    };
+    Ok((sig, from, pins))
+}
+
+/// The ascribed signature's schema, the signature it applies, and the application's pins. Refused
+/// where `signature` names no one application of a signature.
+#[allow(clippy::type_complexity)]
+fn applied<'run: 'x, 'x>(
+    signature: KType,
+    types: &Types<'_, 'run>,
+    scratch: BumpAllocator<'x>,
+) -> Result<(SigSchema<'run>, KType, BumpVec<'x, (BinderSymbol, KType)>), Unascribable<'run, 'x>> {
     if !takes(types, signature) {
         return Err(Unascribable::NotASignature(signature));
     }
@@ -204,15 +290,7 @@ pub(super) fn fitted<'run: 'x, 'x>(
     };
     let sig = crate::elaborate::schema_of(declared, types)
         .ok_or(Unascribable::NotASignature(signature))?;
-    // The empty signature asks nothing, and every module fits it.
-    let from = if sig.is_empty() {
-        Members::EMPTY
-    } else {
-        let solution = fits_application(types, scratch, held, declared, &pins)
-            .map_err(Unascribable::Unsatisfied)?;
-        solved(types, scratch, solution)
-    };
-    Ok((sig, from, pins))
+    Ok((sig, declared, pins))
 }
 
 /// What *fits* solved a module's own signature against an application to. A module's
@@ -235,7 +313,7 @@ fn solved<'x>(
 }
 
 /// Build the view's member run in layout order and lay the node down, its content `content`. `from`
-/// and `to` are what the source and the view bind the signature's head parameters to.
+/// and `to` are what the source and the view bind the signature's head parameters to, interned.
 ///
 /// Two callers: an ascription, and a nested signature slot inside one
 /// ([`coerce`](super::coerce::coerce)), which passes the enclosing substitutions unchanged —
@@ -247,8 +325,8 @@ pub(super) fn build<'graph, 'cell, 'x>(
     source: Knotted<'graph, 'cell>,
     sig: SigSchema<'cell>,
     view: KType,
-    from: Members<'x, TypeSymbol, KType>,
-    to: Members<'x, TypeSymbol, KType>,
+    from: Substitution<'cell>,
+    to: Substitution<'cell>,
     content: ModuleContent,
     types: &Types<'_, 'cell>,
     scratch: BumpAllocator<'x>,
@@ -257,8 +335,8 @@ pub(super) fn build<'graph, 'cell, 'x>(
         writer,
         types,
         scratch,
-        from: Substitution::interned(from, types, scratch),
-        to: Substitution::interned(to, types, scratch),
+        from,
+        to,
     };
     let view_schema = crate::elaborate::schema_of(view, types).expect("the view's own signature");
     let mut members: BumpVec<'x, KValue<'graph, 'cell>> = BumpVec::with_capacity_in(

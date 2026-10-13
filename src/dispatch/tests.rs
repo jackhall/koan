@@ -25,6 +25,7 @@ mod statics;
 mod surface;
 mod tail;
 mod trees;
+mod views;
 
 use std::cell::RefCell;
 

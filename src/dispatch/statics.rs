@@ -113,7 +113,9 @@
 //! run's doors check in debug builds.
 //!
 //! The pass reads each `:|` ascription's operand as a [content tree](crate::scope::Tree) —
-//! [`trees`] — and the cell records it by the ascription's site.
+//! [`trees`] — and the cell records it by the ascription's site. Over a closed tree it lays every
+//! type the view door computes from types alone ([`view_types`](view::view_types)) in the root,
+//! and the run's door checks in debug builds that the tree reads the operand's digest.
 //!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
@@ -122,6 +124,7 @@
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
+use crate::knot::module::ModuleContent;
 use crate::knot::module::view::{self, Ascription, opaque_view_type, transparent_view_type};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
@@ -1908,6 +1911,23 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let tree = self.tree(level, &operand_part.value)?;
                 let tree = resident(self.writer, tree);
                 self.chain[level].trees.push((Site::of_node(node), tree));
+                // Over a closed tree the load lays every type the view door computes from types
+                // alone, so the run's view interns none of its own.
+                if let (Some(digest), Some(signature)) = (
+                    tree.digest(),
+                    declared.and_then(|declared| types.concrete(declared)),
+                ) {
+                    let held = typed
+                        .is_exact()
+                        .then(|| types.concrete(typed.upper))
+                        .flatten();
+                    let key =
+                        ModuleContent::view(Operator::Opaque, signature, digest).carrier_key();
+                    if let Ok(viewed) = view::view_types(held, signature, mode, key, types, scratch)
+                    {
+                        viewed.lay_members(types, scratch);
+                    }
+                }
             }
             return self.viewed(level, node, mode, typed, declared);
         }
