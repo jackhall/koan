@@ -1,8 +1,12 @@
 //! Paths: a type member read through a module at load, as the load resolves it off the module's
-//! content tree, against what the run binds.
+//! content tree, against what the run binds, and the law that a load verdict over drawn functor
+//! programs holds at every run.
+
+use proptest::prelude::*;
 
 use crate::scope::{Leaf, Resolved, Tree};
 
+use super::super::statics::unnarrowed;
 use super::run;
 use super::statics::{body, interval, let_narrowing, loaded, narrowing};
 
@@ -222,4 +226,157 @@ fn each_open_path_reads_back_its_tree() {
         assert!(!source.closed());
         assert!(trees.next().is_none());
     });
+}
+
+/// `SIG Counter`, `SIG Zeroed`, `SAME`, and two functors over a `Counter`: `WRAP` views a body
+/// capturing its parameter, `BUILD` one capturing a local `LET` of a member read.
+const FUNCTORS: &str = "SIG Counter FOR ALL #[Carrier] = \
+                        #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                        SIG Zeroed FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                        EXPR FOR ALL #[Elt] #(SAME a :Elt AND b :Elt) -> Elt = #(a)\n\
+                        EXPR #(WRAP p :Counter) -> Module = #(\n  \
+                        (MODULE built OVER #[p] = ((LET zero = p.zero) (LET succ = p.succ)))\n  \
+                        (built :| Counter))\n\
+                        EXPR #(BUILD p :Counter) -> Module = #(\n  \
+                        (LET start = p.zero)\n  \
+                        (MODULE built OVER #[start] = (LET zero = start))\n  \
+                        (built :| Zeroed))\n";
+
+/// A functor's argument: a `MODULE`, or an earlier binding that is a `Counter`, each picked by
+/// index modulo what there is.
+#[derive(Clone, Copy, Debug)]
+enum Argument {
+    Module(usize),
+    Earlier(usize),
+}
+
+/// A top-level binding of a drawn functor program, each `MODULE` picked by index modulo their
+/// count.
+#[derive(Clone, Copy, Debug)]
+enum Binding {
+    /// The module itself.
+    Module(usize),
+    /// `(m :| Counter)`.
+    Opaque(usize),
+    /// `(m :! Counter)`.
+    Transparent(usize),
+    /// `(WRAP <argument>)`: a `Counter`.
+    Wrap(Argument),
+    /// `(BUILD <argument>)`: a `Zeroed`, so no functor's argument.
+    Build(Argument),
+}
+
+/// A drawn functor program: `MODULE`s over drawn literals, top-level bindings over them, and the
+/// two bindings whose `zero` members `SAME` compares.
+#[derive(Clone, Debug)]
+struct Functors {
+    /// Per `MODULE`, its `zero` and its `succ`'s step: few enough that two often share content.
+    modules: Vec<(u8, u8)>,
+    bindings: Vec<Binding>,
+    pair: (usize, usize),
+}
+
+fn functors() -> impl Strategy<Value = Functors> {
+    let argument = prop_oneof![
+        (0..3usize).prop_map(Argument::Module),
+        (0..4usize).prop_map(Argument::Earlier),
+    ];
+    let binding = prop_oneof![
+        (0..3usize).prop_map(Binding::Module),
+        (0..3usize).prop_map(Binding::Opaque),
+        (0..3usize).prop_map(Binding::Transparent),
+        argument.clone().prop_map(Binding::Wrap),
+        argument.prop_map(Binding::Build),
+    ];
+    (
+        prop::collection::vec((0..2u8, 1..3u8), 2..=3),
+        prop::collection::vec(binding, 2..=4),
+        (0..4usize, 0..4usize),
+    )
+        .prop_map(|(modules, bindings, pair)| Functors {
+            modules,
+            bindings,
+            pair,
+        })
+}
+
+impl Functors {
+    /// The program as source ending in `LET s = (SAME ...)` and `PRINT s`, beside the line of the
+    /// `SAME`.
+    fn render(&self) -> (String, usize) {
+        let mut source = FUNCTORS.to_string();
+        for (at, (zero, step)) in self.modules.iter().enumerate() {
+            source.push_str(&format!(
+                "MODULE m{at} = ((LET zero = {zero}) \
+                 (LET succ = (FN :{{x :Number}} -> Number = #(x + {step}))))\n"
+            ));
+        }
+        let module = |at: usize| format!("m{}", at % self.modules.len());
+        for (at, binding) in self.bindings.iter().enumerate() {
+            let argument = |argument: Argument| match argument {
+                Argument::Module(of) => module(of),
+                Argument::Earlier(of) => {
+                    let counters: Vec<usize> = (0..at)
+                        .filter(|earlier| !matches!(self.bindings[*earlier], Binding::Build(_)))
+                        .collect();
+                    match counters.len() {
+                        0 => module(of),
+                        count => format!("b{}", counters[of % count]),
+                    }
+                }
+            };
+            let value = match *binding {
+                Binding::Module(of) => module(of),
+                Binding::Opaque(of) => format!("({} :| Counter)", module(of)),
+                Binding::Transparent(of) => format!("({} :! Counter)", module(of)),
+                Binding::Wrap(of) => format!("(WRAP {})", argument(of)),
+                Binding::Build(of) => format!("(BUILD {})", argument(of)),
+            };
+            source.push_str(&format!("LET b{at} = {value}\n"));
+        }
+        let count = self.bindings.len();
+        let (first, second) = (self.pair.0 % count, self.pair.1 % count);
+        let line = source.lines().count() + 1;
+        source.push_str(&format!(
+            "LET s = (SAME b{first}.zero AND b{second}.zero)\nPRINT s"
+        ));
+        (source, line)
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..ProptestConfig::default()
+    })]
+
+    /// The load's verdict on two paths through drawn modules, views and functor calls holds at
+    /// every run: where it selects `SAME` over two `zero` members the run prints one, where it
+    /// refuses the use the run faults there, and otherwise the run is the unnarrowed one.
+    #[test]
+    fn a_load_verdict_on_two_paths_holds_at_the_run(program in functors()) {
+        let (source, line) = program.render();
+        let narrowed = run(&source);
+        let whole = unnarrowed(|| run(&source));
+        if narrowed.starts_with("load: ") {
+            prop_assert!(
+                narrowed.starts_with(&format!("load: <test>:{line}:")),
+                "refused away from the use: {}\nin\n{}",
+                narrowed,
+                source
+            );
+            prop_assert!(
+                whole.starts_with("error: ") && !whole.contains('\n'),
+                "{} unnarrowed ran {:?}\nin\n{}",
+                narrowed,
+                whole,
+                source
+            );
+        } else {
+            prop_assert_eq!(&narrowed, &whole, "in\n{}", source);
+            if narrowing(&source, "s") == "selected" {
+                prop_assert!(!narrowed.starts_with("error: "), "{}\nin\n{}", narrowed, source);
+            }
+        }
+    }
 }
