@@ -11,9 +11,11 @@
 //! element — and a **sigil-led line** is a whole layout line whose first atom starts with `#`: the
 //! line's own body is what it quotes. A `$` or `\` is a mark: glued to a paren it wraps one
 //! keyworded use, and leading an atom it marks the name the atom starts with, so no line is led by
-//! one. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. Everything else is an
-//! atom, which [`super::atom`] classifies. The one fact lowering records beyond the tree is the
-//! spelling of each bucket key a `NEEDING` list names, since past the parse a key is its symbol.
+//! one. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. A paren glued to an atom
+//! that starts with `.` reads members of its value, `(MAKESET ints).Set`, through the suffixes a
+//! word runs. Everything else is an atom, which [`super::atom`] classifies. The one fact lowering
+//! records beyond the tree is the spelling of each bucket key a `NEEDING` list names, since past
+//! the parse a key is its symbol.
 //!
 //! See [README.md](README.md) § The division of labour with `sexlex`.
 
@@ -231,7 +233,24 @@ impl<'a, 's> Lower<'a, '_, 's> {
                     kind: kind @ (Kind::Paren | Kind::Layout),
                     items: inner,
                 } => {
-                    let part = self.group_part(item, inner, *kind, wrappers)?;
+                    let mut part = self.group_part(item, inner, *kind, wrappers)?;
+                    // A glued `.name` reads a member of the group's value: `(MAKESET ints).Set`.
+                    if *kind == Kind::Paren
+                        && item.glued
+                        && let Some(next) = items.next_if(
+                            |next| matches!(next.node, Node::Atom(text) if text.starts_with('.')),
+                        )
+                        && let Node::Atom(text) = next.node
+                    {
+                        part = atom::member_reads(
+                            self.program,
+                            self.symbols,
+                            part,
+                            text,
+                            next.span.start,
+                            self.file,
+                        )?;
+                    }
                     self.push_part(context, &mut parts, part)?;
                 }
                 Node::Group {

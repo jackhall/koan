@@ -290,14 +290,20 @@ fixed:
   (`ShapeError::NotASignature`, for `m :| Any` or `m :! (A & B)`), and an exact
   operand whose signature can never fit the ascribed one, which the meet test
   cannot say, since signatures meet to a set and never to `Never`. It is
-  exactly the view's signature under `:!` over an exact operand, and at most
-  the ascribed type otherwise. Every `:!` of a non-signature type is held to
-  its type as above;
+  exactly the view's signature under `:!` over an exact operand, and under `:|`
+  over an operand whose [content tree](#paths) is closed, since the load
+  computes the carriers the run keys on that content; at most the ascribed type
+  otherwise. A call or member read whose tree is a view is likewise exactly the
+  view's signature over a closed tree, and at most the view's application
+  otherwise. Every `:!` of a non-signature type is held to its type as above;
 - a member read `m.f` is the member's type in its operand's upper end, a
   signature or an application of one, each pin substituted: at most the
   member's declared type, a type member's kind where its type is concrete, and
-  unknown where the upper end declares no such member or the member names a
-  head parameter the application leaves unpinned. A lower end that is a
+  unknown where the upper end declares no such member. Where the member names a
+  head parameter the application leaves unpinned and the operand is a name or a
+  chain of member reads rooted at one, that parameter is read as the
+  [path](#paths) through the operand, so `m.zero` and `m.succ` share one type;
+  through any other operand the read is unknown. A lower end that is a
   signature lacking the member makes the candidate *never*, so `geometry.tau`
   refuses the load as `SIG (pi: Number) has no member tau`;
 - a call in tail position is typed as any other call: its node never finishes,
@@ -367,11 +373,18 @@ a `FN FOR ALL` literal — is an **instance site**, typed with the type it is
 A member read `m.f` of a quantified member is an instance site too, where its
 operand is a name or a chain of member reads rooted at one, so the load sees
 the member's scheme without typing the operand. One whose scheme names a head
-parameter its signature leaves unpinned names a type the load cannot write, and
-refuses the load as `UnpinnedMember` anywhere but a call's head; at a call's
-head the run solves the call, as a call by name of a scheme. A read whose
-operand the load cannot see into is no instance site, and the run faults where
-it reads a scheme there.
+parameter its signature leaves unpinned reads that parameter as the
+[path](#paths) through the operand, and is instantiated there like any other:
+with `m :Mapper` declaring
+`VAL apply :(FN FOR ALL #[Elt] :{x :Carrier, y :Elt} -> Elt)`,
+`LET go :(FN :{x :(m.Carrier), y :Number} -> Number) = m.apply` loads. Behind an
+opaque view's barrier the run builds the instance as a barrier of its own
+around the same function (`barrier_instance`). Only where no path through the
+operand is reachable — a name read across a quote's code — does the read refuse
+the load as `UnpinnedMember` anywhere but a call's head; at a call's head the
+run solves the call, as a call by name of a scheme. A read whose operand the
+load cannot see into is no instance site, and the run faults where it reads a
+scheme there.
 
 A wanted type is never split: a union or `Any` fixes nothing. The site is
 instantiated at the least instance of its scheme under the wanted type
@@ -685,6 +698,104 @@ the load and the run make one judgment they call one function, so no net holds
 two copies equal; the [narrowing law](#testing) holds a narrowed call to
 selection over the full list.
 
+### Paths
+
+A **path** reads a type member through a module-valued expression —
+`m.Carrier`, `p.inner.Carrier`, `(MAKESET ints).Set` — as the
+[module design](../../design/modules.md#carriers-and-paths) has it. The type
+channel types each path it spells as a
+[path variable](../elaborate/README.md#the-type-channel-at-load), and the pass
+resolves each one ([`paths`](statics/paths.rs)), just before the unit spelling
+it, off the **content tree** of the module its root names, walked through its
+member chain:
+
+- **closed**, where the load knows that module's signature exactly — the
+  root's exact static type, or a closed opaque view's — and reads the path off
+  it as the run does (`elaborate::path_binding`), where the root's declared
+  application pins the label, or where the member is a type a body binds
+  closed. The path is that type — under a pin, the pin, which *fits* solves the
+  label to at every run;
+- otherwise a **class**: the variable of the first path resolved over a tree
+  [`same_as`](../scope/README.md#load-time-types) its own, at the same label,
+  through the same declared application. Paths of one class are one type, so a
+  call solving one variable from two of them is *always*; paths of two classes
+  are *maybe*; carriers over two different closed trees are *never*.
+
+Every cell the type channel fixed is read through those resolutions. A path in
+a type expression through a module built in place that does not resolve closed
+refuses the load as `ShapeError::OpenPathInType`:
+
+```text
+this type reads a member of a module built by a call written in place, and a call in a type is never made; bind the call with `LET` to name its type
+```
+
+**Content trees.** The pass reads a module-valued expression's tree
+([`trees`](statics/trees.rs)) as the
+[module design](../../design/modules.md#the-load-and-the-run) tables it,
+memoized per shape and site, a binder read through itself reading as a leaf.
+A call **unfolds** where the load knows its callee: a keyworded use selected at
+one registration whose `FOR ALL` variables solve to closed points, or a call by
+name of an unquantified closure over a record literal. Its tree is the callee's
+**summary** — the tree of its body's last statement, its parameters leaves —
+with each argument's tree and each variable's point substituted, and every
+other leaf of the callee's body keyed on the call. A leaf on a `MODULE` or
+`GROUP` body's binder is keyed on the body's builder captures instead, wherever
+it is read, since they say which run of the body holds it. The callee is typed
+on demand before its first unfolded call; one met while it is being typed, and
+every callee typed since, is recursive and never unfolds, so whether a call
+unfolds does not turn on declaration order. Each `:|` site records its
+operand's tree in the cell, which `BodyShape::view_tree` reads back.
+
+**Where the run reads a path.** No value carries a path variable. The run binds
+one where it substitutes a cell (`elaborate::bound_path`): a closed path at its
+type, and any other by reading the module at the root's coordinate, walking its
+member chain and reading the label — through *fits* against the root's declared
+application where that application names the label a head parameter, as the
+view door fits, and as the module's own type member otherwise. A declared
+application naming lexical variables is located per reading shape and solved
+there. The pass adds no capture for a path: a use
+records a path variable at a path of its class whose root the reading shape
+reaches through its blocks and builder captures, and a static type read across a
+callable or module boundary reads each path variable no reachable path stands
+for through its bounds, its upper end from above and its lower end from below.
+
+**Pins are read, not stored.** A member read through a name chain pins the
+operand's unpinned head parameters to their paths only while it reads the
+member (`elaborate::applied_member`). No static type holds an application
+pinning a parameter to a path: the lattice reads a pin through its bounds
+covariantly where the order compares pins invariantly, so such a type read
+through its bounds would be no upper end
+([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
+
+**Closed views at load.** At a `:|` site over a closed tree the pass calls the
+view door's type half,
+[`view_types`](../knot/module/README.md#the-view-door), into the root's
+registry: each carrier and the view's signature and, where the load knows what
+the operand carries, what *fits* solves, each member's declared type under
+either side and the types of each nested module's re-view, at any depth
+([`views`](statics/views.rs)). What a module carries is read off its tree: a
+`MODULE` body's exact signature, which the pass keeps by body; a transparent
+view's, from its source's; and a member an opaque view rebuilt, as the coercion
+walk rebuilds it, a list's or dict's cells of several signatures one by one.
+The pass keeps what each read yields — a view over a closed tree by its print, a
+value a view rebuilt by what it was rebuilt from — so a chain of views reads
+each link once. Over an opaque view whose source the load does not type
+exactly, a member is read at the type the view declares for it. Where no tree
+shows a member — one written in a container literal, bound to a parameter or
+returned by a call the load does not unfold — its exact type stands for it, and
+a view of that type is read as its signature declares its members
+([the content tree's horizon](../../design/modules.md#the-load-and-the-run)).
+A member declared at an application fixing each parameter of its signature is
+read as if it carried that application, its own members at their declared
+types under the pins, so its re-view is laid at any depth. Two re-views stay
+the run's: one from an application that leaves a parameter open, and one from
+an application pinning a parameter above what the member's values realize,
+through a slot that leaves that parameter open, where *fits* solves the run's
+re-view off the values. An exact `:!` lays its bindings the same way. The run's view door then interns
+none of them, and asserts in debug builds that the closed tree's digest is the
+operand's; the pass asserts that what the tree shows the operand carries is its
+exact static type, where it has both.
+
 ## Tails under a contract
 
 An evaluation a frame [tails into](../program/README.md#frames-contracts-and-tails)
@@ -914,7 +1025,9 @@ by name, through a chain and by a quoted label, a type member read through a
 module name and through a view's nested member, a module binder exactly the
 signature the run ties, the load refusals — a view every run's door refuses
 among them — and the run faults, a quantified member instantiated where it is
-wanted and one over an unpinned parameter read only at a call's head, `USING`
+wanted and one over an unpinned parameter instantiated at its path, a path
+through a parameter read as the module fits its declared application, the pin
+where it pins the label, `USING`
 blocks opening names and spreading every overload at a key, calls through a
 barrier both ways — two of them on the [Miri slate](../../observe/miri_slate.md) —
 the union rule, the capture contract over each kind of outer name, and carriers
@@ -922,7 +1035,28 @@ keyed on content; [digests](tests/digests.rs) — content digests over programs
 that run: equal values alike, a closure and a module as their code over what
 they capture, a top-level read named by its binding, a ring as one knot, one
 text resolving apart digesting apart, and a view as its operator and
-application over its source; and [tail](tests/tail.rs), a keyworded tail
+application over its source; [trees](tests/trees.rs) — the content tree
+each `:|` site reads back over a parameter, a capture, a local, an expression
+no binder names, a `MODULE` body over literals and a call that unfolds, a
+closed tree's digest against the run's, a functor ignoring its argument, a leaf
+keyed on a call's arguments or a body's captures, and recursive functors never
+unfolding; [paths](tests/paths.rs) — two member reads through one path sharing
+a type, two paths compared by their trees, a path through a call the carrier
+the run computes, a type through an inline call over a leaf refused, each open
+path's tree read back, a quantified member read through a call instanced or
+refused, a functor body written on one line unfolding, and the law that a load
+verdict on two paths through drawn modules, views and functor calls holds at
+every run;
+[views](tests/views.rs) — a view of a body over literals laying no type at run,
+and views laying every nested module's re-view at load: in a slot, a record
+field, a list (empty, or of modules of two signatures) or a dict, two deep,
+under a transparent or opaque view or a chain of them, at a slot leaving a
+nested parameter unset, over a list or dict of modules of two signatures viewed
+twice, and inside a record literal past the tree's horizon; a lone `:!` laying
+its types; a view inside a record literal over a slot leaving a parameter open,
+running; and a chain of views over a module the load types at most, re-viewing
+at run no more than its first view does;
+and [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md). Every runnable
 tutorial snippet is checked against its shown output by
@@ -936,11 +1070,10 @@ tutorial snippet is checked against its shown output by
   values, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
   and `Result`.
-- [Path types](../../roadmap/gradual-typing/path-types.md) — a type member named at
-  load through a module-valued expression, and a quantified member over an
-  unpinned head parameter instantiated through its path.
-- [Shape branches](../../roadmap/type-tiers/shape-branches.md) — the atom-born
-  bit per value binder, and the ties it marks.
+- [The host's scratch as a type cache](../../roadmap/type-tiers/host-scratch-cache.md)
+  — the mint-site classes and the invariance fixpoint.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
-  overlap check skipping a quantified registration, and a warning for an
-  overload never selected.
+  overlap check skipping a quantified registration, a warning for an overload
+  never selected, a pin read through its bounds, a quantified callable's
+  parameter at an application over its own group, and a quote reading a view's
+  quantified member.

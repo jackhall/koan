@@ -1,11 +1,12 @@
 //! Members born coerced: what an opaque view does to each thing it carries across its barrier.
 //!
 //! Under `:|` a view's unpinned head parameters are carriers, so a member declared at one of
-//! them has a type other than the one it has in the source. The member is therefore not carried but rebuilt at
-//! the view's types: data is re-tagged through the admission barrier, a container is rebuilt part
-//! by part from what its type shows — a record from the fields its slot declares, and no other —
-//! and re-stamped, a nested module is re-viewed, and a function is wrapped in a
-//! [barrier node](super::Coerced) a call will later go through.
+//! them has a type other than the one it has in the source. The member is therefore not carried
+//! but rebuilt at the view's types: data is re-tagged through the admission barrier, a container
+//! is rebuilt part by part from what its type shows — a record from the fields its slot declares,
+//! and no other — and laid at its slot's type, a nested module is re-viewed, and a function is
+//! wrapped in a [barrier node](super::Coerced) a call will later go through. Each type the walk
+//! reads is one the load lays at a view it sees all of ([`ViewTypes`](super::view::ViewTypes)).
 //!
 //! **The walk recurses on the declared type**, never on the two substituted types in lockstep. A
 //! union interns its members in a canonical order, so the source's substitution and the view's do
@@ -253,12 +254,11 @@ pub fn coerce<'graph, 'cell>(
                 let cell = surface.child(at, cx.types, cx.scratch).value();
                 cells.push(coerce(cx, cell, element.into())?);
             }
-            let built = List::new(cx.writer, cells.iter().copied(), cx.types, cx.scratch);
-            Ok(Value::List(if built.ktype() == dst {
-                built
-            } else {
-                built.with_type(cx.writer, dst)
-            }))
+            Ok(Value::List(List::typed(
+                cx.writer,
+                cells.iter().copied(),
+                dst,
+            )))
         }
         // Keys are untouched: a dict's key type names no parameter a view hides.
         TypeNode::Dict {
@@ -273,12 +273,9 @@ pub fn coerce<'graph, 'cell>(
                 let cell = surface.child(at, cx.types, cx.scratch).value();
                 entries.push((*surface.key(at), coerce(cx, cell, cell_type.into())?));
             }
-            let built = Dict::new(cx.writer, &entries, cx.types, cx.scratch);
-            Ok(Value::Dict(if built.ktype() == dst {
-                built
-            } else {
-                built.with_type(cx.writer, dst)
-            }))
+            Ok(Value::Dict(Dict::typed(
+                cx.writer, &entries, dst, cx.scratch,
+            )))
         }
         TypeNode::Record { fields } => {
             let (Value::Record(_), Some(dst)) = (value, dst_type) else {
@@ -292,12 +289,9 @@ pub fn coerce<'graph, 'cell>(
                     .value();
                 built.push((binder, coerce(cx, cell, field_type.into())?));
             }
-            let built = Record::new(cx.writer, &built, cx.types, cx.scratch);
-            Ok(Value::Record(if built.ktype() == dst {
-                built
-            } else {
-                built.with_type(cx.writer, dst)
-            }))
+            Ok(Value::Record(Record::typed(
+                cx.writer, &built, dst, cx.scratch,
+            )))
         }
         // The member whose source side admits the value, by a rule blind to the union's member
         // order: where several do, the one naming a head parameter the view reads otherwise — a
@@ -354,24 +348,24 @@ pub fn coerce<'graph, 'cell>(
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
-            let TypeNode::SignatureApply { pins: to_pins, .. } = cx.types.node(dst) else {
-                return Err(unsupported);
-            };
-            let (schema, from, _) = view::fitted(module.ktype(), src, cx.types, cx.scratch)
+            let nested = view::nested_types(module.ktype(), src, dst, cx.types, cx.scratch)
                 .map_err(|_| CoercionRefused::Nested)?;
-            let to = Members::from_pairs(
-                cx.scratch,
-                from.iter().map(|(name, solved)| {
-                    let pinned = to_pins.get(BinderSymbol::Type(*name).symbol());
-                    (*name, pinned.unwrap_or(*solved))
-                }),
-            );
-            let view = view::view_signature(&schema, to, cx.types, cx.scratch);
+            let from = nested
+                .from
+                .expect("a nested module's signature binds the source's side");
             // A nested view is the enclosing opaque one's, at the application its slot reads.
             let content =
                 ModuleContent::view(Operator::Reviewed, dst, value.digest(cx.types, cx.scratch));
             view::build(
-                cx.writer, member, schema, view, from, to, content, cx.types, cx.scratch,
+                cx.writer,
+                member,
+                nested.sig,
+                nested.view,
+                from,
+                nested.to,
+                content,
+                cx.types,
+                cx.scratch,
             )
             .map(Value::Knotted)
             .map_err(|_| CoercionRefused::Nested)

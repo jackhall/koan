@@ -501,3 +501,36 @@ fn an_eager_cycle_through_a_registration_names_its_key() {
         "these bindings need each other's values before any of them exists: `a` `GREET _`"
     );
 }
+
+/// A type read off a call's result, `:((GREET 1).Name)`, roots its path at a value expression,
+/// so the call's keyworded use resolves as it would in value position.
+#[test]
+fn a_use_rooting_a_path_in_a_type_has_its_candidates() {
+    let source = "EXPR #(GREET x :Number) -> Number = #(x)\nLET a :((GREET 1).Name) = 1";
+    built(source, |_, shape| {
+        let registration = shape.registrations()[0].slot;
+        let ExpressionPart::SigiledTypeExpr(path) = &shape.body()[1].parts[2].value else {
+            panic!("a sigiled type");
+        };
+        let mut path = path.reference();
+        // Peel the sigil's own paren down to the member read.
+        while let [only] = path.parts {
+            path = node_of(&only.value);
+        }
+        let [_, root, _] = path.parts else {
+            panic!("a member read");
+        };
+        let list = candidates(shape, node(&root.value));
+        assert_eq!(list.candidates, [local(0, registration)]);
+    });
+}
+
+/// The node a parenthesized or sigiled part holds.
+fn node_of<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
+    match part {
+        ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
+            node.reference()
+        }
+        _ => panic!("a node"),
+    }
+}

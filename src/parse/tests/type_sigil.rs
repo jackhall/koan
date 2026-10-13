@@ -103,3 +103,29 @@ fn the_flip_reaches_quote_bodies() {
         "a quote body's type slot takes the flip",
     );
 }
+
+// --- A member read off a group ---
+
+/// A `.name` glued to a closing paren reads a member of the paren's value, in value and type
+/// position alike, and its suffixes chain as they do after a name.
+#[test]
+fn a_member_read_glued_to_a_group_reads_through_its_value() {
+    assert_eq!(
+        tree("(MAKESET ints).name").unwrap(),
+        "[[t(ATTR) [t(MAKESET) t(ints)] t(name)]]"
+    );
+    assert_eq!(
+        tree(":((MAKESET ints).Name)").unwrap(),
+        "[:(t(ATTR) [t(MAKESET) t(ints)] T(Name))]"
+    );
+    assert_eq!(
+        tree("(MAKESET ints).inner.Name").unwrap(),
+        "[:(t(ATTR) [t(ATTR) [t(MAKESET) t(ints)] t(inner)] T(Name))]"
+    );
+}
+
+/// Whitespace before the `.` leaves the atom on its own, where a leading dot is refused.
+#[test]
+fn a_spaced_member_read_after_a_group_is_refused() {
+    assert!(tree("(MAKESET ints) .name").is_err());
+}

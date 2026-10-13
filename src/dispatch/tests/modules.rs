@@ -78,7 +78,7 @@ fn a_type_member_is_read_through_a_module_name() {
 
 /// A type path through a view reads each member at the type the view's signature declares it: a
 /// nested module declared at an application reads its pinned head parameter, as `v.inner` then
-/// `.Elem` does.
+/// `.Elem` does. The load sees the view exactly, so a value that can never be that type refuses it.
 #[test]
 fn a_type_path_through_a_view_reads_the_member_a_stepwise_read_does() {
     let program = |value: &str| {
@@ -96,7 +96,7 @@ fn a_type_path_through_a_view_reads_the_member_a_stepwise_read_does() {
     assert_eq!(run(&program("\"s\"")), "s\nStr");
     assert_eq!(
         run(&program("1")),
-        "error: Number does not satisfy its annotation Str"
+        "load: <test>:5:1: this value is Number, which can never satisfy its annotation Str"
     );
 }
 
@@ -239,25 +239,49 @@ fn a_quantified_member_is_instantiated_where_it_is_wanted() {
     );
 }
 
-/// A quantified member over a head parameter its signature leaves unpinned is refused anywhere but
-/// a call's head, where the run solves the call.
+/// `SIG Mapper`, whose quantified `apply` names its head parameter, and `MODULE nums`, which fits
+/// it.
+const MAPPER: &str = "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier) \
+                      (VAL apply :(FN FOR ALL #[Elt] :{x :Carrier, y :Elt} -> Elt))]\n\
+                      MODULE nums = ((LET seed = 1) \
+                      (LET apply = (FN FOR ALL #[Elt] :{x :Number, y :Elt} -> Elt = #(y))))\n";
+
+/// A quantified member over a head parameter its signature leaves unpinned is instantiated where
+/// it is wanted, the parameter read as the path through its module: at a closed view's carrier,
+/// and through a parameter at its path, so a plain module and a view behind its barrier both run.
+/// An instance the wanted type can never fix still refuses the load, and a call's head still reads
+/// the member as it is.
 #[test]
-fn a_quantified_member_over_an_unpinned_parameter_is_read_only_at_a_call_s_head() {
-    let applier = "SIG Applier FOR ALL #[Carrier] = \
-                   #[(VAL apply :(FN FOR ALL #[Elt] :{x :Elt, c :Carrier} -> Elt))]\n";
+fn a_quantified_member_over_an_unpinned_parameter_is_instantiated_at_its_path() {
+    let wanted = "LET go :(FN :{x :(m.Carrier), y :Number} -> Number) = m.apply";
     assert_eq!(
         run(&format!(
-            "{applier}EXPR #(USEIT p :Applier) -> Any = \
-             #(LET w :(FN :{{x :Str, c :Number}} -> Str) = p.apply)"
+            "{MAPPER}LET m = (nums :| Mapper)\n{wanted}\nPRINT (go {{x = m.seed, y = 4}})"
         )),
-        "load: <test>:2:79: `apply` is quantified over `Carrier`, which the load cannot name \
-         here; call it, or ascribe its module with `Carrier` pinned"
+        "4"
     );
     assert_eq!(
         run(&format!(
-            "{applier}EXPR #(USEIT p :Applier) -> Any = #(p.apply {{x = 1, c = 2}})\nPRINT \"ok\""
+            "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = #(({wanted}) (go {{x = m.seed, y = 4}}))\n\
+             PRINT (USEIT nums)\n\
+             PRINT (USEIT (nums :| Mapper))"
         )),
-        "ok"
+        "4\n4"
+    );
+    assert_eq!(
+        run(&format!(
+            "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = \
+             #(LET go :(FN :{{x :(m.Carrier), y :Number}} -> Str) = m.apply)"
+        )),
+        "load: <test>:3:87: :(FN FOR ALL #[Elt] :{x :Carrier y :Elt} -> Elt) has no instance \
+         under :(FN :{x :Never y :Number} -> Str)"
+    );
+    assert_eq!(
+        run(&format!(
+            "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = #(m.apply {{x = m.seed, y = 2}})\n\
+             PRINT (USEIT nums)"
+        )),
+        "2"
     );
 }
 
@@ -372,7 +396,9 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
 
 /// A head parameter's bound decides which modules fit, and nothing more: outside the view a sealed
 /// member is opaque, so no `Number` slot, builtin or annotation takes it, while the view's own
-/// functions see its payload behind their barriers, and the view still fits its signature.
+/// functions see its payload behind their barriers, and the view still fits its signature. A view
+/// of a module the load sees all of is known at load, carrier and all, so a use of its member no
+/// `Number` slot takes refuses the load; one through a parameter is refused where it runs.
 #[test]
 fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
     let source = |program: &str| {
@@ -390,17 +416,23 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
         )
     };
     let refused_plus = "error: no overload of `_ + _` admits (Carrier, Number)";
-    let refused_take = "error: no overload of `TAKE _` admits (SIG (Carrier: Carrier, zero: \
-                        Carrier, succ: :(FN :{x :Carrier} -> Carrier)))";
+    let refused_take = "no overload of `TAKE _` admits (SIG (Carrier: Carrier, zero: Carrier, \
+                        succ: :(FN :{x :Carrier} -> Carrier)))";
+    let loaded_take = format!("load: <test>:10:7: {refused_take}");
+    let ran_take = format!("error: {refused_take}");
     for (program, printed) in [
-        ("PRINT (c.zero + 1)", refused_plus),
+        (
+            "PRINT (c.zero + 1)",
+            "load: <test>:10:7: no overload of `_ + _` admits (Carrier, Number)",
+        ),
         (
             "PRINT (SHOW c.zero)",
-            "error: no overload of `SHOW _` admits (Carrier)",
+            "load: <test>:10:7: no overload of `SHOW _` admits (Carrier)",
         ),
         (
             "LET n :Number = c.zero\nPRINT n",
-            "error: Carrier does not satisfy its annotation Number",
+            "load: <test>:10:1: this value is Carrier, which can never satisfy its annotation \
+             Number",
         ),
         ("PRINT (c.zero == 4)", "false"),
         ("PRINT (c.succ {x = c.zero})", "Carrier(5)"),
@@ -409,8 +441,8 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
         ("PRINT (STEP c)", "Carrier(5)"),
         // A bounded parameter offers no `Number`, so neither the view nor a `Counter` fits `Plain`.
         ("PRINT (TAKE ints)", "5"),
-        ("PRINT (TAKE c)", refused_take),
-        ("PRINT (PASS c)", refused_take),
+        ("PRINT (TAKE c)", &loaded_take),
+        ("PRINT (PASS c)", &ran_take),
     ] {
         assert_eq!(run(&source(program)), printed, "{program}");
     }
@@ -712,4 +744,62 @@ fn a_functor_s_carrier_follows_what_its_module_captures() {
         "false",
         "one body listing two top-level names"
     );
+}
+
+#[test]
+fn a_path_through_a_parameter_is_what_its_module_fits_the_declared_type_at() {
+    let source = "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier)]\n\
+                  LET carrier = (FN :{p :Mapper} -> Any = #(:(p.Carrier)))\n\
+                  MODULE plain = (LET seed = 1)\n\
+                  MODULE raw = ((LET Carrier = Str) (LET seed = 2))\n\
+                  PRINT (carrier {p = (plain :| Mapper)})\n\
+                  PRINT (carrier {p = plain})\n\
+                  PRINT (carrier {p = raw})\n\
+                  PRINT raw.Carrier";
+    assert_eq!(
+        run(source),
+        "Carrier\nNumber\nNumber\nStr",
+        "a view's carrier, the type a plain module realizes, and that type again where the \
+         module binds `Carrier` to another, which a read through the module itself reads"
+    );
+}
+
+/// Through a parameter declared at an application pinning the label, the path is the pin: at load,
+/// which refuses a value off it, and at run, over a module that names no such type member.
+#[test]
+fn a_path_through_a_parameter_reads_the_pin_of_its_declared_application() {
+    let program = |value: &str| {
+        format!(
+            "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier)]\n\
+             MODULE plain = (LET seed = 1)\n\
+             LET carrier = (FN :{{p :(Mapper WITH {{Carrier = Number}})}} -> Any = #(:(p.Carrier)))\n\
+             PRINT (carrier {{p = plain}})\n\
+             LET keep = (FN :{{p :(Mapper WITH {{Carrier = Number}})}} -> Any = \
+             #((LET x :(p.Carrier) = {value}) (PRINT x)))\n\
+             keep {{p = plain}}"
+        )
+    };
+    assert_eq!(run(&program("2")), "Number\n2");
+    assert_eq!(
+        run(&program("\"s\"")),
+        "load: <test>:5:66: this value is Str, which can never satisfy its annotation Number"
+    );
+}
+
+/// A pin of one head parameter decides which of a module's overloads fits a keyworded member, and
+/// so what another parameter solves to: the path reads through the declared application, pins and
+/// all, even where a pin names a type the run binds and the reader names it nowhere.
+#[test]
+fn a_path_reads_through_every_pin_of_its_declared_application() {
+    let source = "SIG Mapper FOR ALL #[Carrier Elt] = \
+                  #[(VAL make :(FN :{n :Number} -> Carrier)) \
+                  (EXPR #(STEP _ :Carrier _ :Elt) -> Carrier)]\n\
+                  MODULE two = ((LET make = (FN :{n :Number} -> Number = #(n))) \
+                  (EXPR #(STEP x :Number y :Str) -> Number = #(x)) \
+                  (EXPR #(STEP x :(Number | Bool) y :Number) -> (Number | Bool) = #(x)))\n\
+                  EXPR #(READER Elt :Type m :Any) -> Any = \
+                  #((LET p :(Mapper WITH {Elt = Elt}) = m) ((FN :{} -> Any = #(:(p.Carrier))) {}))\n\
+                  PRINT (READER Number two)\n\
+                  PRINT (READER Str two)";
+    assert_eq!(run(source), ":(Number | Bool)\nNumber");
 }

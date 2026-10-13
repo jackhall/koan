@@ -21,7 +21,7 @@
 
 use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
 use crate::knot::module::layout;
-use crate::knot::{KBuiltins, KValue, UsingRefused, builtin, instance, using};
+use crate::knot::{KBuiltins, KValue, UsingRefused, barrier_instance, builtin, instance, using};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
 use crate::scope::{Builtins, InstanceRead, Site};
@@ -357,18 +357,18 @@ pub(super) fn run<'graph, 'here>(
             // is at a call's head.
             match at.view.shape().instance_at(Site::of_node(node)) {
                 Some(InstanceRead::AsIs) => member,
-                // A quantified member behind a barrier names a carrier, which the load refuses to
-                // instantiate at.
-                Some(InstanceRead::Solved(solution)) => {
-                    match member.as_callable().filter(|f| f.function().is_some()) {
-                        Some(function) => Value::Knotted(instance(
-                            writer, function, solution, &at.view, types, scratch,
-                        )),
-                        None => raise(Raised::BarrierInstance {
-                            name: name.symbol(),
-                        }),
-                    }
-                }
+                Some(InstanceRead::Solved(solution)) => match member.as_callable() {
+                    Some(function) if function.function().is_some() => Value::Knotted(instance(
+                        writer, function, solution, &at.view, types, scratch,
+                    )),
+                    // Behind an opaque view's barrier: a barrier at the instance.
+                    Some(barrier) if barrier.coerced().is_some() => Value::Knotted(
+                        barrier_instance(writer, barrier, solution, &at.view, types, scratch),
+                    ),
+                    _ => raise(Raised::BarrierInstance {
+                        name: name.symbol(),
+                    }),
+                },
                 None if member.ktype().as_type().is_none() => raise(Raised::QuantifiedMember {
                     name: name.symbol(),
                 }),

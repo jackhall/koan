@@ -57,6 +57,7 @@ use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, display_name,
+    instantiate_quantified,
 };
 use crate::values::{ContentDigest, Knotted, Types};
 
@@ -64,9 +65,10 @@ use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
+use super::tree::Tree;
 use super::typed::{
-    BodyClass, Elaboration, InstanceRead, Static, StaticCallable, StaticRegistered, StaticSolution,
-    StaticType, Statics, UseStatics,
+    BodyClass, Elaboration, InstanceRead, PathEntry, PathRead, Static, StaticCallable,
+    StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
 };
 
 mod build;
@@ -429,6 +431,9 @@ pub struct TypeExpression<'graph> {
     /// The statement it is written in, by index into [`BodyShape::body`] — where a refusal about it
     /// is located.
     pub statement: u32,
+    /// Its place among the body's type expressions in program order, which a pass that mints
+    /// anything per expression walks them in: a site is an address, whose order says nothing.
+    pub order: u32,
     /// For a guard: the site of its arm set, and its place among the arms in written order.
     pub guard: Option<(Site, u32)>,
     typed: Cell<StaticType<'graph>>,
@@ -549,6 +554,12 @@ pub struct BodyShape<'graph> {
     /// activation its birth reads: closure slot `captures.len() + i`. Empty for every kind but a
     /// callable and a module.
     type_captures: &'graph Cell<&'graph [Coordinate]>,
+    /// Each path spelling this body's type expressions read, by site: where the body reads its
+    /// root, and its entry. Written once, by the type channel.
+    path_reads: &'graph Cell<Keyed<'graph, (Site, PathRead<'graph>)>>,
+    /// Every path entry of the chain this body roots, by level: empty for a body rooting none.
+    /// Written by the type channel, then by the static pass, which adds its own.
+    paths: &'graph Cell<&'graph [&'graph PathEntry<'graph>]>,
     /// The value channel's static types and each keyworded use's statics, fixed by the language's
     /// load pass.
     statics: &'graph Cell<Option<Statics<'graph>>>,
@@ -711,6 +722,11 @@ impl<'graph> BodyShape<'graph> {
             .is_none_or(|top| top.is_none())
     }
 
+    /// The top-level slot capture `capture` reads, where it reads the program's top level.
+    pub fn top_capture(&self, capture: CaptureSlot) -> Option<Slot> {
+        self.top_captures.get(capture.index()).copied().flatten()
+    }
+
     pub fn components(&self) -> &'graph [Component<'graph>] {
         self.components
     }
@@ -850,6 +866,34 @@ impl<'graph> BodyShape<'graph> {
         binder.registered.set(typed);
     }
 
+    /// A callable body's function type as its body reads it: its own group instantiated at its
+    /// group levels. `None` where the load did not type the callable.
+    pub fn in_body(&self, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> Option<Parametric> {
+        let ktype = match self.callable_type() {
+            Static::Closed(callable) => callable.ktype.into(),
+            Static::Rigid {
+                value: callable, ..
+            } => callable.ktype,
+            Static::Unknown => return None,
+        };
+        match ktype {
+            DeclaredType::Type(ktype) => Some(ktype),
+            DeclaredType::Scheme(scheme) => {
+                debug_assert_eq!(
+                    scheme.group(types).bounds.len(),
+                    self.group_levels().len(),
+                    "the type channel numbered the callable's own group"
+                );
+                Some(instantiate_quantified(
+                    types,
+                    scratch,
+                    scheme,
+                    self.group_levels(),
+                ))
+            }
+        }
+    }
+
     /// Written once, by the load pass.
     pub fn fix_callable(&self, typed: StaticCallable<'graph>) {
         debug_assert_eq!(self.kind, ShapeKind::Callable);
@@ -924,6 +968,59 @@ impl<'graph> BodyShape<'graph> {
         self.refusal.set(Some(refusal));
     }
 
+    /// Every path spelling this body's type expressions read, sorted by site.
+    pub fn path_reads(&self) -> &'graph [(Site, PathRead<'graph>)] {
+        self.path_reads.get().entries()
+    }
+
+    /// The path spelling this body's type expressions read at `site`, where they read one.
+    pub fn path_read(&self, site: Site) -> Option<PathRead<'graph>> {
+        self.path_reads.get().get(site).map(|(_, read)| *read)
+    }
+
+    /// Written once, by the type channel.
+    pub fn fix_path_reads(&self, reads: Keyed<'graph, (Site, PathRead<'graph>)>) {
+        debug_assert!(self.path_reads.get().is_empty());
+        self.path_reads.set(reads);
+    }
+
+    /// The path entry at `level` of the chain this body roots.
+    pub fn path_entry(&self, level: usize) -> Option<&'graph PathEntry<'graph>> {
+        let paths = self.paths.get();
+        let first = paths.first()?.level;
+        paths.get(level.checked_sub(first)?).copied()
+    }
+
+    /// Every path entry of the chain this body roots, in level order.
+    pub fn paths(&self) -> &'graph [&'graph PathEntry<'graph>] {
+        self.paths.get()
+    }
+
+    /// Written once, by the type channel, on a chain's root.
+    pub fn fix_channel_paths(&self, paths: &'graph [&'graph PathEntry<'graph>]) {
+        debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
+        debug_assert!(self.paths.get().is_empty());
+        self.paths.set(paths);
+    }
+
+    /// Written once, by the static pass, on a chain's root: every entry, the type channel's first.
+    pub fn fix_paths(&self, paths: &'graph [&'graph PathEntry<'graph>]) {
+        debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
+        debug_assert!(
+            (self.paths.get().iter())
+                .zip(paths)
+                .all(|(channel, all)| std::ptr::eq(*channel, *all))
+        );
+        self.paths.set(paths);
+    }
+
+    /// Where this body reads each lexical variable of the path at `level`'s
+    /// [`through`](PathEntry::through), where it names any.
+    pub fn through_at(&self, level: usize) -> Option<&'graph [Variable<'graph>]> {
+        let statics = self.statics.get()?;
+        statics.throughs.get(level).map(|(_, located)| *located)
+    }
+
     /// The value channel's load-time facts, once the language's load pass has fixed them.
     pub fn statics(&self) -> Option<Statics<'graph>> {
         self.statics.get()
@@ -965,6 +1062,12 @@ impl<'graph> BodyShape<'graph> {
         self.statics
             .get()
             .is_some_and(|statics| statics.minting.get(site).is_some())
+    }
+
+    /// The content tree of the operand of the `:|` ascription whose node sits at `site`, once the
+    /// load has run.
+    pub fn view_tree(&self, site: Site) -> Option<&'graph Tree<'graph>> {
+        self.statics.get()?.trees.get(site).map(|(_, tree)| *tree)
     }
 
     /// Whether the load settled the ascription at `site`: its operand's static upper end lies under
@@ -1060,6 +1163,16 @@ impl<'graph> BodyShape<'graph> {
 /// or node's around it. `None` when `node` does not hold the part.
 pub fn source_of(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
     build::source_within(node, site)
+}
+
+/// Call `visit` on every part within `node`, at any depth, in written order.
+pub fn each_part<'a>(node: &'a KExpression<'a>, mut visit: impl FnMut(&'a ExpressionPart<'a>)) {
+    build::each_part_within(node, &mut visit)
+}
+
+/// The part at `site` within `node`, at any depth. `None` when `node` does not hold it.
+pub fn part_of<'a>(node: &'a KExpression<'a>, site: Site) -> Option<&'a ExpressionPart<'a>> {
+    build::part_within(node, site)
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible
@@ -1258,6 +1371,9 @@ pub enum ShapeError<'graph> {
     /// a top-level statement — where its `OVER` list does not name it. A registration is named by
     /// its key.
     Unlisted { name: BinderSymbol, at: SourceRef },
+    /// A type expression reading a type member through a module built by an expression written in
+    /// place, at `at`, whose content the load cannot see: the run builds no module there.
+    OpenPathInType { at: SourceRef },
     /// A quantified member read anywhere but a call's head whose scheme names `parameter`, a head
     /// parameter its module's signature leaves unpinned, which the load cannot name there.
     UnpinnedMember {
@@ -1402,6 +1518,7 @@ impl ShapeError<'_> {
             | ShapeError::NoField { at, .. }
             | ShapeError::NoMember { at, .. }
             | ShapeError::Unlisted { at, .. }
+            | ShapeError::OpenPathInType { at }
             | ShapeError::UnpinnedMember { at, .. }
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
@@ -1641,6 +1758,10 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_> {
                     name(read)
                 )
             }
+            ShapeError::OpenPathInType { .. } => f.write_str(
+                "this type reads a member of a module built by a call written in place, and a \
+                 call in a type is never made; bind the call with `LET` to name its type",
+            ),
             ShapeError::UnpinnedMember {
                 member, parameter, ..
             } => write!(

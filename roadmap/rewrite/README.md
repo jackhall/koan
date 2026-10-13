@@ -126,19 +126,16 @@ as surprises, not scheduled.
   but a hop placed `Shares` lays the next frame's activation and argument
   record down in the region of the cell it shares, which reclaims nothing until
   that cell finishes, so the recursion's memory still grows with its depth — and
-  the types it builds with it, in the host's
-  [branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)
-  ([shape branches](../type-tiers/shape-branches.md) release a sealed body's at the loop's
-  end). The hints
+  the types a porous body builds with it, in the host's
+  [branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches);
+  a sealed body's go to a scratch branch instead
+  ([the host's scratch as a type cache](../type-tiers/host-scratch-cache.md)).
+  The hints
   already separate a result's home from the frame's region, so a hop could place
   its activation and temporaries `Fresh`, recycled per hop, and build only what
-  it returns into the home; what is open is how a step tells result bytes from
+  it returns into the home, keeping the scratch branch the successor was lent;
+  what is open is how a step tells result bytes from
   temporaries before it finishes, which `Shares` sidesteps.
-- **A receipt run is laid down anew at every park.** A parked cell's receipt run
-  is laid down fresh in its scratch habitat per registration
-  ([the cell](../../cellgraph/README.md#the-cell)), so a runner that parks once
-  per unit lays one down per unit, where a registration that fits the previous
-  run could reuse its bytes. Reuse would be a `cellgraph` change.
 - **No warning channel.** A program has no way to be told about something
   that is neither an error nor a value. The first case with nothing to report
   through is [dispatch](../../src/dispatch/README.md#the-overlap-check)'s: a user overload that is never selected,
@@ -194,6 +191,42 @@ as surprises, not scheduled.
   types `v.inner` then `.Elem` at the pin and the run faults `has no member
   Elem`. Re-viewing a nested module at its declared application would make the
   pin a member.
+- **A pin is read through its bounds covariantly, and ordered invariantly.**
+  The [type lattice](../../lattice/src/types/README.md)'s `read_through` and
+  `bound_above` read a variable a `SignatureApply` pin names through its bounds
+  as at a covariant position, while the order (`application_under`) compares
+  two pins of one parameter invariantly, so `S WITH {Elt = Elt}` read above is
+  `S WITH {Elt = Any}`, which is no upper bound of it. A static type holding
+  such a pin therefore overshoots what the run carries:
+  `EXPR #(READER Elt :Type) -> Any = #(FN :{p :(Mapper WITH {Elt = Elt})} -> Any = #(1))`,
+  called as `((READER Number) {p = two})` over the `Mapper` and `two` of the
+  dispatch test `a_path_reads_through_every_pin_of_its_declared_application`,
+  panics the debug check that the carried type lies within the load-time static
+  type.
+  [`signature_member`](../../src/elaborate/members.rs) reads pins through
+  `bound_above` too. [Paths](../../src/dispatch/README.md#paths) work around it
+  by never storing a pin over a path variable. Reading a pin's variable as the
+  order does is a lattice change, a flagged exception needing an OK.
+- **A quantified callable cannot take a parameter at an application over its
+  own group.** Under `EXPR FOR ALL #[Elt] #(USE x :Elt p :(Mapper WITH {Elt = Elt})) -> Any`,
+  `USE 1 two` is refused with no overload admitting it, though `two` fits
+  `Mapper WITH {Elt = Number}`, over the same `Mapper` and `two`. Why the
+  solve fails is not yet diagnosed.
+- **An opaque view faults on a nested slot pinned to a type over its
+  parameter.** Under `SIG Deep FOR ALL #[Depth] = #[(VAL v :Depth)]` and
+  `SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL deep :(Deep WITH {Depth = (LIST OF Carrier)}))]`,
+  `ints :| Outer` over `MODULE ints = ((LET zero = 0) (LET deep = d))` with
+  `MODULE d = ((LET v = [1]))` loads, then the run faults with "member deep
+  cannot take its view's type: its module does not fit its view". A pin
+  `(Carrier | Str)` faults alike; a bare `Carrier` and the transparent `:!` run.
+- **A quote reading a view's quantified member loads, then faults.** Over the
+  `Mapper` and `nums` of the dispatch test
+  `a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_parameters`,
+  `LET m = (nums :| Mapper)` then
+  `EVAL #(LET go :(FN :{x :Number, y :Number} -> Number) = $m.apply) -> Any`
+  loads, and the run faults with "member apply is quantified, and no type was
+  known to instantiate it at": the load neither instances the member nor refuses
+  it as `UnpinnedMember`.
 - **A family cannot state its variance.** Every type-constructor family is
   covariant in its parameters, so a
   [parameterized union](../../src/elaborate/README.md#families) placing a

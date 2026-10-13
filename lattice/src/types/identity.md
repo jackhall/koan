@@ -95,15 +95,21 @@ it whole. A type the
 run builds lives in the habitat of the value it is laid down with, so a
 run-built type lives exactly as long as the values that carry it, and every
 handle a value carries resolves from the value's own habitat — in its branch,
-in its region's branch for a scratch value, or in the root. Each door interns
+in its region's branch for a scratch value, or in the root. An embedder may
+lay a value's memo in a shorter tier than the value's — a region value's in
+its scratch — where it proves no reader outlives that tier
+([type tiers](../../../design/type-tiers.md#the-scratch-branch-as-a-cache));
+the lattice does not check it, and a read after that tier's reset misses.
+Each door interns
 into the branch of the habitat its writer allocates into: a `Shares` tenant into
 its host's, a result built into a home into the home's. A door reads and
 interns through a [`TypeChain`](chain.rs) over the half it writes, a
-`Habitat`: the root, the branch it writes, and for a scratch habitat its
-region's branch between the two, read through an object-safe `Tier` that
-re-reads the region's slot on every probe, so a branch the region lays during
-the step is seen and the lattice needs no `unsafe` for the one tier a chain
-reads at another brand. A chain is built per step and never stored.
+`Habitat`: the root, the branch it writes, and for a scratch habitat a
+longer-lived branch between the two — its region's, or a branch lent to it —
+read through an object-safe `Tier` that re-reads that half's slot on every
+probe, so a branch laid there during the step is seen and the lattice needs no
+`unsafe` for the one tier a chain reads at another brand. A chain is built per
+step and never stored.
 
 How a value's types reach another habitat is the crossing's
 ([crossing](../../../src/values/README.md#crossing)), over three doors
@@ -148,6 +154,11 @@ outliving its destination.
   a side table holds — a schema's, a group's bounds, a component's member
   schemas — is adopted after its node is laid, which closes every cycle by a
   hit, and a sealed component is re-laid once, its table already absolute.
+  An adopt reads the type from the home's branch and the branches it links,
+  or from a whole chain — every tier and link that chain reads — where a
+  type's children lie in several of them, as a caching body's do when its
+  value leaves it
+  ([type tiers](../../../design/type-tiers.md#the-scratch-branch-as-a-cache)).
 
 Each node is a [`StoredNode`](stored.rs) laid alone in its tier: its digest,
 then 32 B of content, 48 B in all. The content names each child — and each

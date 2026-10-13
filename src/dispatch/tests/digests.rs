@@ -196,3 +196,30 @@ PRINT (MOVE 1 TO 1)"##;
     };
     assert_eq!(interned(), interned());
 }
+
+/// The recipes the load digests a literal and a type value through give what the run's walk gives
+/// the value the literal evaluates to.
+#[test]
+fn a_literal_digests_as_the_value_it_evaluates_to() {
+    use crate::parse::KLiteral;
+    use crate::type_lattice::KType;
+    use crate::values::digest::{literal_digest, type_digest};
+    let [number, text, flag, null, named] = digests(
+        "LET a = 1.5\nLET b = \"x\"\nLET c = true\nLET d = null\nLET e = Number",
+        ["a", "b", "c", "d", "e"],
+    );
+    assert_eq!(
+        number,
+        format!("{:?}", literal_digest(&KLiteral::Number(1.5)))
+    );
+    assert_eq!(
+        text,
+        format!("{:?}", literal_digest(&KLiteral::String("x")))
+    );
+    assert_eq!(
+        flag,
+        format!("{:?}", literal_digest(&KLiteral::Boolean(true)))
+    );
+    assert_eq!(null, format!("{:?}", literal_digest(&KLiteral::Null)));
+    assert_eq!(named, format!("{:?}", type_digest(KType::NUMBER)));
+}

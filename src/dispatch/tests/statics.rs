@@ -97,7 +97,7 @@ pub(super) fn module_body<'graph>(
 }
 
 /// The narrowing of the keyworded use `LET name = <use>` in the top level of `source`.
-fn narrowing(source: &str, name: &str) -> String {
+pub(super) fn narrowing(source: &str, name: &str) -> String {
     loaded(source, |program| {
         let_narrowing(program, program.shape(), name)
     })

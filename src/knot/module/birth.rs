@@ -112,9 +112,10 @@ pub fn tie_member<'graph, 'cell, 'x>(
     // captures to digest later.
     let mut memo = Digests::new(types, scratch);
     let mut captures = BumpVec::new_in(scratch);
-    composed(body.shape(), body.closure().links(), |index, link| {
-        captures.push((index, link.digest(&mut memo)));
-    });
+    captures.extend(
+        composed(body.shape(), body.closure().links())
+            .map(|(index, link)| (index, link.digest(&mut memo))),
+    );
     let content = ModuleContent::body(body.shape().code_digest(), &captures);
     Ok(Module::tie(writer, ktype, &members, content))
 }

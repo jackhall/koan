@@ -22,6 +22,11 @@
 //!   member [lists](super::Knotted::held) the values its knot holds and
 //!   [hashes](super::Knotted::digest_held) the knot over their digests.
 //!
+//! Each recipe over digests is a function of its own — a literal's, a type value's, a knot's, a
+//! member's, a closure's, a body-born module's and a view's — which the run's walk calls and which
+//! the load calls over the digests it computes from the program's text, so the two cannot key one
+//! content two ways.
+//!
 //! The seen type is part of the recipe, so a retype changes the digest. Inside a knot each node is
 //! digested at its own memo, so a cell a tagged node's representation hides still counts there, as
 //! a copy of the knot keeps it. That over-distinction is sound: a digest keys what is equal by
@@ -38,6 +43,7 @@
 use std::hash::{Hash, Hasher};
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Edge, bump_table};
+use crate::parse::KLiteral;
 use crate::type_lattice::{DeclaredType, KType};
 
 use super::circular::{Circular, Resolved};
@@ -118,6 +124,9 @@ pub enum Tag {
     Transparent = 0x2D,
     Opaque = 0x2E,
     Reviewed = 0x2F,
+    /// What the load cannot see of a module's content, keyed on its binder: a load-time key, never
+    /// a value's digest.
+    Leaf = 0x30,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's
@@ -445,30 +454,144 @@ fn composed<X: Knotted>(surface: &Surface<'_, '_, X>, parts: &[ContentDigest]) -
 
 /// A knot member's digest: its knot's, beside its index there.
 fn beside_index<X: Knotted>(knot: ContentDigest, member: X) -> ContentDigest {
+    member_digest(knot, member.index().index() as usize)
+}
+
+/// The digest of the member at `index` of the knot digesting as `knot`.
+pub fn member_digest(knot: ContentDigest, index: usize) -> ContentDigest {
     DigestHasher::new(Tag::Member)
         .digest(knot)
-        .count(member.index().index() as usize)
+        .count(index)
         .finished()
+}
+
+/// A knot's digest over the `contents` of its `count` nodes, in index order: what every knot but a
+/// builtin's digests as.
+pub fn knot_digest(count: usize, contents: impl Iterator<Item = ContentDigest>) -> ContentDigest {
+    let mut hasher = DigestHasher::new(Tag::Knot);
+    hasher.count(count);
+    for content in contents {
+        hasher.digest(content);
+    }
+    hasher.finished()
+}
+
+/// The digest of a value that is the one node of a knot of its own, whose content is `content`: a
+/// module, a lone closure.
+pub fn lone_member(content: ContentDigest) -> ContentDigest {
+    member_digest(knot_digest(1, std::iter::once(content)), 0)
+}
+
+/// A closure's content: its body's `code` digest, the solution it is an instance at, and the
+/// digest of each capture its code digest does not name, beside its slot.
+pub fn function_content(
+    code: ContentDigest,
+    instance: &[KType],
+    captures: impl Iterator<Item = (usize, ContentDigest)>,
+) -> ContentDigest {
+    let mut hasher = DigestHasher::new(Tag::Function);
+    hasher.digest(code).count(instance.len());
+    for solved in instance {
+        hasher.feed(solved);
+    }
+    for (index, capture) in captures {
+        hasher.count(index).digest(capture);
+    }
+    hasher.finished()
+}
+
+/// A body-born module's content: its body's `code` digest, then each capture the code digest does
+/// not name, beside its slot.
+pub fn body_content(
+    code: ContentDigest,
+    captures: impl Iterator<Item = (usize, ContentDigest)>,
+) -> ContentDigest {
+    let mut hasher = DigestHasher::new(Tag::Module);
+    hasher.digest(code);
+    for (index, capture) in captures {
+        hasher.count(index).digest(capture);
+    }
+    hasher.finished()
+}
+
+/// Which door a view came through, a part of its content.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Operator {
+    /// `:!`.
+    Transparent,
+    /// `:|`.
+    Opaque,
+    /// The re-view a nested module takes at an opaque boundary.
+    Reviewed,
+}
+
+/// A view's content: its `operator` and the `application` it was built at, over its `source`'s
+/// digest.
+pub fn view_content(
+    operator: Operator,
+    application: KType,
+    source: ContentDigest,
+) -> ContentDigest {
+    let operator = match operator {
+        Operator::Transparent => Tag::Transparent,
+        Operator::Opaque => Tag::Opaque,
+        Operator::Reviewed => Tag::Reviewed,
+    };
+    DigestHasher::new(Tag::View)
+        .tag(operator)
+        .feed(application)
+        .digest(source)
+        .finished()
+}
+
+/// A scalar literal's digest, as the value it evaluates to digests.
+pub fn literal_digest(literal: &KLiteral<'_>) -> ContentDigest {
+    match *literal {
+        KLiteral::Number(number) => number_digest(number),
+        KLiteral::Boolean(flag) => bool_digest(flag),
+        KLiteral::Null => DigestHasher::new(Tag::Null).finished(),
+        KLiteral::String(text) => str_digest(text),
+    }
+}
+
+/// A type value's digest, from the handle of the type it names.
+pub fn type_digest(named: KType) -> ContentDigest {
+    DigestHasher::new(Tag::Type).feed(named).finished()
+}
+
+fn number_digest(number: f64) -> ContentDigest {
+    DigestHasher::new(Tag::Number)
+        .feed(number.to_bits())
+        .finished()
+}
+
+fn bool_digest(flag: bool) -> ContentDigest {
+    DigestHasher::new(Tag::Bool).feed(flag).finished()
+}
+
+fn str_digest(text: &str) -> ContentDigest {
+    DigestHasher::new(Tag::Str).text(text.as_bytes()).finished()
 }
 
 /// An edge's digest inside its knot's: its index, since it names a sibling the knot's digest
 /// covers.
 pub fn edge(edge: Edge) -> ContentDigest {
-    DigestHasher::new(Tag::Edge)
-        .count(edge.index() as usize)
-        .finished()
+    edge_at(edge.index() as usize)
+}
+
+/// The digest of an edge to the node at `index` of its knot.
+pub fn edge_at(index: usize) -> ContentDigest {
+    DigestHasher::new(Tag::Edge).count(index).finished()
 }
 
 /// A leaf's digest, from its payload. Only a scalar, a string or a type value is one.
 pub(super) fn scalar<X>(value: Value<'_, X>) -> ContentDigest {
     match value {
-        Value::Number(number) => DigestHasher::new(Tag::Number)
-            .feed(number.to_bits())
-            .finished(),
-        Value::Bool(flag) => DigestHasher::new(Tag::Bool).feed(flag).finished(),
-        Value::Null => DigestHasher::new(Tag::Null).finished(),
-        Value::Str(text) => DigestHasher::new(Tag::Str).text(text.as_bytes()).finished(),
-        Value::Type(value) => DigestHasher::new(Tag::Type).feed(value.handle()).finished(),
+        Value::Number(number) => number_digest(number),
+        Value::Bool(flag) => bool_digest(flag),
+        Value::Null => literal_digest(&KLiteral::Null),
+        Value::Str(text) => str_digest(text),
+        Value::Type(value) => type_digest(value.handle()),
         _ => unreachable!("a composite or a knot member is no leaf"),
     }
 }

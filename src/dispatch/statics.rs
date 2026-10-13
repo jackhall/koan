@@ -22,7 +22,16 @@
 //! the use records it for the call. A contribution naming a lexical variable records where the use
 //! reads it — a hop per block, and a **type capture** per callable or module between the use and the
 //! variable's home, which the shape lays down past its builder's captures; a module body's `OVER`
-//! list must name each one it holds, as it names a capture the builder made.
+//! list must name each one it holds, as it names a capture the builder made. A path a shape's type
+//! expressions spell, read through a declared application naming a lexical variable, records where
+//! the shape reads each one the same way, so the run can fit the module to it.
+//!
+//! The pass resolves each path variable off its module's content tree ([`paths`]) and reads every
+//! cell the type channel fixed through those resolutions. A member read through a name chain reads
+//! each head parameter its module's signature leaves unpinned as the path through it, so two reads
+//! through one module share a type; a path variable a use records is read off a root the reading
+//! shape reaches. A module-valued call, ascription or member read whose tree is a view is at most
+//! the view's application, and exactly its signature over a closed tree.
 //! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
 //! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
 //! first, is **selected** and runs without admitting; where they rank none first, the load refuses
@@ -103,6 +112,13 @@
 //! each component of nominal declarations the load leaves unknown as a **minting site**, which the
 //! run's doors check in debug builds.
 //!
+//! The pass reads each `:|` ascription's operand as a [content tree](crate::scope::Tree) —
+//! [`trees`] — and the cell records it by the ascription's site. Over a closed tree it lays every
+//! type the view door computes from types alone ([`view_types`](view::view_types)) in the root,
+//! each nested module's re-view among them, read off what the tree shows each member carries
+//! ([`views`]); at an exact `:!` likewise. The run's door checks in debug builds that the tree
+//! reads the operand's digest.
+//!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
 //! one.
@@ -110,18 +126,24 @@
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
-use crate::knot::module::view::{self, Ascription, transparent_view_type};
+use crate::knot::module::ModuleContent;
+use crate::knot::module::view::{
+    self, Ascription, ViewTypes, opaque_view_types, transparent_view_types,
+};
 use crate::knot::{BuiltinFunction, KBuiltins};
-use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
+    resident,
+};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::program::placement_of;
 use crate::scheduler::Placement;
 use crate::scope::{
     BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    Coordinate, InstanceRead, Keyed, Listed, Narrowing, Position, ShapeError, ShapeKind, Site,
-    Slot, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, UnitWork, UseStatics,
-    Variable as Located, source_of,
+    Coordinate, InstanceRead, Keyed, Listed, Narrowing, Position, Print, ShapeError, ShapeKind,
+    Site, Slot, Source, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, Tree,
+    UnitWork, UseStatics, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -132,10 +154,17 @@ use crate::type_lattice::{
     scheme_bound_above, scheme_return, scheme_slots, select_by_class, shape_return, shape_slots,
     solving_slots,
 };
+use crate::values::digest::Operator;
 use crate::values::{
     ConstructionRefused, Types, Value, construction, dict_type, list_type, record_type, retyped_to,
     under, unknown,
 };
+
+mod paths;
+mod trees;
+mod views;
+
+use trees::Written;
 
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
@@ -160,9 +189,23 @@ pub(super) fn statics<'graph>(
         chain: BumpVec::new_in(scratch),
         unfilled: false,
         ran: BumpVec::new_in(scratch),
+        trees: bump_table(scratch),
+        reading: BumpVec::new_in(scratch),
+        typing: BumpVec::new_in(scratch),
+        recursive: bump_set(scratch),
+        summaries: bump_table(scratch),
+        signatures: bump_table(scratch),
+        views: bump_table(scratch),
+        steps: bump_table(scratch),
+        rebuilds: bump_table(scratch),
+        modules: bump_table(scratch),
+        selections: bump_table(scratch),
+        paths: BumpVec::new_in(scratch),
     };
     pass.push(root, true);
+    pass.open_paths(root);
     let visited = pass.visit(0, None);
+    pass.close_paths(root);
     pass.chain.pop();
     visited
 }
@@ -280,6 +323,13 @@ struct Level<'p, 'graph> {
     minting: BumpVec<'p, Site>,
     /// The minting sites of the blocks and module bodies the shape runs, folded in.
     folded: u32,
+    /// Each `:|` ascription's site, beside its operand's content tree.
+    trees: BumpVec<'p, (Site, &'graph Tree<'graph>)>,
+    /// Each path the shape spells whose declared application names a lexical variable, by its
+    /// level, beside where the shape reads each variable.
+    throughs: BumpVec<'p, (usize, &'graph [Located<'graph>])>,
+    /// Each `LET` binder, by its right-hand side's site.
+    rhs: BumpBackedMap<'p, Site, Slot>,
 }
 
 /// The walk's state: the chain of enclosing shapes.
@@ -294,6 +344,34 @@ struct Pass<'p, 'x, 'graph> {
     unfilled: bool,
     /// Each quote's code beside its last statement's static type as it runs unfilled.
     ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
+    /// Each content tree read on the chain, by its shape's address and where it is written.
+    trees: BumpBackedMap<'p, (usize, Written), Tree<'graph>>,
+    /// Each binder whose tree is being read, by its shape's address: a binder read through itself
+    /// reads as a leaf.
+    reading: BumpVec<'p, (usize, Slot)>,
+    /// Each callable body being typed, outermost first.
+    typing: BumpVec<'p, &'graph BodyShape<'graph>>,
+    /// Each callable body met while it was being typed, and each typed since: none unfolds.
+    recursive: BumpBackedSet<'p, usize>,
+    /// Each typed callable body's summary: the tree of its last statement.
+    summaries: BumpBackedMap<'p, usize, Option<Tree<'graph>>>,
+    /// Each `MODULE` or `GROUP` body the pass typed exactly, by its address: the signature every
+    /// run of it ties, which its content tree does not record.
+    signatures: BumpBackedMap<'p, usize, KType>,
+    /// What each view over a closed tree binds, by its print: a chain of views reads each once.
+    views: BumpBackedMap<'p, Print, Option<ViewTypes<'graph>>>,
+    /// What each read of a value a lay may reach twice yields, so a chain of views reads each
+    /// member once.
+    steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'graph, 'p>>>,
+    /// Each value a view rebuilt, by what it was rebuilt from.
+    rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'graph, 'p>>,
+    /// The modules each rebuilt union of cells' signatures may be, cell by cell.
+    modules: BumpBackedMap<'p, views::Identity, &'p [views::Carried<'graph, 'p>]>,
+    /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
+    /// point each variable of the candidate's group solves to there, by group index.
+    selections: BumpBackedMap<'p, Site, &'p [Option<KType>]>,
+    /// The path table of each chain being typed, outermost first.
+    paths: BumpVec<'p, paths::ChainPaths<'p, 'graph>>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -398,6 +476,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         binders.resize(shape.slots(), DeclaredType::Type(unknown()));
         let mut uses = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
         uses.resize(shape.candidate_lists().len(), UseStatics::UNFIXED);
+        let mut rhs = bump_table(scratch);
+        for slot in (0..shape.slots() as u32).map(Slot) {
+            if let Some(part) = shape.rhs(slot) {
+                rhs.entry(Site::of(part)).or_insert(slot);
+            }
+        }
         self.chain.push(Level {
             shape,
             roots_chain,
@@ -412,6 +496,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             exits: false,
             minting: BumpVec::new_in(scratch),
             folded: 0,
+            trees: BumpVec::new_in(scratch),
+            throughs: BumpVec::new_in(scratch),
+            rhs,
         });
     }
 
@@ -434,7 +521,26 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.nest(level, nested)?;
             }
         }
+        // The paths a unit spells resolve before it is typed, in program order.
+        let spelled = self.spelled(level);
         for unit in shape.units() {
+            if !spelled.is_empty() {
+                let mut statements = BumpVec::new_in(self.scratch);
+                match unit.work {
+                    UnitWork::Statement(index) => statements.push(index as usize),
+                    UnitWork::Component(index) => statements.extend(
+                        (shape.components()[index.index()].members.iter())
+                            .filter_map(|member| self.statement_of(level, *member)),
+                    ),
+                }
+                for index in statements {
+                    let from = spelled.partition_point(|(at, _)| *at < index);
+                    let to = spelled.partition_point(|(at, _)| *at <= index);
+                    for (_, entry) in spelled[from..to].iter() {
+                        self.resolve_path(level, entry)?;
+                    }
+                }
+            }
             match unit.work {
                 UnitWork::Statement(index) => {
                     let wanted = self.tail(level, index as usize);
@@ -444,6 +550,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 UnitWork::Component(index) => self.component(level, index.index())?,
             }
         }
+        self.resolve_spelled(level)?;
         self.returns(level)?;
         self.return_exits(level);
 
@@ -451,6 +558,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if !done(nested) {
                 self.nest(level, nested)?;
             }
+        }
+        if !self.unfilled {
+            self.throughs(level);
         }
         // A nested shape adds a type capture to each shape between it and the variable's home, so
         // the captures are laid down once every nested shape is typed.
@@ -460,6 +570,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.writer,
                 at.type_captures.iter().map(|(_, source, _)| *source),
             ));
+        }
+        // A callable's summary is read once its body is typed: a recursive one has none.
+        let shape = self.chain[level].shape;
+        if shape.kind() == ShapeKind::Callable && !self.unfilled {
+            let recursive = |pass: &Self| pass.recursive.contains(&address(shape));
+            let mut summary = None;
+            if !recursive(self) {
+                summary = self.summarize(level)?;
+            }
+            // Summarizing may meet the callable itself, through a callee it unfolds.
+            if recursive(self) {
+                summary = None;
+            }
+            self.summaries.insert(address(shape), summary);
         }
         // The cell is fixed last, once every block the shape runs has folded its class into it.
         self.fix(level);
@@ -515,7 +639,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         surfacing: Option<Parametric>,
     ) -> Result<Option<Interval>, ShapeError<'graph>> {
         self.push(nested, roots_chain);
+        let callable = nested.kind() == ShapeKind::Callable;
+        if callable {
+            self.typing.push(nested);
+        }
+        if roots_chain {
+            self.open_paths(nested);
+        }
         let visited = self.visit(level + 1, surfacing);
+        if roots_chain {
+            self.close_paths(nested);
+        }
+        if callable {
+            self.typing.pop();
+        }
         let last = self.chain[level + 1].statements.last().copied();
         let popped = self.chain.pop().expect("the shape was pushed");
         if nested.kind() == ShapeKind::Block {
@@ -552,7 +689,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         .map(|closed| DeclaredType::Type(closed.into())),
                     DeclaredType::Scheme(scheme) => body
                         .births(slot)
-                        .filter(|born| matches!(born.callable_type(), Static::Closed(_)))
+                        .filter(|born| {
+                            let typed = born.callable_type();
+                            matches!(self.resolved_callable(level, typed), Static::Closed(_))
+                        })
                         .map(|_| DeclaredType::Scheme(*scheme)),
                     DeclaredType::Type(_) => None,
                 },
@@ -561,7 +701,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     _ => None,
                 },
                 BinderSymbol::Registration(_) => {
-                    let Static::Closed(registered) = body.registered_type(slot) else {
+                    let typed = self.resolved_registered(level, body.registered_type(slot));
+                    let Static::Closed(registered) = typed else {
                         return Ok(under(KType::EMPTY_SIGNATURE.into()));
                     };
                     keyworded.push(registered.shape);
@@ -575,6 +716,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             members.push((slot, exact));
         }
         let signature = module_signature(body, members, &keyworded, types, scratch);
+        if !self.unfilled {
+            self.signatures.insert(address(body), signature);
+        }
         Ok(Interval::point(signature.into()))
     }
 
@@ -604,6 +748,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             named: Keyed::sorted(writer, &mut at.named),
             class,
             minting: Keyed::sorted(writer, &mut at.minting),
+            trees: Keyed::sorted(writer, &mut at.trees),
+            throughs: Keyed::sorted(writer, &mut at.throughs),
         });
     }
 
@@ -626,7 +772,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             ShapeKind::Program => false,
             ShapeKind::Code => true,
             ShapeKind::Callable => self
-                .declared_return(at.shape)
+                .declared_return(level)
                 .is_some_and(|returns| placement_of(returns) == Placement::Shares),
         };
         Some(match at.exits {
@@ -640,8 +786,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// A callable body's declared return, read off the function type its body runs at, where the
     /// load typed the callable.
-    fn declared_return(&self, shape: &BodyShape<'graph>) -> Option<Parametric> {
-        match self.types.node(self.in_body(shape)?) {
+    fn declared_return(&self, level: usize) -> Option<Parametric> {
+        match self.types.node(self.in_body(level)?) {
             TypeNode::KFunction { ret, .. } => Some(ret),
             _ => None,
         }
@@ -662,7 +808,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let types = self.types;
         let slot = match at.shape.kind() {
             ShapeKind::Callable => {
-                (self.declared_return(at.shape)).unwrap_or_else(|| KType::ANY.into())
+                (self.declared_return(level)).unwrap_or_else(|| KType::ANY.into())
             }
             ShapeKind::Code => KType::ANY.into(),
             ShapeKind::Program | ShapeKind::Module | ShapeKind::Block => return,
@@ -786,13 +932,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Where the shape at `level` reads each lexical variable `values` name, by level: a hop per
     /// block and a type capture per callable or module between the read and the variable's home,
-    /// each added for the use at `used`. Empty where they name none.
+    /// each added for the use at `used`, and a path variable through the root of a path of its
+    /// class. Empty where they name none.
     fn located(
         &mut self,
         level: usize,
         values: &[Parametric],
         used: SourceRef,
-    ) -> &'graph [Located] {
+    ) -> &'graph [Located<'graph>] {
         let (types, scratch) = (self.types, self.scratch);
         let mut levels: BumpVec<'_, (usize, TypeSymbol)> = BumpVec::new_in(scratch);
         for value in values {
@@ -807,10 +954,32 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         let mut located = BumpVec::with_capacity_in(levels.len(), scratch);
         for (variable, name) in levels.iter().copied() {
+            // A path variable is read through a path of its class whose root this shape reaches,
+            // the application it is read through located beside it.
+            if self.is_path(level, variable) {
+                let (entry, at) = self
+                    .reachable(level, variable)
+                    .expect("a path variable a static type names has a root its shape reaches");
+                if let Some(through) = entry.through
+                    && self.types.concrete(through).is_none()
+                    && !(self.chain[level].throughs.iter()).any(|(held, _)| *held == entry.level)
+                {
+                    let through = self.located(level, &[through], used);
+                    self.chain[level].throughs.push((entry.level, through));
+                }
+                located.push(Located {
+                    level: variable,
+                    source: Source::Path {
+                        at: Some(at),
+                        entry,
+                    },
+                });
+                continue;
+            }
             let at = self.coordinate_of(level, variable, (name, used));
             located.push(Located {
                 level: variable,
-                at,
+                source: Source::Type(at),
             });
         }
         collect(self.writer, located.iter().copied())
@@ -841,7 +1010,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if shape.registration(slot).is_some() {
             return shape
                 .births(slot)
-                .map_or(DeclaredType::Type(unknown()), callable);
+                .map_or(DeclaredType::Type(unknown()), |body| {
+                    self.callable(level, body)
+                });
         }
         let name = shape.slot_name(slot);
         if let BinderSymbol::Type(_) = name {
@@ -857,42 +1028,65 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return DeclaredType::Type(unknown());
         }
         let declared = self
-            .in_body(shape)
+            .in_body(level)
             .and_then(|ktype| match self.types.node(ktype) {
                 TypeNode::KFunction { params, .. } => params.get(name.symbol()),
                 _ => None,
             });
-        DeclaredType::Type(retyped_to(
-            self.types,
-            declared.unwrap_or_else(|| KType::ANY.into()),
-        ))
+        // Declared where the callable is written, a path there may not be reachable here.
+        let typed = retyped_to(self.types, declared.unwrap_or_else(|| KType::ANY.into()));
+        DeclaredType::Type(self.sourced(level, typed))
     }
 
-    /// A callable body's function type as its body reads it: its own group instantiated at its
-    /// group levels. `None` where the load did not type the callable.
-    fn in_body(&self, shape: &BodyShape<'graph>) -> Option<Parametric> {
-        let ktype = match shape.callable_type() {
-            Static::Closed(callable) => callable.ktype.into(),
-            Static::Rigid {
-                value: callable, ..
-            } => callable.ktype,
-            Static::Unknown => return None,
-        };
-        match ktype {
-            DeclaredType::Type(ktype) => Some(ktype),
-            DeclaredType::Scheme(scheme) => {
-                debug_assert_eq!(
-                    scheme.group(self.types).bounds.len(),
-                    shape.group_levels().len(),
-                    "the type channel numbered the callable's own group"
-                );
-                Some(instantiate_quantified(
-                    self.types,
-                    self.scratch,
-                    scheme,
-                    shape.group_levels(),
-                ))
+    /// Locate, for the shape at `level`, the lexical variables of each path it spells whose
+    /// declared application names any: where the run reads them to bind the path's variable. A
+    /// path whose application names another path is left unlocated, and its type is read where it
+    /// runs.
+    fn throughs(&mut self, level: usize) {
+        let shape = self.chain[level].shape;
+        for (site, read) in shape.path_reads() {
+            let entry = read.entry;
+            let Some(through) = entry.through else {
+                continue;
+            };
+            if self.types.concrete(through).is_some()
+                || (self.chain[level].throughs.iter()).any(|(held, _)| *held == entry.level)
+            {
+                continue;
             }
+            let mut paths = false;
+            read_through(
+                self.types,
+                self.scratch,
+                through,
+                Side::Above,
+                &mut |variable| {
+                    if let Variable::Lexical { level: at, .. } = variable {
+                        paths |= self.is_path(level, at);
+                    }
+                    None
+                },
+            );
+            if paths {
+                continue;
+            }
+            let used = (shape.body().iter())
+                .find_map(|statement| source_of(statement, *site))
+                .expect("a path is spelled in one of its shape's statements");
+            let located = self.located(level, &[through], used);
+            self.chain[level].throughs.push((entry.level, located));
+        }
+    }
+
+    /// The function type of the callable body at `level` as its body reads it: its own group
+    /// instantiated at its group levels, its paths read through their resolutions. `None` where
+    /// the load did not type the callable, or a path it reads is not resolved.
+    fn in_body(&self, level: usize) -> Option<Parametric> {
+        let shape = self.chain[level].shape;
+        let ktype = shape.in_body(self.types, self.scratch)?;
+        match shape.callable_type().over_paths() {
+            true => self.through_paths(level, ktype),
+            false => Some(ktype),
         }
     }
 
@@ -916,7 +1110,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         for member in component.members {
             if let Some(body) = shape.births(*member) {
                 let typed = match body.form() {
-                    Some(_) => callable(body),
+                    Some(_) => self.callable(level, body),
                     None if body.kind() == ShapeKind::Module => {
                         DeclaredType::Type(self.module(level, body)?)
                     }
@@ -982,8 +1176,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if shape.kind() != ShapeKind::Callable || index + 1 != shape.body().len() {
             return None;
         }
-        match self.in_body(shape).map(|ktype| self.types.node(ktype)) {
-            Some(TypeNode::KFunction { ret, .. }) => Some(ret),
+        match self.in_body(level).map(|ktype| self.types.node(ktype)) {
+            Some(TypeNode::KFunction { ret, .. }) => Some(self.sourced(level, under(ret)).upper),
             _ => None,
         }
     }
@@ -1078,14 +1272,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// bound to a quantified function, or a quantified `FN` written in place; beside its scheme and
     /// where it is written. `None` for any other part.
     fn instance_site(
-        &self,
+        &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
-    ) -> Option<(Instanced<'graph>, Scheme, SourceRef)> {
+    ) -> Result<Option<(Instanced<'graph>, Scheme, SourceRef)>, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
-        match of_part(shape, part) {
+        Ok(match of_part(shape, part) {
             Form::Name(leaf) => {
-                let mention = shape.mention(Site::of(leaf))?;
+                let Some(mention) = shape.mention(Site::of(leaf)) else {
+                    return Ok(None);
+                };
                 match self.read_declared(level, mention.coordinate) {
                     DeclaredType::Scheme(scheme) => Some((
                         Instanced::Name(leaf),
@@ -1096,8 +1292,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
             }
             Form::Lambda(node) => {
-                let body = Site::of_body(node).and_then(|site| shape.nested(site))?;
-                match callable(body) {
+                let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
+                    return Ok(None);
+                };
+                match self.callable(level, body) {
                     DeclaredType::Scheme(scheme) => {
                         Some((Instanced::Literal(body), scheme, node.source))
                     }
@@ -1110,31 +1308,75 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 operand,
                 label,
                 ..
-            } => match self.member_scheme(level, operand, label) {
+            } => match self.peeked_member_scheme(level, operand, label)? {
                 Some((scheme, None)) => Some((Instanced::Member(node), scheme, node.source)),
                 _ => None,
             },
             _ => None,
+        })
+    }
+
+    /// [`member_scheme`](Self::member_scheme) where the operand is [peeked](Self::peeked):
+    /// `None` for any other.
+    fn peeked_member_scheme(
+        &mut self,
+        level: usize,
+        operand: &'graph ExpressionPart<'graph>,
+        name: BinderSymbol,
+    ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'graph>> {
+        match self.peeked(level, operand) {
+            Some(peeked) => self.member_scheme(level, operand, peeked.upper, name),
+            None => Ok(None),
         }
     }
 
     /// The member read `ATTR <operand> <label>`, its label written bare, where it reads a quantified
     /// member: the member's scheme, beside the unpinned head parameter it names, if it names one.
-    /// The operand's static type is read without typing it — a name, or a chain of member reads
-    /// rooted at one ([`peeked`](Self::peeked)) — so a read the load cannot see into is no
-    /// instance site, and faults at run if it reads a scheme there.
+    /// `upper` is the operand's static upper end: read without typing it where the operand is a
+    /// name or a chain of member reads rooted at one ([`peeked`](Self::peeked)), else once the
+    /// read's use has typed it.
     fn member_scheme(
-        &self,
+        &mut self,
         level: usize,
         operand: &'graph ExpressionPart<'graph>,
+        upper: Parametric,
         name: BinderSymbol,
-    ) -> Option<(Scheme, Option<BinderSymbol>)> {
-        let upper = self.peeked(level, operand)?.upper;
-        let member = signature_member(self.types, self.scratch, upper, name)?;
-        let DeclaredType::Scheme(scheme) = member.declared else {
-            return None;
-        };
-        Some((scheme, member.unpinned.map(BinderSymbol::Type)))
+    ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'graph>> {
+        Ok(match self.member_read(level, operand, upper, name)? {
+            Some(SignatureMember {
+                declared: DeclaredType::Scheme(scheme),
+                unpinned,
+            }) => Some((scheme, unpinned.map(BinderSymbol::Type))),
+            _ => None,
+        })
+    }
+
+    /// The member read `node` of member `label`, a quantified one whose scheme `member_scheme`
+    /// gave: its instance wanted at `wanted`, recorded for the run. Refused where the scheme is over
+    /// a head parameter the load cannot name.
+    fn member_instance(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        label: BinderSymbol,
+        (scheme, unpinned): (Scheme, Option<BinderSymbol>),
+        wanted: Option<Parametric>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        if let Some(parameter) = unpinned {
+            return Err(ShapeError::UnpinnedMember {
+                member: label,
+                parameter,
+                at: node.source,
+            });
+        }
+        let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
+        if !self.unfilled {
+            let solution = self.solution(level, solution, node.source);
+            self.chain[level]
+                .instances
+                .push((Site::of_node(node), InstanceRead::Solved(solution)));
+        }
+        Ok(typed)
     }
 
     /// The static type of `part`, a name or a chain of member reads rooted at one, read without
@@ -1507,7 +1749,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(());
         }
         let Some(TypeNode::KFunction { ret, .. }) =
-            self.in_body(shape).map(|ktype| self.types.node(ktype))
+            self.in_body(level).map(|ktype| self.types.node(ktype))
         else {
             return Ok(());
         };
@@ -1546,7 +1788,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         wanted: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
-        let typed = self.form(level, of_part(shape, part), wanted)?;
+        let form = of_part(shape, part);
+        let typed = self.form(level, form, wanted)?;
+        let typed = self.viewed_tree(level, form, Written::Part(Site::of(part)), typed)?;
         self.chain[level].parts.push((Site::of(part), typed));
         Ok(typed)
     }
@@ -1559,7 +1803,58 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         wanted: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
-        self.form(level, of_node(shape, node), wanted)
+        let form = of_node(shape, node);
+        let typed = self.form(level, form, wanted)?;
+        self.viewed_tree(level, form, Written::Node(Site::of_node(node)), typed)
+    }
+
+    /// `typed`, the static type of a call, ascription or member read at `site` of the shape at
+    /// `level` the evaluator reads as `form`, where its tree is a view: exactly the view's signature
+    /// over a closed tree, and at most the view's application otherwise. Any other part's, or one
+    /// that can never be a module's, as it is.
+    fn viewed_tree(
+        &mut self,
+        level: usize,
+        form: Form<'graph>,
+        written: Written,
+        typed: Interval,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        if !matches!(
+            form,
+            Form::Call(..) | Form::Apply(_) | Form::Ascribe(..) | Form::Member { .. }
+        ) || bound_above(types, scratch, typed.upper).kind_of(types) != KKind::Signature
+        {
+            return Ok(typed);
+        }
+        // The binder whose whole right-hand side the part is keys a leaf its tree falls back to.
+        let named = match written {
+            Written::Part(site) => self.chain[level].rhs.get(&site).copied(),
+            Written::Node(_) => None,
+        };
+        let Tree::View {
+            operator,
+            application,
+            source,
+            ..
+        } = self.tree_form(trees::Scope::Chain(level), form, written, named)?
+        else {
+            return Ok(typed);
+        };
+        if operator == Operator::Opaque
+            && let Some(view) = source
+                .digest()
+                .and_then(|digest| opaque_view_types(None, application, digest, types, scratch))
+                .map(|viewed| viewed.view)
+        {
+            return Ok(Interval::point(view.into()));
+        }
+        Ok(match types.concrete(typed.upper) {
+            Some(upper) if typed.lower == KType::NEVER.into() && !typed.is_exact() => {
+                under(meet(types, scratch, application, upper).into())
+            }
+            _ => typed,
+        })
     }
 
     /// The static type of a node or part the evaluator reads as `form`, wanted at `wanted`. A
@@ -1579,7 +1874,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .nested(level, nested, false, None)?
                 .unwrap_or_else(unknown),
             Form::Lambda(node) => match Site::of_body(node).and_then(|site| shape.nested(site)) {
-                Some(body) => match callable(body) {
+                Some(body) => match self.callable(level, body) {
                     DeclaredType::Type(typed) => typed,
                     DeclaredType::Scheme(scheme) => {
                         let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
@@ -1600,26 +1895,32 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 list,
                 operand,
                 label,
-            } => match self.member_scheme(level, operand, label) {
-                Some((scheme, None)) => {
-                    let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
-                    if !self.unfilled {
-                        let solution = self.solution(level, solution, node.source);
-                        self.chain[level]
-                            .instances
-                            .push((Site::of_node(node), InstanceRead::Solved(solution)));
+            } => {
+                let peeked = self.peeked(level, operand);
+                let scheme = self.peeked_member_scheme(level, operand, label)?;
+                match scheme {
+                    Some(scheme) => self.member_instance(level, node, label, scheme, wanted)?,
+                    None => {
+                        let typed = self.narrow(level, node, list)?;
+                        // An operand `peeked` cannot read is typed by the read's use.
+                        let site = Site::of(operand);
+                        let operand_type = (peeked.is_none())
+                            .then(|| self.chain[level].parts.iter().rev())
+                            .and_then(|mut parts| parts.find(|(at, _)| *at == site))
+                            .map(|(_, typed)| typed.upper);
+                        let scheme = match operand_type {
+                            Some(upper) => self.member_scheme(level, operand, upper, label)?,
+                            None => None,
+                        };
+                        match scheme {
+                            Some(scheme) => {
+                                self.member_instance(level, node, label, scheme, wanted)?
+                            }
+                            None => self.read_through_paths(level, operand, label, typed)?,
+                        }
                     }
-                    typed
                 }
-                Some((_, Some(parameter))) => {
-                    return Err(ShapeError::UnpinnedMember {
-                        member: label,
-                        parameter,
-                        at: node.source,
-                    });
-                }
-                None => self.narrow(level, node, list)?,
-            },
+            }
             Form::Call(node, list) => self.narrow(level, node, list)?,
             Form::Apply(node) => self.apply(level, node)?,
             Form::Unevaluable(_) => unknown(),
@@ -1641,7 +1942,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .map(|mention| self.read_declared(level, mention.coordinate)),
             Form::Lambda(node) => Site::of_body(node)
                 .and_then(|site| shape.nested(site))
-                .map(callable),
+                .map(|body| self.callable(level, body)),
             // A member read at a call's head is read as it is, a quantified member by its scheme:
             // its site is recorded as read as it is, which the run reads as the head's mark.
             Form::Member {
@@ -1655,13 +1956,24 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         .instances
                         .push((Site::of_node(node), InstanceRead::AsIs));
                 }
-                match self.member_scheme(level, operand, label) {
+                match self.peeked_member_scheme(level, operand, label)? {
                     Some((scheme, None)) => Some(DeclaredType::Scheme(scheme)),
                     // A scheme over a parameter the load cannot name: the run solves the call.
                     Some((_, Some(_))) => {
                         let typed = self.narrow(level, node, list)?;
                         self.chain[level].parts.push((Site::of(head), typed));
                         return Ok(DeclaredType::Type(unknown()));
+                    }
+                    // An operand read only by typing it: the head is read as it is, as `part`
+                    // reads a member short of its instance.
+                    None if self.peeked(level, operand).is_none() => {
+                        let typed = self.narrow(level, node, list)?;
+                        let typed = self.read_through_paths(level, operand, label, typed)?;
+                        let form = of_part(self.chain[level].shape, head);
+                        let typed =
+                            self.viewed_tree(level, form, Written::Part(Site::of(head)), typed)?;
+                        self.chain[level].parts.push((Site::of(head), typed));
+                        return Ok(DeclaredType::Type(typed));
                     }
                     None => None,
                 }
@@ -1685,18 +1997,50 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         node: &'graph KExpression<'graph>,
         mode: Ascription,
     ) -> Result<Interval, ShapeError<'graph>> {
-        let [operand, _, ascribed] = node.parts else {
+        let [operand_part, _, ascribed] = node.parts else {
             unreachable!("an ascription has an operand, its keyword and a type")
         };
         let (types, scratch) = (self.types, self.scratch);
         let declared = self.declared(level, &ascribed.value);
-        let typed = self.part_at(level, &operand.value, declared)?;
+        let typed = self.part_at(level, &operand_part.value, declared)?;
         let operand = bound_above(types, scratch, typed.upper);
         let bounded = declared.map_or(KType::ANY, |declared| bound_above(types, scratch, declared));
         if view::views(types, mode, operand, bounded) {
             // An opaque view hides each unpinned head parameter behind a carrier it mints.
             if mode == Ascription::Opaque {
                 self.chain[level].minting.push(Site::of_node(node));
+                let tree = self.tree(level, &operand_part.value)?;
+                let tree = resident(self.writer, tree);
+                let site = Site::of_node(node);
+                self.chain[level].trees.push((site, tree));
+                // Over a closed tree the load lays every type the view door computes from types
+                // alone, so the run's view interns none of its own.
+                if let (Some(digest), Some(signature)) = (
+                    tree.digest(),
+                    declared.and_then(|declared| types.concrete(declared)),
+                ) {
+                    let exact = typed
+                        .is_exact()
+                        .then(|| types.concrete(typed.upper))
+                        .flatten();
+                    // What the operand carries, read off its tree, else by its exact type.
+                    let seen = self.carried_type(views::Carried::Tree(*tree), site)?;
+                    debug_assert!(
+                        exact.is_none() || seen.is_none() || exact == seen,
+                        "a tree reads the type its operand carries"
+                    );
+                    let carried = match (seen, exact) {
+                        (None, Some(exact)) => views::Carried::Typed(exact),
+                        _ => views::Carried::Tree(*tree),
+                    };
+                    let key =
+                        ModuleContent::view(Operator::Opaque, signature, digest).carrier_key();
+                    let held = seen.or(exact);
+                    if let Ok(viewed) = view::view_types(held, signature, mode, key, types, scratch)
+                    {
+                        self.lay(&viewed, carried, site)?;
+                    }
+                }
             }
             return self.viewed(level, node, mode, typed, declared);
         }
@@ -1776,11 +2120,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 at: node.source,
             });
         }
-        let view = types
+        let viewed = types
             .concrete(declared)
             .filter(|_| mode == Ascription::Transparent)
-            .and_then(|declared| transparent_view_type(exact, declared, types, scratch));
-        Ok(view.map_or_else(|| under(declared), |view| Interval::point(view.into())))
+            .and_then(|declared| transparent_view_types(exact, declared, types, scratch));
+        let Some(viewed) = viewed else {
+            return Ok(under(declared));
+        };
+        // The load lays what the run's view reads, so it interns nothing of its own.
+        self.lay_declared(&viewed);
+        Ok(Interval::point(viewed.view.into()))
     }
 
     /// `LET <name> <type> = <value>`, the binder at `member` of the shape at `level`, whose value
@@ -1902,7 +2251,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// The type the type part `part` of the shape at `level` denotes, where the load knows it.
     fn declared(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Parametric> {
-        match self.chain[level].shape.typed_expression(Site::of(part)) {
+        let typed = self.chain[level].shape.typed_expression(Site::of(part));
+        match self.resolved_type(level, typed) {
             Static::Closed(handle) => Some(handle.into()),
             Static::Rigid { value: handle, .. } => Some(handle),
             Static::Unknown => None,
@@ -1929,7 +2279,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .nested(Site::of(part))
                 .map_or_else(unknown, |code| Interval::point(code.code_type().into())),
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
-                match shape.typed_expression(Site::of(part)) {
+                match self.resolved_type(level, shape.typed_expression(Site::of(part))) {
                     Static::Closed(handle) => {
                         Interval::point(KType::of_kind(handle.kind_of(types)).into())
                     }
@@ -2023,7 +2373,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The static type of what `coordinate`, read in the shape at `level`, holds, a quantified
-    /// callable's its scheme. A capture along the chain reads its source's; one crossing into a
+    /// callable's its scheme. A capture along the chain reads its source's, each path variable
+    /// there no path of whose class this shape reaches read through its bounds; one crossing into a
     /// quote's code reads it through its bounds.
     fn read_declared(&self, level: usize, coordinate: Coordinate) -> Bound {
         let Followed { landing, crossed } = self.follow(level, coordinate);
@@ -2034,6 +2385,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     .get(index)
                     .ktype()
                     .map(|ktype| Interval::point(ktype.into()));
+            }
+            Landing::Slot { level: at, slot } if at < level && !crossed => {
+                self.sourced_bound(level, self.chain[at].binders[slot.index()])
             }
             Landing::Slot { level, slot } => self.chain[level].binders[slot.index()],
             Landing::Open { .. } => return DeclaredType::Type(unknown()),
@@ -2085,7 +2439,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             };
             let holder = &self.chain[at];
             let outer = at.checked_sub(1);
-            match (holder.shape.captures()[capture.index()].source, outer) {
+            // A type capture the pass added reads its source as a builder capture does.
+            let builder = holder.shape.captures();
+            let source = match builder.get(capture.index()) {
+                Some(spec) => spec.source,
+                None => {
+                    CaptureSource::Read(holder.type_captures[capture.index() - builder.len()].1)
+                }
+            };
+            match (source, outer) {
                 (CaptureSource::Hole, _) => return open(true, crossed),
                 (CaptureSource::Offered, _) | (_, None) => return open(false, crossed),
                 (CaptureSource::Read(inner), Some(outer)) => {
@@ -2349,7 +2711,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let mut typed = BumpVec::with_capacity_in(fields.len(), scratch);
         let mut sites = BumpVec::new_in(scratch);
         for (name, value) in fields.iter() {
-            let Some((instanced, scheme, at)) = self.instance_site(level, value) else {
+            let Some((instanced, scheme, at)) = self.instance_site(level, value)? else {
                 typed.push(Some(self.part(level, value)?));
                 continue;
             };
@@ -2535,7 +2897,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let mut sites = BumpVec::new_in(scratch);
         for (position, wanted) in wanted.iter().enumerate() {
             let site = match wanted {
-                Wanted::Evaluated(part) => self.instance_site(level, part).map(|site| (part, site)),
+                Wanted::Evaluated(part) => {
+                    self.instance_site(level, part)?.map(|site| (part, site))
+                }
                 Wanted::Label(_) => None,
             };
             if let Some((part, (instanced, scheme, at))) = site {
@@ -2787,6 +3151,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 };
                 self.use_exits(level, arguments, &sites, &[chosen]);
                 self.made(level, node, list, &sites, &[chosen])?;
+                if !self.unfilled {
+                    let mut points = BumpVec::new_in(scratch);
+                    points.extend(chosen.intervals.unwrap_or(&[]).iter().map(|interval| {
+                        interval
+                            .is_exact()
+                            .then(|| types.concrete(interval.upper))
+                            .flatten()
+                    }));
+                    self.selections.insert(Site::of_node(node), points.leak());
+                }
                 self.chain[level].uses[index].narrowing = Narrowing::Selected(coordinate);
                 return Ok(self.candidate_return(chosen));
             }
@@ -3048,7 +3422,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if holder.registration(slot).is_none() {
             return Known::Unknown;
         }
-        match holder.registered_type(slot) {
+        let typed = holder.registered_type(slot);
+        // One reading a path no path of whose class this shape reaches is unknown here.
+        if let Static::Rigid { variables, .. } = typed
+            && !self.reaches(level, variables)
+        {
+            return Known::Unknown;
+        }
+        match self.resolved_registered(at, typed) {
             Static::Closed(registered) => Known::Closed(registered.shape),
             Static::Rigid { value, .. } if !crossed => Known::Rigid(value.shape),
             Static::Rigid { .. } | Static::Unknown => Known::Unknown,
@@ -3085,20 +3466,12 @@ fn typed_of<'p>(given: &[Given<'_>], scratch: BumpAllocator<'p>) -> &'p [Interva
     typed.leak()
 }
 
+/// A shape's address, which keys the pass's tables of what it read off each shape.
+fn address(shape: &BodyShape<'_>) -> usize {
+    std::ptr::from_ref(shape).addr()
+}
+
 /// Whether the pass has typed `nested`, or need not: a quote's code the load refused is left.
 fn done(nested: &BodyShape<'_>) -> bool {
     nested.statics().is_some() || (nested.kind() == ShapeKind::Code && nested.refusal().is_some())
-}
-
-/// The static type of the callable body `body`: a point at its function type, or its scheme, where
-/// the load typed it, `[Never, Any]` elsewhere.
-fn callable(body: &BodyShape<'_>) -> Bound {
-    let ktype = match body.callable_type() {
-        Static::Closed(callable) => callable.ktype.into(),
-        Static::Rigid {
-            value: callable, ..
-        } => callable.ktype,
-        Static::Unknown => return DeclaredType::Type(unknown()),
-    };
-    ktype.map(Interval::point)
 }

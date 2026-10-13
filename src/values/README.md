@@ -491,6 +491,13 @@ digest later.
 A literal inside a body's [code digest](../scope/README.md#resolution) is
 hashed as syntax, not as the value it lowers to.
 
+**Every recipe is a function over digests.** `literal_digest`, `type_digest`,
+`knot_digest`, `member_digest`, `function_content`, `body_content`,
+`view_content` and `edge_at` each hash one recipe from its parts' digests, and
+the run's walk calls them. The load calls the same functions over a
+[content tree](../scope/README.md#load-time-types), so a closed tree digests
+as the value its expression evaluates to, and no recipe is written twice.
+
 ## Equality and rendering
 
 `Value::equals` is what `==` means over data. Numbers follow IEEE; a tagged

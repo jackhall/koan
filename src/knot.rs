@@ -56,7 +56,7 @@ pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
 pub use code::{Code, UsingRefused, quote, using};
-pub use function::{Function, instance, lambda};
+pub use function::{Function, barrier_instance, instance, lambda};
 pub use module::{Coerced, Module, body_activation};
 pub use tie::tie;
 
@@ -99,15 +99,14 @@ pub enum Node<'graph, 'cell> {
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
 
-/// Hand `each` every capture of `links`, a closure of `shape`, that its code digest does not name
-/// — every one but a read of the program's top level, and every type capture — beside its slot:
-/// what a closure's or a module's content composes over its code.
-fn composed<L>(shape: &BodyShape<'_>, links: &[L], mut each: impl FnMut(usize, &L)) {
-    for (index, link) in links.iter().enumerate() {
-        if shape.composes(CaptureSlot(index as u32)) {
-            each(index, link);
-        }
-    }
+/// Every capture of `links`, a closure of `shape`, that its code digest does not name — every one
+/// but a read of the program's top level, and every type capture — beside its slot: what a
+/// closure's or a module's content composes over its code.
+fn composed<'l, L>(shape: &BodyShape<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
+    links
+        .iter()
+        .enumerate()
+        .filter(move |(index, _)| shape.composes(CaptureSlot(*index as u32)))
 }
 
 /// A knot member: one node of a knot — a function, a data node, a module or a barrier over a
@@ -292,12 +291,11 @@ impl values::Knotted for Knotted<'_, '_> {
                 .finished();
         }
         let knot = self.0.knot();
-        let mut hasher = DigestHasher::new(Tag::Knot);
-        hasher.count(knot.len() as usize);
-        for member in knot.members() {
-            hasher.digest(Knotted(member).content(types, scratch, parts));
-        }
-        hasher.finished()
+        values::digest::knot_digest(
+            knot.len() as usize,
+            knot.members()
+                .map(|member| Knotted(member).content(types, scratch, parts)),
+        )
     }
 
     fn sibling(&self, edge: Edge) -> Self {

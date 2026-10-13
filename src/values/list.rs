@@ -19,6 +19,19 @@ pub struct List<'cell, X = Nothing, C = Value<'cell, X>> {
     member: PhantomData<Value<'cell, X>>,
 }
 
+/// `items` written as a run of cells into `writer`'s region.
+fn filled<'cell, X: Knotted>(
+    writer: Writer<'cell>,
+    items: impl ExactSizeIterator<Item = Value<'cell, X>>,
+) -> &'cell [Value<'cell, X>] {
+    let mut items = items;
+    writer.fill(items.len(), |_| {
+        items
+            .next()
+            .expect("an exact-size iterator yields its reported length")
+    })
+}
+
 impl<'cell, X: Knotted> List<'cell, X> {
     /// Lay down `items` as the list's cells. The element type is the join of the cells' types —
     /// `Never` for an empty list — and the weight is summed in the same pass.
@@ -28,12 +41,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
         types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell List<'cell, X> {
-        let mut items = items;
-        let cells = writer.fill(items.len(), |_| {
-            items
-                .next()
-                .expect("an exact-size iterator yields its reported length")
-        });
+        let cells = filled(writer, items);
         let ktype = list_type(types, scratch, cells.iter().map(Value::concrete_ktype));
         Self::weighed(writer, cells, ktype)
     }
@@ -46,13 +54,17 @@ impl<'cell, X: Knotted> List<'cell, X> {
         writer: Writer<'cell>,
         functions: impl ExactSizeIterator<Item = Value<'cell, X>>,
     ) -> &'cell List<'cell, X> {
-        let mut functions = functions;
-        let cells = writer.fill(functions.len(), |_| {
-            functions
-                .next()
-                .expect("an exact-size iterator yields its reported length")
-        });
-        Self::weighed(writer, cells, KType::LIST_OF_ANY)
+        Self::typed(writer, functions, KType::LIST_OF_ANY)
+    }
+
+    /// Lay down `items` under `ktype`, a type the caller knows they satisfy — a view's rebuilt
+    /// list, at the type its slot declares — so no type is interned.
+    pub fn typed(
+        writer: Writer<'cell>,
+        items: impl ExactSizeIterator<Item = Value<'cell, X>>,
+        ktype: KType,
+    ) -> &'cell List<'cell, X> {
+        Self::weighed(writer, filled(writer, items), ktype)
     }
 
     /// A list over value cells already resident in `writer`'s region under `ktype`, weighed as

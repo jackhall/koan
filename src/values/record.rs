@@ -32,9 +32,6 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
-        let order = symbol_order(fields, scratch);
-        let names = writer.fill(order.len(), |at| fields[order[at]].0.symbol());
-        let cells = writer.fill(order.len(), |at| fields[order[at]].1);
         let ktype = record_type(
             types,
             scratch,
@@ -42,6 +39,20 @@ impl<'cell, X: Knotted> Record<'cell, X> {
                 .iter()
                 .map(|(name, cell)| (*name, cell.concrete_ktype())),
         );
+        Self::typed(writer, fields, ktype, scratch)
+    }
+
+    /// Lay down `fields` as [`new`](Self::new) does, under `ktype`, a type the caller knows they
+    /// satisfy — a view's rebuilt record, at the type its slot declares — so no type is interned.
+    pub fn typed(
+        writer: Writer<'cell>,
+        fields: &[(BinderSymbol, Value<'cell, X>)],
+        ktype: KType,
+        scratch: BumpAllocator<'_>,
+    ) -> &'cell Record<'cell, X> {
+        let order = symbol_order(fields, scratch);
+        let names = writer.fill(order.len(), |at| fields[order[at]].0.symbol());
+        let cells = writer.fill(order.len(), |at| fields[order[at]].1);
         Self::weighed(writer, names, cells, ktype)
     }
 

@@ -45,7 +45,8 @@ pub use birth::{body_activation, tie_member};
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
-use crate::values::digest::{DigestHasher, Tag};
+pub use crate::values::digest::Operator;
+use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
 use crate::values::{ContentDigest, Knotted as _, Seen, Value, Weight};
 
 use super::{KValue, Knotted, Node};
@@ -144,44 +145,17 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ModuleContent(ContentDigest);
 
-/// Which door a view came through, a part of its content.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Operator {
-    /// `:!`.
-    Transparent,
-    /// `:|`.
-    Opaque,
-    /// The re-view a nested module takes at an opaque boundary.
-    Reviewed,
-}
-
 impl ModuleContent {
     /// A body-born module's content: its body's `code` digest, then each capture the code digest
     /// does not name, beside its slot, as [`composed`](super::composed) yields them.
     pub fn body(code: ContentDigest, captures: &[(usize, ContentDigest)]) -> ModuleContent {
-        let mut hasher = DigestHasher::new(Tag::Module);
-        hasher.digest(code);
-        for (index, capture) in captures.iter().copied() {
-            hasher.count(index).digest(capture);
-        }
-        ModuleContent(hasher.finished())
+        ModuleContent(body_content(code, captures.iter().copied()))
     }
 
     /// A view's content: its `operator` and the `application` it was built at, over its `source`'s
     /// digest.
     pub fn view(operator: Operator, application: KType, source: ContentDigest) -> ModuleContent {
-        let operator = match operator {
-            Operator::Transparent => Tag::Transparent,
-            Operator::Opaque => Tag::Opaque,
-            Operator::Reviewed => Tag::Reviewed,
-        };
-        ModuleContent(
-            DigestHasher::new(Tag::View)
-                .tag(operator)
-                .feed(application)
-                .digest(source)
-                .finished(),
-        )
+        ModuleContent(view_content(operator, application, source))
     }
 
     /// The key an opaque view's carriers are made under: its own content, so two views of equal

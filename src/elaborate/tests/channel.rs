@@ -4,8 +4,8 @@
 
 use crate::memory::BumpAllocator;
 use crate::scope::{
-    BodyShape, CaptureSlot, Coordinate, Elaboration, FunctionGroupMap, ShapeError, ShapeKind, Slot,
-    Static, StaticType, Target, TypeExpression, Variable,
+    BodyShape, CaptureSlot, Coordinate, Elaboration, FunctionGroupMap, PathEntry, ShapeError,
+    ShapeKind, Slot, Source, Static, StaticType, Target, TypeExpression, Variable,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
@@ -200,7 +200,7 @@ fn a_for_all_name_is_its_lexical_variable() {
             variables,
             [Variable {
                 level: 0,
-                at: super::local(slot)
+                source: Source::Type(super::local(slot))
             }]
         );
     });
@@ -354,10 +354,10 @@ fn a_dollar_name_crossing_into_code_is_a_name_of_the_code_s_own() {
             variables,
             [Variable {
                 level: 0,
-                at: Coordinate::Activation {
+                source: Source::Type(Coordinate::Activation {
                     hops: 0,
                     target: Target::Capture(CaptureSlot(capture as u32)),
-                },
+                }),
             }]
         );
     });
@@ -594,5 +594,93 @@ fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
             panic!("a function type")
         };
         assert_eq!(ret, elt, "its declared return is the same variable");
+    });
+}
+
+/// The one path variable among `variables`: its entry.
+fn path_entry<'graph>(variables: &[Variable<'graph>]) -> &'graph PathEntry<'graph> {
+    let [
+        Variable {
+            source: Source::Path { entry, .. },
+            ..
+        },
+    ] = variables
+    else {
+        panic!("one path variable, not {variables:?}")
+    };
+    entry
+}
+
+/// The path variable `typed` is rigid over: its value, a lexical variable, and its entry.
+fn path<'graph>(typed: StaticType<'graph>) -> (Parametric, &'graph PathEntry<'graph>) {
+    let Static::Rigid { value, variables } = typed else {
+        panic!("a rigid type, not {typed:?}")
+    };
+    (value, path_entry(variables))
+}
+
+#[test]
+fn a_path_through_a_module_name_is_one_variable_past_every_name_level() {
+    let source = "MODULE ints = (LET Carrier = Number)\n\
+                  LET x :(ints.Carrier) = 1\n\
+                  LET y :(ints.Carrier) = 2\n\
+                  LET z :(ints.Other) = 3";
+    typed(source, |program| {
+        let shape = program.activation.shape();
+        let [x, y, z] = [1, 2, 3].map(|statement| {
+            let [expression] = written_in(shape, statement)[..] else {
+                panic!("one type expression in statement {statement}")
+            };
+            path(expression.typed())
+        });
+        assert!(std::ptr::eq(x.1, y.1), "two spellings of one path share it");
+        assert_eq!(x.0, y.0);
+        assert!(!std::ptr::eq(x.1, z.1), "another label is another path");
+        // `ints`'s own `Carrier` takes level 0; the paths start past it.
+        assert_eq!((x.1.level, z.1.level), (1, 2));
+        assert_eq!(x.0, lexical(program, 1, "Carrier"));
+        assert!(x.1.through.is_none(), "a binder with no declared type");
+        assert_eq!(shape.paths().len(), 2);
+        assert!(std::ptr::eq(shape.path_entry(2).expect("an entry"), z.1));
+    });
+}
+
+#[test]
+fn a_path_through_a_parameter_reads_through_its_declared_application() {
+    let source = "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier)]\n\
+                  LET f = (FN :{p :Mapper} -> Any = \
+                  #(LET g = (FN :{x :(p.Carrier)} -> Any = #(x))))";
+    typed(source, |program| {
+        let body = program.birth("f");
+        let inner = nested(body, ShapeKind::Callable);
+        let Static::Rigid { variables, .. } = inner.callable_type() else {
+            panic!("`g`'s type is rigid over the path")
+        };
+        let entry = path_entry(variables);
+        assert!(
+            entry.through.is_some(),
+            "`Mapper` leaves `Carrier` unpinned, so the path reads through it"
+        );
+        let read = body.path_reads();
+        assert_eq!(
+            read.len(),
+            1,
+            "the parameter type is spelled where `g` is born"
+        );
+    });
+}
+
+#[test]
+fn a_type_binder_over_a_path_stays_unknown() {
+    let source = "MODULE ints = (LET Carrier = Number)\nLET Elt = :(ints.Carrier)";
+    typed(source, |program| {
+        let shape = program.activation.shape();
+        let slot = type_slot(program, shape, "Elt");
+        assert!(unknown(shape.declared_type(slot)));
+        assert_eq!(
+            shape.path_reads().len(),
+            1,
+            "the run reads it through its entry"
+        );
     });
 }

@@ -83,13 +83,20 @@ registry's own doors:
   representation, a union variant's payload — so a field's type is reached the
   way its value is. The read chains where a field is itself record-shaped:
   `Outer.inner.x`, `Shape.Circle.r`;
-- `m.Carrier` and `outer.inner.Carrier`, where the owner is a value name
-  holding a module or a chain of value members rooted at one, are the module's
-  type member: read where it runs off its carried signature, each step the
-  member that step's signature declares, its application's pins substituted
-  ([a signature's members](#a-signatures-members)), as `LET i = outer.inner`
-  then `i.Carrier` reads it; unknown at load. A signature that declares no such
-  member, or names a head parameter its application leaves unpinned, is
+- `m.Carrier`, `outer.inner.Carrier` and `(MAKESET ints).Set` — a **path**,
+  whose owner is a value name holding a module, a chain of value members rooted
+  at one, or such a chain rooted at an expression written in place — are the
+  module's type member, as [paths.rs](paths.rs) reads it where it runs: off the
+  root's carried signature, each step the member that step's signature
+  declares, its application's pins substituted
+  ([a signature's members](#a-signatures-members)). Where the root is a
+  parameter or an annotated binder whose declared type names the label a head
+  parameter, the path is what the module *fits* that type at, as the view door
+  fits it: `p.Carrier` under `p :Mapper` is the type a plain module's members
+  realize, whatever type member of that name it binds, and under
+  `p :(Mapper WITH {Carrier = Number})` it is `Number`, the pin. Any other path
+  reads the module's own member. At load a path is a
+  [path variable](#the-type-channel-at-load). A path that reads no type is
   `NoSuchMember`;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
   by the parameter names the family declares — every parameter named once and no
@@ -450,6 +457,20 @@ return like with like. Every `FOR ALL` name is such a variable, a name only the
 return reads included: under `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`
 the body reads `Elt` as rigid, and each call binds it.
 
+**Paths.** A [path](#what-a-type-expression-is) is typed in the channel's
+own order as a **path variable**: a lexical variable at a level past every
+name level of its chain, one per root, member chain, label and declared
+application, so two spellings of one path share it. Its root is the binder the
+owner's name lands at, or the owner's own site where it is written in place,
+and where the root's declared type names the label a head parameter the entry
+records that application, read off a parameter's type or an
+annotated binder's. The channel lays the chain's entries on its root shape and
+records which entry each spelled path reads, and dispatch's
+[static pass](../dispatch/README.md#paths) resolves each to a closed type or a
+class off the module's content tree. Where it runs, a path variable binds as
+the path reads (`bound_path`). A type binder over a path stays unknown, as
+below.
+
 **A surfaced key.** A `USING … SCOPE` block's
 [surfaced key](../scope/README.md#names-that-arrive-at-run-time) is typed by the
 one head its operand declares there, and left unknown where it declares
@@ -598,7 +619,10 @@ callable's body and in a callable nested in it; sibling bodies numbering their
 own names alike; a nested `FOR ALL` callable rigid over its enclosing names,
 and one whose bound names a run-bound name left unknown; a `:Type` parameter,
 an outer quantifier inside an inner group, a quote's hole and a `$` name
-crossing into code each as a lexical variable; each spelling left unknown; a
+crossing into code each as a lexical variable; a path through a module name
+one variable past every name level, two spellings sharing it, and one through a
+parameter reading through its declared application; each spelling left
+unknown, a type binder over a path among them; a
 nominal over a
 run-bound type left unknown and a reader of it rigid; each repeated guard; and a
 refusal refusing the load, or kept on its quote's code shape.
@@ -608,8 +632,6 @@ refusal refusing the load, or kept on its quote's code shape.
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [Path types](../../roadmap/gradual-typing/path-types.md) — a type member read through
-  a module-valued expression at load.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
-  variance, which no declaration states, and a nominal over a run-bound type
-  declared per call.
+  variance, which no declaration states, a nominal over a run-bound type
+  declared per call, and a pin read through its bounds.

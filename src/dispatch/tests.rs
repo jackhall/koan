@@ -13,6 +13,7 @@ mod instances;
 mod lexical;
 mod modules;
 mod narrowing;
+mod paths;
 mod programs;
 mod quotes;
 mod rankings;
@@ -23,6 +24,8 @@ mod spellings;
 mod statics;
 mod surface;
 mod tail;
+mod trees;
+mod views;
 
 use std::cell::RefCell;
 

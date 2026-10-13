@@ -16,7 +16,7 @@
 //! variable the solution names is read where the site runs, the typing record carries the solution
 //! so bound, and a frame binds the body's `FOR ALL` names from it.
 
-use crate::elaborate::callable_type;
+use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
@@ -25,10 +25,10 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
 };
-use crate::values::digest::{DigestHasher, Tag};
+use crate::values::digest::function_content;
 use crate::values::{ContentDigest, Knotted as _, Link, Seen, Types, Value, Weight};
 
-use super::{KActivationView, Knotted, Node, Untieable, composed};
+use super::{Coerced, KActivationView, Knotted, Node, Untieable, composed};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -159,29 +159,24 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
     where
         'cell: 'a,
     {
-        composed(self.shape, self.closure.links(), |_, link| {
+        for (_, link) in composed(self.shape, self.closure.links()) {
             if let Link::Value(value) = link {
                 out(Seen::of(*value));
             }
-        });
+        }
     }
 
     /// The node's content: its body's code digest, the solution it is an instance at, and the
     /// digest of each capture the code digest does not name — every one but a read of the
     /// program's top level, and every type capture — a value's answered by `parts`.
     pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
-        let instance = self.instance().unwrap_or(&[]);
-        let mut hasher = DigestHasher::new(Tag::Function);
-        hasher
-            .digest(self.shape.code_digest())
-            .count(instance.len());
-        for solved in instance {
-            hasher.feed(solved);
-        }
-        composed(self.shape, self.closure.links(), |index, link| {
-            hasher.count(index).digest(link.digest_from(parts));
-        });
-        hasher.finished()
+        let captures = composed(self.shape, self.closure.links())
+            .map(|(index, link)| (index, link.digest_from(parts)));
+        function_content(
+            self.shape.code_digest(),
+            self.instance().unwrap_or(&[]),
+            captures,
+        )
     }
 }
 
@@ -359,16 +354,17 @@ const BOUND: &str = "an instance's lexical variables are bound where it is read 
 /// `solution`, an instance's solution in group order as the load recorded it, where the site runs:
 /// as it is when closed, and with each lexical variable it names replaced by the type `activation`
 /// reads at its coordinate when rigid.
-fn solved<'x>(
-    solution: StaticSolution<'_>,
-    activation: &KActivationView<'_, '_>,
+fn solved<'graph, 'x>(
+    solution: StaticSolution<'graph>,
+    activation: &KActivationView<'graph, '_>,
     types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
         StaticSolution::Closed(solution) => scratch.alloc_slice_copy(solution),
         StaticSolution::Rigid { value, variables } => {
-            let bindings = solutions(variables, activation, scratch).expect(BOUND);
+            let paths = |at, entry: &_| bound_path(activation, types, at, entry);
+            let bindings = solutions(variables, activation, scratch, &paths).expect(BOUND);
             let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
             solved.extend(value.iter().map(|each| {
                 let each = substitute_levels(types, scratch, *each, &bindings);
@@ -421,21 +417,22 @@ fn loaded<'graph, 'x>(
     let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
         concrete_declared(types, substitute_levels(types, scratch, value, bindings))
     };
-    let callable = body
-        .callable_type()
-        .solved(activation, scratch, |callable, bindings| {
-            Some(Callable {
-                ktype: substitute(callable.ktype, bindings),
-                quantifier_map: callable.quantifier_map,
-                registered: None,
-            })
-        })?;
+    let paths = |at, entry: &_| bound_path(activation, types, at, entry);
+    let callable =
+        body.callable_type()
+            .solved(activation, scratch, &paths, |callable, bindings| {
+                Some(Callable {
+                    ktype: substitute(callable.ktype, bindings),
+                    quantifier_map: callable.quantifier_map,
+                    registered: None,
+                })
+            })?;
     let registered = match registration {
         Some(registration) => {
             let registered = activation
                 .shape()
                 .registered_type(registration.slot)
-                .solved(activation, scratch, |registered, bindings| {
+                .solved(activation, scratch, &paths, |registered, bindings| {
                     Some(Registered {
                         shape: substitute(registered.shape, bindings),
                         quantifier_map: registered.quantifier_map,
@@ -537,6 +534,41 @@ pub fn lambda<'graph, 'cell, 'x>(
         ))
     });
     Ok(Knotted::of(knot, 0))
+}
+
+/// `member`, a quantified function behind an opaque view's barrier, read where the load solved its
+/// group to `solution`: a barrier of its own at the instance — what a caller sees, and the types its
+/// arguments cross at — before the same function, which solves its own group where it runs. Each
+/// lexical variable `solution` names is read through `activation`.
+pub fn barrier_instance<'graph, 'cell>(
+    writer: Writer<'cell>,
+    member: Knotted<'graph, 'cell>,
+    solution: StaticSolution<'graph>,
+    activation: &KActivationView<'graph, '_>,
+    types: &Types<'_, 'cell>,
+    scratch: BumpAllocator<'_>,
+) -> Knotted<'graph, 'cell> {
+    let solution = solved(solution, activation, types, scratch);
+    let barrier = member
+        .coerced()
+        .expect("a barrier instance is read of a member behind a barrier");
+    let (DeclaredType::Scheme(scheme), DeclaredType::Scheme(declared)) =
+        (barrier.ktype(), barrier.declared())
+    else {
+        unreachable!("a barrier instance is read of a quantified member")
+    };
+    let instance = instantiate_quantified(types, scratch, scheme, solution);
+    let ktype = DeclaredType::Type(types.concrete(instance).expect(INSTANCE));
+    let declared = DeclaredType::Type(instantiate_quantified(types, scratch, declared, solution));
+    let knot = Coerced::tie(
+        writer,
+        barrier.underlying(),
+        ktype,
+        declared,
+        barrier.from(),
+        barrier.to(),
+    );
+    Knotted::of(knot, 0)
 }
 
 /// `member`, a quantified function, read where the load solved its group to `solution`: a one-node

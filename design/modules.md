@@ -108,6 +108,19 @@ one path are known at load to share a type, and a call solving one variable from
 both solves it the same way at every run. What the load can say of two paths is
 [below](#the-load-and-the-run).
 
+A head parameter read through a parameter, or a binder annotated with a type,
+whose declared type leaves it unpinned is what the module fits that type at.
+Under `SIG Mapper FOR ALL #[Carrier]`, a parameter
+`p :Mapper` bound to an opaque view reads `p.Carrier` as the view's carrier, and
+bound to a plain module as the type its members realize `Carrier` at, whether
+or not the module binds a type member of that name. So a quantified member over
+`Carrier` is instantiated at `p.Carrier` and agrees with what `p` holds at every
+run. A type member the module binds is read through the module itself:
+`raw.Carrier` is `raw`'s own binding, even where `raw` realizes `Mapper`'s
+`Carrier` at another type. *Fits* reads no member of that name, since a
+signature may leave out members, and a module fitting a narrower signature on
+the way would lose it.
+
 ## Applicative by content, generative by effect
 
 Koan has no switch between generative and applicative modules. A functor
@@ -137,7 +150,8 @@ what the load cannot see:
 
 | the expression | its tree |
 |---|---|
-| `MODULE n OVER #[x Elt] = (…)`, or a closure | a **body**: its resolved code over the trees of what it captures |
+| `MODULE n OVER #[x Elt] = (…)` | a **body**: its resolved code over the trees of what it captures |
+| a closure, or closures tied into one knot | a **knot**: each closure's code and instance solution over the trees of what it captures, a closure reaching a fellow by its index |
 | `e :\| Counter`, `e :! Counter` | a **view**: the operator and the signature application over the tree of `e` |
 | a value the load can compute, such as a literal | its digest |
 | a name bound by `LET m = e` or `MODULE m = …` | the tree of what it is bound to |
@@ -147,7 +161,22 @@ what the load cannot see:
 | anything else | a leaf, keyed on the binder of the `LET` that names it |
 
 A leaf no binder names — a `MATCH` written inline, a module read out of a list —
-is unlike every tree, its own text written elsewhere included.
+is unlike every tree, its own text written elsewhere included. A knot holding
+anything but closures — a data node, a quote — is a leaf.
+
+A container literal is no node either, so a tree's **horizon** stops at a
+container, a parameter and a call the load does not unfold. A module past it —
+`inner` in `{inner = (a :! Inner)}` — is known only by the exact type the load
+gives it, and where that type is a view's, the view's own members only as its
+signature declares them. A member declared at an application that fixes each
+parameter of its signature is read as a module of that application, at any
+depth; one whose application leaves a parameter open the load cannot read
+further. The load does not look into a container: what lies past the horizon,
+the run reads off the values.
+
+The load computes a node's digest through the run's own recipe for it, read
+over the digests of the node's parts, so the load and the run cannot key one
+content two ways.
 
 ### A call unfolds
 
@@ -164,6 +193,22 @@ result is chosen by a `MATCH` or read out of a container. Bound by a `LET`, it
 is keyed on that binder, so after `LET s = (BUILD p)`, `s.zero` and `s.succ`
 share a type; written inline, it is unlike every tree.
 
+A leaf inside the function's body is bound once per call, so an unfolded tree
+keys it on its binder and on what the call substitutes: the arguments' trees
+and the solution. Under
+
+```koan
+EXPR #(BUILD elem :Ordered) -> Module = #(
+  (LET start = elem.compare)
+  (MODULE built OVER #[start] = (LET zero = start))
+  (built :| Counter)
+)
+```
+
+`start` is a leaf, and `(BUILD one)` written twice is one tree, while
+`(BUILD one)` and `(BUILD two)` are two: each call's `start` is a fact about
+its argument.
+
 ### Comparing two paths
 
 A path reads a member, so two paths are compared at their members. Where the
@@ -173,15 +218,22 @@ rule reads the two trees:
 | the two paths | at load |
 |---|---|
 | the same member of identical trees, each leaf keyed alike | *always* one type |
-| two carriers whose trees hold content at one position and differ there — a body's code, a view's operator or signature, a digest — or that name two parameters of one view | *never* one type |
+| two carriers over closed trees, where the trees differ or the carriers name two parameters of one view | *never* one type |
 | otherwise | *maybe*, and the run compares carriers |
 
 A tree with no leaf is a **closed** tree: the load computes the digest the run
 keys the carrier on, so the load's type is the run's carrier. A tree with a leaf
-gives a rigid type the run binds to the carrier it computes, read from outside
-through its bound; it is a type of the load alone, and no value carries it. Both
-follow the rule above, so every equality the load draws holds at the run, and a
-*maybe* the run settles either way contradicts nothing the load said.
+gives a rigid type, a lexical variable of the load's own that the run binds by
+reading the member off the module the path's root names. It is read from
+outside through its bound, `Any`, and no value carries it. So two paths over
+trees with leaves are *maybe* wherever their trees differ, even in content.
+Every equality the load draws holds at the run, and a *maybe* the run settles
+either way contradicts nothing the load said.
+
+A type expression reads a path as a member read does, a call in it unfolded, so
+`:((MAKESET ints).Set)` written at two sites is one type. One rooted at an
+inline call whose tree holds a leaf is refused: the run builds no module there
+to read the member from.
 
 ## In the literature
 
@@ -199,7 +251,5 @@ equal content give two types; koan keys it on content, so they give one.
 
 ## Open work
 
-- [Path types](../roadmap/gradual-typing/path-types.md) — content trees, a path's
-  load-time type, and a call unfolded.
 - [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.

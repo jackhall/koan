@@ -162,9 +162,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         types: &Types<'_, 'cell>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
-        let kept = kept_entries(entries, scratch);
-        let keys = writer.fill(kept.len(), |at| entries[kept[at]].0.rehomed(writer));
-        let cells = writer.fill(kept.len(), |at| entries[kept[at]].1);
+        let (keys, cells) = Self::kept(writer, entries, scratch);
         let ktype = dict_type(
             types,
             scratch,
@@ -173,6 +171,31 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
                 .map(|(key, cell)| (key.ktype(), cell.concrete_ktype())),
         );
         Self::weighed(writer, keys, cells, ktype)
+    }
+
+    /// Lay down `entries` as [`new`](Self::new) does, under `ktype`, a type the caller knows they
+    /// satisfy — a view's rebuilt dict, at the type its slot declares — so no type is interned.
+    pub fn typed(
+        writer: Writer<'cell>,
+        entries: &[(Key<'_>, Value<'cell, X>)],
+        ktype: KType,
+        scratch: BumpAllocator<'_>,
+    ) -> &'cell Dict<'cell, X> {
+        let (keys, cells) = Self::kept(writer, entries, scratch);
+        Self::weighed(writer, keys, cells, ktype)
+    }
+
+    /// The keys and cells of `entries` that stay, sorted by key, written into `writer`'s region.
+    #[allow(clippy::type_complexity)]
+    fn kept(
+        writer: Writer<'cell>,
+        entries: &[(Key<'_>, Value<'cell, X>)],
+        scratch: BumpAllocator<'_>,
+    ) -> (&'cell [Key<'cell>], &'cell [Value<'cell, X>]) {
+        let kept = kept_entries(entries, scratch);
+        let keys = writer.fill(kept.len(), |at| entries[kept[at]].0.rehomed(writer));
+        let cells = writer.fill(kept.len(), |at| entries[kept[at]].1);
+        (keys, cells)
     }
 
     /// A dict over sorted keys and aligned value cells already resident in `writer`'s region under

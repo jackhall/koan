@@ -30,7 +30,7 @@ pub use lattice::bump::{
     Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, LaysRuns,
     strongly_connected_components,
 };
-pub(crate) use lattice::bump::{bump_set, bump_table};
+pub(crate) use lattice::bump::{BumpHashTable, bump_hash_table, bump_set, bump_table};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use slots::{SlotArray, SlotConflict, SlotView};
 pub use substrate::*;

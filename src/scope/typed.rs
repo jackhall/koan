@@ -14,16 +14,19 @@
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
+use std::cell::Cell;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
-use crate::memory::{BumpAllocator, BumpVec};
-use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
+use crate::memory::{BumpAllocator, BumpHashTable, BumpVec, Writer, collect};
+use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, display_name};
 use crate::values::{KnottedFamily, Types, Value};
 
 use super::activation::ActivationView;
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Site};
+use super::tree::{Binder, Tree};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
 /// group — what a call needs to bind each type parameter to its solution. `T` is what the type is
@@ -211,11 +214,171 @@ impl fmt::Display for ElaborationDisplay<'_, '_, '_> {
 
 /// A rigid variable of a load-time type, and where the run reads its value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Variable {
+pub struct Variable<'graph> {
     /// The variable's level: the lexical variable the rigid value names it by.
     pub level: usize,
-    /// The coordinate, in the shape the value was typed in, that holds the variable's type.
-    pub at: Coordinate,
+    pub source: Source<'graph>,
+}
+
+/// Where the run reads a rigid variable's value.
+#[derive(Clone, Copy, Debug)]
+pub enum Source<'graph> {
+    /// A type name: the coordinate, in the shape the value was typed in, that holds its type.
+    Type(Coordinate),
+    /// A path variable: the coordinate, in the shape the value was typed in, of the module its
+    /// root names — `None` for a root written in place — and the path it stands for.
+    Path {
+        at: Option<Coordinate>,
+        entry: &'graph PathEntry<'graph>,
+    },
+}
+
+impl PartialEq for Source<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Source::Type(mine), Source::Type(theirs)) => mine == theirs,
+            (
+                Source::Path { at, entry },
+                Source::Path {
+                    at: theirs,
+                    entry: path,
+                },
+            ) => at == theirs && std::ptr::eq(*entry, *path),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Source<'_> {}
+
+/// One path of a chain — a type member `label` read through a module-valued expression — typed as
+/// a lexical variable of its own, its **path variable**, at a level past every name level of the
+/// chain ([design/modules.md § Carriers and paths](../../design/modules.md#carriers-and-paths)).
+/// The type channel mints one per distinct root, member chain and label its type expressions
+/// spell, and the static pass one more per path it pins a module's type through; the chain's root
+/// holds them all. The static pass resolves each one.
+#[derive(Clone, Copy)]
+pub struct PathEntry<'graph> {
+    pub root: Root<'graph>,
+    /// The value members read from the root, in order, before `label`.
+    pub chain: &'graph [ValueSymbol],
+    pub label: TypeSymbol,
+    /// The path variable's level.
+    pub level: usize,
+    /// The application the path is read through: the module `chain` reaches is fitted to it, and
+    /// the path is what it fits `label` at. Over the chain's lexical variables; a shape reading the
+    /// path locates them in its own [`Statics::throughs`]. `None` where the path reads the module's
+    /// own type member.
+    pub through: Option<Parametric>,
+    /// What the static pass resolved the path to. Written once.
+    resolution: &'graph Cell<Option<Resolution<'graph>>>,
+}
+
+/// The path entries a pass mints for one chain, found by root, member chain and label: each
+/// entry's index in the pass's own run of them, hashed by [`PathEntry::hash_of`].
+pub type PathIndex<'p> = BumpHashTable<'p, usize>;
+
+impl<'graph> PathEntry<'graph> {
+    /// The hash a [`PathIndex`] finds the entries for `root`, `chain` and `label` by.
+    pub fn hash_of(root: Root<'_>, chain: &[ValueSymbol], label: TypeSymbol) -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        match root {
+            Root::Binder(binder) => {
+                (0u8, std::ptr::from_ref(binder.shape).addr(), binder.slot).hash(&mut hasher)
+            }
+            Root::Inline(site) => (1u8, site).hash(&mut hasher),
+        }
+        (chain, label).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Whether this entry is the one for `root`, `chain` and `label`.
+    pub fn is(&self, root: Root<'graph>, chain: &[ValueSymbol], label: TypeSymbol) -> bool {
+        self.root == root && self.chain == chain && self.label == label
+    }
+
+    /// A new entry, unresolved, laid down through `writer`.
+    pub fn new(
+        writer: Writer<'graph>,
+        root: Root<'graph>,
+        chain: &[ValueSymbol],
+        label: TypeSymbol,
+        level: usize,
+        through: Option<Parametric>,
+    ) -> &'graph PathEntry<'graph> {
+        let mut entry = Some(PathEntry {
+            root,
+            chain: collect(writer, chain.iter().copied()),
+            label,
+            level,
+            through,
+            resolution: &writer.fill(1, |_| Cell::new(None))[0],
+        });
+        &writer.fill(1, |_| entry.take().expect("filled once"))[0]
+    }
+
+    /// What the static pass resolved the path to, once it has.
+    pub fn resolution(&self) -> Option<Resolution<'graph>> {
+        self.resolution.get()
+    }
+
+    /// Written once, by the static pass.
+    pub fn fix_resolution(&self, resolution: Resolution<'graph>) {
+        debug_assert!(self.resolution.get().is_none());
+        self.resolution.set(Some(resolution));
+    }
+
+    /// The type the path is at every run, where the static pass resolved it to one.
+    pub fn closed(&self) -> Option<KType> {
+        match self.resolution()?.resolved {
+            Resolved::Closed(closed) => Some(closed),
+            Resolved::Class(_) => None,
+        }
+    }
+}
+
+impl fmt::Debug for PathEntry<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PathEntry")
+            .field("level", &self.level)
+            .field("chain", &self.chain)
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
+/// What the static pass resolved a path to: the content tree of the module it reads its member
+/// off, and the type that tree gives it.
+#[derive(Clone, Copy)]
+pub struct Resolution<'graph> {
+    pub tree: Tree<'graph>,
+    pub resolved: Resolved,
+}
+
+/// The type a path is at load.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Resolved {
+    /// The same type at every run.
+    Closed(KType),
+    /// The path variable at this level: the first path the pass resolved over a tree like this
+    /// one's, read at the same label through the same application. Every path of one class is one
+    /// type at every run.
+    Class(usize),
+}
+
+/// A path's root: the binder a name lands at, or an expression written in place, by its site.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Root<'graph> {
+    Binder(Binder<'graph>),
+    Inline(Site),
+}
+
+/// A path spelling one shape's type expressions read: where that shape reads its root, and its
+/// entry.
+#[derive(Clone, Copy, Debug)]
+pub struct PathRead<'graph> {
+    pub at: Option<Coordinate>,
+    pub entry: &'graph PathEntry<'graph>,
 }
 
 /// What the load pass fixed for a type, a callable or a registration: a concrete `C` where it is
@@ -229,7 +392,7 @@ pub enum Static<'graph, C, R = C> {
     /// Over rigid variables the run supplies, each read at its coordinate.
     Rigid {
         value: R,
-        variables: &'graph [Variable],
+        variables: &'graph [Variable<'graph>],
     },
 }
 
@@ -246,7 +409,7 @@ pub enum StaticSolution<'graph> {
     /// Over rigid variables the run supplies, each read at its coordinate.
     Rigid {
         value: &'graph [Parametric],
-        variables: &'graph [Variable],
+        variables: &'graph [Variable<'graph>],
     },
 }
 
@@ -351,30 +514,58 @@ pub struct Statics<'graph> {
     /// This shape's own minting sites, sorted: each `:|` ascription, and each component of nominal
     /// declarations the load leaves unknown, by its first member's declaration node.
     pub minting: Keyed<'graph, Site>,
+    /// Each `:|` ascription's site, sorted, beside its operand's content tree.
+    pub trees: Keyed<'graph, (Site, &'graph Tree<'graph>)>,
+    /// Each path this shape's type expressions read whose [`through`](PathEntry::through) names a
+    /// lexical variable, by the path's level, beside where this shape reads each of them.
+    pub throughs: Keyed<'graph, (usize, &'graph [Variable<'graph>])>,
 }
 
+/// How the run binds a path variable: the type a path's entry reads through the module at a
+/// coordinate of the view a value is solved against. The elaborator's `bound_path` is the one
+/// reader, passed in from above.
+pub type Paths<'f, 'graph> = &'f dyn Fn(Coordinate, &'graph PathEntry<'graph>) -> Option<KType>;
+
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry
-/// per level up to the largest, each variable's the handle of the type its coordinate holds, and
-/// `Never` where no variable is listed — a gap no free variable of the rigid value names. `None`
-/// when a coordinate holds anything but a type.
+/// per level up to the largest, each variable's the handle of the type its coordinate holds — or,
+/// for a path variable, the type `paths` reads through its root — and `Never` where no variable is
+/// listed: a gap no free variable of the rigid value names. A path the load resolved closed is that
+/// type, with no read. `None` when a coordinate holds anything but a type, or a path reads none.
 pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
-    variables: &[Variable],
+    variables: &[Variable<'graph>],
     view: &ActivationView<'graph, '_, XF>,
     scratch: BumpAllocator<'x>,
+    paths: Paths<'_, 'graph>,
 ) -> Option<BumpVec<'x, KType>> {
     let len = variables.iter().map(|variable| variable.level + 1).max();
     let mut bindings = BumpVec::with_capacity_in(len.unwrap_or(0), scratch);
     bindings.resize(len.unwrap_or(0), KType::NEVER);
     for variable in variables {
-        match view.read(variable.at) {
-            Value::Type(value) => bindings[variable.level] = value.handle(),
-            _ => return None,
-        }
+        bindings[variable.level] = match variable.source {
+            Source::Type(at) => match view.read(at) {
+                Value::Type(value) => value.handle(),
+                _ => return None,
+            },
+            Source::Path { at, entry } => match entry.closed() {
+                Some(closed) => closed,
+                None => paths(at?, entry)?,
+            },
+        };
     }
     Some(bindings)
 }
 
 impl<'graph, C, R> Static<'graph, C, R> {
+    /// Whether the value is rigid over a path variable.
+    pub fn over_paths(&self) -> bool {
+        match self {
+            Static::Rigid { variables, .. } => variables
+                .iter()
+                .any(|variable| matches!(variable.source, Source::Path { .. })),
+            _ => false,
+        }
+    }
+
     /// The value where it runs, read through `view`: a closed value as it is, and a rigid one with
     /// its variables replaced by what their coordinates read, through `substitute`. `None` for an
     /// unknown value, where a variable's coordinate holds no type, and where `substitute` finds no
@@ -383,13 +574,14 @@ impl<'graph, C, R> Static<'graph, C, R> {
         self,
         view: &ActivationView<'graph, '_, XF>,
         scratch: BumpAllocator<'x>,
+        paths: Paths<'_, 'graph>,
         substitute: impl FnOnce(R, &[KType]) -> Option<C>,
     ) -> Option<C> {
         match self {
             Static::Unknown => None,
             Static::Closed(value) => Some(value),
             Static::Rigid { value, variables } => {
-                let bindings = solutions(variables, view, scratch)?;
+                let bindings = solutions(variables, view, scratch, paths)?;
                 substitute(value, &bindings)
             }
         }

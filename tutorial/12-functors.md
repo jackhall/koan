@@ -208,7 +208,135 @@ LET kept :(view.Carrier) = 5
 ```
 
 ```text
-error: Number does not satisfy its annotation Carrier
+error: <input>:4:1: this value is Number, which can never satisfy its annotation Carrier
+```
+
+A member can be read through any expression that gives a module, a functor's
+call included. Put the call in parentheses and write the `.` straight after
+them, with no space: `(MAKESET up).empty` reads a value member, and
+`:((MAKESET up).Set)` a type member. Koan works out what the call builds before
+the program runs, so `:((MAKESET up).Set)` is one type wherever it is written,
+and it is the type the call's values carry:
+
+```koan
+SIG Ordered = #[(VAL compare :Number)]
+SIG Collection FOR ALL #[Set] = #[(VAL empty :Set)]
+MODULE up = (LET compare = 1)
+MODULE down = (LET compare = 2)
+EXPR #(MAKESET elem :Ordered) -> Module = #(
+  (MODULE built OVER #[elem] = (LET empty = [elem.compare]))
+  (built :| Collection)
+)
+LET kept :((MAKESET up).Set) = (MAKESET up).empty
+PRINT kept
+```
+
+```text
+Set([1])
+```
+
+Applications to modules of different content build different modules, so
+their types are different too, though both are called `Set`. A value of
+`(MAKESET down)`'s `Set` is refused where `(MAKESET up)`'s is wanted:
+
+```koan
+SIG Ordered = #[(VAL compare :Number)]
+SIG Collection FOR ALL #[Set] = #[(VAL empty :Set)]
+MODULE up = (LET compare = 1)
+MODULE down = (LET compare = 2)
+EXPR #(MAKESET elem :Ordered) -> Module = #(
+  (MODULE built OVER #[elem] = (LET empty = [elem.compare]))
+  (built :| Collection)
+)
+LET mixed :((MAKESET up).Set) = (MAKESET down).empty
+```
+
+```text
+error: <input>:9:1: this value is Set, which can never satisfy its annotation Set
+```
+
+Inside a functor, a call over the functor's own parameter builds a module that
+depends on the argument, so a type read through that call written in place is
+refused. Bind the call with `LET`, and read the type through the name:
+
+```koan
+SIG Ordered = #[(VAL compare :Number)]
+SIG Collection FOR ALL #[Set] = #[(VAL empty :Set)]
+MODULE up = (LET compare = 1)
+EXPR #(MAKESET elem :Ordered) -> Module = #(
+  (MODULE built OVER #[elem] = (LET empty = [elem.compare]))
+  (built :| Collection)
+)
+EXPR #(FRESH elem :Ordered) -> Any = #(LET kept :((MAKESET elem).Set) = (MAKESET elem).empty)
+```
+
+```text
+error: <input>:8:51: this type reads a member of a module built by a call written in place, and a call in a type is never made; bind the call with `LET` to name its type
+```
+
+```koan
+SIG Ordered = #[(VAL compare :Number)]
+SIG Collection FOR ALL #[Set] = #[(VAL empty :Set)]
+MODULE up = (LET compare = 1)
+EXPR #(MAKESET elem :Ordered) -> Module = #(
+  (MODULE built OVER #[elem] = (LET empty = [elem.compare]))
+  (built :| Collection)
+)
+EXPR #(FRESH elem :Ordered) -> Any = #(
+  (LET made = (MAKESET elem))
+  (LET kept :(made.Set) = made.empty)
+  kept
+)
+PRINT (FRESH up)
+```
+
+```text
+Set([1])
+```
+
+Through a functor's parameter, a type member is the type the module passed in
+gives the signature's head parameter. In `TWICE`, `counter.zero`,
+`counter.succ` and `:(counter.Carrier)` all name that one type, so koan knows
+before the program runs that `once` is a value `counter.succ` takes:
+
+```koan
+SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]
+MODULE ints = ((LET zero = 0) (LET succ = (FN :{x :Number} -> Number = #(x + 1))))
+EXPR #(TWICE counter :Counter) -> Any = #(
+  (LET once :(counter.Carrier) = (counter.succ {x = counter.zero}))
+  (counter.succ {x = once})
+)
+PRINT (TWICE ints)
+PRINT (TWICE (ints :| Counter))
+```
+
+```text
+2
+Carrier(2)
+```
+
+Passed a plain module, `counter.Carrier` is the type that module's members
+give it, here `Number`; passed an opaque view, it is the view's hidden type. A
+module's own type member of the same name does not change this: `words` names
+`Str` as its `Carrier`, but its `zero` is a number, so it fits `Counter` with
+`Carrier` standing for `Number`, and that is what the parameter reads:
+
+```koan
+SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]
+MODULE ints = (LET zero = 0)
+MODULE words = ((LET Carrier = Str) (LET zero = 0))
+EXPR #(CARRIER counter :Counter) -> Any = #(:(counter.Carrier))
+PRINT (CARRIER ints)
+PRINT (CARRIER (ints :| Counter))
+PRINT (CARRIER words)
+PRINT words.Carrier
+```
+
+```text
+Number
+Carrier
+Number
+Str
 ```
 
 ## Signatures over a type: `SIG … FOR ALL` and `WITH`
@@ -553,7 +681,7 @@ PRINT (counter.zero + 1)
 ```
 
 ```text
-error: no overload of `_ + _` admits (Carrier, Number)
+error: <input>:7:7: no overload of `_ + _` admits (Carrier, Number)
 ```
 
 Only the module's own functions, reached through the view, work with the

@@ -84,10 +84,15 @@ module body, where it stays generic and each call solves its group.
 A member read `m.pick` is an instance site where the load sees that the
 member is quantified: its operand is a name, or a chain of member reads rooted
 at one, whose static type is a signature declaring the member with a scheme.
-A scheme naming a head parameter that signature leaves unpinned names a type
-the load cannot write, so such a read is refused anywhere but a call's head,
-where the run solves the call. A read the load cannot see into is no instance
-site, and faults at run where it reaches a scheme anywhere but a call's head.
+A scheme naming a head parameter that signature leaves unpinned reads that
+parameter as the [path](modules.md#carriers-and-paths) through the operand,
+`m.Carrier`, and is instantiated there like any other: with `m :Mapper`
+declaring `VAL apply :(FN FOR ALL #[Elt] :{x :Carrier, y :Elt} -> Elt)`,
+`LET go :(FN :{x :(m.Carrier), y :Number} -> Number) = m.apply` loads. Only a
+read whose path the load cannot name — one reaching across a quote's code — is
+refused anywhere but a call's head, where the run solves the call. A read the
+load cannot see into is no instance site, and faults at run where it reaches a
+scheme anywhere but a call's head.
 
 The solve is the least instance of the scheme under the wanted type
 ([`instance_under`](../lattice/src/types/relations.md#quantified-binders)). A
@@ -235,8 +240,3 @@ call, from the upper end of each argument's static type and from the type it
 binds, so a solve always has concrete types to read and never infers a
 scheme. And its `Any` is the top of a
 lattice, not an unknown type, so nothing here is checked by consistency.
-
-## Open work
-
-- [Path types](../roadmap/gradual-typing/path-types.md) — a quantified member over a
-  head parameter its signature leaves unpinned, instantiated through its path.

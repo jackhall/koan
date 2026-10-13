@@ -89,7 +89,7 @@ mod locate;
 mod rewrite;
 mod surface;
 
-pub(in crate::scope) use locate::source_within;
+pub(in crate::scope) use locate::{each_part_within, part_within, source_within};
 
 use rewrite::{Built, BuiltKind, chained};
 use surface::{Quantified, Surfaced, SurfacedKey, quantified_value};
@@ -1495,6 +1495,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     } else {
                         self.walk_part(level, statement, part, state)?
                     }
+                }
+                // A path's root other than a name, `(MAKESET ints).Set`, is a value expression
+                // even in a type: its uses resolve, and the static pass types it.
+                Role::Argument
+                    if form.id == BuiltinShapeId::Attribute
+                        && self.in_type > 0
+                        && !rooted_at_name(part) =>
+                {
+                    let in_type = std::mem::replace(&mut self.in_type, 0);
+                    let walked = self.walk_part(level, statement, part, State::Eager);
+                    self.in_type = in_type;
+                    walked?
                 }
                 Role::Argument | Role::InPlace => {
                     self.walk_part(level, statement, part, State::Eager)?
@@ -3318,14 +3330,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let candidates = Keyed::sorted(writer, &mut candidates);
         let mut required = draft.required;
         required.sort_unstable();
-        let mut recorded = draft.type_expressions;
-        recorded.sort_unstable_by_key(|recorded| Site::of(recorded.part));
+        let mut recorded = BumpVec::with_capacity_in(draft.type_expressions.len(), self.scratch);
+        recorded.extend((draft.type_expressions.iter().copied()).zip(0u32..));
+        recorded.sort_unstable_by_key(|(recorded, _)| Site::of(recorded.part));
         let type_expressions = Keyed::from_sorted(writer.fill(recorded.len(), |index| {
-            let recorded = recorded[index];
+            let (recorded, order) = recorded[index];
             TypeExpression {
                 site: Site::of(recorded.part),
                 part: recorded.part,
                 statement: recorded.statement,
+                order,
                 guard: recorded.guard,
                 typed: Cell::new(Static::Unknown),
             }
@@ -3376,6 +3390,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 born_instance: resident_cell(writer, None),
                 declared_variables: resident_cell(writer, &[][..]),
                 type_captures: resident_cell(writer, &[][..]),
+                path_reads: resident_cell(writer, Keyed::from_sorted(&[])),
+                paths: resident_cell(writer, &[][..]),
                 statics: resident_cell(writer, None),
             },
         )
@@ -3394,6 +3410,25 @@ fn types_with_its_binder(form: &BuiltinShape) -> bool {
                 Role::Signature | Role::Head | Role::Quantifiers | Role::Name | Role::Definition(_)
             ) || role.is_callable()
         })
+}
+
+/// Whether `part`, a member read's operand, is a name or a member chain rooted at one (`m`,
+/// `m.inner`): a path the type channel reads by name. Any other root is a value expression.
+fn rooted_at_name(part: &ExpressionPart<'_>) -> bool {
+    match part {
+        ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(..) => true,
+        ExpressionPart::Expression(node) => {
+            let node = node.reference();
+            match (node.cache().builtin_shape(), node.parts) {
+                (Some(form), [_, operand, _]) if form.id == BuiltinShapeId::Attribute => {
+                    rooted_at_name(&operand.value)
+                }
+                (None, [only]) => rooted_at_name(&only.value),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// The type part of `node`'s statement where it is a `LET <name> <type> = <value>`: what each
