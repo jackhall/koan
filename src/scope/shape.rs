@@ -431,6 +431,9 @@ pub struct TypeExpression<'graph> {
     /// The statement it is written in, by index into [`BodyShape::body`] — where a refusal about it
     /// is located.
     pub statement: u32,
+    /// Its place among the body's type expressions in program order, which a pass that mints
+    /// anything per expression walks them in: a site is an address, whose order says nothing.
+    pub order: u32,
     /// For a guard: the site of its arm set, and its place among the arms in written order.
     pub guard: Option<(Site, u32)>,
     typed: Cell<StaticType<'graph>>,
@@ -1160,6 +1163,11 @@ impl<'graph> BodyShape<'graph> {
 /// or node's around it. `None` when `node` does not hold the part.
 pub fn source_of(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
     build::source_within(node, site)
+}
+
+/// Call `visit` on every part within `node`, at any depth, in written order.
+pub fn each_part<'a>(node: &'a KExpression<'a>, mut visit: impl FnMut(&'a ExpressionPart<'a>)) {
+    build::each_part_within(node, &mut visit)
 }
 
 /// The part at `site` within `node`, at any depth. `None` when `node` does not hold it.

@@ -27,12 +27,13 @@ use crate::elaborate::{
     SignatureMember, applied_member, path_base, path_binding, signature_member,
 };
 use crate::knot::module::view::opaque_view_type;
-use crate::memory::{BumpVec, collect};
+use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Leaf, PathEntry, Position,
-    Registered, Resolution, Resolved, Root, ShapeError, ShapeKind, Site, Source, Static,
-    StaticCallable, StaticRegistered, StaticType, Target, Tree, Variable as Located, part_of,
+    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Leaf, PathEntry,
+    PathIndex, Position, Print, Registered, Resolution, Resolved, Root, ShapeError, ShapeKind,
+    Site, Source, Static, StaticCallable, StaticRegistered, StaticType, Target, Tree,
+    Variable as Located, each_part, part_of,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
@@ -59,8 +60,13 @@ pub(super) struct ChainPaths<'p, 'graph> {
     channel: usize,
     /// Every entry, by its level less `base`.
     entries: BumpVec<'p, (&'graph PathEntry<'graph>, Option<Resolution<'graph>>)>,
-    /// Each class's representative's level, in the order the pass resolved them.
-    classes: BumpVec<'p, usize>,
+    /// Each entry's index in `entries`, by root, chain and label.
+    found: PathIndex<'p>,
+    /// Each class's representative's level, by the label, application and tree print its paths
+    /// share.
+    classes: BumpBackedMap<'p, (TypeSymbol, Option<Parametric>, Print), usize>,
+    /// Each path resolved to a class, by the class's representative's level, then its own.
+    members: BumpVec<'p, (usize, usize)>,
     /// Each entry being resolved, by level.
     resolving: BumpVec<'p, usize>,
 }
@@ -78,6 +84,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let channel = root.paths();
         let mut entries = BumpVec::with_capacity_in(channel.len(), self.scratch);
         entries.extend(channel.iter().map(|entry| (*entry, None)));
+        let mut found = bump_hash_table(self.scratch);
+        for (index, entry) in channel.iter().enumerate() {
+            let hash = PathEntry::hash_of(entry.root, entry.chain, entry.label);
+            found.insert_unique(hash, index, |at: &usize| {
+                let held = channel[*at];
+                PathEntry::hash_of(held.root, held.chain, held.label)
+            });
+        }
         self.paths.push(ChainPaths {
             root,
             base: channel
@@ -85,7 +99,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .map_or_else(|| path_base(root), |entry| entry.level),
             channel: channel.len(),
             entries,
-            classes: BumpVec::new_in(self.scratch),
+            found,
+            classes: bump_table(self.scratch),
+            members: BumpVec::new_in(self.scratch),
             resolving: BumpVec::new_in(self.scratch),
         });
     }
@@ -140,31 +156,52 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let writer = self.writer;
         let table = self.table(level);
         let table = &mut self.paths[table];
-        if let Some((entry, _)) = table.entries.iter().find(|(entry, _)| {
-            entry.root == root
-                && entry.chain == chain
-                && entry.label == label
-                && entry.through == through
+        let hash = PathEntry::hash_of(root, chain, label);
+        let entries = &table.entries;
+        if let Some(at) = table.found.find(hash, |at| {
+            let (entry, _) = entries[*at];
+            entry.is(root, chain, label) && entry.through == through
         }) {
-            return entry;
+            return entries[*at].0;
         }
         let level = table.base + table.entries.len();
         let entry = PathEntry::new(writer, root, chain, label, level, through);
+        table.found.insert_unique(hash, table.entries.len(), |at| {
+            let (held, _) = entries[*at];
+            PathEntry::hash_of(held.root, held.chain, held.label)
+        });
         table.entries.push((entry, None));
         entry
     }
 
-    /// Resolve each path the shape at `level` spells at a site `within` takes.
-    pub(super) fn resolve_spelled(
-        &mut self,
-        level: usize,
-        within: impl Fn(Site) -> bool,
-    ) -> Read<'graph, ()> {
+    /// Each path the shape at `level` spells in one of its statements, beside the statement's
+    /// index: by statement, then as written.
+    pub(super) fn spelled(&self, level: usize) -> BumpVec<'p, (usize, &'graph PathEntry<'graph>)> {
         let shape = self.chain[level].shape;
-        for (site, read) in shape.path_reads() {
-            if within(*site) {
-                self.resolve_path(level, read.entry)?;
-            }
+        let mut spelled = BumpVec::new_in(self.scratch);
+        if shape.path_reads().is_empty() {
+            return spelled;
+        }
+        for (index, node) in shape.body().iter().enumerate() {
+            each_part(node, |part| {
+                if let Some(read) = shape.path_read(Site::of(part)) {
+                    spelled.push((index, read.entry));
+                }
+            });
+        }
+        spelled
+    }
+
+    /// Resolve each path the shape at `level` spells: those not resolved with their statement, in
+    /// the order the type channel minted them.
+    pub(super) fn resolve_spelled(&mut self, level: usize) -> Read<'graph, ()> {
+        let shape = self.chain[level].shape;
+        let mut entries: BumpVec<'_, &PathEntry<'graph>> =
+            BumpVec::with_capacity_in(shape.path_reads().len(), self.scratch);
+        entries.extend(shape.path_reads().iter().map(|(_, read)| read.entry));
+        entries.sort_unstable_by_key(|entry| entry.level);
+        for entry in entries {
+            self.resolve_path(level, entry)?;
         }
         Ok(())
     }
@@ -195,7 +232,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         {
             return Err(ShapeError::OpenPathInType { at });
         }
-        self.paths[table].entries[index].1 = Some(resolution);
+        let table = &mut self.paths[table];
+        table.entries[index].1 = Some(resolution);
+        if let Resolved::Class(rep) = resolution.resolved {
+            let at = table
+                .members
+                .partition_point(|member| *member < (rep, entry.level));
+            table.members.insert(at, (rep, entry.level));
+        }
         Ok(resolution.resolved)
     }
 
@@ -212,11 +256,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 Some((tree, held, site)) => (tree, held, site, None),
                 // A binder off the chain is a leaf the load reads nothing through.
                 None => {
-                    let leaf = Tree::Leaf(Leaf::Bound {
-                        binder,
-                        chain: entry.chain,
-                        within: None,
-                    });
+                    let leaf = Tree::bound(binder, entry.chain, None);
                     let resolved = Resolved::Class(self.class_of(level, entry, leaf));
                     return Ok((
                         Resolution {
@@ -271,6 +311,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         operator: Operator::Opaque,
                         application,
                         source,
+                        ..
                     } => source
                         .digest()
                         .and_then(|digest| opaque_view_type(application, digest, types, scratch))
@@ -334,18 +375,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn class_of(&mut self, level: usize, entry: &PathEntry<'graph>, tree: Tree<'graph>) -> usize {
         let table = self.table(level);
         let table = &mut self.paths[table];
-        let found = table.classes.iter().copied().find(|rep| {
-            let Some((held, Some(resolution))) = table.at(*rep) else {
-                return false;
-            };
-            held.label == entry.label
-                && held.through == entry.through
-                && resolution.tree.same_as(&tree)
-        });
-        found.unwrap_or_else(|| {
-            table.classes.push(entry.level);
-            entry.level
-        })
+        // A tree holding a leaf no binder names is like no other.
+        match tree.print() {
+            Print::Unnamed => entry.level,
+            print => *table
+                .classes
+                .entry((entry.label, entry.through, print))
+                .or_insert(entry.level),
+        }
     }
 
     /// `value`, a type a cell of the chain `level` sits on fixed, with each path variable at what
@@ -591,18 +628,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Option<(&'graph PathEntry<'graph>, Coordinate)> {
         let table = &self.paths[self.table(level)];
         table.at(rep)?;
-        table.entries.iter().find_map(|(entry, resolution)| {
-            let Resolution {
-                resolved: Resolved::Class(class),
-                ..
-            } = (*resolution)?
-            else {
-                return None;
-            };
-            if class != rep || !self.locatable(level, entry) {
+        let from = table.members.partition_point(|(class, _)| *class < rep);
+        let to = table.members.partition_point(|(class, _)| *class <= rep);
+        table.members[from..to].iter().find_map(|(_, member)| {
+            let (entry, _) = table.at(*member)?;
+            if !self.locatable(level, entry) {
                 return None;
             }
-            Some((*entry, self.path_coordinate(level, entry)?))
+            Some((entry, self.path_coordinate(level, entry)?))
         })
     }
 

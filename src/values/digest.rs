@@ -124,6 +124,9 @@ pub enum Tag {
     Transparent = 0x2D,
     Opaque = 0x2E,
     Reviewed = 0x2F,
+    /// What the load cannot see of a module's content, keyed on its binder: a load-time key, never
+    /// a value's digest.
+    Leaf = 0x30,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's

@@ -30,15 +30,15 @@
 
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
+use crate::memory::{BumpAllocator, BumpVec, Writer, bump_hash_table, collect, resident};
 use crate::parse::KExpression;
 use crate::parse::Role;
 use crate::parse::quoted_body;
 use crate::scope::{
     Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
-    FunctionGroupMap, Keyed, ParameterBinding, PathEntry, PathRead, Position, Registered,
-    Registration, Root, ShapeError, ShapeGroupMap, ShapeKind, Site, Slot, Source, Static,
-    StaticRegistered, StaticType, SurfacedHead, Target, UnitWork, Variable, source_of,
+    FunctionGroupMap, Keyed, ParameterBinding, PathEntry, PathIndex, PathRead, Position,
+    Registered, Registration, Root, ShapeError, ShapeGroupMap, ShapeKind, Site, Slot, Source,
+    Static, StaticRegistered, StaticType, SurfacedHead, Target, UnitWork, Variable, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -108,6 +108,8 @@ struct Level<'p, 'graph> {
     /// At a chain root: the level past every name level of the chain, and the chain's path entries
     /// in the order they were minted, each at that level plus its index.
     paths: Option<(usize, Cell<BumpVec<'p, &'graph PathEntry<'graph>>>)>,
+    /// At a chain root: its path entries' indices, by root, chain and label.
+    found: Cell<PathIndex<'p>>,
 }
 
 impl<'p, 'graph> Level<'p, 'graph> {
@@ -127,6 +129,7 @@ impl<'p, 'graph> Level<'p, 'graph> {
             names: BumpVec::new_in(scratch),
             reads: Cell::new(BumpVec::new_in(scratch)),
             paths: root.then(|| (path_base(shape), Cell::new(BumpVec::new_in(scratch)))),
+            found: Cell::new(bump_hash_table(scratch)),
         }
     }
 }
@@ -270,11 +273,7 @@ impl<'graph, X> Reader<'_, '_, 'graph, '_, X> {
         edit(
             &self.pass.chain[self.from].reads,
             self.pass.scratch,
-            |reads| {
-                if !reads.iter().any(|(held, _)| *held == site) {
-                    reads.push((site, PathRead { at, entry }));
-                }
-            },
+            |reads| reads.push((site, PathRead { at, entry })),
         );
         if self.mode == Mode::Declaring {
             return TypeAt::Unknown;
@@ -384,9 +383,14 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             .paths
             .as_ref()
             .expect("a chain root holds its paths");
+        let found = &self.chain[at].found;
+        let hash = PathEntry::hash_of(root, chain, label);
         let held = edit(paths, self.scratch, |paths| {
-            (paths.iter().copied())
-                .find(|entry| entry.root == root && entry.chain == chain && entry.label == label)
+            let index = found.replace(bump_hash_table(self.scratch));
+            let held = index.find(hash, |at| paths[*at].is(root, chain, label));
+            let held = held.map(|at| paths[*at]);
+            found.set(index);
+            held
         });
         if let Some(entry) = held {
             return entry;
@@ -399,6 +403,12 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         edit(paths, self.scratch, |paths| {
             let entry =
                 PathEntry::new(self.writer, root, chain, label, base + paths.len(), through);
+            let mut index = found.replace(bump_hash_table(self.scratch));
+            index.insert_unique(hash, paths.len(), |at| {
+                let held = paths[*at];
+                PathEntry::hash_of(held.root, held.chain, held.label)
+            });
+            found.set(index);
             paths.push(entry);
             entry
         })
@@ -706,7 +716,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             bounds: &[],
             outer: None,
         };
-        for expression in shape.type_expressions() {
+        // In program order, so each path variable this mints takes the same level at every load.
+        let mut written = BumpVec::with_capacity_in(shape.type_expressions().len(), scratch);
+        written.extend(shape.type_expressions().iter());
+        written.sort_unstable_by_key(|expression| expression.order);
+        for expression in written {
             let reader = self.reader(level, Mode::Typing);
             let typed = match expression.guard {
                 Some(_) => {
@@ -834,7 +848,13 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         let at = &self.chain[level];
         let mut reads = at.reads.replace(BumpVec::new_in(self.scratch));
         if !reads.is_empty() {
-            shape.fix_path_reads(Keyed::sorted(self.writer, &mut reads));
+            // A spelling typed twice is recorded twice; its first record stands.
+            reads.sort_by_key(|(site, _)| *site);
+            reads.dedup_by_key(|(site, _)| *site);
+            shape.fix_path_reads(Keyed::from_sorted(collect(
+                self.writer,
+                reads.iter().copied(),
+            )));
         }
         if let Some((_, paths)) = &at.paths {
             let paths = paths.replace(BumpVec::new_in(self.scratch));

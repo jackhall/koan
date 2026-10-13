@@ -127,7 +127,10 @@ use crate::elaborate::{SignatureMember, declares_nominal, module_signature, sign
 use crate::knot::module::ModuleContent;
 use crate::knot::module::view::{self, Ascription, opaque_view_type, transparent_view_type};
 use crate::knot::{BuiltinFunction, KBuiltins};
-use crate::memory::{BumpAllocator, BumpVec, Writer, collect, resident};
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
+    resident,
+};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::program::placement_of;
@@ -179,12 +182,12 @@ pub(super) fn statics<'graph>(
         chain: BumpVec::new_in(scratch),
         unfilled: false,
         ran: BumpVec::new_in(scratch),
-        trees: BumpVec::new_in(scratch),
+        trees: bump_table(scratch),
         reading: BumpVec::new_in(scratch),
         typing: BumpVec::new_in(scratch),
-        recursive: BumpVec::new_in(scratch),
-        summaries: BumpVec::new_in(scratch),
-        selections: BumpVec::new_in(scratch),
+        recursive: bump_set(scratch),
+        summaries: bump_table(scratch),
+        selections: bump_table(scratch),
         paths: BumpVec::new_in(scratch),
     };
     pass.push(root, true);
@@ -313,6 +316,8 @@ struct Level<'p, 'graph> {
     /// Each path the shape spells whose declared application names a lexical variable, by its
     /// level, beside where the shape reads each variable.
     throughs: BumpVec<'p, (usize, &'graph [Located<'graph>])>,
+    /// Each `LET` binder, by its right-hand side's site.
+    rhs: BumpBackedMap<'p, Site, Slot>,
 }
 
 /// The walk's state: the chain of enclosing shapes.
@@ -327,20 +332,20 @@ struct Pass<'p, 'x, 'graph> {
     unfilled: bool,
     /// Each quote's code beside its last statement's static type as it runs unfilled.
     ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
-    /// Each content tree read on the chain, by its shape and its part's site.
-    trees: BumpVec<'p, (&'graph BodyShape<'graph>, Site, Tree<'graph>)>,
+    /// Each content tree read on the chain, by its shape's address and its part's site.
+    trees: BumpBackedMap<'p, (usize, Site), Tree<'graph>>,
     /// Each binder whose tree is being read, by its shape's address: a binder read through itself
     /// reads as a leaf.
     reading: BumpVec<'p, (usize, Slot)>,
     /// Each callable body being typed, outermost first.
     typing: BumpVec<'p, &'graph BodyShape<'graph>>,
     /// Each callable body met while it was being typed, and each typed since: none unfolds.
-    recursive: BumpVec<'p, &'graph BodyShape<'graph>>,
+    recursive: BumpBackedSet<'p, usize>,
     /// Each typed callable body's summary: the tree of its last statement.
-    summaries: BumpVec<'p, (&'graph BodyShape<'graph>, Option<Tree<'graph>>)>,
+    summaries: BumpBackedMap<'p, usize, Option<Tree<'graph>>>,
     /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
-    selections: BumpVec<'p, (Site, &'p [Option<KType>])>,
+    selections: BumpBackedMap<'p, Site, &'p [Option<KType>]>,
     /// The path table of each chain being typed, outermost first.
     paths: BumpVec<'p, paths::ChainPaths<'p, 'graph>>,
 }
@@ -447,6 +452,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         binders.resize(shape.slots(), DeclaredType::Type(unknown()));
         let mut uses = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
         uses.resize(shape.candidate_lists().len(), UseStatics::UNFIXED);
+        let mut rhs = bump_table(scratch);
+        for slot in (0..shape.slots() as u32).map(Slot) {
+            if let Some(part) = shape.rhs(slot) {
+                rhs.entry(Site::of(part)).or_insert(slot);
+            }
+        }
         self.chain.push(Level {
             shape,
             roots_chain,
@@ -463,6 +474,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             folded: 0,
             trees: BumpVec::new_in(scratch),
             throughs: BumpVec::new_in(scratch),
+            rhs,
         });
     }
 
@@ -485,19 +497,26 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.nest(level, nested)?;
             }
         }
+        // The paths a unit spells resolve before it is typed, in program order.
+        let spelled = self.spelled(level);
         for unit in shape.units() {
-            // The paths a unit spells resolve before it is typed, in program order.
-            let mut statements = BumpVec::new_in(self.scratch);
-            match unit.work {
-                UnitWork::Statement(index) => statements.push(index as usize),
-                UnitWork::Component(index) => statements.extend(
-                    (shape.components()[index.index()].members.iter())
-                        .filter_map(|member| self.statement_of(level, *member)),
-                ),
+            if !spelled.is_empty() {
+                let mut statements = BumpVec::new_in(self.scratch);
+                match unit.work {
+                    UnitWork::Statement(index) => statements.push(index as usize),
+                    UnitWork::Component(index) => statements.extend(
+                        (shape.components()[index.index()].members.iter())
+                            .filter_map(|member| self.statement_of(level, *member)),
+                    ),
+                }
+                for index in statements {
+                    let from = spelled.partition_point(|(at, _)| *at < index);
+                    let to = spelled.partition_point(|(at, _)| *at <= index);
+                    for (_, entry) in spelled[from..to].iter() {
+                        self.resolve_path(level, *entry)?;
+                    }
+                }
             }
-            self.resolve_spelled(level, |site| {
-                (statements.iter()).any(|index| source_of(&shape.body()[*index], site).is_some())
-            })?;
             match unit.work {
                 UnitWork::Statement(index) => {
                     let wanted = self.tail(level, index as usize);
@@ -507,7 +526,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 UnitWork::Component(index) => self.component(level, index.index())?,
             }
         }
-        self.resolve_spelled(level, |_| true)?;
+        self.resolve_spelled(level)?;
         self.returns(level)?;
         self.return_exits(level);
 
@@ -531,8 +550,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         // A callable's summary is read once its body is typed: a recursive one has none.
         let shape = self.chain[level].shape;
         if shape.kind() == ShapeKind::Callable && !self.unfilled {
-            let recursive =
-                |pass: &Self| (pass.recursive.iter()).any(|known| std::ptr::eq(*known, shape));
+            let recursive = |pass: &Self| pass.recursive.contains(&address(shape));
             let mut summary = None;
             if !recursive(self) {
                 summary = self.summarize(level)?;
@@ -541,7 +559,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if recursive(self) {
                 summary = None;
             }
-            self.summaries.push((shape, summary));
+            self.summaries.insert(address(shape), summary);
         }
         // The cell is fixed last, once every block the shape runs has folded its class into it.
         self.fix(level);
@@ -1742,15 +1760,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         {
             return Ok(typed);
         }
-        let shape = self.chain[level].shape;
         // The binder whose whole right-hand side the part is keys a leaf its tree falls back to.
-        let named = (0..shape.slots() as u32)
-            .map(Slot)
-            .find(|slot| shape.rhs(*slot).is_some_and(|rhs| Site::of(rhs) == site));
+        let named = self.chain[level].rhs.get(&site).copied();
         let Tree::View {
             operator,
             application,
             source,
+            ..
         } = self.tree_form(trees::Scope::Chain(level), form, site, named)?
         else {
             return Ok(typed);
@@ -3041,7 +3057,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                             .then(|| types.concrete(interval.upper))
                             .flatten()
                     }));
-                    self.selections.push((Site::of_node(node), points.leak()));
+                    self.selections.insert(Site::of_node(node), points.leak());
                 }
                 self.chain[level].uses[index].narrowing = Narrowing::Selected(coordinate);
                 return Ok(self.candidate_return(chosen));
@@ -3346,6 +3362,11 @@ fn typed_of<'p>(given: &[Given<'_>], scratch: BumpAllocator<'p>) -> &'p [Interva
     let mut typed = BumpVec::with_capacity_in(given.len(), scratch);
     typed.extend(given.iter().map(|each| each.typed));
     typed.leak()
+}
+
+/// A shape's address, which keys the pass's tables of what it read off each shape.
+fn address(shape: &BodyShape<'_>) -> usize {
+    std::ptr::from_ref(shape).addr()
 }
 
 /// Whether the pass has typed `nested`, or need not: a quote's code the load refused is left.

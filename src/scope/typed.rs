@@ -16,8 +16,9 @@
 
 use std::cell::Cell;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
-use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
+use crate::memory::{BumpAllocator, BumpHashTable, BumpVec, Writer, collect};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, display_name};
 use crate::values::{KnottedFamily, Types, Value};
@@ -273,7 +274,29 @@ pub struct PathEntry<'graph> {
     resolution: &'graph Cell<Option<Resolution<'graph>>>,
 }
 
+/// The path entries a pass mints for one chain, found by root, member chain and label: each
+/// entry's index in the pass's own run of them, hashed by [`PathEntry::hash_of`].
+pub type PathIndex<'p> = BumpHashTable<'p, usize>;
+
 impl<'graph> PathEntry<'graph> {
+    /// The hash a [`PathIndex`] finds the entries for `root`, `chain` and `label` by.
+    pub fn hash_of(root: Root<'_>, chain: &[ValueSymbol], label: TypeSymbol) -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        match root {
+            Root::Binder(binder) => {
+                (0u8, std::ptr::from_ref(binder.shape).addr(), binder.slot).hash(&mut hasher)
+            }
+            Root::Inline(site) => (1u8, site).hash(&mut hasher),
+        }
+        (chain, label).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Whether this entry is the one for `root`, `chain` and `label`.
+    pub fn is(&self, root: Root<'graph>, chain: &[ValueSymbol], label: TypeSymbol) -> bool {
+        self.root == root && self.chain == chain && self.label == label
+    }
+
     /// A new entry, unresolved, laid down through `writer`.
     pub fn new(
         writer: Writer<'graph>,

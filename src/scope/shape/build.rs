@@ -89,7 +89,7 @@ mod locate;
 mod rewrite;
 mod surface;
 
-pub(in crate::scope) use locate::{part_within, source_within};
+pub(in crate::scope) use locate::{each_part_within, part_within, source_within};
 
 use rewrite::{Built, BuiltKind, chained};
 use surface::{Quantified, Surfaced, SurfacedKey, quantified_value};
@@ -3330,14 +3330,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let candidates = Keyed::sorted(writer, &mut candidates);
         let mut required = draft.required;
         required.sort_unstable();
-        let mut recorded = draft.type_expressions;
-        recorded.sort_unstable_by_key(|recorded| Site::of(recorded.part));
+        let mut recorded = BumpVec::with_capacity_in(draft.type_expressions.len(), self.scratch);
+        recorded.extend((draft.type_expressions.iter().copied()).zip(0u32..));
+        recorded.sort_unstable_by_key(|(recorded, _)| Site::of(recorded.part));
         let type_expressions = Keyed::from_sorted(writer.fill(recorded.len(), |index| {
-            let recorded = recorded[index];
+            let (recorded, order) = recorded[index];
             TypeExpression {
                 site: Site::of(recorded.part),
                 part: recorded.part,
                 statement: recorded.statement,
+                order,
                 guard: recorded.guard,
                 typed: Cell::new(Static::Unknown),
             }

@@ -100,3 +100,47 @@ fn part_in<'a>(part: &'a ExpressionPart<'a>, site: Site) -> Option<&'a Expressio
         | ExpressionPart::Literal(_) => None,
     }
 }
+
+/// Call `visit` on every part within `node`, at any depth, in written order: the parts
+/// [`part_within`] searches.
+pub(in crate::scope) fn each_part_within<'a>(
+    node: &'a KExpression<'a>,
+    visit: &mut impl FnMut(&'a ExpressionPart<'a>),
+) {
+    for part in node.parts.iter() {
+        each_part_in(&part.value, visit);
+    }
+}
+
+/// [`each_part_within`] for one part.
+fn each_part_in<'a>(part: &'a ExpressionPart<'a>, visit: &mut impl FnMut(&'a ExpressionPart<'a>)) {
+    visit(part);
+    match part {
+        ExpressionPart::Expression(node)
+        | ExpressionPart::SigiledTypeExpr(node)
+        | ExpressionPart::RecordType(node)
+        | ExpressionPart::QuotedExpression(node)
+        | ExpressionPart::MarkedUse(_, node) => each_part_within(node.reference(), visit),
+        ExpressionPart::ListLiteral(items) => {
+            for item in items.iter() {
+                each_part_in(item, visit);
+            }
+        }
+        ExpressionPart::DictLiteral(pairs) => {
+            for (key, value) in pairs.iter() {
+                each_part_in(key, visit);
+                each_part_in(value, visit);
+            }
+        }
+        ExpressionPart::RecordLiteral(fields) => {
+            for (_, value) in fields.iter() {
+                each_part_in(value, visit);
+            }
+        }
+        ExpressionPart::Keyword(_)
+        | ExpressionPart::Identifier(_)
+        | ExpressionPart::Type(_)
+        | ExpressionPart::MarkedName(..)
+        | ExpressionPart::Literal(_) => {}
+    }
+}

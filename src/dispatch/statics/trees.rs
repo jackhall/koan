@@ -24,11 +24,11 @@
 //! Trees on the chain are memoized per shape and site; a binder already being read reads as a leaf,
 //! so no tree is built through itself.
 
-use crate::memory::{BumpVec, collect, resident};
+use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, KnotNode, Leaf, Narrowing,
-    NodeCapture, ParameterBinding, Position, ShapeError, ShapeKind, Site, Slot, Static,
+    NodeCapture, ParameterBinding, Position, Print, ShapeError, ShapeKind, Site, Slot, Static,
     StaticSolution, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
@@ -36,7 +36,7 @@ use crate::type_lattice::KType;
 use crate::values::digest::{Operator, literal_digest, type_digest};
 
 use super::super::evaluate::{Form, Wanted, of_node, of_part, slots};
-use super::{Landing, Pass, done};
+use super::{Landing, Pass, address, done};
 use crate::knot::module::view::Ascription;
 
 type Read<'graph, T> = Result<T, ShapeError<'graph>>;
@@ -123,8 +123,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Read<'graph, Tree<'graph>> {
         let shape = self.scope_shape(scope);
         if let Scope::Chain(_) = scope
-            && let Some((_, _, tree)) =
-                (self.trees.iter()).find(|(at, part, _)| std::ptr::eq(*at, shape) && *part == site)
+            && let Some(tree) = self.trees.get(&(address(shape), site))
         {
             return Ok(*tree);
         }
@@ -150,14 +149,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 match self.resolved_type(self.scope_level(scope), typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
-                        Tree::View {
-                            operator: match mode {
-                                Ascription::Opaque => Operator::Opaque,
-                                Ascription::Transparent => Operator::Transparent,
-                            },
-                            application,
-                            source: resident(self.writer, source),
-                        }
+                        let operator = match mode {
+                            Ascription::Opaque => Operator::Opaque,
+                            Ascription::Transparent => Operator::Transparent,
+                        };
+                        Tree::view(operator, application, resident(self.writer, source))
                     }
                     _ => self.fallback(scope, named, site)?,
                 }
@@ -193,7 +189,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             _ => self.fallback(scope, named, site)?,
         };
         if let Scope::Chain(_) = scope {
-            self.trees.push((shape, site, tree));
+            self.trees.insert((address(shape), site), tree);
         }
         Ok(tree)
     }
@@ -270,10 +266,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     return self.leaf_on(scope, slot);
                 }
                 let captures = self.captures_of(scope, body, site)?;
-                return Ok(Tree::Body {
-                    shape: body,
-                    captures,
-                });
+                return Ok(Tree::body(body, captures));
             }
             let component = shape.component_of(slot);
             let mut bodies = BumpVec::with_capacity_in(component.members.len(), self.scratch);
@@ -361,11 +354,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 None => &[][..],
             },
         };
-        Ok(Tree::Leaf(Leaf::Bound {
-            binder: Binder { shape, slot },
-            chain: &[],
-            within: (!key.is_empty()).then(|| resident(self.writer, Within::Body(key))),
-        }))
+        let within = (!key.is_empty()).then(|| resident(self.writer, Within::Body(key)));
+        Ok(Tree::bound(Binder { shape, slot }, &[], within))
     }
 
     /// `tree`'s value member `label`, read at the part at `site`: through a body, the member's
@@ -378,7 +368,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         site: Site,
     ) -> Read<'graph, Option<Tree<'graph>>> {
         Ok(match tree {
-            Tree::Body { shape, captures } => match shape.slot(BinderSymbol::Value(label)) {
+            Tree::Body {
+                shape, captures, ..
+            } => match shape.slot(BinderSymbol::Value(label)) {
                 Some((slot, _)) => {
                     Some(self.slot_tree(Scope::Body { shape, captures }, slot, site)?)
                 }
@@ -388,15 +380,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 binder,
                 chain,
                 within,
+                ..
             }) => {
                 let mut extended = BumpVec::with_capacity_in(chain.len() + 1, self.scratch);
                 extended.extend(chain.iter().copied());
                 extended.push(label);
-                Some(Tree::Leaf(Leaf::Bound {
-                    binder,
-                    chain: collect(self.writer, extended.iter().copied()),
-                    within,
-                }))
+                let chain = collect(self.writer, extended.iter().copied());
+                Some(Tree::bound(binder, chain, within))
             }
             Tree::Leaf(Leaf::Unnamed(site)) => Some(Tree::Leaf(Leaf::Unnamed(site))),
             Tree::Digest(_) | Tree::Knot { .. } | Tree::View { .. } => None,
@@ -491,10 +481,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 captures: collect(self.writer, captures.iter().copied()),
             });
         }
-        Ok(Some(Tree::Knot {
-            members: collect(self.writer, members.iter().copied()),
+        Ok(Some(Tree::knot(
+            collect(self.writer, members.iter().copied()),
             index,
-        }))
+        )))
     }
 
     /// The solution the closure `body`, born in the chain `level` sits on, is born at: its born
@@ -555,12 +545,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         // Each `FOR ALL` variable at the closed point the pass solved it to at this use.
         let mut solution = BumpVec::new_in(self.scratch);
         if !registered.quantifier_map.is_empty() {
-            let Some((_, points)) =
-                (self.selections.iter().rev()).find(|(at, _)| *at == Site::of_node(node))
-            else {
+            let Some(points) = self.selections.get(&Site::of_node(node)).copied() else {
                 return Ok(None);
             };
-            let points = *points;
             for (name, at) in registered.quantifier_map.iter() {
                 let (Some(point), Some((variable, _))) = (
                     points.get(at).copied().flatten(),
@@ -599,7 +586,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let ExpressionPart::RecordLiteral(fields) = &argument.value else {
             return Ok(None);
         };
-        let Tree::Knot { members, index } = self.tree(level, &head.value)? else {
+        let Tree::Knot { members, index, .. } = self.tree(level, &head.value)? else {
             return Ok(None);
         };
         let callee = members[index as usize].shape;
@@ -637,7 +624,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             arguments: collect(self.writer, arguments.iter().copied()),
             solution: collect(self.writer, solution.iter().copied()),
         };
-        self.substituted(summary, &call, site).map(Some)
+        let mut done = bump_table(self.scratch);
+        self.substituted(summary, &call, site, &mut done).map(Some)
     }
 
     /// The summary of `callee`, typing it first where the walk has not: `None` where it is
@@ -648,27 +636,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         if let Some(at) = (self.typing.iter()).position(|typing| std::ptr::eq(*typing, callee)) {
             for typing in self.typing[at..].iter() {
-                if !self
-                    .recursive
-                    .iter()
-                    .any(|known| std::ptr::eq(*known, *typing))
-                {
-                    self.recursive.push(*typing);
-                }
+                self.recursive.insert(address(typing));
             }
             return Ok(None);
         }
-        if let Some((_, summary)) =
-            (self.summaries.iter()).find(|(at, _)| std::ptr::eq(*at, callee))
-        {
+        if let Some(summary) = self.summaries.get(&address(callee)) {
             return Ok(*summary);
         }
         if done(callee) || !self.typed_on_demand(callee)? {
             return Ok(None);
         }
-        Ok((self.summaries.iter())
-            .find(|(at, _)| std::ptr::eq(*at, callee))
-            .and_then(|(_, summary)| *summary))
+        Ok(self.summaries.get(&address(callee)).copied().flatten())
     }
 
     /// Whether the callable body `body` is typed, typing it now where the walk has not reached it:
@@ -698,20 +676,33 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// `tree`, a summary of `call`'s callee, with the call substituted: each parameter's leaf by
     /// its argument's tree read through the leaf's chain, each `FOR ALL` variable's by its point,
-    /// and every other leaf of the callee's body keyed on the call.
+    /// and every other leaf of the callee's body keyed on the call. `done` holds each subtree
+    /// substituted for this call already, by print, so a subtree shared across the summary is
+    /// substituted once.
     fn substituted(
         &mut self,
         tree: Tree<'graph>,
         call: &Unfolded<'graph>,
         site: Site,
+        done: &mut BumpBackedMap<'p, Print, Tree<'graph>>,
     ) -> Read<'graph, Tree<'graph>> {
-        Ok(match tree {
+        let print = tree.print();
+        // A closed tree holds no leaf to substitute.
+        if let Print::Closed(_) = print {
+            return Ok(tree);
+        }
+        if let Some(substituted) = done.get(&print) {
+            return Ok(*substituted);
+        }
+        let substituted = match tree {
             Tree::Digest(_) | Tree::Leaf(Leaf::Unnamed(_)) => tree,
-            Tree::Body { shape, captures } => Tree::Body {
+            Tree::Body {
+                shape, captures, ..
+            } => Tree::body(
                 shape,
-                captures: self.substituted_captures(captures, call, site)?,
-            },
-            Tree::Knot { members, index } => {
+                self.substituted_captures(captures, call, site, done)?,
+            ),
+            Tree::Knot { members, index, .. } => {
                 let mut nodes = BumpVec::with_capacity_in(members.len(), self.scratch);
                 for node in members {
                     let mut captures = BumpVec::with_capacity_in(node.captures.len(), self.scratch);
@@ -721,7 +712,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                             match capture {
                                 NodeCapture::Fellow(fellow) => NodeCapture::Fellow(*fellow),
                                 NodeCapture::Tree(tree) => {
-                                    NodeCapture::Tree(self.substituted(*tree, call, site)?)
+                                    NodeCapture::Tree(self.substituted(*tree, call, site, done)?)
                                 }
                             },
                         ));
@@ -731,77 +722,83 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         ..*node
                     });
                 }
-                Tree::Knot {
-                    members: collect(self.writer, nodes.iter().copied()),
-                    index,
-                }
+                Tree::knot(collect(self.writer, nodes.iter().copied()), index)
             }
             Tree::View {
                 operator,
                 application,
                 source,
+                ..
             } => {
-                let source = self.substituted(*source, call, site)?;
-                Tree::View {
-                    operator,
-                    application,
-                    source: resident(self.writer, source),
-                }
+                let source = self.substituted(*source, call, site, done)?;
+                Tree::view(operator, application, resident(self.writer, source))
             }
             Tree::Leaf(Leaf::Bound {
                 binder,
                 chain,
                 within,
-            }) => {
-                if std::ptr::eq(binder.shape, call.callee) {
-                    if let Some((_, argument)) =
-                        (call.arguments.iter()).find(|(slot, _)| *slot == binder.slot)
-                    {
-                        let mut read = Some(*argument);
-                        for label in chain {
-                            read = match read {
-                                Some(tree) => self.read_member(tree, *label, site)?,
-                                None => None,
-                            };
-                        }
-                        if let Some(read) = read {
-                            return Ok(read);
-                        }
-                    }
-                    if let Some((_, point)) =
-                        (call.solution.iter()).find(|(slot, _)| *slot == binder.slot)
-                        && chain.is_empty()
-                    {
-                        return Ok(Tree::Digest(type_digest(*point)));
-                    }
+                ..
+            }) => self.substituted_leaf(binder, chain, within, call, site, done)?,
+        };
+        if print != Print::Unnamed {
+            done.insert(print, substituted);
+        }
+        Ok(substituted)
+    }
+
+    /// [`substituted`](Self::substituted) for a leaf on `binder` read through `chain`, in the run
+    /// `within` names.
+    fn substituted_leaf(
+        &mut self,
+        binder: Binder<'graph>,
+        chain: &'graph [ValueSymbol],
+        within: Option<&'graph Within<'graph>>,
+        call: &Unfolded<'graph>,
+        site: Site,
+        done: &mut BumpBackedMap<'p, Print, Tree<'graph>>,
+    ) -> Read<'graph, Tree<'graph>> {
+        if std::ptr::eq(binder.shape, call.callee) {
+            if let Some((_, argument)) =
+                (call.arguments.iter()).find(|(slot, _)| *slot == binder.slot)
+            {
+                let mut read = Some(*argument);
+                for label in chain {
+                    read = match read {
+                        Some(tree) => self.read_member(tree, *label, site)?,
+                        None => None,
+                    };
                 }
-                let within = match within {
-                    Some(Within::Body(captures)) => Some(Within::Body(
-                        self.substituted_captures(captures, call, site)?,
-                    )),
-                    Some(Within::Call(inner)) => {
-                        let mut arguments =
-                            BumpVec::with_capacity_in(inner.arguments.len(), self.scratch);
-                        for (slot, tree) in inner.arguments {
-                            arguments.push((*slot, self.substituted(*tree, call, site)?));
-                        }
-                        Some(Within::Call(Unfolded {
-                            arguments: collect(self.writer, arguments.iter().copied()),
-                            ..*inner
-                        }))
-                    }
-                    // A module body's binder is keyed on its captures, which read nothing.
-                    None if binder.shape.kind() == ShapeKind::Module => None,
-                    None if inside(binder.shape, call.callee) => Some(Within::Call(*call)),
-                    None => None,
-                };
-                Tree::Leaf(Leaf::Bound {
-                    binder,
-                    chain,
-                    within: within.map(|within| resident(self.writer, within)),
-                })
+                if let Some(read) = read {
+                    return Ok(read);
+                }
             }
-        })
+            if let Some((_, point)) = (call.solution.iter()).find(|(slot, _)| *slot == binder.slot)
+                && chain.is_empty()
+            {
+                return Ok(Tree::Digest(type_digest(*point)));
+            }
+        }
+        let within = match within {
+            Some(Within::Body(captures)) => Some(Within::Body(
+                self.substituted_captures(captures, call, site, done)?,
+            )),
+            Some(Within::Call(inner)) => {
+                let mut arguments = BumpVec::with_capacity_in(inner.arguments.len(), self.scratch);
+                for (slot, tree) in inner.arguments {
+                    arguments.push((*slot, self.substituted(*tree, call, site, done)?));
+                }
+                Some(Within::Call(Unfolded {
+                    arguments: collect(self.writer, arguments.iter().copied()),
+                    ..*inner
+                }))
+            }
+            // A module body's binder is keyed on its captures, which read nothing.
+            None if binder.shape.kind() == ShapeKind::Module => None,
+            None if inside(binder.shape, call.callee) => Some(Within::Call(*call)),
+            None => None,
+        };
+        let within = within.map(|within| resident(self.writer, within));
+        Ok(Tree::bound(binder, chain, within))
     }
 
     fn substituted_captures(
@@ -809,10 +806,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         captures: &'graph [(u32, Tree<'graph>)],
         call: &Unfolded<'graph>,
         site: Site,
+        done: &mut BumpBackedMap<'p, Print, Tree<'graph>>,
     ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
         let mut substituted = BumpVec::with_capacity_in(captures.len(), self.scratch);
         for (slot, tree) in captures {
-            substituted.push((*slot, self.substituted(*tree, call, site)?));
+            substituted.push((*slot, self.substituted(*tree, call, site, done)?));
         }
         Ok(collect(self.writer, substituted.iter().copied()))
     }
@@ -821,13 +819,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 /// Whether `shape` is `callee` or a body nested in it, at any depth: a binder bound once per call
 /// of `callee`.
 fn inside<'graph>(shape: &BodyShape<'graph>, callee: &BodyShape<'graph>) -> bool {
+    // Every body a binder births is a nested shape too.
     std::ptr::eq(shape, callee)
         || (callee.nested_shapes().iter()).any(|(_, nested)| inside(shape, nested))
-        || (0..callee.slots()).any(|slot| {
-            callee
-                .births(Slot(slot as u32))
-                .is_some_and(|born| inside(shape, born))
-        })
 }
 
 /// Where capture `capture` of `body` is read from at birth: a builder capture's source, or a type
