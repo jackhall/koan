@@ -383,6 +383,23 @@ fn parse_compound<'a>(
         };
     }
 
+    suffixes(brand, symbols, expr, tok, chars, start, token_span, file)
+}
+
+/// The suffix operators `chars` holds next, each applied to everything read before it: `.b` an
+/// `ATTR`, `?` a `TRY`. `expr` is what they follow — the word's leading atom, or a group the
+/// lowering found glued to an atom that starts with `.` (`(MAKESET ints).Set`).
+#[allow(clippy::too_many_arguments)]
+fn suffixes<'a>(
+    brand: ProgramBrand<'a>,
+    symbols: &SymbolInterner,
+    mut expr: Spanned<ExpressionPart<'a>>,
+    tok: &str,
+    chars: &mut Peekable<CharIndices>,
+    start: u32,
+    token_span: Span,
+    file: FileId,
+) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
     while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
         chars.next();
@@ -395,8 +412,35 @@ fn parse_compound<'a>(
             SuffixOp::Suffix(build) => build(brand, symbols, expr, trigger, file),
         };
     }
-
     Ok(expr)
+}
+
+/// A group followed, with no space between, by an atom that starts with `.`: the atom's member
+/// reads apply to the group, so `(MAKESET ints).Set` reads `Set` off the call's result. `tok` is
+/// the atom as written and `start` its offset.
+pub(super) fn member_reads<'a>(
+    brand: ProgramBrand<'a>,
+    symbols: &SymbolInterner,
+    group: Spanned<ExpressionPart<'a>>,
+    tok: &str,
+    start: u32,
+    file: FileId,
+) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
+    let token_span = Span {
+        start,
+        end: start + tok.len() as u32,
+    };
+    let mut chars = tok.char_indices().peekable();
+    let part = suffixes(
+        brand, symbols, group, tok, &mut chars, start, token_span, file,
+    )?;
+    if let Some(&(_, c)) = chars.peek() {
+        return Err(ParseError::new(
+            format!("unexpected {:?} in token {:?}", c, tok),
+            Some(token_span),
+        ));
+    }
+    Ok(part)
 }
 
 /// A `$` or `\` leading a word whose rest starts no name: `tok` is the word as written.
