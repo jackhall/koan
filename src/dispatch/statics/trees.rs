@@ -51,6 +51,22 @@ pub(super) enum Scope<'graph> {
     },
 }
 
+/// Where an expression is written: a part, or a whole node, whose site is its first part's address
+/// too, so the two are told apart.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Written {
+    Part(Site),
+    Node(Site),
+}
+
+impl Written {
+    fn site(self) -> Site {
+        match self {
+            Written::Part(site) | Written::Node(site) => site,
+        }
+    }
+}
+
 impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// The shape `scope` reads in.
     fn scope_shape(&self, scope: Scope<'graph>) -> &'graph BodyShape<'graph> {
@@ -96,7 +112,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let node = &shape.body()[last];
         let tree = match bound {
             Some(slot) => self.slot_tree(scope, slot, Site::of_node(node))?,
-            None => self.tree_form(scope, of_node(shape, node), Site::of_node(node), None)?,
+            None => {
+                let written = Written::Node(Site::of_node(node));
+                self.tree_form(scope, of_node(shape, node), written, None)?
+            }
         };
         Ok(Some(tree))
     }
@@ -110,23 +129,29 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         named: Option<Slot>,
     ) -> Read<'graph, Tree<'graph>> {
         let shape = self.scope_shape(scope);
-        self.tree_form(scope, of_part(shape, part), Site::of(part), named)
+        self.tree_form(
+            scope,
+            of_part(shape, part),
+            Written::Part(Site::of(part)),
+            named,
+        )
     }
 
-    /// The tree of what the evaluator reads as `form`, written at `site` in `scope`.
+    /// The tree of what the evaluator reads as `form`, written as `written` in `scope`.
     pub(super) fn tree_form(
         &mut self,
         scope: Scope<'graph>,
         form: Form<'graph>,
-        site: Site,
+        written: Written,
         named: Option<Slot>,
     ) -> Read<'graph, Tree<'graph>> {
         let shape = self.scope_shape(scope);
         if let Scope::Chain(_) = scope
-            && let Some(tree) = self.trees.get(&(address(shape), site))
+            && let Some(tree) = self.trees.get(&(address(shape), written))
         {
             return Ok(*tree);
         }
+        let site = written.site();
         let tree = match form {
             Form::Name(name) => match shape.mention(Site::of(name)) {
                 Some(mention) => self.resolve(scope, mention.coordinate, site)?,
@@ -189,7 +214,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             _ => self.fallback(scope, named, site)?,
         };
         if let Scope::Chain(_) = scope {
-            self.trees.insert((address(shape), site), tree);
+            self.trees.insert((address(shape), written), tree);
         }
         Ok(tree)
     }

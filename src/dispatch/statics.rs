@@ -159,6 +159,8 @@ use crate::values::{
 mod paths;
 mod trees;
 
+use trees::Written;
+
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
 use super::one_name;
@@ -332,8 +334,8 @@ struct Pass<'p, 'x, 'graph> {
     unfilled: bool,
     /// Each quote's code beside its last statement's static type as it runs unfilled.
     ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
-    /// Each content tree read on the chain, by its shape's address and its part's site.
-    trees: BumpBackedMap<'p, (usize, Site), Tree<'graph>>,
+    /// Each content tree read on the chain, by its shape's address and where it is written.
+    trees: BumpBackedMap<'p, (usize, Written), Tree<'graph>>,
     /// Each binder whose tree is being read, by its shape's address: a binder read through itself
     /// reads as a leaf.
     reading: BumpVec<'p, (usize, Slot)>,
@@ -1763,7 +1765,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let shape = self.chain[level].shape;
         let form = of_part(shape, part);
         let typed = self.form(level, form, wanted)?;
-        let typed = self.viewed_tree(level, form, Site::of(part), typed)?;
+        let typed = self.viewed_tree(level, form, Written::Part(Site::of(part)), typed)?;
         self.chain[level].parts.push((Site::of(part), typed));
         Ok(typed)
     }
@@ -1778,7 +1780,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let shape = self.chain[level].shape;
         let form = of_node(shape, node);
         let typed = self.form(level, form, wanted)?;
-        self.viewed_tree(level, form, Site::of_node(node), typed)
+        self.viewed_tree(level, form, Written::Node(Site::of_node(node)), typed)
     }
 
     /// `typed`, the static type of a call, ascription or member read at `site` of the shape at
@@ -1789,7 +1791,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         form: Form<'graph>,
-        site: Site,
+        written: Written,
         typed: Interval,
     ) -> Result<Interval, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
@@ -1801,13 +1803,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(typed);
         }
         // The binder whose whole right-hand side the part is keys a leaf its tree falls back to.
-        let named = self.chain[level].rhs.get(&site).copied();
+        let named = match written {
+            Written::Part(site) => self.chain[level].rhs.get(&site).copied(),
+            Written::Node(_) => None,
+        };
         let Tree::View {
             operator,
             application,
             source,
             ..
-        } = self.tree_form(trees::Scope::Chain(level), form, site, named)?
+        } = self.tree_form(trees::Scope::Chain(level), form, written, named)?
         else {
             return Ok(typed);
         };
@@ -1939,7 +1944,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         let typed = self.narrow(level, node, list)?;
                         let typed = self.read_through_paths(level, operand, label, typed)?;
                         let form = of_part(self.chain[level].shape, head);
-                        let typed = self.viewed_tree(level, form, Site::of(head), typed)?;
+                        let typed =
+                            self.viewed_tree(level, form, Written::Part(Site::of(head)), typed)?;
                         self.chain[level].parts.push((Site::of(head), typed));
                         return Ok(DeclaredType::Type(typed));
                     }

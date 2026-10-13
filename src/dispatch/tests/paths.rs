@@ -144,6 +144,21 @@ fn a_path_through_a_call_is_the_carrier_the_run_computes() {
     );
 }
 
+/// A node's site is its first part's too: a functor's last statement written with no group of its
+/// own, `(built :| Collection)` on the body's one line, is the view, not its operand.
+#[test]
+fn a_functor_body_on_one_line_unfolds_to_its_view() {
+    let functor = "EXPR #(ONELINE elem :Ordered) -> Module = \
+                   #((MODULE built OVER #[elem] = (LET empty = [elem.compare])) \
+                   (built :| Collection))\n";
+    assert_eq!(
+        run(&format!(
+            "{ORDERED}{functor}LET x :((ONELINE asc).Set) = (ONELINE asc).empty\nPRINT x"
+        )),
+        "Set([1])"
+    );
+}
+
 /// A leaf a functor's body binds keys the path on the call's arguments: two calls of `BUILD` over
 /// one argument are one type, and over two of different content *maybe*.
 #[test]
