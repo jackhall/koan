@@ -24,6 +24,7 @@ use crate::values::{KnottedFamily, Types, Value};
 use super::activation::ActivationView;
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Site};
+use super::tree::Tree;
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
 /// group — what a call needs to bind each type parameter to its solution. `T` is what the type is
@@ -351,6 +352,8 @@ pub struct Statics<'graph> {
     /// This shape's own minting sites, sorted: each `:|` ascription, and each component of nominal
     /// declarations the load leaves unknown, by its first member's declaration node.
     pub minting: Keyed<'graph, Site>,
+    /// Each `:|` ascription's site, sorted, beside its operand's content tree.
+    pub trees: Keyed<'graph, (Site, &'graph Tree<'graph>)>,
 }
 
 /// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry

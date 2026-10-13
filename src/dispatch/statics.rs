@@ -103,6 +103,9 @@
 //! each component of nominal declarations the load leaves unknown as a **minting site**, which the
 //! run's doors check in debug builds.
 //!
+//! The pass reads each `:|` ascription's operand as a [content tree](crate::scope::Tree) —
+//! [`trees`] — and the cell records it by the ascription's site.
+//!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
 //! one.
@@ -120,8 +123,8 @@ use crate::scheduler::Placement;
 use crate::scope::{
     BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     Coordinate, InstanceRead, Keyed, Listed, Narrowing, Position, ShapeError, ShapeKind, Site,
-    Slot, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, UnitWork, UseStatics,
-    Variable as Located, source_of,
+    Slot, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, Tree, UnitWork,
+    UseStatics, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -136,6 +139,8 @@ use crate::values::{
     ConstructionRefused, Types, Value, construction, dict_type, list_type, record_type, retyped_to,
     under, unknown,
 };
+
+mod trees;
 
 use super::builtins::Native;
 use super::evaluate::{Form, Wanted, of_node, of_part, slots};
@@ -160,6 +165,8 @@ pub(super) fn statics<'graph>(
         chain: BumpVec::new_in(scratch),
         unfilled: false,
         ran: BumpVec::new_in(scratch),
+        trees: BumpVec::new_in(scratch),
+        reading: BumpVec::new_in(scratch),
     };
     pass.push(root, true);
     let visited = pass.visit(0, None);
@@ -280,6 +287,8 @@ struct Level<'p, 'graph> {
     minting: BumpVec<'p, Site>,
     /// The minting sites of the blocks and module bodies the shape runs, folded in.
     folded: u32,
+    /// Each `:|` ascription's site, beside its operand's content tree.
+    trees: BumpVec<'p, (Site, &'graph Tree<'graph>)>,
 }
 
 /// The walk's state: the chain of enclosing shapes.
@@ -294,6 +303,11 @@ struct Pass<'p, 'x, 'graph> {
     unfilled: bool,
     /// Each quote's code beside its last statement's static type as it runs unfilled.
     ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
+    /// Each content tree read on the chain, by its shape and its part's site.
+    trees: BumpVec<'p, (&'graph BodyShape<'graph>, Site, Tree<'graph>)>,
+    /// Each binder whose tree is being read, by its shape's address: a binder read through itself
+    /// reads as a leaf.
+    reading: BumpVec<'p, (usize, Slot)>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -412,6 +426,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             exits: false,
             minting: BumpVec::new_in(scratch),
             folded: 0,
+            trees: BumpVec::new_in(scratch),
         });
     }
 
@@ -604,6 +619,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             named: Keyed::sorted(writer, &mut at.named),
             class,
             minting: Keyed::sorted(writer, &mut at.minting),
+            trees: Keyed::sorted(writer, &mut at.trees),
         });
     }
 
@@ -1685,18 +1701,21 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         node: &'graph KExpression<'graph>,
         mode: Ascription,
     ) -> Result<Interval, ShapeError<'graph>> {
-        let [operand, _, ascribed] = node.parts else {
+        let [operand_part, _, ascribed] = node.parts else {
             unreachable!("an ascription has an operand, its keyword and a type")
         };
         let (types, scratch) = (self.types, self.scratch);
         let declared = self.declared(level, &ascribed.value);
-        let typed = self.part_at(level, &operand.value, declared)?;
+        let typed = self.part_at(level, &operand_part.value, declared)?;
         let operand = bound_above(types, scratch, typed.upper);
         let bounded = declared.map_or(KType::ANY, |declared| bound_above(types, scratch, declared));
         if view::views(types, mode, operand, bounded) {
             // An opaque view hides each unpinned head parameter behind a carrier it mints.
             if mode == Ascription::Opaque {
                 self.chain[level].minting.push(Site::of_node(node));
+                let tree = self.tree(level, &operand_part.value);
+                let tree = resident(self.writer, tree);
+                self.chain[level].trees.push((Site::of_node(node), tree));
             }
             return self.viewed(level, node, mode, typed, declared);
         }

@@ -23,6 +23,7 @@ mod spellings;
 mod statics;
 mod surface;
 mod tail;
+mod trees;
 
 use std::cell::RefCell;
 

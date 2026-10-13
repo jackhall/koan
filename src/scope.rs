@@ -34,6 +34,7 @@ mod groups;
 mod keyed;
 mod shape;
 mod signature;
+mod tree;
 mod typed;
 
 #[cfg(test)]
@@ -54,6 +55,7 @@ pub use shape::{
     Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, selection_refused,
     source_of, spelled, view_refused,
 };
+pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, InstanceRead,
     Narrowing, ParameterBinding, Registered, ShapeGroupMap, Static, StaticCallable,

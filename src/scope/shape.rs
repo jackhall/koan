@@ -64,6 +64,7 @@ use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
+use super::tree::Tree;
 use super::typed::{
     BodyClass, Elaboration, InstanceRead, Static, StaticCallable, StaticRegistered, StaticSolution,
     StaticType, Statics, UseStatics,
@@ -711,6 +712,11 @@ impl<'graph> BodyShape<'graph> {
             .is_none_or(|top| top.is_none())
     }
 
+    /// The top-level slot capture `capture` reads, where it reads the program's top level.
+    pub fn top_capture(&self, capture: CaptureSlot) -> Option<Slot> {
+        self.top_captures.get(capture.index()).copied().flatten()
+    }
+
     pub fn components(&self) -> &'graph [Component<'graph>] {
         self.components
     }
@@ -965,6 +971,12 @@ impl<'graph> BodyShape<'graph> {
         self.statics
             .get()
             .is_some_and(|statics| statics.minting.get(site).is_some())
+    }
+
+    /// The content tree of the operand of the `:|` ascription whose node sits at `site`, once the
+    /// load has run.
+    pub fn view_tree(&self, site: Site) -> Option<&'graph Tree<'graph>> {
+        self.statics.get()?.trees.get(site).map(|(_, tree)| *tree)
     }
 
     /// Whether the load settled the ascription at `site`: its operand's static upper end lies under

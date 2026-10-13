@@ -573,9 +573,12 @@ fn str_digest(text: &str) -> ContentDigest {
 /// An edge's digest inside its knot's: its index, since it names a sibling the knot's digest
 /// covers.
 pub fn edge(edge: Edge) -> ContentDigest {
-    DigestHasher::new(Tag::Edge)
-        .count(edge.index() as usize)
-        .finished()
+    edge_at(edge.index() as usize)
+}
+
+/// The digest of an edge to the node at `index` of its knot.
+pub fn edge_at(index: usize) -> ContentDigest {
+    DigestHasher::new(Tag::Edge).count(index).finished()
 }
 
 /// A leaf's digest, from its payload. Only a scalar, a string or a type value is one.
