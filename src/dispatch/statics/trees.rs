@@ -350,7 +350,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         Ok(Tree::Leaf(Leaf::Bound {
             binder: Binder { shape, slot },
             chain: &[],
-            within: (!key.is_empty()).then(|| &*resident(self.writer, Within::Body(key))),
+            within: (!key.is_empty()).then(|| resident(self.writer, Within::Body(key))),
         }))
     }
 

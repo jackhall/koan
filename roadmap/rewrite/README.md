@@ -126,19 +126,16 @@ as surprises, not scheduled.
   but a hop placed `Shares` lays the next frame's activation and argument
   record down in the region of the cell it shares, which reclaims nothing until
   that cell finishes, so the recursion's memory still grows with its depth — and
-  the types it builds with it, in the host's
-  [branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)
-  ([shape branches](../type-tiers/shape-branches.md) release a sealed body's at the loop's
-  end). The hints
+  the types a porous body builds with it, in the host's
+  [branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches);
+  a sealed body's go to a scratch branch instead
+  ([the host's scratch as a type cache](../type-tiers/host-scratch-cache.md)).
+  The hints
   already separate a result's home from the frame's region, so a hop could place
   its activation and temporaries `Fresh`, recycled per hop, and build only what
-  it returns into the home; what is open is how a step tells result bytes from
+  it returns into the home, keeping the scratch branch the successor was lent;
+  what is open is how a step tells result bytes from
   temporaries before it finishes, which `Shares` sidesteps.
-- **A receipt run is laid down anew at every park.** A parked cell's receipt run
-  is laid down fresh in its scratch habitat per registration
-  ([the cell](../../cellgraph/README.md#the-cell)), so a runner that parks once
-  per unit lays one down per unit, where a registration that fits the previous
-  run could reuse its bytes. Reuse would be a `cellgraph` change.
 - **No warning channel.** A program has no way to be told about something
   that is neither an error nor a value. The first case with nothing to report
   through is [dispatch](../../src/dispatch/README.md#the-overlap-check)'s: a user overload that is never selected,
