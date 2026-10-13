@@ -766,15 +766,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         ) {
             return Ok(member);
         }
-        let Some((binder, chain)) = self.name_chain(level, operand) else {
-            return Ok(member);
+        // An operand no name chain reaches roots its paths where it is written.
+        let (root, chain) = match self.name_chain(level, operand) {
+            Some((binder, chain)) => (Root::Binder(binder), chain),
+            None => (
+                Root::Inline(Site::of(operand)),
+                BumpVec::new_in(self.scratch),
+            ),
         };
-        Ok(
-            match self.pinned(level, Root::Binder(binder), &chain, upper)? {
-                Some((signature, pins)) => applied_member(types, scratch, signature, &pins, name),
-                None => member,
-            },
-        )
+        Ok(match self.pinned(level, root, &chain, upper)? {
+            Some((signature, pins)) => applied_member(types, scratch, signature, &pins, name),
+            None => member,
+        })
     }
 
     /// `typed`, the static type of the read of member `label` through `operand` in the shape at

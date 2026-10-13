@@ -1759,8 +1759,8 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_> {
                 )
             }
             ShapeError::OpenPathInType { .. } => f.write_str(
-                "this type reads a member of a module built by a call written in place, which \
-                 the run never makes; bind the call with `LET` to name its type",
+                "this type reads a member of a module built by a call written in place, and a \
+                 call in a type is never made; bind the call with `LET` to name its type",
             ),
             ShapeError::UnpinnedMember {
                 member, parameter, ..

@@ -513,7 +513,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     let from = spelled.partition_point(|(at, _)| *at < index);
                     let to = spelled.partition_point(|(at, _)| *at <= index);
                     for (_, entry) in spelled[from..to].iter() {
-                        self.resolve_path(level, *entry)?;
+                        self.resolve_path(level, entry)?;
                     }
                 }
             }
@@ -1281,7 +1281,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 operand,
                 label,
                 ..
-            } => match self.member_scheme(level, operand, label)? {
+            } => match self.peeked_member_scheme(level, operand, label)? {
                 Some((scheme, None)) => Some((Instanced::Member(node), scheme, node.source)),
                 _ => None,
             },
@@ -1289,20 +1289,32 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         })
     }
 
-    /// The member read `ATTR <operand> <label>`, its label written bare, where it reads a quantified
-    /// member: the member's scheme, beside the unpinned head parameter it names, if it names one.
-    /// The operand's static type is read without typing it — a name, or a chain of member reads
-    /// rooted at one ([`peeked`](Self::peeked)) — so a read the load cannot see into is no
-    /// instance site, and faults at run if it reads a scheme there.
-    fn member_scheme(
+    /// [`member_scheme`](Self::member_scheme) where the operand is [peeked](Self::peeked):
+    /// `None` for any other.
+    fn peeked_member_scheme(
         &mut self,
         level: usize,
         operand: &'graph ExpressionPart<'graph>,
         name: BinderSymbol,
     ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'graph>> {
-        let Some(upper) = self.peeked(level, operand).map(|typed| typed.upper) else {
-            return Ok(None);
-        };
+        match self.peeked(level, operand) {
+            Some(peeked) => self.member_scheme(level, operand, peeked.upper, name),
+            None => Ok(None),
+        }
+    }
+
+    /// The member read `ATTR <operand> <label>`, its label written bare, where it reads a quantified
+    /// member: the member's scheme, beside the unpinned head parameter it names, if it names one.
+    /// `upper` is the operand's static upper end: read without typing it where the operand is a
+    /// name or a chain of member reads rooted at one ([`peeked`](Self::peeked)), else once the
+    /// read's use has typed it.
+    fn member_scheme(
+        &mut self,
+        level: usize,
+        operand: &'graph ExpressionPart<'graph>,
+        upper: Parametric,
+        name: BinderSymbol,
+    ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'graph>> {
         Ok(match self.member_read(level, operand, upper, name)? {
             Some(SignatureMember {
                 declared: DeclaredType::Scheme(scheme),
@@ -1310,6 +1322,34 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }) => Some((scheme, unpinned.map(BinderSymbol::Type))),
             _ => None,
         })
+    }
+
+    /// The member read `node` of member `label`, a quantified one whose scheme `member_scheme`
+    /// gave: its instance wanted at `wanted`, recorded for the run. Refused where the scheme is over
+    /// a head parameter the load cannot name.
+    fn member_instance(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        label: BinderSymbol,
+        (scheme, unpinned): (Scheme, Option<BinderSymbol>),
+        wanted: Option<Parametric>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        if let Some(parameter) = unpinned {
+            return Err(ShapeError::UnpinnedMember {
+                member: label,
+                parameter,
+                at: node.source,
+            });
+        }
+        let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
+        if !self.unfilled {
+            let solution = self.solution(level, solution, node.source);
+            self.chain[level]
+                .instances
+                .push((Site::of_node(node), InstanceRead::Solved(solution)));
+        }
+        Ok(typed)
     }
 
     /// The static type of `part`, a name or a chain of member reads rooted at one, read without
@@ -1824,29 +1864,32 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 list,
                 operand,
                 label,
-            } => match self.member_scheme(level, operand, label)? {
-                Some((scheme, None)) => {
-                    let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
-                    if !self.unfilled {
-                        let solution = self.solution(level, solution, node.source);
-                        self.chain[level]
-                            .instances
-                            .push((Site::of_node(node), InstanceRead::Solved(solution)));
+            } => {
+                let peeked = self.peeked(level, operand);
+                let scheme = self.peeked_member_scheme(level, operand, label)?;
+                match scheme {
+                    Some(scheme) => self.member_instance(level, node, label, scheme, wanted)?,
+                    None => {
+                        let typed = self.narrow(level, node, list)?;
+                        // An operand `peeked` cannot read is typed by the read's use.
+                        let site = Site::of(operand);
+                        let operand_type = (peeked.is_none())
+                            .then(|| self.chain[level].parts.iter().rev())
+                            .and_then(|mut parts| parts.find(|(at, _)| *at == site))
+                            .map(|(_, typed)| typed.upper);
+                        let scheme = match operand_type {
+                            Some(upper) => self.member_scheme(level, operand, upper, label)?,
+                            None => None,
+                        };
+                        match scheme {
+                            Some(scheme) => {
+                                self.member_instance(level, node, label, scheme, wanted)?
+                            }
+                            None => self.read_through_paths(level, operand, label, typed)?,
+                        }
                     }
-                    typed
                 }
-                Some((_, Some(parameter))) => {
-                    return Err(ShapeError::UnpinnedMember {
-                        member: label,
-                        parameter,
-                        at: node.source,
-                    });
-                }
-                None => {
-                    let typed = self.narrow(level, node, list)?;
-                    self.read_through_paths(level, operand, label, typed)?
-                }
-            },
+            }
             Form::Call(node, list) => self.narrow(level, node, list)?,
             Form::Apply(node) => self.apply(level, node)?,
             Form::Unevaluable(_) => unknown(),
@@ -1882,13 +1925,23 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         .instances
                         .push((Site::of_node(node), InstanceRead::AsIs));
                 }
-                match self.member_scheme(level, operand, label)? {
+                match self.peeked_member_scheme(level, operand, label)? {
                     Some((scheme, None)) => Some(DeclaredType::Scheme(scheme)),
                     // A scheme over a parameter the load cannot name: the run solves the call.
                     Some((_, Some(_))) => {
                         let typed = self.narrow(level, node, list)?;
                         self.chain[level].parts.push((Site::of(head), typed));
                         return Ok(DeclaredType::Type(unknown()));
+                    }
+                    // An operand read only by typing it: the head is read as it is, as `part`
+                    // reads a member short of its instance.
+                    None if self.peeked(level, operand).is_none() => {
+                        let typed = self.narrow(level, node, list)?;
+                        let typed = self.read_through_paths(level, operand, label, typed)?;
+                        let form = of_part(self.chain[level].shape, head);
+                        let typed = self.viewed_tree(level, form, Site::of(head), typed)?;
+                        self.chain[level].parts.push((Site::of(head), typed));
+                        return Ok(DeclaredType::Type(typed));
                     }
                     None => None,
                 }

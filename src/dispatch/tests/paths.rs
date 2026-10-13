@@ -190,12 +190,58 @@ fn a_type_through_an_inline_call_over_a_leaf_refuses_the_load() {
             "{ORDERED}EXPR #(USE p :Ordered) -> Any = #(LET x :((PICK p).Set) = 1)"
         )),
         "load: <test>:20:43: this type reads a member of a module built by a call written in \
-         place, which the run never makes; bind the call with `LET` to name its type"
+         place, and a call in a type is never made; bind the call with `LET` to name its type"
     );
 }
 
 /// Once the load ends, each path over a tree with a leaf reads back that tree: through a parameter,
 /// a leaf on it; through a call that unfolds, the view it builds over the leaf it binds.
+/// `SIG Mapper`, whose `apply` is quantified over its own `Elt` and the signature's `Carrier`,
+/// `MODULE nums`, which fits it at `Number`, and `PASS`, which returns its argument at `Mapper`
+/// with `Carrier` pinned to `Number`, and `LOOSE`, which leaves it unpinned.
+const MAPPER: &str = "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier) \
+                      (VAL apply :(FN FOR ALL #[Elt] :{x :Carrier, y :Elt} -> Elt))]\n\
+                      MODULE nums = ((LET seed = 1) \
+                      (LET apply = (FN FOR ALL #[Elt] :{x :Number, y :Elt} -> Elt = #(y))))\n\
+                      EXPR #(PASS m :Mapper) -> (Mapper WITH {Carrier = Number}) = #(m)\n\
+                      EXPR #(LOOSE m :Mapper) -> Mapper = #(m)\n";
+
+/// A quantified member read through any module-valued expression is instanced at load where the
+/// load can name every head parameter it is over, and refused where it cannot: through a call's
+/// result whose type leaves one unpinned, and through a name the load reads across a quote's code,
+/// whose refusal `EVAL` raises. A call's head reads the member as it is, and the run solves the
+/// call.
+#[test]
+fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_parameters() {
+    let wanted = "LET go :(FN :{x :Number, y :Number} -> Number)";
+    assert_eq!(
+        run(&format!(
+            "{MAPPER}{wanted} = (PASS nums).apply\nPRINT (go {{x = 1, y = 2}})"
+        )),
+        "2"
+    );
+    let unpinned = "is quantified over `Carrier`, which the load cannot name here; call it, or \
+                    ascribe its module with `Carrier` pinned";
+    assert_eq!(
+        run(&format!("{MAPPER}{wanted} = (LOOSE nums).apply")),
+        format!("load: <test>:5:50: `apply` {unpinned}")
+    );
+    assert_eq!(
+        run(&format!(
+            "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = \
+             #(EVAL #({wanted} = $m.apply) -> Any)\nPRINT (USEIT nums)"
+        )),
+        format!("error: <test>:5:92: `apply` {unpinned}")
+    );
+    assert_eq!(
+        run(&format!(
+            "{MAPPER}PRINT ((PASS nums).apply {{x = 1, y = \"s\"}})\n\
+             PRINT ((LOOSE nums).apply {{x = 1, y = \"t\"}})"
+        )),
+        "s\nt"
+    );
+}
+
 #[test]
 fn each_open_path_reads_back_its_tree() {
     let source = format!(
