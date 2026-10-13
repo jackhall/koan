@@ -25,7 +25,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
 };
-use crate::values::digest::{DigestHasher, Tag};
+use crate::values::digest::function_content;
 use crate::values::{ContentDigest, Knotted as _, Link, Seen, Types, Value, Weight};
 
 use super::{KActivationView, Knotted, Node, Untieable, composed};
@@ -159,29 +159,24 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
     where
         'cell: 'a,
     {
-        composed(self.shape, self.closure.links(), |_, link| {
+        for (_, link) in composed(self.shape, self.closure.links()) {
             if let Link::Value(value) = link {
                 out(Seen::of(*value));
             }
-        });
+        }
     }
 
     /// The node's content: its body's code digest, the solution it is an instance at, and the
     /// digest of each capture the code digest does not name — every one but a read of the
     /// program's top level, and every type capture — a value's answered by `parts`.
     pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
-        let instance = self.instance().unwrap_or(&[]);
-        let mut hasher = DigestHasher::new(Tag::Function);
-        hasher
-            .digest(self.shape.code_digest())
-            .count(instance.len());
-        for solved in instance {
-            hasher.feed(solved);
-        }
-        composed(self.shape, self.closure.links(), |index, link| {
-            hasher.count(index).digest(link.digest_from(parts));
-        });
-        hasher.finished()
+        let captures = composed(self.shape, self.closure.links())
+            .map(|(index, link)| (index, link.digest_from(parts)));
+        function_content(
+            self.shape.code_digest(),
+            self.instance().unwrap_or(&[]),
+            captures,
+        )
     }
 }
 
