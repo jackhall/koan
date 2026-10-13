@@ -24,7 +24,7 @@ use crate::knot::module::coerce::Substitution;
 use crate::knot::module::view::{self, ViewTypes};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::scope::{Print, ShapeError, Site, Tree};
-use crate::symbols::{BinderSymbol, Symbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, Symbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
 };
@@ -162,7 +162,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     let Some(held) = self.carried_type(module, site)? else {
                         continue;
                     };
-                    if re_viewable(held, types)
+                    if re_viewable(held, types, scratch)
                         && let Ok(nested) = view::nested_types(held, src, dst, types, scratch)
                     {
                         self.lay(&nested, module, site)?;
@@ -270,7 +270,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     // A union of cells' signatures is re-viewed cell by cell (`modules`).
                     let held = self.carried_type(source, site)?;
                     let nested = held
-                        .filter(|held| re_viewable(*held, types))
+                        .filter(|held| re_viewable(*held, types, scratch))
                         .and_then(|held| view::nested_types(held, src, dst, types, scratch).ok());
                     (nested.map(|nested| nested.view), nested)
                 }
@@ -528,19 +528,8 @@ fn slot_type(
             *member
         }
         None => {
-            let TypeNode::SignatureApply { signature, pins } = types.node(held) else {
-                return None;
-            };
-            let schema = crate::elaborate::schema_of(signature, types)?;
+            let (schema, fixed) = fixed(held, types, scratch)?;
             let (_, declared) = schema.value_slots.iter().find(|(slot, _)| *slot == name)?;
-            let mut fixed = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
-            for (parameter, _) in schema.parameters.iter() {
-                fixed.push((
-                    *parameter,
-                    pins.get(BinderSymbol::Type(*parameter).symbol())?,
-                ));
-            }
-            let fixed = Members::from_pairs(scratch, fixed);
             substitute_parameters(types, scratch, *declared, fixed)
         }
     };
@@ -548,8 +537,8 @@ fn slot_type(
 }
 
 /// Whether the load re-views a nested module whose type is `held` as the run does.
-fn re_viewable(held: KType, types: &Types<'_, '_>) -> bool {
-    module_schema(held, types).is_some() || fully_pinned(held, types)
+fn re_viewable(held: KType, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> bool {
+    module_schema(held, types).is_some() || fully_pinned(held, types, scratch)
 }
 
 /// `held`'s schema where it is a module's own signature, declaring no head parameter: a type the
@@ -565,15 +554,29 @@ fn module_schema<'run>(held: KType, types: &Types<'_, 'run>) -> Option<SigSchema
 /// Whether `held` is an application fixing every head parameter of its signature: the type a
 /// transparent view's signature gives a nested module. *Fits* solves a re-view from it to its pins,
 /// the bindings a re-view from the module's own signature solves at the same slot, so the load
-/// lays the view the run builds.
-fn fully_pinned(held: KType, types: &Types<'_, '_>) -> bool {
+/// lays the view the run builds — save where a pin sits above what the module's members realize
+/// and the slot leaves that parameter open: *fits* solves it off the members, and the run re-views.
+fn fully_pinned(held: KType, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> bool {
+    fixed(held, types, scratch).is_some()
+}
+
+/// The signature `held` applies and each of its head parameters at its pin, where `held` is an
+/// application fixing every one.
+fn fixed<'run, 'x>(
+    held: KType,
+    types: &Types<'_, 'run>,
+    scratch: BumpAllocator<'x>,
+) -> Option<(SigSchema<'run>, Members<'x, TypeSymbol, KType>)> {
     let TypeNode::SignatureApply { signature, pins } = types.node(held) else {
-        return false;
+        return None;
     };
-    crate::elaborate::schema_of(signature, types).is_some_and(|schema| {
-        schema
-            .parameters
-            .iter()
-            .all(|(name, _)| pins.get(BinderSymbol::Type(*name).symbol()).is_some())
-    })
+    let schema = crate::elaborate::schema_of(signature, types)?;
+    let mut fixed = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
+    for (parameter, _) in schema.parameters.iter() {
+        fixed.push((
+            *parameter,
+            pins.get(BinderSymbol::Type(*parameter).symbol())?,
+        ));
+    }
+    Some((schema, Members::from_pairs(scratch, fixed)))
 }
