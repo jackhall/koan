@@ -109,12 +109,13 @@ pub enum Within<'graph> {
 }
 
 /// A call the load unfolded: its callee's body, each parameter's argument tree by the callee's
-/// parameter slot, and the point each of its `FOR ALL` variables solves to, where closed.
+/// parameter slot, and the closed point each of its `FOR ALL` variables solves to, by the
+/// variable's slot there.
 #[derive(Clone, Copy)]
 pub struct Unfolded<'graph> {
     pub callee: &'graph BodyShape<'graph>,
     pub arguments: &'graph [(Slot, Tree<'graph>)],
-    pub solution: &'graph [Option<KType>],
+    pub solution: &'graph [(Slot, KType)],
 }
 
 impl<'graph> Tree<'graph> {

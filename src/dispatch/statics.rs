@@ -167,6 +167,10 @@ pub(super) fn statics<'graph>(
         ran: BumpVec::new_in(scratch),
         trees: BumpVec::new_in(scratch),
         reading: BumpVec::new_in(scratch),
+        typing: BumpVec::new_in(scratch),
+        recursive: BumpVec::new_in(scratch),
+        summaries: BumpVec::new_in(scratch),
+        selections: BumpVec::new_in(scratch),
     };
     pass.push(root, true);
     let visited = pass.visit(0, None);
@@ -308,6 +312,15 @@ struct Pass<'p, 'x, 'graph> {
     /// Each binder whose tree is being read, by its shape's address: a binder read through itself
     /// reads as a leaf.
     reading: BumpVec<'p, (usize, Slot)>,
+    /// Each callable body being typed, outermost first.
+    typing: BumpVec<'p, &'graph BodyShape<'graph>>,
+    /// Each callable body met while it was being typed, and each typed since: none unfolds.
+    recursive: BumpVec<'p, &'graph BodyShape<'graph>>,
+    /// Each typed callable body's summary: the tree of its last statement.
+    summaries: BumpVec<'p, (&'graph BodyShape<'graph>, Option<Tree<'graph>>)>,
+    /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
+    /// point each variable of the candidate's group solves to there, by group index.
+    selections: BumpVec<'p, (Site, &'p [Option<KType>])>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -476,6 +489,21 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 at.type_captures.iter().map(|(_, source, _)| *source),
             ));
         }
+        // A callable's summary is read once its body is typed: a recursive one has none.
+        let shape = self.chain[level].shape;
+        if shape.kind() == ShapeKind::Callable && !self.unfilled {
+            let recursive =
+                |pass: &Self| (pass.recursive.iter()).any(|known| std::ptr::eq(*known, shape));
+            let mut summary = None;
+            if !recursive(self) {
+                summary = self.summarize(level)?;
+            }
+            // Summarizing may meet the callable itself, through a callee it unfolds.
+            if recursive(self) {
+                summary = None;
+            }
+            self.summaries.push((shape, summary));
+        }
         // The cell is fixed last, once every block the shape runs has folded its class into it.
         self.fix(level);
         let at = &self.chain[level];
@@ -530,7 +558,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         surfacing: Option<Parametric>,
     ) -> Result<Option<Interval>, ShapeError<'graph>> {
         self.push(nested, roots_chain);
+        let callable = nested.kind() == ShapeKind::Callable;
+        if callable {
+            self.typing.push(nested);
+        }
         let visited = self.visit(level + 1, surfacing);
+        if callable {
+            self.typing.pop();
+        }
         let last = self.chain[level + 1].statements.last().copied();
         let popped = self.chain.pop().expect("the shape was pushed");
         if nested.kind() == ShapeKind::Block {
@@ -1713,7 +1748,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             // An opaque view hides each unpinned head parameter behind a carrier it mints.
             if mode == Ascription::Opaque {
                 self.chain[level].minting.push(Site::of_node(node));
-                let tree = self.tree(level, &operand_part.value);
+                let tree = self.tree(level, &operand_part.value)?;
                 let tree = resident(self.writer, tree);
                 self.chain[level].trees.push((Site::of_node(node), tree));
             }
@@ -2104,7 +2139,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             };
             let holder = &self.chain[at];
             let outer = at.checked_sub(1);
-            match (holder.shape.captures()[capture.index()].source, outer) {
+            // A type capture the pass added reads its source as a builder capture does.
+            let builder = holder.shape.captures();
+            let source = match builder.get(capture.index()) {
+                Some(spec) => spec.source,
+                None => {
+                    CaptureSource::Read(holder.type_captures[capture.index() - builder.len()].1)
+                }
+            };
+            match (source, outer) {
                 (CaptureSource::Hole, _) => return open(true, crossed),
                 (CaptureSource::Offered, _) | (_, None) => return open(false, crossed),
                 (CaptureSource::Read(inner), Some(outer)) => {
@@ -2806,6 +2849,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 };
                 self.use_exits(level, arguments, &sites, &[chosen]);
                 self.made(level, node, list, &sites, &[chosen])?;
+                if !self.unfilled {
+                    let mut points = BumpVec::new_in(scratch);
+                    points.extend(chosen.intervals.unwrap_or(&[]).iter().map(|interval| {
+                        interval
+                            .is_exact()
+                            .then(|| types.concrete(interval.upper))
+                            .flatten()
+                    }));
+                    self.selections.push((Site::of_node(node), points.leak()));
+                }
                 self.chain[level].uses[index].narrowing = Narrowing::Selected(coordinate);
                 return Ok(self.candidate_return(chosen));
             }
