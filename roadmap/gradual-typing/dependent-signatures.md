@@ -24,9 +24,6 @@ names the type a value carries in type position: `TYPE OF` has no shape.
 
 ## Dependencies
 
-**Requires:**
-
-- [Path types](path-types.md) — a parameter's member is a path
-  through a leaf.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

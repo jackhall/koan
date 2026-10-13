@@ -128,6 +128,19 @@ at what `to` gives it, every manifest member, value slot and keyworded member at
 its declared type read under `to` — so a view's signature is a module's, with no
 parameters, and it fits the signature it was ascribed to.
 
+**The type half.** Everything the door computes from types alone — the schema,
+both substitutions and the view's signature — is [`view_types`](view.rs), which
+`ascribe` calls before it builds a member. `opaque_view_types` is that half of
+a `:|` over a source known by its digest; without the source's signature it
+computes the view's own side only: each carrier, from the pins and the declared
+bounds, and the view's signature. `transparent_view_types` is the same half of
+a `:!` over a source whose signature is known. [`nested_types`](view.rs) is the same half of a nested
+re-view (below). The load calls these at a `:|` site over a content tree it sees
+all of, and at an exact `:!`, and interns what the walk would — each member's
+declared type under either side and each nested module's re-view — so the run's
+view finds every one of those types already in the root
+([closed views at load](../../dispatch/README.md#paths)).
+
 An `Unascribable` names which door refused: the operand is no module, the
 ascribed handle names no one application of a signature, the module does not fit it
 (carrying the lattice's own failure), or a member could not take the view's type
@@ -166,9 +179,10 @@ Where they differ, the arm is the declared type's:
   side is a carrier, a value sealed under it gives up its payload at the view's
   type;
 - a list, dict or record — rebuilt part by part from what its type shows, a
-  record from the fields its slot declares and no other, through its own public
-  door and re-stamped with the declared handle where the derived memo is not that one,
-  which is the empty container and the widened declaration; a dict's keys are
+  record from the fields its slot declares and no other, and laid straight at
+  the slot's type read under `to` (`List::typed`, `Dict::typed`,
+  `Record::typed`), which each rebuilt part satisfies, so the walk interns no
+  type of its own for the container; a dict's keys are
   untouched, so a key read back through the view carries the source's scalar
   type even where the dict's declared key type names a carrier;
 - a union — the member whose source side admits the value, by a rule blind to
@@ -179,10 +193,12 @@ Where they differ, the arm is the declared type's:
 - a function type or an expression shape — a **barrier node**
   ([`Coerced`](../README.md#what-a-knot-member-is)) holding the
   function it stands before, the type a caller sees, the declared slot type and
-  the two substitutions as signature handles, which `build` interns once per
-  view and a call through the barrier reads as the handles' manifest members;
+  the two substitutions as signature handles, which `view_types` interns once
+  per view and a call through the barrier reads as the handles' manifest members;
 - an application whose pins name the enclosing signature's parameters — the
-  member is **re-viewed** through the same `fitted` and `build`. No carrier is made at a
+  member is **re-viewed** through the same `fitted` and `build`, its types those
+  [`nested_types`](view.rs) computes from the nested module's signature and the
+  slot's type under either side. No carrier is made at a
   nested boundary: the enclosing substitutions read the pins, so the nested
   view's identities are the outer carriers, arriving through the declared type
   rather than being made again, and the nested signature's own unpinned
@@ -203,6 +219,12 @@ admits the arguments and solves its group. Its result crosses back
 [`outward`](coerce.rs) at the declared return. A barrier stacked behind another
 is crossed in turn, and a call through one never tails, since its value crosses
 where its frame ends.
+
+A quantified member behind a barrier, read where the load solved its group — an
+[instance site](../../dispatch/README.md#static-types) — is a barrier of its own
+at the instance, [`barrier_instance`](../function.rs): the instance is what a
+caller sees and what its arguments cross at, and the same function stands behind
+it, solving its own group where it runs.
 
 ## Entering a `USING … SCOPE` block
 
@@ -273,8 +295,6 @@ open a module and call through a barrier are
 
 ## Open work
 
-- [Path types](../../../roadmap/gradual-typing/path-types.md) — a type member named at
-  load through a module-valued expression.
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
   data member coerced through a barrier, and a dict's keys crossing a barrier
   unsealed.

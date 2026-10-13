@@ -557,11 +557,21 @@ elaborated — and the pass fills it, once, where the program loads:
   type captures that pass adds (`BodyShape::type_captures`);
 - a quote's code shape's **refusal**: one cell, holding the builder's refusal
   where its code cannot be built, else the load pass's where the built code
-  does not type, which `BodyShape::refusal` reports when an `EVAL` runs it.
+  does not type, which `BodyShape::refusal` reports when an `EVAL` runs it;
+- at a chain's root, its **path entries** (`BodyShape::paths`, by level through
+  `path_entry`): one `PathEntry` per path the chain reads — its root, a binder
+  or a part written in place, its value-member chain, its label, its level and
+  the declared application it is read through, if any — each with a write-once
+  `Resolution`, the path's content tree beside what the
+  [static pass](../dispatch/README.md#paths) resolved it to, closed at a type
+  or the variable of its class; and, per shape, the entry each path its type
+  expressions spell reads (`BodyShape::path_read`, by site).
 
 A cell holds `Unknown`, a closed value, or a rigid value beside the
-`Variable`s — a variable's level and the coordinate its value is
-read at — that the run substitutes. The born-instance cell holds a
+`Variable`s that the run substitutes: each a variable's level and its source —
+a name's coordinate (`Source::Type`), or a path's entry beside the coordinate
+of its root (`Source::Path`), which the run binds by reading the module there
+and the member through it. The born-instance cell holds a
 `StaticSolution`, closed or rigid, or nothing: it has no unknown arm. The
 vocabulary lives here, beside the shape that holds it: `Static`,
 `StaticSolution`, `Variable`, and the callable-typing records the
@@ -584,7 +594,10 @@ carried; the site of each
 so the run checks nothing there; what the load fixed at each
 [instance site](../dispatch/README.md#static-types) — the solution it is
 instantiated at, closed or rigid, or, for a member read at a call's head, that
-the run reads it as it is (`InstanceRead`);
+the run reads it as it is (`InstanceRead`); each `:|` ascription's operand's
+**content tree**, by the ascription's site (`view_tree`); where the run reads
+each lexical variable of a path's declared application, per path
+(`through_at`);
 and each call by name's contributions, by its argument's site, a static type
 per parameter of its callee in symbol order, `Unknown` where the frame reads the
 carried type. It lives here for the same reason the type channel's
@@ -592,6 +605,20 @@ cells do, and the shape reads it by site (`value_type`, `use_statics`,
 `settled`, `instance_at`, `named_contributions`) or statement index; a shape the
 pass has not fixed — a quote's code it refused — has no static types, every
 candidate of every use in it is *maybe*, and no ascription in it is settled.
+
+**Content trees.** The value channel's trees are [`tree`](tree.rs)'s
+vocabulary: what the load knows of a module-valued expression's content
+([the module design](../../design/modules.md#the-load-and-the-run)). A
+`Tree` is a digest the load computes, a `MODULE` or `GROUP` body over the trees
+of what it composes, a knot of closures, a view over its operand's tree, or a
+**leaf** for what the load cannot see: a binder and a value-member chain read
+through it (`Leaf::Bound`), keyed too on which run of the binder's body holds
+it — a body's builder captures, or a call the load unfolded — or an expression
+no binder names (`Leaf::Unnamed`), unlike every tree, itself included. A tree
+with no leaf is closed, and its digest is the run's, computed through the run's
+own [recipes](../values/README.md#content-digests). `Tree::same_as` is the one
+equality: closed trees by digest, any other structurally. Trees are `Copy` and
+laid in program storage beside the cells that hold them.
 
 ## Names that arrive at run time
 

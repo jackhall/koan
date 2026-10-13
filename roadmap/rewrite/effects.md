@@ -45,7 +45,5 @@ building one content at every run.
 
 - [Families as parameters](families-as-parameters.md) — a `Monad` signature
   over a family.
-- [Path types](../gradual-typing/path-types.md) — an effectful call stays folded only where
-  calls unfold.
 
 **Unblocks:** none — a leaf.

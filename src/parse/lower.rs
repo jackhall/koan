@@ -13,8 +13,9 @@
 //! keyworded use, and leading an atom it marks the name the atom starts with, so no line is led by
 //! one. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. A paren glued to an atom
 //! that starts with `.` reads members of its value, `(MAKESET ints).Set`, through the suffixes a
-//! word runs. Everything else is an atom, which [`super::atom`] classifies. The one fact lowering records beyond the tree is the
-//! spelling of each bucket key a `NEEDING` list names, since past the parse a key is its symbol.
+//! word runs. Everything else is an atom, which [`super::atom`] classifies. The one fact lowering
+//! records beyond the tree is the spelling of each bucket key a `NEEDING` list names, since past
+//! the parse a key is its symbol.
 //!
 //! See [README.md](README.md) § The division of labour with `sexlex`.
 

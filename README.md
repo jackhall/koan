@@ -184,6 +184,7 @@ src/
 │   ├── keyed.rs          Keyed — a table sorted by the key each entry carries and the one search over it, how a shape and its Statics hold every table sparse over its site
 │   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
+│   ├── tree.rs           content trees — Tree, Leaf, Binder, Within: what the load sees of a module-valued expression, each node printed once as the run's digest or as an open key over its leaves
 │   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Registered / ParameterBinding and Elaboration, and the value channel's Statics and each keyworded use's UseStatics (its Narrowing and contributions)
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types, then the overloads grouped by bucket key
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each; the run's copy and weight
@@ -212,6 +213,7 @@ src/
 │   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names, Union.Tag
 │   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the expression shape its body sits in, with a registration's ranked shape and parameter binding
 │   ├── channel.rs        type_channel — the load pass: every type binder, type expression, callable and registration — a USING block's surfaced key included — typed where the program loads, closed, rigid or unknown, into the shape's write-once cells
+│   ├── paths.rs          what a path through a module reads where it runs — declared_through, path_binding, bound_path — the one reader the load and the run share
 │   ├── members.rs        a signature's members: layout order, and the one lookup of where a member sits and what it is declared at, shared by the type reader, dispatch and the module layout
 │   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the load pass's reader
 ├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable, and the field a USING source names
@@ -248,6 +250,9 @@ src/
     ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — and a keyworded call's argument record
     ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
     ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription, view and EVAL checks
+    ├── statics/trees.rs  a module-valued expression read as its content tree, a call unfolded into its callee's summary
+    ├── statics/paths.rs  each path resolved at load, closed or to its class; the crossing rule; member reads under transient pins
+    ├── statics/views.rs  the load's half of a view: what each nested module carries, read off the operand's tree, and the types the run's view would intern laid in the root
     └── errors.rs         the messages of the error values dispatch raises
 ```
 

@@ -43,7 +43,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Matching](conditionals/matching.md)
 - [Activation typing](gradual-typing/activation-typing.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
-- [Path types](gradual-typing/path-types.md)
+- [Dependent signatures](gradual-typing/dependent-signatures.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Families as parameters](rewrite/families-as-parameters.md)
@@ -51,4 +51,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 - [Presizing a branch](type-tiers/branch-presizing.md)
+- [The host's scratch as a type cache](type-tiers/host-scratch-cache.md)
 

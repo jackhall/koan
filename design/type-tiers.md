@@ -155,8 +155,10 @@ declared per call is classed alike by the type binders its declaration reads:
   type the door computes from types alone — what *fits* solves, each barrier's
   substitutions and each coerced member's type — and the root holds them. The
   run mints there only what *fits* solves from an operand the load cannot type
-  exactly and what the coercion derives from a member's value, such as an empty
-  list's type: content the same at every run, which interns where the frame
+  exactly, a re-view past the tree's
+  [horizon](modules.md#the-load-and-the-run) of a nested module whose declared
+  application does not fix each parameter at what the module realizes, and what the coercion derives
+  from a member's value, such as an empty list's type: content the same at every run, which interns where the frame
   would intern anything and finds itself there after the first.
 - **invariant**: a tree whose every leaf is a capture or a parameter the
   body's tail loop passes through unchanged, so the site mints the same
@@ -263,8 +265,6 @@ types, and released with that tier.
 - [The host's scratch as a type cache](../roadmap/type-tiers/host-scratch-cache.md)
   — the caching chains, the site classes, the lend door, the adopts at exits,
   and the receipt-run free list.
-- [Path types](../roadmap/gradual-typing/path-types.md) — the content trees
-  the site classes read, and closed views interned in the root.
 - [Invariance around a tail cycle](../roadmap/type-tiers/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch

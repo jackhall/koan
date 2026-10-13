@@ -67,7 +67,11 @@ Lowering is where koan's vocabulary enters, and six rules cover it
   it, so a splice reads the same in a block laid out on one line or several; a
   written `($..xs)` stays a group.
 - **Adjacency** rejects a `[` or `{` glued to a neighbouring token, and a closer
-  followed by anything but whitespace, another closer or a `,`.
+  followed by anything but whitespace, another closer, a `,` or a member read.
+  A `.name` glued to a closing paren reads a member of the paren's value, in
+  value and type position alike, its suffixes chaining as they do after a word:
+  `(MAKESET ints).empty`, `:((MAKESET ints).Set)`. With a space before the dot
+  the atom stands alone, and a leading dot is an error.
 - Everything else is an **atom**, which [atom.rs](atom.rs) classifies.
 
 Atom classification is the one place text is read closely: literals; a split on

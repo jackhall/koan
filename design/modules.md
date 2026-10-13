@@ -164,6 +164,16 @@ A leaf no binder names — a `MATCH` written inline, a module read out of a list
 is unlike every tree, its own text written elsewhere included. A knot holding
 anything but closures — a data node, a quote — is a leaf.
 
+A container literal is no node either, so a tree's **horizon** stops at a
+container, a parameter and a call the load does not unfold. A module past it —
+`inner` in `{inner = (a :! Inner)}` — is known only by the exact type the load
+gives it, and where that type is a view's, the view's own members only as its
+signature declares them. A member declared at an application that fixes each
+parameter of its signature is read as a module of that application, at any
+depth; one whose application leaves a parameter open the load cannot read
+further. The load does not look into a container: what lies past the horizon,
+the run reads off the values.
+
 The load computes a node's digest through the run's own recipe for it, read
 over the digests of the node's parts, so the load and the run cannot key one
 content two ways.
@@ -241,7 +251,5 @@ equal content give two types; koan keys it on content, so they give one.
 
 ## Open work
 
-- [Path types](../roadmap/gradual-typing/path-types.md) — content trees, a path's
-  load-time type, and a call unfolded.
 - [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.
