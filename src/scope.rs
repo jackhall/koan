@@ -58,6 +58,7 @@ pub use shape::{
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, InstanceRead,
-    Narrowing, ParameterBinding, Registered, ShapeGroupMap, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable, solutions,
+    Narrowing, ParameterBinding, PathEntry, PathRead, Paths, Registered, Root, ShapeGroupMap,
+    Source, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics,
+    UseStatics, Variable, solutions,
 };

@@ -15,6 +15,13 @@
 //! level wherever a nested shape of the chain reads it, and sibling shapes reuse levels. A `$` name
 //! crossing into code is a name of the code's own, bounded as the name it reads.
 //!
+//! A **path** — a type member read through a module-valued expression, `m.Carrier` — is a lexical
+//! variable of its own, its *path variable*, at a level past every name level of its chain: one
+//! [`PathEntry`] per root, member chain and label, laid on the chain's root, and each spelling a
+//! shape reads recorded beside where it reads the root. An entry whose root's declared type leaves
+//! the label an unpinned head parameter keeps that application, which the run fits the module to
+//! ([`paths`](super::paths)).
+//!
 //! A `USING … SCOPE` block's surfaced head is typed from its signature: the head's shape as the
 //! `SIG` declares it, each head parameter read at the ascription's pin or, unpinned, at the block's
 //! own type parameter of that name.
@@ -28,13 +35,13 @@ use crate::parse::KExpression;
 use crate::parse::Role;
 use crate::parse::quoted_body;
 use crate::scope::{
-    BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
-    FunctionGroupMap, ParameterBinding, Registered, Registration, ShapeError, ShapeGroupMap,
-    ShapeKind, Site, Slot, Static, StaticRegistered, StaticType, SurfacedHead, Target, UnitWork,
-    Variable, source_of,
+    Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
+    FunctionGroupMap, Keyed, ParameterBinding, PathEntry, PathRead, Position, Registered,
+    Registration, Root, ShapeError, ShapeGroupMap, ShapeKind, Site, Slot, Source, Static,
+    StaticRegistered, StaticType, SurfacedHead, Target, UnitWork, Variable, source_of,
 };
 use crate::source::SourceRef;
-use crate::symbols::BinderSymbol;
+use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, TypeNode, substitute_parameters,
 };
@@ -42,6 +49,7 @@ use crate::values::{Knotted, Types, Value};
 
 use super::declaration::{HeadShape, signature_heads, type_declarations};
 use super::expression::{Elaborator, Groups, type_expression};
+use super::paths::declared_through;
 use super::reads::{Reads, TypeAt};
 use super::signature::callable_type;
 
@@ -63,14 +71,7 @@ pub fn type_channel<'graph, X: Knotted>(
         scratch,
         chain: BumpVec::new_in(scratch),
     };
-    pass.chain.push(Level {
-        shape: root,
-        root: true,
-        base: 0,
-        count: 0,
-        own: None,
-        names: BumpVec::new_in(scratch),
-    });
+    pass.chain.push(Level::new(root, true, 0, None, scratch));
     pass.visit(0)
 }
 
@@ -102,6 +103,55 @@ struct Level<'p, 'graph> {
     own: Option<Own<'graph>>,
     /// Every other run-bound name the shape declares, beside its level.
     names: BumpVec<'p, (Key, usize)>,
+    /// Each path spelling the shape's type expressions read, by site.
+    reads: Cell<BumpVec<'p, (Site, PathRead<'graph>)>>,
+    /// At a chain root: the level past every name level of the chain, and the chain's path entries
+    /// in the order they were minted, each at that level plus its index.
+    paths: Option<(usize, Cell<BumpVec<'p, &'graph PathEntry<'graph>>>)>,
+}
+
+impl<'p, 'graph> Level<'p, 'graph> {
+    fn new(
+        shape: &'graph BodyShape<'graph>,
+        root: bool,
+        base: usize,
+        own: Option<Own<'graph>>,
+        scratch: BumpAllocator<'p>,
+    ) -> Self {
+        Level {
+            shape,
+            root,
+            base,
+            count: 0,
+            own,
+            names: BumpVec::new_in(scratch),
+            reads: Cell::new(BumpVec::new_in(scratch)),
+            paths: root.then(|| (path_base(shape), Cell::new(BumpVec::new_in(scratch)))),
+        }
+    }
+}
+
+/// The first level past every name level of the chain `root` roots: along each nesting of shapes
+/// that share its chain, the sum of each one's type-name slots, its own `FOR ALL` names among them,
+/// and, at the root, its type-named captures — an upper bound on the levels the channel numbers
+/// there ([`number`](Pass::number)). A code shape roots a chain of its own.
+fn path_base(root: &BodyShape<'_>) -> usize {
+    fn names(shape: &BodyShape<'_>) -> usize {
+        (0..shape.slots())
+            .filter(|index| matches!(shape.slot_name(Slot(*index as u32)), BinderSymbol::Type(_)))
+            .count()
+    }
+    fn deepest(shape: &BodyShape<'_>, base: usize) -> usize {
+        let next = base + names(shape);
+        (shape.nested_shapes().iter())
+            .filter(|(_, nested)| nested.kind() != ShapeKind::Code)
+            .map(|(_, nested)| deepest(nested, next))
+            .fold(next, usize::max)
+    }
+    let captures = (root.captures().iter())
+        .filter(|capture| matches!(capture.name, BinderSymbol::Type(_)))
+        .count();
+    deepest(root, captures)
 }
 
 /// What a coordinate holds, as far as the load can tell.
@@ -141,7 +191,7 @@ struct Reader<'e, 'p, 'graph, 'cell, X> {
     mode: Mode,
     rigid: Cell<u32>,
     /// Each rigid variable read, once per level.
-    variables: Cell<BumpVec<'p, Variable>>,
+    variables: Cell<BumpVec<'p, Variable<'graph>>>,
 }
 
 impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
@@ -162,21 +212,83 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
     fn rigid_reads(&self) -> u32 {
         self.rigid.get()
     }
+
+    /// A path through the binder `at` lands at: its path variable, minted for the chain where it
+    /// is new. `Unknown` where `at` lands past a chain root, and while typing a type binder, which
+    /// is closed or unknown.
+    fn member_type(
+        &self,
+        at: Coordinate,
+        site: Site,
+        chain: &[ValueSymbol],
+        label: TypeSymbol,
+        _types: &Types<'_, '_>,
+    ) -> Option<(TypeAt, KType)> {
+        let unknown = Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE));
+        let Some((level, slot)) = self.pass.landing(self.from, at) else {
+            return unknown;
+        };
+        let binder = Binder {
+            shape: self.pass.chain[level].shape,
+            slot,
+        };
+        let entry = self
+            .pass
+            .path(self.from, Root::Binder(binder), chain, label, || {
+                self.pass.declared(level, slot)
+            });
+        Some((self.path(site, Some(at), entry), KType::EMPTY_SIGNATURE))
+    }
+
+    fn inline_member(&self, site: Site, chain: &[ValueSymbol], label: TypeSymbol) -> TypeAt {
+        let entry = self
+            .pass
+            .path(self.from, Root::Inline(site), chain, label, || None);
+        self.path(site, None, entry)
+    }
 }
 
-impl<X> Reader<'_, '_, '_, '_, X> {
+impl<'graph, X> Reader<'_, '_, 'graph, '_, X> {
     /// The lexical variable `variable`, read at `at`.
     fn rigid(&self, variable: Parametric, at: Coordinate) -> TypeAt {
         let TypeNode::Lexical { level, .. } = self.pass.types.node(variable) else {
             unreachable!("a run-bound name reads as a lexical variable");
         };
+        self.read(level, Source::Type(at));
+        TypeAt::Rigid(variable)
+    }
+
+    /// The path variable of `entry`, spelled at `site` with its root read at `at`: recorded on the
+    /// shape read, and rigid where the reader types anything but a type binder.
+    fn path(&self, site: Site, at: Option<Coordinate>, entry: &'graph PathEntry<'graph>) -> TypeAt {
+        edit(
+            &self.pass.chain[self.from].reads,
+            self.pass.scratch,
+            |reads| {
+                if !reads.iter().any(|(held, _)| *held == site) {
+                    reads.push((site, PathRead { at, entry }));
+                }
+            },
+        );
+        if self.mode == Mode::Declaring {
+            return TypeAt::Unknown;
+        }
+        self.read(entry.level, Source::Path { at, entry });
+        TypeAt::Rigid(
+            self.pass
+                .types
+                .lexical(entry.level, entry.label, KType::ANY),
+        )
+    }
+
+    /// Record a rigid read of the variable at `level`, once per level.
+    fn read(&self, level: usize, source: Source<'graph>) {
         self.rigid.set(self.rigid.get() + 1);
         edit(&self.variables, self.pass.scratch, |variables| {
             if !variables.iter().any(|held| held.level == level) {
-                variables.push(Variable { level, at });
+                variables.push(Variable { level, source });
             }
         });
-        TypeAt::Rigid(variable)
     }
 }
 
@@ -222,6 +334,91 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             .find(|(held, _)| *held == key)
             .expect("a run-bound name has its level");
         self.types.lexical(*numbered, name, bound)
+    }
+
+    /// The binder `at`, read in the shape at level `from`, lands at — by its chain level and slot —
+    /// following each capture to what it reads where its shape is born. `None` for a builtin and
+    /// for a capture crossing a chain root.
+    fn landing(&self, from: usize, at: Coordinate) -> Option<(usize, Slot)> {
+        let Coordinate::Activation { hops, target } = at else {
+            return None;
+        };
+        let level = from
+            .checked_sub(hops as usize)
+            .expect("a coordinate steps out only through shapes on the chain");
+        match target {
+            Target::Local(slot) => Some((level, slot)),
+            Target::Capture(capture) => {
+                match self.chain[level].shape.captures()[capture.index()].source {
+                    CaptureSource::Read(inner) if !self.chain[level].root => {
+                        self.landing(level - 1, inner)
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// The path entry of the chain the shape at level `from` sits on for `root`, `chain` and
+    /// `label`: the one minted already, or a new one at the chain's next path level, read through
+    /// what `declared` gives — the root's declared type — where it leaves `label` unpinned.
+    fn path(
+        &self,
+        from: usize,
+        root: Root<'graph>,
+        chain: &[ValueSymbol],
+        label: TypeSymbol,
+        declared: impl FnOnce() -> Option<Parametric>,
+    ) -> &'graph PathEntry<'graph> {
+        let at = (0..=from)
+            .rev()
+            .find(|level| self.chain[*level].root)
+            .expect("every chain has a root");
+        let (base, paths) = self.chain[at]
+            .paths
+            .as_ref()
+            .expect("a chain root holds its paths");
+        let held = edit(paths, self.scratch, |paths| {
+            (paths.iter().copied())
+                .find(|entry| entry.root == root && entry.chain == chain && entry.label == label)
+        });
+        if let Some(entry) = held {
+            return entry;
+        }
+        // Typing the declared type may mint the paths it reads, so it runs before the level is
+        // taken.
+        let through = declared().and_then(|declared| {
+            declared_through(self.types, self.scratch, declared, chain, label)
+        });
+        edit(paths, self.scratch, |paths| {
+            let entry = resident(
+                self.writer,
+                PathEntry {
+                    root,
+                    chain: collect(self.writer, chain.iter().copied()),
+                    label,
+                    level: base + paths.len(),
+                    through,
+                },
+            );
+            paths.push(entry);
+            entry
+        })
+    }
+
+    /// The declared type of the value binder at `slot` of the shape at chain level `level`: a
+    /// parameter's, as its body reads it, or an annotated binder's annotation, typed here.
+    fn declared(&self, level: usize, slot: Slot) -> Option<Parametric> {
+        let shape = self.chain[level].shape;
+        if shape.kind() == ShapeKind::Callable && shape.position_of(slot) == Position::PARAMETER {
+            return match self.types.node(shape.in_body(self.types, self.scratch)?) {
+                TypeNode::KFunction { params, .. } => params.get(shape.slot_name(slot).symbol()),
+                _ => None,
+            };
+        }
+        let annotation = shape.annotation(slot)?;
+        let reader = self.reader(level, Mode::Typing);
+        type_expression(annotation, &reader, self.types, self.scratch).ok()
     }
 
     /// What `at`, read in the shape at level `from`, holds.
@@ -625,14 +822,8 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 }
                 _ => None,
             };
-            self.chain.push(Level {
-                shape: nested,
-                root,
-                base,
-                count: 0,
-                own,
-                names: BumpVec::new_in(scratch),
-            });
+            self.chain
+                .push(Level::new(nested, root, base, own, scratch));
             let visited = self.visit(level + 1);
             self.chain.pop();
             match visited {
@@ -640,6 +831,17 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     nested.refuse_typing(resident(self.writer, error));
                 }
                 visited => visited?,
+            }
+        }
+        let at = &self.chain[level];
+        let mut reads = at.reads.replace(BumpVec::new_in(self.scratch));
+        if !reads.is_empty() {
+            shape.fix_path_reads(Keyed::sorted(self.writer, &mut reads));
+        }
+        if let Some((_, paths)) = &at.paths {
+            let paths = paths.replace(BumpVec::new_in(self.scratch));
+            if !paths.is_empty() {
+                shape.fix_channel_paths(collect(self.writer, paths.iter().copied()));
             }
         }
         Ok(())

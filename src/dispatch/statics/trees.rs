@@ -36,7 +36,7 @@ use crate::type_lattice::KType;
 use crate::values::digest::{Operator, literal_digest, type_digest};
 
 use super::super::evaluate::{Form, Wanted, of_node, of_part, slots};
-use super::{Landing, Pass, done};
+use super::{Landing, Pass, channel, done};
 use crate::knot::module::view::Ascription;
 
 type Read<'graph, T> = Result<T, ShapeError<'graph>>;
@@ -809,7 +809,7 @@ fn born_at<'graph>(body: &'graph BodyShape<'graph>, keeps_scheme: bool) -> Optio
     match body.born_instance() {
         Some(StaticSolution::Closed(solution)) => Some(solution),
         Some(StaticSolution::Rigid { .. }) => None,
-        None => match body.callable_type() {
+        None => match channel(body.callable_type()) {
             Static::Closed(callable) if callable.ktype.as_type().is_some() => Some(&[]),
             Static::Rigid { value, .. } if value.ktype.as_type().is_some() => Some(&[]),
             Static::Closed(_) | Static::Rigid { .. } if keeps_scheme => Some(&[]),

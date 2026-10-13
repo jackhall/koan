@@ -3388,6 +3388,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 born_instance: resident_cell(writer, None),
                 declared_variables: resident_cell(writer, &[][..]),
                 type_captures: resident_cell(writer, &[][..]),
+                path_reads: resident_cell(writer, Keyed::from_sorted(&[])),
+                paths: resident_cell(writer, &[][..]),
                 statics: resident_cell(writer, None),
             },
         )

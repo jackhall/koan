@@ -35,7 +35,7 @@
 //! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
 //! selection.
 
-use crate::elaborate::denoted;
+use crate::elaborate::{bound_path, denoted};
 use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{KValue, Knotted, instance, lambda, quote, refused_construction};
 use crate::memory::{Bump, BumpVec, Writer, collect};
@@ -688,9 +688,14 @@ fn contributed<'x, 'graph>(
             Static::Unknown => None,
             known => Some(
                 known
-                    .solved(&at.view, scratch, |value, bindings| {
-                        types.concrete(substitute_levels(types, scratch, value, bindings))
-                    })
+                    .solved(
+                        &at.view,
+                        scratch,
+                        &|at_, entry| bound_path(&at.view, types, at_, entry),
+                        |value, bindings| {
+                            types.concrete(substitute_levels(types, scratch, value, bindings))
+                        },
+                    )
                     .expect("a contribution's variables are bound where its call runs"),
             ),
         }

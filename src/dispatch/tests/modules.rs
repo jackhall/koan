@@ -713,3 +713,39 @@ fn a_functor_s_carrier_follows_what_its_module_captures() {
         "one body listing two top-level names"
     );
 }
+
+#[test]
+fn a_path_through_a_parameter_is_what_its_module_fits_the_declared_type_at() {
+    let source = "SIG Mapper FOR ALL #[Carrier] = #[(VAL seed :Carrier)]\n\
+                  LET carrier = (FN :{p :Mapper} -> Any = #(:(p.Carrier)))\n\
+                  MODULE plain = (LET seed = 1)\n\
+                  MODULE raw = ((LET Carrier = Str) (LET seed = 2))\n\
+                  PRINT (carrier {p = (plain :| Mapper)})\n\
+                  PRINT (carrier {p = plain})\n\
+                  PRINT (carrier {p = raw})\n\
+                  PRINT raw.Carrier";
+    assert_eq!(
+        run(source),
+        "Carrier\nNumber\nNumber\nStr",
+        "a view's carrier, the type a plain module realizes, and that type again where the \
+         module binds `Carrier` to another, which a read through the module itself reads"
+    );
+}
+
+/// A pin of one head parameter decides which of a module's overloads fits a keyworded member, and
+/// so what another parameter solves to: the path reads through the declared application, pins and
+/// all, even where a pin names a type the run binds and the reader names it nowhere.
+#[test]
+fn a_path_reads_through_every_pin_of_its_declared_application() {
+    let source = "SIG Mapper FOR ALL #[Carrier Elt] = \
+                  #[(VAL make :(FN :{n :Number} -> Carrier)) \
+                  (EXPR #(STEP _ :Carrier _ :Elt) -> Carrier)]\n\
+                  MODULE two = ((LET make = (FN :{n :Number} -> Number = #(n))) \
+                  (EXPR #(STEP x :Number y :Str) -> Number = #(x)) \
+                  (EXPR #(STEP x :(Number | Bool) y :Number) -> (Number | Bool) = #(x)))\n\
+                  EXPR #(READER Elt :Type m :Any) -> Any = \
+                  #((LET p :(Mapper WITH {Elt = Elt}) = m) ((FN :{} -> Any = #(:(p.Carrier))) {}))\n\
+                  PRINT (READER Number two)\n\
+                  PRINT (READER Str two)";
+    assert_eq!(run(source), ":(Number | Bool)\nNumber");
+}

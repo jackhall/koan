@@ -16,7 +16,7 @@
 //! variable the solution names is read where the site runs, the typing record carries the solution
 //! so bound, and a frame binds the body's `FOR ALL` names from it.
 
-use crate::elaborate::callable_type;
+use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
@@ -354,16 +354,17 @@ const BOUND: &str = "an instance's lexical variables are bound where it is read 
 /// `solution`, an instance's solution in group order as the load recorded it, where the site runs:
 /// as it is when closed, and with each lexical variable it names replaced by the type `activation`
 /// reads at its coordinate when rigid.
-fn solved<'x>(
-    solution: StaticSolution<'_>,
-    activation: &KActivationView<'_, '_>,
+fn solved<'graph, 'x>(
+    solution: StaticSolution<'graph>,
+    activation: &KActivationView<'graph, '_>,
     types: &Types<'_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
         StaticSolution::Closed(solution) => scratch.alloc_slice_copy(solution),
         StaticSolution::Rigid { value, variables } => {
-            let bindings = solutions(variables, activation, scratch).expect(BOUND);
+            let paths = |at, entry: &_| bound_path(activation, types, at, entry);
+            let bindings = solutions(variables, activation, scratch, &paths).expect(BOUND);
             let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
             solved.extend(value.iter().map(|each| {
                 let each = substitute_levels(types, scratch, *each, &bindings);
@@ -416,21 +417,22 @@ fn loaded<'graph, 'x>(
     let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
         concrete_declared(types, substitute_levels(types, scratch, value, bindings))
     };
-    let callable = body
-        .callable_type()
-        .solved(activation, scratch, |callable, bindings| {
-            Some(Callable {
-                ktype: substitute(callable.ktype, bindings),
-                quantifier_map: callable.quantifier_map,
-                registered: None,
-            })
-        })?;
+    let paths = |at, entry: &_| bound_path(activation, types, at, entry);
+    let callable =
+        body.callable_type()
+            .solved(activation, scratch, &paths, |callable, bindings| {
+                Some(Callable {
+                    ktype: substitute(callable.ktype, bindings),
+                    quantifier_map: callable.quantifier_map,
+                    registered: None,
+                })
+            })?;
     let registered = match registration {
         Some(registration) => {
             let registered = activation
                 .shape()
                 .registered_type(registration.slot)
-                .solved(activation, scratch, |registered, bindings| {
+                .solved(activation, scratch, &paths, |registered, bindings| {
                     Some(Registered {
                         shape: substitute(registered.shape, bindings),
                         quantifier_map: registered.quantifier_map,

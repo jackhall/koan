@@ -249,10 +249,10 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, R> {
         }
     }
 
-    /// `owner.label` at `site`, where `owner` is a value name holding a module, or a chain of value
-    /// members rooted at one, and `label` a type name: the module's manifest member, read off its
-    /// signature where it runs and unknown at load. `None` where `owner` names no module, which
-    /// leaves the projection to a type's own members.
+    /// `owner.label` at `site`, where `owner` is a value name holding a module, a chain of value
+    /// members rooted at one, or such a chain rooted at an expression written in place — a
+    /// **path** — and `label` a type name: the module's type member, as the reader reads the path.
+    /// `None` where `owner` names no module, which leaves the projection to a type's own members.
     fn module_member(
         &self,
         site: Site,
@@ -266,15 +266,22 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, R> {
         let mut root = owner;
         while let ExpressionPart::Expression(node) = root {
             let node = node.reference();
-            let form = node.cache().builtin_shape()?;
-            let ([_, inner, step], BuiltinShapeId::Attribute) = (node.parts, form.id) else {
-                return None;
-            };
-            let ExpressionPart::Identifier(step) = step.value else {
-                return None;
-            };
-            chain.push(step);
-            root = &inner.value;
+            match (node.cache().builtin_shape(), node.parts) {
+                (Some(form), [_, inner, step]) if form.id == BuiltinShapeId::Attribute => {
+                    let ExpressionPart::Identifier(step) = step.value else {
+                        return None;
+                    };
+                    chain.push(step);
+                    root = &inner.value;
+                }
+                (None, [only]) => root = &only.value,
+                // A path's root written in place: a call, say, whose module the path reads.
+                _ => {
+                    chain.reverse();
+                    let read = self.reader.inline_member(site, &chain, *name);
+                    return Some(path_type(site, *name, read, KType::EMPTY_SIGNATURE));
+                }
+            }
         }
         let ExpressionPart::Identifier(_) = root else {
             return None;
@@ -286,17 +293,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, R> {
         }
         let (read, owner) =
             self.reader
-                .member_type(mention.coordinate, &chain, *name, self.types)?;
-        Some(match read {
-            TypeAt::Type(held) => Ok(held.into()),
-            TypeAt::Rigid(held) => Ok(held),
-            TypeAt::Unknown => Err(Elaboration::Unknown { site }),
-            TypeAt::NotAType => Err(Elaboration::NoSuchMember {
-                owner: owner.into(),
-                name: name.symbol(),
-                site,
-            }),
-        })
+                .member_type(mention.coordinate, site, &chain, *name, self.types)?;
+        Some(path_type(site, *name, read, owner))
     }
 
     /// `operands` elaborated, and refused `Unknown` at `site` when one read a lexical variable: the
@@ -909,5 +907,25 @@ pub fn declared_field(
             }
             _ => return None,
         }
+    }
+}
+
+/// What a path spelled at `site` reads, as a type: `NotAType` is a member `owner`, the module's
+/// signature, does not declare.
+fn path_type(
+    site: Site,
+    name: TypeSymbol,
+    read: TypeAt,
+    owner: KType,
+) -> Result<Parametric, Elaboration> {
+    match read {
+        TypeAt::Type(held) => Ok(held.into()),
+        TypeAt::Rigid(held) => Ok(held),
+        TypeAt::Unknown => Err(Elaboration::Unknown { site }),
+        TypeAt::NotAType => Err(Elaboration::NoSuchMember {
+            owner: owner.into(),
+            name: name.symbol(),
+            site,
+        }),
     }
 }

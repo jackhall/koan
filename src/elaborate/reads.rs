@@ -5,17 +5,19 @@
 //! Every name a type expression reads is a mention the shape builder resolved to a
 //! [`Coordinate`]; a reader answers the shape holding those mentions and what a coordinate's
 //! binding holds, as a [`TypeAt`]. An activation answers a type or not one; the load-time reader
-//! may also answer a rigid variable standing for a type a run binds, or that it cannot know.
+//! may also answer a rigid variable standing for a type a run binds, or that it cannot know. A path
+//! through a module, `m.Carrier`, is read where it runs as the run binds its path variable
+//! ([`bound_path`]), and at load as that variable.
 
 use crate::memory::{Bump, BumpAllocator};
 use crate::parse::ExpressionPart;
 use crate::scope::{Activation, ActivationView, BodyShape, Coordinate, Elaboration, Site};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, substitute_levels};
+use crate::type_lattice::{KType, Parametric, TypeNode, substitute_levels};
 use crate::values::{KnottedFamily, Types, Value};
 
 use super::expression::type_expression;
-use super::members::{SignatureMember, signature_member};
+use super::paths::{bound_path, member_module, member_type};
 
 /// What a reader answers for the binding at a coordinate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -45,22 +47,30 @@ pub trait Reads<'graph> {
     }
 
     /// The type member `name` of the module the binding at `at` holds, reached through the value
-    /// members `chain` names in turn, beside that module's signature: `None` where the binding
-    /// holds no module, and [`TypeAt::NotAType`] where the module declares no such member. The load
-    /// cannot know what a module holds, and answers `Unknown`.
+    /// members `chain` names in turn — the path spelled at `site` — beside that module's
+    /// signature: `None` where the binding holds no module, and [`TypeAt::NotAType`] where the
+    /// path reads no type. The load answers the path's variable.
     fn member_type(
         &self,
         _at: Coordinate,
+        _site: Site,
         _chain: &[ValueSymbol],
         _name: TypeSymbol,
         _types: &Types<'_, '_>,
     ) -> Option<(TypeAt, KType)> {
         Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE))
     }
+
+    /// The type member `name` of the module an expression written in place builds, reached through
+    /// the value members `chain` names — the path spelled at `site`. The load answers the path's
+    /// variable; where it runs, the run never builds that module, and the type is unknown.
+    fn inline_member(&self, _site: Site, _chain: &[ValueSymbol], _name: TypeSymbol) -> TypeAt {
+        TypeAt::Unknown
+    }
 }
 
 /// The type member `name` of a module of signature `signature`, reached through the value members
-/// `chain` names, each step's type read off the one before it ([`signature_member`]). `None` where
+/// `chain` names, each step's type read off the one before it ([`member_module`]). `None` where
 /// `signature` is no signature type; [`TypeAt::NotAType`] where a step names no value member at a
 /// type, the last names no type member, or a member names a head parameter its application leaves
 /// unpinned.
@@ -77,23 +87,9 @@ fn member_through(
     ) {
         return None;
     }
-    // A member read at a type, every head parameter it names pinned.
-    let read =
-        |of: KType, name: BinderSymbol| match signature_member(types, scratch, of.into(), name) {
-            Some(SignatureMember {
-                declared: DeclaredType::Type(declared),
-                unpinned: None,
-            }) => types.concrete(declared),
-            _ => None,
-        };
-    let mut held = signature;
-    for step in chain {
-        match read(held, BinderSymbol::Value(*step)) {
-            Some(inner) => held = inner,
-            None => return Some(TypeAt::NotAType),
-        }
-    }
-    Some(read(held, BinderSymbol::Type(name)).map_or(TypeAt::NotAType, TypeAt::Type))
+    let read = member_module(types, scratch, signature, chain)
+        .and_then(|inner| member_type(types, scratch, inner, BinderSymbol::Type(name)));
+    Some(read.map_or(TypeAt::NotAType, TypeAt::Type))
 }
 
 impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph, '_, XF> {
@@ -111,6 +107,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
     fn member_type(
         &self,
         at: Coordinate,
+        site: Site,
         chain: &[ValueSymbol],
         name: TypeSymbol,
         types: &Types<'_, '_>,
@@ -118,6 +115,14 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         let held = self.read(at);
         held.as_module()?;
         let signature = held.concrete_ktype();
+        // The load records every path its type expressions spell; one it read through a declared
+        // application binds as the run's path variable does.
+        if let Some(read) = self.shape().path_read(site)
+            && read.entry.through.is_some()
+        {
+            let bound = bound_path(self, types, at, read.entry);
+            return Some((bound.map_or(TypeAt::NotAType, TypeAt::Type), signature));
+        }
         let scratch = Bump::new();
         Some((
             member_through(types, &scratch, signature, chain, name)?,
@@ -138,11 +143,12 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
     fn member_type(
         &self,
         at: Coordinate,
+        site: Site,
         chain: &[ValueSymbol],
         name: TypeSymbol,
         types: &Types<'_, '_>,
     ) -> Option<(TypeAt, KType)> {
-        ActivationView::member_type(self, at, chain, name, types)
+        ActivationView::member_type(self, at, site, chain, name, types)
     }
 }
 
@@ -161,12 +167,12 @@ pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
             .expect("a type read where it runs holds no variable")
     };
     let elaborated = || type_expression(part, view, types, scratch).map(concrete);
-    let loaded =
-        view.shape()
-            .typed_expression(Site::of(part))
-            .solved(view, scratch, |value, bindings| {
-                Some(concrete(substitute_levels(types, scratch, value, bindings)))
-            });
+    let loaded = view.shape().typed_expression(Site::of(part)).solved(
+        view,
+        scratch,
+        &|at, entry| bound_path(view, types, at, entry),
+        |value, bindings| Some(concrete(substitute_levels(types, scratch, value, bindings))),
+    );
     debug_assert!(
         loaded.is_none() || loaded == elaborated().ok(),
         "the load-time type agrees with elaborating where it runs"

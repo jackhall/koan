@@ -43,6 +43,7 @@ mod declaration;
 mod expression;
 mod members;
 mod module;
+mod paths;
 mod reads;
 mod signature;
 
@@ -58,5 +59,6 @@ pub use members::{
     value_count,
 };
 pub use module::{module_signature, self_signature};
+pub use paths::{bound_path, declared_through, path_binding};
 pub use reads::{Reads, TypeAt, denoted};
 pub use signature::callable_type;
