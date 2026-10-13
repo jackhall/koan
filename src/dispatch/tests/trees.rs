@@ -341,3 +341,27 @@ fn a_quantified_functor_unfolds_at_its_solution() {
     assert!(apart);
     assert_eq!(digest, digest_back(&mut substrate, "a"));
 }
+
+/// A binder of a module body holds one value per run of the body, so its leaf is keyed on the
+/// body's captures: read through one functor's result over one argument twice it is one tree, over
+/// two arguments two.
+#[test]
+fn a_module_body_s_leaf_is_keyed_on_its_captures() {
+    let source = format!(
+        "{ORDERED}SIG Picky = #[(VAL pick :(FN :{{}} -> Module))]\n\
+         MODULE first = (LET pick = (FN :{{}} -> Module = #(asc)))\n\
+         MODULE second = (LET pick = (FN :{{}} -> Module = #(desc)))\n\
+         EXPR #(MK elem :Picky) -> Module = #(\n  \
+         MODULE built OVER #[elem] = (LET v = (elem.pick {{}})))\n\
+         LET a = ((MK first).v :| Ordered)\n\
+         LET b = ((MK first).v :| Ordered)\n\
+         LET c = ((MK second).v :| Ordered)"
+    );
+    loaded(&source, |program| {
+        let shape = program.shape();
+        let [a, b, c] = ["a", "b", "c"].map(|name| let_tree(program, shape, name));
+        assert!(!a.closed(), "`v` is a call the load cannot see into: {a:?}");
+        assert!(a.same_as(&b), "one run of the body");
+        assert!(!a.same_as(&c), "two runs of the body");
+    });
+}

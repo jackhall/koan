@@ -5,9 +5,9 @@
 //! see. A **body** is a `MODULE` or `GROUP` body over the trees of what it composes, a **knot** is
 //! closures tied into one knot, a **view** is an ascription's operator and application over its
 //! operand's tree, and a **digest** is a value the load computes outright. A **leaf** is keyed on
-//! the binder that names it and a value-member chain read through it, and, inside a body the load
-//! reads through or a call it unfolds, on that body's captures or that call's substitution; a leaf
-//! no binder names is unlike every tree, itself included.
+//! the binder that names it and a value-member chain read through it, and on what says which run
+//! of the binder's body holds it: a `MODULE` or `GROUP` body's captures, or the substitution of a
+//! call the load unfolds. A leaf no binder names is unlike every tree, itself included.
 //!
 //! A tree with no leaf is **closed**, and its [digest](Tree::digest) is the one the run computes
 //! for the value the expression evaluates to, through the run's own recipes in
@@ -72,9 +72,8 @@ pub enum NodeCapture<'graph> {
 /// What the load cannot see.
 #[derive(Clone, Copy)]
 pub enum Leaf<'graph> {
-    /// The value `binder` holds, read through `chain`'s value members: one value per activation
-    /// of the binder's body, and per `within` where a body read through or a call unfolded
-    /// substitutes what that body reads.
+    /// The value `binder` holds, read through `chain`'s value members: one value per run of the
+    /// binder's body, the run `within` names where it is not the one being typed.
     Bound {
         binder: Binder<'graph>,
         chain: &'graph [ValueSymbol],
@@ -100,8 +99,8 @@ impl PartialEq for Binder<'_> {
 
 impl Eq for Binder<'_> {}
 
-/// What a leaf's binder is bound under: the captures of the body the load read it through, or the
-/// call it unfolded.
+/// Which run of a leaf's body holds its binder: a `MODULE` or `GROUP` body's by its builder
+/// captures, or a callee's by the call the load unfolded.
 #[derive(Clone, Copy)]
 pub enum Within<'graph> {
     Body(&'graph [(u32, Tree<'graph>)]),

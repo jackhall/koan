@@ -8,8 +8,9 @@
 //! the tree of what its binder holds — a body, a knot of closures, a `LET`'s right-hand side — and
 //! a parameter a leaf on its binder. A member read goes through a body to the member's binding and
 //! through a leaf by extending its chain. Anything else is a leaf on the `LET` whose whole
-//! right-hand side it is, else a leaf no binder names. A leaf read inside a body the load reads
-//! through is keyed on that body's captures too, since the body runs once per what it captures.
+//! right-hand side it is, else a leaf no binder names. A leaf on a `MODULE` or `GROUP` body's
+//! binder is keyed on the body's builder captures too, wherever it is read, since they say which
+//! run of the body its value is from.
 //!
 //! A call on the chain **unfolds** ([design](../../../design/modules.md#a-call-unfolds)): a
 //! keyworded use the pass selected one registration at, or a call by name whose head's tree is a
@@ -118,14 +119,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         {
             return Ok(*tree);
         }
-        let fallback = |pass: &Self| match named {
-            Some(slot) => pass.leaf_on(scope, slot, &[]),
-            None => Tree::Leaf(Leaf::Unnamed(site)),
-        };
         let tree = match form {
             Form::Name(name) => match shape.mention(Site::of(name)) {
                 Some(mention) => self.resolve(scope, mention.coordinate, site)?,
-                None => fallback(self),
+                None => self.fallback(scope, named, site)?,
             },
             Form::Member {
                 operand,
@@ -133,8 +130,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 ..
             } => {
                 let through = self.tree_in(scope, operand, None)?;
-                self.read_member(through, label, site)?
-                    .unwrap_or_else(|| fallback(self))
+                let read = self.read_member(through, label, site)?;
+                self.or_fallback(read, scope, named, site)?
             }
             Form::Ascribe(node, mode) => {
                 let [operand, _, ascribed] = node.parts else {
@@ -152,33 +149,38 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                             source: resident(self.writer, source),
                         }
                     }
-                    _ => fallback(self),
+                    _ => self.fallback(scope, named, site)?,
                 }
             }
             Form::Leaf(ExpressionPart::Literal(literal)) => Tree::Digest(literal_digest(literal)),
             Form::Leaf(ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)) => {
                 match shape.typed_expression(site) {
                     Static::Closed(handle) => Tree::Digest(type_digest(handle)),
-                    _ => fallback(self),
+                    _ => self.fallback(scope, named, site)?,
                 }
             }
             Form::Lambda(node) => match Site::of_body(node).and_then(|body| shape.nested(body)) {
-                Some(body) => self
-                    .knot(scope, &[(body, false)], 0, site)?
-                    .unwrap_or_else(|| fallback(self)),
-                None => fallback(self),
+                Some(body) => {
+                    let knot = self.knot(scope, &[(body, false)], 0, site)?;
+                    self.or_fallback(knot, scope, named, site)?
+                }
+                None => self.fallback(scope, named, site)?,
             },
             Form::Call(node, _) => match scope {
-                Scope::Chain(level) => self
-                    .keyworded(level, node)?
-                    .unwrap_or_else(|| fallback(self)),
-                Scope::Body { .. } => fallback(self),
+                Scope::Chain(level) => {
+                    let unfolded = self.keyworded(level, node)?;
+                    self.or_fallback(unfolded, scope, named, site)?
+                }
+                Scope::Body { .. } => self.fallback(scope, named, site)?,
             },
             Form::Apply(node) => match scope {
-                Scope::Chain(level) => self.by_name(level, node)?.unwrap_or_else(|| fallback(self)),
-                Scope::Body { .. } => fallback(self),
+                Scope::Chain(level) => {
+                    let unfolded = self.by_name(level, node)?;
+                    self.or_fallback(unfolded, scope, named, site)?
+                }
+                Scope::Body { .. } => self.fallback(scope, named, site)?,
             },
-            _ => fallback(self),
+            _ => self.fallback(scope, named, site)?,
         };
         if let Scope::Chain(_) = scope {
             self.trees.push((shape, site, tree));
@@ -228,7 +230,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let shape = self.scope_shape(scope);
         let key = (std::ptr::from_ref(shape).addr(), slot);
         if self.reading.contains(&key) {
-            return Ok(self.leaf_on(scope, slot, &[]));
+            return self.leaf_on(scope, slot);
         }
         self.reading.push(key);
         let tree = self.binder_tree(scope, slot, site);
@@ -244,18 +246,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Read<'graph, Tree<'graph>> {
         let shape = self.scope_shape(scope);
         if let BinderSymbol::Type(_) = shape.slot_name(slot) {
-            return Ok(match shape.declared_type(slot) {
+            return match shape.declared_type(slot) {
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {
-                    Tree::Digest(type_digest(handle))
+                    Ok(Tree::Digest(type_digest(handle)))
                 }
-                _ => self.leaf_on(scope, slot, &[]),
-            });
+                _ => self.leaf_on(scope, slot),
+            };
         }
         if let Some(body) = shape.births(slot) {
             if body.kind() == ShapeKind::Module {
                 // A body not yet typed has not laid its type captures down.
                 if !done(body) {
-                    return Ok(self.leaf_on(scope, slot, &[]));
+                    return self.leaf_on(scope, slot);
                 }
                 let captures = self.captures_of(scope, body, site)?;
                 return Ok(Tree::Body {
@@ -270,42 +272,86 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     Some(body) if body.kind() == ShapeKind::Callable => {
                         bodies.push((body, keeps_scheme(shape, *member)));
                     }
-                    _ => return Ok(self.leaf_on(scope, slot, &[])),
+                    _ => return self.leaf_on(scope, slot),
                 }
             }
             let index = (component.members.iter())
                 .position(|member| *member == slot)
                 .expect("a binder is a member of its component");
-            return Ok(self
-                .knot(scope, &bodies, index as u32, site)?
-                .unwrap_or_else(|| self.leaf_on(scope, slot, &[])));
+            return match self.knot(scope, &bodies, index as u32, site)? {
+                Some(knot) => Ok(knot),
+                None => self.leaf_on(scope, slot),
+            };
         }
         if shape.position_of(slot) == Position::PARAMETER {
-            return Ok(self.leaf_on(scope, slot, &[]));
+            return self.leaf_on(scope, slot);
         }
         match shape.rhs(slot) {
             Some(rhs) => self.tree_in(scope, rhs, Some(slot)),
-            None => Ok(self.leaf_on(scope, slot, &[])),
+            None => self.leaf_on(scope, slot),
         }
     }
 
-    /// A leaf on the binder at `slot` of `scope`'s shape, read through `chain`: keyed on the
-    /// captures of a body read through.
-    fn leaf_on(&self, scope: Scope<'graph>, slot: Slot, chain: &[ValueSymbol]) -> Tree<'graph> {
-        let within = match scope {
-            Scope::Body { captures, .. } if !captures.is_empty() => {
-                Some(resident(self.writer, Within::Body(captures)))
+    /// The tree an expression the load cannot see reads as: a leaf on the `LET` binder `named`
+    /// whose whole right-hand side it is, else a leaf no binder names, keyed on `site`.
+    fn fallback(
+        &mut self,
+        scope: Scope<'graph>,
+        named: Option<Slot>,
+        site: Site,
+    ) -> Read<'graph, Tree<'graph>> {
+        match named {
+            Some(slot) => self.leaf_on(scope, slot),
+            None => Ok(Tree::Leaf(Leaf::Unnamed(site))),
+        }
+    }
+
+    /// `tree`, or where there is none, the [fallback](Self::fallback).
+    fn or_fallback(
+        &mut self,
+        tree: Option<Tree<'graph>>,
+        scope: Scope<'graph>,
+        named: Option<Slot>,
+        site: Site,
+    ) -> Read<'graph, Tree<'graph>> {
+        match tree {
+            Some(tree) => Ok(tree),
+            None => self.fallback(scope, named, site),
+        }
+    }
+
+    /// A leaf on the binder at `slot` of `scope`'s shape. A `MODULE` or `GROUP` body's binder holds
+    /// one value per run of the body, and the body's captures say which run, so its leaf is keyed
+    /// on them wherever it is read: on the chain, as the shape enclosing the body resolves them,
+    /// and through a body's tree, as the tree holds them.
+    fn leaf_on(&mut self, scope: Scope<'graph>, slot: Slot) -> Read<'graph, Tree<'graph>> {
+        let shape = self.scope_shape(scope);
+        let key = match scope {
+            _ if shape.kind() != ShapeKind::Module => &[][..],
+            Scope::Body { captures, .. } => {
+                let builder = shape.captures().len();
+                let mut key = BumpVec::with_capacity_in(captures.len(), self.scratch);
+                key.extend(
+                    captures
+                        .iter()
+                        .filter(|(at, _)| (*at as usize) < builder)
+                        .copied(),
+                );
+                collect(self.writer, key.iter().copied())
             }
-            _ => None,
-        };
-        Tree::Leaf(Leaf::Bound {
-            binder: Binder {
-                shape: self.scope_shape(scope),
-                slot,
+            // A body with no statement reads nothing, so captures nothing.
+            Scope::Chain(level) => match shape.body().first() {
+                Some(first) => {
+                    self.builder_captures(Scope::Chain(level - 1), shape, Site::of_node(first))?
+                }
+                None => &[][..],
             },
-            chain: collect(self.writer, chain.iter().copied()),
-            within,
-        })
+        };
+        Ok(Tree::Leaf(Leaf::Bound {
+            binder: Binder { shape, slot },
+            chain: &[],
+            within: (!key.is_empty()).then(|| &*resident(self.writer, Within::Body(key))),
+        }))
     }
 
     /// `tree`'s value member `label`, read at the part at `site`: through a body, the member's
@@ -351,8 +397,31 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         body: &'graph BodyShape<'graph>,
         site: Site,
     ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
-        let mut captures = BumpVec::with_capacity_in(body.capture_count(), self.scratch);
-        for index in 0..body.capture_count() {
+        self.composed_captures(scope, body, body.capture_count(), site)
+    }
+
+    /// [`captures_of`](Self::captures_of) short of the type captures, which a module body's `OVER`
+    /// list names as builder captures too: what says which run of the body a binder's value is
+    /// from, known before the body is typed.
+    fn builder_captures(
+        &mut self,
+        scope: Scope<'graph>,
+        body: &'graph BodyShape<'graph>,
+        site: Site,
+    ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
+        self.composed_captures(scope, body, body.captures().len(), site)
+    }
+
+    /// The trees of the first `count` closure slots of `body` its content composes.
+    fn composed_captures(
+        &mut self,
+        scope: Scope<'graph>,
+        body: &'graph BodyShape<'graph>,
+        count: usize,
+        site: Site,
+    ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
+        let mut captures = BumpVec::with_capacity_in(count, self.scratch);
+        for index in 0..count {
             let capture = CaptureSlot(index as u32);
             if !body.composes(capture) {
                 continue;
@@ -683,6 +752,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                             ..*inner
                         }))
                     }
+                    // A module body's binder is keyed on its captures, which read nothing.
+                    None if binder.shape.kind() == ShapeKind::Module => None,
                     None if inside(binder.shape, call.callee) => Some(Within::Call(*call)),
                     None => None,
                 };
