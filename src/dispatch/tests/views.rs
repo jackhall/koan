@@ -1,5 +1,6 @@
 //! Views the load sees all of: at a `:|` site over a closed content tree the root holds every type
-//! the view door computes, so the run builds the view without interning a type of its own.
+//! the view door computes, so the run builds the view without interning a type of its own — a
+//! nested module's view among them.
 
 use std::cell::Cell;
 
@@ -47,4 +48,36 @@ fn a_view_of_a_body_over_literals_lays_no_type_at_run() {
                   (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
                   LET m = (ints :| Counter)\n";
     assert_eq!(branch_after(source), 0, "the root holds the view's types");
+}
+
+/// A slot declared at an application over the outer parameter re-views the nested module.
+#[test]
+fn a_view_over_a_nested_module_lays_its_nested_view_at_load() {
+    let source = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
+                  SIG Outer FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL inner :(Inner WITH {Elem = Carrier}))]\n\
+                  MODULE ints = ((LET zero = 0) \
+                  (MODULE inner = ((LET Elem = Number) (LET item = 5))))\n\
+                  LET m = (ints :| Outer)\n";
+    assert_eq!(
+        branch_after(source),
+        0,
+        "the root holds the nested view's types"
+    );
+}
+
+/// A nested module in a record field is re-viewed too, and the record rebuilt at its slot's type.
+#[test]
+fn a_view_over_a_record_holding_a_module_lays_its_nested_view_at_load() {
+    let source = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
+                  SIG Outer FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL pair :{inner :(Inner WITH {Elem = Carrier})})]\n\
+                  MODULE inner = ((LET Elem = Number) (LET item = 5))\n\
+                  MODULE ints = ((LET zero = 0) (LET pair = {inner = inner}))\n\
+                  LET m = (ints :| Outer)\n";
+    assert_eq!(
+        branch_after(source),
+        0,
+        "the root holds the nested view's types"
+    );
 }
