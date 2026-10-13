@@ -127,7 +127,9 @@
 
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
 use crate::knot::module::ModuleContent;
-use crate::knot::module::view::{self, Ascription, opaque_view_type, transparent_view_types};
+use crate::knot::module::view::{
+    self, Ascription, ViewTypes, opaque_view_types, transparent_view_types,
+};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
@@ -139,8 +141,8 @@ use crate::program::placement_of;
 use crate::scheduler::Placement;
 use crate::scope::{
     BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    Coordinate, InstanceRead, Keyed, Listed, Narrowing, Position, ShapeError, ShapeKind, Site,
-    Slot, Source, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, Tree,
+    Coordinate, InstanceRead, Keyed, Listed, Narrowing, Position, Print, ShapeError, ShapeKind,
+    Site, Slot, Source, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, Tree,
     UnitWork, UseStatics, Variable as Located, source_of,
 };
 use crate::source::SourceRef;
@@ -193,6 +195,9 @@ pub(super) fn statics<'graph>(
         recursive: bump_set(scratch),
         summaries: bump_table(scratch),
         signatures: bump_table(scratch),
+        views: bump_table(scratch),
+        steps: bump_table(scratch),
+        rebuilds: bump_table(scratch),
         selections: bump_table(scratch),
         paths: BumpVec::new_in(scratch),
     };
@@ -352,6 +357,13 @@ struct Pass<'p, 'x, 'graph> {
     /// Each `MODULE` or `GROUP` body the pass typed exactly, by its address: the signature every
     /// run of it ties, which its content tree does not record.
     signatures: BumpBackedMap<'p, usize, KType>,
+    /// What each view over a closed tree binds, by its print: a chain of views reads each once.
+    views: BumpBackedMap<'p, Print, Option<ViewTypes<'graph>>>,
+    /// What each read of a value a lay may reach twice yields, so a chain of views reads each
+    /// member once.
+    steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'graph, 'p>>>,
+    /// Each value a view rebuilt, by what it was rebuilt from.
+    rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'graph, 'p>>,
     /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
     selections: BumpBackedMap<'p, Site, &'p [Option<KType>]>,
@@ -1829,7 +1841,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if operator == Operator::Opaque
             && let Some(view) = source
                 .digest()
-                .and_then(|digest| opaque_view_type(application, digest, types, scratch))
+                .and_then(|digest| opaque_view_types(None, application, digest, types, scratch))
+                .map(|viewed| viewed.view)
         {
             return Ok(Interval::point(view.into()));
         }
@@ -2014,9 +2027,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         "a tree reads the type its operand carries"
                     );
                     let carried = match (seen, exact) {
-                        (Some(_), _) => views::Carried::Tree(*tree),
                         (None, Some(exact)) => views::Carried::Typed(exact),
-                        (None, None) => views::Carried::Tree(*tree),
+                        _ => views::Carried::Tree(*tree),
                     };
                     let key =
                         ModuleContent::view(Operator::Opaque, signature, digest).carrier_key();
@@ -2113,7 +2125,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(under(declared));
         };
         // The load lays what the run's view reads, so it interns nothing of its own.
-        self.lay(&viewed, views::Carried::Typed(exact), Site::of_node(node))?;
+        self.lay_declared(&viewed);
         Ok(Interval::point(viewed.view.into()))
     }
 

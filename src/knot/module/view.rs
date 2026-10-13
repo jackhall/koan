@@ -139,6 +139,7 @@ pub fn ascribe<'graph, 'cell: 'x, 'x>(
 /// The types a view at `signature` of a module of signature `held` carries, computed from types
 /// alone — everything [`ascribe`] interns before it builds a member. The load computes them at a
 /// `:|` site over a content tree it sees all of, so the run finds each in the root.
+#[derive(Clone, Copy)]
 pub struct ViewTypes<'run> {
     /// The source module's signature, where known.
     pub held: Option<KType>,
@@ -252,19 +253,20 @@ pub fn transparent_view_types<'run>(
     })
 }
 
-/// The signature an opaque view at `signature` carries over a source whose digest is `source`,
-/// computed from types alone, as the load computes it over a source it sees all of: each carrier
-/// keyed on the view's content and each pinned parameter at its pin. The very handle [`ascribe`]
-/// lays down where the source fits. `None` where the view door would refuse the signature.
-pub fn opaque_view_type(
+/// What an opaque view at `signature` of a module whose signature is `held`, where known, binds
+/// over a source whose digest is `source`, computed from types alone, as the load computes it over
+/// a source it sees all of: each carrier keyed on the view's content and each pinned parameter at
+/// its pin. The very handles [`ascribe`] lays down where the source fits; the view's signature
+/// needs no `held`. `None` where the view door would refuse.
+pub fn opaque_view_types<'run>(
+    held: Option<KType>,
     signature: KType,
     source: ContentDigest,
-    types: &Types<'_, '_>,
+    types: &Types<'_, 'run>,
     scratch: BumpAllocator<'_>,
-) -> Option<KType> {
+) -> Option<ViewTypes<'run>> {
     let key = ModuleContent::view(Operator::Opaque, signature, source).carrier_key();
-    let viewed = view_types(None, signature, Ascription::Opaque, key, types, scratch).ok()?;
-    Some(viewed.view)
+    view_types(held, signature, Ascription::Opaque, key, types, scratch).ok()
 }
 
 /// The ascribed signature's schema, what a module of signature `held` binds its head parameters

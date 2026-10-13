@@ -6,10 +6,11 @@
 //! The run re-views a nested module from the type the module carries, which the operand's type
 //! does not always show: a transparent view carries each member as it is, yet declares it at its
 //! slot's application. So the lay reads what each cell carries, a [`Carried`], off the operand's
-//! tree: a module body's exact signature, which the pass keeps by body; a view's, computed from its
-//! source's as the run computes it; and a cell an opaque view rebuilt, as the coercion walk rebuilds
-//! it. Each step follows a view to its source or a slot into its declared type, so the lay ends
-//! at any depth.
+//! tree: a module body's exact signature, which the pass keeps by body; a view's, computed from
+//! its source's as the run computes it; and a cell an opaque view rebuilt, as the coercion walk
+//! rebuilds it. Each step follows a view to its source or a slot into its declared type, so the
+//! lay ends at any depth. Every read of a view over a closed tree or of a rebuilt value is
+//! memoized on the pass ([`Identity`]), so a chain of views costs the load linear time.
 //!
 //! Where no tree shows a cell — a container literal's, a parameter's, a call's the load does not
 //! unfold — its exact type stands for it, and a view that type is is read as its signature declares
@@ -17,11 +18,10 @@
 //!
 //! See [the module design](../../../design/modules.md#the-load-and-the-run).
 
-use crate::knot::module::ModuleContent;
 use crate::knot::module::coerce::Substitution;
-use crate::knot::module::view::{self, Ascription, ViewTypes, transparent_view_types};
+use crate::knot::module::view::{self, ViewTypes};
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::scope::{ShapeError, Site, Tree};
+use crate::scope::{Print, ShapeError, Site, Tree};
 use crate::symbols::{BinderSymbol, Symbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, SigSchema, TypeNode, substitute_parameters,
@@ -41,22 +41,59 @@ pub(super) enum Carried<'graph, 'p> {
     Tree(Tree<'graph>),
     /// A value known by its exact type alone.
     Typed(KType),
-    /// `source` as a view rebuilt it: at `declared`, read under `from` on the source's side and
-    /// `to` on the view's.
-    Across {
-        declared: DeclaredType<Parametric>,
-        from: Substitution<'graph>,
-        to: Substitution<'graph>,
-        source: &'p Carried<'graph, 'p>,
-    },
+    /// A value a view rebuilt.
+    Across(&'p Across<'graph, 'p>),
+}
+
+/// `source` as a view rebuilt it, as the coercion walk does: at `declared`, read under `from` on
+/// the source's side and `to` on the view's, the two apart.
+pub(super) struct Across<'graph, 'p> {
+    declared: DeclaredType<Parametric>,
+    from: Substitution<'graph>,
+    to: Substitution<'graph>,
+    source: Carried<'graph, 'p>,
+    /// The type the rebuilt value carries, where the load knows it.
+    held: Option<KType>,
+    /// What a nested module was re-viewed at: its members are rebuilt under it in turn.
+    nested: Option<ViewTypes<'graph>>,
 }
 
 /// What a container holds: a list's elements, a dict's values, or a record's field.
-#[derive(Clone, Copy)]
-enum Inside {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Inside {
     Element,
     Value,
     Field(Symbol),
+}
+
+/// A value the load reads twice, wherever it is reached from: a view over a closed tree, by its
+/// print, or a value a view rebuilt, by its address. What each yields is memoized on it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Identity {
+    Tree(Print),
+    Across(usize),
+}
+
+/// One read of a value's content: a module's member, or what a container holds.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Step {
+    Member(ValueSymbol),
+    Inside(Inside),
+}
+
+/// A value rebuilt by a view: its declared type, the two sides' handles, and the source.
+pub(super) type Rebuild = (DeclaredType<Parametric>, KType, KType, Identity);
+
+/// What `carried` is known by, where a read of it is worth keeping.
+fn identity(carried: Carried<'_, '_>) -> Option<Identity> {
+    match carried {
+        Carried::Tree(tree) => match tree.print() {
+            print @ Print::Closed(_) => Some(Identity::Tree(print)),
+            _ => None,
+        },
+        Carried::Across(across) => Some(Identity::Across(std::ptr::from_ref(across).addr())),
+        Carried::Typed(_) => None,
+    }
 }
 
 /// A declared type read either side of a view.
@@ -71,21 +108,15 @@ enum Sides {
 
 impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Lay what the view `viewed` interns over a module that carries `carried`, read at the `:|`
-    /// site `site`: each member's declared type read under either side, as the coercion walk reads
-    /// it before it rebuilds a member, and each nested module's re-view.
+    /// site `site`: each member's declared type read either side, and each nested module's
+    /// re-view.
     pub(super) fn lay(
         &mut self,
         viewed: &ViewTypes<'graph>,
         carried: Carried<'graph, 'p>,
         site: Site,
     ) -> Read<'graph, ()> {
-        let (types, scratch) = (self.types, self.scratch);
-        let declared = viewed.sig.value_slots.iter().map(|(_, declared)| *declared);
-        for declared in declared.chain(viewed.sig.keyworded.iter().copied()) {
-            for side in viewed.from.iter().chain([&viewed.to]) {
-                substitute_parameters(types, scratch, declared, side.bindings);
-            }
-        }
+        self.lay_declared(viewed);
         let Some(from) = viewed.from else {
             return Ok(());
         };
@@ -95,6 +126,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         Ok(())
+    }
+
+    /// Lay each member's declared type of the view `viewed` read under either side, as the
+    /// coercion walk reads it before it rebuilds a member: all a transparent view interns.
+    pub(super) fn lay_declared(&self, viewed: &ViewTypes<'graph>) {
+        let (types, scratch) = (self.types, self.scratch);
+        let declared = viewed.sig.value_slots.iter().map(|(_, declared)| *declared);
+        for declared in declared.chain(viewed.sig.keyworded.iter().copied()) {
+            for side in viewed.from.iter().chain([&viewed.to]) {
+                substitute_parameters(types, scratch, declared, side.bindings);
+            }
+        }
     }
 
     /// Lay each nested module's re-view a member declared `declared`, carrying `cell`, takes: in
@@ -113,7 +156,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         match declared.view(types).body {
             TypeNode::SignatureApply { .. } => {
-                for module in self.modules(cell) {
+                for module in self.modules(cell, site)? {
                     let Some(held) = self.carried_type(module, site)? else {
                         continue;
                     };
@@ -125,19 +168,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
             }
             TypeNode::List { element } => {
-                if let Some(cell) = self.inside(cell, Inside::Element) {
+                if let Some(cell) = self.inside(cell, Inside::Element, site)? {
                     self.lay_nested(viewed, from, element.into(), cell, site)?;
                 }
             }
             TypeNode::Dict { value, .. } => {
-                if let Some(cell) = self.inside(cell, Inside::Value) {
+                if let Some(cell) = self.inside(cell, Inside::Value, site)? {
                     self.lay_nested(viewed, from, value.into(), cell, site)?;
                 }
             }
             TypeNode::Record { fields } => {
                 for (binder, field) in fields.iter() {
                     let inside = Inside::Field(binder.symbol());
-                    if let Some(cell) = self.inside(cell, inside) {
+                    if let Some(cell) = self.inside(cell, inside, site)? {
                         self.lay_nested(viewed, from, field.into(), cell, site)?;
                     }
                 }
@@ -153,79 +196,117 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         carried: Carried<'graph, 'p>,
         site: Site,
     ) -> Read<'graph, Option<KType>> {
-        let (types, scratch) = (self.types, self.scratch);
         Ok(match carried {
             Carried::Typed(held) => Some(held),
             Carried::Tree(Tree::Body { shape, .. }) => {
                 self.signatures.get(&address(shape)).copied()
             }
-            Carried::Tree(Tree::View {
-                operator,
-                application,
-                source,
-                ..
-            }) => match operator {
-                Operator::Transparent => self
-                    .carried_type(Carried::Tree(*source), site)?
-                    .and_then(|held| transparent_view_types(held, application, types, scratch))
-                    .map(|viewed| viewed.view),
-                Operator::Opaque => self
-                    .opaque(application, source, site)?
-                    .map(|viewed| viewed.view),
-                Operator::Reviewed => None,
-            },
-            Carried::Tree(_) => None,
-            Carried::Across {
-                declared,
-                from,
-                to,
-                source,
-            } => {
-                let Some(held) = self.carried_type(*source, site)? else {
-                    return Ok(None);
-                };
-                match sides(types, scratch, declared, from, to) {
-                    Sides::Alike => Some(held),
-                    Sides::Apart(src, dst) => match declared.view(types).body {
-                        TypeNode::SignatureApply { .. } => {
-                            view::nested_types(held, src, dst, types, scratch)
-                                .ok()
-                                .map(|nested| nested.view)
-                        }
-                        // A rebuilt container is laid at its slot's type.
-                        _ => Some(dst),
-                    },
-                    Sides::Open => None,
-                }
+            Carried::Tree(tree @ Tree::View { .. }) => {
+                self.view_of(tree, site)?.map(|viewed| viewed.view)
             }
+            Carried::Tree(_) => None,
+            Carried::Across(across) => across.held,
         })
     }
 
-    /// What the opaque view at `application` of `source` binds, where the load knows the source's
-    /// type and digest.
-    fn opaque(
+    /// What the view `tree` binds, where the load knows it: a transparent view's over its source's
+    /// type, an opaque one's over its source's digest. Memoized by print over a closed tree.
+    fn view_of(
         &mut self,
-        application: KType,
-        source: &'graph Tree<'graph>,
+        tree: Tree<'graph>,
         site: Site,
     ) -> Read<'graph, Option<ViewTypes<'graph>>> {
         let (types, scratch) = (self.types, self.scratch);
-        let (Some(held), Some(digest)) = (
-            self.carried_type(Carried::Tree(*source), site)?,
-            source.digest(),
-        ) else {
+        let Tree::View {
+            operator,
+            application,
+            source,
+            print,
+        } = tree
+        else {
             return Ok(None);
         };
-        let key = ModuleContent::view(Operator::Opaque, application, digest).carrier_key();
-        let viewed = view::view_types(
-            Some(held),
-            application,
-            Ascription::Opaque,
-            key,
-            types,
-            scratch,
-        );
-        Ok(viewed.ok())
+        let closed = matches!(print, Print::Closed(_));
+        if closed && let Some(viewed) = self.views.get(&print) {
+            return Ok(*viewed);
+        }
+        let held = self.carried_type(Carried::Tree(*source), site)?;
+        let viewed = match operator {
+            Operator::Transparent => held
+                .and_then(|held| view::transparent_view_types(held, application, types, scratch)),
+            Operator::Opaque => source.digest().and_then(|digest| {
+                view::opaque_view_types(held, application, digest, types, scratch)
+            }),
+            Operator::Reviewed => None,
+        };
+        if closed {
+            self.views.insert(print, viewed);
+        }
+        Ok(viewed)
+    }
+
+    /// `source` rebuilt by a view at `declared`, read under `from` and `to`: carried as it is
+    /// where the two sides agree.
+    fn across(
+        &mut self,
+        declared: DeclaredType<Parametric>,
+        from: Substitution<'graph>,
+        to: Substitution<'graph>,
+        source: Carried<'graph, 'p>,
+        site: Site,
+    ) -> Read<'graph, Carried<'graph, 'p>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let key = identity(source).map(|source| (declared, from.handle, to.handle, source));
+        if let Some(rebuilt) = key.and_then(|key| self.rebuilds.get(&key)) {
+            return Ok(*rebuilt);
+        }
+        let (held, nested) = match sides(types, scratch, declared, from, to) {
+            Sides::Alike => return Ok(source),
+            Sides::Open => (None, None),
+            Sides::Apart(src, dst) => match declared.view(types).body {
+                TypeNode::SignatureApply { .. } => {
+                    let held = self.carried_type(source, site)?;
+                    let nested = held
+                        .and_then(|held| view::nested_types(held, src, dst, types, scratch).ok());
+                    (nested.map(|nested| nested.view), nested)
+                }
+                // A rebuilt container is laid at its slot's type.
+                _ => (Some(dst), None),
+            },
+        };
+        let rebuilt = Carried::Across(scratch.alloc(Across {
+            declared,
+            from,
+            to,
+            source,
+            held,
+            nested,
+        }));
+        if let Some(key) = key {
+            self.rebuilds.insert(key, rebuilt);
+        }
+        Ok(rebuilt)
+    }
+
+    /// What `step` reads of `carried`, memoized where `carried` has an [`Identity`].
+    fn step(
+        &mut self,
+        carried: Carried<'graph, 'p>,
+        step: Step,
+        site: Site,
+    ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
+        let key = identity(carried).map(|identity| (identity, step));
+        if let Some(read) = key.and_then(|key| self.steps.get(&key)) {
+            return Ok(*read);
+        }
+        let read = match step {
+            Step::Member(name) => self.member(carried, name, site)?,
+            Step::Inside(inside) => self.held_by(carried, inside, site)?,
+        };
+        if let Some(key) = key {
+            self.steps.insert(key, read);
+        }
+        Ok(read)
     }
 
     /// What value member `name` of a module carrying `carried` carries.
@@ -235,7 +316,27 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         name: ValueSymbol,
         site: Site,
     ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
-        let (types, scratch) = (self.types, self.scratch);
+        self.step(carried, Step::Member(name), site)
+    }
+
+    /// What a container carrying `carried` holds `inside`.
+    fn inside(
+        &mut self,
+        carried: Carried<'graph, 'p>,
+        inside: Inside,
+        site: Site,
+    ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
+        self.step(carried, Step::Inside(inside), site)
+    }
+
+    /// [`cell`](Self::cell), unmemoized.
+    fn member(
+        &mut self,
+        carried: Carried<'graph, 'p>,
+        name: ValueSymbol,
+        site: Site,
+    ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
+        let types = self.types;
         Ok(match carried {
             Carried::Typed(held) => slot_type(held, name, types).map(Carried::Typed),
             Carried::Tree(Tree::Body {
@@ -256,103 +357,85 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         .map(Carried::Typed)
                 }
             }
-            Carried::Tree(Tree::View {
-                operator,
-                application,
-                source,
-                ..
-            }) => match operator {
-                // A transparent view carries each member as it is.
-                Operator::Transparent => self.cell(Carried::Tree(*source), name, site)?,
-                Operator::Opaque => {
-                    let Some(viewed) = self.opaque(application, source, site)? else {
-                        return Ok(None);
-                    };
-                    let declared = (viewed.sig.value_slots.iter()).find(|(slot, _)| *slot == name);
-                    let inner = self.cell(Carried::Tree(*source), name, site)?;
-                    match (declared, inner, viewed.from) {
-                        (Some((_, declared)), Some(inner), Some(from)) => Some(Carried::Across {
-                            declared: *declared,
-                            from,
-                            to: viewed.to,
-                            source: scratch.alloc(inner),
-                        }),
-                        _ => None,
+            Carried::Tree(
+                tree @ Tree::View {
+                    operator, source, ..
+                },
+            ) => {
+                let inner = self.cell(Carried::Tree(*source), name, site)?;
+                match operator {
+                    // A transparent view carries each member as it is.
+                    Operator::Transparent => inner,
+                    _ => {
+                        let viewed = self.view_of(tree, site)?;
+                        self.rebuilt(viewed, name, inner, site)?
                     }
                 }
-                Operator::Reviewed => None,
-            },
+            }
             Carried::Tree(_) => None,
-            Carried::Across {
-                declared,
-                from,
-                to,
-                source,
-            } => match sides(types, scratch, declared, from, to) {
-                Sides::Alike => self.cell(*source, name, site)?,
-                Sides::Apart(src, dst) => {
-                    let TypeNode::SignatureApply { .. } = declared.view(types).body else {
-                        return Ok(None);
-                    };
-                    let Some(held) = self.carried_type(*source, site)? else {
-                        return Ok(None);
-                    };
-                    let Ok(nested) = view::nested_types(held, src, dst, types, scratch) else {
-                        return Ok(None);
-                    };
-                    let declared = (nested.sig.value_slots.iter()).find(|(slot, _)| *slot == name);
-                    let inner = self.cell(*source, name, site)?;
-                    match (declared, inner, nested.from) {
-                        (Some((_, declared)), Some(inner), Some(from)) => Some(Carried::Across {
-                            declared: *declared,
-                            from,
-                            to: nested.to,
-                            source: scratch.alloc(inner),
-                        }),
-                        _ => None,
-                    }
-                }
-                Sides::Open => None,
-            },
+            Carried::Across(across) => {
+                let inner = self.cell(across.source, name, site)?;
+                self.rebuilt(across.nested, name, inner, site)?
+            }
         })
     }
 
-    /// What a container carrying `carried` holds `inside`.
-    fn inside(&self, carried: Carried<'graph, 'p>, inside: Inside) -> Option<Carried<'graph, 'p>> {
-        let (types, scratch) = (self.types, self.scratch);
-        match carried {
+    /// Member `name` of a module the view `viewed` rebuilt, its source's member carrying `inner`.
+    fn rebuilt(
+        &mut self,
+        viewed: Option<ViewTypes<'graph>>,
+        name: ValueSymbol,
+        inner: Option<Carried<'graph, 'p>>,
+        site: Site,
+    ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
+        let Some(ViewTypes {
+            sig,
+            from: Some(from),
+            to,
+            ..
+        }) = viewed
+        else {
+            return Ok(None);
+        };
+        let declared = sig.value_slots.iter().find(|(slot, _)| *slot == name);
+        match (declared, inner) {
+            (Some((_, declared)), Some(inner)) => {
+                Ok(Some(self.across(*declared, from, to, inner, site)?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// [`inside`](Self::inside), unmemoized.
+    fn held_by(
+        &mut self,
+        carried: Carried<'graph, 'p>,
+        inside: Inside,
+        site: Site,
+    ) -> Read<'graph, Option<Carried<'graph, 'p>>> {
+        let types = self.types;
+        Ok(match carried {
             Carried::Typed(held) => held_inside(types.node(held), inside).map(Carried::Typed),
             Carried::Tree(_) => None,
-            Carried::Across {
-                declared,
-                from,
-                to,
-                source,
-            } => {
-                let inner = self.inside(*source, inside);
-                match sides(types, scratch, declared, from, to) {
-                    Sides::Alike => inner,
-                    Sides::Apart(..) => {
-                        let declared = declared_inside(declared.view(types).body, inside);
-                        match (declared, inner) {
-                            (Some(declared), Some(inner)) => Some(Carried::Across {
-                                declared,
-                                from,
-                                to,
-                                source: scratch.alloc(inner),
-                            }),
-                            _ => None,
-                        }
+            Carried::Across(across) => {
+                let declared = declared_inside(across.declared.view(types).body, inside);
+                match (declared, self.inside(across.source, inside, site)?) {
+                    (Some(declared), Some(inner)) => {
+                        Some(self.across(declared, across.from, across.to, inner, site)?)
                     }
-                    Sides::Open => None,
+                    _ => None,
                 }
             }
-        }
+        })
     }
 
     /// The modules a value carrying `carried` may be: a list's cells of several signatures carry
     /// their union, each member one cell's.
-    fn modules(&self, carried: Carried<'graph, 'p>) -> BumpVec<'p, Carried<'graph, 'p>> {
+    fn modules(
+        &mut self,
+        carried: Carried<'graph, 'p>,
+        site: Site,
+    ) -> Read<'graph, BumpVec<'p, Carried<'graph, 'p>>> {
         let (types, scratch) = (self.types, self.scratch);
         let mut modules = BumpVec::new_in(scratch);
         match carried {
@@ -363,23 +446,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 _ => modules.push(carried),
             },
             Carried::Tree(_) => modules.push(carried),
-            Carried::Across {
-                declared,
-                from,
-                to,
-                source,
-            } => {
-                for module in self.modules(*source) {
-                    modules.push(Carried::Across {
-                        declared,
-                        from,
-                        to,
-                        source: scratch.alloc(module),
-                    });
+            Carried::Across(across) => {
+                for module in self.modules(across.source, site)? {
+                    let module =
+                        self.across(across.declared, across.from, across.to, module, site)?;
+                    modules.push(module);
                 }
             }
         }
-        modules
+        Ok(modules)
     }
 }
 

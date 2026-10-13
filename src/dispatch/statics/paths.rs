@@ -27,7 +27,7 @@
 use crate::elaborate::{
     SignatureMember, applied_member, path_base, path_binding, signature_member,
 };
-use crate::knot::module::view::opaque_view_type;
+use crate::knot::module::view::opaque_view_types;
 use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
@@ -315,7 +315,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         ..
                     } => source
                         .digest()
-                        .and_then(|digest| opaque_view_type(application, digest, types, scratch))
+                        .and_then(|digest| {
+                            opaque_view_types(None, application, digest, types, scratch)
+                        })
+                        .map(|viewed| viewed.view)
                         .and_then(|view| read(view, &[])),
                     _ => None,
                 })
