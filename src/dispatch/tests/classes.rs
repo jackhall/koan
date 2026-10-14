@@ -201,6 +201,165 @@ fn a_value_the_body_received_passed_on_is_no_exit() {
     });
 }
 
+/// `SIG Holder`, `PEEK` and `KEEP`, registrations at a signature-typed and an `Any` slot, and `g`
+/// and `r`, functions at the same.
+const PASSERS: &str = "SIG Holder FOR ALL #[Elt] = #[(VAL held :Elt)]\n\
+                       EXPR #(PEEK h :Holder) -> Number = #(1)\n\
+                       EXPR #(KEEP x :Any) -> Number = #(1)\n\
+                       LET g = (FN :{x :Holder} -> Number = #(1))\n\
+                       LET r = (FN :{x :Any} -> Number = #(1))\n";
+
+/// The class of `f`, a body viewing its parameter `m`, then running `statements`.
+fn passing(statements: &str) -> String {
+    class(
+        &format!(
+            "{PASSERS}LET f = (FN :{{m :Counter, c :Number, k :Any}} -> Number = \
+             #((LET v = (m :| Counter)) {statements} (c)))"
+        ),
+        "f",
+    )
+}
+
+#[test]
+fn a_module_built_over_what_the_body_received_is_no_exit() {
+    let pack = "(MODULE pack OVER #[c] = (LET held = c))";
+    assert_eq!(passing(&format!("{pack} (PEEK pack)")), "sealed 1 caches");
+    assert_eq!(
+        passing(&format!("{pack} (g {{x = pack}})")),
+        "sealed 1 caches",
+        "a call by name"
+    );
+    assert_eq!(
+        passing(&format!("{pack} (k pack)")),
+        "sealed 1 caches",
+        "a callee the load cannot type"
+    );
+}
+
+#[test]
+fn a_module_capturing_what_the_body_minted_is_an_exit() {
+    assert_eq!(
+        passing("(MODULE pack OVER #[v] = (LET held = v)) (PEEK pack)"),
+        "porous 1"
+    );
+    assert_eq!(
+        passing("(MODULE pack OVER #[m] = (LET held = (m :| Counter))) (PEEK pack)"),
+        "porous 2",
+        "the module body mints"
+    );
+    assert_eq!(
+        loaded(
+            &format!(
+                "{COUNTER}{PASSERS}LET v = (ints :| Counter)\n\
+                 MODULE pack = (LET held = v)\nPRINT (PEEK pack)"
+            ),
+            |program| rendered(program.shape().class())
+        ),
+        "porous 0",
+        "a module reading the program's own binder, where the program is the frame body"
+    );
+}
+
+#[test]
+fn a_module_capturing_a_local_is_read_through_it() {
+    let peeked = |built: &str| passing(&format!("{built} (PEEK pack)"));
+    assert_eq!(
+        peeked("(LET d = c) (MODULE pack OVER #[d] = (LET held = d))"),
+        "sealed 1 caches",
+        "an alias of a parameter"
+    );
+    assert_eq!(
+        peeked("(LET d = 5) (MODULE pack OVER #[d] = (LET held = d))"),
+        "sealed 1 caches",
+        "a literal"
+    );
+    assert_eq!(
+        peeked(
+            "(MODULE inner OVER #[c] = (LET held = c)) \
+             (MODULE pack OVER #[inner] = (LET held = inner))"
+        ),
+        "sealed 1 caches",
+        "a module built over a parameter"
+    );
+    assert_eq!(
+        peeked(
+            "(MODULE inner OVER #[v] = (LET held = v)) \
+             (MODULE pack OVER #[inner] = (LET held = inner))"
+        ),
+        "porous 1",
+        "a module capturing a view"
+    );
+    assert_eq!(
+        peeked("(LET d = [c]) (MODULE pack OVER #[d] = (LET held = d))"),
+        "porous 1",
+        "a local the load cannot see through"
+    );
+    // A quantified function is bound as a module member, where nothing need fix its group.
+    let source = format!(
+        "{PASSERS}MODULE lib = (LET f = (FN FOR ALL #[Elt] :{{m :Counter, x :Elt}} -> Number = \
+         #((LET v = (m :| Counter)) (MODULE pack OVER #[x, Elt] = (LET held :Elt = x)) \
+         (PEEK pack) (1))))"
+    );
+    loaded(&format!("{COUNTER}{source}"), |program| {
+        let f = body(program, module_body(program, "lib"), "f");
+        assert_eq!(
+            rendered(f.class()),
+            "sealed 1 caches",
+            "a type capture of the body's own variable"
+        );
+    });
+}
+
+#[test]
+fn a_record_written_in_place_is_judged_field_by_field() {
+    assert_eq!(passing("(KEEP {a = c, b = m})"), "sealed 1 caches");
+    assert_eq!(passing("(KEEP {a = {b = m}})"), "sealed 1 caches", "nested");
+    assert_eq!(passing("(KEEP {a = v})"), "porous 1");
+    assert_eq!(
+        passing("(r {x = {a = m}})"),
+        "sealed 1 caches",
+        "a call by name, a literal nested"
+    );
+    assert_eq!(
+        passing("(LET q = {a = m}) (KEEP q)"),
+        "porous 1",
+        "a record bound by `LET` is read by its static type"
+    );
+}
+
+#[test]
+fn a_return_holds_nothing_minted_by_the_same_rule() {
+    let returning = |returns: &str, last: &str| {
+        class(
+            &format!(
+                "LET f = (FN :{{m :Counter, c :Number}} -> {returns} = \
+                 #((LET v = (m :| Counter)) {last}))"
+            ),
+            "f",
+        )
+    };
+    assert_eq!(returning("Counter", "(m)"), "sealed 1 caches", "received");
+    assert_eq!(
+        returning("Any", "(m.zero)"),
+        "sealed 1 caches",
+        "a builtin member read of a received value"
+    );
+    assert_eq!(
+        returning("Any", "(MODULE pack OVER #[c] = (LET held = c))"),
+        "sealed 1 caches",
+        "a binding last statement"
+    );
+    assert_eq!(
+        returning("Any", "(MODULE pack OVER #[c] = (LET held = c)) (pack)"),
+        "sealed 1 caches"
+    );
+    assert_eq!(returning("Any", "({a = c, b = m})"), "sealed 1 caches");
+    assert_eq!(
+        returning("Any", "(MODULE pack OVER #[v] = (LET held = v)) (pack)"),
+        "porous 1"
+    );
+}
+
 #[test]
 fn every_eval_is_an_exit() {
     assert_eq!(

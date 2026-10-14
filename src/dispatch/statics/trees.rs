@@ -53,6 +53,19 @@ pub(super) enum Scope<'graph> {
     },
 }
 
+/// The value slot `shape`'s last statement binds, where it binds one: a binding statement's value
+/// is what it binds.
+pub(super) fn last_binder(shape: &BodyShape<'_>) -> Option<Slot> {
+    let last = shape.body().len().checked_sub(1)?;
+    (0..shape.slots())
+        .map(|slot| Slot(slot as u32))
+        .find(|slot| {
+            shape.position_of(*slot).statement_index() == Some(last)
+                && !matches!(shape.slot_name(*slot), BinderSymbol::Type(_))
+                && shape.registration(*slot).is_none()
+        })
+}
+
 /// Where an expression is written: a part, or a whole node, whose site is its first part's address
 /// too, so the two are told apart.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,16 +116,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(None);
         };
         let scope = Scope::Chain(level);
-        // A binding statement's value is what it binds.
-        let bound = (0..shape.slots())
-            .map(|slot| Slot(slot as u32))
-            .find(|slot| {
-                shape.position_of(*slot).statement_index() == Some(last)
-                    && !matches!(shape.slot_name(*slot), BinderSymbol::Type(_))
-                    && shape.registration(*slot).is_none()
-            });
         let node = &shape.body()[last];
-        let tree = match bound {
+        let tree = match last_binder(shape) {
             Some(slot) => self.slot_tree(scope, slot, Site::of_node(node))?,
             None => {
                 let written = Written::Node(Site::of_node(node));

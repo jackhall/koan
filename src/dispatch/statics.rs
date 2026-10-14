@@ -107,11 +107,13 @@
 //! is exposing ([`porous_site`]). A body is [porous](BodyClass::Porous) where a porous value leaves
 //! it at a porous slot: its last statement at its declared return — a quote's code read as
 //! returning `Any` — or an argument of a call it makes into a frame: a registration, a function
-//! called by name, a surfaced head, a candidate the load cannot read, or any `EVAL`. An argument
-//! naming bare a value the body received — a parameter, a capture — or reading a member of one
-//! through the builtin `ATTR` holds nothing it minted, so passing it on is no exit
-//! ([`received`](Pass::received)). A builtin's native runs in the caller's step and enters no
-//! frame. Any other body is sealed, and caches where it is a callable or a quote's code that mints
+//! called by name, a surfaced head, a candidate the load cannot read, or any `EVAL`. A value that
+//! holds nothing the body minted is no exit, at a call or at the return
+//! ([`holds_nothing_minted`](Pass::holds_nothing_minted)): one the body received — a parameter or
+//! a capture named bare, or a member of one read through the builtin `ATTR` — a record literal
+//! written in place of such values, or a module whose content tree reaches no view, no closure, no
+//! module body holding a minting site and no leaf but a value the body received. A builtin's
+//! native runs in the caller's step and enters no frame. Any other body is sealed, and caches where it is a callable or a quote's code that mints
 //! at run ([`caching`]). The cell records each `:|` ascription and each component of nominal
 //! declarations the load leaves unknown as a **minting site**, which the run's doors check in
 //! debug builds.
@@ -141,9 +143,9 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    Coordinate, InstanceRead, Keyed, Listed, Narrowing, Position, Print, ShapeError, ShapeKind,
-    Site, Slot, Source, Static, StaticSolution, StaticType, Statics, SurfacedHead, Target, Tree,
-    UnitWork, UseStatics, Variable as Located, source_of,
+    Coordinate, InstanceRead, Keyed, Leaf, Listed, Narrowing, Position, Print, ShapeError,
+    ShapeKind, Site, Slot, Source, Static, StaticSolution, StaticType, Statics, SurfacedHead,
+    Target, Tree, UnitWork, UseStatics, Variable as Located, Within, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -208,6 +210,7 @@ pub(super) fn statics<'graph>(
         bound_at_binder: bump_set(scratch),
         holders: BumpVec::new_in(scratch),
         received: BumpVec::new_in(scratch),
+        module_mints: bump_table(scratch),
         heading: false,
     };
     pass.push(root, true);
@@ -337,6 +340,9 @@ struct Level<'p, 'graph> {
     closed: u32,
     /// The minting sites of the blocks and module bodies the shape runs, folded in.
     folded: u32,
+    /// Whether a block or module body the shape runs holds a minting site, a view over a closed
+    /// tree included.
+    minted_within: bool,
     /// Each `:|` ascription's site, beside its operand's content tree.
     trees: BumpVec<'p, (Site, &'graph Tree<'graph>)>,
     /// Each path the shape spells whose declared application names a lexical variable, by its
@@ -410,6 +416,9 @@ struct Pass<'p, 'x, 'graph> {
     holders: BumpVec<'p, (&'graph BodyShape<'graph>, &'graph BodyShape<'graph>)>,
     /// Each argument part passing on what its frame body received, beside the shape it sits in.
     received: BumpVec<'p, (&'graph BodyShape<'graph>, Site)>,
+    /// Each `MODULE` or `GROUP` body the pass typed, by address: whether it, or a block or module
+    /// body it runs, holds a minting site.
+    module_mints: BumpBackedMap<'p, usize, bool>,
     /// Whether the name the pass is about to read sits at a call's head.
     heading: bool,
 }
@@ -538,6 +547,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             minting: BumpVec::new_in(scratch),
             closed: 0,
             folded: 0,
+            minted_within: false,
             trees: BumpVec::new_in(scratch),
             throughs: BumpVec::new_in(scratch),
             rhs,
@@ -601,7 +611,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         self.resolve_spelled(level)?;
         self.returns(level)?;
-        self.return_exits(level);
+        self.return_exits(level)?;
 
         for (_, nested) in shape.nested_shapes() {
             if !done(nested) {
@@ -726,6 +736,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let visited = self.visit(level + 1, None);
         let popped = self.chain.pop().expect("the body was pushed");
         self.fold(level, &popped);
+        let mints = !popped.minting.is_empty() || popped.minted_within;
+        self.module_mints.insert(address(body), mints);
         let binders = popped.binders;
         visited?;
         let mut members = BumpVec::with_capacity_in(binders.len(), scratch);
@@ -809,6 +821,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let at = &mut self.chain[level];
         at.exits |= inner.exits;
         at.folded += inner.run_mints();
+        at.minted_within |= inner.minted_within || !inner.minting.is_empty();
     }
 
     /// The class of the shape at `level` where it is a frame body: porous where a porous value
@@ -844,14 +857,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Mark the shape at `level` porous where its return carries a porous value out: a callable
     /// whose last statement's value is porous and whose declared return — `Any` where the load did
     /// not type it — is too, and a quote's code whose last statement's value is porous, its
-    /// `EVAL`'s declared return unknown to the shape. A body that never arrives returns nothing.
-    fn return_exits(&mut self, level: usize) {
+    /// `EVAL`'s declared return unknown to the shape. A body that never arrives returns nothing,
+    /// and a value [holding nothing it minted](Self::returns_nothing_minted) carries nothing out.
+    fn return_exits(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
         let at = &self.chain[level];
         let Some(last) = at.statements.last().copied() else {
-            return;
+            return Ok(());
         };
         if last.upper == KType::NEVER.into() {
-            return;
+            return Ok(());
         }
         let types = self.types;
         let slot = match at.shape.kind() {
@@ -859,10 +873,53 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 (self.declared_return(level)).unwrap_or_else(|| KType::ANY.into())
             }
             ShapeKind::Code => KType::ANY.into(),
-            ShapeKind::Program | ShapeKind::Module | ShapeKind::Block => return,
+            ShapeKind::Program | ShapeKind::Module | ShapeKind::Block => return Ok(()),
         };
-        if porous_site(types, last) && porous_slot(types, slot) {
+        if porous_site(types, last)
+            && porous_slot(types, slot)
+            && !self.returns_nothing_minted(level, last)?
+        {
             self.chain[level].exits = true;
+        }
+        Ok(())
+    }
+
+    /// Whether the last statement of the shape at `level`, of the static type `last`, returns a
+    /// value [holding nothing](Self::holds_nothing_minted) the body minted. A binding statement
+    /// returns what it binds: a `MODULE` or `GROUP` body's tree, or an unannotated `LET`'s
+    /// right-hand side.
+    fn returns_nothing_minted(
+        &mut self,
+        level: usize,
+        last: Interval,
+    ) -> Result<bool, ShapeError<'graph>> {
+        let shape = self.chain[level].shape;
+        let node = shape
+            .body()
+            .last()
+            .expect("a body returning a value has a statement");
+        let Some(slot) = trees::last_binder(shape) else {
+            let form = of_node(shape, node);
+            return self.holds_nothing_minted(
+                level,
+                form,
+                Written::Node(Site::of_node(node)),
+                last,
+            );
+        };
+        if let Some(body) = shape.births(slot)
+            && body.kind() == ShapeKind::Module
+        {
+            let scope = trees::Scope::Chain(level);
+            let tree = self.slot_tree(scope, slot, Site::of_node(node))?;
+            return Ok(!self.reaches_minted(level, &tree));
+        }
+        match (shape.rhs(slot), shape.annotation(slot)) {
+            (Some(rhs), None) => match self.typed_part(level, rhs) {
+                Some(typed) => self.holds_nothing_minted_part(level, rhs, typed),
+                None => Ok(false),
+            },
+            _ => Ok(false),
         }
     }
 
@@ -2603,7 +2660,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             None => {
                 let typed = self.part(level, argument)?;
                 self.note_argument(level, argument);
-                if porous_site(self.types, typed) && !self.received_whole(level, argument) {
+                if porous_site(self.types, typed)
+                    && !self.holds_nothing_minted_part(level, argument, typed)?
+                {
                     self.chain[level].exits = true;
                 }
                 Ok(unknown())
@@ -2700,7 +2759,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// fit them; `Never` where a field never arrives. Only an exact callee is judged: one known at
     /// most may bind a function admitting more, or naming other parameters, so its call is at most
     /// its return. A quantified callee's record literal types each field that is an instance site
-    /// at its slot read through the group the other fields solve.
+    /// at its slot read through the group the other fields solve. A porous value at a porous slot
+    /// is an exit unless it [holds nothing](Self::holds_nothing_minted) the body minted.
     fn called(
         &mut self,
         level: usize,
@@ -2725,7 +2785,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 // A callee known at most may bind a function whose parameters admit more.
                 let inexact = !callee.exact
                     && porous_site(self.types, payload)
-                    && !self.received_whole(level, argument);
+                    && !self.holds_nothing_minted_part(level, argument, payload)?;
                 let Some(arguments) = self.laid_out(callee, payload) else {
                     return match callee.exact {
                         true => Err(self.never(callee, payload.upper, node)),
@@ -2755,9 +2815,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             self.chain[level].named.push((Site::of(argument), recorded));
         }
         let (types, scratch) = (self.types, self.scratch);
-        let received = self.received_fields(level, callee.names, argument);
+        let minted_free = self.minted_free_fields(level, callee.names, argument)?;
         self.note_argument(level, argument);
-        if self.slot_exits(callee.shape, arguments, received) {
+        if self.slot_exits(callee.shape, arguments, minted_free) {
             self.chain[level].exits = true;
         }
         let read = self.solved_from(callee.shape, arguments, contributions);
@@ -3044,6 +3104,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.note_received(level, part);
             }
         }
+        // Only a porous argument's judgement is read.
+        let mut minted_free = BumpVec::with_capacity_in(wanted.len(), scratch);
+        for (wanted, typed) in wanted.iter().zip(arguments.iter()) {
+            minted_free.push(match wanted {
+                Wanted::Evaluated(part) if porous_site(types, *typed) => {
+                    self.holds_nothing_minted_part(level, part, *typed)?
+                }
+                _ => false,
+            });
+        }
+        let minted_free = minted_free.leak();
         let shape = self.chain[level].shape;
         let index = shape
             .candidate_lists()
@@ -3186,7 +3257,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         // The narrowing law's unnarrowed load: see `unnarrowed`.
         #[cfg(test)]
         if UNNARROWED.with(std::cell::Cell::get) {
-            self.use_exits(level, arguments, received, &sites, &judged);
+            self.use_exits(level, arguments, minted_free, &sites, &judged);
             return Ok(unknown());
         }
         if judged.is_empty() {
@@ -3267,7 +3338,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let Candidate::One(coordinate) = chosen.candidate else {
                     unreachable!("an always candidate is no spread");
                 };
-                self.use_exits(level, arguments, received, &sites, &[chosen]);
+                self.use_exits(level, arguments, minted_free, &sites, &[chosen]);
                 self.made(level, node, list, &sites, &[chosen])?;
                 if !self.unfilled {
                     let mut points = BumpVec::new_in(scratch);
@@ -3296,7 +3367,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             );
             self.chain[level].uses[index].narrowing = Narrowing::Kept(kept);
         }
-        self.use_exits(level, arguments, received, &sites, &judged);
+        self.use_exits(level, arguments, minted_free, &sites, &judged);
         self.made(level, node, list, &sites, &judged)?;
         // A lone closed signature head, with no hole skipped, is the only list that may admit, and
         // every function in it returns retyped to the head's return.
@@ -3322,12 +3393,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// candidate that is not a builtin — a builtin's native runs in the caller's step — whose slot
     /// at that argument is porous, or which the load cannot read: an unknown one, a spread, a hole
     /// or a surfaced key. Each instance argument is read at the instance its candidate makes. An
-    /// argument the frame body [received](Self::received) is no exit.
+    /// argument `minted_free` marks as [holding nothing minted](Self::holds_nothing_minted) is no
+    /// exit.
     fn use_exits(
         &mut self,
         level: usize,
         arguments: &[Interval],
-        received: &[bool],
+        minted_free: &[bool],
         sites: &[InstanceArgument<'graph>],
         kept: &[Judgement<'_>],
     ) {
@@ -3342,9 +3414,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 here[site.position] = *instance;
             }
             match (judgement.candidate, judgement.known.shape()) {
-                (Candidate::One(_), Some(shape)) => self.slot_exits(shape, &here, received),
-                _ => (here.iter().zip(received))
-                    .any(|(typed, received)| !received && porous_site(self.types, *typed)),
+                (Candidate::One(_), Some(shape)) => self.slot_exits(shape, &here, minted_free),
+                _ => (here.iter().zip(minted_free))
+                    .any(|(typed, free)| !free && porous_site(self.types, *typed)),
             }
         });
         if exits {
@@ -3352,13 +3424,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// Whether some argument of the static types `arguments`, not one the frame body `received`, is
-    /// porous where `shape`'s slot at it is too.
+    /// Whether some argument of the static types `arguments`, not one `minted_free` marks as holding
+    /// nothing the frame body minted, is porous where `shape`'s slot at it is too.
     fn slot_exits(
         &self,
         shape: DeclaredType<Parametric>,
         arguments: &[Interval],
-        received: &[bool],
+        minted_free: &[bool],
     ) -> bool {
         let types = self.types;
         let mut slots = BumpVec::new_in(self.scratch);
@@ -3366,8 +3438,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             DeclaredType::Type(shape) => slots.extend(shape_slots(shape, types)),
             DeclaredType::Scheme(scheme) => slots.extend(scheme_slots(scheme, types)),
         }
-        (slots.iter().zip(arguments).zip(received)).any(|((slot, typed), received)| {
-            !received && porous_site(types, *typed) && porous_slot(types, *slot)
+        (slots.iter().zip(arguments).zip(minted_free)).any(|((slot, typed), free)| {
+            !free && porous_site(types, *typed) && porous_slot(types, *slot)
         })
     }
 
@@ -3376,8 +3448,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// `ATTR` alone — which cannot hold what the body mints, so passing it on is no exit
     /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)).
     fn received(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> bool {
+        self.received_form(level, of_part(self.chain[level].shape, part))
+    }
+
+    /// [`received`](Self::received) over what the evaluator reads as `form`.
+    fn received_form(&self, level: usize, form: Form<'graph>) -> bool {
         let shape = self.chain[level].shape;
-        let name = match of_part(shape, part) {
+        let name = match form {
             Form::Name(name) => name,
             // A registration at `ATTR`'s key may hand back anything its body reaches.
             Form::Member { list, operand, .. } => {
@@ -3400,29 +3477,153 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// For each of `names`, the slots of a call by name, whether `argument` passes it a value the
-    /// frame body at `level` [received](Self::received): a record literal field by field, any
-    /// other argument whole.
-    fn received_fields(
-        &self,
+    /// The static type the pass recorded for `part` of the shape at `level`, where it typed it.
+    fn typed_part(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
+        let site = Site::of(part);
+        (self.chain[level].parts.iter().rev())
+            .find(|(at, _)| *at == site)
+            .map(|(_, typed)| *typed)
+    }
+
+    /// Whether the value `form`, written as `written` in the shape at `level` and of the static
+    /// type `typed`, holds nothing its frame body minted: a value it
+    /// [received](Self::received_form), a record literal written in place of such values, or a
+    /// module whose content tree [reaches](Self::reaches_minted) nothing minted
+    /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)). A record bound by `LET` is
+    /// read by its static type alone.
+    fn holds_nothing_minted(
+        &mut self,
+        level: usize,
+        form: Form<'graph>,
+        written: Written,
+        typed: Interval,
+    ) -> Result<bool, ShapeError<'graph>> {
+        if self.received_form(level, form) {
+            return Ok(true);
+        }
+        if let Form::Leaf(ExpressionPart::RecordLiteral(fields)) = form {
+            for (_, value) in fields.iter() {
+                let Some(typed) = self.typed_part(level, value) else {
+                    return Ok(false);
+                };
+                if !self.holds_nothing_minted_part(level, value, typed)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        let (types, scratch) = (self.types, self.scratch);
+        if bound_above(types, scratch, typed.upper).kind_of(types) != KKind::Signature {
+            return Ok(false);
+        }
+        let tree = self.tree_form(trees::Scope::Chain(level), form, written, None)?;
+        Ok(!self.reaches_minted(level, &tree))
+    }
+
+    /// [`holds_nothing_minted`](Self::holds_nothing_minted) over the part `part`.
+    fn holds_nothing_minted_part(
+        &mut self,
+        level: usize,
+        part: &'graph ExpressionPart<'graph>,
+        typed: Interval,
+    ) -> Result<bool, ShapeError<'graph>> {
+        let form = of_part(self.chain[level].shape, part);
+        self.holds_nothing_minted(level, form, Written::Part(Site::of(part)), typed)
+    }
+
+    /// Whether the content tree `tree`, read in the shape at `level`, reaches content its frame
+    /// body minted: a view, open or closed, since a closed one may still mint past the tree's
+    /// horizon; a closure, whose type or captures may name it; a module body holding a minting
+    /// site, in itself or in a block or module body it runs, or capturing what reaches it; or a
+    /// leaf on anything but a value the frame body received. A leaf reading a member, or keyed on
+    /// an unfolded call, reaches it too: the tree does not say the member read was the builtin's.
+    fn reaches_minted(&self, level: usize, tree: &Tree<'graph>) -> bool {
+        let frame = self.frame_level(level);
+        let mut stack = BumpVec::new_in(self.scratch);
+        stack.push(*tree);
+        while let Some(tree) = stack.pop() {
+            match tree {
+                Tree::Digest(_) => {}
+                Tree::Retyped { source, .. } => stack.push(*source),
+                Tree::Body {
+                    shape, captures, ..
+                } => {
+                    let mints = self.module_mints.get(&address(shape)).copied();
+                    // A read of the program's top level is no capture the tree holds; it is the
+                    // program's own where the program is the frame body.
+                    let reads_top = frame == 0
+                        && (0..shape.capture_count())
+                            .any(|at| shape.top_capture(CaptureSlot(at as u32)).is_some());
+                    if mints != Some(false) || reads_top {
+                        return true;
+                    }
+                    stack.extend(captures.iter().map(|(_, at)| *at));
+                }
+                Tree::View { .. } | Tree::Knot { .. } | Tree::Leaf(Leaf::Unnamed(_)) => {
+                    return true;
+                }
+                Tree::Leaf(Leaf::Bound {
+                    binder,
+                    chain,
+                    within,
+                    ..
+                }) => {
+                    if !chain.is_empty() || matches!(within, Some(Within::Call(_))) {
+                        return true;
+                    }
+                    let at = (0..=level)
+                        .rev()
+                        .find(|at| std::ptr::eq(self.chain[*at].shape, binder.shape));
+                    let received = at.is_some_and(|at| {
+                        at < frame
+                            || (at == frame
+                                && binder.shape.position_of(binder.slot) == Position::PARAMETER)
+                    });
+                    if !received {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// For each of `names`, the slots of a call by name, whether `argument` passes it a value that
+    /// [holds nothing](Self::holds_nothing_minted) the frame body at `level` minted: a record
+    /// literal field by field, any other argument whole.
+    fn minted_free_fields(
+        &mut self,
         level: usize,
         names: &[BinderSymbol],
         argument: &'graph ExpressionPart<'graph>,
-    ) -> &'p [bool] {
+    ) -> Result<&'p [bool], ShapeError<'graph>> {
         let scratch = self.scratch;
+        let mut free = BumpVec::with_capacity_in(names.len(), scratch);
         match argument {
             ExpressionPart::RecordLiteral(fields) => {
-                scratch.alloc_slice_fill_iter(names.iter().map(|name| {
-                    (fields.iter()).any(|(field, value)| {
-                        field.symbol() == name.symbol() && self.received(level, value)
-                    })
-                }))
+                for name in names {
+                    let value = (fields.iter())
+                        .find(|(field, _)| field.symbol() == name.symbol())
+                        .map(|(_, value)| value);
+                    let typed =
+                        value.and_then(|value| Some((value, self.typed_part(level, value)?)));
+                    free.push(match typed {
+                        Some((value, typed)) => {
+                            self.holds_nothing_minted_part(level, value, typed)?
+                        }
+                        None => false,
+                    });
+                }
             }
             _ => {
-                let whole = self.received(level, argument);
-                scratch.alloc_slice_fill_iter(names.iter().map(|_| whole))
+                let whole = match self.typed_part(level, argument) {
+                    Some(typed) => self.holds_nothing_minted_part(level, argument, typed)?,
+                    None => false,
+                };
+                free.resize(names.len(), whole);
             }
         }
+        Ok(free.leak())
     }
 
     /// Note, for the run's exits, each value `argument` passes on that the frame body at `level`
@@ -3438,17 +3639,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             _ if self.received(level, argument) => self.note_received(level, argument),
             _ => {}
-        }
-    }
-
-    /// Whether every value `argument` passes the frame body at `level` received: one named bare,
-    /// or a record literal of such.
-    fn received_whole(&self, level: usize, argument: &'graph ExpressionPart<'graph>) -> bool {
-        match argument {
-            ExpressionPart::RecordLiteral(fields) => {
-                (fields.iter()).all(|(_, value)| self.received(level, value))
-            }
-            _ => self.received(level, argument),
         }
     }
 

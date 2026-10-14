@@ -112,6 +112,18 @@ fn hosted_peeks() -> String {
     )
 }
 
+/// `WRAP`, a loop viewing the module it passes on and handing [`PEEK`] a module built over each
+/// link: sealed, since the module captures only what the loop received.
+fn wrapped_peeks() -> String {
+    format!(
+        "{PEEK}EXPR #(WRAP m :Counter link :Link) -> Str = \
+         #((LET v = (m :| Counter)) (MODULE h OVER #[link] = (LET held = link)) \
+         (LET seen = (PEEK h)) (WRAP m (ATTR link next)))\n\
+         EXPR #(WRAP m :Counter end :Null) -> Str = #(\"done\")\n\
+         PRINT (WRAP ints chain)"
+    )
+}
+
 /// [`INVARIANT`] over `ints`.
 fn invariant_loop() -> String {
     format!("{INVARIANT}PRINT (COUNTDOWN ints chain)")
@@ -169,6 +181,29 @@ fn a_shares_call_with_new_content_each_call_holds_its_hosts_region_flat() {
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
     // The host's scratch grows with the loop, as its bytes do; its region does not.
     assert_eq!(few.tiers.region, many.tiers.region);
+}
+
+#[test]
+fn a_loop_passing_on_a_module_built_over_its_link_caches_and_holds_flat() {
+    let source = wrapped_peeks();
+    assert_eq!(caching(&source), 2, "`WRAP` and `PEEK` cache");
+    let ran_adopting = |depth: u32| {
+        crate::values::ADOPTED.with(|adopted| adopted.set(0));
+        let ran = ran(depth, &source);
+        (ran, crate::values::ADOPTED.with(Cell::get))
+    };
+    let [(few, few_adopted), (many, many_adopted)] = DEPTHS.map(ran_adopting);
+    assert_eq!((few.printed.as_str(), few.root), ("done", 0));
+    // `PEEK`'s warm tier grows with the loop, as in `hosted_peeks`; the region does not.
+    assert_eq!(few.tiers.region, many.tiers.region);
+    assert!(few_adopted > 0, "the loop's exits adopt");
+    // A hop's adoptions at the greater depth cost no more than at the lesser.
+    assert!(
+        many_adopted * DEPTHS[0] as usize <= few_adopted * DEPTHS[1] as usize,
+        "adoptions {few_adopted} over {} hops against {many_adopted} over {}",
+        DEPTHS[0],
+        DEPTHS[1]
+    );
 }
 
 #[test]
@@ -458,6 +493,7 @@ fn laid_through_caching_chains() {
     println!("| program | body | depth | scratch nodes | warm nodes |\n|---|---|---|---|---|");
     let programs = [
         ("hosted peeks", hosted_peeks()),
+        ("wrapped peeks", wrapped_peeks()),
         ("invariant loop", invariant_loop()),
         ("parking loop", PARKING_LOOP.to_string()),
         ("varying loop", varying_loop()),
