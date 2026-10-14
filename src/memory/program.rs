@@ -46,12 +46,15 @@ impl ProgramStorage {
 /// types instead of in prose. The doors' *products* stay covariant, so program-hosted AST still
 /// reaches its readers by ordinary subtyping.
 #[derive(Clone, Copy)]
-pub struct ProgramBrand<'graph>(Writer<'graph>, PhantomData<fn(&'graph ()) -> &'graph ()>);
+pub struct ProgramBrand<'graph>(
+    Writer<'graph, 'graph>,
+    PhantomData<fn(&'graph ()) -> &'graph ()>,
+);
 
 impl<'graph> ProgramBrand<'graph> {
     /// The plain write capability underneath, at `'graph` — where the AST, the builtin table and
     /// the program's record all rest, in the one store `cellgraph` owns.
-    pub fn writer(self) -> Writer<'graph> {
+    pub fn writer(self) -> Writer<'graph, 'graph> {
         self.0
     }
 }

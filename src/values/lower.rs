@@ -3,7 +3,7 @@
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::parse::{ExpressionPart, KLiteral};
 
-use super::{Dict, Key, Knotted, List, Record, Types, Value, text};
+use super::{Chain, Dict, Key, Knotted, List, Record, Value, text};
 
 impl<'cell, X: Knotted> Value<'cell, X> {
     /// The value a region-pure part denotes: a scalar or string literal, or a container literal
@@ -12,9 +12,9 @@ impl<'cell, X: Knotted> Value<'cell, X> {
     /// quote, whose code binds its `$` names where it is written — anywhere inside it; the part is
     /// checked whole before anything is written, so a refusal leaves the region untouched.
     pub fn lower_part(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         part: &ExpressionPart<'_>,
-        types: &Types<'_, 'cell>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Value<'cell, X>> {
         lowers(part).then(|| lower(writer, part, types, scratch))
@@ -49,9 +49,9 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
 
 /// The value of a part [`lowers`] took.
 fn lower<'cell, X: Knotted>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     part: &ExpressionPart<'_>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Value<'cell, X> {
     match part {

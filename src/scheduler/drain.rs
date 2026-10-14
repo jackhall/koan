@@ -74,6 +74,49 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     }
 }
 
+/// The most any step has left in each of its cell's type tiers: what a test reads to see a loop's
+/// tiers hold flat across hops.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Tiers {
+    /// Nodes in the write home's region branch.
+    pub region: usize,
+    /// Nodes in the scratch branch.
+    pub scratch: usize,
+    /// Nodes in the lent branch.
+    pub lent: usize,
+    /// Verdicts recorded in the lent branch.
+    pub lent_verdicts: usize,
+    /// Bytes the scratch bump has handed out.
+    pub scratch_bytes: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The [`Tiers`] every step has left so far. Tests reset it.
+    pub(crate) static TIERS: std::cell::Cell<Tiers> = const {
+        std::cell::Cell::new(Tiers {
+            region: 0,
+            scratch: 0,
+            lent: 0,
+            lent_verdicts: 0,
+            scratch_bytes: 0,
+        })
+    };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The caching body the running step runs, by its shape's address: set by the step, taken by
+    /// the drain as the step returns.
+    pub(crate) static CACHING: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+
+    /// Per caching body, by its shape's address: the nodes its steps laid in the scratch branch,
+    /// and in the lent branch. Tests reset it.
+    pub(crate) static LAID: std::cell::RefCell<std::collections::BTreeMap<usize, (usize, usize)>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
 /// The drain: a ready stack and a request buffer, made per call over a graph it borrows.
 ///
 /// A view dropped before its root work ended abandons what is on its stack: the graph keeps the
@@ -318,6 +361,14 @@ where
                         }
                     }
                 };
+                #[cfg(test)]
+                let before = {
+                    let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
+                        branch.map_or(0, crate::type_lattice::Branch::len)
+                    };
+                    let lent = context.lent_scratch().and_then(|(_, header)| header.get());
+                    (len(context.scratch_header().get()), len(lent))
+                };
                 let step = step(Step::new(
                     context,
                     type_root,
@@ -326,6 +377,35 @@ where
                     state,
                     scratch,
                 ));
+                #[cfg(test)]
+                {
+                    let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
+                        branch.map_or(0, crate::type_lattice::Branch::len)
+                    };
+                    let lent = context.lent_scratch().and_then(|(_, header)| header.get());
+                    if let Some(shape) = CACHING.take() {
+                        let scratch = len(context.scratch_header().get()).saturating_sub(before.0);
+                        let warm = len(lent).saturating_sub(before.1);
+                        LAID.with(|laid| {
+                            let mut laid = laid.borrow_mut();
+                            let entry = laid.entry(shape).or_default();
+                            *entry = (entry.0 + scratch, entry.1 + warm);
+                        });
+                    }
+                    TIERS.with(|tiers| {
+                        let most = tiers.get();
+                        tiers.set(Tiers {
+                            region: most.region.max(len(context.header().get())),
+                            scratch: most.scratch.max(len(context.scratch_header().get())),
+                            lent: most.lent.max(len(lent)),
+                            lent_verdicts: (most.lent_verdicts)
+                                .max(lent.map_or(0, crate::type_lattice::Branch::verdict_count)),
+                            scratch_bytes: most
+                                .scratch_bytes
+                                .max(context.scratch_writer().in_use()),
+                        });
+                    });
+                }
                 (step, provenance)
             })
             .map_err(|_| DrainStalled::Unenterable)
@@ -390,15 +470,16 @@ where
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and
 /// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose spawner is above it,
 /// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
-fn wake<'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>(
-    context: &mut Context<'graph, 'step, 'here, 'scratch, B>,
+fn wake<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     type_root: &'graph Root<'graph>,
     dormant: Dormant<'graph, B::Birth>,
     born: Born,
 ) -> Result<StateAt<'graph, 'here, B>, RedeemError>
 where
-    'graph: 'step + 'here,
+    'graph: 'step + 'here + 'lent,
     'here: 'scratch,
+    'lent: 'scratch,
     Erased<'graph, B::Birth>: Copy,
 {
     let carrier = context.redeem(dormant)?;

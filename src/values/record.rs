@@ -7,7 +7,7 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::KType;
 
-use super::{Knotted, Link, Nothing, Types, Value, Weight, record_type};
+use super::{Chain, Knotted, Link, Nothing, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
 /// nominal identity, only its fields; equality over two is blind to the order they were written in.
@@ -27,9 +27,9 @@ impl<'cell, X: Knotted> Record<'cell, X> {
     /// each field's type in the order the fields were written; the sort and the field-type run are
     /// staged over `scratch`.
     pub fn new(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         fields: &[(BinderSymbol, Value<'cell, X>)],
-        types: &Types<'_, 'cell>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
         let ktype = record_type(
@@ -45,7 +45,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
     /// Lay down `fields` as [`new`](Self::new) does, under `ktype`, a type the caller knows they
     /// satisfy — a view's rebuilt record, at the type its slot declares — so no type is interned.
     pub fn typed(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         fields: &[(BinderSymbol, Value<'cell, X>)],
         ktype: KType,
         scratch: BumpAllocator<'_>,
@@ -59,7 +59,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
     /// A record over sorted names and aligned value cells already resident in `writer`'s region
     /// under `ktype`, weighed as [`new`](Self::new) weighs them — a retyped data node's arm.
     pub(crate) fn weighed(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         names: &'cell [Symbol],
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
@@ -76,7 +76,7 @@ impl<'cell, X: Knotted> Record<'cell, X, Link<'cell, X>> {
     /// Lay down `fields`, whose names are distinct, sorted by symbol, as a knot's data node under
     /// the finished memo `ktype`; the sort is staged over `scratch`.
     pub fn linked(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         fields: &[(BinderSymbol, Link<'cell, X>)],
         ktype: KType,
         scratch: BumpAllocator<'_>,
@@ -117,7 +117,7 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
     /// A record over sorted names and aligned cells already resident in `writer`'s region, under a
     /// type and weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_runs(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         names: &'cell [Symbol],
         cells: &'cell [C],
         ktype: KType,
@@ -136,7 +136,7 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
     }
 
     /// The same fields under `ktype` — an ascription's retype, sharing both runs.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
+    pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
         Self::from_runs(writer, self.names, self.cells, ktype, self.weight)
     }
 

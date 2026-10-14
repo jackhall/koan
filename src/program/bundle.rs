@@ -11,7 +11,7 @@ use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, StepBundle};
 use crate::scope::{BodyShape, Site};
-use crate::type_lattice::{KType, Root};
+use crate::type_lattice::{Halves, KType, Root};
 use crate::values::{Half, TypeHeader, Types, copy_severed};
 
 use super::body::Runner;
@@ -50,21 +50,25 @@ pub enum KBirth<'graph, 'cell> {
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     /// A frame's tail hands its last statement over with the frame's `contract`, which the
-    /// evaluation then owes its value.
+    /// evaluation then owes its value. `routes` says it runs in the own body of a caching frame
+    /// that holds its scratch, which it then interns through: set on every evaluation and block
+    /// such a frame's body spawns, and cleared on the tail's hand-off.
     Evaluate {
         program: &'graph Program<'graph>,
         node: Evaluated<'graph>,
         view: KActivationView<'graph, 'cell>,
         contract: Option<Contract>,
+        routes: bool,
     },
     /// A block — a synthesized block part's shape, or a `USING … SCOPE` body — run beside the
     /// view of the activation it sits in, its last statement's value its own; a `USING` body's
-    /// parameters bound to what `module` surfaces.
+    /// parameters bound to what `module` surfaces. `routes` as an evaluation's.
     Block {
         program: &'graph Program<'graph>,
         shape: &'graph BodyShape<'graph>,
         enclosing: KActivationView<'graph, 'cell>,
         module: Option<KValue<'graph, 'cell>>,
+        routes: bool,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
     /// work to read a top-level binding through.
@@ -162,8 +166,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     /// branch yet, and merges it where it has — a tenant, whose branch is its host's. A copied one
     /// is rebuilt, each type its values carry adopted from the home's branch.
     fn cross<'cell>(
-        writer: Writer<'cell>,
-        header: Header<'graph, 'cell, TypeHeader>,
+        writer: Writer<'cell, '_>,
+        header: Header<'graph, 'cell, '_, TypeHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, TypeHeader>,
         born: Born,
         type_root: &'graph Root<'graph>,
@@ -173,7 +177,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
     {
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
-                let types = Types::new(type_root, Half::of(writer, header));
+                let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
                 home.read(|header, _| match born {
                     Born::Child => types.link(header.into_value()),
                     Born::Hop | Born::Left => types.link_or_merge(header.into_value()),
@@ -195,7 +199,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     contributed,
                     owed,
                 } => {
-                    let types = Types::new(type_root, Half::of(writer, header));
+                    let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
                     let [callee, arguments] = copy_severed::<_, KnottedFamily, 2>(
                         writer,
                         &types,
@@ -217,7 +221,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     offered,
                     contract,
                 } => {
-                    let types = Types::new(type_root, Half::of(writer, header));
+                    let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
                     let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
                         writer,
                         &types,

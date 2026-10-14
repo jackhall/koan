@@ -70,7 +70,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
-    self, Circular, ConstructionRefused, ContentDigest, KeyRejected, Resolved, Seen, Types, Value,
+    self, Chain, Circular, ConstructionRefused, ContentDigest, KeyRejected, Resolved, Seen, Value,
     ValueCarrier, ValueFamily, Weight,
 };
 
@@ -198,7 +198,7 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
     /// digests as its overload, never through here.
     fn content_parts<'a>(
         self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -219,7 +219,7 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
     /// the door at its memo.
     fn content(
         self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -270,7 +270,7 @@ impl values::Knotted for Knotted<'_, '_> {
     /// builtin holds none.
     fn held<'a>(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -290,7 +290,7 @@ impl values::Knotted for Knotted<'_, '_> {
     /// are tied into.
     fn digest_held(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -349,10 +349,10 @@ impl values::Knotted for Knotted<'_, '_> {
 /// included — restamped in `writer`'s region at the type it is seen at, or a module's member. `None` for any other value, or a name
 /// `source` does not show.
 fn field<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     source: KValue<'graph, 'cell>,
     name: BinderSymbol,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'cell>> {
     match source.knot_member() {
@@ -413,11 +413,11 @@ pub enum Untieable<'x> {
 impl<'x> Untieable<'x> {
     /// The refusal as an error value's message, with its names spelled through `symbols` and its
     /// types through `types`.
-    pub fn display<'d, 'g, 'run>(
+    pub fn display<'d, 'g, 'run, 'p, 'reg>(
         &'d self,
         symbols: &'d SymbolInterner,
-        types: &'d Types<'g, 'run>,
-    ) -> UntieableDisplay<'d, 'x, 'g, 'run> {
+        types: &'d Chain<'g, 'run, 'p, 'reg, '_>,
+    ) -> UntieableDisplay<'d, 'x, 'g, 'run, 'p, 'reg> {
         UntieableDisplay {
             error: self,
             symbols,
@@ -427,13 +427,13 @@ impl<'x> Untieable<'x> {
 }
 
 /// An [`Untieable`] beside the interner and registry it renders through.
-pub struct UntieableDisplay<'d, 'x, 'g, 'run> {
+pub struct UntieableDisplay<'d, 'x, 'g, 'run, 'p, 'reg> {
     error: &'d Untieable<'x>,
     symbols: &'d SymbolInterner,
-    types: &'d Types<'g, 'run>,
+    types: &'d Chain<'g, 'run, 'p, 'reg, 'd>,
 }
 
-impl fmt::Display for UntieableDisplay<'_, '_, '_, '_> {
+impl fmt::Display for UntieableDisplay<'_, '_, '_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let ktype = |handle: &KType| display_name(*handle, self.types, self.symbols);
@@ -469,11 +469,11 @@ impl fmt::Display for UntieableDisplay<'_, '_, '_, '_> {
 
 /// A construction the construction rule refused, as an error value's message: what a tie of a
 /// data member and an evaluated construction both report.
-pub fn refused_construction<'d, 'g, 'run>(
+pub fn refused_construction<'d, 'g, 'run, 'p, 'reg>(
     refused: &'d ConstructionRefused,
     symbols: &'d SymbolInterner,
-    types: &'d Types<'g, 'run>,
-) -> RefusedConstruction<'d, 'g, 'run> {
+    types: &'d Chain<'g, 'run, 'p, 'reg, '_>,
+) -> RefusedConstruction<'d, 'g, 'run, 'p, 'reg> {
     RefusedConstruction {
         refused,
         symbols,
@@ -482,13 +482,13 @@ pub fn refused_construction<'d, 'g, 'run>(
 }
 
 /// A [`ConstructionRefused`] beside the interner and registry it renders through.
-pub struct RefusedConstruction<'d, 'g, 'run> {
+pub struct RefusedConstruction<'d, 'g, 'run, 'p, 'reg> {
     refused: &'d ConstructionRefused,
     symbols: &'d SymbolInterner,
-    types: &'d Types<'g, 'run>,
+    types: &'d Chain<'g, 'run, 'p, 'reg, 'd>,
 }
 
-impl fmt::Display for RefusedConstruction<'_, '_, '_> {
+impl fmt::Display for RefusedConstruction<'_, '_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ktype = |handle: &KType| display_name(*handle, self.types, self.symbols);
         match self.refused {

@@ -39,7 +39,11 @@ impl BuiltinFunction {
 /// The builtin door: the overload `id` of the embedder's native table, registered at the expression
 /// shape `ktype`, laid down with its node as a one-node knot in program storage, which `writer`
 /// fills.
-pub fn builtin<'graph>(writer: Writer<'graph>, ktype: KType, id: u32) -> Knotted<'graph, 'graph> {
+pub fn builtin<'graph>(
+    writer: Writer<'graph, '_>,
+    ktype: KType,
+    id: u32,
+) -> Knotted<'graph, 'graph> {
     let record = resident(writer, BuiltinFunction { ktype, id });
     let knot = KnotPlan::new(1).tie(writer, |_| Node::Builtin(record));
     Knotted::of(knot, 0)

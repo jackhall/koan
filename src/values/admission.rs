@@ -19,14 +19,14 @@ use crate::type_lattice::{
     admits_with, satisfied_by, substitute_quantified,
 };
 
-use super::{Knotted, Types, Value, WorkingPart};
+use super::{Chain, Knotted, Value, WorkingPart};
 
 /// Whether `slot` takes `value`: *fits* over the value's memoized type — a quantified callable's
 /// scheme fitting a function slot through an instance.
 pub fn satisfies<X: Knotted>(
     slot: KType,
     value: &Value<'_, X>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
     satisfied_by(types, scratch, slot, value.ktype())
@@ -63,7 +63,7 @@ pub enum ConstructionRefused<T = KType> {
 /// Over a concrete payload the identity is concrete, and over a static type — which may hold a
 /// lexical variable — it may hold one too.
 pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     head: KType,
     payload: T,
@@ -118,7 +118,7 @@ pub fn construction<T: TypeHandle + From<KType> + Into<DeclaredType<Parametric>>
 /// `Any`. `None` for an identity with none: an opaque view's carrier, a family that constructs
 /// nothing.
 pub fn representation(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     identity: KType,
 ) -> Option<KType> {
@@ -156,7 +156,7 @@ const FAMILY: &str = "a family's representation reads only its own parameters";
 /// Whether a construction through `head` solves its identity from its payload — `head` names a
 /// family with a representation — rather than taking `head` itself: a newtype, or a head that
 /// constructs nothing, which the check then refuses. The tie reads the latter two as a cut.
-pub fn solves_identity(types: &Types<'_, '_>, head: KType) -> bool {
+pub fn solves_identity(types: &Chain<'_, '_, '_, '_, '_>, head: KType) -> bool {
     matches!(
         types.member_schema(head),
         Some(NodeSchema::TypeConstructor {
@@ -184,7 +184,7 @@ pub enum SealRefused {
 /// construction to check against, so what is checked is the source's own binding. Sealing happens
 /// where a view is built, never where a koan program writes a construction.
 pub fn sealing(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     carrier: KType,
     witness: KType,
@@ -207,7 +207,7 @@ pub fn sealing(
 /// type token `ProperType`, the kind a type name denotes.
 pub fn part_ktype(
     part: &ExpressionPart<'_>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KType> {
     let element =
@@ -246,7 +246,7 @@ pub fn part_ktype(
 
 fn joined<H: TypeHandle + From<KType>>(
     items: impl Iterator<Item = H>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> H {
     // The canonical union of two types is their join where both are concrete, and keeps a
@@ -260,7 +260,7 @@ fn joined<H: TypeHandle + From<KType>>(
 /// none. Every list's memo is derived here — [`List::new`](super::List::new)'s over its cells, and
 /// the tie's over a data node's staged cells.
 pub fn list_type<H: TypeHandle + From<KType>>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     elements: impl Iterator<Item = H>,
 ) -> H {
@@ -270,7 +270,7 @@ pub fn list_type<H: TypeHandle + From<KType>>(
 /// The type a dict over entries of key and value types `entries` memoizes: the dict of each side's
 /// join. Every dict's memo is derived here, over the entries a repeated key leaves.
 pub fn dict_type<H: TypeHandle + From<KType>>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     entries: impl Iterator<Item = (H, H)>,
 ) -> H {
@@ -287,7 +287,7 @@ pub fn dict_type<H: TypeHandle + From<KType>>(
 /// The type a record over `fields` memoizes: the record of each field's type. Every record's memo
 /// is derived here.
 pub fn record_type<H: TypeHandle>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     fields: impl ExactSizeIterator<Item = (BinderSymbol, H)>,
 ) -> H {
@@ -302,7 +302,11 @@ pub fn record_type<H: TypeHandle>(
 /// slot takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its
 /// bound takes. A function, nominal, carrier, signature, shape, constructor-application, deferred
 /// or sibling slot admits no raw part — only a resolved value.
-pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &Types<'_, '_>) -> bool {
+pub fn admits_part(
+    slot: Parametric,
+    part: &ExpressionPart<'_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
+) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
         TypeNode::Quantified { bound, .. } | TypeNode::Lexical { bound, .. } => {
@@ -386,7 +390,7 @@ pub fn admits_part(slot: Parametric, part: &ExpressionPart<'_>, types: &Types<'_
 pub fn admits<X: Knotted>(
     slot: KType,
     part: &WorkingPart<'_, '_, X>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
     match part {

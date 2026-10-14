@@ -100,7 +100,7 @@ thread_local! {
 }
 
 /// A root work over the top level's resting view: whether module `m` satisfies signature `Mover`.
-fn ascribing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn ascribing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);

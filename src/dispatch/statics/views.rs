@@ -30,7 +30,7 @@ use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
 };
 use crate::values::digest::Operator;
-use crate::values::{Types, applications, retyped_to};
+use crate::values::{Chain, applications, retyped_to};
 
 use super::trees::Scope;
 use super::{Pass, address};
@@ -514,7 +514,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
 /// `declared` read under `from` on a view's source side and `to` on its own.
 fn sides(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     declared: DeclaredType<Parametric>,
     from: Substitution<'_>,
@@ -565,7 +565,7 @@ fn declared_inside(
 fn slot_type(
     held: KType,
     name: ValueSymbol,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KType> {
     let read = match module_schema(held, types) {
@@ -583,14 +583,17 @@ fn slot_type(
 }
 
 /// Whether the load re-views a nested module whose type is `held` as the run does.
-fn re_viewable(held: KType, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> bool {
+fn re_viewable(held: KType, types: &Chain<'_, '_, '_, '_, '_>, scratch: BumpAllocator<'_>) -> bool {
     module_schema(held, types).is_some() || fully_pinned(held, types, scratch)
 }
 
 /// `held`'s schema where it is a module's own signature, declaring no head parameter: a type the
 /// load knows a nested module's view from, beside a [`fully_pinned`] application. A list's element
 /// type joined over modules of several signatures, or an empty list's `Never`, is neither.
-fn module_schema<'run>(held: KType, types: &Types<'_, 'run>) -> Option<SigSchema<'run>> {
+fn module_schema<'run>(
+    held: KType,
+    types: &Chain<'_, 'run, '_, '_, '_>,
+) -> Option<SigSchema<'run>> {
     if !matches!(types.node(held), TypeNode::Signature { .. }) {
         return None;
     }
@@ -600,7 +603,11 @@ fn module_schema<'run>(held: KType, types: &Types<'_, 'run>) -> Option<SigSchema
 /// Whether `held` is an application fixing every head parameter of its signature: the type a
 /// header gives a nested module it declares at one. The run re-views such a module from the
 /// application it carries, as the load does, so *fits* solves the re-view to the pins at both.
-fn fully_pinned(held: KType, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> bool {
+fn fully_pinned(
+    held: KType,
+    types: &Chain<'_, '_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> bool {
     fixed(held, types, scratch).is_some()
 }
 
@@ -608,7 +615,7 @@ fn fully_pinned(held: KType, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) 
 /// application fixing every one.
 fn fixed<'run, 'x>(
     held: KType,
-    types: &Types<'_, 'run>,
+    types: &Chain<'_, 'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<(SigSchema<'run>, Members<'x, TypeSymbol, KType>)> {
     let TypeNode::SignatureApply { signature, pins } = types.node(held) else {

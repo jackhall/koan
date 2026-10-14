@@ -61,7 +61,7 @@ enum Shape {
 }
 
 /// The list of the handed type, interned through `step`'s chain and handed on in its place.
-fn mint_list(step: &Step<'_, '_, '_, '_, '_, Native>) {
+fn mint_list(step: &Step<'_, '_, '_, '_, '_, '_, Native>) {
     let handed = HANDED.with(Cell::get);
     let minted = step.types().list(handed);
     HANDED.with(|slot| slot.set(minted));
@@ -69,12 +69,12 @@ fn mint_list(step: &Step<'_, '_, '_, '_, '_, Native>) {
 
 /// How many reach steps the merges into `step`'s write home's branch have taken, or 0 where it has
 /// none.
-fn reach_steps(step: &Step<'_, '_, '_, '_, '_, Native>) -> usize {
+fn reach_steps(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
     step.header().get().map_or(0, Branch::reach_steps)
 }
 
 /// The length of `step`'s write home's branch, or 0 where it has none.
-fn branch_length(step: &Step<'_, '_, '_, '_, '_, Native>) -> usize {
+fn branch_length(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
     step.header().get().map_or(0, Branch::len)
 }
 
@@ -95,7 +95,7 @@ fn run(cells: u32, start: AnyStep) -> Vec<String> {
 }
 
 /// The spawner: mint `List^1` through `List^n`, hand the last to a `Fresh` child, park on it.
-fn spawner<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn spawner<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     for _ in 0..MINTED.with(Cell::get) {
         mint_list(&step);
     }
@@ -104,14 +104,14 @@ fn spawner<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gr
 }
 
 /// The child: read the handed type, then report its branch's length.
-fn reader<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn reader<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let _ = step.types().node(HANDED.with(Cell::get));
     record(branch_length(&step).to_string());
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// A root work, woken by the child it parked on: take the result and end.
-fn woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let _ = step.results().count();
     step.done()
 }
@@ -131,12 +131,12 @@ fn a_child_links_its_spawners_branch() {
 }
 
 /// A child level of the recursion, which delivers to the level above it.
-fn level<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn level<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     descend(step, relay)
 }
 
 /// The recursion's first level, a root work, which ends with nothing to deliver.
-fn first<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn first<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     descend(step, woken)
 }
 
@@ -145,7 +145,7 @@ fn first<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
 /// level reads the type it lists once, through its link, so its branch holds that type and its
 /// own.
 fn descend<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     wake: TestStep<'graph>,
 ) -> Action<'graph, Native> {
     let at = LEVEL.with(|level| level.replace(level.get() + 1));
@@ -162,7 +162,7 @@ fn descend<'graph>(
 }
 
 /// A parked level, woken by the level below it: take its result and deliver one of its own.
-fn relay<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn relay<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let _ = step.results().count();
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
@@ -192,7 +192,7 @@ fn a_minting_recursion_holds_each_level_flat() {
 
 /// The case's spawner: lay `[[[1]]]`, minting `List^1` through `List^3`, and hand it to a `Fresh`
 /// child, whose branch links this one.
-fn nests<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn nests<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let types = step.types();
     let scratch = Bump::new();
     let writer = step.writer();
@@ -208,7 +208,7 @@ fn nests<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
 /// The child: lay a list of what it was born with in its own region. Its type, `List^4`, reads
 /// `List^3` through the link and caches it, but not `List^2`, which the list still carries. A
 /// tenant is handed the list pinned.
-fn lists<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn lists<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let types = step.types();
     let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
@@ -219,7 +219,7 @@ fn lists<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
 /// The deepest level: lay a list of the type it minted in its own region and hand it on as
 /// `shape` says, then park, to wake at `wake`, or, for a kept result, to report its own branch.
 fn hand_down<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     wake: TestStep<'graph>,
     shape: Shape,
 ) -> Action<'graph, Native> {
@@ -254,7 +254,7 @@ fn hand_down<'graph>(
 }
 
 /// Hop `Fresh` with the state to [`measures`].
-fn hop_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn hop_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     step.tail(
         Placement::Fresh,
@@ -267,7 +267,7 @@ fn hop_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
 
 /// Lay a list of the state and hop with it as `placement` says, to `next`.
 fn wrap_and_tail<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     placement: Placement,
     next: TestStep<'graph>,
 ) -> Action<'graph, Native> {
@@ -280,21 +280,21 @@ fn wrap_and_tail<'graph>(
 
 /// Lay a list of the state and hop `Fresh` with it to [`measures`].
 fn wrap_and_hop_fresh<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     wrap_and_tail(step, Placement::Fresh, measures)
 }
 
 /// Lay a list of the state and hop `Shares` with it to [`measures`].
 fn wrap_and_hop_shares<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     wrap_and_tail(step, Placement::Shares, measures)
 }
 
 /// A cycle's frame: lay a list of the state and hop `Shares` to a tenant of the level, whose
 /// branch the hop merges this frame's into.
-fn cycle_frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn cycle_frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     FRAMES.with(|frames| frames.set(frames.get() + 1));
     wrap_and_tail(step, Placement::Shares, cycle_tenant)
 }
@@ -302,7 +302,7 @@ fn cycle_frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gr
 /// A cycle's tenant of the level: lay a list of the state in the level's region and hop `Fresh`
 /// to the next frame, whose birth links the level's branch; after the last frame, report the
 /// level's reach steps before the result crosses back.
-fn cycle_tenant<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn cycle_tenant<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     if FRAMES.with(Cell::get) < CYCLE_FRAMES {
         return wrap_and_tail(step, Placement::Fresh, cycle_frame);
     }
@@ -311,20 +311,20 @@ fn cycle_tenant<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'g
 }
 
 /// The hop's successor: report its branch's length.
-fn measures<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn measures<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     record(branch_length(&step).to_string());
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// Hand the state back up as a kept result.
-fn hand_back<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn hand_back<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     step.finish(state)
 }
 
 /// [`relay`], reporting the branch's length once the kept result has crossed into it.
 fn relay_measuring<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let _ = step.results().count();
     record(branch_length(&step).to_string());
@@ -380,7 +380,7 @@ fn a_tail_cycle_checks_as_many_steps_however_deep_its_host() {
 
 /// The tenant: hop `Fresh` with the list. The successor is a new cell, which has laid no branch,
 /// and the list's home, the tenant's host, outlives it, so the birth links the host's branch.
-fn hops<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn hops<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     let work = Work {
         step: arrives,
@@ -390,7 +390,7 @@ fn hops<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Na
 }
 
 /// The hop's successor, whose birth passed the habitat check.
-fn arrives<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn arrives<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     record(String::from("arrived"));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
@@ -398,4 +398,108 @@ fn arrives<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 #[test]
 fn a_hop_reaches_what_its_births_home_read_through_its_link() {
     assert_eq!(run(4, nests), ["arrived"]);
+}
+
+/// The root work for a caching chain's test: ask `child` in the given placement, park on it.
+fn asking<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+    child: TestStep<'graph>,
+    fresh_child: bool,
+) -> Action<'graph, Native> {
+    let request = if fresh_child {
+        fresh(child, Use::Reads, KValue::Null)
+    } else {
+        shares(child, Use::Reads, KValue::Null)
+    };
+    let asked = step.spawn(request);
+    step.park(asked, woken, KValue::Null, None)
+}
+
+/// A `Shares` tenant interning through the `Shares` chain: the host's region branch before and
+/// after, and the scratch branch's length after.
+fn shares_minting<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let before = branch_length(&step);
+    let chain = step.shares_types();
+    let _ = chain.list(chain.list(chain.list(KType::NUMBER)));
+    record(format!(
+        "{before} {} {}",
+        branch_length(&step),
+        chain.own_len()
+    ));
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+#[test]
+fn a_shares_chain_lays_in_the_hosts_scratch_and_leaves_its_region() {
+    fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        asking(step, shares_minting, false)
+    }
+    let seen = run(2, start);
+    let [before, after, scratch] = seen[0]
+        .split(' ')
+        .map(|n| n.parse::<usize>().unwrap())
+        .collect::<Vec<_>>()[..]
+    else {
+        panic!("three figures");
+    };
+    assert_eq!(before, after, "the region branch is untouched");
+    assert!(scratch > 0, "the lists were laid in the scratch branch");
+}
+
+/// A `Fresh` child holding its scratch and reading through its reading chain: a type in its region
+/// and one in its lender's scratch both resolve, and a list of each lays in its own scratch while
+/// neither the region nor the lent branch grows.
+fn reading<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    assert!(step.hold_scratch(), "a tree cell holds its own scratch");
+    step.link_reading_types();
+    let in_region = step.types().list(step.types().list(KType::NUMBER));
+    let warm = step.warm_types().expect("a tree cell has a lender");
+    let in_lent = warm.list(warm.list(KType::BOOL));
+    let (region, lent) = (branch_length(&step), warm.own_len());
+    let chain = step.reading_types().expect("a tree cell has a lender");
+    let _ = chain.list(in_region);
+    let _ = chain.list(in_lent);
+    assert_eq!(
+        branch_length(&step),
+        region,
+        "the region branch is untouched"
+    );
+    assert_eq!(warm.own_len(), lent, "the lent branch is untouched");
+    record(chain.own_len().to_string());
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+#[test]
+fn a_held_fresh_child_reads_its_region_and_its_lenders_scratch() {
+    fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        asking(step, reading, true)
+    }
+    let laid: usize = run(2, start)[0].parse().unwrap();
+    // Both lists, the region type cached through the link, and the link's own tier node.
+    assert!(
+        laid >= 2,
+        "the reading chain laid {laid} nodes in its own scratch"
+    );
+}
+
+/// A `Fresh` child interning through the warm chain alone over a type in its region: the lent
+/// branch is laid through the root and itself, so the region's child misses.
+fn warm_over_region<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let in_region = step.types().list(step.types().list(KType::NUMBER));
+    let warm = step.warm_types().expect("a tree cell has a lender");
+    let _ = warm.list(in_region);
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+#[test]
+#[should_panic(expected = "names no interned node")]
+fn a_lent_branch_lays_through_the_root_and_itself_alone() {
+    fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        asking(step, warm_over_region, true)
+    }
+    run(2, start);
 }

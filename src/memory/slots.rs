@@ -34,7 +34,7 @@ where
     Erased<'graph, V>: Copy,
 {
     /// `len` empty slots, laid down in the region `writer` names.
-    pub fn new(writer: Writer<'cell>, len: usize) -> Self {
+    pub fn new(writer: Writer<'cell, '_>, len: usize) -> Self {
         SlotArray(writer.once_run(len))
     }
 

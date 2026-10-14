@@ -29,7 +29,7 @@ use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
 use crate::scope::{Builtins, InstanceRead, Site};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, builtin_types, meet};
-use crate::values::{Circular, Seen, TypeValue, Types, Value, record_type};
+use crate::values::{Chain, Circular, Seen, TypeValue, Value, record_type};
 
 use super::errors::Raised;
 use super::rules;
@@ -216,9 +216,9 @@ const _: () = {
 
 /// Lay the builtin table down in program storage, through `writer`.
 pub(super) fn table<'graph>(
-    writer: Writer<'graph>,
+    writer: Writer<'graph, '_>,
     symbols: &'graph SymbolInterner,
-    types: &Types<'graph, 'graph>,
+    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> &'graph KBuiltins<'graph, 'graph> {
     let type_value = |handle| Value::Type(TypeValue::new(writer, handle, types));
@@ -266,9 +266,9 @@ pub(super) fn table<'graph>(
 /// `at`, building in `writer`'s region and taking transients from `scratch`.
 pub(super) fn run<'graph, 'here>(
     native: Native,
-    at: &Evaluation<'graph, 'here>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     node: &'graph KExpression<'graph>,
-    writer: Writer<'here>,
+    writer: Writer<'here, '_>,
     operands: &[Operand<'graph, 'here>],
     scratch: &Bump,
 ) -> KValue<'graph, 'here> {
@@ -456,7 +456,7 @@ pub(super) fn run<'graph, 'here>(
 /// The elements of a list a slot admitted, read through its surface into `scratch`.
 pub(super) fn listed<'graph, 'here, 'x>(
     value: KValue<'graph, 'here>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KValue<'graph, 'here>] {
     let list = value
@@ -487,8 +487,8 @@ fn one_name(value: KValue<'_, '_>) -> Option<BinderSymbol> {
 fn field<'graph, 'here>(
     value: KValue<'graph, 'here>,
     name: Symbol,
-    writer: Writer<'here>,
-    types: &Types<'_, 'here>,
+    writer: Writer<'here, '_>,
+    types: &Chain<'_, '_, 'here, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'here>> {
     let mut seen = Seen::of(value);

@@ -10,7 +10,7 @@
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{CrossedOperand, Header, Writer, reattachable};
 use crate::scheduler::{Action, Born, Graph, NativeStep, Step, StepBundle};
-use crate::type_lattice::Root;
+use crate::type_lattice::{Halves, Root};
 use crate::values::{Half, TypeHeader, Types};
 
 /// The bundle the scheduler's tests run over.
@@ -32,8 +32,8 @@ impl<'graph> StepBundle<'graph> for Native {
     /// where a hop's or a left birth's half has already laid a branch; a copied one goes through
     /// the value crossing.
     fn cross<'cell>(
-        writer: Writer<'cell>,
-        header: Header<'graph, 'cell, TypeHeader>,
+        writer: Writer<'cell, '_>,
+        header: Header<'graph, 'cell, '_, TypeHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, TypeHeader>,
         born: Born,
         type_root: &'graph Root<'graph>,
@@ -41,7 +41,7 @@ impl<'graph> StepBundle<'graph> for Native {
     where
         'graph: 'cell,
     {
-        let types = Types::new(type_root, Half::of(writer, header));
+        let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
                 home.read(|header, _| match born {
@@ -69,8 +69,8 @@ pub type TestStep<'graph> = NativeStep<'graph, Native>;
 
 /// A test step over every graph: what a helper that builds its own graph, over a root it seeds,
 /// takes to start a root work at.
-pub type AnyStep = for<'graph, 'step, 'here, 'scratch> fn(
-    Step<'_, 'graph, 'step, 'here, 'scratch, Native>,
+pub type AnyStep = for<'graph, 'step, 'here, 'scratch, 'lent> fn(
+    Step<'_, 'graph, 'step, 'here, 'scratch, 'lent, Native>,
 ) -> Action<'graph, Native>;
 
 /// A graph over the test bundle.

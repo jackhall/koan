@@ -1,7 +1,7 @@
 //! A first-class type as a value: the handle it names and the `OfKind` type it has — its kind's,
 //! or one a retype to a kind above it stamped.
 
-use super::Types;
+use super::Chain;
 use crate::memory::{Writer, resident};
 use crate::type_lattice::KType;
 
@@ -17,9 +17,9 @@ impl TypeValue {
     /// The type value naming `handle`, typed `OfKind` of `handle`'s kind, which `types` reads and
     /// never interns.
     pub fn new<'cell>(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         handle: KType,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
     ) -> &'cell TypeValue {
         resident(
             writer,
@@ -42,7 +42,7 @@ impl TypeValue {
 
     /// The type value naming the same type at `ktype`, a kind its own lies under, in `writer`'s
     /// region: what a retype to a kind hands on.
-    pub fn with_type<'cell>(&self, writer: Writer<'cell>, ktype: KType) -> &'cell TypeValue {
+    pub fn with_type<'cell>(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell TypeValue {
         resident(
             writer,
             TypeValue {
@@ -53,7 +53,7 @@ impl TypeValue {
     }
 
     /// The same value written into another region.
-    pub(crate) fn copied<'cell>(&self, writer: Writer<'cell>) -> &'cell TypeValue {
+    pub(crate) fn copied<'cell>(&self, writer: Writer<'cell, '_>) -> &'cell TypeValue {
         resident(writer, *self)
     }
 }

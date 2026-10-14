@@ -6,7 +6,7 @@
 //! leaves; disposal by pledge, in any release order, cascading through dead-but-undisposed
 //! ancestors into the slab's own walk; and a dormant carrier redeeming through the tombstone chain
 //! after its home's bytes have moved — into a live cell, into a root that later absorbs, seals, or
-//! reclaims.
+//! reclaims; and a tree cell's parked borrows and fresh doors surviving the region table growing.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -42,7 +42,7 @@ fn recording(
 
 /// Build a number in the cell the step is running in.
 fn number_in<'step, C: Reattachable<'static>>(
-    context: &mut StepContext<'static, 'step, '_, '_, C>,
+    context: &mut StepContext<'static, 'step, '_, '_, '_, C>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     number_here(context, value)
@@ -748,4 +748,62 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
     graph.release_tree(next).unwrap();
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
+}
+
+/// A tree cell's table entry moves when the region table grows between its steps. What its slots
+/// park names chunks — its own region, its scratch and its lender's — which do not move, so each
+/// reads back intact; and the doors the next step takes are minted fresh, onto the moved entry.
+#[test]
+fn a_tree_cell_reads_what_it_parked_after_the_region_table_moves() {
+    struct Pair;
+    crate::reattachable!(both Pair => (&'here u32, &'scratch u32));
+    let mut graph: CellGraph<'static, Borrowed, Pair> = CellGraph::new(1, pin);
+    let root = graph.create(None).unwrap();
+    let cell = graph.create_tree(root, None).unwrap();
+    let child = graph.create_tree(cell, None).unwrap();
+    graph
+        .enter(cell, |context| {
+            let here = &context.writer().fill(1, |_| 1u32)[0];
+            let scratch = &context.scratch_writer().fill(1, |_| 2u32)[0];
+            context.store_successor(here);
+            context.store_scratch_state((here, scratch));
+        })
+        .unwrap();
+    graph
+        .enter(child, |context| {
+            let (lent, _) = context.lent_scratch().unwrap();
+            let in_lent = &lent.fill(1, |_| 3u32)[0];
+            let here = &context.writer().fill(1, |_| 4u32)[0];
+            context.store_successor(here);
+            context.store_scratch_state((here, in_lent));
+        })
+        .unwrap();
+
+    let before = graph.regions.tree_len();
+    for _ in 0..8 {
+        graph.create_tree(root, None).unwrap();
+    }
+    assert!(graph.regions.tree_len() > before, "the table grew");
+
+    let child_read = graph
+        .enter(child, |context| {
+            let here = context.continuation().unwrap();
+            let (also_here, in_lent) = context.scratch_state().unwrap();
+            let (lent, _) = context.lent_scratch().unwrap();
+            let fresh = &lent.fill(1, |_| 7u32)[0];
+            let written = context.writer().fill(1, |_| 8u32)[0];
+            (*here, *also_here, *in_lent, *fresh, written)
+        })
+        .unwrap();
+    let cell_read = graph
+        .enter(cell, |context| {
+            let here = context.continuation().unwrap();
+            let (also_here, scratch) = context.scratch_state().unwrap();
+            let written = context.writer().fill(1, |_| 5u32)[0];
+            let scratch_written = context.scratch_writer().fill(1, |_| 6u32)[0];
+            (*here, *also_here, *scratch, written, scratch_written)
+        })
+        .unwrap();
+    assert_eq!(child_read, (4, 4, 3, 7, 8));
+    assert_eq!(cell_read, (1, 1, 2, 5, 6));
 }

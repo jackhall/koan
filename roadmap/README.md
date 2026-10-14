@@ -51,5 +51,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 - [Presizing a branch](type-tiers/branch-presizing.md)
-- [The host's scratch as a type cache](type-tiers/host-scratch-cache.md)
+- [Invariance around a tail cycle](type-tiers/cycle-invariance.md)
+- [Porosity read off declared members](type-tiers/declared-porosity.md)
 

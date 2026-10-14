@@ -62,7 +62,7 @@ use crate::symbols::{
     BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, SymbolInterner, TypeSymbol,
     ValueSymbol,
 };
-use crate::values::{ContentDigest, Knotted, Types, admits_part};
+use crate::values::{Chain, ContentDigest, Knotted, Types, admits_part};
 
 use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
 
@@ -118,7 +118,7 @@ pub(super) fn program<'graph, X: Knotted>(
     brand: ProgramBrand<'graph>,
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, X>,
-    types: &Types<'graph, 'graph>,
+    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -170,7 +170,7 @@ fn declared_parameters(
 fn written_as_read<'e>(
     form: &'static BuiltinShape,
     node: &KExpression<'_>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> Result<(), ShapeError<'e>> {
     let declarator = matches!(
         form.id,
@@ -697,7 +697,7 @@ struct Builder<'graph, 'x, 'e> {
     builtins: &'e dyn BuiltinNames,
     /// The program's type registry, which the static check admits written parts through and a
     /// quote's carried type is interned in.
-    types: &'e Types<'graph, 'graph>,
+    types: &'e Types<'graph, 'graph, 'e>,
     /// The program's interner, which records the spelling of each key a quote's code leaves open,
     /// so its carried type renders the key as written.
     symbols: &'e SymbolInterner,
@@ -733,7 +733,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         brand: ProgramBrand<'graph>,
         scratch: BumpAllocator<'x>,
         builtins: &'e dyn BuiltinNames,
-        types: &'e Types<'graph, 'graph>,
+        types: &'e Chain<'graph, 'graph, 'graph, '_, '_>,
         symbols: &'e SymbolInterner,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,
@@ -3273,12 +3273,41 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// Lay a finished draft down in program storage, its nested drafts first; `form` is the node
     /// holding a callable draft's body.
+    /// The slots a callable's or a code body's last statement reads — directly, through a nested
+    /// block, or through a nested body's captures — beside every type slot, sorted: what a frame
+    /// that hands its last statement on keeps alive across the hand-off. A type slot is listed
+    /// whole, since a type capture the static pass adds later reads one at a birth no read here
+    /// records. Empty for any other kind, and for a body with no statements.
+    fn last_reads(&self, draft: &Draft<'graph, 'x>) -> &'graph [Slot] {
+        let Some(last) = draft.statements.checked_sub(1) else {
+            return &[];
+        };
+        if !matches!(draft.kind, ShapeKind::Callable | ShapeKind::Code) {
+            return &[];
+        }
+        let mut slots = BumpVec::new_in(self.scratch);
+        slots.extend(
+            (draft.reads.iter())
+                .filter(|(statement, _)| *statement == last)
+                .map(|(_, slot)| *slot),
+        );
+        slots.extend(
+            (0..draft.channels().len())
+                .map(|index| Slot(index as u32))
+                .filter(|slot| draft.is_type_slot(*slot)),
+        );
+        slots.sort_unstable();
+        slots.dedup();
+        collect(self.brand.writer(), slots.iter().copied())
+    }
+
     fn seal(
         &self,
         draft: Draft<'graph, 'x>,
         form: Option<&'graph KExpression<'graph>>,
     ) -> &'graph BodyShape<'graph> {
         let writer = self.brand.writer();
+        let last_reads = self.last_reads(&draft);
         let mut nested = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
         for (site, child) in draft.children {
             let form = self.forms.get(&site).copied();
@@ -3376,6 +3405,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 form,
                 binders,
                 units: collect(writer, draft.units.iter().copied()),
+                last_reads,
                 arm: draft.arm,
                 code_type: draft.code_type,
                 refusal: resident_cell(writer, draft.refusal),
@@ -3393,6 +3423,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 path_reads: resident_cell(writer, Keyed::from_sorted(&[])),
                 paths: resident_cell(writer, &[][..]),
                 statics: resident_cell(writer, None),
+                caching: resident_cell(writer, None),
             },
         )
     }
@@ -3446,7 +3477,7 @@ fn annotation_of<'graph>(node: &KExpression<'graph>) -> Option<&'graph Expressio
 }
 
 /// One write-once cell laid down in program storage.
-fn resident_cell<T>(writer: crate::memory::Writer<'_>, value: T) -> &Cell<T> {
+fn resident_cell<'cell, T>(writer: crate::memory::Writer<'cell, '_>, value: T) -> &'cell Cell<T> {
     let mut value = Some(value);
     &writer.fill(1, |_| Cell::new(value.take().expect("filled once")))[0]
 }

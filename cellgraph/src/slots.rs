@@ -1,7 +1,7 @@
 //! What a cell carries between its steps, for every kind of cell.
 //!
 //! A slab cell, a tree cell and a tenant differ in where their bytes live and in what holds them
-//! in their table; they park identically. Each carries the same four slots, and the rules that
+//! in their table; they park identically. Each carries the same four slots and a hold, and the rules that
 //! read them — what names a scratch bump, what a death clears, what comes off at a step's entry
 //! and back at its end — are the same rules. They live here once, so the pools hand this struct
 //! out rather than restating them, and the graph's kind dispatch is two accessors rather than one
@@ -35,6 +35,10 @@ pub(crate) struct StepSlots<
     /// byte, so it holds no reset off; the lay-down runs after the reset, which is what puts a
     /// re-registering cell's next run at the foot of a fresh bump.
     pending_receipts: Option<usize>,
+    /// Whether the cell holds its scratch bump for its whole life: a third thing that names it,
+    /// set by [`hold_scratch`](crate::StepContext::hold_scratch) and cleared only at the cell's
+    /// death.
+    held: bool,
 }
 
 impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
@@ -49,18 +53,19 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
             scratch_state: None,
             receipts: None,
             pending_receipts: None,
+            held: false,
         }
     }
 
-    /// Whether anything at rest here names the scratch bump the cell writes: its scratch state, or
-    /// its receipt run. **One definition, three readings** — a step's entry, a step's end, and a
+    /// Whether anything at rest here names the scratch bump the cell writes: its scratch state, its
+    /// receipt run, or its hold. **One definition, three readings** — a step's entry, a step's end, and a
     /// tenant's departure — so the count a host keeps moves by the same rule it is read by.
     ///
     /// A pending registration is deliberately not one of them. It names no byte until the step
     /// end that lays it down, and that lay-down happens *after* the reset, which is what puts a
     /// re-registering cell's next run at the foot of a bump handed back whole.
     pub(crate) fn names_scratch(&self) -> bool {
-        self.scratch_state.is_some() || self.receipts.is_some()
+        self.scratch_state.is_some() || self.receipts.is_some() || self.held
     }
 
     /// The receipt run at rest, erased.
@@ -81,6 +86,11 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
 
     pub(crate) fn set_pending_receipts(&mut self, count: usize) {
         self.pending_receipts = Some(count);
+    }
+
+    /// Hold the scratch bump for the cell's life.
+    pub(crate) fn hold(&mut self) {
+        self.held = true;
     }
 
     /// Both parked slots, off the cell for the length of its step. Each has its own family — the
@@ -105,10 +115,12 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
     /// Drop everything that names the cell's scratch bump, at the cell's death. A dead cell is
     /// never entered, so nothing will read what it parked there again, and the bump stops waiting
     /// on a cell that will never read it. The continuation stays: it is not what holds the reset
-    /// off, and the disposal is what takes it.
-    pub(crate) fn clear_scratch(&mut self) {
+    /// off, and the disposal is what takes it. The receipt run comes back, so its home can reuse
+    /// its bytes.
+    pub(crate) fn clear_scratch(&mut self) -> Option<Erased<'graph, ReceiptRun<D>>> {
         self.scratch_state = None;
-        self.receipts = None;
         self.pending_receipts = None;
+        self.held = false;
+        self.receipts.take()
     }
 }

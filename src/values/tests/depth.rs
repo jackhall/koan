@@ -9,7 +9,7 @@ use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema};
 use crate::values::TypeValue;
 
 use super::{
-    Fixture, Holding, Link, Record, Tagged, TestGraph, Types, Value, copy, pin, tie, with_fixture,
+    Chain, Fixture, Holding, Link, Record, Tagged, TestGraph, Value, copy, pin, tie, with_fixture,
 };
 
 /// How deep each chain is: about a hundred times what a recursive walk reaches in a debug build.
@@ -38,8 +38,8 @@ impl Fixture<'_, '_> {
     /// A chain `depth` deep in `writer`'s region, `Null` at the bottom.
     fn chain<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'_, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         node: KType,
         depth: usize,
     ) -> Value<'cell> {
@@ -60,8 +60,8 @@ impl Fixture<'_, '_> {
     /// bottom.
     fn knots<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'_, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         depth: usize,
     ) -> Holding<'cell> {
         let (types, scratch) = (types, self.scratch());
@@ -84,8 +84,8 @@ impl Fixture<'_, '_> {
     /// `{next :Any, tag :Number}`, retyped to `{next :Any}`, whose `next` holds the header below.
     fn headers<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'_, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         depth: usize,
     ) -> Holding<'cell> {
         let (types, scratch) = (types, self.scratch());
@@ -109,7 +109,11 @@ impl Fixture<'_, '_> {
 }
 
 /// `value` as `PRINT` writes it.
-fn rendered(fixture: &Fixture<'_, '_>, types: &Types<'_, '_>, value: Value<'_>) -> String {
+fn rendered(
+    fixture: &Fixture<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
+    value: Value<'_>,
+) -> String {
     let mut out = String::new();
     value
         .render(&mut out, types, fixture.symbols, fixture.scratch())

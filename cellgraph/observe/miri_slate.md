@@ -23,7 +23,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-53 tests, grouped by the unsafe site each pins down. Names below are the exact
+59 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -172,6 +172,15 @@ the slab entirely — the root seals, and a holder reads a tree-homed value out 
 - `graph::tests::tree::a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one`
 - `graph::tests::tree::a_tree_root_that_seals_carries_its_spliced_bumps`
 
+**The region table's tree half moving** ([src/region.rs](../src/region.rs),
+[src/graph.rs](../src/graph.rs)) — the table keeps its tree cells' habitats in a `Vec`, which a
+`create_tree` reallocates when it grows, moving every tree cell's entry between two of its steps.
+What Miri checks is that the reallocation leaves every parked chunk borrow valid — at the cell's
+own region, its scratch, and its child's lent bump — and that the next step's doors, minted fresh,
+write into the moved entries.
+
+- `graph::tests::tree::a_tree_cell_reads_what_it_parked_after_the_region_table_moves`
+
 **The scratch habitat's re-anchor** ([src/graph.rs](../src/graph.rs),
 [src/region.rs](../src/region.rs)) — the same `retype` primitive at the second re-anchor `enter`
 makes: a cell's scratch state, handed back at a fresh `'here` and `'scratch` each step over a
@@ -189,6 +198,9 @@ waits on all of them.
 - `graph::tests::habitat::a_tree_cells_scratch_survives_parks_and_resets_once_unnamed`
 - `graph::tests::habitat::an_absorb_leaves_the_absorbers_named_scratch_alone`
 - `graph::tests::habitat::a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant`
+- `graph::tests::habitat::a_parents_scratch_waits_on_a_tree_child_and_goes_after_its_death` —
+  the lend: a parent's bump written while a tree child borrows it, kept until the child's death,
+  and rebuilt under Miri at the first quiet step end after it.
 - `graph::tests::habitat::a_parked_form_names_storage_at_here_and_survives_the_bump_going_back`
   the two-lifetime re-anchor: a parked form holding an invariant `'here` cell beside a `'scratch`
   one, whose `'here` part is written through after its re-anchor, goes on into the continuation
@@ -206,11 +218,17 @@ replaced — and because a reset rebuilds the bump under Miri, a stale `'scratch
 error Miri can see. One test per habitat: the first is the load-bearing one, a slab home that
 registers, is filled, drains and re-registers round after round, so every round's run is read out of
 a bump that was handed back and re-laid; the second is a tree home; the third is a tenant's, whose
-run is its own though the bytes under it are its host's, with the host writing into it.
+run is its own though the bytes under it are its host's, with the host writing into it. The last
+three reuse a released run off its write home's free list, re-anchored through the same door as a
+run at rest and narrowed for a narrower registration, over a bump a parked run holds: what Miri
+checks is that a free run's bytes are live until the reset that clears the list.
 
 - `graph::tests::receipts::a_cell_parking_on_receipts_alone_starts_every_round_at_the_foot_of_the_bump`
 - `graph::tests::receipts::a_tree_cell_parks_on_a_run_in_its_own_bump`
 - `graph::tests::receipts::a_tenants_run_is_its_own_though_the_bytes_under_it_are_its_hosts`
+- `graph::tests::receipts::a_held_bump_reuses_the_runs_its_departed_tenants_released`
+- `graph::tests::receipts::a_cell_re_registering_under_a_held_bump_reuses_its_drained_run`
+- `graph::tests::receipts::a_wider_free_run_serves_a_narrower_registration_and_completes_at_its_width`
 
 **Tenancy — a second writer under a parked borrow** ([src/tenant.rs](../src/tenant.rs),
 [src/graph.rs](../src/graph.rs)) — no unsafe site of its own, and a second reading of the re-anchor in `enter`:
@@ -250,6 +268,9 @@ every birth finds no header in a slot whose previous occupant laid one.
 - `graph::tests::headers::an_operand_redeemed_from_sealed_storage_carries_the_sealed_header`
 - `graph::tests::headers::a_splice_and_an_absorb_keep_the_absorbers_header`
 - `graph::tests::headers::a_tail_loop_lays_a_header_on_every_hop`
+- `graph::tests::headers::a_tree_cell_lays_a_header_in_its_lenders_scratch_and_the_lender_reads_it`
+  — a header laid at a tree cell's `'lent` and read back at its lender's `'scratch`, then gone
+  after the borrower's death.
 
 ## Adding tests to the slate
 
@@ -270,9 +291,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-10-14: 287.34s — 191 tests, 0 leaks, 0 UB
+- 2026-10-14: 235.43s — 190 tests, 0 leaks, 0 UB
 - 2026-10-09: 271.37s — 181 tests, 0 leaks, 0 UB
 - 2026-09-21: 298.18s — 165 tests, 0 leaks, 0 UB
 - 2026-09-19: 276.90s — 164 tests, 0 leaks, 0 UB
-- 2026-09-18: 287.00s — 164 tests, 0 leaks, 0 UB
-- 2026-09-18: 287.08s — 164 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

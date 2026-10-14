@@ -24,7 +24,11 @@ pub struct Retyped<X> {
 
 impl<X: Knotted> Retyped<X> {
     /// `member` retyped to `ktype`, laid down in `writer`'s region.
-    pub fn of<'cell>(writer: Writer<'cell>, member: X, ktype: DeclaredType<KType>) -> &'cell Self
+    pub fn of<'cell>(
+        writer: Writer<'cell, '_>,
+        member: X,
+        ktype: DeclaredType<KType>,
+    ) -> &'cell Self
     where
         X: 'cell,
     {

@@ -15,7 +15,7 @@
 
 use crate::handle::{HomeHandle, SlabHandle, Stale, TreeHandle};
 use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
-use crate::receipt::Delivery;
+use crate::receipt::{Delivery, ReceiptRun};
 use crate::scratch::Scratch;
 use crate::slots::StepSlots;
 use crate::tenant::Tenancy;
@@ -340,11 +340,12 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
     }
 
     /// Declare the cell's death. A dead cell is never entered, so everything of its that names its
-    /// scratch bump goes here, and the bump stops waiting on a cell that will never read it.
-    pub(crate) fn mark_dead(&mut self, index: u32) {
+    /// scratch bump goes here, and the bump stops waiting on a cell that will never read it. The
+    /// receipt run its slots let go of comes back, for its home's free list.
+    pub(crate) fn mark_dead(&mut self, index: u32) -> Option<Erased<'graph, ReceiptRun<D>>> {
         let branch = self.branch_mut(index);
         branch.life = Life::Dead;
-        branch.step_slots.clear_scratch();
+        branch.step_slots.clear_scratch()
     }
 
     pub(crate) fn mark_kept(&mut self, index: u32) {

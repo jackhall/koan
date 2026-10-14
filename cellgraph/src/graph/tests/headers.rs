@@ -48,15 +48,15 @@ impl<'graph> Delivery<'graph> for Push {
 }
 
 type Graph = CellGraph<'static, Owned, Held, Push, 1, Marks>;
-type Context<'step, 'here, 'scratch> =
-    StepContext<'static, 'step, 'here, 'scratch, Owned, Held, Push, 1, Marks>;
+type Context<'step, 'here, 'scratch, 'lent> =
+    StepContext<'static, 'step, 'here, 'scratch, 'lent, Owned, Held, Push, 1, Marks>;
 
 fn new_graph(cap: u32) -> Graph {
     CellGraph::new(cap, pin)
 }
 
 /// A table over `value`, laid through `writer`: the number, then the `Cell` pointing at it.
-fn table<'cell>(writer: Writer<'cell>, value: u32) -> Mark<'static, 'cell> {
+fn table<'cell>(writer: Writer<'cell, '_>, value: u32) -> Mark<'static, 'cell> {
     let number = one(writer, value);
     Mark::Table(one(writer, Cell::new(number)))
 }
@@ -78,7 +78,7 @@ fn number_of<'cell>(mark: Mark<'_, 'cell>) -> &'cell u32 {
 }
 
 /// Lay a table over `value` in the step's region header, or read back the one already there.
-fn lay(context: &Context<'_, '_, '_>, value: u32) -> Option<u32> {
+fn lay(context: &Context<'_, '_, '_, '_>, value: u32) -> Option<u32> {
     value_of(
         context
             .header()
@@ -87,12 +87,15 @@ fn lay(context: &Context<'_, '_, '_>, value: u32) -> Option<u32> {
 }
 
 /// What the step's region header points at.
-fn header_value(context: &Context<'_, '_, '_>) -> Option<u32> {
+fn header_value(context: &Context<'_, '_, '_, '_>) -> Option<u32> {
     context.header().get().and_then(value_of)
 }
 
 /// A `Number` carrier homed where the step writes.
-fn lifted<'step>(context: &Context<'step, '_, '_>, value: u32) -> Ready<'static, 'step, Number> {
+fn lifted<'step>(
+    context: &Context<'step, '_, '_, '_>,
+    value: u32,
+) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
 }
 
@@ -121,7 +124,7 @@ fn pinned_home<'cell>(view: &CrossedOperand<'static, 'cell, '_, Number, Marks>) 
 
 /// Build a number in `dest` and hand back its carrier.
 fn number_into<'step>(
-    context: &mut Context<'step, '_, '_>,
+    context: &mut Context<'step, '_, '_, '_>,
     dest: impl Into<CellHandle>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
@@ -568,4 +571,52 @@ fn a_tail_loop_lays_a_header_on_every_hop() {
             assert_eq!(window[2], window[0]);
         }
     }
+}
+
+/// A tree cell writes its lender's scratch through the lent doors, and the lender reads it back at
+/// its own `'scratch` once it steps; the bump outlives both steps while the borrower lives, and
+/// goes at the first quiet step end after its death.
+#[test]
+fn a_tree_cell_lays_a_header_in_its_lenders_scratch_and_the_lender_reads_it() {
+    let mut graph = new_graph(1);
+    let root = graph.create(None).unwrap();
+    let child = graph.create_tree(root, None).unwrap();
+    let home = CellHome::Slab(root.slot());
+    assert!(
+        graph
+            .enter(root, |context| context.lent_scratch().is_none())
+            .unwrap()
+    );
+
+    graph
+        .enter(child, |context| {
+            let (writer, header) = context.lent_scratch().expect("a tree cell has a lender");
+            value_of(header.get_or_lay(|| table(writer, 41)))
+        })
+        .unwrap();
+    assert!(
+        graph.regions.scratch_in_use(home) > 0,
+        "the lent bump kept its bytes"
+    );
+    let read = graph
+        .enter(root, |context| {
+            context.scratch_header().get().and_then(value_of)
+        })
+        .unwrap();
+    assert_eq!(read, Some(41));
+    assert!(
+        graph.regions.scratch_in_use(home) > 0,
+        "the borrower still holds it"
+    );
+
+    graph.release_tree(child).unwrap();
+    graph.enter(root, |_| ()).unwrap();
+    assert_eq!(graph.regions.scratch_in_use(home), 0);
+    let read = graph
+        .enter(root, |context| context.scratch_header().get().is_none())
+        .unwrap();
+    assert!(read, "the reset cleared the header");
+
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }

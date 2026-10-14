@@ -30,7 +30,7 @@ use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
-use crate::values::{Types, Weight, retype_target};
+use crate::values::{Chain, Weight, retype_target};
 
 use super::data::{self, Stager};
 use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
@@ -52,10 +52,10 @@ pub struct Tied<'graph, 'cell, 'x> {
 /// Member `i` of `component` is the knot's node `i`; the caller binds each member's slot to the
 /// member at that node.
 pub fn tie<'graph, 'cell, 'x>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
 ) -> Result<Tied<'graph, 'cell, 'x>, Untieable<'x>> {

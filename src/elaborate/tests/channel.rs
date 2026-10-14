@@ -9,14 +9,14 @@ use crate::scope::{
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
-use crate::values::Types;
+use crate::values::Chain;
 
 use super::super::type_channel;
 use super::{Held, Program, with_program};
 
 /// The scalars and `Type`, which a `:Type` parameter names.
 fn with_type(
-    _: &Types<'_, '_>,
+    _: &Chain<'_, '_, '_, '_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {

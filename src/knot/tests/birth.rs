@@ -8,7 +8,7 @@ use crate::scope::{CaptureSlot, Coordinate, Site, Target};
 use crate::scope::{Elaboration, ParameterBinding};
 use crate::symbols::{BinderSymbol, KeywordSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema};
-use crate::values::{Circular, ConstructionRefused, KeyRejected, Link, Types};
+use crate::values::{Chain, Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::function::Typing;
@@ -21,8 +21,8 @@ use super::{
 /// test to see.
 pub(super) fn tie_with<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
-    writer: Writer<'cell>,
-    types: &Types<'graph, 'cell>,
+    writer: Writer<'cell, '_>,
+    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
     eager: &mut Eager<'_, 'graph, 'cell>,
@@ -43,8 +43,8 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
 /// [`tie_with`] under an evaluator that supplies nothing.
 pub(super) fn tie_of<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
-    writer: Writer<'cell>,
-    types: &Types<'graph, 'cell>,
+    writer: Writer<'cell, '_>,
+    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'f>> {
@@ -289,7 +289,7 @@ fn a_closure_captures_the_enclosing_value_word() {
 /// The coordinate `name`'s single mention in `callable`'s body reads through.
 fn capture_read<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    writer: crate::memory::Writer<'cell>,
+    writer: crate::memory::Writer<'cell, '_>,
     callable: Knotted<'graph, 'cell>,
     builtins: &'cell crate::scope::Builtins<'cell, Knotted<'graph, 'cell>>,
     name: &str,

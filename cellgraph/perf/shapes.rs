@@ -76,7 +76,7 @@ fn pinned<'a, 'step, V: Reattachable<'static> + Covariant<'static> + DropFree>(
 /// One value, laid down through the writer's single run verb — the shape every embedder derives
 /// its own one-value write from, since the substrate ships no such verb. No allocation of its own:
 /// the `Option` is a stack slot the run of one empties.
-fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
+fn one<'cell, T>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }
@@ -86,15 +86,15 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 /// Generic over the scratch and delivery a caller's context carries: the shapes here park no
 /// scratch and deliver nothing, but the write this measures is the same whatever a step declares.
 fn number_here<'step, S: ReattachableOverBoth<'static>, D: Delivery<'static>>(
-    context: &StepContext<'static, 'step, '_, '_, Work, S, D>,
+    context: &StepContext<'static, 'step, '_, '_, '_, Work, S, D>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
 }
 
 fn build_number<'cell, 'severed>(
-    writer: Writer<'cell>,
-    _: Header<'static, 'cell, NoHeader>,
+    writer: Writer<'cell, '_>,
+    _: Header<'static, 'cell, '_, NoHeader>,
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Number> {
     Active::new(match views[0] {
@@ -107,8 +107,8 @@ fn build_number<'cell, 'severed>(
 /// Written straight out of the views: the run is filled by index, so the build needs no buffer of
 /// its own and the placement is charged for nothing the harness did.
 fn build_slice<'cell, 'severed>(
-    writer: Writer<'cell>,
-    _: Header<'static, 'cell, NoHeader>,
+    writer: Writer<'cell, '_>,
+    _: Header<'static, 'cell, '_, NoHeader>,
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Numbers> {
     Active::new(writer.fill(views.len(), |index| match views[index] {

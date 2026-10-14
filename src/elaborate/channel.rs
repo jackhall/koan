@@ -45,7 +45,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, TypeNode, substitute_parameters,
 };
-use crate::values::{Knotted, Types, Value};
+use crate::values::{Chain, Knotted, Types, Value};
 
 use super::declaration::{HeadShape, signature_heads, type_declarations};
 use super::expression::{Elaborator, Groups, type_expression};
@@ -60,8 +60,8 @@ use super::signature::callable_type;
 pub fn type_channel<'graph, X: Knotted>(
     root: &'graph BodyShape<'graph>,
     builtins: &Builtins<'_, X>,
-    types: &Types<'graph, 'graph>,
-    writer: Writer<'graph>,
+    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
     let mut pass = Pass {
@@ -181,8 +181,8 @@ enum Mode {
 /// The walk's state: the chain of enclosing shapes, each numbering its names.
 struct Pass<'p, 'graph, 'cell, X> {
     builtins: &'p Builtins<'cell, X>,
-    types: &'p Types<'graph, 'graph>,
-    writer: Writer<'graph>,
+    types: &'p Types<'graph, 'graph, 'p>,
+    writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
 }
@@ -225,7 +225,7 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
         site: Site,
         chain: &[ValueSymbol],
         label: TypeSymbol,
-        _types: &Types<'_, '_>,
+        _types: &Chain<'_, '_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         let unknown = Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE));
         let Some((level, slot)) = self.pass.landing(self.from, at) else {
@@ -868,7 +868,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
 
 /// The expression shape `shape` ranked by `classes`.
 fn ranked(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     shape: DeclaredType<Parametric>,
     classes: &[u16],
@@ -902,7 +902,7 @@ const FREE: &str = "a load-time type that read no lexical variable holds no vari
 
 /// `declared` where it read no lexical variable: a scheme as it is, a type narrowed to concrete.
 fn close_declared(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     declared: DeclaredType<Parametric>,
 ) -> DeclaredType<KType> {
     match declared {
@@ -913,7 +913,7 @@ fn close_declared(
 
 /// [`close_declared`] over a callable and its bucket entry.
 fn close_callable<'graph>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     callable: Callable<'graph>,
 ) -> Callable<'graph, KType> {
     Callable {
@@ -927,7 +927,7 @@ fn close_callable<'graph>(
 
 /// [`close_declared`] over a bucket entry.
 fn close_registered<'graph>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     registered: Registered<'graph>,
 ) -> Registered<'graph, KType> {
     Registered {
@@ -1074,7 +1074,10 @@ pub fn writes_for_all(form: &KExpression<'_>) -> bool {
 }
 
 /// `callable`'s runs laid down in program storage.
-fn laid_callable<'graph>(writer: Writer<'graph>, callable: Callable<'_>) -> Callable<'graph> {
+fn laid_callable<'graph>(
+    writer: Writer<'graph, 'graph>,
+    callable: Callable<'_>,
+) -> Callable<'graph> {
     Callable {
         ktype: callable.ktype,
         quantifier_map: FunctionGroupMap(collect(writer, callable.quantifier_map.iter())),
@@ -1086,7 +1089,7 @@ fn laid_callable<'graph>(writer: Writer<'graph>, callable: Callable<'_>) -> Call
 
 /// `registered`'s runs laid down in program storage.
 fn laid_registered<'graph>(
-    writer: Writer<'graph>,
+    writer: Writer<'graph, 'graph>,
     registered: Registered<'_>,
 ) -> Registered<'graph> {
     Registered {

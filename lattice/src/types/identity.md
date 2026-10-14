@@ -108,8 +108,11 @@ interns through a [`TypeChain`](chain.rs) over the half it writes, a
 longer-lived branch between the two — its region's, or a branch lent to it —
 read through an object-safe `Tier` that re-reads that half's slot on every
 probe, so a branch laid there during the step is seen and the lattice needs no
-`unsafe` for the one tier a chain reads at another brand. A chain is built per
-step and never stored.
+`unsafe` for the one tier a chain reads at another brand. The chain holds that
+half by value beside the one it writes (`Halves`, which `Habitat::region`
+hands the chain), so building one lays nothing; no branch holds it, since a
+half's door is valid for one step. A chain is built per step and never
+stored.
 
 How a value's types reach another habitat is the crossing's
 ([crossing](../../../src/values/README.md#crossing)), over three doors

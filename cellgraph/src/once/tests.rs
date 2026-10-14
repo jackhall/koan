@@ -30,7 +30,7 @@ fn pin(_: Prices) -> Verdict {
     Verdict::Pin
 }
 
-fn one(writer: Writer<'_>, value: u32) -> &u32 {
+fn one<'cell>(writer: Writer<'cell, '_>, value: u32) -> &'cell u32 {
     &writer.fill(1, |_| value)[0]
 }
 

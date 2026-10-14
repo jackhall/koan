@@ -101,7 +101,7 @@ where
 /// test that runs under both verdicts passes.
 fn take<'cell>(
     view: &CrossedOperand<'static, 'cell, '_, Number>,
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
 ) -> &'cell u32 {
     match view {
         // Pinned: the borrow itself, embedded in the destination's storage.
@@ -113,7 +113,7 @@ fn take<'cell>(
 
 /// One value, laid down through the writer's single run verb — the shape an embedder derives its
 /// own one-value write from, and what these tests use in place of one.
-fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
+fn one<'cell, T>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }
@@ -126,7 +126,7 @@ fn number_here<
     S: ReattachableOverBoth<'static>,
     D: Delivery<'static>,
 >(
-    context: &StepContext<'static, 'step, '_, '_, C, S, D>,
+    context: &StepContext<'static, 'step, '_, '_, '_, C, S, D>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))

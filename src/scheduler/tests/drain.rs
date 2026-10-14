@@ -14,14 +14,14 @@ use crate::scheduler::{
 use crate::type_lattice::Root;
 
 /// A step that records the number or text it holds, and finishes.
-fn record_state<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn record_state<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     record(describe(state));
     step.done()
 }
 
 /// A step that refuses to proceed.
-fn fail<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn fail<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     step.failed(StepError::Stale)
 }
 
@@ -68,7 +68,7 @@ fn a_birth_state_reaches_the_step_that_runs_the_root_work() {
 
 /// Hand a child a state built in this cell's own region, at `'here`.
 fn hand_over<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     placement: Placement,
 ) -> Action<'graph, Native> {
     let handed = crate::values::text(step.writer(), "handed over");
@@ -81,23 +81,27 @@ fn hand_over<'graph>(
     step.park(asked, woken, KValue::Null, None)
 }
 
-fn hand_over_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn hand_over_fresh<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     hand_over(step, Placement::Fresh)
 }
 
-fn hand_over_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn hand_over_shares<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     hand_over(step, Placement::Shares)
 }
 
 /// The child: record the state it woke holding, and deliver nothing but the wake.
-fn take_over<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn take_over<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     record(format!("woke {}", where_text(state)));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 /// A consumer woken by its children, with nothing more to do.
-fn woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     step.done()
 }
 
@@ -128,7 +132,7 @@ fn a_spawned_child_wakes_holding_the_state_its_spawner_handed_over() {
 
 /// A cell of the order test: record its name, ask for two children named after it when it is not
 /// a leaf, and park on them.
-fn named<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn named<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Str(name) = state else {
         return step.failed(StepError::Stale);
@@ -158,7 +162,7 @@ fn named<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
 }
 
 /// A cell of the order test, woken: record that it woke, and deliver to its own spawner.
-fn named_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn named_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     let KValue::Str(name) = state else {
         return step.failed(StepError::Stale);
@@ -202,7 +206,7 @@ fn two_children_asked_in_one_park_run_one_subtree_after_the_other() {
 const DEPTH: f64 = if cfg!(miri) { 2.0 } else { 8.0 };
 
 /// One level of a recursion that asks for two children at every level, down to a leaf.
-fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Number(depth) = state else {
         return step.failed(StepError::Stale);
@@ -216,7 +220,7 @@ fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Na
 }
 
 /// One level, woken: count the leaves below it and hand the count up, or record it at the top.
-fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Number(depth) = state else {
         return step.failed(StepError::Stale);
@@ -259,7 +263,9 @@ fn a_recursion_asking_two_children_per_level_peaks_at_its_depth() {
 const SIBLINGS: usize = 100;
 
 /// Ask for a hundred children in one park.
-fn ask_a_hundred<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn ask_a_hundred<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     let mut last = None;
     for index in 0..SIBLINGS {
         last = Some(step.spawn(fresh(sibling, Use::Reads, KValue::Number(index as f64))));
@@ -273,7 +279,7 @@ fn ask_a_hundred<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Acti
 }
 
 /// One sibling: record its index, and deliver it.
-fn sibling<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn sibling<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     let KValue::Number(index) = state else {
         return step.failed(StepError::Stale);
@@ -283,7 +289,9 @@ fn sibling<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 }
 
 /// The spawner, woken: count what arrived.
-fn count_them<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn count_them<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     let arrived = step.results().filter(Result::is_ok).count();
     record(format!("{arrived} arrived"));
     step.done()
@@ -328,7 +336,7 @@ fn a_step_that_cannot_proceed_stalls_the_drain() {
 
 /// Ask for a child that ends without delivering, and park on it.
 fn park_on_a_silent_child<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let asked = step.spawn(fresh(record_state, Use::Reads, KValue::Str("silent")));
     step.park(asked, woken, KValue::Null, None)
@@ -356,7 +364,9 @@ fn a_child_that_ends_without_delivering_leaves_the_drain_unfinished() {
 }
 
 /// Ask for a child, then end without parking on it.
-fn ask_and_leave<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn ask_and_leave<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     step.spawn(fresh(record_state, Use::Reads, KValue::Null));
     step.done()
 }
@@ -452,7 +462,7 @@ fn two_views_over_one_graph_run_in_turn() {
 /// Park on two children, the first of which refuses to proceed: the drain stalls on it with the
 /// second still unborn on the stack.
 fn park_behind_a_failure<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     step.spawn(fresh(fail, Use::Reads, KValue::Null));
     let asked = step.spawn(fresh(record_state, Use::Reads, KValue::Str("queued")));
@@ -487,7 +497,9 @@ fn a_view_dropped_with_a_queued_cell_leaves_cells_the_roots_release_does_not_emp
 }
 
 /// A root work that writes text in its home and leaves it at rest.
-fn write_and_leave<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn write_and_leave<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     let left = crate::values::text(step.writer(), "left at rest");
     record(format!("left {}", where_text(left)));
     step.leave(left)
@@ -495,7 +507,7 @@ fn write_and_leave<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action
 
 /// A later root work that records what the earlier one left.
 fn read_what_was_left<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let (step, state) = step.state();
     record(format!("left {}", where_text(state)));
@@ -544,14 +556,14 @@ fn a_fresh_root_work_leaves_a_state_its_root_keeps() {
 
 /// A child that tries to leave: only a root work reports to nobody.
 fn leave_from_a_child<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     step.leave(KValue::Null)
 }
 
 /// A root work whose child tries to leave.
 fn spawn_a_leaver<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let asked = step.spawn(fresh(leave_from_a_child, Use::Reads, KValue::Null));
     step.park(asked, record_state, KValue::Null, None)

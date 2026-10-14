@@ -26,7 +26,7 @@ use crate::type_lattice::{
     DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
 };
 use crate::values::digest::function_content;
-use crate::values::{ContentDigest, Knotted as _, Link, Retyped, Seen, Types, Value, Weight};
+use crate::values::{Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight};
 
 use super::{Coerced, KActivationView, KValue, Knotted, Node, Untieable, composed};
 
@@ -143,7 +143,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     /// record is re-homed through `writer`, since it is a run in the source region.
     pub(super) fn rebuilt<'to, Y>(
         &self,
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         closure: &'to ClosureBindings<'to, Y>,
     ) -> Function<'graph, 'to, Y> {
         Function {
@@ -213,7 +213,7 @@ impl<'cell> Typing<'cell> {
     /// `map`, `registered`, `instance` and `declared` written into the region `writer` fills, or
     /// `None` where the function has none of them.
     pub(super) fn laid_down(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         map: FunctionGroupMap<'_>,
         registered: Option<Registered<'_, KType>>,
         instance: &[KType],
@@ -296,7 +296,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     /// add to the knot's weight. A plain unquantified `FN` has no typing record and writes none.
     pub(super) fn laid_down(
         &self,
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
     ) -> (
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
         Option<&'cell Typing<'cell>>,
@@ -327,7 +327,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, 'cell>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
 ) -> Result<Staged<'graph, 'cell, 'x>, Untieable<'x>> {
@@ -385,7 +385,7 @@ const BOUND: &str = "an instance's lexical variables are bound where it is read 
 fn solved<'graph, 'x>(
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
@@ -409,7 +409,7 @@ const BORN: &str = "a callable's type holds no variable once its levels are boun
 
 /// `declared` where every level is bound: a scheme as it is, and a type narrowed to concrete.
 fn concrete_declared(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     declared: DeclaredType<Parametric>,
 ) -> DeclaredType<KType> {
     match declared {
@@ -419,7 +419,10 @@ fn concrete_declared(
 }
 
 /// `callable` as a function is born with it, every level its declaration read bound.
-fn born<'x>(types: &Types<'_, '_>, callable: Callable<'x, Parametric>) -> Callable<'x, KType> {
+fn born<'x>(
+    types: &Chain<'_, '_, '_, '_, '_>,
+    callable: Callable<'x, Parametric>,
+) -> Callable<'x, KType> {
     Callable {
         ktype: concrete_declared(types, callable.ktype),
         quantifier_map: callable.quantifier_map,
@@ -439,7 +442,7 @@ fn loaded<'graph, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, '_>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<Callable<'x, KType>> {
     let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
@@ -502,7 +505,7 @@ pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
     activation: &KActivationView<'graph, 'cell>,
     bodies: &[Option<Born<'graph>>],
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Option<Staged<'graph, 'cell, 'x>>>, Untieable<'x>> {
     let mut staged = BumpVec::with_capacity_in(bodies.len(), scratch);
@@ -534,10 +537,10 @@ pub(super) fn stage<'graph, 'cell, 'x>(
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
 /// never asks for it, so no capture here is an edge.
 pub fn lambda<'graph, 'cell, 'x>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     site: Site,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>> {
     let body = activation
@@ -569,11 +572,11 @@ pub fn lambda<'graph, 'cell, 'x>(
 /// arguments cross at — before the same function, which solves its own group where it runs. Each
 /// lexical variable `solution` names is read through `activation`.
 pub fn barrier_instance<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);
@@ -605,11 +608,11 @@ pub fn barrier_instance<'graph, 'cell>(
 /// member's own group, as a call by name does. Each lexical variable `solution` names is read
 /// through `activation`.
 pub fn header_instance<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     header: &Retyped<Knotted<'graph, 'cell>>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);
@@ -629,11 +632,11 @@ pub fn header_instance<'graph, 'cell>(
 /// An edge in `member`'s closure is relative to its own knot, so each is rehomed as the sibling
 /// value it names.
 pub fn instance<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);

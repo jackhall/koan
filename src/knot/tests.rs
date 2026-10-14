@@ -29,7 +29,7 @@ use crate::scope::{BodyShape, Builtins, Component, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::tests::TestTypes;
-use crate::values::{Circular, Knotted as _, Link, TypeHeader, TypeValue, Types, Value};
+use crate::values::{Chain, Circular, Knotted as _, Link, TypeHeader, TypeValue, Types, Value};
 
 use super::module::body_activation;
 use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
@@ -42,13 +42,13 @@ reattachable!(Step => ());
 pub(crate) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TypeHeader>;
 
 /// A step context over [`TestGraph`].
-pub(crate) type TestContext<'graph, 'step, 'here, 'scratch> =
-    StepContext<'graph, 'step, 'here, 'scratch, Step, NoScratch, NoDelivery, TypeHeader>;
+pub(crate) type TestContext<'graph, 'step, 'here, 'scratch, 'lent> =
+    StepContext<'graph, 'step, 'here, 'scratch, 'lent, Step, NoScratch, NoDelivery, TypeHeader>;
 
 pub(crate) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which a test's load-time work and every shape go through.
-    pub types: &'f Types<'graph, 'graph>,
+    pub types: &'f Types<'graph, 'graph, 'f>,
     /// The tiers every cell's chain is built over.
     pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
@@ -90,8 +90,8 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn in_cell<R>(
         &self,
         verdict: fn(Prices) -> Verdict,
-        step: impl for<'step, 'here, 'scratch> FnOnce(
-            &mut TestContext<'graph, 'step, 'here, 'scratch>,
+        step: impl for<'step, 'here, 'scratch, 'lent> FnOnce(
+            &mut TestContext<'graph, 'step, 'here, 'scratch, 'lent>,
         ) -> R,
     ) -> R {
         let mut graph: TestGraph<'graph> = CellGraph::new(1, verdict);
@@ -111,8 +111,8 @@ impl<'graph> Fixture<'_, 'graph> {
     /// `ZZ _ _`, laid down in `writer`'s region, typed through `types`.
     pub fn builtins<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'graph, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
     ) -> &'cell Builtins<'cell, Knotted<'graph, 'cell>> {
         let origin = ValueSymbol::declared("origin", self.symbols).expect("a value token");
         let types: Vec<_> = [
@@ -146,8 +146,8 @@ impl<'graph> Fixture<'_, 'graph> {
     /// into being unless one of its members is named in `leave`, whose slots stay empty.
     pub fn run<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'graph, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
         lines: &[KExpression<'graph>],
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
@@ -188,8 +188,8 @@ impl<'graph> Fixture<'_, 'graph> {
     /// from.
     fn bring_in<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'graph, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
@@ -264,8 +264,8 @@ impl<'graph> Fixture<'_, 'graph> {
     /// slot empty, each of the body's own components brought in, then the binder tied.
     fn bring_module<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'graph, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,

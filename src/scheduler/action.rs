@@ -27,15 +27,17 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::type_lattice::Root;
-use crate::values::{Half, TypeHeader, Types};
+use crate::type_lattice::{Habitat, Halves, Own};
+use crate::values::{Chain, Half, TypeHeader, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
-pub(super) type Context<'graph, 'step, 'here, 'scratch, B> = StepContext<
+pub(super) type Context<'graph, 'step, 'here, 'scratch, 'lent, B> = StepContext<
     'graph,
     'step,
     'here,
     'scratch,
+    'lent,
     ContinuationFamily<B>,
     <B as StepBundle<'graph>>::Scratch,
     KDelivery,
@@ -117,7 +119,7 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn once<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+/// fn once<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     step.done()
 /// }
 /// ```
@@ -128,7 +130,7 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+/// fn twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let _ = step.done();
 ///     step.done()
 /// }
@@ -143,12 +145,12 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn state_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+/// fn state_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.state();
 ///     step.done()
 /// }
 ///
-/// fn scratch_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+/// fn scratch_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.scratch();
 ///     step.done()
 /// }
@@ -160,7 +162,7 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn state_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+/// fn state_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.state();
 ///     let (step, _) = step.state();
 ///     step.done()
@@ -173,7 +175,7 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn scratch_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+/// fn scratch_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.scratch();
 ///     let (step, _) = step.scratch();
 ///     step.done()
@@ -185,14 +187,16 @@ pub struct Step<
     'step,
     'here,
     'scratch,
+    'lent,
     B: StepBundle<'graph>,
     S: Hold = Holding,
     X: Hold = Holding,
 > where
-    'graph: 'step + 'here,
+    'graph: 'step + 'here + 'lent,
     'here: 'scratch,
+    'lent: 'scratch,
 {
-    context: &'a mut Context<'graph, 'step, 'here, 'scratch, B>,
+    context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     /// The frozen type root of the graph this step runs over, which every chain it builds reads
     /// first.
     type_root: &'graph Root<'graph>,
@@ -225,17 +229,18 @@ impl Hold for Taken {
     type Of<T> = ();
 }
 
-impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>
-    Step<'a, 'graph, 'step, 'here, 'scratch, B>
+impl<'a, 'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>
+    Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, B>
 where
-    'graph: 'step + 'here,
+    'graph: 'step + 'here + 'lent,
     'here: 'scratch,
+    'lent: 'scratch,
 {
     /// The step the drain hands a cell's continuation, over its graph's type root, the provenance
     /// it read off that same continuation, the buffer it cleared for this step, and both slots the
     /// cell parked in.
     pub(super) fn new(
-        context: &'a mut Context<'graph, 'step, 'here, 'scratch, B>,
+        context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
         type_root: &'graph Root<'graph>,
         provenance: &'a Provenance,
         spawns: &'a mut Spawns<'graph, B>,
@@ -253,11 +258,12 @@ where
     }
 }
 
-impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>, X: Hold>
-    Step<'a, 'graph, 'step, 'here, 'scratch, B, Holding, X>
+impl<'a, 'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>, X: Hold>
+    Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, B, Holding, X>
 where
-    'graph: 'step + 'here,
+    'graph: 'step + 'here + 'lent,
     'here: 'scratch,
+    'lent: 'scratch,
 {
     /// The state this cell holds: the one the previous step parked with, or the one the cell was
     /// born with, woken to this step's `'here` at the verdict's price. It comes back beside the
@@ -266,7 +272,7 @@ where
     pub fn state(
         self,
     ) -> (
-        Step<'a, 'graph, 'step, 'here, 'scratch, B, Taken, X>,
+        Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, B, Taken, X>,
         StateAt<'graph, 'here, B>,
     ) {
         let Step {
@@ -289,11 +295,12 @@ where
     }
 }
 
-impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>, S: Hold>
-    Step<'a, 'graph, 'step, 'here, 'scratch, B, S, Holding>
+impl<'a, 'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>, S: Hold>
+    Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, B, S, Holding>
 where
-    'graph: 'step + 'here,
+    'graph: 'step + 'here + 'lent,
     'here: 'scratch,
+    'lent: 'scratch,
 {
     /// The scratch state the previous step parked, if it parked one, beside the `Step` in its
     /// [`Taken`] form, like [`state`](Step::state). A step that parks again hands it, or its
@@ -302,7 +309,7 @@ where
     pub fn scratch(
         self,
     ) -> (
-        Step<'a, 'graph, 'step, 'here, 'scratch, B, S, Taken>,
+        Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, B, S, Taken>,
         Option<ScratchAt<'graph, 'here, 'scratch, B>>,
     ) {
         let Step {
@@ -325,42 +332,111 @@ where
     }
 }
 
-impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>, S: Hold, X: Hold>
-    Step<'a, 'graph, 'step, 'here, 'scratch, B, S, X>
+impl<'a, 'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>, S: Hold, X: Hold>
+    Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, B, S, X>
 where
-    'graph: 'step + 'here,
+    'graph: 'step + 'here + 'lent,
     'here: 'scratch,
+    'lent: 'scratch,
 {
     /// This cell's region, at its own brand.
-    pub fn writer(&self) -> Writer<'here> {
+    pub fn writer(&self) -> Writer<'here, 'step> {
         self.context.writer()
     }
 
     /// This cell's scratch habitat, at its own brand.
-    pub fn scratch_writer(&self) -> Writer<'scratch> {
+    pub fn scratch_writer(&self) -> Writer<'scratch, 'step> {
         self.context.scratch_writer()
     }
 
     /// The header door of this cell's write home — its region, or its host's for a tenant — at
     /// its own brand: where the branch of the types the step builds there rests.
-    pub fn header(&self) -> Header<'graph, 'here, TypeHeader> {
+    pub fn header(&self) -> Header<'graph, 'here, 'step, TypeHeader> {
         self.context.header()
     }
 
     /// The chain this step reads and interns types through for what it lays at `'here`: the
     /// graph's type root, then its write home's branch. Built once per step, never parked.
-    pub fn types(&self) -> Types<'graph, 'here> {
-        Types::new(self.type_root, Half::of(self.writer(), self.header()))
+    pub fn types(&self) -> Types<'graph, 'here, 'step> {
+        Types::new(
+            self.type_root,
+            Halves::alone(Half::of(self.writer(), self.header())),
+        )
     }
 
     /// The chain for what the step lays in its scratch habitat: the graph's type root, its write
     /// home's branch, then the scratch habitat's own, released with it at the step's end.
-    pub fn scratch_types(&self) -> Types<'graph, 'scratch> {
-        Types::scratch(
+    pub fn scratch_types(&self) -> Chain<'graph, 'scratch, 'scratch, 'here, 'step> {
+        Chain::scratch(
             self.type_root,
-            Half::of(self.writer(), self.header()),
+            Half::paired(self.writer(), self.header()),
             Half::of(self.scratch_writer(), self.context.scratch_header()),
         )
+    }
+
+    /// The chain a `Shares` caching body runs on: [`scratch_types`](Self::scratch_types)'s tiers,
+    /// paired to this step's region writer, so a value laid at `'here` takes its types from the
+    /// write home's scratch and nothing the body mints lands in its region.
+    pub fn shares_types(&self) -> Chain<'graph, 'scratch, 'here, 'here, 'step> {
+        Chain::scratch(
+            self.type_root,
+            Half::of(self.writer(), self.header()),
+            Half::paired(self.scratch_writer(), self.context.scratch_header()),
+        )
+    }
+
+    /// Hold this cell's scratch for the rest of its life: `true` for a tree cell, whose own
+    /// scratch a `Fresh` caching frame keeps its cold types in; `false`, changing nothing, for a
+    /// tenant, whose scratch is its host's.
+    pub fn hold_scratch(&mut self) -> bool {
+        self.context.hold_scratch()
+    }
+
+    /// Link this cell's scratch branch to its region branch, laying both, so the
+    /// [reading chain](Self::reading_types) reaches the region through the link. Called once, by a
+    /// `Fresh` caching frame right after its [hold](Self::hold_scratch), before anything lays its
+    /// scratch branch: the link refuses a laid branch.
+    pub fn link_reading_types(&self) {
+        let Own::Branch(region) = Half::of(self.writer(), self.header()).own_or_lay() else {
+            unreachable!("a step's region half lays a branch");
+        };
+        Chain::new(
+            self.type_root,
+            Halves::alone(Half::paired(
+                self.scratch_writer(),
+                self.context.scratch_header(),
+            )),
+        )
+        .link(region);
+    }
+
+    /// The chain a held `Fresh` caching frame's own body reads and lays through: the graph's type
+    /// root, the lent branch — the scratch of the cell its asker parked in — then this cell's own
+    /// scratch, whose branch links its region. Paired to the region writer. `None` for a cell
+    /// with no lender.
+    pub fn reading_types(&self) -> Option<Chain<'graph, 'scratch, 'here, 'lent, 'step>> {
+        let (lent_writer, lent_header) = self.context.lent_scratch()?;
+        let scratch_header = self.context.scratch_header();
+        debug_assert!(
+            scratch_header.get().is_some(),
+            "a held frame's scratch branch is laid by its link"
+        );
+        Some(Chain::scratch(
+            self.type_root,
+            Half::paired(lent_writer, lent_header),
+            Half::paired(self.scratch_writer(), scratch_header),
+        ))
+    }
+
+    /// The warm tier alone, over the graph's type root: the lent branch, which outlives every hop
+    /// born under the asker's park. What an invariant site's types are adopted into, so the next
+    /// hop finds them. Paired to the region writer; `None` for a cell with no lender.
+    pub fn warm_types(&self) -> Option<Chain<'graph, 'lent, 'here, 'lent, 'step>> {
+        let (lent_writer, lent_header) = self.context.lent_scratch()?;
+        Some(Chain::new(
+            self.type_root,
+            Halves::alone(Half::paired(lent_writer, lent_header)),
+        ))
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain
@@ -385,13 +461,29 @@ where
     pub fn results(
         &mut self,
     ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> {
+        self.results_against(None)
+    }
+
+    /// [`results`](Self::results), a pinned carrier's debug check reading `check`: the chain of
+    /// a caching body, whose children's values carry types in its scratch tiers.
+    pub fn results_with<'c>(
+        &'c mut self,
+        check: &'c Chain<'_, '_, '_, '_, '_>,
+    ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> + 'c {
+        self.results_against(Some(check))
+    }
+
+    fn results_against<'c>(
+        &'c mut self,
+        check: Option<&'c Chain<'_, '_, '_, '_, '_>>,
+    ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> + 'c {
         let root = self.type_root;
         let context = &mut *self.context;
         let count = context.receipt_count().unwrap_or(0);
         (0..count).map(move |slot| match context.receipt(slot) {
             Ok(Receipt::Value(value)) => Ok(Received::Scratch(value)),
             Ok(Receipt::Carrier(Ok(carrier))) => Ok(Received::Here(crate::values::cross_here(
-                context, &carrier, root,
+                context, &carrier, root, check,
             ))),
             _ => Err(StepError::Unredeemable),
         })
@@ -461,8 +553,8 @@ where
     pub fn finish_fresh(
         self,
         build: impl for<'their> FnOnce(
-            Writer<'their>,
-            &Types<'graph, 'their>,
+            Writer<'their, '_>,
+            &Types<'graph, 'their, '_>,
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
@@ -476,7 +568,11 @@ where
                 self.provenance.parent,
                 report.slot,
                 |writer, header, witness| {
-                    build(writer, &Types::new(root, Half::of(writer, header)), witness)
+                    build(
+                        writer,
+                        &Types::new(root, Halves::alone(Half::of(writer, header))),
+                        witness,
+                    )
                 },
             );
             return Action::settle(filled);
@@ -488,7 +584,11 @@ where
             // argument's type implies the bound the witness states. Were that where-clause to go,
             // this would stop compiling — a compile error, never unsoundness.
             |writer, header, _: &[CrossedOperand<'graph, '_, '_, KValueFamily, TypeHeader>]| {
-                build(writer, &Types::new(root, Half::of(writer, header)), &&())
+                build(
+                    writer,
+                    &Types::new(root, Halves::alone(Half::of(writer, header))),
+                    &&(),
+                )
             },
         );
         self.file(report, placed)
@@ -504,8 +604,22 @@ where
         self,
         operands: [KValue<'graph, 'here>; N],
         build: impl for<'their> FnOnce(
-            Writer<'their>,
-            &Types<'graph, 'their>,
+            Writer<'their, '_>,
+            &Types<'graph, 'their, '_>,
+            [KValue<'graph, 'their>; N],
+            &'their &'graph (),
+        ) -> Active<'graph, 'their, KValueFamily>,
+    ) -> Action<'graph, B> {
+        self.finish_in_home_against(operands, None, build)
+    }
+
+    fn finish_in_home_against<const N: usize>(
+        self,
+        operands: [KValue<'graph, 'here>; N],
+        check: Option<&Chain<'_, '_, '_, '_, '_>>,
+        build: impl for<'their> FnOnce(
+            Writer<'their, '_>,
+            &Types<'graph, 'their, '_>,
             [KValue<'graph, 'their>; N],
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
@@ -526,9 +640,9 @@ where
             self.provenance.home,
             &crossing,
             |writer, header, views| {
-                let types = Types::new(root, Half::of(writer, header));
+                let types = Types::new(root, Halves::alone(Half::of(writer, header)));
                 let values = std::array::from_fn(|index| {
-                    crate::values::cross_view(writer, &types, &views[index])
+                    crate::values::cross_view_against(writer, &types, &views[index], check)
                 });
                 build(writer, &types, values, &&())
             },
@@ -540,6 +654,16 @@ where
     /// to resolve there over the graph's type root, and deliver it as a carrier.
     pub fn finish(self, value: KValue<'graph, 'here>) -> Action<'graph, B> {
         self.finish_in_home([value], |_, _, [value], _| Active::new(value))
+    }
+
+    /// [`finish`](Self::finish), a pinned value's debug check reading `check`: the chain of a
+    /// caching body finishing a value that stays inside it, whose types lie in its scratch tiers.
+    pub fn finish_with(
+        self,
+        value: KValue<'graph, 'here>,
+        check: &Chain<'_, '_, '_, '_, '_>,
+    ) -> Action<'graph, B> {
+        self.finish_in_home_against([value], Some(check), |_, _, [value], _| Active::new(value))
     }
 
     /// End a root work by leaving `birth` at rest in its home — the cell it was born under — for

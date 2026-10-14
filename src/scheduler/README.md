@@ -112,8 +112,9 @@ work, so nothing a stalled run left there is ever popped.
 
 ## What a step may name
 
-`enter` quantifies a step's three brands — `'step`, `'here` and `'scratch` — per
-call, so a step's return type can name none of them. That is why `Action`
+`enter` quantifies a step's four brands — `'step`, `'here`, `'scratch` and
+`'lent`, a tree cell's borrow of its lender's scratch — per call, so a step's
+return type can name none of them. That is why `Action`
 carries no region borrow, and why the children a step asks for go into a
 drain-owned buffer rather than into what it returns.
 
@@ -127,6 +128,14 @@ previous step parked, and exposes:
   each writer — `types` and `scratch_types`, built over the graph's type root
   once per step and never parked — so a type the step builds lands in the
   branch of the habitat it lays its value in;
+- the chains a [caching body](../program/README.md#caching-bodies) runs on,
+  paired to the region writer while their tiers sit in scratch:
+  `shares_types`, over the write home's region and scratch; `reading_types`,
+  over the lent branch and the cell's own scratch, whose branch
+  `link_reading_types` links to its region once `hold_scratch` has held that
+  scratch for the cell's life; and `warm_types`, the lent branch alone. The
+  last two are `None` where the cell borrows no scratch. `results_with` and
+  `finish_with` run a pinned value's debug check against such a chain;
 - `state` and `scratch`, which take the cell's state and its parked scratch
   state, each once. A state is a projection of the step bundle, which a
   higher-ranked function pointer cannot take as a parameter (rustc #100013), so
@@ -406,7 +415,10 @@ no layer of koan's above present. They hold, each with a workload of its own:
   tenant's `Fresh` hop reaches what its host read through its link, and each
   way a deep cell hands a value on — a hop at each placement from a tree cell
   and a tenant, and a kept result — leaves the landing cell's branch the same
-  at depth four and sixteen ([tests/branches.rs](tests/branches.rs));
+  at depth four and sixteen; and the caching chains: a `Shares` chain laying
+  in its host's scratch and leaving its region, a held `Fresh` child reading
+  its region and its lender's scratch, and a lent branch refusing a node over
+  a region child ([tests/branches.rs](tests/branches.rs));
 - a root work that leaves a birth a later root work resumes from, at each
   placement, and a cell that reports to somebody refused on `leave`;
 - two schedulers beside each other sharing nothing — each test seeds its own

@@ -47,7 +47,7 @@ use crate::parse::KLiteral;
 use crate::type_lattice::{DeclaredType, KType};
 
 use super::surface::Parts;
-use super::{Knotted, Nothing, Seen, Surface, Types, Value};
+use super::{Chain, Knotted, Nothing, Seen, Surface, Value};
 
 /// A value's content identity: the low 128 bits of a BLAKE3 hash of its content, held as bytes so a
 /// node storing one keeps a word's alignment.
@@ -218,8 +218,8 @@ fn composite(tag: Tag, ktype: KType, contents: ContentDigest) -> ContentDigest {
 /// Nothing a walk reads is freed or moved while it runs, so an address names one part of a shape
 /// for the walk's life, and the shape keeps two kinds of resident that could share an address
 /// apart.
-pub struct Digests<'a, 'g, 'run, X> {
-    types: &'a Types<'g, 'run>,
+pub struct Digests<'a, 'g, 'run, 'p, 'reg, X> {
+    types: &'a Chain<'g, 'run, 'p, 'reg, 'a>,
     scratch: BumpAllocator<'a>,
     composites: BumpBackedMap<'a, MemoKey, ContentDigest>,
     knots: BumpBackedMap<'a, X, ContentDigest>,
@@ -267,10 +267,10 @@ struct Stacks<'a, 'cell, X> {
     held: BumpVec<'a, Seen<'cell, X>>,
 }
 
-impl<'a, 'g, 'run, X: Knotted> Digests<'a, 'g, 'run, X> {
+impl<'a, 'g, 'run, 'p, 'reg, X: Knotted> Digests<'a, 'g, 'run, 'p, 'reg, X> {
     /// A demand's memo, reading types in `types` and staging its walks and its tables over
     /// `scratch`.
-    pub fn new(types: &'a Types<'g, 'run>, scratch: BumpAllocator<'a>) -> Self {
+    pub fn new(types: &'a Chain<'g, 'run, 'p, 'reg, '_>, scratch: BumpAllocator<'a>) -> Self {
         Digests {
             types,
             scratch,

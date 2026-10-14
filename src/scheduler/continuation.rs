@@ -49,8 +49,8 @@ pub trait StepBundle<'graph>: 'graph {
     /// `type_root`, as `born` says. The one place above the scheduler a birth is copied, and the
     /// veneer calls it only from inside a priced crossing.
     fn cross<'cell>(
-        writer: Writer<'cell>,
-        header: Header<'graph, 'cell, TypeHeader>,
+        writer: Writer<'cell, '_>,
+        header: Header<'graph, 'cell, '_, TypeHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, TypeHeader>,
         born: Born,
         type_root: &'graph Root<'graph>,
@@ -83,8 +83,8 @@ pub type StateAt<'graph, 'cell, B> =
 /// Higher-ranked over the three brands one `enter` quantifies, so one pointer runs in any cell at
 /// any step. It is not ranked over `'graph`: the state it reads, the children it asks for and the
 /// action it returns all name the graph whose cells they belong to.
-pub type NativeStep<'graph, B> = for<'step, 'here, 'scratch> fn(
-    Step<'_, 'graph, 'step, 'here, 'scratch, B>,
+pub type NativeStep<'graph, B> = for<'step, 'here, 'scratch, 'lent> fn(
+    Step<'_, 'graph, 'step, 'here, 'scratch, 'lent, B>,
 ) -> Action<'graph, B>;
 
 /// The work one cell is born to run: the step it starts at, and what it starts holding.

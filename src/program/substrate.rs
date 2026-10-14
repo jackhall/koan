@@ -10,8 +10,8 @@ use crate::parse::parse_with_path;
 use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
 use crate::scope::BodyShape;
 use crate::symbols::SymbolInterner;
-use crate::type_lattice::RootBuilder;
-use crate::values::{Half, Types};
+use crate::type_lattice::{Halves, RootBuilder};
+use crate::values::{Chain, Half, Types};
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
@@ -148,7 +148,8 @@ impl CellSubstrate {
             // Everything the root owns is laid in the owner's registry arena, which releases it
             // whole. The load's chain never leaves the load: its end freezes the root.
             let builder = RootBuilder::in_region(&owner.registry);
-            let types: &Types<'_, '_> = &Types::building(Half::Load(builder));
+            let types: &Chain<'_, '_, '_, '_, '_> =
+                &Types::building(Halves::alone(Half::load(builder)));
             let scratch = Bump::new();
             let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
             let refused = |error: crate::scope::ShapeError<'_>| LoadError::Shape {

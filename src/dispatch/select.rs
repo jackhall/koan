@@ -29,7 +29,7 @@ use crate::type_lattice::{
     DeclaredType, KType, Parametric, Verdict, admit_by_class, outranks, satisfied_by, scheme_slots,
     select_by_class, shape_slots, solving_slots, substitute_quantified,
 };
-use crate::values::{List, Record, TypeValue, Types, Value};
+use crate::values::{Chain, List, Record, TypeValue, Value};
 
 use super::{Evaluation, Operand};
 
@@ -59,7 +59,7 @@ struct Admitted<'x, 'graph, 'here> {
 /// solving slot reading its operand's entry of `contributed` where it holds one: each candidate
 /// beside the load's verdict, where an *always* one is taken as admitted.
 pub(super) fn selected<'x, 'graph, 'here>(
-    at: &Evaluation<'graph, 'here>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     candidates: impl IntoIterator<Item = (Candidate, Verdict)>,
     arguments: &[KType],
     contributed: &[Option<KType>],
@@ -159,7 +159,7 @@ pub(super) fn winner(
 /// that one admits too and eliminates it there. Only the first class is safe: past it, a survivor
 /// that would eliminate it may itself be gone.
 pub(super) fn never_runs(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: &Bump,
     maybe: DeclaredType<Parametric>,
     always: impl IntoIterator<Item = DeclaredType<Parametric>>,
@@ -191,7 +191,7 @@ fn registration<'here>(callee: KValue<'_, 'here>) -> Option<Registered<'here, KT
 /// types `arguments`: run without admitting, save that a quantified one solves its group from them
 /// and `contributed` — and where that solve fails, no overload, as full selection finds.
 pub(super) fn chosen<'x, 'graph, 'here>(
-    at: &Evaluation<'graph, 'here>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     coordinate: Coordinate,
     arguments: &[KType],
     contributed: &[Option<KType>],
@@ -226,7 +226,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
 /// The types `shape`'s group is solved from: at each slot the solve reads, the argument's
 /// contribution where the load recorded one, and its carried type everywhere else.
 fn solved_from<'x>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: &'x Bump,
     shape: DeclaredType<KType>,
     carried: &'x [KType],
@@ -250,7 +250,7 @@ fn solved_from<'x>(
 /// Whether each of `carried` lies under its slot of `shape` at `solution`. Not gated on
 /// `debug_assertions`: its one caller is a `debug_assert!`, which type-checks in every profile.
 pub(super) fn carried_fit(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: &Bump,
     shape: DeclaredType<KType>,
     solution: &[KType],
@@ -293,8 +293,8 @@ fn registered_shape(candidate: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
 /// type parameter the shape's group solved to `solution` — or, for a header or a barrier, each
 /// name of the shape's group — built in `writer`'s region.
 pub(super) fn arguments<'graph, 'here>(
-    types: &Types<'_, 'here>,
-    writer: Writer<'here>,
+    types: &Chain<'_, '_, 'here, '_, '_>,
+    writer: Writer<'here, '_>,
     registered: Registered<'_, KType>,
     operands: &[Operand<'graph, 'here>],
     solution: &[KType],

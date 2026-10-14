@@ -391,7 +391,10 @@ fn a_panicking_step_leaves_both_slots_as_it_held_them() {
 
 /// A scratch state over one scratch value, for the shared-region tests: what it names is a byte of
 /// the *host's* scratch bump, whichever cell stored it.
-fn park_one<'step>(context: &mut StepContext<'static, 'step, '_, '_, Storage, Spine>, value: u32) {
+fn park_one<'step>(
+    context: &mut StepContext<'static, 'step, '_, '_, '_, Storage, Spine>,
+    value: u32,
+) {
     let numbers = context.scratch_writer().fill(1, |_| value);
     let spine = context.scratch_writer().fill(1, |_| &numbers[0]);
     let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
@@ -486,5 +489,124 @@ fn a_released_hosts_scratch_slot_no_longer_blocks_its_tenants() {
     assert_eq!(scratch_in_use(&graph, tenant), 0);
 
     graph.release_tenant(tenant).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A tree cell borrows its parent's scratch bump from its creation to its death: the parent's
+/// step ends hand nothing back meanwhile, and the first quiet step end after the child's death
+/// does.
+#[test]
+fn a_parents_scratch_waits_on_a_tree_child_and_goes_after_its_death() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let parent = graph.create(None).unwrap();
+    let child = graph.create_tree(parent, None).unwrap();
+    let home = CellHome::Slab(parent.slot());
+    assert_eq!(graph.cells.tenancy(home).scratch_borrowers, 1);
+
+    graph
+        .enter(parent, |context| {
+            context.scratch_writer().fill(8, |index| index as u64);
+        })
+        .unwrap();
+    assert!(
+        scratch_in_use(&graph, parent) > 0,
+        "the borrower holds the reset off"
+    );
+
+    graph.release_tree(child).unwrap();
+    assert_eq!(graph.cells.tenancy(home).scratch_borrowers, 0);
+    assert!(
+        scratch_in_use(&graph, parent) > 0,
+        "a death resets nothing by itself"
+    );
+    graph.enter(parent, |_| ()).unwrap();
+    assert_eq!(scratch_in_use(&graph, parent), 0);
+
+    graph
+        .release(parent, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A registration that replaces a parent's run resets nothing while a tree child borrows the
+/// parent's bump.
+#[test]
+fn a_parents_re_registration_keeps_its_bump_under_a_tree_child() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let parent = graph.create(None).unwrap();
+    let child = graph.create_tree(parent, None).unwrap();
+    graph
+        .enter(parent, |context| {
+            context.scratch_writer().fill(8, |index| index as u64);
+            context.register_receipts(1).unwrap();
+        })
+        .unwrap();
+    let written = scratch_in_use(&graph, parent);
+    graph
+        .enter(parent, |context| context.register_receipts(1).unwrap())
+        .unwrap();
+    assert_eq!(
+        scratch_in_use(&graph, parent),
+        written,
+        "the replaced run was reused, and nothing reset"
+    );
+
+    graph.release_tree(child).unwrap();
+    graph
+        .release(parent, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A held tree cell's scratch survives a re-registration and every step end, and goes only with
+/// the cell.
+#[test]
+fn a_held_tree_cells_scratch_lasts_until_its_death() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let root = graph.create(None).unwrap();
+    let cell = graph.create_tree(root, None).unwrap();
+    let home = CellHome::Tree(cell.index());
+
+    graph
+        .enter(cell, |context| {
+            assert!(context.hold_scratch());
+            context.scratch_writer().fill(8, |index| index as u64);
+        })
+        .unwrap();
+    let written = graph.regions.scratch_in_use(home);
+    assert!(written > 0, "the hold kept the bytes past the step end");
+    graph
+        .enter(cell, |context| context.register_receipts(1).unwrap())
+        .unwrap();
+    graph
+        .enter(cell, |context| context.register_receipts(1).unwrap())
+        .unwrap();
+    assert!(graph.regions.scratch_in_use(home) >= written);
+
+    graph.release_tree(cell).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A tenant writes its host's bump, so its hold refuses and changes nothing.
+#[test]
+fn a_tenants_hold_changes_nothing() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let host = graph.create(None).unwrap();
+    let tenant = graph.create_tenant(host, None).unwrap();
+    graph
+        .enter(tenant, |context| {
+            assert!(!context.hold_scratch());
+            context.scratch_writer().fill(8, |index| index as u64);
+        })
+        .unwrap();
+    assert_eq!(
+        scratch_in_use(&graph, host),
+        0,
+        "nothing held the host's bump"
+    );
+    assert!(!graph.enter(host, |context| context.hold_scratch()).unwrap());
+    graph.release_tenant(tenant).unwrap();
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }

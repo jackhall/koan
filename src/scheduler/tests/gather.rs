@@ -21,20 +21,20 @@ const TEXTS: [&str; 3] = ["first", "second", "third"];
 /// Accepts only values at the step's own `'here`, which is invariant: a run read back at
 /// `'scratch` does not pass. What the final build asserts about where its result lives.
 fn in_storage<'graph, 'here, S: Hold, X: Hold>(
-    _: &Step<'_, 'graph, '_, 'here, '_, Native, S, X>,
+    _: &Step<'_, 'graph, '_, 'here, '_, '_, Native, S, X>,
     _: &'here [KValue<'graph, 'here>],
 ) {
 }
 
 /// Ask for one producer of `text`, placed as a co-tenant and asked with `Keeps`, so its result is
 /// built in this cell's own storage and reaches it as a carrier homed here.
-fn ask_for<'graph>(step: &mut Step<'_, 'graph, '_, '_, '_, Native>, text: &'graph str) -> Slot {
+fn ask_for<'graph>(step: &mut Step<'_, 'graph, '_, '_, '_, '_, Native>, text: &'graph str) -> Slot {
     step.spawn(shares(produce, Use::Keeps, KValue::Str(text)))
 }
 
 /// A producer: build the text it was born holding. Asked with `Keeps`, the build lands in the
 /// consumer's storage and is filed as a carrier.
-fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     let KValue::Str(text) = state else {
         return step.failed(StepError::Stale);
@@ -46,7 +46,9 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 }
 
 /// The consumer's first step: ask for two producers and park on them, carrying nothing in scratch.
-fn ask_for_two<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn ask_for_two<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     ask_for(&mut step, TEXTS[0]);
     let asked = ask_for(&mut step, TEXTS[1]);
     step.park(asked, gather_two, KValue::Null, None)
@@ -54,8 +56,8 @@ fn ask_for_two<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action
 
 /// The second step: take both results at this cell's `'here`, lay them down as a run in the
 /// scratch habitat, ask for a third producer, and park carrying the run.
-fn gather_two<'graph, 'here, 'scratch>(
-    mut step: Step<'_, 'graph, '_, 'here, 'scratch, Native>,
+fn gather_two<'graph, 'here, 'scratch, 'lent>(
+    mut step: Step<'_, 'graph, '_, 'here, 'scratch, 'lent, Native>,
 ) -> Action<'graph, Native> {
     let mut gathered = [KValue::Null; 2];
     for (held, received) in gathered.iter_mut().zip(step.results().collect::<Vec<_>>()) {
@@ -81,7 +83,9 @@ fn gather_two<'graph, 'here, 'scratch>(
 
 /// The last step: take the third result and build all three into this cell's storage, straight out
 /// of the gathered run.
-fn build<'graph, 'here>(step: Step<'_, 'graph, '_, 'here, '_, Native>) -> Action<'graph, Native> {
+fn build<'graph, 'here>(
+    step: Step<'_, 'graph, '_, 'here, '_, '_, Native>,
+) -> Action<'graph, Native> {
     let (mut step, scratch) = step.scratch();
     let Some(ScratchState::Gathered(run)) = scratch else {
         return step.failed(StepError::Unredeemable);

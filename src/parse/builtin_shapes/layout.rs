@@ -98,7 +98,7 @@ impl<'a> SlotLayout<'a> {
     ///
     /// Written through `writer` — the node's own store, since this runs from the construction
     /// door. A body that binds no value takes [`EMPTY`](Self::EMPTY) and writes nothing.
-    pub(crate) fn of_body(writer: Writer<'a>, body: &KExpression<'a>) -> &'a SlotLayout<'a> {
+    pub(crate) fn of_body(writer: Writer<'a, '_>, body: &KExpression<'a>) -> &'a SlotLayout<'a> {
         let mut entries: Staged = body
             .body_statements()
             .filter_map(|(statement, position)| {
@@ -112,7 +112,7 @@ impl<'a> SlotLayout<'a> {
     /// ships the same sorted, position-carrying invariant. `entries` is the caller's stack staging,
     /// so the run is ordered where it sits and reaches the store once, at the length the dedupe
     /// settled.
-    fn seal(writer: Writer<'a>, entries: &mut Staged) -> &'a SlotLayout<'a> {
+    fn seal(writer: Writer<'a, '_>, entries: &mut Staged) -> &'a SlotLayout<'a> {
         if entries.is_empty() {
             return SlotLayout::EMPTY;
         }

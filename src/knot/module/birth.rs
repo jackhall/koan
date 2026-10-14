@@ -16,7 +16,7 @@ use crate::knot::{
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
 use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
 use crate::symbols::BinderSymbol;
-use crate::values::Types;
+use crate::values::Chain;
 use crate::values::digest::Digests;
 
 use super::{Module, ModuleContent};
@@ -25,7 +25,7 @@ use super::{Module, ModuleContent};
 /// every slot empty. The caller binds its slots, then ties the binder with the finished
 /// activation.
 pub fn body_activation<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     enclosing: &KActivationView<'graph, 'cell>,
     slot: Slot,
     scratch: BumpAllocator<'_>,
@@ -48,10 +48,10 @@ pub fn body_activation<'graph, 'cell>(
 /// A module is alone in its component and shares nothing with the staging the
 /// [tie](crate::knot::tie()) does for the other member kinds, so it ties on its own path.
 pub fn tie_member<'graph, 'cell, 'x>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'x>> {

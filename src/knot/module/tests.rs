@@ -13,7 +13,7 @@ use crate::knot::{KActivation, KValue, Knotted};
 use crate::memory::BumpAllocator;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, SigSchema};
-use crate::values::Types;
+use crate::values::Chain;
 
 /// The module bound under `name`.
 pub(super) fn module<'graph, 'cell>(
@@ -27,7 +27,7 @@ pub(super) fn module<'graph, 'cell>(
 }
 
 /// The schema of the signature `handle` is.
-pub(super) fn schema<'run>(handle: KType, types: &Types<'_, 'run>) -> SigSchema<'run> {
+pub(super) fn schema<'run>(handle: KType, types: &Chain<'_, 'run, '_, '_, '_>) -> SigSchema<'run> {
     crate::elaborate::schema_of(handle, types).expect("a signature handle")
 }
 
@@ -36,7 +36,7 @@ pub(super) fn member<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     view: Knotted<'graph, 'cell>,
     name: &str,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let name: BinderSymbol = fixture.name(name);

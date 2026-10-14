@@ -13,13 +13,13 @@ use crate::type_lattice::Root;
 const DEPTH: f64 = 200.0;
 
 /// Ask for the head of the descent and park on its single slot.
-fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let asked = step.spawn(fresh(descend, Use::Reads, KValue::Number(DEPTH)));
     step.park(asked, finish, KValue::Null, None)
 }
 
 /// One level: park on a child one shallower, or turn around at the bottom.
-fn descend<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn descend<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Number(depth) = state else {
         return step.failed(StepError::Stale);
@@ -32,7 +32,7 @@ fn descend<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 }
 
 /// The count the level below delivered.
-fn below(step: &mut Step<'_, '_, '_, '_, '_, Native>) -> Option<f64> {
+fn below(step: &mut Step<'_, '_, '_, '_, '_, '_, Native>) -> Option<f64> {
     match step.results().next() {
         Some(Ok(Received::Scratch(KValue::Number(count)))) => Some(count),
         _ => None,
@@ -40,7 +40,7 @@ fn below(step: &mut Step<'_, '_, '_, '_, '_, Native>) -> Option<f64> {
 }
 
 /// Woken by the level below: add this level to its count and pass it up.
-fn ascend<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn ascend<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let Some(count) = below(&mut step) else {
         return step.failed(StepError::Unredeemable);
     };
@@ -49,14 +49,14 @@ fn ascend<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
 
 /// Put one number in the slot this cell was born against.
 fn fill<'graph, S: Hold>(
-    step: Step<'_, 'graph, '_, '_, '_, Native, S>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native, S>,
     count: f64,
 ) -> Action<'graph, Native> {
     step.finish_fresh(move |_, _, _| Active::new(KValue::Number(count)))
 }
 
 /// The root work, woken by the head of the descent.
-fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let Some(count) = below(&mut step) else {
         return step.failed(StepError::Unredeemable);
     };

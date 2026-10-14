@@ -14,7 +14,8 @@
 //! - [`Header`], onto one of a step's own halves, at that half's brand: the step's `'here` and
 //!   `'scratch`, or a build closure's own brand for the half it writes, handed out beside the
 //!   [`Writer`](crate::Writer) into the same half. Invariant, like the writer, so a writer and a
-//!   header of different halves never meet in one call.
+//!   header of different halves never meet in one call. Like the writer, it also carries the
+//!   brand of the step that minted it, so it cannot outlive that step.
 //! - [`HomeHeader`], an operand's home header at the operand's brand, which a build reads through
 //!   a closure and never writes. The graph resolves it from a region the operand's reach names;
 //!   [`StepContext::alloc_into`](crate::StepContext::alloc_into) documents the rule.
@@ -24,6 +25,7 @@ use std::marker::PhantomData;
 
 use crate::carrier::Active;
 use crate::reattach::{Erased, Reattachable};
+use crate::region::DoorBrands;
 
 /// The habitat header family: a reattachable family whose erased form is `Copy`, kept one per
 /// habitat half and handed back at that half's brand. Implemented for every such family, so an
@@ -88,15 +90,28 @@ pub(crate) type HeaderSlot<'graph, H> = Cell<Option<Erased<'graph, H>>>;
 ///     })
 ///     .unwrap();
 /// ```
-pub struct Header<'graph, 'cell, H: HabitatHeader<'graph>>
+///
+/// A header door is a door too, and parks nowhere either:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// struct Parked;
+/// reattachable!(Parked => Option<Header<'static, 'cell, 'cell, NoHeader>>);
+/// let mut graph: CellGraph<'static, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// graph.enter(cell, |context| context.store_successor(Some(context.header()))).unwrap();
+/// ```
+pub struct Header<'graph, 'cell, 'door, H: HabitatHeader<'graph>>
 where
     'graph: 'cell,
 {
     slot: &'cell HeaderSlot<'graph, H>,
-    _brand: PhantomData<fn(&'cell ()) -> &'cell ()>,
+    _brand: DoorBrands<'cell, 'door>,
 }
 
-impl<'graph, 'cell, H: HabitatHeader<'graph>> Clone for Header<'graph, 'cell, H>
+impl<'graph, 'cell, 'door, H: HabitatHeader<'graph>> Clone for Header<'graph, 'cell, 'door, H>
 where
     'graph: 'cell,
 {
@@ -105,14 +120,18 @@ where
     }
 }
 
-impl<'graph, 'cell, H: HabitatHeader<'graph>> Copy for Header<'graph, 'cell, H> where 'graph: 'cell {}
+impl<'graph, 'cell, 'door, H: HabitatHeader<'graph>> Copy for Header<'graph, 'cell, 'door, H> where
+    'graph: 'cell
+{
+}
 
-impl<'graph, 'cell, H: HabitatHeader<'graph>> Header<'graph, 'cell, H>
+impl<'graph, 'cell, 'door, H: HabitatHeader<'graph>> Header<'graph, 'cell, 'door, H>
 where
     'graph: 'cell,
 {
     /// The door onto `slot`, at the brand of the half it belongs to. Crate-private: the caller
-    /// asserts that `'cell` is that half's brand, which [`get`](Self::get) relies on.
+    /// asserts that `'cell` is that half's brand, which [`get`](Self::get) relies on, and picks
+    /// `'door`: every step door passes its `'step`.
     pub(crate) fn new(slot: &'cell HeaderSlot<'graph, H>) -> Self {
         Header {
             slot,
@@ -125,13 +144,17 @@ where
         let header = self.slot.get()?;
         // SAFETY: the slot belongs to one habitat half and this door is at that half's brand.
         // Every value in it was put there by `get_or_lay` through a door onto the same half, at
-        // that half's brand of some step or build, so its referents are the half's own bytes,
-        // `'graph`, storage the half's cell holds (a region's hold set, monotone for its life,
-        // including what a placement into it minted before its build ran), or, for the scratch
-        // half, the write home's region, which `'here: 'scratch` lets a scratch value name. A
-        // region's chunks do not move while it lives, its slot leaves with it, and no recycled
-        // region keeps one (`Region::new`, `Region::is_untouched`); the scratch slot is cleared at
-        // every reset. So every referent outlives `'cell`. `Header` is invariant, and every brand
+        // that half's brand of some step or build. Its referents are of four kinds: the half's
+        // own bytes; `'graph`, which outlives the graph — a door onto `Storage` among them;
+        // storage the half's cell holds (a region's hold set, monotone for its life, including
+        // what a placement into it minted before its build ran); and, for the scratch half, the
+        // write home's region, which `'here: 'scratch` lets a scratch value name. A door onto a
+        // habitat is none of these: it names the half's table entry, which moves when the table
+        // grows, and it carries the brand of the step that minted it, which outlives no habitat
+        // brand, so no value laid at one holds such a door. A region's chunks do not move while it
+        // lives, its slot leaves with it, and no recycled region keeps one (`Region::new`,
+        // `Region::is_untouched`); the scratch slot is cleared at every reset. So every referent
+        // outlives `'cell`. `Header` is invariant, and every brand
         // it is handed out at is quantified by `enter` or by a build and nameable nowhere outside
         // it, which discharges the invariant-family condition.
         Some(unsafe { header.reattach::<'cell>() })

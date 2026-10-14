@@ -3,7 +3,7 @@
 //! refusals the construction rule gives.
 
 use crate::type_lattice::KType;
-use crate::values::{Circular, ConstructionRefused, Knotted as _, Link, Types, Value};
+use crate::values::{Chain, Circular, ConstructionRefused, Knotted as _, Link, Value};
 
 use super::super::Untieable;
 use super::birth::tie_of;
@@ -12,7 +12,7 @@ use super::{Fixture, bound, callable, circular, declared, pin, with_fixture};
 /// `family` applied at `Type = argument`.
 fn boxed_at(
     fixture: &Fixture<'_, '_>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     family: KType,
     argument: KType,
 ) -> KType {

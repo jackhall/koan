@@ -114,8 +114,10 @@ the body's return or an argument of a call the body makes into a frame — a
 registration, a function called by name, a surfaced head, a candidate the load
 cannot read — and only where a porous value meets a porous slot there; and
 through every `EVAL`, which offers values to the code's open `\` marks at
-slots the body does not type. A builtin's native runs in the caller's step and
-enters no frame. A body mints at a `:|` ascription, which hides each unpinned
+slots the body does not type. A value the body received — a parameter or a
+capture named bare, or a member of one read through the builtin `ATTR` — holds
+nothing the body minted, so passing it on is no exit. A builtin's native runs
+in the caller's step and enters no frame. A body mints at a `:|` ascription, which hides each unpinned
 head parameter behind a carrier, and at a nominal declaration the load leaves
 unknown, declared each time its unit runs; `:!` mints nothing, since it
 carries each head parameter at what *fits* solved.
@@ -179,7 +181,10 @@ load cannot name included.
 Under `Shares` the warm and cold tiers are one branch, the host's scratch,
 under the host's region. So a `Shares` caching body runs every step on one
 chain over the root, the host's region and that scratch, writing the scratch,
-and its classes route nothing. Under `Fresh` the two are the lent branch and
+and its classes route nothing. A scratch chain holds the tier it reads between
+the root and its own by value, so building one per step lays nothing; no
+branch holds that tier, since a habitat's door lives one step and a branch
+lives as long as its half. Under `Fresh` the two are the lent branch and
 the frame's scratch, and the frame's scratch is under both it and the frame's
 region (§ A node lives in a tier its children outlive). So a `Fresh` caching
 body reads through a chain whose own tier is its scratch, whose read tier is
@@ -196,9 +201,11 @@ the region, its memo in a scratch tier, and a door handed a writer and a chain
 paired to another does not compile.
 
 Whether a loop passes a parameter through unchanged is a greatest fixpoint
-over the tail calls the load resolves by name. Every parameter starts
-invariant, and one stays so only where, on every tail edge into its body, the
-argument at its slot is a bare invariant parameter of the caller. A body
+over the tail calls the load resolves: a call by name, its arguments paired
+with the callee's parameters by field, and each candidate of a keyworded use,
+paired by slot. Every parameter starts invariant, and one stays so only where,
+on every tail edge into its body, the argument at its slot is a bare invariant
+parameter of the caller. A body
 whose name escapes as a value can be tail-called from a site the load cannot
 read, so its parameters are varying. The rule is conservative: an argument
 built over invariant leaves has the same content from the second round on,
@@ -229,9 +236,11 @@ to each other, and so are the statements of a `Shares` callee, since the
 asker's park holds across them; two calls from the host's own body in
 separate statements are cold, since that body replaces its own receipt
 between them. A `Fresh` caching frame also holds its own scratch, its cold
-tier, for its life, and drops it with the frame. The cache needs no count of
-its own and no `unsafe`: a wrong lend is a miss at the lay, never a dangling
-read.
+tier, for its life, and drops it with the frame. A loop that parks once a hop
+lays no receipt run per hop: the scratch habitat keeps the runs its cells
+released, drained, on a free list a registration searches first fit, cleared
+at the reset. The cache needs no count of its own and no `unsafe`: a wrong
+lend is a miss at the lay, never a dangling read.
 
 **A memo may be shorter-lived than its value.** A caching body's values are
 laid in the region its writer lays into, and their memos in a scratch tier.
@@ -258,8 +267,10 @@ hand-off. The adopt reads the whole chain the body ran on, since a `Fresh`
 type's children may lie both in the lent branch and in the frame's scratch. A
 value the frame received — a parameter's, a closure binding's or the
 callable's own — adopts its own memo alone: its parts crossed into the region
-at the frame's birth, and admission at a slot restamps only the top. So a
-loop that passes a large value through unchanged walks none of it per hop.
+at the frame's birth, and admission at a slot restamps only the top. So does
+an argument the load records as passing one on, a builtin `ATTR` member read
+of one included. So a loop that passes a large value through unchanged, or
+walks a chain one member a hop, walks none of it per hop.
 A sealed exit carries no minted content, but it may carry a
 composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.
@@ -272,9 +283,9 @@ types, and released with that tier.
 
 ## Open work
 
-- [The host's scratch as a type cache](../roadmap/type-tiers/host-scratch-cache.md)
-  — the caching chains, the site classes, the lend door, the adopts at exits,
-  and the receipt-run free list.
+- [Porosity read off declared members](../roadmap/type-tiers/declared-porosity.md)
+  — a module built in a body porous only where it captures minted content or
+  exposes its signature.
 - [Invariance around a tail cycle](../roadmap/type-tiers/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch

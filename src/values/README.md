@@ -333,9 +333,11 @@ over the graph's frozen type root and the build's writer and header.
 branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 The branch is the habitat half's header, [`TypeHeader`](habitat.rs), and a
-[`Types`](habitat.rs) chain pairs a half's writer with its header door at one
-brand, so a value door handed one half's writer and another half's chain does
-not compile. What a reader sees of a value is bounded only by the value: under
+[`Chain`](habitat.rs) carries a pairing brand naming the writer it serves
+beside the brand its tiers sit at, so a value door handed one half's writer and
+a chain paired to another does not compile. [`Types`](habitat.rs) is the chain
+whose tiers sit at its writer's own brand; a caching body's chains lay in a
+scratch tier and are paired to its region writer. What a reader sees of a value is bounded only by the value: under
 `Any`, a union, a function type or a carrier a part keeps its own memo, so the
 types a value reaches are the closure over its parts' memos. A copied operand
 therefore adopts each part's own memo into the destination's branch before the
@@ -351,6 +353,15 @@ view, and a pinned birth into a branch already laid — a tenant's, which is its
 host's — merges its home's branch into the destination's, with each branch the
 home links up to one the destination already reaches, a cost in the types
 those branches hold, never in the value.
+
+**A caching body adopts at its exits.** Its values lie in its region and
+their memos in a scratch tier, so before a value leaves the body
+[`adopt_value`](crossing.rs) walks it as the crossing check does — each part's
+memo, each type value's payload, each type a knot carries and every value it
+holds — and adopts every type into the region, reading the whole chain the
+body ran on. A part that is the same word as a value the frame received — a
+parameter, a closure binding, the callable, or an argument the load recorded
+as passing one on — adopts its own memo and is not entered ([type tiers](../../design/type-tiers.md#the-scratch-branch-as-a-cache)).
 
 **A debug build checks every crossing.** After each crossing door, a debug
 build asserts that every type the crossed value carries — each part's memo,

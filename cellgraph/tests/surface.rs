@@ -70,22 +70,22 @@ impl DropFree for Listing {}
 
 /// The writer's one run verb, at length one — the shape an embedder derives a single-value write
 /// from, since the substrate ships no such verb.
-fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
+fn one<'cell, T>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }
 
-fn build_number<'cell>(writer: Writer<'cell>) -> &'cell u32 {
+fn build_number<'cell>(writer: Writer<'cell, '_>) -> &'cell u32 {
     one(writer, 7)
 }
 
-fn build_slice<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
+fn build_slice<'cell>(writer: Writer<'cell, '_>) -> &'cell [u32] {
     writer.fill(3, |index| index as u32 + 1)
 }
 
 /// The run behind one thin pointer: a handle a word wide, whose length rides at the front of the
 /// allocation instead of beside the pointer.
-fn build_thin_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
+fn build_thin_run<'cell>(writer: Writer<'cell, '_>) -> &'cell [u32] {
     let run: ThinRun<'cell, u32> = writer.thin_run(4, |index| index as u32 * 2);
     assert!(!run.is_empty() && run.len() == 4);
     run.as_slice()
@@ -93,7 +93,7 @@ fn build_thin_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
 
 /// The once-written run: a slot set once, refused a second time, and read through the view — the
 /// read half, which has no door that sets.
-fn build_once_run<'cell>(writer: Writer<'cell>) -> &'cell u32 {
+fn build_once_run<'cell>(writer: Writer<'cell, '_>) -> &'cell u32 {
     let run: OnceRun<'static, 'cell, Number> = writer.once_run(2);
     assert!(!run.is_empty() && run.len() == 2);
     run.set(1, one(writer, 5)).unwrap();
@@ -103,14 +103,14 @@ fn build_once_run<'cell>(writer: Writer<'cell>) -> &'cell u32 {
     view.get(1).expect("slot one was set")
 }
 
-fn build_text<'cell>(writer: Writer<'cell>) -> &'cell str {
+fn build_text<'cell>(writer: Writer<'cell, '_>) -> &'cell str {
     writer.text("koan")
 }
 
 /// The producer-decided run: a filter settles the width only once the elements exist, so there is
 /// no length to hand `fill`.
-fn build_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
-    let mut run: Run<'cell, u32> = writer.run();
+fn build_run<'cell>(writer: Writer<'cell, '_>) -> &'cell [u32] {
+    let mut run: Run<'cell, '_, u32> = writer.run();
     run.extend((1..8u32).filter(|value| value % 3 == 0));
     run.push(99);
     assert!(!run.is_empty() && run.len() == 3);
@@ -119,10 +119,10 @@ fn build_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
 
 /// The same shape for text: a rendering whose length no caller knows up front, formatted straight
 /// into the region.
-fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
+fn build_prose<'cell>(writer: Writer<'cell, '_>) -> &'cell str {
     use std::fmt::Write;
 
-    let mut prose: Prose<'cell> = writer.prose();
+    let mut prose: Prose<'cell, '_> = writer.prose();
     for value in build_run(writer) {
         write!(prose, "{value};").expect("a region sink never fails");
     }
@@ -134,7 +134,7 @@ fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
 /// generic over the value family has to write that bound too — and the [`Covariant`] one, which is
 /// what a read view of a longer-lived home at a short borrow rests on.
 fn read_first<'graph, 'cell, 'step, V>(
-    context: &'cell StepContext<'graph, 'step, '_, '_, Work>,
+    context: &'cell StepContext<'graph, 'step, '_, '_, '_, Work>,
     carrier: &'cell Ready<'graph, 'step, V>,
 ) -> <V as Reattachable<'graph>>::At<'cell>
 where
@@ -405,7 +405,7 @@ reattachable!(Table => &'cell Cell<&'cell u32>);
 
 /// What a half's header points at, from any header family's door — generic, so the bound is
 /// named from outside the crate.
-fn laid<'graph, 'cell, H: HabitatHeader<'graph>>(header: Header<'graph, 'cell, H>) -> bool {
+fn laid<'graph, 'cell, H: HabitatHeader<'graph>>(header: Header<'graph, 'cell, '_, H>) -> bool {
     header.get().is_some()
 }
 

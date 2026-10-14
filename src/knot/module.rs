@@ -86,7 +86,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     /// module is — a body's code over what it captures, or a view's operator and application over
     /// its source — never its members, which that content determines.
     pub fn tie(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
         content: ModuleContent,
@@ -132,7 +132,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     /// knot weight and the content are facts about the members, which the copy preserves.
     pub(super) fn rebuilt<'to>(
         &self,
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         members: &'to [KValue<'graph, 'to>],
     ) -> Module<'graph, 'to> {
         Module {
@@ -210,7 +210,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
     ///
     /// `underlying` carries its whole knot's weight, since a crossing rebuilds that knot whole.
     pub fn tie(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         underlying: Knotted<'graph, 'cell>,
         ktype: DeclaredType<KType>,
         declared: DeclaredType<Parametric>,

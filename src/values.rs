@@ -55,13 +55,18 @@ pub use admission::{
     part_ktype, record_type, representation, satisfies, sealing, solves_identity,
 };
 pub use circular::{Circular, CodeView, Resolved};
-pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
+#[cfg(test)]
+pub use crossing::ADOPTED;
+pub use crossing::{
+    COPY_RATIO, adopt_value, copy_severed, cross, cross_here, cross_view, cross_view_against,
+    each_carried_type, verdict,
+};
 #[cfg(debug_assertions)]
 pub use crossing::{check_habitat, check_pinned_habitat};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use digest::{ContentDigest, Digests};
 pub use equality::Incomparable;
-pub use habitat::{Half, TypeHeader, Types};
+pub use habitat::{Chain, Half, TypeHeader, Types};
 pub use link::Link;
 pub use list::List;
 pub use record::Record;
@@ -99,7 +104,7 @@ pub trait Knotted: Copy + Eq + Hash {
     /// digests. An edge between siblings is no held value: the knot hashes its index.
     fn held<'a>(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -112,7 +117,7 @@ pub trait Knotted: Copy + Eq + Hash {
     /// this digest ([`digest::retyped_content`]).
     fn digest_held(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest;
@@ -167,7 +172,7 @@ pub trait KnottedFamily<'graph> {
     /// answers each value [`held`](Self::held) listed with its finished copy, in `held`'s order,
     /// and answers nothing else.
     fn copy_into<'from, 'to>(
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         member: &Self::Closed<'from>,
         copy: &mut DeepCopy<'_, 'from, 'to, Self::Closed<'from>, Self::Closed<'to>>,
     ) -> Self::Closed<'to>
@@ -192,8 +197,12 @@ impl Knotted for Nothing {
         match *self {}
     }
 
-    fn held<'a>(&self, _: &Types<'_, '_>, _: BumpAllocator<'_>, _: &mut dyn FnMut(Seen<'a, Self>))
-    where
+    fn held<'a>(
+        &self,
+        _: &Chain<'_, '_, '_, '_, '_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
         Self: 'a,
     {
         match *self {}
@@ -201,7 +210,7 @@ impl Knotted for Nothing {
 
     fn digest_held(
         &self,
-        _: &Types<'_, '_>,
+        _: &Chain<'_, '_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -249,7 +258,7 @@ impl<'graph> KnottedFamily<'graph> for NoKnot {
     }
 
     fn copy_into<'from, 'to>(
-        _: Writer<'to>,
+        _: Writer<'to, '_>,
         member: &Nothing,
         _: &mut DeepCopy<'_, 'from, 'to, Nothing, Nothing>,
     ) -> Nothing
@@ -343,12 +352,16 @@ impl<'cell, X: Knotted> Value<'cell, X> {
 
     /// The value's content digest ([`digest`]), computed now, as one demand over `scratch`: what
     /// the door shows of it at its own memo, as a copy lays it down.
-    pub fn digest(&self, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> ContentDigest {
+    pub fn digest(
+        &self,
+        types: &Chain<'_, '_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> ContentDigest {
         self.digest_in(&mut Digests::new(types, scratch))
     }
 
     /// [`digest`](Self::digest) inside a demand already walking, through its `memo`.
-    pub fn digest_in(&self, memo: &mut Digests<'_, '_, '_, X>) -> ContentDigest {
+    pub fn digest_in(&self, memo: &mut Digests<'_, '_, '_, '_, '_, X>) -> ContentDigest {
         memo.seen(Seen::of(*self))
     }
 
@@ -469,6 +482,6 @@ impl<'cell, X: Knotted> Value<'cell, X> {
 }
 
 /// A string value whose bytes are written into the region.
-pub fn text<'cell, X>(writer: Writer<'cell>, text: &str) -> Value<'cell, X> {
+pub fn text<'cell, X>(writer: Writer<'cell, '_>, text: &str) -> Value<'cell, X> {
     Value::Str(writer.text(text))
 }

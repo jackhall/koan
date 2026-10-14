@@ -55,6 +55,13 @@ fn scratch_in_use<D: Delivery<'static>>(
     graph.regions.scratch_in_use(home)
 }
 
+/// How many released runs the free list holds over `home`'s bump.
+fn free_runs(graph: &Graph, home: CellHome) -> usize {
+    (graph.cells.free_runs.iter())
+        .filter(|(at, _, _)| *at == home)
+        .count()
+}
+
 /// The number a `Value` receipt held, or a failure naming what came back instead.
 fn note(receipt: Receipt<'static, '_, '_, Push, 1>) -> u32 {
     match receipt {
@@ -650,4 +657,134 @@ fn kind<D: Delivery<'static>>(receipt: &Receipt<'static, '_, '_, D, 1>) -> &'sta
         Receipt::Carrier(Ok(_)) => "a redeemed carrier",
         Receipt::Carrier(Err(_)) => "a refused carrier",
     }
+}
+
+/// Tenants of a host whose own run holds its bump each park once and leave: every registration
+/// after the first reuses the run the tenant before it released, so the bump does not grow.
+#[test]
+fn a_held_bump_reuses_the_runs_its_departed_tenants_released() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let host = graph.create(None).unwrap();
+    await_one(&mut graph, host);
+    let mut parked = Vec::new();
+    for _ in 0..4 {
+        let tenant = graph.create_tenant(host, None).unwrap();
+        await_one(&mut graph, tenant);
+        parked.push(scratch_in_use(&graph, host));
+        graph.release_tenant(tenant).unwrap();
+    }
+    assert!(
+        parked.windows(2).all(|pair| pair[0] == pair[1]),
+        "each tenant's run reuses the last one's bytes: {parked:?}"
+    );
+
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A tenant under a held bump that drains and re-registers every round replaces its run with the
+/// one it just released, so the bump does not grow round over round.
+#[test]
+fn a_cell_re_registering_under_a_held_bump_reuses_its_drained_run() {
+    let mut graph: Graph = CellGraph::new(2, pin);
+    let host = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
+    await_one(&mut graph, host);
+    let tenant = graph.create_tenant(host, None).unwrap();
+    await_one(&mut graph, tenant);
+    let mut parked = Vec::new();
+    for round in 0..4u32 {
+        assert_eq!(
+            send(&mut graph, producer, tenant, 0, round),
+            Ok(Delivered::Complete)
+        );
+        graph
+            .enter(tenant, |context| {
+                assert_eq!(note(context.receipt(0).unwrap()), round);
+                context.register_receipts(1).unwrap();
+            })
+            .unwrap();
+        parked.push(scratch_in_use(&graph, host));
+    }
+    // The first round's notes are scratch bytes too; from the second on, the bump holds still.
+    assert!(
+        parked[1..]
+            .windows(2)
+            .all(|pair| pair[1] - pair[0] == parked[1] - parked[0]),
+        "only the notes grow the bump, never a run: {parked:?}"
+    );
+    let home = CellHome::Slab(host.slot());
+    assert!(
+        free_runs(&graph, home) == 0,
+        "each round took the run it released"
+    );
+
+    graph.release_tenant(tenant).unwrap();
+    graph
+        .release(producer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A wider released run serves a narrower registration, narrowed to it, so a fill of the
+/// narrower width completes it.
+#[test]
+fn a_wider_free_run_serves_a_narrower_registration_and_completes_at_its_width() {
+    let mut graph: Graph = CellGraph::new(2, pin);
+    let host = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
+    await_one(&mut graph, host);
+    let wide = graph.create_tenant(host, None).unwrap();
+    graph
+        .enter(wide, |context| context.register_receipts(3).unwrap())
+        .unwrap();
+    graph.release_tenant(wide).unwrap();
+    let home = CellHome::Slab(host.slot());
+    assert_eq!(free_runs(&graph, home), 1);
+    let held = scratch_in_use(&graph, host);
+
+    let narrow = graph.create_tenant(host, None).unwrap();
+    await_one(&mut graph, narrow);
+    assert_eq!(
+        scratch_in_use(&graph, host),
+        held,
+        "the wide run was reused"
+    );
+    assert!(free_runs(&graph, home) == 0);
+    graph
+        .enter(narrow, |context| {
+            assert_eq!(context.receipt_count(), Some(1))
+        })
+        .unwrap();
+    assert_eq!(
+        send(&mut graph, producer, narrow, 0, 41),
+        Ok(Delivered::Complete)
+    );
+
+    graph.release_tenant(narrow).unwrap();
+    graph
+        .release(producer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// The reset that hands a bump back clears the runs released into it.
+#[test]
+fn a_reset_empties_the_free_list() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let host = graph.create(None).unwrap();
+    let tenant = graph.create_tenant(host, None).unwrap();
+    await_one(&mut graph, tenant);
+    graph.release_tenant(tenant).unwrap();
+    let home = CellHome::Slab(host.slot());
+    assert_eq!(free_runs(&graph, home), 1);
+
+    graph.enter(host, |_| ()).unwrap();
+    assert_eq!(scratch_in_use(&graph, host), 0);
+    assert!(free_runs(&graph, home) == 0);
+
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }

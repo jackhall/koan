@@ -80,7 +80,7 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
     }
 
     fn copy_into<'from, 'to>(
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         member: &Knotted<'graph, 'from>,
         copy: &mut DeepCopy<'_, 'from, 'to, Knotted<'graph, 'from>, Knotted<'graph, 'to>>,
     ) -> Knotted<'graph, 'to>

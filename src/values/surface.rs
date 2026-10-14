@@ -24,7 +24,7 @@ use crate::type_lattice::{
 };
 
 use super::circular::{Circular, Resolved};
-use super::{Key, Knotted, Link, Nothing, Retyped, Types, Value, representation};
+use super::{Chain, Key, Knotted, Link, Nothing, Retyped, Value, representation};
 
 /// Why the type a container, a tagged value or a data node is seen at is concrete: its memo is a
 /// type, and so is every type a holder names for a part. Only a callable is typed by a scheme.
@@ -80,7 +80,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn satisfies(
         &self,
         slot: KType,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> bool {
         satisfied_by(types, scratch, slot, self.ktype)
@@ -94,7 +94,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn seen_at(
         self,
         declared: impl Into<DeclaredType<KType>>,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Self {
         let Some(kind) = kind(self.value) else {
@@ -122,7 +122,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     /// it as its handle over the same cells; a knot member, whose node every holder shares, takes a
     /// [`Retyped`] header over its bare member, or is that bare member where the seen type is its
     /// own.
-    pub fn restamped(self, writer: Writer<'cell>) -> Value<'cell, X> {
+    pub fn restamped(self, writer: Writer<'cell, '_>) -> Value<'cell, X> {
         if self.value.ktype() == self.ktype {
             return self.value;
         }
@@ -144,7 +144,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     /// every knot member but a data node.
     pub fn surface<'x>(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'x>,
     ) -> Option<Surface<'x, 'cell, X>> {
         let (node, raw) = raw(self.value)?;
@@ -187,7 +187,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn field(
         &self,
         name: Symbol,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Self> {
         let Some((_, Raw::Record(names, cells))) = raw(self.value) else {
@@ -205,7 +205,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     /// This value opened at its own memo: [`Seen::surface`].
     pub fn surface<'x>(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'x>,
     ) -> Option<Surface<'x, 'cell, X>> {
         Seen::of(*self).surface(types, scratch)
@@ -215,7 +215,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     pub fn field(
         &self,
         name: Symbol,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Seen<'cell, X>> {
         Seen::of(*self).field(name, types, scratch)
@@ -226,9 +226,9 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     /// [`Seen::seen_at`], then [`Seen::restamped`].
     pub fn retyped(
         self,
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         declared: KType,
-        types: &Types<'_, 'cell>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Value<'cell, X> {
         Seen::of(self)
@@ -299,7 +299,7 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
     pub fn child(
         &self,
         at: usize,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Seen<'a, X> {
         match self.parts {
@@ -467,9 +467,8 @@ fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X
 }
 
 /// Every part `value` holds, hidden or not, at its own memo: a container's cells, a tagged value's
-/// payload. Nothing for a knot member, whose parts its knot lists. What the crossing's habitat
-/// check walks.
-#[cfg(debug_assertions)]
+/// payload. Nothing for a knot member, whose parts its knot lists. What the crossing's carried-type
+/// walk reads.
 pub(super) fn raw_parts<'a, X: Knotted + 'a>(
     value: Value<'a, X>,
     out: &mut impl FnMut(Value<'a, X>),
@@ -539,7 +538,7 @@ fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
 /// code or a type value is taken at each such member its type fits, a module at each application it fits, pinned
 /// ([`pinned_at_fit`]). `None` where none is.
 fn target(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     kind: Kind,
     own: DeclaredType<KType>,
@@ -584,7 +583,7 @@ fn target(
 /// The applications the signature type `carried` holds, in `scratch`: a meet's members, or
 /// `carried` alone.
 pub fn applications<'x>(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     carried: KType,
 ) -> BumpVec<'x, KType> {
@@ -602,7 +601,7 @@ pub fn applications<'x>(
 /// one of them not, or `declared` is no signature type. The load pins an exact operand with it, so
 /// a header's type is the one the load computes.
 pub fn pinned_at_fit(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     own: KType,
     declared: KType,
@@ -638,7 +637,7 @@ pub fn pinned_at_fit(
 /// `own`: each concrete, since a module's type offers no stand-in to the solve. Refused where `own`
 /// does not fit the application. What both a retype's pins and a view's `from` are read from.
 pub fn fit_solution<'run: 'x, 'x>(
-    types: &Types<'_, 'run>,
+    types: &Chain<'_, 'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     own: KType,
     signature: KType,
@@ -661,7 +660,7 @@ pub fn fit_solution<'run: 'x, 'x>(
 /// `own`'s node, and `own` itself where nothing re-stamps — what a knot's tie births an annotated
 /// member at.
 pub fn retype_target(
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     own: DeclaredType<KType>,
     declared: KType,
@@ -678,7 +677,7 @@ pub fn retype_target(
 /// for a type value. `None` for every other type, which a value satisfying it keeps its own type
 /// under — `Module`, every module's type, and `Code`, every code kind's, among them, as `Any` is
 /// every value's.
-fn retyped_kind(types: &Types<'_, '_>, declared: Parametric) -> Option<Kind> {
+fn retyped_kind(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> Option<Kind> {
     if declared == KType::EMPTY_SIGNATURE.into() {
         return None;
     }
@@ -688,7 +687,7 @@ fn retyped_kind(types: &Types<'_, '_>, declared: Parametric) -> Option<Kind> {
 /// Whether a retype to `declared` lays a header over a function, a module or a quote's code — the
 /// knot members a header stands over beside a data node: [`retyped_kind`] answers one of their
 /// kinds at `declared`, or at a member of the union `declared` is. What a content tree retypes.
-pub fn retypes_by_header(types: &Types<'_, '_>, declared: KType) -> bool {
+pub fn retypes_by_header(types: &Chain<'_, '_, '_, '_, '_>, declared: KType) -> bool {
     let header = |member: KType| {
         matches!(
             retyped_kind(types, member.into()),
@@ -738,7 +737,7 @@ fn node_kind(node: TypeNode<'_, Parametric>) -> Option<Kind> {
 /// otherwise; a union keeps each variant's own type. A module is pinned afresh at each run where
 /// `declared` leaves a parameter unpinned, and two pins of one parameter are unordered. It reads
 /// the predicate [`Seen::seen_at`] retypes by.
-pub fn retyped_to(types: &Types<'_, '_>, declared: Parametric) -> Interval {
+pub fn retyped_to(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> Interval {
     match retyped_kind(types, declared) {
         Some(Kind::Module) if !pins_every_parameter(types, declared) => under(declared),
         Some(_) => Interval::point(declared),
@@ -748,7 +747,7 @@ pub fn retyped_to(types: &Types<'_, '_>, declared: Parametric) -> Interval {
 
 /// Whether every application the signature type `declared` holds pins each of its head
 /// parameters, a lexical variable counting as a pin.
-fn pins_every_parameter(types: &Types<'_, '_>, declared: Parametric) -> bool {
+fn pins_every_parameter(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> bool {
     let pinned = |application: Parametric| match types.node(application) {
         TypeNode::Signature { schema, .. } => schema.parameters.is_empty(),
         TypeNode::SignatureApply { signature, pins } => match types.node(signature) {

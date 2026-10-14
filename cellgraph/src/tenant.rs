@@ -24,7 +24,7 @@
 use crate::carrier::CellHome;
 use crate::handle::{Stale, TenantHandle};
 use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
-use crate::receipt::Delivery;
+use crate::receipt::{Delivery, ReceiptRun};
 use crate::slots::StepSlots;
 
 /// What a region-owning cell carries for the tenants that write its region.
@@ -39,6 +39,11 @@ pub(crate) struct Tenancy {
     /// cell's own slots. Moved where a tenant step ends, where a run is laid down and where a
     /// tenant leaves, and read only where a step ends.
     pub(crate) scratch_tenants: u32,
+    /// Tree cells whose tree parent's write home this is, created and not yet dead: each borrows
+    /// this cell's scratch bump from its creation to its death
+    /// ([`lent_scratch`](crate::StepContext::lent_scratch)), so the bump's reset waits on this
+    /// count too.
+    pub(crate) scratch_borrowers: u32,
 }
 
 /// One tenant.
@@ -65,11 +70,12 @@ struct TenantCell<
     occupant: Option<Tenant<'graph, C, S, D>>,
 }
 
-/// What a released tenant leaves its host to settle: which host, and whether the tenant's scratch
-/// state was at rest and so in the host's count.
-pub(crate) struct Departed {
+/// What a released tenant leaves its host to settle: which host, whether the tenant's scratch
+/// state was at rest and so in the host's count, and the receipt run it left in the host's bump.
+pub(crate) struct Departed<'graph, D: Delivery<'graph>> {
     pub(crate) host: CellHome,
     pub(crate) scratch_named: bool,
+    pub(crate) run: Option<Erased<'graph, ReceiptRun<D>>>,
 }
 
 /// The growable pool of tenants.
@@ -173,17 +179,19 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
 
     /// Take the tenant out: both its slots drop, its index frees under a fresh generation, and what
     /// its host has to settle comes back.
-    pub(crate) fn remove(&mut self, index: u32) -> Departed {
+    pub(crate) fn remove(&mut self, index: u32) -> Departed<'graph, D> {
         let cell = &mut self.slots[index as usize];
-        let tenant = cell
+        let mut tenant = cell
             .occupant
             .take()
             .unwrap_or_else(|| panic!("tenant pool slot {index} is free"));
         cell.generation = cell.generation.wrapping_add(1);
         self.free.push(index);
+        let scratch_named = tenant.step_slots.names_scratch();
         Departed {
             host: tenant.host,
-            scratch_named: tenant.step_slots.names_scratch(),
+            scratch_named,
+            run: tenant.step_slots.clear_scratch(),
         }
     }
 

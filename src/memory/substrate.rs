@@ -24,7 +24,7 @@ pub type Ready<'graph, 'home, T> = cellgraph::Ready<'graph, 'home, T, WIDTH>;
 pub type Operand<'graph, 'a, 'step, V> = cellgraph::Operand<'graph, 'a, 'step, V, WIDTH>;
 
 /// What one slot of a cell's receipt run held, drained into the step that owns the run.
-pub type Receipt<'graph, 'step, 'scratch, D> =
+pub type Receipt<'graph, 'step, 'scratch, 'lent, D> =
     cellgraph::Receipt<'graph, 'step, 'scratch, D, WIDTH>;
 
 /// The graph of cells, their regions and the liveness matrix over them, over storage `'graph` that
@@ -37,28 +37,30 @@ pub type CellGraph<'graph, C, S = NoScratch, D = NoDelivery, H = NoHeader> =
     cellgraph::CellGraph<'graph, C, S, D, WIDTH, H>;
 
 /// What a step running in a cell holds: the cell's brand `'here`, its scratch habitat's brand
-/// `'scratch`, a writer and a header door at each, and the step's doors.
+/// `'scratch`, a writer and a header door at each, a tree cell's lent scratch at `'lent`, and the
+/// step's doors.
 pub type StepContext<
     'graph,
     'step,
     'here,
     'scratch,
+    'lent,
     C,
     S = NoScratch,
     D = NoDelivery,
     H = NoHeader,
-> = cellgraph::StepContext<'graph, 'step, 'here, 'scratch, C, S, D, WIDTH, H>;
+> = cellgraph::StepContext<'graph, 'step, 'here, 'scratch, 'lent, C, S, D, WIDTH, H>;
 
 /// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
 /// one.
-pub fn resident<'cell, T: Copy>(writer: Writer<'cell>, value: T) -> &'cell T {
+pub fn resident<'cell, T: Copy>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
     &writer.fill(1, |_| value)[0]
 }
 
 /// Copy an exact-length run into the region — [`Writer::fill`] driven by the iterator, with no
 /// growth path.
 pub fn collect<'cell, T>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     items: impl ExactSizeIterator<Item = T>,
 ) -> &'cell [T] {
     let mut items = items;

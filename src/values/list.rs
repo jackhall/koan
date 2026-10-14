@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::KType;
 
-use super::{Knotted, Link, Nothing, Types, Value, Weight, list_type};
+use super::{Chain, Knotted, Link, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
 #[derive(Clone, Copy, Debug)]
@@ -21,7 +21,7 @@ pub struct List<'cell, X = Nothing, C = Value<'cell, X>> {
 
 /// `items` written as a run of cells into `writer`'s region.
 fn filled<'cell, X: Knotted>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     items: impl ExactSizeIterator<Item = Value<'cell, X>>,
 ) -> &'cell [Value<'cell, X>] {
     let mut items = items;
@@ -36,9 +36,9 @@ impl<'cell, X: Knotted> List<'cell, X> {
     /// Lay down `items` as the list's cells. The element type is the join of the cells' types —
     /// `Never` for an empty list — and the weight is summed in the same pass.
     pub fn new(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         items: impl ExactSizeIterator<Item = Value<'cell, X>>,
-        types: &Types<'_, 'cell>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell List<'cell, X> {
         let cells = filled(writer, items);
@@ -51,7 +51,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     /// a list, each function by its own type; a quantified registration's type is a scheme, which
     /// no list type joins.
     pub fn of_candidates(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         functions: impl ExactSizeIterator<Item = Value<'cell, X>>,
     ) -> &'cell List<'cell, X> {
         Self::typed(writer, functions, KType::LIST_OF_ANY)
@@ -60,7 +60,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     /// Lay down `items` under `ktype`, a type the caller knows they satisfy — a view's rebuilt
     /// list, at the type its slot declares — so no type is interned.
     pub fn typed(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         items: impl ExactSizeIterator<Item = Value<'cell, X>>,
         ktype: KType,
     ) -> &'cell List<'cell, X> {
@@ -70,7 +70,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     /// A list over value cells already resident in `writer`'s region under `ktype`, weighed as
     /// [`new`](Self::new) weighs them — a retyped data node's arm.
     pub(crate) fn weighed(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
     ) -> &'cell Self {
@@ -84,7 +84,11 @@ impl<'cell, X: Knotted> List<'cell, X> {
 impl<'cell, X: Knotted> List<'cell, X, Link<'cell, X>> {
     /// Lay down `cells` as a knot's data node under the finished memo `ktype`, which the tie
     /// derived from the cells and the members their edges name.
-    pub fn linked(writer: Writer<'cell>, cells: &[Link<'cell, X>], ktype: KType) -> &'cell Self {
+    pub fn linked(
+        writer: Writer<'cell, '_>,
+        cells: &[Link<'cell, X>],
+        ktype: KType,
+    ) -> &'cell Self {
         let weight = cells.iter().fold(Weight::flat::<Self>(), |weight, cell| {
             weight.plus(cell.weight())
         });
@@ -101,7 +105,7 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
     /// A list over cells already resident in `writer`'s region, under a type and weight the caller
     /// already knows — the deep copy's arm.
     pub(crate) fn from_run(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         cells: &'cell [C],
         ktype: KType,
         weight: Weight,
@@ -118,7 +122,7 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
     }
 
     /// The same cells under `ktype` — an ascription's retype, sharing the run.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
+    pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
         Self::from_run(writer, self.cells, ktype, self.weight)
     }
 

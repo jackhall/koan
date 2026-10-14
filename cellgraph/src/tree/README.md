@@ -102,8 +102,18 @@ tenant named as a destination, a parent or a host means its host, whatever has
 been declared about the host, because the host cannot have disposed while the
 tenant is counted on it. The region stays put, because a live child or a tenant
 may still borrow it, and its pledge stays writable, because a descendant's later
-upward pin may still walk through it. Its scratch state is cleared, since a dead
-cell is never entered.
+upward pin may still walk through it. Its scratch state and its hold are
+cleared, since a dead cell is never entered, and it stops borrowing its
+lender's scratch.
+
+**A tree cell borrows its lender's scratch.** From its creation to its death a
+tree cell borrows the scratch bump of its tree parent, or of its root where it
+sits directly under one — its **lender** — and writes it at `'lent`
+([lifetimes](../lifetimes.md)). The lender counts its live borrowers, and its
+scratch does not reset while one lives, whatever its own receipt run does. A
+parent waits on its children, so the lend changes no reset timing; it makes the
+borrower's writes there structural rather than a matter of when the parent
+parks.
 
 If it has undisposed children or tenants it stops there — **dead but undisposed**, exactly
 as a slab root one of them is still counted under. That is what lets an embedder

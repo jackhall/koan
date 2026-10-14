@@ -8,6 +8,8 @@ publish = false
 # The measurement harness: `cargo run -p cellgraph --features perf --bin perf`. Off by default so
 # the library build, its tests, and the Miri slate never compile it.
 perf = []
+# Byte counts a dependent's tests read: `Writer::in_use`.
+counters = []
 
 [[bin]]
 name = "perf"

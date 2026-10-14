@@ -17,7 +17,9 @@ thread_local! {
 }
 
 /// A root work over the top level's resting view: it records the root cell's branch length.
-fn branch_length<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn branch_length<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
+) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { .. }) = state else {
         return step.failed(StepError::Refused);

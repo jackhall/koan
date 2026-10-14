@@ -18,7 +18,7 @@ use crate::source::{SourceRef, Span, Spanned};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::display_name;
 
-use super::{Knotted, Nothing, Types, Value, part_ktype};
+use super::{Chain, Knotted, Nothing, Value, part_ktype};
 
 /// One slot of a working expression.
 #[derive(Clone, Copy, Debug)]
@@ -87,7 +87,7 @@ impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
     pub fn write_summary(
         &self,
         f: &mut fmt::Formatter<'_>,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
@@ -140,7 +140,7 @@ pub struct WorkingExpression<'graph, 'cell, X = Nothing> {
 impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     /// The working copy of a parsed node: its parts wrapped as [`WorkingPart::Ast`] in one run, the
     /// cache carried over whole. Shallow — a nested node stays AST until it is itself dispatched.
-    pub fn from_ast(writer: Writer<'cell>, ast: &KExpression<'graph>) -> Self {
+    pub fn from_ast(writer: Writer<'cell, '_>, ast: &KExpression<'graph>) -> Self {
         WorkingExpression {
             parts: collect(
                 writer,
@@ -157,7 +157,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
 
     /// A run the scheduler built, copied into the region, its cache computed from the key.
     pub fn build(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         parts: &[Spanned<WorkingPart<'graph, 'cell, X>>],
         source: SourceRef,
     ) -> Self {
@@ -165,7 +165,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     }
 
     /// [`build`](Self::build) over a run whose slots are computed — see [`RunIter`].
-    pub fn build_from_iter<I>(writer: Writer<'cell>, parts: I, source: SourceRef) -> Self
+    pub fn build_from_iter<I>(writer: Writer<'cell, '_>, parts: I, source: SourceRef) -> Self
     where
         I: IntoIterator<Item = Spanned<WorkingPart<'graph, 'cell, X>>>,
         RunIter<I>: ExactSizeIterator,
@@ -176,7 +176,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     /// A run synthesized out of `origin` — a chain reduction, an extracted head. It takes `origin`'s
     /// file and the extent its own parts span, or `origin`'s extent when no part carries one.
     pub fn synthesized(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         parts: &[Spanned<WorkingPart<'graph, 'cell, X>>],
         origin: &WorkingExpression<'graph, 'cell, X>,
     ) -> Self {
@@ -197,7 +197,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     /// The node over a run already resident in the region: the key laid down beside it and the
     /// cache built from the key and the head.
     fn from_run(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         parts: &'cell [Spanned<WorkingPart<'graph, 'cell, X>>],
         source: SourceRef,
     ) -> Self {
@@ -213,7 +213,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     /// The splice path: a new run under the same key. A splice substitutes slots one for one and
     /// writes no keyword, so the key and everything settled by it ride through; only the head class
     /// is read again.
-    pub fn respliced<I>(&self, writer: Writer<'cell>, parts: I) -> Self
+    pub fn respliced<I>(&self, writer: Writer<'cell, '_>, parts: I) -> Self
     where
         I: IntoIterator<Item = Spanned<WorkingPart<'graph, 'cell, X>>>,
         RunIter<I>: ExactSizeIterator,
@@ -268,7 +268,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     pub fn write_summary(
         &self,
         f: &mut fmt::Formatter<'_>,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {

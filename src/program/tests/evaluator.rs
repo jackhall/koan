@@ -31,7 +31,7 @@ use crate::scheduler::{
 use crate::scope::{Builtins, CaptureSlot, Offer, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
-use crate::values::{Circular, Knotted as _, Link, List, Record, TypeValue, Types, Value};
+use crate::values::{Chain, Circular, Knotted as _, Link, List, Record, TypeValue, Value};
 
 thread_local! {
     static SEEN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -67,9 +67,9 @@ pub(super) struct Mini;
 
 impl Language for Mini {
     fn builtins<'graph>(
-        writer: Writer<'graph>,
+        writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Types<'graph, 'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph> {
         let origin = ValueSymbol::declared("origin", symbols).expect("a value token");
@@ -152,7 +152,7 @@ fn read<'graph, 'here>(
 fn born<'graph>(
     member: Knotted<'graph, '_>,
     program: &'graph Program<'graph>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> String {
     let closure = member
         .function()
@@ -191,7 +191,7 @@ fn number(received: Received<'_, '_, '_>) -> Option<f64> {
 }
 
 /// The step every evaluation runs.
-fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, _) = step.scratch();
     let (birth, stage) = match state {
@@ -204,6 +204,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
         node,
         view,
         contract,
+        ..
     } = birth
     else {
         return step.failed(StepError::Refused);
@@ -328,7 +329,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             };
             let branch = if holds { taken } else { other };
             if contract.is_some() {
-                let work = program.evaluate(Evaluated::Part(&branch.value), view, contract);
+                let work = program.evaluate(Evaluated::Part(&branch.value), view, contract, false);
                 return step.tail(Placement::Shares, work);
             }
             let asked = ask(&mut step, birth, &branch.value, Use::Forwards);
@@ -473,12 +474,12 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
 }
 
 /// A step that took both its states.
-type Taking<'a, 'graph, 'step, 'here, 'scratch> =
-    Step<'a, 'graph, 'step, 'here, 'scratch, KBundle, Taken, Taken>;
+type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
+    Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, KBundle, Taken, Taken>;
 
 /// Ask for one child evaluating `part` through the view `birth` holds, in a region of its own.
 fn ask<'graph, 'here>(
-    step: &mut Taking<'_, 'graph, '_, 'here, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     birth: KBirth<'graph, 'here>,
     part: &'graph ExpressionPart<'graph>,
     use_: Use,
@@ -489,13 +490,13 @@ fn ask<'graph, 'here>(
     step.spawn(Request {
         placement: Placement::Fresh,
         use_,
-        work: program.evaluate(Evaluated::Part(part), view, None),
+        work: program.evaluate(Evaluated::Part(part), view, None, false),
     })
 }
 
 /// Park on the children asked for, resuming at `stage`.
 fn park<'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_>,
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     asked: Asked,
     birth: KBirth<'graph, 'here>,
     stage: u32,
@@ -517,8 +518,8 @@ fn parameter(callee: KValue<'_, '_>) -> Option<crate::symbols::BinderSymbol> {
 fn held<'graph, 'cell>(
     program: &Program<'graph>,
     contract: Option<Contract>,
-    writer: crate::memory::Writer<'cell>,
-    types: &Types<'_, 'cell>,
+    writer: crate::memory::Writer<'cell, '_>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     value: KValue<'graph, 'cell>,
 ) -> KValue<'graph, 'cell> {
     match contract {

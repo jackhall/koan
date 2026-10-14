@@ -1,8 +1,9 @@
 //! Body classes: the class the load gives each frame body — sealed or porous by its exits — and the
-//! minting sites it counts, the blocks and module bodies it runs among them.
+//! sites it mints at at run, the blocks and module bodies it runs among them; and the caching record
+//! each shape carries — each minting site closed, invariant or varying, and each warm composite.
 
 use crate::program::Program;
-use crate::scope::{BodyClass, ShapeKind};
+use crate::scope::{BodyClass, BodyShape, Mint, ShapeKind};
 
 use super::run;
 use super::statics::{body, loaded, module_body};
@@ -13,12 +14,12 @@ const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
                        MODULE ints = ((LET zero = 0) \
                        (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n";
 
-/// A class, rendered: `sealed` or `porous`, its minting sites, and `lays` where a sealed body lays
-/// a shape branch.
+/// A class, rendered: `sealed` or `porous`, the sites it mints at at run, and `caches` where a
+/// sealed body caches.
 fn rendered(class: Option<BodyClass>) -> String {
     match class.expect("a frame body has a class") {
-        BodyClass::Sealed { mints, lays_branch } => {
-            format!("sealed {mints}{}", if lays_branch { " lays" } else { "" })
+        BodyClass::Sealed { mints, caches } => {
+            format!("sealed {mints}{}", if caches { " caches" } else { "" })
         }
         BodyClass::Porous { mints } => format!("porous {mints}"),
     }
@@ -42,23 +43,23 @@ fn code_class(source: &str) -> String {
 }
 
 #[test]
-fn a_body_returning_no_view_is_sealed_and_lays_a_branch_where_it_shares() {
-    let body = "(LET v = (ints :| Counter)) (c)";
+fn a_body_returning_no_view_is_sealed_and_caches_whatever_its_placement() {
+    let body = "(LET v = (m :| Counter)) (c)";
     assert_eq!(
         class(
-            &format!("LET f = (FN :{{c :Number}} -> Any = #({body}))"),
+            &format!("LET f = (FN :{{m :Counter, c :Number}} -> Any = #({body}))"),
             "f"
         ),
-        "sealed 1 lays",
+        "sealed 1 caches",
         "the return is porous, the value returned is not"
     );
     assert_eq!(
         class(
-            &format!("LET f = (FN :{{c :Number}} -> Number = #({body}))"),
+            &format!("LET f = (FN :{{m :Counter, c :Number}} -> Number = #({body}))"),
             "f"
         ),
-        "sealed 1",
-        "a body placed fresh lays no branch"
+        "sealed 1 caches",
+        "a body placed fresh caches too"
     );
 }
 
@@ -66,7 +67,7 @@ fn a_body_returning_no_view_is_sealed_and_lays_a_branch_where_it_shares() {
 fn a_body_returning_its_view_is_porous() {
     assert_eq!(
         class(
-            "LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (v)))",
+            "LET f = (FN :{m :Counter, c :Number} -> Any = #((LET v = (m :| Counter)) (v)))",
             "f"
         ),
         "porous 1"
@@ -79,8 +80,8 @@ fn a_call_into_a_frame_at_a_porous_slot_is_an_exit_and_a_builtin_is_none() {
     assert_eq!(
         class(
             &format!(
-                "{keep}LET f = (FN :{{c :Number}} -> Any = \
-                 #((LET v = (ints :| Counter)) (KEEP v) (c)))"
+                "{keep}LET f = (FN :{{m :Counter, c :Number}} -> Any = \
+                 #((LET v = (m :| Counter)) (KEEP v) (c)))"
             ),
             "f"
         ),
@@ -88,33 +89,33 @@ fn a_call_into_a_frame_at_a_porous_slot_is_an_exit_and_a_builtin_is_none() {
     );
     assert_eq!(
         class(
-            "LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (PRINT v) (c)))",
+            "LET f = (FN :{m :Counter, c :Number} -> Any = #((LET v = (m :| Counter)) (PRINT v) (c)))",
             "f"
         ),
-        "sealed 1 lays",
+        "sealed 1 caches",
         "a builtin's native enters no frame"
     );
     assert_eq!(
         class(
             &format!(
-                "{keep}LET f = (FN :{{c :Number}} -> Any = \
-                 #((LET v = (ints :| Counter)) (KEEP c) (c)))"
+                "{keep}LET f = (FN :{{m :Counter, c :Number}} -> Any = \
+                 #((LET v = (m :| Counter)) (KEEP c) (c)))"
             ),
             "f"
         ),
-        "sealed 1 lays",
+        "sealed 1 caches",
         "a value that is not porous carries nothing out"
     );
 }
 
 #[test]
 fn a_call_by_name_is_an_exit_where_a_porous_value_meets_a_porous_slot() {
-    let view = "(LET v = (ints :| Counter))";
+    let view = "(LET v = (m :| Counter))";
     assert_eq!(
         class(
             &format!(
                 "LET g = (FN :{{x :Any}} -> Number = #(1))\n\
-                 LET f = (FN :{{c :Number}} -> Number = #({view} (g {{x = v}}) (c)))"
+                 LET f = (FN :{{m :Counter, c :Number}} -> Number = #({view} (g {{x = v}}) (c)))"
             ),
             "f"
         ),
@@ -125,17 +126,17 @@ fn a_call_by_name_is_an_exit_where_a_porous_value_meets_a_porous_slot() {
         class(
             &format!(
                 "LET g = (FN :{{x :Any}} -> Number = #(1))\n\
-                 LET f = (FN :{{c :Number}} -> Number = #({view} (g {{x = c}}) (c)))"
+                 LET f = (FN :{{m :Counter, c :Number}} -> Number = #({view} (g {{x = c}}) (c)))"
             ),
             "f"
         ),
-        "sealed 1",
+        "sealed 1 caches",
         "a value that is not porous carries nothing out, at a porous slot too"
     );
     assert_eq!(
         class(
             &format!(
-                "LET f = (FN :{{c :Number, h :(FN :{{x :Any}} -> Number)}} -> Number = \
+                "LET f = (FN :{{m :Counter, c :Number, h :(FN :{{x :Any}} -> Number)}} -> Number = \
                  #({view} (h v) (c)))"
             ),
             "f"
@@ -145,7 +146,9 @@ fn a_call_by_name_is_an_exit_where_a_porous_value_meets_a_porous_slot() {
     );
     assert_eq!(
         class(
-            &format!("LET f = (FN :{{c :Number, h :Any}} -> Number = #({view} (h v) (c)))"),
+            &format!(
+                "LET f = (FN :{{m :Counter, c :Number, h :Any}} -> Number = #({view} (h v) (c)))"
+            ),
             "f"
         ),
         "porous 1",
@@ -154,11 +157,56 @@ fn a_call_by_name_is_an_exit_where_a_porous_value_meets_a_porous_slot() {
 }
 
 #[test]
+fn a_value_the_body_received_passed_on_is_no_exit() {
+    let keep = "EXPR #(KEEP x :Any) -> Number = #(1)\n";
+    let view = "(LET v = (m :| Counter))";
+    let passing = |call: &str| {
+        class(
+            &format!(
+                "{keep}LET g = (FN :{{x :Any}} -> Number = #(1))\n\
+                 LET f = (FN :{{m :Counter, c :Number, h :Any}} -> Number = #({view} {call} (c)))"
+            ),
+            "f",
+        )
+    };
+    assert_eq!(passing("(KEEP m)"), "sealed 1 caches", "a keyworded use");
+    assert_eq!(passing("(g {x = m})"), "sealed 1 caches", "a call by name");
+    assert_eq!(
+        passing("(h m)"),
+        "sealed 1 caches",
+        "a callee the load cannot type"
+    );
+    assert_eq!(
+        passing("(g {x = v})"),
+        "porous 1",
+        "what the body minted still leaves"
+    );
+    assert_eq!(
+        passing("(g {x = m.zero})"),
+        "sealed 1 caches",
+        "a member of one"
+    );
+    assert_eq!(
+        passing("(g {x = v.zero})"),
+        "porous 1",
+        "and a member of it"
+    );
+    let source = "LET g = (FN :{x :Any} -> Number = #(1))\n\
+                  LET mk = (FN :{m :Counter} -> Any = #(\
+                  (LET h = (FN :{n :Number} -> Number = #((LET v = (m :| Counter)) (g {x = m}) (n)))) \
+                  (h)))";
+    loaded(&format!("{COUNTER}{source}"), |program| {
+        let mk = body(program, program.shape(), "mk");
+        assert!(record_of(body(program, mk, "h")).2, "a capture");
+    });
+}
+
+#[test]
 fn every_eval_is_an_exit() {
     assert_eq!(
         class(
-            "LET f = (FN :{c :Number} -> Number = \
-             #((LET v = (ints :| Counter)) (EVAL #(1) -> Number) (c)))",
+            "LET f = (FN :{m :Counter, c :Number} -> Number = \
+             #((LET v = (m :| Counter)) (EVAL #(1) -> Number) (c)))",
             "f"
         ),
         "porous 1"
@@ -169,11 +217,11 @@ fn every_eval_is_an_exit() {
 fn a_module_body_counts_toward_the_body_running_it() {
     assert_eq!(
         class(
-            "LET f = (FN :{c :Number} -> Number = \
-             #((MODULE m = (LET v = (ints :| Counter))) (c)))",
+            "LET f = (FN :{m :Counter, c :Number} -> Number = \
+             #((MODULE inner OVER #[m] = (LET v = (m :| Counter))) (c)))",
             "f"
         ),
-        "sealed 1"
+        "sealed 1 caches"
     );
 }
 
@@ -182,7 +230,7 @@ fn a_call_result_returned_is_the_only_exit() {
     assert_eq!(
         class(
             "LET g = (FN :{x :Number} -> Any = #(x))\n\
-             LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (g {x = c})))",
+             LET f = (FN :{m :Counter, c :Number} -> Any = #((LET v = (m :| Counter)) (g {x = c})))",
             "f"
         ),
         "porous 1"
@@ -196,7 +244,7 @@ fn a_nominal_declared_per_call_mints() {
                   #((NEWTYPE Box = :{v :Elt}) (1))))";
     loaded(&format!("{COUNTER}{source}"), |program| {
         let f = body(program, module_body(program, "lib"), "f");
-        assert_eq!(rendered(f.class()), "sealed 1");
+        assert_eq!(rendered(f.class()), "sealed 1 caches");
     });
     assert_eq!(
         class(
@@ -212,17 +260,17 @@ fn a_nominal_declared_per_call_mints() {
 fn an_arm_counts_toward_the_body_running_it() {
     assert_eq!(
         class(
-            "LET f = (FN :{c :Number} -> Number = \
-             #(MATCH (c) -> :Number WITH #{Number: ((LET v = (ints :| Counter)) (it))}))",
+            "LET f = (FN :{m :Counter, c :Number} -> Number = \
+             #(MATCH (c) -> :Number WITH #{Number: ((LET v = (m :| Counter)) (it))}))",
             "f"
         ),
-        "sealed 1"
+        "sealed 1 caches"
     );
     assert_eq!(
         class(
             "EXPR #(KEEP x :Any) -> Number = #(1)\n\
-             LET f = (FN :{c :Number} -> Number = \
-             #((LET v = (ints :| Counter)) (MATCH (c) -> :Number WITH #{Number: (KEEP v)})))",
+             LET f = (FN :{m :Counter, c :Number} -> Number = \
+             #((LET v = (m :| Counter)) (MATCH (c) -> :Number WITH #{Number: (KEEP v)})))",
             "f"
         ),
         "porous 1"
@@ -231,13 +279,13 @@ fn an_arm_counts_toward_the_body_running_it() {
 
 #[test]
 fn a_nested_function_is_a_body_of_its_own() {
-    let source = "LET f = (FN :{c :Number} -> Any = #(\
-                  (LET h = (FN :{y :Number} -> Number = #((LET v = (ints :| Counter)) (y)))) \
+    let source = "LET f = (FN :{m :Counter, c :Number} -> Any = #(\
+                  (LET h = (FN :{m :Counter, y :Number} -> Number = #((LET v = (m :| Counter)) (y)))) \
                   (c)))";
     assert_eq!(class(source, "f"), "sealed 0");
     loaded(&format!("{COUNTER}{source}"), |program| {
         let f = body(program, program.shape(), "f");
-        assert_eq!(rendered(body(program, f, "h").class()), "sealed 1");
+        assert_eq!(rendered(body(program, f, "h").class()), "sealed 1 caches");
     });
 }
 
@@ -247,8 +295,8 @@ fn a_view_leaves_through_each_porous_return() {
         class(
             &format!(
                 "NEWTYPE Box = :{{v :Any}}\n\
-                 LET f = (FN :{{c :Number}} -> {returns} = \
-                 #((LET v = (ints :| Counter)) ({value})))"
+                 LET f = (FN :{{m :Counter, c :Number}} -> {returns} = \
+                 #((LET v = (m :| Counter)) ({value})))"
             ),
             "f",
         )
@@ -265,7 +313,7 @@ fn a_view_leaves_through_each_porous_return() {
     );
     assert_eq!(
         returning(":{b :Number}", "{b = 1}"),
-        "sealed 1 lays",
+        "sealed 1 caches",
         "an exact closed record exposes only what it names"
     );
 }
@@ -277,18 +325,178 @@ fn the_program_and_a_quote_are_frame_bodies() {
             &format!("{COUNTER}LET v = (ints :| Counter)\nPRINT v"),
             |program| rendered(program.shape().class())
         ),
-        "sealed 1",
-        "the program lays no branch"
+        "sealed 0",
+        "a view over a closed tree mints nothing at run"
     );
     assert_eq!(
         code_class("LET code = #((LET v = (ints :| Counter)) (1))"),
-        "sealed 1 lays",
-        "a quote's code is placed `Shares`"
+        "sealed 1 caches",
+        "a quote's code reads a capture across its root as a leaf"
     );
     assert_eq!(
         code_class("LET code = #((LET v = (ints :| Counter)) (v))"),
         "porous 1"
     );
+}
+
+/// The caching record of `shape`: each own minting site's class in site order, how many
+/// composite sites it holds warm, and whether its frame caches.
+fn record_of(shape: &BodyShape<'_>) -> (Vec<Mint>, usize, bool) {
+    let caching = shape.caching().expect("the load fixed the record");
+    let mints = caching
+        .mints
+        .entries()
+        .iter()
+        .map(|(_, mint)| *mint)
+        .collect();
+    (mints, caching.warm.entries().len(), caching.caches)
+}
+
+/// [`record_of`] the body the top-level binder `name` of `COUNTER` and `source` births.
+fn caching(source: &str, name: &str) -> (Vec<Mint>, usize, bool) {
+    loaded(&format!("{COUNTER}{source}"), |program| {
+        record_of(body(program, program.shape(), name))
+    })
+}
+
+#[test]
+fn a_closed_view_mints_nothing_at_run() {
+    assert_eq!(
+        caching(
+            "LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (c)))",
+            "f"
+        ),
+        (vec![Mint::Closed], 0, false)
+    );
+}
+
+#[test]
+fn a_view_over_a_parameter_a_tail_loop_passes_on_is_invariant() {
+    let looping = |passed: &str| {
+        caching(
+            &format!(
+                "LET loop = (FN :{{m :Counter, n :Number}} -> Number = \
+                 #((LET v = (m :| Counter)) (loop {{m = {passed}, n = n}})))"
+            ),
+            "loop",
+        )
+    };
+    // Passing the module on bare is no exit, so the loop caches.
+    assert_eq!(looping("m"), (vec![Mint::Invariant], 0, true));
+    assert_eq!(
+        looping("ints").0,
+        [Mint::Varying],
+        "a parameter rebound on a tail edge varies"
+    );
+}
+
+#[test]
+fn a_keyworded_tail_loop_pairs_its_arguments_by_slot() {
+    let looping = |passed: &str| {
+        let source = format!(
+            "NEWTYPE Link = :{{next :Any}}\n\
+             EXPR #(COUNTDOWN m :Counter link :Link) -> Number = \
+             #((LET v = (m :| Counter)) (COUNTDOWN {passed} (ATTR link next)))\n\
+             EXPR #(COUNTDOWN m :Counter end :Null) -> Number = #(0)"
+        );
+        loaded(&format!("{COUNTER}{source}"), |program| {
+            let (_, looping) = (program.shape().nested_shapes().iter())
+                .find(|(_, nested)| {
+                    nested.kind() == ShapeKind::Callable
+                        && nested
+                            .caching()
+                            .is_some_and(|c| !c.mints.entries().is_empty())
+                })
+                .expect("the looping registration births a callable body");
+            record_of(looping)
+        })
+    };
+    // A member of a received value is no exit either, so the loop caches.
+    assert_eq!(looping("m"), (vec![Mint::Invariant], 0, true));
+    assert_eq!(looping("ints").0, [Mint::Varying], "a slot rebound varies");
+}
+
+#[test]
+fn a_callable_read_as_a_value_keeps_its_parameters_varying() {
+    assert_eq!(
+        caching(
+            "LET h = (FN :{m :Counter} -> Number = #((LET v = (m :| Counter)) (1)))\n\
+             LET k = h",
+            "h"
+        ),
+        (vec![Mint::Varying], 0, true)
+    );
+}
+
+#[test]
+fn a_view_over_a_local_binder_varies() {
+    assert_eq!(
+        caching(
+            "LET f = (FN :{n :Number} -> Number = \
+             #((LET w = (MATCH (n) -> :Any WITH #{Number: (ints)})) (LET v = (w :| Counter)) (n)))",
+            "f"
+        )
+        .0,
+        [Mint::Varying]
+    );
+}
+
+#[test]
+fn a_view_over_a_capture_is_invariant() {
+    let source = "LET mk = (FN :{m :Counter} -> Any = #(\
+                  (LET h = (FN :{n :Number} -> Number = #((LET v = (m :| Counter)) (n)))) \
+                  (h)))";
+    loaded(&format!("{COUNTER}{source}"), |program| {
+        let mk = body(program, program.shape(), "mk");
+        assert_eq!(
+            record_of(body(program, mk, "h")),
+            (vec![Mint::Invariant], 0, true)
+        );
+    });
+}
+
+#[test]
+fn a_view_over_a_view_follows_the_parameter_under_it() {
+    assert_eq!(
+        caching(
+            "LET f = (FN :{m :Counter} -> Number = #((LET v = ((m :| Counter) :| Counter)) (1)))",
+            "f"
+        ),
+        (vec![Mint::Invariant, Mint::Invariant], 0, true)
+    );
+}
+
+#[test]
+fn a_nominal_declared_per_call_follows_the_type_it_reads() {
+    let source = "EXPR FOR ALL #[Elt] #(BOXED x :Elt) -> Number = \
+                  #((NEWTYPE Box = :{v :Elt}) (1))";
+    loaded(&format!("{COUNTER}{source}"), |program| {
+        let (_, registered) = (program.shape().nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            .expect("the registration births a callable body");
+        assert_eq!(record_of(registered), (vec![Mint::Invariant], 0, true));
+    });
+}
+
+#[test]
+fn a_composite_is_warm_where_its_parts_read_invariant_views_alone() {
+    let built = |value: &str| {
+        caching(
+            &format!(
+                "LET f = (FN :{{m :Counter, a :Any}} -> Any = \
+                 #((LET v = (m :| Counter)) (LET w = {value}) (1)))"
+            ),
+            "f",
+        )
+        .1
+    };
+    assert_eq!(
+        built("{z = v.zero}"),
+        1,
+        "a record over an invariant view's member"
+    );
+    assert_eq!(built("[1 2]"), 0, "a list of numbers is closed");
+    assert_eq!(built("[a]"), 0, "a list over a name typed `Any` varies");
 }
 
 /// Debug builds check at each minting door that the load recorded the site: a view and a nominal
@@ -308,7 +516,7 @@ fn the_run_finds_each_minting_site_the_load_recorded() {
 /// Each runnable snippet of the tutorial, as `tools/verify_snippets.py` picks them: a `koan` block
 /// followed, with only whitespace between, by a `text` block, and holding no pending expression
 /// shape.
-fn tutorial_snippets() -> Vec<(String, String)> {
+pub(super) fn tutorial_snippets() -> Vec<(String, String)> {
     const PENDING: [&str; 6] = ["MATCH", "TRY", "CATCH", "Result", "TYPE", "CLOSE"];
     let pending = |code: &str| {
         code.split(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -355,9 +563,9 @@ fn tutorial_snippets() -> Vec<(String, String)> {
     snippets
 }
 
-/// The measurement the shape-branches work reads: over the tutorial's runnable programs, how many
-/// frame bodies the load gives each class, and how many minting sites each sealed body laying a
-/// shape branch holds. Run with `cargo test classes_over_the_tutorial -- --ignored --nocapture`.
+/// The measurement the type-tiers work reads: over the tutorial's runnable programs, how many
+/// frame bodies the load gives each class, and how many sites minting at run each caching body
+/// holds. Run with `cargo test classes_over_the_tutorial -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn classes_over_the_tutorial() {
@@ -371,7 +579,7 @@ fn classes_over_the_tutorial() {
 
     let (mut programs, mut refused) = (0, 0);
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
-    let mut laying: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut caching: BTreeMap<u32, usize> = BTreeMap::new();
     for (_, code) in tutorial_snippets() {
         let Ok(mut substrate) = CellSubstrate::load::<Koan>(&code, "<tutorial>", 8, output())
         else {
@@ -396,14 +604,14 @@ fn classes_over_the_tutorial() {
                 let class = match shape.class() {
                     None => "unfixed".to_string(),
                     Some(BodyClass::Porous { .. }) => "porous".to_string(),
-                    Some(BodyClass::Sealed { mints, lays_branch }) => {
-                        if lays_branch {
-                            *laying.entry(mints).or_default() += 1;
+                    Some(BodyClass::Sealed { mints, caches }) => {
+                        if caches {
+                            *caching.entry(mints).or_default() += 1;
                         }
-                        match (mints, lays_branch) {
-                            (0, _) => "sealed, mints nothing",
-                            (_, true) => "sealed, lays a branch",
-                            (_, false) => "sealed, mints, lays no branch",
+                        match (mints, caches) {
+                            (0, _) => "sealed, mints nothing at run",
+                            (_, true) => "sealed, caches",
+                            (_, false) => "sealed, mints, caches nothing",
                         }
                         .to_string()
                     }
@@ -418,8 +626,8 @@ fn classes_over_the_tutorial() {
         let (kind, class) = row.split_at(8);
         println!("| {} | {} | {count} |", kind.trim(), class.trim());
     }
-    println!("\n| minting sites | sealed bodies laying a branch |\n|---|---|");
-    for (mints, count) in &laying {
+    println!("\n| sites minting at run | caching bodies |\n|---|---|");
+    for (mints, count) in &caching {
         println!("| {mints} | {count} |");
     }
 }

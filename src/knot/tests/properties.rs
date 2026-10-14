@@ -23,7 +23,7 @@ use crate::scope::{
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
-use crate::values::{Circular, Knotted as _, Link, TypeValue, Types, Value};
+use crate::values::{Chain, Circular, Knotted as _, Link, TypeValue, Value};
 
 use super::super::{KActivation, KValue, KValueFamily, Knotted, Supplied, Untieable, tie};
 use super::{Fixture, TestGraph, copy, with_fixture};
@@ -65,8 +65,8 @@ fn rebuilt<'graph>(original: KValue<'graph, '_>, copied: KValue<'graph, '_>) -> 
 /// The value a runner binds a slot the tie does not: a fresh number, a type for a type name, or
 /// `null` for a registration.
 fn synthetic<'graph, 'cell>(
-    writer: Writer<'cell>,
-    types: &Types<'graph, 'cell>,
+    writer: Writer<'cell, '_>,
+    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
     name: BinderSymbol,
     next: &mut f64,
 ) -> KValue<'graph, 'cell> {
@@ -196,8 +196,8 @@ fn cyclic(data: &[usize], reads: &[Vec<usize>]) -> bool {
 /// or an arm would, and do the same there. Every tied member is pushed onto `tied`.
 fn run<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    writer: Writer<'cell>,
-    types: &Types<'graph, 'cell>,
+    writer: Writer<'cell, '_>,
+    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
     activation: &'cell KActivation<'graph, 'cell>,
     next: &mut f64,
     tied: &mut Vec<Knotted<'graph, 'cell>>,

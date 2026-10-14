@@ -320,6 +320,13 @@ the addresses stand:
   absorbed region readable through the sealed cell that swallowed it.
 - **The tree splice.** A dying tree cell's whole bump goes up the chain into its
   parent's bundle — the [splice](#locality-tactics), again a `Bump` move.
+- **The region table growing.** A `create_tree` that grows the table's tree
+  half reallocates it, moving every tree cell's habitat — its bumps and header
+  slots — between two of that cell's steps. No chunk moves, so what a slot
+  parked still reads. A door names the habitat itself, not its chunks, which is
+  why every door is branded to the step that minted it and none can be parked
+  ([../../README.md](../../README.md#the-contract-four-embedder-types)); the
+  next step's doors are minted fresh, onto the moved habitat.
 
 So a continuation's captures re-anchor at the next step's brand with no check:
 the cell is live, its holds are monotone, and every chunk those holds cover is

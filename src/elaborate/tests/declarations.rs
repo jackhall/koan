@@ -7,7 +7,7 @@ use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, FoldDirection, KKind, KType, NodeSchema, Parametric,
     ReductionMode, SigOrigin, SigSchema, TypeNode, display_name, member, shape_return, shape_slots,
 };
-use crate::values::Types;
+use crate::values::Chain;
 
 use super::{Held, Program, brought, declared, with_program};
 use crate::scope::Elaboration;
@@ -324,7 +324,7 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
 #[test]
 fn a_code_kind_needing_names_is_spelled_with_needing() {
     fn expression(
-        _: &Types<'_, '_>,
+        _: &Chain<'_, '_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &SymbolInterner,
     ) -> Vec<(&'static str, KType)> {

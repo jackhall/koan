@@ -1109,3 +1109,26 @@ fn a_code_digest_is_blind_to_position_and_names_top_level_reads_by_binding() {
         assert_ne!(code("f"), code("h"), "two top-level bindings of one value");
     });
 }
+
+/// A callable's last statement reads a parameter, a `LET` through a nested block and a third binder
+/// through a nested body's capture; a binder only an earlier statement reads is not listed, and a
+/// type parameter is listed whole.
+#[test]
+fn a_callables_last_reads_reach_through_blocks_and_captures() {
+    let source = "\
+LET f = (FN FOR ALL #[Elt] :{a :Number, b :Elt, c :Number} -> Any = #((LET u = b) (LET e = a) (LET g = c) ([(MATCH a -> :Number WITH #{Number: ((e))}) (FN :{} -> Number = #(g))])))";
+    shaped(source, |fixture, lines, shape| {
+        let shape = shape.expect("the program shapes");
+        let body = nested_at(shape, &lines[0], 3, 8);
+        assert_eq!(body.kind(), ShapeKind::Callable);
+        let slot = |name: &str| body.slot(value(fixture, name)).unwrap().0;
+        let (elt, _) = body
+            .slot(BinderSymbol::Type(type_name("Elt", fixture.symbols)))
+            .expect("the type parameter has a slot");
+        let mut expected = [slot("a"), slot("e"), slot("g"), elt];
+        expected.sort_unstable();
+        assert_eq!(body.last_reads(), &expected[..]);
+        assert!(!body.last_reads().contains(&slot("u")));
+        assert!(!body.last_reads().contains(&slot("b")));
+    });
+}

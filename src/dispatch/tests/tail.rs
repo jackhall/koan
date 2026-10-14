@@ -99,7 +99,9 @@ thread_local! {
 }
 
 /// A root work over the top level's resting view: it records the root cell's branch length.
-fn branch_length<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn branch_length<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
+) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { .. }) = state else {
         return step.failed(StepError::Refused);
@@ -183,8 +185,11 @@ fn a_fresh_loop_viewing_a_new_module_each_hop_holds_its_types_flat() {
         minting(&viewed_few, &built_few),
         minting(&viewed_many, &built_many),
     );
+    // A bump claims chunks as its bytes double, so the two depths may differ by a handful of
+    // allocations that grow with the log of the depth, never with it.
+    let slack = u64::from(many.ilog2()) * u64::from(few);
     assert!(
-        per_many * u64::from(few) <= per_few * u64::from(many),
+        per_many * u64::from(few) <= per_few * u64::from(many) + slack,
         "minting costs {per_many} over {many} hops against {per_few} over {few}"
     );
 }

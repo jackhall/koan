@@ -544,7 +544,7 @@ where
     rendering: &'p Rendering<'p>,
     located: Located<'g>,
     shape: &'g BodyShape<'g>,
-    writer: Writer<'c>,
+    writer: Writer<'c, 'p>,
     table: &'c Builtins<'c, Probe>,
 }
 
@@ -610,7 +610,7 @@ fn through_chain(chain: &[&BodyShape<'_>], name: BinderSymbol, at: Position) -> 
 /// activate every shape nested in it the way a call or an arm would — a callable's activation run
 /// by a probe standing for itself. `chain` is the shapes of the activations enclosing it.
 fn activate<'g, 'c>(
-    writer: Writer<'c>,
+    writer: Writer<'c, '_>,
     scratch: BumpAllocator<'_>,
     table: &'c Builtins<'c, Probe>,
     activation: Activation<'g, 'c, ProbeFamily>,

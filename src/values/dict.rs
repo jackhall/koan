@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::KType;
 
-use super::{Knotted, Link, Nothing, Types, Value, Weight, dict_type};
+use super::{Chain, Knotted, Link, Nothing, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with
@@ -78,7 +78,7 @@ impl<'cell> Key<'cell> {
     }
 
     /// The key laid down in `writer`'s region: a string's bytes are written again, a scalar rides.
-    pub(crate) fn rehomed<'dest>(self, writer: Writer<'dest>) -> Key<'dest> {
+    pub(crate) fn rehomed<'dest>(self, writer: Writer<'dest, '_>) -> Key<'dest> {
         Key(match self.0 {
             Scalar::Str(text) => Scalar::Str(writer.text(text)),
             Scalar::Number(number) => Scalar::Number(number),
@@ -157,9 +157,9 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
     /// written into `writer`'s region wherever they borrowed from, and the key and value types are
     /// the joins over what stays. The sort is staged over `scratch`.
     pub fn new(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Value<'cell, X>)],
-        types: &Types<'_, 'cell>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let (keys, cells) = Self::kept(writer, entries, scratch);
@@ -176,7 +176,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
     /// Lay down `entries` as [`new`](Self::new) does, under `ktype`, a type the caller knows they
     /// satisfy — a view's rebuilt dict, at the type its slot declares — so no type is interned.
     pub fn typed(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Value<'cell, X>)],
         ktype: KType,
         scratch: BumpAllocator<'_>,
@@ -188,7 +188,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
     /// The keys and cells of `entries` that stay, sorted by key, written into `writer`'s region.
     #[allow(clippy::type_complexity)]
     fn kept(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Value<'cell, X>)],
         scratch: BumpAllocator<'_>,
     ) -> (&'cell [Key<'cell>], &'cell [Value<'cell, X>]) {
@@ -201,7 +201,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
     /// A dict over sorted keys and aligned value cells already resident in `writer`'s region under
     /// `ktype`, weighed as [`new`](Self::new) weighs them — a retyped data node's arm.
     pub(crate) fn weighed(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         keys: &'cell [Key<'cell>],
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
@@ -220,7 +220,7 @@ impl<'cell, X: Knotted> Dict<'cell, X, Link<'cell, X>> {
     /// Lay down `entries` as a knot's data node under the finished memo `ktype`, sorted by key with
     /// the last of a repeated key kept, as [`Dict::new`] does; the sort is staged over `scratch`.
     pub fn linked(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Link<'cell, X>)],
         ktype: KType,
         scratch: BumpAllocator<'_>,
@@ -271,7 +271,7 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
     /// A dict over sorted keys and aligned cells already resident in `writer`'s region, under a type
     /// and weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_runs(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         keys: &'cell [Key<'cell>],
         cells: &'cell [C],
         ktype: KType,
@@ -290,7 +290,7 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
     }
 
     /// The same entries under `ktype` — an ascription's retype, sharing both runs.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
+    pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
         Self::from_runs(writer, self.keys, self.cells, ktype, self.weight)
     }
 

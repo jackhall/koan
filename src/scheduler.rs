@@ -31,4 +31,6 @@ pub use action::{
     Action, Hold, Holding, Placement, Received, Request, Slot, Step, StepError, Taken, Use,
 };
 pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
+#[cfg(test)]
+pub(crate) use drain::{CACHING, LAID, TIERS, Tiers};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};

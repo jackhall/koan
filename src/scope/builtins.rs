@@ -39,7 +39,7 @@ impl<'cell, X: Knotted> Builtins<'cell, X> {
     /// Panics on a name given twice in one channel: the embedder assembles the table, and two
     /// builtins under one name is its bug.
     pub fn new(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         scratch: BumpAllocator<'_>,
         values: &[(ValueSymbol, Value<'cell, X>)],
         types: &[(TypeSymbol, Value<'cell, X>)],

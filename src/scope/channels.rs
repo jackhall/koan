@@ -43,7 +43,7 @@ impl<'a, P: Copy> Channels<'a, P> {
     ///
     /// Panics on a name given twice in one channel.
     pub(crate) fn sorted_in(
-        writer: Writer<'a>,
+        writer: Writer<'a, '_>,
         scratch: BumpAllocator<'_>,
         values: &[(ValueSymbol, P)],
         types: &[(TypeSymbol, P)],
@@ -120,7 +120,7 @@ fn search<K: Ord + Copy, P>(run: &[(K, P)], name: K) -> Option<usize> {
 
 /// `entries` sorted by name into the region, with a repeated name refused.
 fn sorted<'cell, K: Ord + Copy, P: Copy>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     scratch: BumpAllocator<'_>,
     entries: &[(K, P)],
 ) -> &'cell [(K, P)] {

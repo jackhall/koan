@@ -59,7 +59,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
 
     /// A finished read laid down in `writer`'s region.
     pub fn of(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         captures: &[Link<'cell, X>],
     ) -> &'cell ClosureBindings<'cell, X> {
         let slots = collect(writer, captures.iter().copied());
@@ -79,7 +79,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     /// an edge names a node by index, so it means the same in a copy of its knot.
     pub fn copied<'to, Y: Knotted>(
         &self,
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         mut copy: impl FnMut(&Value<'cell, X>) -> Value<'to, Y>,
     ) -> &'to ClosureBindings<'to, Y> {
         let source = self.slots;

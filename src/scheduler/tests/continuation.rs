@@ -21,7 +21,7 @@ fn place(cell: CellHandle) -> Provenance {
 }
 
 /// A step that does nothing, named only so a continuation has a pointer to hold.
-fn inert<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn inert<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     step.done()
 }
 

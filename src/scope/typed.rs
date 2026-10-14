@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use crate::memory::{BumpAllocator, BumpHashTable, BumpVec, Writer, collect};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, display_name};
-use crate::values::{KnottedFamily, Types, Value};
+use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
 use super::keyed::Keyed;
@@ -158,11 +158,11 @@ impl Elaboration {
 
     /// The refusal as an error value's message, with its names spelled through `symbols` and its
     /// types through `types`.
-    pub fn display<'x, 'g, 'run>(
+    pub fn display<'x, 'g, 'run, 'p, 'reg>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x Types<'g, 'run>,
-    ) -> ElaborationDisplay<'x, 'g, 'run> {
+        types: &'x Chain<'g, 'run, 'p, 'reg, '_>,
+    ) -> ElaborationDisplay<'x, 'g, 'run, 'p, 'reg> {
         ElaborationDisplay {
             error: self,
             symbols,
@@ -172,13 +172,13 @@ impl Elaboration {
 }
 
 /// An [`Elaboration`] beside the interner and registry it renders through.
-pub struct ElaborationDisplay<'x, 'g, 'run> {
+pub struct ElaborationDisplay<'x, 'g, 'run, 'p, 'reg> {
     error: &'x Elaboration,
     symbols: &'x SymbolInterner,
-    types: &'x Types<'g, 'run>,
+    types: &'x Chain<'g, 'run, 'p, 'reg, 'x>,
 }
 
-impl fmt::Display for ElaborationDisplay<'_, '_, '_> {
+impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.error {
             Elaboration::NotAType { name, .. } => {
@@ -299,7 +299,7 @@ impl<'graph> PathEntry<'graph> {
 
     /// A new entry, unresolved, laid down through `writer`.
     pub fn new(
-        writer: Writer<'graph>,
+        writer: Writer<'graph, '_>,
         root: Root<'graph>,
         chain: &[ValueSymbol],
         label: TypeSymbol,
@@ -466,16 +466,48 @@ impl UseStatics<'_> {
 }
 
 /// What the load fixed about a frame body's minted types — the program's, a callable's or a quote's
-/// code's: whether one can leave it, and how many minting sites it and the blocks and module bodies
-/// it runs hold ([type tiers](../../design/type-tiers.md#two-classes-of-body)).
+/// code's: whether one can leave it, and how many sites it and the blocks and module bodies it runs
+/// mint at run — every minting site but a view over a closed content tree, whose types the load
+/// laid in the root ([type tiers](../../design/type-tiers.md#two-classes-of-body)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BodyClass {
-    /// No porous exit: nothing it mints is reachable once it returns. It lays a shape branch where
-    /// it mints and is placed `Shares`.
-    Sealed { mints: u32, lays_branch: bool },
+    /// No porous exit: nothing it mints is reachable once it returns. A callable or a quote's code
+    /// that mints at run **caches**: it interns on its write home's scratch, and adopts into its
+    /// region what leaves it ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
+    Sealed { mints: u32, caches: bool },
     /// A porous exit: its return, or an argument of a call it makes into a frame, can carry a
     /// minted type out.
     Porous { mints: u32 },
+}
+
+/// How the load classed one minting site of a body: by what its content reads
+/// ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mint {
+    /// Over a closed content tree: the same content at every run, its types in the root.
+    Closed,
+    /// The same content at every hop born under one park: interned into the warm tier, the
+    /// scratch branch that park holds.
+    Invariant,
+    /// Content that may differ per hop: interned into the cold tier.
+    Varying,
+}
+
+/// What the load fixed about where a body's types intern at run: whether its frame caches, how
+/// each of its own minting sites is classed, and which of its composite sites — list, dict and
+/// record literals and constructions — build values whose own types are warm.
+#[derive(Clone, Copy, Debug)]
+pub struct Caching<'graph> {
+    /// Whether the frame body this shape runs in caches: its own class for a callable or a quote's
+    /// code, its frame's for a block or a module body.
+    pub caches: bool,
+    /// Each of the shape's own minting sites, sorted by site, beside its class.
+    pub mints: Keyed<'graph, (Site, Mint)>,
+    /// Each composite site whose parts the load classed invariant, sorted.
+    pub warm: Keyed<'graph, Site>,
+    /// Each argument part of a call that passes on a value the frame body received, or a member
+    /// read of one, sorted: its types crossed into the region at the frame's birth.
+    pub received: Keyed<'graph, Site>,
 }
 
 /// The value channel's load-time facts for one body: a static type for every value expression and

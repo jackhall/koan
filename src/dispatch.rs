@@ -51,7 +51,7 @@ use crate::scheduler::NativeStep;
 use crate::scope::{BodyShape, ShapeError};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
-use crate::values::Types;
+use crate::values::Chain;
 
 /// Koan's language: what [`CellSubstrate::load`](crate::program::CellSubstrate::load) runs a
 /// program under.
@@ -59,9 +59,9 @@ pub struct Koan;
 
 impl Language for Koan {
     fn builtins<'graph>(
-        writer: Writer<'graph>,
+        writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Types<'graph, 'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph> {
         builtins::table(writer, symbols, types, scratch)
@@ -74,8 +74,8 @@ impl Language for Koan {
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Types<'graph, 'graph>,
-        writer: Writer<'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
         check::overlaps(shape, builtins, types, scratch)?;
@@ -84,14 +84,16 @@ impl Language for Koan {
 }
 
 /// What one evaluation is born over: the program, the view it reads names through, the contract
-/// it owes a frame it finishes, and the birth it parks with — beside the chain the step reads and
-/// interns types through, built at the step's entry and never parked.
-struct Evaluation<'graph, 'here> {
+/// it owes a frame it finishes, whether it [routes](KBirth::Evaluate), and the birth it parks with
+/// — beside the chain the step reads and interns types through, built at the step's entry and
+/// never parked.
+struct Evaluation<'graph, 'here, 'tier, 'reg, 'door> {
     program: &'graph Program<'graph>,
     view: KActivationView<'graph, 'here>,
     contract: Option<Contract>,
+    routes: bool,
     birth: KBirth<'graph, 'here>,
-    types: Types<'graph, 'here>,
+    types: Chain<'graph, 'tier, 'here, 'reg, 'door>,
 }
 
 /// What one of a call's operands came to: a value, or — an `ATTR` label written bare — the name

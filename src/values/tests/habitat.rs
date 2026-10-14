@@ -15,7 +15,7 @@ use crate::values::{Key, TypeHeader, TypeValue, ValueFamily};
 use super::{Dict, List, Record, TestGraph, Value, copy, pin, text, with_fixture};
 
 /// The digests the branch behind `header` holds, or none where the half has no branch.
-fn branch_digests(header: Header<'_, '_, TypeHeader>) -> HashSet<TypeDigest> {
+fn branch_digests(header: Header<'_, '_, '_, TypeHeader>) -> HashSet<TypeDigest> {
     let mut digests = HashSet::new();
     if let Some(branch) = header.get() {
         branch.each_digest(|digest| {

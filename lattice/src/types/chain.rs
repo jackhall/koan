@@ -1,10 +1,12 @@
 //! The type chain: the tiers one habitat half reads and writes types through, and every door that
 //! interns or reads a type.
 //!
-//! A [`TypeChain`] holds the frozen [`Root`] the load built, a scratch habitat's region tier where
-//! it is built over one, and the [`Habitat`] it writes into: a cell region's or a scratch habitat's
-//! branch at the run, the [`RootBuilder`](super::tiers::RootBuilder) during the load, which is the
-//! one chain with no root. See [tiers.rs](super::tiers) for the tiers themselves.
+//! A [`TypeChain`] holds the frozen [`Root`] the load built and the [`Habitat`] it writes into: a
+//! cell region's or a scratch habitat's branch at the run, the
+//! [`RootBuilder`](super::tiers::RootBuilder) during the load, which is the one chain with no root.
+//! A scratch habitat's chain is built over [`Halves`], which holds the region the chain reads
+//! between the root and its own tier beside the half it writes. See [tiers.rs](super::tiers) for
+//! the tiers themselves.
 //!
 //! Each node is a [`StoredNode`](super::stored::StoredNode) laid alone in the half the chain
 //! writes, holding its own digest beside its content and a reference to each child's node. A
@@ -42,7 +44,6 @@
 //! See [identity.md § Storage](identity.md#storage-a-root-and-its-branches).
 
 use std::cell::Cell;
-use std::marker::PhantomData;
 
 use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
@@ -64,7 +65,7 @@ use super::shape::{
 use super::signatures::canonical_applications;
 use super::stored::{Content, Flags, Linked, StoredNode, copied, mapped_fields};
 use super::substitute::{rewrite_siblings, substitute_quantified};
-use super::tiers::{ChainPosition, Habitat, Own, RegionTier, Root, Tier, lay_one};
+use super::tiers::{ChainPosition, Habitat, Halves, Own, Root, lay_one};
 use super::verdicts::{Relation, VerdictKey};
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_free_quantified};
@@ -137,13 +138,20 @@ pub struct TypeChain<'t, H> {
     /// The bottom and the top, held so producing either costs no lookup.
     never: Linked<'t>,
     any: Linked<'t>,
-    /// A scratch chain's region tier; `None` on every other chain.
-    region: Option<&'t dyn Tier<'t>>,
-    /// The half the chain lays into, and its own tier.
+    /// The half the chain lays into, its own tier, and a scratch chain's region tier.
     half: H,
     /// `test`-only: how many handles have been entered, so a test can count a walk's lookups.
     #[cfg(test)]
     lookups: Cell<usize>,
+}
+
+impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> TypeChain<'t, Halves<'r, 't, H, R>> {
+    /// A scratch habitat's chain over `half`, reading `region`'s tier between the root and its
+    /// own. The region is held by value, so building the chain lays nothing, and it is re-read on
+    /// every probe, so a branch the region lays during the step is seen.
+    pub fn scratch(root: &'t Root<'t>, region: R, half: H) -> Self {
+        Self::new(root, Halves::over(half, region))
+    }
 }
 
 /// Which tier holds a type, longest-lived first: where a verdict over it is placed.
@@ -160,33 +168,19 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         let Some(Own::Builder(builder)) = half.own() else {
             panic!("the load's chain is built over the root builder");
         };
-        Self::over(None, builder.never(), builder.any(), None, half)
+        Self::over(None, builder.never(), builder.any(), half)
     }
 
     /// A chain over `half`, reading `root` first.
     pub fn new(root: &'t Root<'t>, half: H) -> Self {
-        Self::over(Some(root), root.never(), root.any(), None, half)
+        Self::over(Some(root), root.never(), root.any(), half)
     }
 
-    /// A scratch habitat's chain over `half`, reading `region`'s tier between the root and its
-    /// own. The region tier is laid in `half`, and re-reads `region` on every probe.
-    pub fn scratch<'r: 't, R: Habitat<'r> + 't>(root: &'t Root<'t>, region: R, half: H) -> Self {
-        let region: &'t dyn Tier<'t> = lay_one(half, RegionTier(region, PhantomData));
-        Self::over(Some(root), root.never(), root.any(), Some(region), half)
-    }
-
-    fn over(
-        root: Option<&'t Root<'t>>,
-        never: Linked<'t>,
-        any: Linked<'t>,
-        region: Option<&'t dyn Tier<'t>>,
-        half: H,
-    ) -> Self {
+    fn over(root: Option<&'t Root<'t>>, never: Linked<'t>, any: Linked<'t>, half: H) -> Self {
         TypeChain {
             root,
             never,
             any,
-            region,
             half,
             #[cfg(test)]
             lookups: Cell::new(0),
@@ -421,18 +415,26 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         if let Some(found) = self.root.and_then(|root| root.find(digest)) {
             return Some((Placed::Root, found));
         }
-        if let Some(found) = self.region.and_then(|region| region.find(digest)) {
+        if let Some(found) = self
+            .half
+            .region()
+            .and_then(|region| region.tier().find(digest))
+        {
             return Some((Placed::Region, found));
         }
         Some((Placed::Own, self.half.own()?.find(digest)?))
     }
 
     /// The node under `digest` through the own branch's link, then the region tier's.
-    fn linked_reach(&self, digest: TypeDigest) -> Option<Linked<'t>> {
+    pub(super) fn linked_reach(&self, digest: TypeDigest) -> Option<Linked<'t>> {
         self.half
             .own()
             .and_then(|own| own.link_reach(digest))
-            .or_else(|| self.region.and_then(|region| region.reach(digest)))
+            .or_else(|| {
+                self.half
+                    .region()
+                    .and_then(|region| region.tier().reach(digest))
+            })
     }
 
     /// Whether the own tier or the region tier is the branch at `at`, or reaches it through its
@@ -440,8 +442,9 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     pub(super) fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool {
         self.half.own().is_some_and(|own| own.reaches_at(at, steps))
             || self
-                .region
-                .is_some_and(|region| region.reaches_at(at, steps))
+                .half
+                .region()
+                .is_some_and(|region| region.tier().reaches_at(at, steps))
     }
 
     /// Whether the own tier or the region tier is the branch at `address`, or reaches it through
@@ -452,8 +455,9 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             .own()
             .is_some_and(|own| own.reaches_branch(address))
             || self
-                .region
-                .is_some_and(|region| region.reaches_branch(address))
+                .half
+                .region()
+                .is_some_and(|region| region.tier().reaches_branch(address))
     }
 
     /// Whether `handle` names a union. The construction lane's first probe, so it answers from the
@@ -1402,7 +1406,11 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         self.half
             .own()
             .and_then(|own| own.verdict(key))
-            .or_else(|| self.region.and_then(|region| region.verdict(key)))
+            .or_else(|| {
+                self.half
+                    .region()
+                    .and_then(|region| region.tier().verdict(key))
+            })
             .or_else(|| self.root.and_then(|root| root.verdict(key)))
     }
 
@@ -1432,8 +1440,8 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
                 }
             }
             Placed::Region => {
-                if let Some(region) = self.region {
-                    region.record(key, verdict);
+                if let Some(region) = self.half.region() {
+                    region.tier().record(key, verdict);
                 }
             }
             Placed::Own => self.half.own_or_lay().record(self.half, key, verdict),

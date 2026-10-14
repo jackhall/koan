@@ -25,7 +25,8 @@
 //!   branch the reader links, so each of those meets within a link.
 //!
 //! A copied value is rebuilt in the destination, and its home may die first, so its types are
-//! re-laid: [`adopt`](TypeChain::adopt) lays each node the destination lacks at its own digest and
+//! re-laid: [`adopt`](TypeChain::adopt), or [`adopt_from`](TypeChain::adopt_from) reading a whole
+//! chain, lays each node the destination lacks at its own digest and
 //! flags through the third conversion ([`Content::transfer`]), children first, then makes every
 //! handle a side table holds resolve, which closes each cycle through a schema by a hit. A sealed
 //! component is re-laid whole, its table already absolute ([`Component::absolute`]).
@@ -99,22 +100,35 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// from `source` — the copied value's home branch, `None` where the home had none. The root is
     /// shared, so a root handle is found whatever the source.
     pub fn adopt<'s>(&self, source: Option<&Branch<'s>>, kt: impl Into<DeclaredType<Parametric>>) {
+        self.adopt_in(&source, kt);
+    }
+
+    /// [`adopt`](Self::adopt) reading every tier and link `source` reads — the root, its region
+    /// tier, its own tier and their links — so a type whose children lie in several of them
+    /// arrives in one pass. Reads `source` without caching into it.
+    pub fn adopt_from<'s, H2: Habitat<'s>>(
+        &self,
+        source: &TypeChain<'s, H2>,
+        kt: impl Into<DeclaredType<Parametric>>,
+    ) {
+        self.adopt_in(&source, kt);
+    }
+
+    fn adopt_in<'s>(&self, source: &impl Source<'s>, kt: impl Into<DeclaredType<Parametric>>) {
         self.adopt_digest(source, kt.into().raw().digest());
     }
 
     /// [`adopt`](Self::adopt) by digest, answering the node.
-    fn adopt_digest<'s>(&self, source: Option<&Branch<'s>>, digest: TypeDigest) -> Linked<'t> {
+    fn adopt_digest<'s>(&self, source: &impl Source<'s>, digest: TypeDigest) -> Linked<'t> {
         if let Some(found) = self.resolve(digest) {
             return found;
         }
-        let from = source
-            .and_then(|source| source.reach(digest))
-            .unwrap_or_else(|| {
-                panic!(
-                    "a crossed value names type 0x{:032x}, which its home cannot resolve",
-                    digest.0
-                )
-            });
+        let from = source.reach(digest).unwrap_or_else(|| {
+            panic!(
+                "a crossed value names type 0x{:032x}, which its home cannot resolve",
+                digest.0
+            )
+        });
         let content = from.content().transfer(
             self.half(),
             &mut |child| self.adopt_digest(source, child.digest()),
@@ -124,7 +138,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         match node.content() {
             Content::Scheme { group, .. } => {
                 for bound in group.bounds {
-                    self.adopt(source, *bound);
+                    self.adopt_in(source, *bound);
                 }
             }
             Content::Signature { schema, .. } => {
@@ -133,13 +147,13 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
                     .iter()
                     .chain(schema.manifest_members.iter());
                 for (_, kt) in named {
-                    self.adopt(source, *kt);
+                    self.adopt_in(source, *kt);
                 }
                 for (_, kt) in schema.value_slots.iter() {
-                    self.adopt(source, *kt);
+                    self.adopt_in(source, *kt);
                 }
                 for kt in schema.keyworded {
-                    self.adopt(source, *kt);
+                    self.adopt_in(source, *kt);
                 }
             }
             _ => {}
@@ -152,7 +166,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// member schema's handles adopted after, which closes each cycle through a schema by a hit.
     fn adopt_component<'s>(
         &self,
-        source: Option<&Branch<'s>>,
+        source: &impl Source<'s>,
         from: &Component<'s>,
     ) -> &'t Component<'t> {
         if let Some(Content::SetMember { component, .. }) = self
@@ -174,14 +188,35 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         }
         for member in relaid {
             match member.schema {
-                NodeSchema::NewType(repr) => self.adopt(source, repr),
+                NodeSchema::NewType(repr) => {
+                    self.adopt_in(source, repr);
+                }
                 NodeSchema::TypeConstructor {
                     representation: Some(representation),
                     ..
-                } => self.adopt(source, representation),
+                } => {
+                    self.adopt_in(source, representation);
+                }
                 NodeSchema::TypeConstructor { .. } => {}
             }
         }
         component
+    }
+}
+
+/// Where an adopt reads a node it lacks: one branch and its links, or a whole chain.
+trait Source<'s> {
+    fn reach(&self, digest: TypeDigest) -> Option<Linked<'s>>;
+}
+
+impl<'s> Source<'s> for Option<&Branch<'s>> {
+    fn reach(&self, digest: TypeDigest) -> Option<Linked<'s>> {
+        self.and_then(|branch| branch.reach(digest))
+    }
+}
+
+impl<'s, H: Habitat<'s>> Source<'s> for &TypeChain<'s, H> {
+    fn reach(&self, digest: TypeDigest) -> Option<Linked<'s>> {
+        self.find(digest).or_else(|| self.linked_reach(digest))
     }
 }

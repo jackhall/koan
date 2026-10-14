@@ -21,7 +21,7 @@ use crate::scope::{
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::KType;
 use crate::values::tests::TestTypes;
-use crate::values::{TypeHeader, TypeValue, Types, Value};
+use crate::values::{Chain, TypeHeader, TypeValue, Types, Value};
 
 use super::{callable_type, type_declarations};
 use crate::scope::{Callable, Elaboration};
@@ -48,16 +48,16 @@ pub(super) enum Held<'cell> {
 /// What a check reads: the fixture's storage and the activated program, its types through the
 /// cell's chain, which reads what the load built.
 pub(super) struct Program<'p, 'graph, 'cell> {
-    pub types: &'p Types<'graph, 'cell>,
+    pub types: &'p Chain<'graph, 'cell, 'cell, 'graph, 'p>,
     /// The load's chain, which a load-time pass reads and interns through.
-    pub load: &'p Types<'graph, 'graph>,
+    pub load: &'p Types<'graph, 'graph, 'p>,
     pub symbols: &'p SymbolInterner,
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
-    pub writer: Writer<'cell>,
+    pub writer: Writer<'cell, 'p>,
     /// Program storage's writer, which the load pass lays its records down through.
-    pub storage: Writer<'graph>,
+    pub storage: Writer<'graph, 'graph>,
 }
 
 impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
@@ -186,8 +186,16 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
 /// `hold` gives for its name, and run `check`.
 pub(super) fn with_program<R>(
     source: &str,
-    extra: impl FnOnce(&Types<'_, '_>, BumpAllocator<'_>, &SymbolInterner) -> Vec<(&'static str, KType)>,
-    hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &Types<'graph, 'cell>) -> Held<'cell>,
+    extra: impl FnOnce(
+        &Chain<'_, '_, '_, '_, '_>,
+        BumpAllocator<'_>,
+        &SymbolInterner,
+    ) -> Vec<(&'static str, KType)>,
+    hold: impl for<'graph, 'cell> Fn(
+        &str,
+        Writer<'cell, '_>,
+        &Chain<'graph, 'cell, 'cell, '_, '_>,
+    ) -> Held<'cell>,
     check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
 ) -> R {
     let storage = program_storage();
@@ -294,15 +302,15 @@ pub(super) fn brought<R>(
 /// Every slot bound to `Null`.
 pub(super) fn nulls<'graph, 'cell>(
     _: &str,
-    _: Writer<'cell>,
-    _: &Types<'graph, 'cell>,
+    _: Writer<'cell, '_>,
+    _: &Chain<'graph, 'cell, 'cell, '_, '_>,
 ) -> Held<'cell> {
     Held::Bound(Value::Null)
 }
 
 /// No builtin type past the scalars.
 pub(super) fn scalars(
-    _: &Types<'_, '_>,
+    _: &Chain<'_, '_, '_, '_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {

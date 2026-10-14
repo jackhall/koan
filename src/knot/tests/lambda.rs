@@ -6,7 +6,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BodyShape, CaptureSlot, Site};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DeclaredType, KType};
-use crate::values::{Circular, Knotted as _, Link, Types, Value};
+use crate::values::{Chain, Circular, Knotted as _, Link, Value};
 
 use super::super::{KActivation, Knotted, Untieable, lambda};
 use super::birth::tie_with;
@@ -49,8 +49,8 @@ fn body_of<'graph>(
 /// Statement `statement` of `activation`'s shape, a `FN`, born through the door.
 fn born<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    writer: Writer<'cell>,
-    types: &Types<'graph, 'cell>,
+    writer: Writer<'cell, '_>,
+    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     statement: usize,
 ) -> Knotted<'graph, 'cell> {

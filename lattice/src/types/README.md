@@ -147,10 +147,6 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 - [Presizing a branch](../../../roadmap/type-tiers/branch-presizing.md) — a
   branch's table laid at a predicted size, and the width of its slots.
-- [The host's scratch as a type cache](../../../roadmap/type-tiers/host-scratch-cache.md)
-  — a scratch branch lent to a frame in another cell, written through the
-  root and itself alone and read as a scratch chain's middle tier, and an
-  adopt that reads a whole chain.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.

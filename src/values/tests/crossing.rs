@@ -284,7 +284,7 @@ fn two_members_of_one_knot_cross_as_members_of_one_copy() {
     });
 }
 
-fn text_in<'cell>(writer: crate::memory::Writer<'cell>) -> super::Holding<'cell> {
+fn text_in<'cell>(writer: crate::memory::Writer<'cell, '_>) -> super::Holding<'cell> {
     crate::values::text(writer, "held")
 }
 

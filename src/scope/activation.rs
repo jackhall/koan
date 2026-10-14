@@ -26,7 +26,7 @@ use crate::values::{Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
-use super::shape::{BodyShape, Coordinate, ShapeKind, Slot, Target};
+use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
 
 /// The read half of one body's bindings for one call or one block entry: what an evaluation is
 /// handed. Covariant in `'cell`, and without a door that binds a slot.
@@ -121,7 +121,7 @@ where
 {
     /// The one constructor every kind goes through: `len` empty slots and the view over them.
     fn laid_down(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
@@ -144,7 +144,7 @@ where
 
     /// A fresh activation of the program shape `shape`, every slot empty.
     pub fn of_program(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
@@ -162,7 +162,7 @@ where
     /// A fresh activation of the callable shape `shape`, run by `callable` over its closure
     /// bindings, every slot empty.
     pub fn of_callable(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
         callable: XF::Closed<'cell>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
@@ -181,7 +181,7 @@ where
     /// empty. It runs no knot member: a module's captures are never edges, and the caller ties
     /// the binder once this activation's every slot is bound.
     pub fn of_module(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
@@ -200,7 +200,7 @@ where
     /// it runs no knot member and reads through no enclosing activation: code reaches nothing the
     /// `EVAL` running it does not hand it.
     pub fn of_code(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
@@ -218,7 +218,7 @@ where
     /// slot empty. A view is all it needs, so an evaluation holding only a view can lay a block
     /// down.
     pub fn of_block(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
         enclosing: &'cell ActivationView<'graph, 'cell, XF>,
     ) -> Self {
@@ -312,6 +312,37 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
                         .sibling(edge),
                 ),
             },
+        }
+    }
+
+    /// The value bound at `slot`, or `None` while it is empty.
+    pub fn bound(&self, slot: Slot) -> Option<Value<'cell, XF::Closed<'cell>>> {
+        self.slots.get(slot.index())
+    }
+
+    /// What the frame body this view runs in received, handed to `each`: each parameter it has
+    /// bound, each value its closure bindings hold, and the callable it runs. Nothing for the
+    /// program or a module body, whose bindings their own units built. A value that leaves a
+    /// caching body and is one of these adopts its own memo alone: its parts crossed into the
+    /// region where the frame was born.
+    pub fn received(&self, each: &mut dyn FnMut(Value<'cell, XF::Closed<'cell>>)) {
+        let mut view = self;
+        while let Some(enclosing) = view.enclosing {
+            view = enclosing;
+        }
+        if !matches!(view.shape.kind(), ShapeKind::Callable | ShapeKind::Code) {
+            return;
+        }
+        for slot in (0..view.shape.slots()).map(|index| Slot(index as u32)) {
+            if view.shape.position_of(slot) == Position::PARAMETER
+                && let Some(value) = view.bound(slot)
+            {
+                each(value);
+            }
+        }
+        view.closure.held(each);
+        if let Some(callable) = view.callable {
+            each(Value::Knotted(callable));
         }
     }
 }

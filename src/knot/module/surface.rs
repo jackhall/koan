@@ -16,7 +16,7 @@ use crate::knot::{KActivation, KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::scope::{Position, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
-use crate::values::{List, Types, Value};
+use crate::values::{Chain, List, Value};
 
 use super::layout;
 
@@ -39,10 +39,10 @@ pub enum Unsurfaceable {
 /// `module`'s carried signature declares it ([`layout::member`]), and each surfaced key to the list
 /// of the functions `module` offers there, laid down through `writer`. A refusal binds nothing.
 pub fn surface<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     module: KValue<'graph, 'cell>,
     block: &KActivation<'graph, 'cell>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Unsurfaceable> {
     debug_assert_eq!(block.shape().kind(), ShapeKind::Block);

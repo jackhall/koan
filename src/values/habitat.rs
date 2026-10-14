@@ -12,8 +12,10 @@
 //! writers with types. See [README.md § Crossing](README.md#crossing) for how a crossing makes a
 //! value's types resolve in its destination.
 
+use std::marker::PhantomData;
+
 use crate::memory::{Header, LaysRuns, Writer, reattachable};
-use crate::type_lattice::{Branch, Habitat, Own, RootBuilder, TypeChain};
+use crate::type_lattice::{Branch, Habitat, Halves, Own, RootBuilder, TypeChain};
 
 /// The header family a koan graph keeps per habitat half: the half's branch of the type lattice.
 pub struct TypeHeader;
@@ -22,64 +24,103 @@ reattachable!(TypeHeader => &'cell Branch<'cell>);
 
 /// The tier a chain interns into, beside the runs it lays content through: a habitat half's
 /// writer and header door at one brand, or the root builder during the load.
+///
+/// `'pair` is the pairing brand: the brand of the writer the chain serves, which a value door
+/// pairs its writer with. A half built by [`of`](Half::of) or [`load`](Half::load) is paired to
+/// its own brand; a step pairs a caching body's scratch halves to its region writer
+/// ([`paired`](Half::paired)), since a value holds its type by digest and never references a node.
+///
+/// `'door` is the brand of the step that minted the half's doors, so a half cannot outlive it.
 #[derive(Clone, Copy)]
-pub enum Half<'graph, 'cell>
+pub enum Half<'graph, 'cell, 'pair, 'door>
 where
     'graph: 'cell,
 {
     /// A cell region or a scratch habitat: its writer beside its header door.
     Habitat {
-        writer: Writer<'cell>,
-        header: Header<'graph, 'cell, TypeHeader>,
+        writer: Writer<'cell, 'door>,
+        header: Header<'graph, 'cell, 'door, TypeHeader>,
+        pair: Pairing<'pair>,
     },
     /// The load: the root builder the load's chain writes, at `'cell = 'graph`.
-    Load(&'cell RootBuilder<'cell>),
+    Load(&'cell RootBuilder<'cell>, Pairing<'pair>),
 }
 
-impl<'graph, 'cell> Half<'graph, 'cell> {
-    /// The half `writer` lays into, whose header door is `header`.
-    pub fn of(writer: Writer<'cell>, header: Header<'graph, 'cell, TypeHeader>) -> Self {
-        Half::Habitat { writer, header }
+/// The pairing brand a [`Half`] carries, invariant so a chain paired to one brand is never read
+/// as paired to another.
+pub type Pairing<'pair> = PhantomData<fn(&'pair ()) -> &'pair ()>;
+
+impl<'graph, 'cell, 'door> Half<'graph, 'cell, 'cell, 'door> {
+    /// The half `writer` lays into, whose header door is `header`, paired to its own brand.
+    pub fn of(
+        writer: Writer<'cell, 'door>,
+        header: Header<'graph, 'cell, 'door, TypeHeader>,
+    ) -> Self {
+        Half::Habitat {
+            writer,
+            header,
+            pair: PhantomData,
+        }
+    }
+
+    /// The load's half over `builder`, paired to its own brand.
+    pub fn load(builder: &'cell RootBuilder<'cell>) -> Self {
+        Half::Load(builder, PhantomData)
     }
 }
 
-impl<'cell> LaysRuns<'cell> for Half<'_, 'cell> {
+impl<'graph, 'cell, 'pair, 'door> Half<'graph, 'cell, 'pair, 'door> {
+    /// The half `writer` lays into, paired to the writer at `'pair` that a caching body's value
+    /// doors take beside a chain over it.
+    pub(crate) fn paired(
+        writer: Writer<'cell, 'door>,
+        header: Header<'graph, 'cell, 'door, TypeHeader>,
+    ) -> Self {
+        Half::Habitat {
+            writer,
+            header,
+            pair: PhantomData,
+        }
+    }
+}
+
+impl<'cell> LaysRuns<'cell> for Half<'_, 'cell, '_, '_> {
     fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'cell [T] {
         match self {
             Half::Habitat { writer, .. } => writer.fill(len, fill),
-            Half::Load(builder) => builder.lay(len, fill),
+            Half::Load(builder, _) => builder.lay(len, fill),
         }
     }
 
     fn text(self, text: &str) -> &'cell str {
         match self {
             Half::Habitat { writer, .. } => writer.text(text),
-            Half::Load(builder) => builder.text(text),
+            Half::Load(builder, _) => builder.text(text),
         }
     }
 }
 
-impl<'cell> Habitat<'cell> for Half<'_, 'cell> {
+impl<'cell> Habitat<'cell> for Half<'_, 'cell, '_, '_> {
     fn own(self) -> Option<Own<'cell>> {
         match self {
             Half::Habitat { header, .. } => header.get().map(Own::Branch),
-            Half::Load(builder) => Some(Own::Builder(builder)),
+            Half::Load(builder, _) => Some(Own::Builder(builder)),
         }
     }
 
     fn own_or_lay(self) -> Own<'cell> {
         match self {
-            Half::Habitat { writer, header } => Own::Branch(header.get_or_lay(|| {
+            Half::Habitat { writer, header, .. } => Own::Branch(header.get_or_lay(|| {
                 let mut branch = Some(Branch::new(self));
                 &writer.fill(1, |_| branch.take().expect("a run of one fills once"))[0]
             })),
-            Half::Load(builder) => Own::Builder(builder),
+            Half::Load(builder, _) => Own::Builder(builder),
         }
     }
 }
 
 /// The chain a step, a build or the load reads and interns types through, writing the half its
-/// writer lays into.
+/// writer lays into. It holds that half's doors, so it is branded `'door` to the step that built it.
 ///
 /// A value door takes its writer and its chain at one brand, so the types it interns land in the
 /// habitat it lays the value in:
@@ -91,7 +132,7 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell> {
 /// use koan::values::{List, Value};
 ///
 /// fn scratch_list<'graph>(
-///     step: Step<'_, 'graph, '_, '_, '_, KBundle>,
+///     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 /// ) -> Action<'graph, KBundle> {
 ///     let types = step.scratch_types();
 ///     let items = [Value::Number(1.0)].into_iter();
@@ -109,7 +150,7 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell> {
 /// use koan::values::{List, Value};
 ///
 /// fn scratch_list<'graph>(
-///     step: Step<'_, 'graph, '_, '_, '_, KBundle>,
+///     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 /// ) -> Action<'graph, KBundle> {
 ///     let types = step.types();
 ///     let items = [Value::Number(1.0)].into_iter();
@@ -117,4 +158,54 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell> {
 ///     step.done()
 /// }
 /// ```
-pub type Types<'graph, 'cell> = TypeChain<'cell, Half<'graph, 'cell>>;
+///
+/// A caching body's chain lays in a scratch tier but is paired to the region writer, so a door
+/// takes the two together:
+///
+/// ```
+/// use koan::memory::Bump;
+/// use koan::program::KBundle;
+/// use koan::scheduler::{Action, Step};
+/// use koan::values::{List, Value};
+///
+/// fn cached_list<'graph>(
+///     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
+/// ) -> Action<'graph, KBundle> {
+///     let types = step.shares_types();
+///     let items = [Value::Number(1.0)].into_iter();
+///     let _: &List<'_> = List::new(step.writer(), items, &types, &Bump::new());
+///     step.done()
+/// }
+/// ```
+///
+/// and the same chain beside the scratch writer, whose brand it is not paired to, does not
+/// compile:
+///
+/// ```compile_fail
+/// use koan::memory::Bump;
+/// use koan::program::KBundle;
+/// use koan::scheduler::{Action, Step};
+/// use koan::values::{List, Value};
+///
+/// fn cached_list<'graph>(
+///     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
+/// ) -> Action<'graph, KBundle> {
+///     let types = step.shares_types();
+///     let items = [Value::Number(1.0)].into_iter();
+///     let _: &List<'_> = List::new(step.scratch_writer(), items, &types, &Bump::new());
+///     step.done()
+/// }
+/// ```
+pub type Types<'graph, 'cell, 'door> = Chain<'graph, 'cell, 'cell, 'cell, 'door>;
+
+/// A chain whose tiers sit at `'tier`, paired to the writer at `'pair`: what a value door takes
+/// beside a writer at `'pair`. A caching body's chains lay into a scratch tier, so their tier brand
+/// differs from the region writer they are paired to. A scratch chain reads a region at `'reg`
+/// between the root and its own tier, holding the region's half by value ([`Halves`]), so building
+/// one lays nothing; the region's half takes the chain's pairing brand, which it lays no value
+/// under. A chain over a half alone holds none, and its `'reg` names nothing. The chain holds its
+/// halves' doors, so it is branded `'door` to the step that built it.
+pub type Chain<'graph, 'tier, 'pair, 'reg, 'door> = TypeChain<
+    'tier,
+    Halves<'reg, 'tier, Half<'graph, 'tier, 'pair, 'door>, Half<'graph, 'reg, 'pair, 'door>>,
+>;

@@ -56,7 +56,7 @@ impl<'a, T: KeyedEntry> Keyed<'a, T> {
     }
 
     /// `staged` sorted by key and laid down in `writer`'s region.
-    pub(crate) fn sorted(writer: Writer<'a>, staged: &mut [T]) -> Self
+    pub(crate) fn sorted(writer: Writer<'a, '_>, staged: &mut [T]) -> Self
     where
         T: Copy,
     {

@@ -59,7 +59,7 @@ use crate::type_lattice::{
     DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, display_name,
     instantiate_quantified,
 };
-use crate::values::{ContentDigest, Knotted, Types};
+use crate::values::{Chain, ContentDigest, Knotted};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
@@ -67,8 +67,8 @@ use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
 use super::typed::{
-    BodyClass, Elaboration, InstanceRead, PathEntry, PathRead, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
+    BodyClass, Caching, Elaboration, InstanceRead, Mint, PathEntry, PathRead, Static,
+    StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
 };
 
 mod build;
@@ -518,6 +518,8 @@ pub struct BodyShape<'graph> {
     binders: &'graph [Binder<'graph>],
     /// The body's units in the order they are performed.
     units: &'graph [Unit],
+    /// The slots a callable's or a code body's last statement reads, and every type slot, sorted.
+    last_reads: &'graph [Slot],
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
     /// A code shape's carried type: its code kind needing its open `\` marks. `Code` for every
@@ -563,6 +565,8 @@ pub struct BodyShape<'graph> {
     /// The value channel's static types and each keyworded use's statics, fixed by the language's
     /// load pass.
     statics: &'graph Cell<Option<Statics<'graph>>>,
+    /// Where the body's types intern at run, fixed once the whole static pass has run.
+    caching: &'graph Cell<Option<&'graph Caching<'graph>>>,
 }
 
 /// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
@@ -611,7 +615,7 @@ impl<'graph> BodyShape<'graph> {
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, X>,
-        types: &Types<'graph, 'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -736,6 +740,15 @@ impl<'graph> BodyShape<'graph> {
     /// parameters, or a statement that binds nothing.
     pub fn units(&self) -> &'graph [Unit] {
         self.units
+    }
+
+    /// The slots a callable's or a code body's last statement reads — directly, through a nested
+    /// block or through a nested body's captures — and every type slot, sorted; empty for any
+    /// other kind. A caching frame that hands its last statement on adopts these slots' values
+    /// into its region at the hand-off, since its scratch departs while the statement still reads
+    /// them.
+    pub fn last_reads(&self) -> &'graph [Slot] {
+        self.last_reads
     }
 
     /// The component `slot` belongs to, by index into [`components`](Self::components).
@@ -868,7 +881,11 @@ impl<'graph> BodyShape<'graph> {
 
     /// A callable body's function type as its body reads it: its own group instantiated at its
     /// group levels. `None` where the load did not type the callable.
-    pub fn in_body(&self, types: &Types<'_, '_>, scratch: BumpAllocator<'_>) -> Option<Parametric> {
+    pub fn in_body(
+        &self,
+        types: &Chain<'_, '_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Option<Parametric> {
         let ktype = match self.callable_type() {
             Static::Closed(callable) => callable.ktype.into(),
             Static::Rigid {
@@ -1055,6 +1072,41 @@ impl<'graph> BodyShape<'graph> {
     /// the load fixed nothing.
     pub fn class(&self) -> Option<BodyClass> {
         self.statics.get()?.class
+    }
+
+    /// Whether the frame body this shape runs in caches: interns on its write home's scratch, and
+    /// adopts into its region what leaves it. `false` before the load has run.
+    pub fn caches(&self) -> bool {
+        self.caching.get().is_some_and(|caching| caching.caches)
+    }
+
+    /// How the load classed the minting site at `site`, one of this shape's own; `None` for a site
+    /// it recorded none at, and before it has run.
+    pub fn mint_at(&self, site: Site) -> Option<Mint> {
+        let caching = self.caching.get()?;
+        caching.mints.get(site).map(|(_, mint)| *mint)
+    }
+
+    /// Whether the composite site at `site` builds a value whose own type is warm.
+    pub fn warm_at(&self, site: Site) -> bool {
+        (self.caching.get()).is_some_and(|caching| caching.warm.get(site).is_some())
+    }
+
+    /// Whether the argument part at `site` passes on a value the frame body received, or a member
+    /// read of one: an exit adopts its own memo alone.
+    pub fn received_at(&self, site: Site) -> bool {
+        (self.caching.get()).is_some_and(|caching| caching.received.get(site).is_some())
+    }
+
+    /// Where the body's types intern at run, once the static pass has run.
+    pub fn caching(&self) -> Option<&'graph Caching<'graph>> {
+        self.caching.get()
+    }
+
+    /// Written once, by the static pass, after it has typed every shape.
+    pub fn fix_caching(&self, caching: &'graph Caching<'graph>) {
+        debug_assert!(self.caching.get().is_none());
+        self.caching.set(Some(caching));
     }
 
     /// Whether the load recorded `site` as one of this shape's own minting sites.
@@ -1536,11 +1588,11 @@ impl ShapeError<'_> {
 
     /// The error rendered, led by where it was found (`path:line:col: `), with its names spelled
     /// through `symbols` and its types through `types`.
-    pub fn display<'x, 'g, 'run>(
+    pub fn display<'x, 'g, 'run, 'p, 'reg>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x Types<'g, 'run>,
-    ) -> ShapeErrorDisplay<'x, 'g, 'run> {
+        types: &'x Chain<'g, 'run, 'p, 'reg, '_>,
+    ) -> ShapeErrorDisplay<'x, 'g, 'run, 'p, 'reg> {
         ShapeErrorDisplay {
             error: self,
             symbols,
@@ -1551,13 +1603,13 @@ impl ShapeError<'_> {
 
 /// A [`ShapeError`] beside the interner its names render through and the registry its types
 /// render through.
-pub struct ShapeErrorDisplay<'x, 'g, 'run> {
+pub struct ShapeErrorDisplay<'x, 'g, 'run, 'p, 'reg> {
     error: &'x ShapeError<'x>,
     symbols: &'x SymbolInterner,
-    types: &'x Types<'g, 'run>,
+    types: &'x Chain<'g, 'run, 'p, 'reg, 'x>,
 }
 
-impl fmt::Display for ShapeErrorDisplay<'_, '_, '_> {
+impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
@@ -1840,7 +1892,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_> {
     }
 }
 
-impl ShapeErrorDisplay<'_, '_, '_> {
+impl ShapeErrorDisplay<'_, '_, '_, '_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
     }
@@ -1854,7 +1906,7 @@ pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
     arguments: &[A],
     ambiguous: Option<usize>,
     symbols: &SymbolInterner,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> fmt::Result {
     let key = spelled(key, symbols);
     match ambiguous {
@@ -1888,7 +1940,7 @@ pub fn view_refused(
     f: &mut fmt::Formatter<'_>,
     refused: ViewRefused,
     symbols: &SymbolInterner,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> fmt::Result {
     match refused {
         ViewRefused::NotAModule(value) => {

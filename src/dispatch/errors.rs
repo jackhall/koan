@@ -12,7 +12,7 @@ use crate::program::Program;
 use crate::scope::{ViewRefused, selection_refused, view_refused};
 use crate::symbols::{KeySymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, display_name};
-use crate::values::{KeyRejected, Types};
+use crate::values::{Chain, KeyRejected};
 
 /// Why dispatch raised an error value.
 #[derive(Clone, Copy)]
@@ -90,8 +90,8 @@ impl Raised<'_> {
     pub(super) fn raise<'graph, 'cell>(
         self,
         program: &Program<'graph>,
-        writer: Writer<'cell>,
-        types: &Types<'_, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
     ) -> KValue<'graph, 'cell> {
         program.error(
             writer,
@@ -106,13 +106,13 @@ impl Raised<'_> {
 }
 
 /// A [`Raised`] beside the interner and registry it renders through.
-struct RaisedDisplay<'a, 'x, 'g, 'run> {
+struct RaisedDisplay<'a, 'x, 'g, 'run, 'p, 'reg> {
     raised: Raised<'a>,
     symbols: &'x SymbolInterner,
-    types: &'x Types<'g, 'run>,
+    types: &'x Chain<'g, 'run, 'p, 'reg, 'x>,
 }
 
-impl fmt::Display for RaisedDisplay<'_, '_, '_, '_> {
+impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ktype = |handle: KType| display_name(handle, self.types, self.symbols);
         match self.raised {

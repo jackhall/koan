@@ -30,6 +30,12 @@
 //! satisfies the contract hops to the callee's frame, and every other value is held to the contract
 //! where it is finished.
 //!
+//! In a caching body the step runs on the body's chain ([`evaluate`]), asks for blocks with `Keeps`,
+//! and adopts what leaves the body into its region through an [`Exit`]: a call's callee, arguments,
+//! contributions and the contract it hands on, an `EVAL`'s code, offered record and declared type,
+//! and a value owed a frame's contract. Under `routes` an invariant view's operand and view, and a
+//! warm composite's own memo, are adopted into the warm tier.
+//!
 //! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
 //! as it evaluates. Debug builds check that a finished value's carried type lies within its node's
 //! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
@@ -37,24 +43,26 @@
 
 use crate::elaborate::{bound_path, denoted};
 use crate::knot::module::view::{self, Ascription, Unascribable};
-use crate::knot::{KValue, Knotted, instance, lambda, quote, refused_construction};
+use crate::knot::{KValue, Knotted, KnottedFamily, instance, lambda, quote, refused_construction};
 use crate::memory::{Bump, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{CallKind, Evaluated, KBirth, KBundle, KState, block, surfaced_block};
+use crate::program::{CallKind, Evaluated, Exit, KBirth, KBundle, KState, block, surfaced_block};
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, InstanceRead, Narrowing, Offer, ShapeKind, Site, Static,
-    StaticType,
+    BodyShape, Candidate, CandidateList, InstanceRead, Mint, Narrowing, Offer, ShapeKind, Site,
+    Static, StaticType,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Verdict, substitute_levels};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
-use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
+use crate::values::{
+    Chain, Dict, Key, List, Record, Tagged, TypeValue, Value, adopt_value, satisfies,
+};
 
 use super::builtins::{self, Native};
 use super::errors::Raised;
@@ -69,8 +77,8 @@ const GATHERED: u32 = 1;
 const FINISHING: u32 = 2;
 
 /// A step that took both its states.
-type Taking<'a, 'graph, 'step, 'here, 'scratch> =
-    Step<'a, 'graph, 'step, 'here, 'scratch, KBundle, Taken, Taken>;
+type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
+    Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, KBundle, Taken, Taken>;
 
 /// What a node is to the evaluator.
 #[derive(Clone, Copy)]
@@ -116,9 +124,11 @@ enum Gathered<'x, 'graph, 'here> {
     Broken(StepError),
 }
 
-/// The step.
+/// The step. It runs on one chain, as the body runner's steps do ([`run`](crate::program::run)):
+/// the reading chain where it routes, the `Shares` chain elsewhere in a caching body, and its
+/// region's anywhere else.
 pub(super) fn evaluate<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, KBundle>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 ) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (step, _) = step.scratch();
@@ -127,21 +137,52 @@ pub(super) fn evaluate<'graph>(
         KState::Evaluating { birth, stage } => (birth, stage),
         KState::Runner(_) => return step.failed(StepError::Refused),
     };
+    let KBirth::Evaluate { view, routes, .. } = birth else {
+        return step.failed(StepError::Refused);
+    };
+    #[cfg(test)]
+    if routes || view.shape().caches() {
+        let address = std::ptr::from_ref(view.shape()).addr();
+        crate::scheduler::CACHING.set(Some(address));
+    }
+    if routes {
+        let types = step
+            .reading_types()
+            .expect("a routing evaluation has a lender");
+        evaluate_on(step, birth, stage, types)
+    } else if view.shape().caches() {
+        let types = step.shares_types();
+        evaluate_on(step, birth, stage, types)
+    } else {
+        let types = step.types();
+        evaluate_on(step, birth, stage, types)
+    }
+}
+
+/// [`evaluate`] on the chain `types` it picked.
+fn evaluate_on<'graph, 'here, 'tier, 'reg>(
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    birth: KBirth<'graph, 'here>,
+    stage: u32,
+    types: Chain<'graph, 'tier, 'here, 'reg, '_>,
+) -> Action<'graph, KBundle> {
     let KBirth::Evaluate {
         program,
         node,
         view,
         contract,
+        routes,
     } = birth
     else {
-        return step.failed(StepError::Refused);
+        unreachable!("an evaluation is born to evaluate")
     };
     let at = Evaluation {
         program,
         view,
         contract,
+        routes,
         birth,
-        types: step.types(),
+        types,
     };
     if stage == FINISHING {
         return finishing(step, &at);
@@ -151,7 +192,7 @@ pub(super) fn evaluate<'graph>(
         Form::Name(part) => read(step, &at, part),
         Form::Block(shape) => {
             let mut step = step;
-            let asked = step.spawn(block(program, shape, view, Use::Forwards));
+            let asked = step.spawn(block(program, shape, view, inside(&at), routes));
             park(step, &at, asked, FINISHING)
         }
         Form::Lambda(node) => {
@@ -179,12 +220,21 @@ pub(super) fn evaluate<'graph>(
             let [head, argument] = node.parts else {
                 unreachable!("an application is a head and its argument")
             };
-            apply(step, &at, &head.value, &argument.value, stage)
+            apply(step, &at, node, &head.value, &argument.value, stage)
         }
         Form::Unevaluable(node) => {
             let error = Raised::Unevaluable { node }.raise(program, step.writer(), &at.types);
             finish(step, &at, error)
         }
+    }
+}
+
+/// How an evaluation asks for a block whose value is its own: kept in a caching body, so a value
+/// leaves the body only where it adopts, and forwarded elsewhere.
+fn inside(at: &Evaluation<'_, '_, '_, '_, '_>) -> Use {
+    match at.view.shape().caches() {
+        true => Use::Keeps,
+        false => Use::Forwards,
     }
 }
 
@@ -263,8 +313,8 @@ pub(super) fn of_node<'graph>(
 
 /// A leaf part: read, lowered or born in place, or built from its parts.
 fn leaf<'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     part: &'graph ExpressionPart<'graph>,
     stage: u32,
 ) -> Action<'graph, KBundle> {
@@ -295,8 +345,8 @@ fn leaf<'graph, 'here>(
 
 /// A part read in place ([`in_place`]) as this evaluation's value: a literal, a name or a quote.
 fn read<'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     part: &'graph ExpressionPart<'graph>,
 ) -> Action<'graph, KBundle> {
     match in_place(&step, at, part, &Bump::new()) {
@@ -310,8 +360,8 @@ fn read<'graph, 'here>(
 /// as it through the [view door](crate::knot::module::view), which checks it fits; `:|` over
 /// anything else raises.
 fn ascribe<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     node: &'graph KExpression<'graph>,
     mode: Ascription,
     stage: u32,
@@ -351,8 +401,20 @@ fn ascribe<'graph, 'here>(
             };
             return finish(step, at, raised.raise(program, writer, &at.types));
         }
+        // Under `routes` an invariant site's operand and view are adopted into the warm tier, so
+        // the next hop finds both there and the verdicts over them stay warm.
+        let invariant = at.view.shape().mint_at(Site::of_node(node)) == Some(Mint::Invariant);
+        let warm = (at.routes && invariant)
+            .then(|| step.warm_types())
+            .flatten();
+        if let Some(warm) = &warm {
+            adopt_value::<KnottedFamily>(warm, types, &value, &[]);
+        }
         let raised = match view::ascribe(writer, value, ascribed, types, &scratch) {
             Ok(view) => {
+                if let Some(warm) = &warm {
+                    adopt_value::<KnottedFamily>(warm, types, &Value::Knotted(view), &[]);
+                }
                 // The load lays a view's types over a closed tree, so that tree is the view's
                 // content.
                 debug_assert!(
@@ -398,8 +460,8 @@ fn ascribe<'graph, 'here>(
 /// `USING <module> SCOPE <body>`: the body run as a block whose parameters are bound to what the
 /// module surfaces, its last statement's value its own.
 fn using<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     node: &'graph KExpression<'graph>,
     stage: u32,
 ) -> Action<'graph, KBundle> {
@@ -427,7 +489,7 @@ fn using<'graph, 'here>(
     let body = Site::of_body(node)
         .and_then(|site| at.view.shape().nested(site))
         .expect("a `USING … SCOPE` body is a block its shape holds");
-    let request = surfaced_block(program, body, at.view, Some(module), Use::Forwards);
+    let request = surfaced_block(program, body, at.view, Some(module), inside(at), at.routes);
     let asked = step.spawn(request);
     park(step, at, asked, FINISHING)
 }
@@ -436,8 +498,8 @@ fn using<'graph, 'here>(
 /// run in a frame over the names and keys the `EVAL` offers, owing the declared type as a called
 /// frame owes its return. An operand that is no code, and every refusal, is an error value.
 fn evaluated<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     node: &'graph KExpression<'graph>,
     stage: u32,
 ) -> Action<'graph, KBundle> {
@@ -478,6 +540,11 @@ fn evaluated<'graph, 'here>(
         );
     }
     let offered = offered(at, writer, &operand.value, &scratch);
+    exits(&step, at, &[], |exit| {
+        exit.value(&value);
+        exit.value(&offered);
+        exit.handle(returns);
+    });
     match crate::program::eval(program, &at.types, code, offered, returns, Use::Forwards) {
         Ok(request) => {
             let asked = step.spawn(request);
@@ -493,8 +560,8 @@ fn evaluated<'graph, 'here>(
 /// The record of the names and keys an `EVAL` offers the code `operand` holds — a key as the list
 /// of its functions, as a use at the key written at the `EVAL` resolves it.
 fn offered<'graph, 'here>(
-    at: &Evaluation<'graph, 'here>,
-    writer: Writer<'here>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    writer: Writer<'here, '_>,
     operand: &'graph ExpressionPart<'graph>,
     scratch: &Bump,
 ) -> KValue<'graph, 'here> {
@@ -528,8 +595,8 @@ fn offered<'graph, 'here>(
 /// A list, dict or record literal: lowered whole when every part is a literal, and otherwise built
 /// from its parts' values.
 fn container<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     part: &'graph ExpressionPart<'graph>,
     stage: u32,
 ) -> Action<'graph, KBundle> {
@@ -538,6 +605,7 @@ fn container<'graph, 'here>(
     if stage == BORN
         && let Some(value) = Value::lower_part(step.writer(), part, types, &scratch)
     {
+        warmed(&step, at, Site::of(part), &value);
         return finish(step, at, value);
     }
     let mut wanted = BumpVec::new_in(&scratch);
@@ -596,14 +664,32 @@ fn container<'graph, 'here>(
         }
         _ => unreachable!("a container is a list, dict or record literal"),
     };
+    warmed(&step, at, Site::of(part), &value);
     finish(step, at, value)
+}
+
+/// Under `routes`, adopt the own memo of `value`, built at `site`, into the warm tier where the
+/// load found the site warm — a composite whose parts read invariant views alone — so the next hop
+/// finds it there. Only the memo: a warm composite's parts are no deeper walk's.
+fn warmed<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    site: Site,
+    value: &KValue<'graph, 'here>,
+) {
+    if at.routes
+        && at.view.shape().warm_at(site)
+        && let Some(warm) = step.warm_types()
+    {
+        warm.adopt_from(&at.types, value.ktype());
+    }
 }
 
 /// A keyworded call: its slots evaluated, a candidate selected, and the builtin's native run or the
 /// registration's function called.
 fn call<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     node: &'graph KExpression<'graph>,
     list: &'graph CandidateList<'graph>,
     stage: u32,
@@ -651,6 +737,16 @@ fn call<'graph, 'here>(
             );
             let arguments =
                 select::arguments(types, writer, registered, &operands, solution, &scratch);
+            let tails = at.contract.filter(|contract| {
+                callee.as_callable().and_then(Knotted::coerced).is_none()
+                    && contract.kept_by(types, registered.shape, Some(solution))
+            });
+            let passed = passed_operands(at, &wanted, &operands, &scratch);
+            exits(&step, at, &passed, |exit| {
+                exit.value(&callee);
+                exit.value(&arguments);
+                tails.iter().for_each(|owed| exit.contract(owed));
+            });
             let call = |owed| {
                 crate::program::call(
                     program,
@@ -665,11 +761,7 @@ fn call<'graph, 'here>(
             };
             // A call through a barrier never tails: its value crosses the barrier where its
             // frame ends.
-            let barrier = callee.as_callable().and_then(Knotted::coerced).is_some();
-            if let Some(contract) = at.contract
-                && !barrier
-                && contract.kept_by(types, registered.shape, Some(solution))
-            {
+            if let Some(contract) = tails {
                 let request = call(Some(contract));
                 return step.tail(request.placement, request.work);
             }
@@ -693,7 +785,7 @@ fn call<'graph, 'here>(
 /// What each recorded contribution is where the call runs: a closed type as it is, a rigid one at
 /// the types the run binds its variables to, and `None` where the call reads the carried type.
 fn contributed<'x, 'graph>(
-    at: &Evaluation<'graph, '_>,
+    at: &Evaluation<'graph, '_, '_, '_, '_>,
     recorded: &[StaticType<'graph>],
     scratch: &'x Bump,
 ) -> BumpVec<'x, Option<KType>> {
@@ -751,8 +843,9 @@ pub(super) fn slots<'x, 'graph>(
 /// `(head argument)`: a construction when the head is a type, and otherwise a call by name of the
 /// head over the argument record.
 fn apply<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    node: &'graph KExpression<'graph>,
     head: &'graph ExpressionPart<'graph>,
     argument: &'graph ExpressionPart<'graph>,
     stage: u32,
@@ -766,13 +859,18 @@ fn apply<'graph, 'here>(
         other => return unready(step, at, other),
     };
     let recorded = at.view.shape().named_contributions(Site::of(argument));
+    let part = argument;
     let [Operand::Value(head), Operand::Value(argument)] = operands[..] else {
         unreachable!("both parts of an application are evaluated")
     };
     let writer = step.writer();
     if let Value::Type(head) = head {
         let value = match Tagged::construct(writer, head, argument, types, &scratch) {
-            Ok(tagged) => Value::Tagged(tagged),
+            Ok(tagged) => {
+                let value = Value::Tagged(tagged);
+                warmed(&step, at, Site::of_node(node), &value);
+                value
+            }
             Err(refused) => program.error(
                 writer,
                 types,
@@ -783,6 +881,19 @@ fn apply<'graph, 'here>(
     }
     // What the frame solves each parameter from, in symbol order: `None` where its carried type.
     let contributed = collect(writer, contributed(at, recorded, &scratch).iter().copied());
+    // A call keeps its contract by the type its callee shows; a barrier never tails, since its
+    // value crosses the barrier where its frame ends.
+    let tails = at.contract.filter(|contract| {
+        (head.as_callable().and_then(Knotted::function)).is_some()
+            && contract.kept_by(&at.types, head.ktype(), None)
+    });
+    let passed = passed_fields(at, part, argument, &scratch);
+    exits(&step, at, &passed, |exit| {
+        exit.value(&head);
+        exit.value(&argument);
+        contributed.iter().flatten().for_each(|kt| exit.handle(*kt));
+        tails.iter().for_each(|owed| exit.contract(owed));
+    });
     let call = |owed| {
         crate::program::call(
             program,
@@ -795,12 +906,7 @@ fn apply<'graph, 'here>(
             Use::Forwards,
         )
     };
-    // A call keeps its contract by the type its callee shows; a barrier never tails, since its
-    // value crosses the barrier where its frame ends.
-    if let Some(contract) = at.contract
-        && (head.as_callable().and_then(Knotted::function)).is_some()
-        && contract.kept_by(&at.types, head.ktype(), None)
-    {
+    if let Some(contract) = tails {
         let request = call(Some(contract));
         return step.tail(request.placement, request.work);
     }
@@ -813,7 +919,7 @@ fn apply<'graph, 'here>(
 /// candidate's judgement reads an argument's.
 #[cfg(debug_assertions)]
 fn carried_under_static<'graph, 'here>(
-    at: &Evaluation<'graph, 'here>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     value: &KValue<'graph, 'here>,
 ) {
     if at.program.message(value, &at.types).is_some() {
@@ -860,8 +966,8 @@ fn read_in_place(part: &ExpressionPart<'_>) -> bool {
 /// quantified function at the instance the load solved there, where it solved one — a quote born.
 /// `None` for a name the shape resolved no mention of, which is an invariant break.
 fn in_place<'graph, 'here>(
-    step: &Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     part: &'graph ExpressionPart<'graph>,
     scratch: &Bump,
 ) -> Option<KValue<'graph, 'here>> {
@@ -895,8 +1001,8 @@ fn in_place<'graph, 'here>(
 /// Ask for every wanted part not read in place, or — once they are in, or when none needed asking —
 /// every operand, in order. An error value among them is handed back alone.
 fn gathered<'x, 'graph, 'here>(
-    step: &mut Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     wanted: &[Wanted<'graph>],
     stage: u32,
     scratch: &'x Bump,
@@ -908,18 +1014,22 @@ fn gathered<'x, 'graph, 'here>(
             let Wanted::Evaluated(part) = wanted else {
                 unreachable!("only an evaluated part is asked for")
             };
-            asked = Some(step.spawn(Request {
-                placement: Placement::Shares,
-                use_: Use::Keeps,
-                work: at.program.evaluate(Evaluated::Part(part), at.view, None),
-            }));
+            asked = Some(
+                step.spawn(Request {
+                    placement: Placement::Shares,
+                    use_: Use::Keeps,
+                    work: at
+                        .program
+                        .evaluate(Evaluated::Part(part), at.view, None, at.routes),
+                }),
+            );
         }
         if let Some(asked) = asked {
             return Gathered::Asked(asked);
         }
     }
     let mut received = BumpVec::new_in(scratch);
-    for result in step.results() {
+    for result in step.results_with(&at.types) {
         match result {
             Ok(Received::Here(value)) => {
                 if at.program.message(&value, &at.types).is_some() {
@@ -957,13 +1067,13 @@ fn gathered<'x, 'graph, 'here>(
 /// Gathering that did not come back ready: park on what it asked for, finish with the error value
 /// a part came to, or fail.
 fn unready<'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     gathered: Gathered<'_, 'graph, 'here>,
 ) -> Action<'graph, KBundle> {
     match gathered {
         Gathered::Asked(asked) => park(step, at, asked, GATHERED),
-        Gathered::Raised(error) => step.finish(error),
+        Gathered::Raised(error) => delivered(step, at, error),
         Gathered::Broken(error) => step.failed(error),
         Gathered::Ready(_) => unreachable!("a ready gathering is not unready"),
     }
@@ -971,8 +1081,8 @@ fn unready<'graph, 'here>(
 
 /// Park on the children asked for, resuming at `stage`.
 fn park<'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     asked: Asked,
     stage: u32,
 ) -> Action<'graph, KBundle> {
@@ -989,10 +1099,10 @@ fn park<'graph, 'here>(
 
 /// The one child whose value is this evaluation's is in: finish with it.
 fn finishing<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
 ) -> Action<'graph, KBundle> {
-    let received = step.results().next();
+    let received = step.results_with(&at.types).next();
     match received {
         Some(Ok(Received::Here(value))) => finish(step, at, value),
         _ => step.failed(StepError::Unredeemable),
@@ -1001,8 +1111,8 @@ fn finishing<'graph, 'here>(
 
 /// Finish with `value`, held to the contract the evaluation was born under.
 fn finish<'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_>,
-    at: &Evaluation<'graph, 'here>,
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
     value: KValue<'graph, 'here>,
 ) -> Action<'graph, KBundle> {
     #[cfg(debug_assertions)]
@@ -1013,5 +1123,88 @@ fn finish<'graph, 'here>(
             .fulfilled(step.writer(), &at.types, value, contract),
         None => value,
     };
-    step.finish(value)
+    delivered(step, at, value)
+}
+
+/// Deliver `value` to the evaluation's asker. In a caching body a value owed a frame's contract
+/// leaves it, so it is adopted first; any other stays inside, and its debug check reads the body's
+/// chain.
+fn delivered<'graph, 'here>(
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    value: KValue<'graph, 'here>,
+) -> Action<'graph, KBundle> {
+    match (at.view.shape().caches(), at.contract) {
+        (true, Some(_)) => {
+            exits(&step, at, &[], |exit| exit.value(&value));
+            step.finish(value)
+        }
+        (true, None) => step.finish_with(value, &at.types),
+        (false, _) => step.finish(value),
+    }
+}
+
+/// In a caching body, hand `adopt` the [`Exit`] a value leaving it is adopted through, into the
+/// step's region, beside the values `passed` that it passes on and its frame received; elsewhere
+/// nothing leaves a scratch tier, and `adopt` is not called.
+fn exits<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    passed: &[KValue<'graph, 'here>],
+    adopt: impl FnOnce(&Exit<'_, '_, '_, 'graph, 'here, '_>),
+) {
+    if at.view.shape().caches() {
+        let scratch = Bump::new();
+        adopt(&Exit::new(
+            step.types(),
+            &at.types,
+            &at.view,
+            passed,
+            &scratch,
+        ));
+    }
+}
+
+/// The operands of a keyworded call, evaluated from `wanted`, that the load recorded as passing on
+/// what the frame body received.
+fn passed_operands<'x, 'graph, 'here>(
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    wanted: &[Wanted<'graph>],
+    operands: &[Operand<'graph, 'here>],
+    scratch: &'x Bump,
+) -> BumpVec<'x, KValue<'graph, 'here>> {
+    let shape = at.view.shape();
+    let mut passed = BumpVec::new_in(scratch);
+    for (wanted, operand) in wanted.iter().zip(operands) {
+        if let (Wanted::Evaluated(part), Operand::Value(value)) = (wanted, operand)
+            && shape.received_at(Site::of(part))
+        {
+            passed.push(*value);
+        }
+    }
+    passed
+}
+
+/// What the argument `value` of a call by name, written `part`, passes on that the load recorded
+/// the frame body received: the whole, or a record literal's fields.
+fn passed_fields<'x, 'graph, 'here>(
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    part: &'graph ExpressionPart<'graph>,
+    value: KValue<'graph, 'here>,
+    scratch: &'x Bump,
+) -> BumpVec<'x, KValue<'graph, 'here>> {
+    let shape = at.view.shape();
+    let mut passed = BumpVec::new_in(scratch);
+    if shape.received_at(Site::of(part)) {
+        passed.push(value);
+    } else if let ExpressionPart::RecordLiteral(fields) = part {
+        for (name, field) in fields.iter() {
+            if shape.received_at(Site::of(field))
+                && let Some(seen) = value.field(name.symbol(), &at.types, scratch)
+            {
+                passed.push(seen.value());
+            }
+        }
+    }
+    passed
 }

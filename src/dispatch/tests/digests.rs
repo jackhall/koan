@@ -18,7 +18,7 @@ thread_local! {
 /// hold once it has run — the load's, in the root, and the run's, in the root cell's branch, where
 /// every top-level evaluation's result crossed.
 fn interned_digests<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, KBundle>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 ) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, .. }) = state else {

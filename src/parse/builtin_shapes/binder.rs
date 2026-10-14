@@ -41,7 +41,7 @@ pub type BinderNameFn = fn(&KExpression<'_>) -> Option<BinderSymbol>;
 ///
 /// A bucket key is synthesized rather than read straight out of the parts run, so the extractor
 /// takes the writer that lays each key down in the node's own store.
-pub type BinderBucketFn = for<'a> fn(Writer<'a>, &KExpression<'a>) -> Option<BucketKeys<'a>>;
+pub type BinderBucketFn = for<'a> fn(Writer<'a, '_>, &KExpression<'a>) -> Option<BucketKeys<'a>>;
 
 /// The bucket keys one binder's body registers overloads under: one for `FN` and binary `OP`, two
 /// for `UNARY OP` (the keyword-first list key plus the binary bridge key). Two is the maximum any
@@ -278,7 +278,7 @@ pub(crate) fn quantifier_entries<'g>(
 /// registers exactly one overload, so the result names one key. Returns `None` only when the
 /// signature slot itself is missing.
 pub(crate) fn fn_def_binder_bucket<'a>(
-    writer: Writer<'a>,
+    writer: Writer<'a, '_>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     let signature_expr = head_run(expr)?;
@@ -473,7 +473,7 @@ fn is_unary_form(expr: &KExpression<'_>) -> bool {
 /// statement using the operator parks on the `OP` slot instead of failing dispatch while the
 /// declaration is still finalizing. A `UNARY OP` registers two bodies, so it names two keys.
 pub(crate) fn op_def_binder_bucket<'a>(
-    writer: Writer<'a>,
+    writer: Writer<'a, '_>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     // The glyph's symbol is already minted on the quoted part, so the park keys are read off it.
@@ -490,7 +490,7 @@ pub(crate) fn op_def_binder_bucket<'a>(
 
 /// The `[Slot, Keyword(sym), Slot]` run a reduced binary call computes, in the region. Agreeing
 /// with a call's key on the symbol is what lets a park edge installed here be found by it.
-fn stored_binary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
+fn stored_binary_key<'a>(writer: Writer<'a, '_>, symbol: KeywordSymbol) -> &'a [KeyElement] {
     collect(
         writer,
         [
@@ -503,7 +503,7 @@ fn stored_binary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyE
 }
 
 /// The `[Keyword(sym), Slot]` run a reduced unary run computes, in the region.
-fn stored_unary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
+fn stored_unary_key<'a>(writer: Writer<'a, '_>, symbol: KeywordSymbol) -> &'a [KeyElement] {
     collect(
         writer,
         [KeyElement::Keyword(symbol), KeyElement::Slot].into_iter(),
@@ -634,7 +634,7 @@ pub enum OpArity {
 /// `None` for a shape with no binder facts, and for one whose extractors install nothing (`VAL`,
 /// and the anonymous `FN :{…}` whose signature part names no bucket).
 pub(crate) fn binder_plan_for<'a>(
-    writer: Writer<'a>,
+    writer: Writer<'a, '_>,
     shape: Option<&'static BuiltinShape>,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {

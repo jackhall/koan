@@ -211,7 +211,7 @@ fn is_operator_chain_shape(key: &[KeyElement]) -> bool {
 /// so reading it is a slice borrow and nothing is hashed — the parse already minted every symbol in
 /// the run.
 pub fn stored_untyped_key<'a>(
-    writer: Writer<'a>,
+    writer: Writer<'a, '_>,
     elements: impl ExactSizeIterator<Item = KeyElement>,
 ) -> &'a [KeyElement] {
     collect(writer, elements)

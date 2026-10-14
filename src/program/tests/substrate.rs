@@ -71,7 +71,7 @@ fn an_inspection_before_the_program_runs_is_unfinished() {
 }
 
 /// A step that refuses to proceed.
-fn fail<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn fail<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     step.failed(StepError::Stale)
 }
 

@@ -20,7 +20,7 @@ use crate::type_lattice::KType;
 use super::digest::{ContentDigest, DigestHasher, Tag, edge, scalar};
 use super::surface::Parts;
 use super::{
-    DeepCopy, Dict, Knotted, Link, List, Nothing, Record, Seen, Surface, Tagged, Types, Value,
+    Chain, DeepCopy, Dict, Knotted, Link, List, Nothing, Record, Seen, Surface, Tagged, Value,
     Weight,
 };
 
@@ -104,7 +104,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     /// knot [holds](super::Knotted::held) of this node.
     pub fn content_parts<'a>(
         holder: X,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, X>),
     ) where
@@ -124,7 +124,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     /// `parts` answers in [`content_parts`](Self::content_parts)' order.
     pub fn content(
         holder: X,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -173,7 +173,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     /// names collected, type and weight carried over.
     pub fn copied<'to, Y: Knotted>(
         &self,
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         copy: &mut DeepCopy<'_, 'cell, 'to, X, Y>,
     ) -> Circular<'to, Y> {
         let mut copy = |value: &Value<'cell, X>| copy(value);
@@ -220,7 +220,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
 /// `holder`'s data node opened through the door at its memo.
 fn opened<'x, 'a, X: Knotted + 'a>(
     holder: X,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Surface<'x, 'a, X> {
     Seen::of(Value::Knotted(holder))

@@ -25,7 +25,7 @@ use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::tests::TestTypes;
-use crate::values::{ContentDigest, Seen, Types};
+use crate::values::{Chain, ContentDigest, Seen, Types};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
@@ -51,15 +51,19 @@ impl Knotted for Probe {
     }
 
     /// A probe holds no value: every probe is a member of one empty knot, told apart by its index.
-    fn held<'a>(&self, _: &Types<'_, '_>, _: BumpAllocator<'_>, _: &mut dyn FnMut(Seen<'a, Self>))
-    where
+    fn held<'a>(
+        &self,
+        _: &Chain<'_, '_, '_, '_, '_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
         Self: 'a,
     {
     }
 
     fn digest_held(
         &self,
-        _: &Types<'_, '_>,
+        _: &Chain<'_, '_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -112,7 +116,7 @@ impl<'graph> KnottedFamily<'graph> for ProbeFamily {
     }
 
     fn copy_into<'from, 'to>(
-        _: Writer<'to>,
+        _: Writer<'to, '_>,
         member: &Probe,
         _: &mut DeepCopy<'_, 'from, 'to, Probe, Probe>,
     ) -> Probe
@@ -130,7 +134,7 @@ covariant!(ValueFamily<ProbeFamily>);
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which every shape a test builds goes through.
-    pub types: &'f Types<'graph, 'graph>,
+    pub types: &'f Types<'graph, 'graph, 'f>,
     pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
@@ -151,7 +155,7 @@ impl<'graph> Fixture<'_, 'graph> {
     /// activation over a program shape takes the cell's brand only where that is known.
     pub fn in_cell<R>(
         &self,
-        step: impl for<'cell> FnOnce(Writer<'cell>, &'cell &'graph ()) -> R,
+        step: impl for<'cell> FnOnce(Writer<'cell, '_>, &'cell &'graph ()) -> R,
     ) -> R {
         let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, |_| Verdict::Pin);
         let cell = graph.create(None).expect("the graph has a free slot");
@@ -210,7 +214,7 @@ pub(super) fn type_name(text: &str, symbols: &SymbolInterner) -> TypeSymbol {
 /// overload at each of [`BUILTIN_KEYS`], laid down in `writer`'s region.
 pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
 ) -> &'cell Builtins<'cell, X> {
     let symbols = fixture.symbols;
     let values: Vec<_> = BUILTIN_VALUES

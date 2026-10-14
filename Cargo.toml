@@ -42,5 +42,6 @@ dhat = { version = "0.3.3", optional = true }
 
 [dev-dependencies]
 proptest = "1"
-# The lattice's test counters, which koan's tests read.
+# The lattice's and the cell graph's test counters, which koan's tests read.
 lattice = { path = "lattice", features = ["counters"] }
+cellgraph = { path = "cellgraph", features = ["counters"] }

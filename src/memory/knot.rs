@@ -77,7 +77,7 @@ impl KnotPlan {
     /// since the node run is claimed before the first payload is built.
     pub fn tie<'cell, T>(
         self,
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         mut build: impl FnMut(Edge) -> T,
     ) -> Knot<'cell, T> {
         const {

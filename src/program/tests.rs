@@ -16,7 +16,7 @@ use crate::scheduler::{Action, Step, StepError};
 use crate::scope::{Coordinate, Target};
 use crate::type_lattice::display_name;
 use crate::values::tests::parts;
-use crate::values::{Knotted as _, Link, Types, Value};
+use crate::values::{Chain, Knotted as _, Link, Value};
 
 use evaluator::{Mini, record};
 
@@ -127,7 +127,7 @@ pub(crate) fn digest_back(substrate: &mut CellSubstrate, name: &str) -> String {
 }
 
 /// [`weighing`]'s sibling: it records the wanted binding's content digest.
-fn digesting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn digesting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
@@ -141,7 +141,7 @@ fn digesting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gra
 }
 
 /// [`typing`]'s sibling: it records the wanted binding's weight.
-fn weighing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn weighing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
@@ -152,7 +152,7 @@ fn weighing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
 }
 
 /// [`inspecting`]'s sibling: it records the wanted binding's type.
-fn typing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn typing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
@@ -166,7 +166,7 @@ fn typing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph,
 
 /// A root work born from the top level's resting view: it records each wanted binding and leaves
 /// the view at rest again, for the next inspection.
-fn inspecting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn inspecting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
@@ -179,7 +179,7 @@ fn inspecting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gr
 }
 
 /// [`inspecting`]'s sibling: it records whether the two wanted bindings are equal.
-fn comparing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+fn comparing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
@@ -209,7 +209,7 @@ fn wanted<'graph, 'cell>(
 fn describe<'graph>(
     value: KValue<'graph, '_>,
     program: &'graph Program<'graph>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> String {
     match value {
         Value::Number(number) => number.to_string(),
@@ -235,7 +235,7 @@ fn describe<'graph>(
 fn describe_member<'graph>(
     member: Knotted<'graph, '_>,
     program: &'graph Program<'graph>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> String {
     let knot = member
         .member()

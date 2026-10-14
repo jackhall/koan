@@ -5,12 +5,12 @@ use crate::memory::Bump;
 use crate::parse::KeyElement;
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, builtin_shape_for};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode};
-use crate::values::Types;
+use crate::values::Chain;
 
 use super::super::builtin_shape_types;
 
 /// The bucket key an interned handle's elements spell.
-fn erasure(types: &Types<'_, '_>, handle: KType) -> Vec<KeyElement> {
+fn erasure(types: &Chain<'_, '_, '_, '_, '_>, handle: KType) -> Vec<KeyElement> {
     let TypeNode::ExpressionShape { elements, .. } = types.node(handle) else {
         panic!("the door interns an expression shape");
     };

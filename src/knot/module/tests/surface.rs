@@ -37,7 +37,7 @@ fn local(slot: Slot) -> Coordinate {
 
 /// The block of `enclosing`'s shape, activated with every slot empty.
 fn entered<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     enclosing: &'cell KActivation<'graph, 'cell>,
 ) -> &'cell KActivation<'graph, 'cell> {
     let block = only_block(enclosing.shape());

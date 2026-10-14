@@ -128,8 +128,8 @@ fn a_payload_is_seen_at_its_identitys_representation() {
 /// A one-node knot: a record node under `{next :Any, value :Number}` whose `next` names itself.
 pub(super) fn looped<'cell>(
     fixture: &super::Fixture<'_, '_>,
-    writer: crate::memory::Writer<'cell>,
-    types: &crate::values::Types<'_, 'cell>,
+    writer: crate::memory::Writer<'cell, '_>,
+    types: &crate::values::Chain<'_, '_, 'cell, '_, '_>,
     value: f64,
 ) -> super::Node<'cell> {
     let (scratch, symbols) = (fixture.scratch(), fixture.symbols);

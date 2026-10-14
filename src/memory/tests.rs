@@ -9,7 +9,7 @@ struct Step;
 reattachable!(Step => ());
 
 /// Run `step` inside one cell of a one-slot graph, handing it the cell's writer.
-pub(crate) fn in_cell<R>(step: impl for<'cell> FnOnce(Writer<'cell>) -> R) -> R {
+pub(crate) fn in_cell<R>(step: impl for<'cell> FnOnce(Writer<'cell, '_>) -> R) -> R {
     let mut graph: CellGraph<'static, Step> = CellGraph::new(1, |_| Verdict::Pin);
     let cell = graph
         .create(None)

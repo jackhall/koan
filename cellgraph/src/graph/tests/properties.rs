@@ -528,7 +528,7 @@ fn expected_redeem(
 /// was kept as, which is what says a mask forwarded through a merge — or a tombstone chain — still
 /// names the right storage.
 fn check_redeem(
-    context: &StepContext<'static, '_, '_, '_, Borrowed, Transient>,
+    context: &StepContext<'static, '_, '_, '_, '_, Borrowed, Transient>,
     dormant: Dormant<'static, Number>,
     carried: u32,
 ) -> Result<(), RedeemError> {
@@ -678,12 +678,20 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
     // A host's tenant counts are tallies too: recounted from the pool, over every cell that can
     // host — and a dead tree cell with neither a child nor a tenant should have disposed.
     let census: Vec<(CellHome, bool)> = graph.cells.tenants.census().collect();
+    // A live tree cell borrows its lender's scratch bump until its death.
+    let lenders: Vec<CellHome> = occupied
+        .iter()
+        .copied()
+        .filter(|index| pool.state(*index) == TreeState::Live)
+        .filter_map(|index| graph.cells.lender(CellHome::Tree(index)))
+        .collect();
     let recount = |home: CellHome| crate::tenant::Tenancy {
         tenants: census.iter().filter(|(host, _)| *host == home).count() as u32,
         scratch_tenants: census
             .iter()
             .filter(|(host, named)| *host == home && *named)
             .count() as u32,
+        scratch_borrowers: lenders.iter().filter(|lender| **lender == home).count() as u32,
     };
     for slot in 0..graph.cells.cap {
         let home = CellHome::Slab(slot);

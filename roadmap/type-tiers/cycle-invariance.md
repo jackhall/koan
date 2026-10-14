@@ -26,18 +26,18 @@ cold: a `Fresh` loop re-lays it and recomputes its verdicts each hop, and a
 
 **Directions.**
 
-- *The cycle walk — open.* The tail-call graph the load resolves by name is
-  small, but its cycles need not be few. One pass per strongly connected
-  component, composing argument trees along each edge to a fixpoint with the
+- *The cycle walk — open.* The tail-call graph the load resolves — calls by
+  name and each keyworded use's candidates — is small, but its cycles need not
+  be few. One pass per strongly connected component, composing argument trees along each edge to a fixpoint with the
   comparison bounded by the trees the load already unfolds, is the expected
   shape; a cap on a composed tree's depth keeps it linear and errs toward
   varying.
 
 ## Dependencies
 
-**Requires:**
+The site classes it refines, their tail edges and the invariance fixpoint
+live in [the static pass](../../src/dispatch/statics/caching.rs).
 
-- [The host's scratch as a type cache](host-scratch-cache.md) — the site
-  classes it refines.
+**Requires:** none.
 
 **Unblocks:** none.

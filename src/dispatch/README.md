@@ -824,6 +824,35 @@ none of them, and asserts in debug builds that the closed tree's digest is the
 view's; the pass asserts that what the tree shows the operand carries is its
 exact static type, where it has both.
 
+### Body classes
+
+The pass classes every frame body — the program, a callable, a quote's code,
+counted with the blocks and module bodies it runs — **sealed** or **porous**
+([type tiers](../../design/type-tiers.md#two-classes-of-body)): porous where a
+porous value leaves it at a porous slot, at its return or as an argument of a
+call into a frame. A value the body received — a parameter or a capture named
+bare, or a member of one read through the builtin `ATTR` — holds nothing the
+body minted, so passing it on is no exit, and the caching record lists each
+such argument's site for the run's exits to adopt by its memo alone. A sealed
+callable or quote's code
+that mints at run **caches**: its types live in a scratch tier
+([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
+A `:|` over a closed content tree mints nothing at run, since the load laid its
+types in the root.
+
+Each shape the pass types gets a write-once caching record
+([`caching`](statics/caching.rs)) that classes every minting site **closed**,
+**invariant** or **varying** by the leaves of its content tree — a nominal
+declared per call by the type binders its declaration reads — and holds every
+composite site warm whose parts read invariant views alone. A leaf is
+invariant where it is a capture, or a parameter every tail edge into its body
+passes on bare from an invariant parameter of the caller: a greatest fixpoint
+over the tail edges of every callable's and quote's code's last statement,
+fixed once the whole pass has run, a call by name's arguments paired with the
+callee's parameters by field and a keyworded use's by slot. A callable whose
+name is read as a value, or which is born in a `MODULE` or `GROUP` body or
+written in place, may be called from anywhere, so its parameters are varying.
+
 ## Tails under a contract
 
 An evaluation a frame [tails into](../program/README.md#frames-contracts-and-tails)
@@ -1105,6 +1134,16 @@ twice, and inside a record literal past the tree's horizon; a lone `:!` laying
 its types; a view inside a record literal over a slot leaving a parameter open,
 running; and a chain of views over a module the load types at most, re-viewing
 at run no more than its first view does;
+[classes](tests/classes.rs) — each body's class, a received value passed on as
+no exit, and each site's caching class over parameters, captures, locals,
+views of views, nominals and composites, a keyworded tail loop pairing its
+arguments by slot, and the tutorial's classes (an ignored measurement);
+[caching](tests/caching.rs) — caching bodies at run: `Shares`, `Fresh`, helper
+and mixed-placement loops holding their tiers flat across hops, warm verdicts,
+a parking loop's scratch bytes flat, the scratch and the lent branch reset
+after a delivery, and each exit — a retyped value, a closure, a quote, a knot
+member, a held frame's hand-off, a received list adopted by its memo alone,
+and a loop passing on a member of a received chain adopting a hop at a time;
 and [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md). Every runnable
@@ -1119,8 +1158,11 @@ tutorial snippet is checked against its shown output by
   values, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
   and `Result`.
-- [The host's scratch as a type cache](../../roadmap/type-tiers/host-scratch-cache.md)
-  — the mint-site classes and the invariance fixpoint.
+- [Invariance around a tail cycle](../../roadmap/type-tiers/cycle-invariance.md)
+  — an argument built over invariant leaves classed invariant.
+- [Porosity read off declared members](../../roadmap/type-tiers/declared-porosity.md)
+  — a module built in a body porous only where it captures minted content or
+  exposes its signature.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, a warning for an overload
   never selected, a pin read through its bounds, a member read exact through a

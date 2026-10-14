@@ -7,7 +7,7 @@ use std::ptr;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::display_name;
 use crate::values::tests::parts;
-use crate::values::{Knotted as _, Link, Types, Value};
+use crate::values::{Chain, Knotted as _, Link, Value};
 
 use super::super::{Knotted, UsingRefused, using};
 use super::{Fixture, bound, pin, with_fixture};
@@ -23,7 +23,11 @@ fn code<'graph, 'cell>(
         .unwrap_or_else(|| panic!("`{name}` is bound to code"))
 }
 
-fn rendered(fixture: &Fixture<'_, '_>, types: &Types<'_, '_>, member: Knotted<'_, '_>) -> String {
+fn rendered(
+    fixture: &Fixture<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
+    member: Knotted<'_, '_>,
+) -> String {
     let mut out = String::new();
     Value::Knotted(member)
         .render(&mut out, types, fixture.symbols, fixture.scratch())

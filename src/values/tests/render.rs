@@ -2,11 +2,15 @@
 
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
-use crate::values::{Key, TypeValue, Types};
+use crate::values::{Chain, Key, TypeValue};
 
 use super::{Dict, Fixture, List, Record, Stand, Tagged, Value, pin, quote, text, with_fixture};
 
-fn rendered(fixture: &Fixture<'_, '_>, types: &Types<'_, '_>, value: Value<'_>) -> String {
+fn rendered(
+    fixture: &Fixture<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
+    value: Value<'_>,
+) -> String {
     let mut out = String::new();
     value
         .render(&mut out, types, fixture.symbols, fixture.scratch())

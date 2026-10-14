@@ -15,8 +15,10 @@
 //! A branch may **link** one other tier, read at a brand of its own through the object-safe
 //! [`Tier`]: a spawned child's branch links its spawner's ([`BranchTier`]), which the pin that
 //! carried the child's birth keeps alive. A chain over a scratch habitat reads its region's
-//! branch the same way ([`RegionTier`]), re-reading the region's header on every probe so a branch
-//! the region lays during the step is seen. A link never cycles: it points at a spawner, linked
+//! branch the same way ([`RegionTier`]), held by value in the chain's [`Halves`] and re-reading the
+//! region's header on every probe so a branch the region lays during the step is seen. A branch
+//! never holds a region tier: the region's door is valid for one step, a branch for its half's
+//! life. A link never cycles: it points at a spawner, linked
 //! before its child existed. A branch records its link depth and its chain's bottom as it is laid,
 //! which a merge's reach check reads ([transfer.rs](super::transfer)).
 //!
@@ -328,6 +330,13 @@ impl<'t> Branch<'t> {
         self.nodes.slots()
     }
 
+    /// How many verdicts the branch holds. Tests read it — koan's among them, through the
+    /// `counters` feature, since `cfg(test)` does not reach a dependency.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn verdict_count(&self) -> usize {
+        self.verdicts.get().map_or(0, |table| table.len())
+    }
+
     /// Every digest the branch holds, in slot order. Tests read it — koan's among them.
     pub fn each_digest(&self, mut each: impl FnMut(TypeDigest)) {
         self.nodes.each(|node| each(node.digest()));
@@ -555,6 +564,85 @@ pub trait Habitat<'t>: LaysRuns<'t> {
 
     /// The half's own tier, laying its branch ([`Branch::new`]) if none is laid.
     fn own_or_lay(self) -> Own<'t>;
+
+    /// The region tier a scratch chain reads between the root and its own: `None` but for
+    /// [`Halves`] over a region.
+    fn region(&self) -> Option<RegionRead<'_, 't>> {
+        None
+    }
+}
+
+/// A region tier as [`Habitat::region`] hands it to the chain.
+#[derive(Clone, Copy)]
+pub struct RegionRead<'a, 't>(&'a dyn Tier<'t>);
+
+impl<'a, 't> RegionRead<'a, 't> {
+    pub(super) fn tier(self) -> &'a dyn Tier<'t> {
+        self.0
+    }
+}
+
+/// What a scratch habitat's chain is built over: the half it writes, and the region whose tier it
+/// reads between the root and its own, held by value since a region's door lives one step. `None`
+/// for a half read alone, so a caller may hold one type for both. `'r: 't` is declared, so a
+/// function handed a chain over one may read the region at the chain's brand.
+#[derive(Clone, Copy)]
+pub struct Halves<'r, 't, H, R>
+where
+    'r: 't,
+{
+    half: H,
+    region: Option<RegionTier<'r, R>>,
+    brand: PhantomData<&'t ()>,
+}
+
+impl<'r: 't, 't, H, R> Halves<'r, 't, H, R> {
+    /// `half` alone.
+    pub fn alone(half: H) -> Self {
+        Halves {
+            half,
+            region: None,
+            brand: PhantomData,
+        }
+    }
+
+    /// `half`, reading `region` between the root and its own tier.
+    pub fn over(half: H, region: R) -> Self {
+        Halves {
+            half,
+            region: Some(RegionTier(region, PhantomData)),
+            brand: PhantomData,
+        }
+    }
+
+    /// The half the chain writes.
+    pub fn half(self) -> H {
+        self.half
+    }
+}
+
+impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> LaysRuns<'t> for Halves<'r, 't, H, R> {
+    fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'t [T] {
+        self.half.lay(len, fill)
+    }
+
+    fn text(self, text: &str) -> &'t str {
+        self.half.text(text)
+    }
+}
+
+impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> Habitat<'t> for Halves<'r, 't, H, R> {
+    fn own(self) -> Option<Own<'t>> {
+        self.half.own()
+    }
+
+    fn own_or_lay(self) -> Own<'t> {
+        self.half.own_or_lay()
+    }
+
+    fn region(&self) -> Option<RegionRead<'_, 't>> {
+        Some(RegionRead(self.region.as_ref()?))
+    }
 }
 
 /// A tier a chain reads at a brand other than its own: a scratch chain's region, or the spawner's
@@ -587,7 +675,7 @@ pub(super) trait Tier<'t> {
 }
 
 /// A scratch chain's region tier: the region half itself, so every call re-reads the region's
-/// tier and a branch the region lays during the step is seen. Laid in the scratch half.
+/// tier and a branch the region lays during the step is seen. Held by value in [`Halves`].
 #[derive(Clone, Copy)]
 pub(super) struct RegionTier<'r, H>(pub H, pub PhantomData<&'r ()>);
 

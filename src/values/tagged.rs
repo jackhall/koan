@@ -7,7 +7,7 @@ use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::KType;
 
 use super::{
-    ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Types, Value, Weight,
+    Chain, ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Value, Weight,
     construction, sealing,
 };
 
@@ -26,10 +26,10 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
     /// A construction `(head payload)`: [`construction`] checks the payload against what the head
     /// names — a newtype or a family — and the payload is held under the identity it answers.
     pub fn construct(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         head: &TypeValue,
         payload: Value<'cell, X>,
-        types: &Types<'_, 'cell>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, ConstructionRefused> {
         let identity = construction(types, scratch, head.handle(), payload.concrete_ktype())?;
@@ -39,7 +39,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
     /// The raw wrap — a union variant, a lowered error, a retype: the payload rides verbatim,
     /// nested tagged layers included, so a newtype over another keeps every layer.
     pub fn hold(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         payload: Value<'cell, X>,
         identity: KType,
     ) -> &'cell Tagged<'cell, X> {
@@ -51,11 +51,11 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
     /// carrier and the payload satisfies what the source binds the member to, and the payload takes
     /// the carrier as its one tagged layer.
     pub fn seal(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         value: Value<'cell, X>,
         carrier: KType,
         witness: KType,
-        types: &Types<'_, 'cell>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, SealRefused> {
         let identity = sealing(types, scratch, carrier, witness, value.ktype())?;
@@ -65,7 +65,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
     /// A re-tag: a tagged value's own layer is replaced rather than wrapped, so the payload is never
     /// itself tagged.
     pub fn peel(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         value: Value<'cell, X>,
         identity: KType,
     ) -> &'cell Tagged<'cell, X> {
@@ -78,7 +78,11 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
 
 impl<'cell, X: Knotted> Tagged<'cell, X, Link<'cell, X>> {
     /// A knot's tagged data node over `payload`, under the identity the tie checked.
-    pub fn linked(writer: Writer<'cell>, payload: Link<'cell, X>, identity: KType) -> &'cell Self {
+    pub fn linked(
+        writer: Writer<'cell, '_>,
+        payload: Link<'cell, X>,
+        identity: KType,
+    ) -> &'cell Self {
         Self::from_payload(
             writer,
             payload,
@@ -92,7 +96,7 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
     /// A tagged value over a payload already resident in `writer`'s region, under an identity and
     /// weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_payload(
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         payload: C,
         ktype: KType,
         weight: Weight,
@@ -109,7 +113,7 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
     }
 
     /// The same payload under another identity.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
+    pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
         resident(writer, Tagged { ktype, ..*self })
     }
 

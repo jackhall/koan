@@ -42,10 +42,10 @@ fn code_of<'graph>(end: u32, use_: Use) -> KValue<'graph, 'graph> {
 }
 
 /// The code a step was born holding, beside the step it was taken from.
-fn code<'a, 'graph, 'step, 'here, 'scratch>(
-    step: Step<'a, 'graph, 'step, 'here, 'scratch, Native>,
+fn code<'a, 'graph, 'step, 'here, 'scratch, 'lent>(
+    step: Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, Native>,
 ) -> (
-    Step<'a, 'graph, 'step, 'here, 'scratch, Native, Taken>,
+    Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, Native, Taken>,
     Option<u32>,
 ) {
     let (step, state) = step.state();
@@ -58,7 +58,7 @@ fn code<'a, 'graph, 'step, 'here, 'scratch>(
 /// The one build every end shares: text in whatever region the door hands it, its address
 /// recorded.
 fn seven<'graph, 'their>(
-    writer: Writer<'their>,
+    writer: Writer<'their, '_>,
     _: &'their &'graph (),
 ) -> Active<'graph, 'their, KValueFamily> {
     let value: KValue<'graph, 'their> = crate::values::text(writer, "seven");
@@ -67,7 +67,7 @@ fn seven<'graph, 'their>(
 }
 
 /// A producer: end by the end its code names.
-fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, code) = code(step);
     let Some(code) = code else {
         return step.failed(StepError::Stale);
@@ -86,7 +86,7 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph,
 /// The consumer: ask for one producer with the `Use` its code names, at the placement the test
 /// gives it, and park on its single slot.
 fn consume<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     placement: Placement,
 ) -> Action<'graph, Native> {
     let (mut step, code) = code(step);
@@ -102,11 +102,13 @@ fn consume<'graph>(
     step.park(asked, read_back, KValue::Null, None)
 }
 
-fn consume_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn consume_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     consume(step, Placement::Fresh)
 }
 
-fn consume_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn consume_shares<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     consume(step, Placement::Shares)
 }
 
@@ -120,7 +122,7 @@ fn record_received(received: Result<Received<'_, '_, '_>, StepError>) -> Result<
 }
 
 /// The consumer, woken: read its one slot back.
-fn read_back<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn read_back<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     for received in step.results().collect::<Vec<_>>() {
         if let Err(error) = record_received(received) {
             return step.failed(error);
@@ -224,7 +226,7 @@ fn both_placements_compute_the_same_value() {
 
 /// The grandparent: lay a marker down in its own region, ask for the middle with `Keeps`, and park.
 /// The middle's home is therefore this cell, and a leaf the middle forwards to builds here too.
-fn grandparent<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn grandparent<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     record(format!(
         "marker {}",
@@ -235,14 +237,16 @@ fn grandparent<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gr
 }
 
 /// The middle: ask for the leaf with `Forwards`, and park.
-fn middle<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn middle<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let asked = step.spawn(fresh(produce, Use::Forwards, state));
     step.park(asked, middle_woken, KValue::Null, None)
 }
 
 /// The middle, woken: read the leaf's result and hand it on, kept, to the grandparent.
-fn middle_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn middle_woken<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     let Some(Ok(Received::Here(value))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
@@ -252,7 +256,7 @@ fn middle_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Actio
 
 /// The grandparent, woken: a second marker, then the result.
 fn grandparent_woken<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     record(format!(
         "marker {}",
@@ -366,7 +370,9 @@ fn a_finished_value_forwarded_reaches_the_spawners_home() {
 const PRODUCERS: usize = 3;
 
 /// The consumer: ask for a producer per slot, and park on the run they fill.
-fn park_on_three<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn park_on_three<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     for slot in 0..PRODUCERS - 1 {
         step.spawn(producer(slot));
     }
@@ -382,7 +388,7 @@ fn producer<'graph, 'here>(slot: usize) -> Request<'graph, 'here, Native> {
 }
 
 /// One producer: fill the slot the drain gave it with ten times the number it was born holding.
-fn scale<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn scale<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     // The number itself, not the value: a value at this producer's brand is not one the consumer's
     // scratch can hold, so what crosses is the word inside it.
     let (step, state) = step.state();
@@ -393,7 +399,9 @@ fn scale<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, N
 }
 
 /// The consumer, woken: read every slot of the run it registered.
-fn drain_the_run<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn drain_the_run<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     let results: Vec<_> = step.results().collect();
     record(format!("woke on {}", results.len()));
     for received in results {

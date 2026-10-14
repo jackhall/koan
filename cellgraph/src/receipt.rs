@@ -8,6 +8,11 @@
 //! it does hold is the reset of the bump it lives in, exactly as a scratch continuation does: the
 //! run is one of the things at rest that names those bytes.
 //!
+//! A run a registration replaces, or a dying cell lets go of, is kept on the graph's free list
+//! beside its write home once drained ([`FreeRuns`]), and the next registration over that bump
+//! reuses the first that fits rather than laying a new run down: a host whose bump a parked
+//! evaluation holds would otherwise grow by one run per tenant that parks under it.
+//!
 //! The two families a run's slots store reach the graph as one [`Delivery`] bundle rather than as
 //! two parameters of their own. The bundle carries the [`DropFree`] bound both need — a delivered
 //! value lands in a bump — so no such bound propagates into the graph, the cells or the pools, and
@@ -17,6 +22,7 @@
 use std::cell::Cell;
 use std::marker::PhantomData;
 
+use crate::carrier::CellHome;
 use crate::dormant::Dormant;
 use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::Writer;
@@ -80,7 +86,7 @@ impl<'graph, 'cell, D: Delivery<'graph>> Receipts<'graph, 'cell, D> {
     /// Lay a run of `count` empty slots down behind the count word that counts them, in the bump
     /// `writer` names. The count word goes first, so a run's bytes are in the order the layout
     /// describes.
-    pub(crate) fn lay_down(writer: Writer<'cell>, count: usize) -> Self {
+    pub(crate) fn lay_down(writer: Writer<'cell, '_>, count: usize) -> Self {
         Receipts {
             filled: &writer.fill(1, |_| Cell::new(0u32))[0],
             slots: writer.fill(count, |_| Cell::new(ReceiptSlot::Empty)),
@@ -90,6 +96,15 @@ impl<'graph, 'cell, D: Delivery<'graph>> Receipts<'graph, 'cell, D> {
     /// How many slots the run has.
     pub(crate) fn width(self) -> usize {
         self.slots.len()
+    }
+
+    /// The run's first `count` slots, behind the same count word: a drained run reused for a
+    /// narrower registration, so [`complete`](Self::complete) reads that registration's width.
+    pub(crate) fn narrowed(self, count: usize) -> Self {
+        Receipts {
+            filled: self.filled,
+            slots: &self.slots[..count],
+        }
     }
 
     /// Whether every slot is empty — what lets a registration replace this run, and what a drained
@@ -150,6 +165,11 @@ impl<'graph, D: Delivery<'graph>> Copy for Receipts<'graph, '_, D> {}
 
 /// The receipt run's family, so a run rests in a cell's slot free of every step brand.
 pub(crate) struct ReceiptRun<D>(PhantomData<fn() -> D>);
+
+/// Released, drained runs, each beside its write home and width: what a registration over a
+/// home's scratch bump takes first, first fit, before it lays a run down. Every reset of a bump
+/// drops that home's entries, so no entry outlives the bytes it names.
+pub(crate) type FreeRuns<'graph, D> = Vec<(CellHome, u32, Erased<'graph, ReceiptRun<D>>)>;
 
 crate::reattachable!(ReceiptRun<D: crate::Delivery<'graph>> => Receipts<'graph, 'cell, D>);
 

@@ -314,7 +314,8 @@ interleaving. Per unit:
 - **A statement that binds nothing** is one evaluation, asked with `Reads` —
   save a frame's last unit, which the runner [tails](#frames-contracts-and-tails)
   into, and a block's last statement, asked with `Forwards` so the value is
-  built where the block's result goes. A body whose last unit is a binder
+  built where the block's result goes — `Keeps` in a
+  [caching body](#caching-bodies). A body whose last unit is a binder
   yields that binding's value.
 
 The only children the runner asks for are evaluations, through
@@ -358,6 +359,42 @@ returns a `LIST OF Any`. An `EVAL`'s frame owes the type the `EVAL` declares
 as a called frame owes its return; its contract names no callee, so a miss
 names the `EVAL`'s code (`` `EVAL`'s code returned Str, which does not satisfy
 Number ``). A block never tails, and nor does a frame called through a barrier.
+
+### Caching bodies
+
+A body the load found [caching](../dispatch/README.md#body-classes) lays its
+values in the region its writer lays into and its types in a scratch tier
+([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
+Each step picks one chain at its entry ([`run`](body.rs), and the evaluator's
+`evaluate`):
+
+- the **reading chain** in the own body of a `Fresh` caching frame, which
+  holds its scratch for its life at its first step and links that scratch's
+  branch to its region before anything lays it. It reads the root, the lent
+  branch — the scratch its asker parked in — and the frame's scratch, and
+  the frame's region through the link. A
+  `routes` bit on each evaluation and block the frame asks for
+  ([`KBirth`](bundle.rs)) carries the pick down, and the hand-off of the last
+  statement clears it;
+- the **`Shares` chain** anywhere else in a caching body, over the root, the
+  write home's region and its scratch;
+- the region chain in every other body.
+
+Under `routes`, an invariant view's operand and view, an invariant nominal's
+types and a warm composite's own memo are adopted into the lent branch, so the
+next hop hits them there.
+
+A caching body asks for its blocks and its yielding statement with `Keeps`
+rather than `Forwards`, so a value leaves it only through an **exit**
+([`Exit`](exit.rs)), where every type the value reaches is adopted into the
+region first: a call's callee, arguments, contributions and the contract a
+tail hands on, an `EVAL`'s code, offered record and declared type, a value
+owed a frame's contract, the frame's end, and — in a frame holding its scratch
+— the hand-off of its last statement, which adopts the binders the shape lists
+that statement reading, and the frame's contract. A value the frame received
+adopts its own memo alone, and so does an argument the load
+[recorded](../dispatch/README.md#body-classes) as passing one on: an operand of
+a keyworded call, or a call by name's argument or record-literal field.
 
 ### Faults and output
 
@@ -475,7 +512,5 @@ before the program ran, and a stalled substrate. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [The host's scratch as a type cache](../../roadmap/type-tiers/host-scratch-cache.md)
-  — the scratch branch a frame is born writing, and which bodies cache there.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   bytes a `Shares` tail hop leaves in its host.

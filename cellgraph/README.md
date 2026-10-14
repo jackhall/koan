@@ -119,10 +119,14 @@ Four absences are design statements rather than gaps:
   until it dies. It is no part of the region — it never seals, splices or
   absorbs, no price counts its bytes, and it stays at its table index when the
   region leaves — and it is handed back whole at the end of the first step that
-  leaves nothing naming it. Two things at rest name it: the cell's **scratch
-  state**, and the receipt run below. Either on the cell itself, or on any
-  of its tenants, holds the reset off. A departing cell's scratch is dropped at
-  its disposal. A tenant's scratch is its host's. The habitat has a header slot
+  leaves nothing naming it. Four things name it: the cell's **scratch
+  state** and the receipt run below, either on the cell itself or on any of its
+  tenants; a **hold**, which a tree cell's step takes on its own scratch for
+  the rest of the cell's life (`StepContext::hold_scratch`); and a tree cell
+  **borrowing** it. A tree cell borrows the scratch of its tree parent's write
+  home, its **lender**, from its creation to its death, and writes it at a
+  brand of its own, `'lent` (`StepContext::lent_scratch`). A departing cell's
+  scratch is dropped at its disposal. A tenant's scratch is its host's. The habitat has a header slot
   of its own, cleared at every reset and no part of what holds one off.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
@@ -148,13 +152,18 @@ Four absences are design statements rather than gaps:
   owning cell drains them one at a time in a step of its own. A registration
   replaces the run at rest and is refused while that run still holds a receipt.
   The run is the tenant's own where the bytes under it are its host's, it is
-  cleared when the cell's death is declared, and it holds nothing alive — its
+  let go when the cell's death is declared, and it holds nothing alive — its
   slots carry `Dormant`s, which carry no reach, and erased values, which are
   bytes, so no mint, no verdict, no price and no table entry stand behind one.
   What it does hold is the reset of the bump it lives in, and it holds it until
   the registration that replaces it or the cell's death: there is no door that
   drops a run at rest, so a cell that has registered once parks on run-sized
-  bytes for the rest of its life.
+  bytes for the rest of its life. A run let go, once drained, goes on the
+  graph's **free list** beside its write home, and a registration over that
+  home's bump reuses the first that fits, narrowed to its width, before it lays
+  a run down; the bump's reset clears the home's entries. So a host whose bump
+  a parked evaluation holds does not grow by a run per tenant that parks under
+  it.
 - **Holds**, in one relation — *pin*: value reach, accruing as values are minted
   in. It is monotone for the cell's life and releases wholesale rather than per
   reason. A slab cell stands under nothing; the parent chain is the tree pool's,
@@ -273,14 +282,15 @@ none is; nothing replaces or clears a laid header. `header` and `scratch_header`
 hand out the write home's two, and the builds of `alloc_into`, `alloc_here` and
 `deliver_scratch` each receive the header of the half they write beside its
 writer, both off one region borrow, so a writer and a header of different halves
-never meet in one call. The door sits beside the writer rather than inside it
-because a slot inside `Writer` would put `'graph` and the family on every writer
-an embedder names, and `Storage` could hold no slot at all: its `'graph` would
-be a borrow of itself. A door copies the erased value in and out and never lends
-a reference into the slot, which is why the slot is a `Cell` and not a
-`OnceCell`: a reference from `OnceCell::get_or_init` descends from a unique
-borrow, and a later interior write through `get` is undefined behaviour under
-tree borrows.
+never meet in one call. Like the writer, it is branded to the step that minted
+it, so no slot holds one (*A door dies with its step*, below). The door sits
+beside the writer rather than inside it because a slot inside `Writer` would put
+`'graph` and the family on every writer an embedder names, and `Storage` could
+hold no slot at all: its `'graph` would be a borrow of itself. A door copies the
+erased value in and out and never lends a reference into the slot, which is why
+the slot is a `Cell` and not a `OnceCell`: a reference from
+`OnceCell::get_or_init` descends from a unique borrow, and a later interior
+write through `get` is undefined behaviour under tree borrows.
 
 A crossing operand carries its home's header as a **`HomeHeader`**, read-only,
 at the operand's brand ([The crossing verdict](#the-crossing-verdict)). Its one
@@ -298,22 +308,23 @@ death verb.
 What each lifetime proves, and what rests on the proof, is
 [src/lifetimes.md](src/lifetimes.md); the paragraphs below say what each is.
 
-**Three brands per step, under the graph's lifetime.** `'step` is the step: a
+**Four brands per step, under the graph's lifetime.** `'step` is the step: a
 carrier branded to it was built or redeemed by this step's doors and dies with
-the step. `'here` is the executing cell's: invariant, quantified per `enter`,
-with no outlives relation to `'step`, and naming storage the cell's hold set
-covers for the cell's whole life — its own region, or a region a pinned crossing
-into this cell minted into its holds. It is a real borrow, not a brand alone:
-the shared borrow of the graph's region table that `enter` holds for the whole
-step beside its exclusive borrow of everything else, so the step's own writer
-borrows at `'here` and the verbs that move or drop a region cannot run under it. A
-value built there is held as a plain `&'here` reference and needs no carrier,
-because its reach is the cell itself, which is alive for as long as the borrow;
-the three carrier states are for a value homed in another cell or crossing a
-step. The continuation's captures are `'here` references, re-anchored at each
-step's brand, which is how per-cell embedder structure rides the cell without a
-frame type. For a step in a tenant `'here` is the host's: the host's region and
-the host's hold set, which the host keeps until its last tenant has left.
+the step, and so does every door the step takes. `'here` is the executing
+cell's: invariant, quantified per `enter`, with no outlives relation to `'step`,
+and naming storage the cell's hold set covers for the cell's whole life — its
+own region, or a region a pinned crossing into this cell minted into its holds.
+It is a real borrow, not a brand alone: the shared borrow of the graph's region
+table that `enter` holds for the whole step beside its exclusive borrow of
+everything else, so the step's own writer borrows at `'here` and the verbs that
+move or drop a region cannot run under it. A value built there is held as a
+plain `&'here` reference and needs no carrier, because its reach is the cell
+itself, which is alive for as long as the borrow; the three carrier states are
+for a value homed in another cell or crossing a step. The continuation's
+captures are `'here` references, re-anchored at each step's brand, which is how
+per-cell embedder structure rides the cell without a frame type. For a step in a
+tenant `'here` is the host's: the host's region and the host's hold set, which
+the host keeps until its last tenant has left.
 
 `'scratch` is the scratch habitat's: invariant and quantified per `enter` like
 `'here`, with `'here: 'scratch` the whole of its relation to it. So a scratch
@@ -333,11 +344,32 @@ its brand, so a writer at `'here` is never taken at `'scratch`, and a
 scratch-lived value is never laid in storage, where its bytes would be stranded
 until the cell dies.
 
+`'lent` is a tree cell's borrow of its lender's scratch: invariant and
+quantified per `enter`, with `'lent: 'scratch` the whole of its relation to the
+step's other brands. So the cell's own scratch may name the lent bump, and
+nothing of the cell's region or scratch may be laid there, since `'lent` is
+unrelated to `'here`. The lender's reset waits on every borrower, so what a
+step writes there outlives the step, and the lender reads it back at its own
+`'scratch`.
+
+**A door dies with its step.** A door onto a habitat half — `Writer`, `Header`,
+and the `Run` and `Prose` a writer opens — carries two brands: the half's, which
+it writes at and hands back, and its own life, last and covariant. Every door a
+step takes, a build's included, has `'step` for its own life, and `Storage`'s
+writer has the storage's borrow. A door names its half's entry in the graph's
+region table, which moves when a `create_tree` grows the table between two
+steps, while what it wrote sits in chunks that never move. `'step` outlives none
+of the brands a slot is re-anchored at, so a door can be parked by no route —
+the continuation, the scratch state, a value laid in a habitat or behind a trait
+object, a header slot, a placement or a delivery — while what it wrote can be
+parked by every one. Each route is pinned by a `compile_fail` doctest on
+`Writer` against one compiling control.
+
 Both slots are re-anchored in `enter`, the one function that mints both brands,
 both writers and both header doors, so the pairing of slot with brand is made and audited in one
 place and the continuation doors are field moves.
 
-`'graph` outlives both. It is the lifetime of storage the embedder owns outside
+`'graph` outlives all of them. It is the lifetime of storage the embedder owns outside
 the graph — program text, say — which the borrow checker keeps alive for as
 long as the graph is used; the graph is invariant in it, so it never shortens to
 a step's brand. Anything that outlives the graph may be borrowed through it: a
@@ -353,8 +385,9 @@ The crate ships one such store, **`Storage`** ([src/region.rs](src/region.rs)):
 a bump the embedder keeps outside the graph, written through the same `Writer`
 a region is, so what the embedder lays down at `'graph` passes the writer's
 drop-freeness checks and the embedder never names the bump underneath. Its
-writer is at the storage's borrow, which is `'graph` for a graph built over
-it.
+writer is at the storage's borrow at both its brands, which is `'graph` for a
+graph built over it: `Storage` is no habitat, so nothing confines its writer
+to a step.
 
 A foreign carrier is read at a borrow strictly inside the step and can never
 coerce to `'here`, so the only references that land in a cell's region without
@@ -651,7 +684,8 @@ exactly one decision.
   step holds shared for its whole length so that nothing can move or drop a bump
   under a writer into it, with the scratch bumps beside the regions and the
   bounded spare list, and the header slot of each habitat half — `Writer` —
-  the crate's one write surface, invariant in its brand, a verb per
+  the crate's one write surface, invariant in its brand and branded to the
+  step that minted it, a verb per
   shape a region cannot be given: `fill`, `thin_run` and `text` where the width
   is settled before the first element — `thin_run` laying its run behind a
   length header so its `ThinRun` handle is one pointer wide — `run` and `prose` where only the producer settles it,
@@ -722,6 +756,9 @@ machinery and not the `alloc_into` within it.
   from its parent's frame. It counts through
   [audit/counting_alloc.rs](../audit/counting_alloc.rs), the same delegating
   allocator koan's own readings go through.
+- The `counters` feature, off by default, exposes what a dependent's tests
+  read across the crate boundary, where `cfg(test)` does not reach: the bytes
+  a writer's bump has handed out (`Writer::in_use`).
 - [tools/cellgraph_perf.py](../tools/cellgraph_perf.py) — the one command.
   `python3 tools/cellgraph_perf.py` sweeps the set and prints a delta against the
   newest recorded commit, which it rebuilds and runs beside HEAD so the time

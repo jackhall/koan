@@ -32,7 +32,7 @@ thread_local! {
 
 /// The caller: ask for the loop's head, park on its single slot.
 fn start<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     head: TestStep<'graph>,
 ) -> Action<'graph, Native> {
     let asked = step.spawn(fresh(head, Use::Reads, KValue::Null));
@@ -45,7 +45,7 @@ fn start<'graph>(
 /// successor writes a region drawn back from the pool its predecessor returned, while a `Shares`
 /// successor writes its host's, which no turn of the loop ever returns.
 fn turn<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     placement: Placement,
     next: TestStep<'graph>,
 ) -> Action<'graph, Native> {
@@ -72,7 +72,7 @@ fn turn<'graph>(
 }
 
 /// The caller, woken by the loop's last cell.
-fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let first = step.results().next();
     match first {
         Some(Ok(Received::Scratch(KValue::Number(length)))) => record(length.to_string()),
@@ -81,19 +81,19 @@ fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
     step.done()
 }
 
-fn start_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn start_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     start(step, turn_fresh)
 }
 
-fn start_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn start_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     start(step, turn_shares)
 }
 
-fn turn_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn turn_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     turn(step, Placement::Fresh, turn_fresh)
 }
 
-fn turn_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn turn_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     turn(step, Placement::Shares, turn_shares)
 }
 

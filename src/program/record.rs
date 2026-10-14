@@ -19,7 +19,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, Root, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
-use crate::values::{Record, Tagged, Types, Value, satisfies};
+use crate::values::{Chain, Record, Tagged, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle};
 
@@ -33,9 +33,9 @@ use super::bundle::{KBirth, KBundle};
 pub trait Language {
     /// Lay the builtin table down at `'graph`, through the writer of program storage's store.
     fn builtins<'graph>(
-        writer: Writer<'graph>,
+        writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Types<'graph, 'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph>;
 
@@ -48,8 +48,8 @@ pub trait Language {
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Types<'graph, 'graph>,
-        writer: Writer<'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
         let _ = (shape, builtins, types, writer, scratch);
@@ -96,7 +96,7 @@ impl Contract {
     /// before its frame solves, a quantified callee keeps nothing. The one answer for every call.
     pub fn kept_by(
         self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         callee: DeclaredType<KType>,
         solution: Option<&[KType]>,
     ) -> bool {
@@ -212,12 +212,13 @@ impl<'graph> Program<'graph> {
     /// The one door every evaluation is asked through: `node`, read through `view`, as a child the
     /// drain can create — or as the successor a frame's tail hands `contract`. The caller picks its
     /// placement and its `Use`; what the node means is the evaluator's, so nothing in `program`
-    /// names an expression shape.
+    /// names an expression shape. `routes` is [`KBirth::Evaluate`]'s.
     pub fn evaluate<'here>(
         &'graph self,
         node: Evaluated<'graph>,
         view: KActivationView<'graph, 'here>,
         contract: Option<Contract>,
+        routes: bool,
     ) -> Work<'graph, 'here, KBundle> {
         Work {
             step: self.evaluator,
@@ -226,6 +227,7 @@ impl<'graph> Program<'graph> {
                 node,
                 view,
                 contract,
+                routes,
             },
         }
     }
@@ -233,8 +235,8 @@ impl<'graph> Program<'graph> {
     /// An error value carrying `message`, rendered into `writer`'s region, its types in `types`.
     pub fn error<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'_, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         message: impl fmt::Display,
     ) -> KValue<'graph, 'cell> {
         let scratch = Bump::new();
@@ -248,7 +250,7 @@ impl<'graph> Program<'graph> {
     pub fn message<'cell>(
         &self,
         value: &KValue<'graph, 'cell>,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
     ) -> Option<&'cell str> {
         let Value::Tagged(tagged) = value else {
             return None;
@@ -267,8 +269,8 @@ impl<'graph> Program<'graph> {
     /// miss.
     pub fn fulfilled<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'_, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
         contract: Contract,
     ) -> KValue<'graph, 'cell> {
@@ -307,8 +309,8 @@ impl<'graph> Program<'graph> {
     /// retyped to it, and anything else is the error naming the miss.
     pub fn annotated<'cell>(
         &self,
-        writer: Writer<'cell>,
-        types: &Types<'_, 'cell>,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
         annotation: KType,
         settled: bool,
@@ -344,7 +346,7 @@ impl<'graph> Program<'graph> {
 }
 
 /// `message` rendered into `writer`'s region.
-pub(super) fn rendered<'cell>(writer: Writer<'cell>, message: impl fmt::Display) -> &'cell str {
+pub(super) fn rendered<'cell>(writer: Writer<'cell, '_>, message: impl fmt::Display) -> &'cell str {
     let mut prose = writer.prose();
     fmt::Write::write_fmt(&mut prose, format_args!("{message}"))
         .expect("writing into a region does not fail");

@@ -10,7 +10,8 @@
 //! Nothing stored in a region is ever dropped — a bump releases its chunks whole — which is why
 //! every family a region hosts is [`DropFree`](crate::DropFree). The write surface is
 //! [`Writer`], a `Copy` handle a step receives at a brand it cannot widen: a build closure's own
-//! for a foreign destination, and the executing cell's `'here` for its own region.
+//! for a foreign destination, and the executing cell's `'here` for its own region. A writer also
+//! carries the brand of the step that minted it, so it cannot outlive that step.
 //!
 //! Every live cell's region sits in one table, [`Regions`], that a step borrows **shared** for
 //! its whole length while it holds the rest of the graph exclusively. The step's own writer is a
@@ -102,8 +103,9 @@ impl<'graph, H: HabitatHeader<'graph>> Region<'graph, H> {
     }
 
     /// The door onto this region's header slot, for as long as this borrow lasts — handed out
-    /// beside [`writer`](Self::writer) from the same borrow.
-    pub(crate) fn header(&self) -> Header<'graph, '_, H> {
+    /// beside [`writer`](Self::writer) from the same borrow. The caller picks `'door`; every step
+    /// door passes its `'step`.
+    pub(crate) fn header<'door>(&self) -> Header<'graph, '_, 'door, H> {
         Header::new(&self.header)
     }
 
@@ -144,8 +146,9 @@ impl<'graph, H: HabitatHeader<'graph>> Region<'graph, H> {
     }
 
     /// The write surface for as long as this borrow lasts: a placement's, for the length of its
-    /// build, or the executing cell's, for the length of the step that borrowed the table.
-    pub(crate) fn writer(&self) -> Writer<'_> {
+    /// build, or the executing cell's, for the length of the step that borrowed the table. The
+    /// caller picks `'door`; every step door passes its `'step`.
+    pub(crate) fn writer<'door>(&self) -> Writer<'_, 'door> {
         Writer(&self.bump, PhantomData)
     }
 
@@ -384,6 +387,12 @@ impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
         self.spare.len()
     }
 
+    /// How many entries the tree half of the table holds, live or free.
+    #[cfg(test)]
+    pub(crate) fn tree_len(&self) -> usize {
+        self.tree.len()
+    }
+
     /// What [`bound`](Self::bound) reads right now.
     #[cfg(all(test, not(miri)))]
     pub(crate) fn spare_bound(&self) -> usize {
@@ -399,13 +408,15 @@ impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
         &self.habitat(home).scratch
     }
 
-    /// The write surface of `home`'s scratch bump, which a step takes at its `'scratch` brand.
-    pub(crate) fn scratch_writer(&self, home: CellHome) -> Writer<'_> {
+    /// The write surface of `home`'s scratch bump, which a step takes at its `'scratch` brand. The
+    /// caller picks `'door`; every step door passes its `'step`.
+    pub(crate) fn scratch_writer<'door>(&self, home: CellHome) -> Writer<'_, 'door> {
         Writer(self.scratch_bump(home), PhantomData)
     }
 
-    /// The door onto `home`'s scratch header, which a step takes at its `'scratch` brand.
-    pub(crate) fn scratch_header(&self, home: CellHome) -> Header<'graph, '_, H> {
+    /// The door onto `home`'s scratch header, which a step takes at its `'scratch` brand. The
+    /// caller picks `'door`; every step door passes its `'step`.
+    pub(crate) fn scratch_header<'door>(&self, home: CellHome) -> Header<'graph, '_, 'door, H> {
         Header::new(&self.habitat(home).scratch_header)
     }
 
@@ -515,10 +526,289 @@ impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
 /// Invariant in its brand: a writer at one habitat half's brand cannot stand in for another's, so
 /// a value meant for a shorter-lived half is never laid in a longer-lived one's bytes, and a writer
 /// is never paired with a [`Header`](crate::Header) of another half.
+///
+/// **A door dies with its step.** A writer is branded twice: `'cell` is the half it writes and
+/// the brand of what it hands back, and `'door` is its own life, which may only shorten. Every
+/// door a step takes, a build's included, carries the step's `'step`, and [`Storage`]'s writer
+/// carries its borrow. A door names its half's entry in the graph's region table, which moves
+/// when the table grows between steps, while what it wrote sits in chunks that never move.
+/// `'step` outlives no brand a slot is re-anchored at, so no route parks a door, while every
+/// route parks what one wrote:
+///
+/// ```
+/// # use cellgraph::{Active, CellGraph, Delivery, Dormant, DropFree, Verdict, covariant, reattachable};
+/// # struct Thunk;
+/// # reattachable!(Thunk => &'cell (dyn Fn() -> u32 + 'cell));
+/// # covariant!(Thunk);
+/// # impl DropFree for Thunk {}
+/// struct Kept;
+/// reattachable!(Kept => (
+///     Option<&'cell u32>,
+///     Option<&'cell [u32]>,
+///     Option<Dormant<'static, Thunk>>,
+///     Option<Dormant<'static, Thunk>>,
+/// ));
+/// struct Parked;
+/// reattachable!(both Parked => (
+///     &'here u32,
+///     &'scratch u32,
+///     &'scratch &'here u32,
+///     &'scratch (dyn Fn() -> u32 + 'scratch),
+/// ));
+/// struct Note;
+/// reattachable!(Note => &'cell u32);
+/// # impl DropFree for Note {}
+/// # struct Mail;
+/// # impl<'graph> Delivery<'graph> for Mail { type Scratch = Note; type Carrier = Note; }
+/// let mut graph: CellGraph<'static, Kept, Parked, Mail, 1, Note> =
+///     CellGraph::new(2, |_| Verdict::Pin);
+/// let root = graph.create(None).unwrap();
+/// let cell = graph.create_tree(root, None).unwrap();
+/// let other = graph.create(None).unwrap();
+/// graph.enter(cell, |context| context.register_receipts(1).unwrap()).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let writer = context.writer();
+///         let here = &writer.fill(1, |_| 1u32)[0];
+///         // The header slot.
+///         context.header().get_or_lay(|| here);
+///         // A run, finished.
+///         let mut run = writer.run();
+///         run.push(2u32);
+///         let run = run.finish();
+///         // A region value behind a trait object, lifted and kept.
+///         let thunk: &dyn Fn() -> u32 = &writer.fill(1, |_| move || *here)[0];
+///         let lifted = context.keep(context.lift::<Thunk>(thunk));
+///         // A placement build's value behind a trait object.
+///         let placed = context
+///             .alloc_into::<Thunk, Thunk>(other, &[], |writer, _, _| {
+///                 let there = &writer.fill(1, |_| 3u32)[0];
+///                 let thunk: &dyn Fn() -> u32 = &writer.fill(1, |_| move || *there)[0];
+///                 Active::new(thunk)
+///             })
+///             .unwrap();
+///         let placed = context.keep(placed);
+///         // The continuation.
+///         context.store_successor((Some(here), Some(run), Some(lifted), Some(placed)));
+///         // The scratch state at both brands, a `'here` value laid in the habitat, and the lent
+///         // bump behind a trait object.
+///         let scratch = context.scratch_writer();
+///         let (lent, _) = context.lent_scratch().unwrap();
+///         let lent_value = &lent.fill(1, |_| 4u32)[0];
+///         let reads: &dyn Fn() -> u32 = &scratch.fill(1, |_| move || *lent_value)[0];
+///         let laid = &scratch.fill(1, |_| here)[0];
+///         context.store_scratch_state((here, &scratch.fill(1, |_| 5u32)[0], laid, reads));
+///     })
+///     .unwrap();
+/// // A delivery's value.
+/// graph
+///     .enter(other, |context| {
+///         context
+///             .deliver_scratch(cell, 0, |writer, _, _| Active::new(&writer.fill(1, |_| 6u32)[0]))
+///             .unwrap();
+///     })
+///     .unwrap();
+/// ```
+///
+/// The same routes refuse the writer itself.
+///
+/// A continuation:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// struct Parked;
+/// reattachable!(Parked => Option<Writer<'cell, 'cell>>);
+/// let mut graph: CellGraph<'static, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// graph.enter(cell, |context| context.store_successor(Some(context.writer()))).unwrap();
+/// ```
+///
+/// The scratch state, at its `'here` position:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// struct Parked;
+/// reattachable!(both Parked => Option<Writer<'here, 'here>>);
+/// let mut graph: CellGraph<'static, Work, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// graph.enter(cell, |context| context.store_scratch_state(Some(context.writer()))).unwrap();
+/// ```
+///
+/// The scratch state, at its `'scratch` position:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// struct Parked;
+/// reattachable!(both Parked => Option<Writer<'scratch, 'scratch>>);
+/// let mut graph: CellGraph<'static, Work, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// graph
+///     .enter(cell, |context| context.store_scratch_state(Some(context.scratch_writer())))
+///     .unwrap();
+/// ```
+///
+/// Laid in the scratch habitat, which `'here: 'scratch` admits:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// struct Parked;
+/// reattachable!(both Parked => Option<&'scratch Writer<'here, 'here>>);
+/// let mut graph: CellGraph<'static, Work, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let writer = context.writer();
+///         let laid = &context.scratch_writer().fill(1, |_| writer)[0];
+///         context.store_scratch_state(Some(laid));
+///     })
+///     .unwrap();
+/// ```
+///
+/// The lent writer, behind a trait object laid in the scratch habitat, which `'lent: 'scratch`
+/// admits:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// struct Parked;
+/// reattachable!(both Parked => Option<&'scratch (dyn Fn() + 'scratch)>);
+/// let mut graph: CellGraph<'static, Work, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let root = graph.create(None).unwrap();
+/// let cell = graph.create_tree(root, None).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let (lent, _) = context.lent_scratch().unwrap();
+///         let laid: &dyn Fn() = &context.scratch_writer().fill(1, |_| move || {
+///             lent.fill(1, |_| 1u32);
+///         })[0];
+///         context.store_scratch_state(Some(laid));
+///     })
+///     .unwrap();
+/// ```
+///
+/// The header slot:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// struct Parked;
+/// reattachable!(Parked => Writer<'cell, 'cell>);
+/// let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let writer = context.writer();
+///         context.header().get_or_lay(|| writer);
+///     })
+///     .unwrap();
+/// ```
+///
+/// A region value hiding it behind a trait object, lifted and kept:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// # struct Thunk;
+/// # reattachable!(Thunk => &'cell (dyn Fn() -> u32 + 'cell));
+/// # covariant!(Thunk);
+/// # impl DropFree for Thunk {}
+/// struct Parked;
+/// reattachable!(Parked => Option<Dormant<'static, Thunk>>);
+/// let mut graph: CellGraph<'static, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let writer = context.writer();
+///         let thunk: &dyn Fn() -> u32 =
+///             &writer.fill(1, |_| move || writer.fill(1, |_| 1u32)[0])[0];
+///         let kept = context.keep(context.lift::<Thunk>(thunk));
+///         context.store_successor(Some(kept));
+///     })
+///     .unwrap();
+/// ```
+///
+/// A placement build's writer, hidden in the value it builds and kept:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// # struct Thunk;
+/// # reattachable!(Thunk => &'cell (dyn Fn() -> u32 + 'cell));
+/// # covariant!(Thunk);
+/// # impl DropFree for Thunk {}
+/// struct Parked;
+/// reattachable!(Parked => Option<Dormant<'static, Thunk>>);
+/// let mut graph: CellGraph<'static, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+/// let cell = graph.create(None).unwrap();
+/// let other = graph.create(None).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let placed = context
+///             .alloc_into::<Thunk, Thunk>(other, &[], |writer, _, _| {
+///                 let thunk: &dyn Fn() -> u32 =
+///                     &writer.fill(1, |_| move || writer.fill(1, |_| 1u32)[0])[0];
+///                 Active::new(thunk)
+///             })
+///             .unwrap();
+///         let kept = context.keep(placed);
+///         context.store_successor(Some(kept));
+///     })
+///     .unwrap();
+/// ```
+///
+/// A delivery build's writer, as the delivered value:
+///
+/// ```compile_fail
+/// # use cellgraph::*;
+/// # struct Work;
+/// # reattachable!(Work => ());
+/// # impl DropFree for Work {}
+/// struct Door;
+/// reattachable!(Door => Writer<'cell, 'cell>);
+/// impl DropFree for Door {}
+/// struct Mail;
+/// impl<'graph> Delivery<'graph> for Mail {
+///     type Scratch = Door;
+///     type Carrier = Work;
+/// }
+/// let mut graph: CellGraph<'static, Work, NoScratch, Mail> = CellGraph::new(2, |_| Verdict::Pin);
+/// let consumer = graph.create(None).unwrap();
+/// let producer = graph.create(None).unwrap();
+/// graph.enter(consumer, |context| context.register_receipts(1).unwrap()).unwrap();
+/// graph
+///     .enter(producer, |context| {
+///         context.deliver_scratch(consumer, 0, |writer, _, _| Active::new(writer)).unwrap();
+///     })
+///     .unwrap();
+/// ```
 #[derive(Clone, Copy)]
-pub struct Writer<'cell>(&'cell Bump, PhantomData<fn(&'cell ()) -> &'cell ()>);
+pub struct Writer<'cell, 'door>(&'cell Bump, DoorBrands<'cell, 'door>);
 
-impl<'cell> Writer<'cell> {
+/// The two brands a door onto a habitat half carries: invariant in `'cell`, the half it opens, and
+/// covariant in `'door`, its own life, which may only shorten.
+pub(crate) type DoorBrands<'cell, 'door> = PhantomData<(fn(&'cell ()) -> &'cell (), &'door ())>;
+
+impl<'cell, 'door> Writer<'cell, 'door> {
+    /// Bytes this writer's bump has handed out since its last reset. Tests read it — a
+    /// dependent's among them, through the `counters` feature, since `cfg(test)` does not reach a
+    /// dependency.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn in_use(self) -> usize {
+        self.0.allocated_bytes() - self.0.chunk_capacity()
+    }
+
     /// Write a run of `len` values, each built from its index, and hand back the borrow of it that
     /// lives in the region.
     ///
@@ -579,15 +869,29 @@ impl<'cell> Writer<'cell> {
     ///
     /// Where the length is known before the first element, [`fill`](Self::fill) costs no header
     /// and no growth path.
-    pub fn run<T>(self) -> Run<'cell, T> {
+    ///
+    /// A run holds its writer's bump, so it carries the writer's door brand and parks nowhere
+    /// either:
+    ///
+    /// ```compile_fail
+    /// # use cellgraph::*;
+    /// # struct Work;
+    /// # reattachable!(Work => ());
+    /// struct Parked;
+    /// reattachable!(Parked => Option<Run<'cell, 'cell, u32>>);
+    /// let mut graph: CellGraph<'static, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// let cell = graph.create(None).unwrap();
+    /// graph.enter(cell, |context| context.store_successor(Some(context.writer().run()))).unwrap();
+    /// ```
+    pub fn run<T>(self) -> Run<'cell, 'door, T> {
         const { assert!(!std::mem::needs_drop::<T>()) };
-        Run(allocator_api2::vec::Vec::new_in(self.0))
+        Run(allocator_api2::vec::Vec::new_in(self.0), PhantomData)
     }
 
     /// Text whose length the producer decides: a [`fmt::Write`](std::fmt::Write) sink into the
     /// region, closed with [`Prose::finish`]. Same growth story as [`run`](Self::run), which it is
     /// a run of bytes over.
-    pub fn prose(self) -> Prose<'cell> {
+    pub fn prose(self) -> Prose<'cell, 'door> {
         Prose(self.run())
     }
 }
@@ -607,7 +911,7 @@ impl Storage {
     }
 
     /// A writer at this storage's borrow — `'graph`, for a graph built over it.
-    pub fn writer(&self) -> Writer<'_> {
+    pub fn writer(&self) -> Writer<'_, '_> {
         Writer(&self.0, PhantomData)
     }
 }
@@ -682,9 +986,12 @@ impl<'cell, T> ThinRun<'cell, T> {
 /// No `Drop`: a run abandoned mid-build is dead region bytes, like every other buffer a bump
 /// outgrows. Nothing it holds runs a destructor either — [`Writer::run`] asserts that at the
 /// instantiation site, the way [`Writer::fill`] does.
-pub struct Run<'cell, T>(allocator_api2::vec::Vec<T, &'cell Bump>);
+pub struct Run<'cell, 'door, T>(
+    allocator_api2::vec::Vec<T, &'cell Bump>,
+    PhantomData<&'door ()>,
+);
 
-impl<'cell, T> Run<'cell, T> {
+impl<'cell, 'door, T> Run<'cell, 'door, T> {
     /// Append one element.
     pub fn push(&mut self, value: T) {
         self.0.push(value);
@@ -717,16 +1024,16 @@ impl<'cell, T> Run<'cell, T> {
 
 /// Text under construction in a region: a [`fmt::Write`](std::fmt::Write) sink over a
 /// [`Run`] of bytes, so `write!` lands its output straight in the region's chunk.
-pub struct Prose<'cell>(Run<'cell, u8>);
+pub struct Prose<'cell, 'door>(Run<'cell, 'door, u8>);
 
-impl std::fmt::Write for Prose<'_> {
+impl std::fmt::Write for Prose<'_, '_> {
     fn write_str(&mut self, text: &str) -> std::fmt::Result {
         self.0.extend(text.bytes());
         Ok(())
     }
 }
 
-impl<'cell> Prose<'cell> {
+impl<'cell, 'door> Prose<'cell, 'door> {
     /// How many bytes — not characters — are down so far.
     pub fn len(&self) -> usize {
         self.0.len()

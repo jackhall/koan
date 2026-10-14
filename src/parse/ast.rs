@@ -332,7 +332,7 @@ impl<'a> KExpression<'a> {
     /// Construction door for a borrowed run: copy it into `writer`'s store, then fill the
     /// structural cache.
     pub fn build(
-        writer: Writer<'a>,
+        writer: Writer<'a, '_>,
         parts: &[Spanned<ExpressionPart<'a>>],
         source: SourceRef,
     ) -> Self {
@@ -340,7 +340,7 @@ impl<'a> KExpression<'a> {
     }
 
     /// [`build`](Self::build)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn build_from_iter<I>(writer: Writer<'a>, parts: I, source: SourceRef) -> Self
+    pub fn build_from_iter<I>(writer: Writer<'a, '_>, parts: I, source: SourceRef) -> Self
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
@@ -353,7 +353,7 @@ impl<'a> KExpression<'a> {
     /// in how the run reached the store — so none ships with a stale or unfilled cache and no part
     /// run is mutated after it is frozen.
     fn from_run(
-        writer: Writer<'a>,
+        writer: Writer<'a, '_>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
         source: SourceRef,
     ) -> Self {
@@ -367,7 +367,7 @@ impl<'a> KExpression<'a> {
     /// and freezes. The one place a `KExpression` is written, so neither door above can ship a node
     /// whose plan disagrees with its parts.
     fn seal(
-        writer: Writer<'a>,
+        writer: Writer<'a, '_>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
         source: SourceRef,
         cache: NodeCache<'a>,
@@ -397,7 +397,7 @@ impl<'a> KExpression<'a> {
     /// Build a node and write it, for a part arm that nests one ([`ExpressionPart::Expression`] and
     /// its sigil siblings hold `&'a KExpression<'a>`).
     pub fn nested(
-        writer: Writer<'a>,
+        writer: Writer<'a, '_>,
         parts: &[Spanned<ExpressionPart<'a>>],
         source: SourceRef,
     ) -> &'a KExpression<'a> {
@@ -406,7 +406,7 @@ impl<'a> KExpression<'a> {
 
     /// [`nested`](Self::nested)'s peer for a run whose slots are computed — see [`RunIter`].
     pub fn nested_from_iter<I>(
-        writer: Writer<'a>,
+        writer: Writer<'a, '_>,
         parts: I,
         source: SourceRef,
     ) -> &'a KExpression<'a>

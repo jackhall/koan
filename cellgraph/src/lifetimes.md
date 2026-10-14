@@ -16,10 +16,12 @@ Several are both: a real borrow made invariant so it also brands.
 | lifetime | kind | relations | variance where it matters |
 |---|---|---|---|
 | `'graph` | borrow of storage outside the graph | outlives everything | graph invariant |
-| `'step` | exclusive borrow of the cells, per `enter` | `'graph: 'step`; none to `'here` | `Ready` covariant |
+| `'step` | exclusive borrow of the cells, per `enter` | `'graph: 'step`; none to `'here` or any habitat brand | `Ready` covariant |
 | `'here` | shared borrow of the region table, per `enter` | `'graph: 'here`; `'here: 'scratch` | invariant |
-| `'scratch` | brand of the scratch habitat, per `enter` | `'here: 'scratch`, nothing else | invariant |
+| `'scratch` | brand of the scratch habitat, per `enter` | `'here: 'scratch`, `'lent: 'scratch`, nothing else | invariant |
+| `'lent` | brand of a tree cell's lender's scratch, per `enter` | `'graph: 'lent`; `'lent: 'scratch`; none to `'here` | invariant |
 | `'cell` | a habitat half's brand, generically | `'graph: 'cell` | per door; `Writer`, `Header`, `Active` and `OnceRun` invariant |
+| `'door` | a door's own life, generically | filled with `'step` by every step and build door, with the storage borrow by `Storage` | `Writer`, `Header`, `Run` and `Prose` covariant |
 | `'severed` | a copied operand's brand, per build | `'graph: 'severed`; none to `'cell` | quantified |
 | `'h` | a home header's brand, per read | `'graph: 'h: 'b`, `'b` the operand's brand | quantified |
 | `'their` | the consumer's scratch brand, per delivery | `'graph: 'their` | quantified |
@@ -88,11 +90,12 @@ the bare shape, and takes the bound as a value, `&'cell &'graph ()`, the
 witness every build receives ([carrier.rs](carrier.rs)). That is the price of
 `'graph` being a real borrow the brands sit under rather than a free name.
 
-## `'step`: a carrier dies with the step, and nothing dies during it
+## `'step`: a carrier and a door die with the step, and nothing dies during it
 
 `'step` is the exclusive borrow of the cells half of the graph that `enter`
 holds for the closure's length ([`StepContext`](graph.rs)), and the brand of
-every `Ready` carrier the step's doors mint or redeem. Two proofs:
+every `Ready` carrier the step's doors mint or redeem and of every door onto a
+habitat the step takes. Three proofs:
 
 - **A carrier cannot leave the step.** `Ready<'graph, 'step, …>` names the
   borrow, and the borrow ends with the closure, so the only state an embedder
@@ -102,11 +105,21 @@ every `Ready` carrier the step's doors mint or redeem. Two proofs:
   seal — takes the graph exclusively, which `'step` forbids for the step's
   length. So the liveness `redeem` checks once holds for as long as the carrier
   it hands back exists. This is what fills `'home`.
+- **A door cannot leave the step.** A door onto a habitat half — `Writer`,
+  `Header`, and the `Run` and `Prose` a writer opens — names the half's entry in
+  the region table, not its chunks, and a `create_tree` that grows the table
+  moves every tree cell's entry between steps. So every door a step takes, the
+  builds' of `alloc_into`, `alloc_here` and `deliver_scratch` included, carries
+  `'step` as its `'door` ([region.rs](region.rs)). `'step` outlives no brand a
+  slot is re-anchored at, nor any brand a build is quantified at, so no slot,
+  value or habitat can hold a door, while what the door wrote, at `'cell`, rides
+  every one of them.
 
 `'step` has no outlives relation to `'here`: a carrier is not a region borrow,
 and a region borrow is not a carrier. A foreign carrier is read at
 `&'cell self`, a borrow of the context strictly inside the step, which can
-coerce to neither.
+coerce to neither. Nor has it one to `'scratch`, `'lent`, a build's `'cell` or a
+delivery's `'their`, which is what keeps a door in its step.
 
 ## `'here`: the executing cell's storage is fixed for the step, at a name only this step holds
 
@@ -152,6 +165,17 @@ holds one off, so no header laid at `'scratch` outlives the bytes it may name.
 `Writer` is invariant, so the region's writer at `'here` is
 never taken at `'scratch`: a scratch-lived value is never laid in storage, where
 its bytes would be stranded until the cell dies.
+
+## `'lent`: a borrowed scratch outlives the borrower
+
+`'lent` is the brand of the scratch a tree cell borrows from its lender, the
+write home of its tree parent, from the cell's creation to its death
+([`lent_scratch`](graph.rs)). The lender's reset waits on every live borrower
+(the lender's borrower count, which [`scratch_named`](graph.rs) reads), so the lent bytes
+outlive every step of the borrower and every scratch it parks: `'lent:
+'scratch` is honest, and the borrower's scratch may name the lent bump. `'lent`
+has no relation to `'here`, so nothing in the lent bump names the borrower's
+region, which retires at the borrower's disposal while the lent bump stays.
 
 ## `'cell`: the brand a door is generic over
 
@@ -253,7 +277,8 @@ brands, checked for size and alignment at compile time and otherwise trusted
 - **The continuation and scratch-state slots.** Written at a cell's own
   brands, reattached by `enter` on that same cell. Proof: a region outlives
   every step in it, `'here` is invariant so nothing shorter was written in,
-  and the scratch reset is held off while the scratch slot is occupied.
+  the scratch reset is held off while the scratch slot is occupied, and no door
+  onto a habitat was written in, since its `'step` outlives neither brand.
 - **A once-written slot.** Set through an invariant `OnceRun` at the run's
   brand, read through a covariant `OnceView` at a brand the view's constructor
   proved shorter. Proof: the family is `Covariant`, so a shortened read takes
@@ -262,10 +287,11 @@ brands, checked for size and alignment at compile time and otherwise trusted
   outlive `'cell`, re-anchored at the same `'cell` by an invariant marker.
 - **A header slot.** Laid through an invariant `Header` at its habitat half's
   brand, reattached by `Header::get` at that half's brand of a later step or
-  build. Proof: what was laid names the half's own bytes, `'graph`, storage the
-  half's cell holds, or, for a scratch half, the write home's region; a
-  region's slot travels with its chunks, no recycled region keeps one, and a
-  scratch slot is cleared at every reset.
+  build. Proof: what was laid names the half's own bytes, `'graph` (a
+  `Storage` writer among it), storage the half's cell holds, or, for a scratch
+  half, the write home's region — never a door onto a habitat, whose `'step`
+  outlives no habitat brand; a region's slot travels with its chunks, no
+  recycled region keeps one, and a scratch slot is cleared at every reset.
 - **A home header.** Anchored by `HomeHeader::read` through `Active` at the
   `'h` its closure is generic over. Proof: the header is read only from a
   region the operand's reach names, so its referents are kept on the grounds

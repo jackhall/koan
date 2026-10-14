@@ -21,7 +21,7 @@ mod tests;
 /// One slot of a run: empty, or a value set once, erased to `'graph`.
 type OnceSlot<'graph, V> = Cell<Option<Erased<'graph, V>>>;
 
-impl<'cell> Writer<'cell> {
+impl<'cell, 'door> Writer<'cell, 'door> {
     /// A run of `len` empty slots, each set once at this region's brand and read at it or any
     /// shorter one — the shape a table of bindings is built over.
     pub fn once_run<'graph, V>(self, len: usize) -> OnceRun<'graph, 'cell, V>

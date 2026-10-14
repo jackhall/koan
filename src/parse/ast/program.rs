@@ -91,7 +91,7 @@ impl<'a> ProgramExpression<'a> {
     /// touch: the write copies the `Copy` struct (its `parts`, structural cache and binder cache
     /// all stay the program-storage borrows they were) into wherever `writer` writes. What the
     /// resulting `ProgramNode` promises is unchanged — only the address of the node header moves.
-    pub fn rehost(self, writer: Writer<'a>) -> ProgramNode<'a> {
+    pub fn rehost(self, writer: Writer<'a, '_>) -> ProgramNode<'a> {
         ProgramNode(resident(writer, self.0))
     }
 }

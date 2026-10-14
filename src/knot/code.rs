@@ -17,7 +17,7 @@ use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{CodeView, ContentDigest, Link, List, Seen, Types, Value, Weight};
+use crate::values::{Chain, CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
 use super::{KActivationView, KValue, Knotted, Node};
 
@@ -126,7 +126,7 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
     /// each edge verbatim, and the body, shape, type and knot weight carried over.
     pub(super) fn rebuilt<'to>(
         &self,
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         mut copy: impl FnMut(&KValue<'graph, 'cell>) -> KValue<'graph, 'to>,
     ) -> Code<'graph, 'to> {
         let mut run = |source: &'cell [Binding<'graph, 'cell>]| {
@@ -170,7 +170,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     /// add to the knot's weight.
     pub(super) fn laid_down(
         &self,
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
     ) -> (&'cell [Binding<'graph, 'cell>], Weight) {
         let bound = collect(writer, self.bound.iter().copied());
         let weight = run_weight(bound).plus(Weight::flat::<Code<'graph, 'cell>>());
@@ -180,7 +180,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     /// The resident code over `bound`, in a knot weighing `knot_weight`.
     pub(super) fn tied(
         &self,
-        writer: Writer<'cell>,
+        writer: Writer<'cell, '_>,
         bound: &'cell [Binding<'graph, 'cell>],
         knot_weight: Weight,
     ) -> Node<'graph, 'cell> {
@@ -239,7 +239,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
 
 /// Lay `code` down as a one-node knot in `writer`'s region, its runs holding value words only.
 fn one_node<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     body: ProgramNode<'graph>,
     shape: &'graph BodyShape<'graph>,
     bound: &[Binding<'graph, 'cell>],
@@ -276,7 +276,7 @@ fn one_node<'graph, 'cell>(
 /// A quote whose `$` name reads a fellow member is born inside its binder's knot by the tie, which
 /// never asks for it, so no binding here is an edge.
 pub fn quote<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     part: &'graph ExpressionPart<'graph>,
     scratch: BumpAllocator<'_>,
@@ -309,10 +309,10 @@ pub enum UsingRefused {
 /// Refused, writing nothing, where a module's registrations at a hole's key rank their slots other
 /// than the code's own candidates at the key do.
 pub fn using<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     code: Knotted<'graph, 'cell>,
     source: KValue<'graph, 'cell>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Knotted<'graph, 'cell>, UsingRefused> {
     let node = code
@@ -362,11 +362,11 @@ pub fn using<'graph, 'cell>(
 /// overload a view carries, or one a header retypes in `writer`'s region. A ranking other than the one `shape`'s own candidates at `key` carry
 /// is refused.
 fn keyed<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     shape: &BodyShape<'graph>,
     key: KeySymbol,
     source: KValue<'graph, 'cell>,
-    types: &Types<'_, 'cell>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {

@@ -17,7 +17,7 @@ mod surface;
 mod working;
 
 use super::digest::{ContentDigest, DigestHasher, Tag};
-use super::{Half, TypeHeader, Types};
+use super::{Chain, Half, TypeHeader, Types};
 use crate::memory::{
     Active, Bump, BumpAllocator, CellGraph, CellHandle, Covariant, Delivery, Edge, Header,
     KnotPlan, Member, NoDelivery, NoScratch, Operand, Prices, ProgramBrand, Reattachable,
@@ -27,7 +27,8 @@ use crate::memory::{
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, RecursiveGroupWindow, RelativeSchema, Root, RootBuilder,
+    DeclaredType, Halves, KType, Parametric, RecursiveGroupWindow, RelativeSchema, Root,
+    RootBuilder,
 };
 use crate::values::{
     Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Seen, ValueCarrier,
@@ -45,7 +46,7 @@ pub(super) type WorkingExpression<'graph, 'cell> = crate::values::WorkingExpress
 pub(super) type WorkingPart<'graph, 'cell> = crate::values::WorkingPart<'graph, 'cell>;
 
 /// [`crate::values::text`] at [`Value`].
-pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell>, text: &str) -> Value<'cell> {
+pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell, '_>, text: &str) -> Value<'cell> {
     crate::values::text(writer, text)
 }
 
@@ -54,7 +55,7 @@ pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell>, text: &str) -> V
 /// value's payload. Empty for a value that does not open.
 pub(crate) fn parts<'cell, X: Knotted + 'cell>(
     value: crate::values::Value<'cell, X>,
-    types: &Types<'_, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Vec<crate::values::Value<'cell, X>> {
     let Some(surface) = value.surface(types, scratch) else {
@@ -103,28 +104,28 @@ impl<'graph> TestTypes<'graph> {
     }
 
     /// The chain a test's load-time work goes through: the builder, as the load's chain.
-    pub fn load(&self) -> Types<'graph, 'graph> {
-        Types::building(Half::Load(self.builder))
+    pub fn load(&self) -> Types<'graph, 'graph, 'graph> {
+        Types::building(Halves::alone(Half::load(self.builder)))
     }
 
     /// The chain for the half `writer` lays into, whose header door is `header`.
-    pub fn half<'here>(
+    pub fn half<'here, 'door>(
         &self,
-        writer: Writer<'here>,
-        header: Header<'graph, 'here, TypeHeader>,
-    ) -> Types<'graph, 'here> {
-        Types::scratch(
+        writer: Writer<'here, 'door>,
+        header: Header<'graph, 'here, 'door, TypeHeader>,
+    ) -> Chain<'graph, 'here, 'here, 'graph, 'door> {
+        Chain::scratch(
             self.root,
-            Half::Load(self.builder),
+            Half::Load(self.builder, std::marker::PhantomData),
             Half::of(writer, header),
         )
     }
 
     /// The chain for what `context`'s step lays in its cell.
-    pub fn of<'here, C, S, D>(
+    pub fn of<'step, 'here, C, S, D>(
         &self,
-        context: &StepContext<'graph, '_, 'here, '_, C, S, D, TypeHeader>,
-    ) -> Types<'graph, 'here>
+        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
+    ) -> Chain<'graph, 'here, 'here, 'graph, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
@@ -136,7 +137,7 @@ impl<'graph> TestTypes<'graph> {
     /// [`values::cross`](crate::values::cross) over this test's chains.
     pub fn cross<'step, C, S, D, XF>(
         &self,
-        context: &mut StepContext<'graph, 'step, '_, '_, C, S, D, TypeHeader>,
+        context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, TypeHeader>,
         dest: impl Into<CellHandle>,
         carrier: &ValueCarrier<'graph, 'step, XF>,
     ) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
@@ -163,7 +164,7 @@ impl<'graph> TestTypes<'graph> {
     /// [`values::cross_here`](crate::values::cross_here) over this test's chains.
     pub fn cross_here<'step, 'here, C, S, D, XF>(
         &self,
-        context: &mut StepContext<'graph, 'step, 'here, '_, C, S, D, TypeHeader>,
+        context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
         carrier: &ValueCarrier<'graph, 'step, XF>,
     ) -> crate::values::Value<'here, XF::Closed<'here>>
     where
@@ -186,8 +187,14 @@ impl<'graph> TestTypes<'graph> {
 
 /// A chain that reads `root` and interns anything a test asks of it into a builder of its own in
 /// `bump`: how a test reads the types a load built, outside any step.
-pub(crate) fn reading<'tier>(root: &'tier Root<'tier>, bump: &'tier Bump) -> Types<'tier, 'tier> {
-    Types::new(root, Half::Load(RootBuilder::in_region(bump)))
+pub(crate) fn reading<'tier>(
+    root: &'tier Root<'tier>,
+    bump: &'tier Bump,
+) -> Types<'tier, 'tier, 'tier> {
+    Types::new(
+        root,
+        Halves::alone(Half::load(RootBuilder::in_region(bump))),
+    )
 }
 
 /// A continuation family for a graph whose cells only store.
@@ -202,7 +209,7 @@ pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDeliver
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which a test interns through outside a cell.
-    pub types: &'f Types<'graph, 'graph>,
+    pub types: &'f Types<'graph, 'graph, 'f>,
     /// The tiers every cell's chain is built over.
     pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
@@ -235,12 +242,13 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn in_cell<R>(
         &self,
         verdict: fn(Prices) -> Verdict,
-        step: impl for<'step, 'here, 'scratch> FnOnce(
+        step: impl for<'step, 'here, 'scratch, 'lent> FnOnce(
             &mut StepContext<
                 'graph,
                 'step,
                 'here,
                 'scratch,
+                'lent,
                 Step,
                 NoScratch,
                 NoDelivery,
@@ -337,15 +345,19 @@ impl Knotted for Stand<'_> {
     }
 
     /// A stand-in holds no value: its knot is its identity.
-    fn held<'a>(&self, _: &Types<'_, '_>, _: BumpAllocator<'_>, _: &mut dyn FnMut(Seen<'a, Self>))
-    where
+    fn held<'a>(
+        &self,
+        _: &Chain<'_, '_, '_, '_, '_>,
+        _: BumpAllocator<'_>,
+        _: &mut dyn FnMut(Seen<'a, Self>),
+    ) where
         Self: 'a,
     {
     }
 
     fn digest_held(
         &self,
-        _: &Types<'_, '_>,
+        _: &Chain<'_, '_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -412,7 +424,7 @@ impl Knotted for Node<'_> {
     /// a data node's.
     fn held<'a>(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -427,7 +439,7 @@ impl Knotted for Node<'_> {
     /// knot.
     fn digest_held(
         &self,
-        types: &Types<'_, '_>,
+        types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -494,7 +506,7 @@ impl<'graph> KnottedFamily<'graph> for NodeFamily {
     }
 
     fn copy_into<'from, 'to>(
-        writer: Writer<'to>,
+        writer: Writer<'to, '_>,
         member: &Node<'from>,
         copy: &mut DeepCopy<'_, 'from, 'to, Node<'from>, Node<'to>>,
     ) -> Node<'to>
@@ -521,7 +533,7 @@ pub(super) type Link<'cell> = crate::values::Link<'cell, Node<'cell>>;
 /// Tie `count` nodes in `writer`'s region: `build` is handed each node's index and every node's
 /// edge, and returns its finished payload. Every node, in index order.
 pub(super) fn tie<'graph, 'cell>(
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     count: u32,
     mut build: impl FnMut(u32, &[Edge]) -> Circular<'cell, Node<'cell>>,
 ) -> Vec<Node<'cell>> {
@@ -592,7 +604,7 @@ impl<'graph> Fixture<'_, 'graph> {
 /// is node `2i` and its record node `2i + 1`; the members come back in order.
 pub(super) fn ring<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    writer: Writer<'cell>,
+    writer: Writer<'cell, '_>,
     identity: KType,
     values: &[Option<Holding<'cell>>],
 ) -> Vec<Node<'cell>> {

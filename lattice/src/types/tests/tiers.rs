@@ -7,7 +7,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 
 use crate::types::chain::TypeChain;
 use crate::types::handle::{KType, TypeHandle};
-use crate::types::tiers::{Branch, BumpHalf, Root};
+use crate::types::tiers::{Branch, BumpHalf, Habitat, Root};
 use crate::types::typed::is_subtype_of;
 use crate::types::verdicts::Relation;
 
@@ -125,16 +125,18 @@ fn a_merge_enters_what_its_source_reaches_through_its_link() {
 }
 
 /// The reach steps a merge into `into` takes, and how many nodes it enters.
-fn merged<'t, 's: 't>(into: &TypeChain<'t, BumpHalf<'t>>, source: &Branch<'s>) -> (usize, usize) {
-    let (steps, len) = (
-        into.half().branch().map_or(0, Branch::reach_steps),
-        into.own_len(),
-    );
+fn merged<'t, 's: 't>(
+    into: &TypeChain<'t, impl Habitat<'t>>,
+    source: &Branch<'s>,
+) -> (usize, usize) {
+    let steps = || {
+        into.half()
+            .own()
+            .map_or(0, |own| own.branch().reach_steps())
+    };
+    let (before, len) = (steps(), into.own_len());
     into.merge(source);
-    (
-        BumpHalf::branch_of(into).reach_steps() - steps,
-        into.own_len() - len,
-    )
+    (steps() - before, into.own_len() - len)
 }
 
 /// A merge walks the destination's chain only as far as the depth of the branch it checks, so a
@@ -326,4 +328,50 @@ fn a_scratch_chain_records_a_region_verdict_in_the_region() {
     assert_eq!(types.verdict(x, y, Relation::Subtype), Some(false));
     let next = TypeChain::scratch(root, region_half, BumpHalf::new(&second_scratch));
     assert_eq!(next.verdict(x, y, Relation::Subtype), Some(false));
+}
+
+/// An adopt from a whole chain reads every tier the chain reads: a list laid in a scratch chain's
+/// own tier over a record its region tier holds arrives in an unrelated chain in one pass.
+#[test]
+fn an_adopt_from_a_chain_reads_its_region_and_own_tiers() {
+    let symbols = SymbolInterner::new();
+    let (root_region, region, scratch_region, there_region) =
+        (Bump::new(), Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let region_half = BumpHalf::new(&region);
+    let types = TypeChain::new(root, region_half);
+    let inner = record_named(&types, &symbols, "x");
+    let in_scratch = TypeChain::scratch(root, region_half, BumpHalf::new(&scratch_region));
+    let outer = in_scratch.list(inner);
+    assert_eq!(
+        in_scratch.own_len(),
+        1,
+        "only the list is laid in the scratch"
+    );
+
+    let there = TypeChain::new(root, BumpHalf::new(&there_region));
+    there.adopt_from(&in_scratch, outer);
+    assert_eq!(there.list(inner), outer, "it resolves with the same handle");
+    assert!(there.find(inner.raw().digest()).is_some());
+    assert_eq!(there.own_len(), 2);
+}
+
+/// An adopt from a chain reads its own branch's link, without caching into the source.
+#[test]
+fn an_adopt_from_a_chain_reads_through_its_link() {
+    let symbols = SymbolInterner::new();
+    let (root_region, home_region, region, there_region) =
+        (Bump::new(), Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let home = TypeChain::new(root, BumpHalf::new(&home_region));
+    let inner = record_named(&home, &symbols, "x");
+    let child = TypeChain::new(root, BumpHalf::new(&region));
+    child.link(BumpHalf::branch_of(&home));
+    let _ = record_named(&child, &symbols, "y");
+    let child_len = child.own_len();
+
+    let there = TypeChain::new(root, BumpHalf::new(&there_region));
+    there.adopt_from(&child, inner);
+    assert!(there.find(inner.raw().digest()).is_some());
+    assert_eq!(child.own_len(), child_len, "the source caches nothing");
 }
