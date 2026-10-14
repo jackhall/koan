@@ -109,10 +109,11 @@
 //! returning `Any` — or an argument of a call it makes into a frame: a registration, a function
 //! called by name, a surfaced head, a candidate the load cannot read, or any `EVAL`. A value that
 //! holds nothing the body minted is no exit, at a call or at the return
-//! ([`holds_nothing_minted`](Pass::holds_nothing_minted)): one the body received — a parameter or
-//! a capture named bare, or a member of one read through the builtin `ATTR` — a record literal
-//! written in place whose every field is such a value or no porous one, or a module whose content tree reaches no view, no closure, no
-//! module body holding a minting site and no leaf but a value the body received. A builtin's
+//! ([`holds_nothing_minted`](Pass::holds_nothing_minted)): one at a site that is not porous; one
+//! the body received — a parameter or a capture named bare, or a member of one read through the
+//! builtin `ATTR`; a record literal written in place whose every field holds nothing minted; or a
+//! module whose content tree reaches no view, no closure, no module body holding a minting site
+//! and no leaf but a value the body received. A builtin's
 //! native runs in the caller's step and enters no frame. Any other body is sealed, and caches
 //! where it is a callable or a quote's code that mints at run ([`caching`]). The cell records each
 //! `:|` ascription and each component of nominal declarations the load leaves unknown as a

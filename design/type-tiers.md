@@ -114,10 +114,19 @@ the body's return or an argument of a call the body makes into a frame — a
 registration, a function called by name, a surfaced head, a candidate the load
 cannot read — and only where a porous value meets a porous slot there; and
 through every `EVAL`, which offers values to the code's open `\` marks at
-slots the body does not type. A value the body received — a parameter or a
-capture named bare, or a member of one read through the builtin `ATTR` — holds
-nothing the body minted, so passing it on is no exit. A builtin's native runs
-in the caller's step and enters no frame. A body mints at a `:|` ascription, which hides each unpinned
+slots the body does not type. A value that holds nothing the body minted is
+no exit, at a call and at the return alike. A value the body received — a
+parameter or a capture named bare, or a member of one read through the builtin
+`ATTR` — holds nothing it minted; so does a record literal written in place
+whose every field is non-porous or holds nothing minted, and a module whose
+[content tree](modules.md#the-load-and-the-run) reaches no minted content: no
+view, open or closed, no closure, no module body holding a minting site in
+itself or in a block or module body it runs, and no leaf but a value the body
+received. The tree reads a local binder through to what it binds, so a module
+built over an alias of a parameter, a literal or another such module holds
+nothing minted. A record bound by `LET` is read by its static type alone. A
+builtin's native runs in the caller's step and enters no frame. A body mints
+at a `:|` ascription, which hides each unpinned
 head parameter behind a carrier, and at a nominal declaration the load leaves
 unknown, declared each time its unit runs; `:!` mints nothing, since it
 carries each head parameter at what *fits* solved.
@@ -283,9 +292,6 @@ types, and released with that tier.
 
 ## Open work
 
-- [Porosity read off declared members](../roadmap/type-tiers/declared-porosity.md)
-  — a module built in a body porous only where it captures minted content or
-  exposes its signature.
 - [Invariance around a tail cycle](../roadmap/type-tiers/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch

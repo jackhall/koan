@@ -830,10 +830,15 @@ The pass classes every frame body — the program, a callable, a quote's code,
 counted with the blocks and module bodies it runs — **sealed** or **porous**
 ([type tiers](../../design/type-tiers.md#two-classes-of-body)): porous where a
 porous value leaves it at a porous slot, at its return or as an argument of a
-call into a frame. A value the body received — a parameter or a capture named
-bare, or a member of one read through the builtin `ATTR` — holds nothing the
-body minted, so passing it on is no exit, and the caching record lists each
-such argument's site for the run's exits to adopt by its memo alone. A sealed
+call into a frame. A value that holds nothing the body minted is no exit there:
+one at a site that is not porous; one the body received — a parameter or a
+capture named bare, or a member of one read through the builtin `ATTR`; a record
+literal written in place whose every field holds nothing minted; or a module
+whose content tree ([paths](#paths)) reaches no view, no closure, no module body
+holding a minting site and no leaf but a value the body received
+([`holds_nothing_minted`](statics.rs)). The caching record lists the
+site of each argument passing on a received value, for the run's exits to adopt
+by its memo alone. A sealed
 callable or quote's code
 that mints at run **caches**: its types live in a scratch tier
 ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
@@ -1134,16 +1139,20 @@ twice, and inside a record literal past the tree's horizon; a lone `:!` laying
 its types; a view inside a record literal over a slot leaving a parameter open,
 running; and a chain of views over a module the load types at most, re-viewing
 at run no more than its first view does;
-[classes](tests/classes.rs) — each body's class, a received value passed on as
-no exit, and each site's caching class over parameters, captures, locals,
-views of views, nominals and composites, a keyworded tail loop pairing its
+[classes](tests/classes.rs) — each body's class, a value holding nothing minted
+— received, a record literal written in place, a module built over received or
+literal content — passed on or returned as no exit, and each site's caching
+class over parameters, captures, locals, views of views, nominals and
+composites, a keyworded tail loop pairing its
 arguments by slot, and the tutorial's classes (an ignored measurement);
 [caching](tests/caching.rs) — caching bodies at run: `Shares`, `Fresh`, helper
 and mixed-placement loops holding their tiers flat across hops, warm verdicts,
 a parking loop's scratch bytes flat, the scratch and the lent branch reset
 after a delivery, and each exit — a retyped value, a closure, a quote, a knot
 member, a held frame's hand-off, a received list adopted by its memo alone,
-and a loop passing on a member of a received chain adopting a hop at a time;
+a loop passing on a member of a received chain adopting a hop at a time,
+and a loop handing a callee a module built over its link each hop, caching and
+flat;
 and [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md). Every runnable
@@ -1160,9 +1169,6 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Invariance around a tail cycle](../../roadmap/type-tiers/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Porosity read off declared members](../../roadmap/type-tiers/declared-porosity.md)
-  — a module built in a body porous only where it captures minted content or
-  exposes its signature.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, a warning for an overload
   never selected, a pin read through its bounds, a member read exact through a

@@ -52,5 +52,4 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Yielding iterators](rewrite/yielding-iterators.md)
 - [Presizing a branch](type-tiers/branch-presizing.md)
 - [Invariance around a tail cycle](type-tiers/cycle-invariance.md)
-- [Porosity read off declared members](type-tiers/declared-porosity.md)
 
