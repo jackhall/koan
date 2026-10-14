@@ -61,11 +61,19 @@ caches (`classes_over_the_tutorial` in
 - Nothing leaving a caching body names a scratch node: its result, each
   argument it passes into a frame and the callee at each birth are walked as
   a knot's copy walks them, every capture, member and barrier handle
-  included, and adopted into the region first. A test returns a value retyped
-  under a union from a `Shares` caching body and reads it after the scratch
-  reset; a second passes a closure, a quote and a member of a cyclic
-  component out through non-porous slots and calls, `EVAL`s or crosses each
-  after the scratch reset.
+  included, and adopted into the region first, beside the types a call by
+  name contributes and the contract a tail call or an `EVAL` hands on. Where
+  a `Fresh` caching frame hands its last statement on, each binder the load
+  lists that statement reading, and the frame's contract, are adopted at the
+  hand-off. A value the frame received adopts its own memo alone. A test
+  returns a value retyped under a union from a `Shares` caching body and
+  reads it after the scratch reset; a second passes a closure, a quote and a
+  member of a cyclic component out through non-porous slots and calls,
+  `EVAL`s or crosses each after the scratch reset; a third ends a `Fresh`
+  caching frame on a statement reading a binder built over a varying view;
+  a fourth counts the handles adopted across a `Shares` tail loop passing a
+  list through unchanged, and finds the count independent of the list's
+  length.
 - The scratch habitat keeps a free list of released, drained receipt runs; a
   registration takes the first that fits, and the reset clears the list. A
   test runs a `Shares` tail loop that parks once per iteration and holds its
@@ -146,12 +154,19 @@ caches (`classes_over_the_tutorial` in
   state, so a loop accumulating a list would go quadratic to save a small,
   park-bounded growth.
 - *Exits — decided.* Before a caching body's value leaves it — its result, an
-  argument at a frame birth or tail call, the callee — its types are adopted
+  argument at a frame birth or tail call, the callee, a call by name's
+  contributions, a handed-on contract — its types are adopted
   into the region, so no cross-cell door reads a scratch tier. The walk is the
   crossing check's: every part, and every value and handle a knot holds, a
   closure's and a quote's captures, a component's members and a barrier's
   four handles included, since a part keeps its own memo under `Any`, a
-  union, a function type or a carrier. Adopt per handle rather than merge the
+  union or a carrier. A `Fresh` frame's hand-off of its last statement is an
+  exit too, since the frame's scratch departs with it while the statement
+  runs: it adopts the binders the shape lists that statement reading, rather
+  than every binder, so a loop pays for what its last statement reads. A
+  value identical to one the frame received adopts its own memo alone,
+  rather than walking it, so a loop passing a large value through unchanged
+  stays constant per hop. Adopt per handle rather than merge the
   branch: the host's scratch is shared by every tenant, so a whole-branch copy
   would carry unrelated transients, and a by-reference merge from scratch into
   region is forbidden by brand. A sealed exit carries no minted content, but

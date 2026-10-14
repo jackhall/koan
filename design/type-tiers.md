@@ -238,8 +238,8 @@ laid in the region its writer lays into, and their memos in a scratch tier.
 The static pass is what guarantees no reader of that memo outlives the
 scratch: nothing the body minted is reachable after it returns, and every
 exit adopts what it carries into the region first, walking the values and
-every value and handle their knots hold, since a part keeps its own memo under `Any`, a union, a function type
-or a carrier. The lattice does not check this
+every value and handle their knots hold, since a part keeps its own memo under
+`Any`, a union or a carrier. The lattice does not check this
 ([storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 The debug build's crossing check reads a value inside a caching body against
 the chain the body runs on, and a value leaving it against the root and the
@@ -247,11 +247,20 @@ region.
 
 **What still lingers in the host.** Before a caching body's value leaves it —
 its result, an argument at a frame birth or tail call, a called member's
-function type with its carrier, and a barrier's four handles, the type the
-caller sees, the declared slot type and the two substitutions — its types are
-adopted into the region. The adopt reads the whole chain the body ran on,
-since a `Fresh` type's children may lie both in the lent branch and in the
-frame's scratch. A sealed exit carries no minted content, but it may carry a
+function type with its carrier, the types a call by name contributes to its
+callee's solve, the contract a tail call or an `EVAL` hands on, and a
+barrier's four handles, the type the caller sees, the declared slot type and
+the two substitutions — its types are adopted into the region. A `Fresh`
+caching frame that hands its last statement to the evaluator departs while
+that statement runs, and its scratch with it, so the binders that statement
+reads, which the load lists, and the frame's contract are adopted at the
+hand-off. The adopt reads the whole chain the body ran on, since a `Fresh`
+type's children may lie both in the lent branch and in the frame's scratch. A
+value the frame received — a parameter's, a closure binding's or the
+callable's own — adopts its own memo alone: its parts crossed into the region
+at the frame's birth, and admission at a slot restamps only the top. So a
+loop that passes a large value through unchanged walks none of it per hop.
+A sealed exit carries no minted content, but it may carry a
 composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.
 
