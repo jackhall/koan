@@ -111,12 +111,12 @@
 //! holds nothing the body minted is no exit, at a call or at the return
 //! ([`holds_nothing_minted`](Pass::holds_nothing_minted)): one the body received — a parameter or
 //! a capture named bare, or a member of one read through the builtin `ATTR` — a record literal
-//! written in place of such values, or a module whose content tree reaches no view, no closure, no
+//! written in place whose every field is such a value or no porous one, or a module whose content tree reaches no view, no closure, no
 //! module body holding a minting site and no leaf but a value the body received. A builtin's
-//! native runs in the caller's step and enters no frame. Any other body is sealed, and caches where it is a callable or a quote's code that mints
-//! at run ([`caching`]). The cell records each `:|` ascription and each component of nominal
-//! declarations the load leaves unknown as a **minting site**, which the run's doors check in
-//! debug builds.
+//! native runs in the caller's step and enters no frame. Any other body is sealed, and caches
+//! where it is a callable or a quote's code that mints at run ([`caching`]). The cell records each
+//! `:|` ascription and each component of nominal declarations the load leaves unknown as a
+//! **minting site**, which the run's doors check in debug builds.
 //!
 //! The pass reads each `:|` ascription's operand as a [content tree](crate::scope::Tree) —
 //! [`trees`] — and the cell records the view's tree by the ascription's site. Over a closed tree it
@@ -2770,6 +2770,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Interval, ShapeError<'graph>> {
         let never = Interval::point(KType::NEVER.into());
         let at_most = |pass: &Self| Ok(under(pass.returned(callee.shape, None)));
+        // The argument's whole static type, where it was typed whole.
+        let mut whole = None;
         let (payload, arguments, contributions) = match (callee.function, argument) {
             (DeclaredType::Scheme(_), ExpressionPart::RecordLiteral(fields)) => {
                 match self.literal(level, callee, argument, fields, node)? {
@@ -2807,6 +2809,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
                 let contributions =
                     self.contributions(level, callee, arguments, node.source, |_| true);
+                whole = Some(payload);
                 (payload.upper, arguments, contributions)
             }
         };
@@ -2815,7 +2818,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             self.chain[level].named.push((Site::of(argument), recorded));
         }
         let (types, scratch) = (self.types, self.scratch);
-        let minted_free = self.minted_free_fields(level, callee.names, argument)?;
+        let minted_free = self.minted_free_fields(level, callee.names, argument, whole)?;
         self.note_argument(level, argument);
         if self.slot_exits(callee.shape, arguments, minted_free) {
             self.chain[level].exits = true;
@@ -3486,9 +3489,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Whether the value `form`, written as `written` in the shape at `level` and of the static
-    /// type `typed`, holds nothing its frame body minted: a value it
-    /// [received](Self::received_form), a record literal written in place of such values, or a
-    /// module whose content tree [reaches](Self::reaches_minted) nothing minted
+    /// type `typed`, holds nothing its frame body minted: a value that is not
+    /// [porous](self::porous_site), a value it [received](Self::received_form), a record literal
+    /// written in place of such values, or a module whose content tree
+    /// [reaches](Self::reaches_minted) nothing minted
     /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)). A record bound by `LET` is
     /// read by its static type alone.
     fn holds_nothing_minted(
@@ -3498,7 +3502,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         written: Written,
         typed: Interval,
     ) -> Result<bool, ShapeError<'graph>> {
-        if self.received_form(level, form) {
+        if !porous_site(self.types, typed) || self.received_form(level, form) {
             return Ok(true);
         }
         if let Form::Leaf(ExpressionPart::RecordLiteral(fields)) = form {
@@ -3590,12 +3594,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// For each of `names`, the slots of a call by name, whether `argument` passes it a value that
     /// [holds nothing](Self::holds_nothing_minted) the frame body at `level` minted: a record
-    /// literal field by field, any other argument whole.
+    /// literal field by field, any other argument whole, of the static type `whole`.
     fn minted_free_fields(
         &mut self,
         level: usize,
         names: &[BinderSymbol],
         argument: &'graph ExpressionPart<'graph>,
+        whole: Option<Interval>,
     ) -> Result<&'p [bool], ShapeError<'graph>> {
         let scratch = self.scratch;
         let mut free = BumpVec::with_capacity_in(names.len(), scratch);
@@ -3616,11 +3621,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
             }
             _ => {
-                let whole = match self.typed_part(level, argument) {
+                let free_whole = match whole {
                     Some(typed) => self.holds_nothing_minted_part(level, argument, typed)?,
                     None => false,
                 };
-                free.resize(names.len(), whole);
+                free.resize(names.len(), free_whole);
             }
         }
         Ok(free.leak())

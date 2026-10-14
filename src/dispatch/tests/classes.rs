@@ -314,6 +314,11 @@ fn a_module_capturing_a_local_is_read_through_it() {
 fn a_record_written_in_place_is_judged_field_by_field() {
     assert_eq!(passing("(KEEP {a = c, b = m})"), "sealed 1 caches");
     assert_eq!(passing("(KEEP {a = {b = m}})"), "sealed 1 caches", "nested");
+    assert_eq!(
+        passing("(KEEP {a = 5, b = m})"),
+        "sealed 1 caches",
+        "a field that is not porous"
+    );
     assert_eq!(passing("(KEEP {a = v})"), "porous 1");
     assert_eq!(
         passing("(r {x = {a = m}})"),
@@ -354,6 +359,7 @@ fn a_return_holds_nothing_minted_by_the_same_rule() {
         "sealed 1 caches"
     );
     assert_eq!(returning("Any", "({a = c, b = m})"), "sealed 1 caches");
+    assert_eq!(returning("Any", "({a = 5, b = m})"), "sealed 1 caches");
     assert_eq!(
         returning("Any", "(MODULE pack OVER #[v] = (LET held = v)) (pack)"),
         "porous 1"
