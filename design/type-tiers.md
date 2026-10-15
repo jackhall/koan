@@ -296,3 +296,7 @@ types, and released with that tier.
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch
   laid at a predicted size.
+- [The build tree](../roadmap/type-tiers/build-tree.md) — the tiers restated
+  over a second tree of cells: the root tier as the build root's branch, a
+  specialization's branch for each seam under a binding, then the region
+  and scratch branches, per [the build module](../src/build/README.md).

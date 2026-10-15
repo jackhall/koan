@@ -430,3 +430,10 @@ no layer of koan's above present. They hold, each with a workload of its own:
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.
+
+## Open work
+
+- [The build tree](../../roadmap/type-tiers/build-tree.md) — a second slab
+  root beside the run root, build cells as enterable work under the one
+  drain, and the counted borrow a run cell takes of its build cell, per
+  [the build module](../build/README.md).

@@ -224,5 +224,8 @@ changes what a reader sees and which overload runs.
   items.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)
-- [Activation typing](../roadmap/gradual-typing/activation-typing.md) — the
-  type pass re-entered at a frame whose argument closes a leaf.
+- [Monotone elaboration](../roadmap/gradual-typing/monotone-elaboration.md)
+  — the load's pass as a solver that parks on an unknown and resumes when a
+  binding removes it, per [the build module](../src/build/README.md).
+- [Activation typing](../roadmap/gradual-typing/activation-typing.md) — a
+  frame's facts settled at its seams over the content its bindings bring.

@@ -512,5 +512,8 @@ before the program ran, and a stalled substrate. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
+- [The build tree](../../roadmap/type-tiers/build-tree.md) — the load as the
+  build root's steps, run to quiescence before the top level's first value
+  step, per [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   bytes a `Shares` tail hop leaves in its host.

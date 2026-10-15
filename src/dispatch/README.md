@@ -1169,6 +1169,9 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Invariance around a tail cycle](../../roadmap/type-tiers/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
+- [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
+  — the static pass's driver moved to [the build module](../build/README.md)
+  as a worklist, selection reading verdicts through a run cell's borrow.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, a warning for an overload
   never selected, a pin read through its bounds, a member read exact through a

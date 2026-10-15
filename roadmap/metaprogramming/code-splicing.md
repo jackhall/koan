@@ -4,11 +4,11 @@ Code taken apart and put together, and the shape such code runs in, laid down
 where the code lives.
 
 **Problem.** No koan operation takes a fragment out of a quote or splices code
-into one, so every code value is a quote the program wrote. An `EVAL` builds a
-block shape for its code each time it runs, and `Shape::for_eval`
-([scope/shape.rs](../../src/scope/shape.rs)) lays it down in program storage,
-which is never released during a run, so an `EVAL` evaluated in a loop grows it
-without bound.
+into one, so every code value is a quote the program wrote. A quote's code
+shape is built once, where the program loads, into program storage
+([building code](../../src/scope/README.md#building-code)), and nothing
+builds a shape at run time, so there is no place for the shape of code that
+exists only at run time to live.
 
 **Acceptance criteria.**
 
@@ -28,9 +28,14 @@ without bound.
   holds `LET x = 4` has `x` a hole.
 - A fragment taken out of a quote holds each fellow knot member it names as
   that member's value word, and no code value outside a knot holds an edge.
-- Code composed at run time has its shape built once per code value and laid
-  down where the value lives rather than in program storage, so an `EVAL` of
-  composed code evaluated in a loop does not grow program storage.
+- Code composed at run time has its shape built once per code value in a
+  composed-code cell: a tree cell under the build root
+  ([the build module](../../src/build/README.md)), counted by the value's
+  home run cell and released when the count reaches zero, so an `EVAL` of
+  composed code evaluated in a loop grows neither program storage nor the
+  build root. A shape read from a cell's region rather than from program
+  storage is what this asks of `scope`: a shape generic over its storage
+  brand.
 - Code composed at run time has its shape typed by
   [the load pass](../../src/elaborate/README.md#the-type-channel-at-load) before
   an `EVAL` runs it, so the overlap check reads every closed registration in it,
@@ -91,6 +96,7 @@ without bound.
 **Requires:**
 
 - [Slicing and splicing](slicing-and-splicing.md) — slice as a builtin, views, and `..` outside a quote.
+- [The build tree](../type-tiers/build-tree.md) — the build root a composed-code cell lives under.
 - [`parse`](../../src/parse/README.md#the-syntax-depth-limit) — shipped: the syntax depth limit composed code is checked against.
 
 **Unblocks:**

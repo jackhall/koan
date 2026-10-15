@@ -1191,5 +1191,8 @@ type outside the one error that lists names, and on a retired lifetime name.
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
+- [The build tree](../../roadmap/type-tiers/build-tree.md) — shapes homed in
+  the build root and read at a borrow's brand, and the write-once cell as a
+  monotone type fact, per [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.
