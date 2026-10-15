@@ -7,7 +7,9 @@ use crate::knot::KValue;
 use crate::memory::{Active, Bump};
 use crate::scheduler::tests::bundle::{Native, TestGraph};
 use crate::scheduler::tests::native::{fresh, work};
-use crate::scheduler::{Action, Placement, Scheduler, Seek, Step, StepError, Use, Work};
+use crate::scheduler::{
+    Action, Placement, Scheduler, Seek, Step, StepError, TIERS, Tiers, Use, Work,
+};
 use crate::type_lattice::{Habitat, Root};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{BuildRef, Half, SpecKey};
@@ -23,6 +25,16 @@ fn builds() -> Vec<BuildRef> {
 
 fn reset() {
     BUILDS.with(|builds| builds.borrow_mut().clear());
+}
+
+/// How many specializations the drains on this thread have built since the last [`fresh_tally`].
+fn specialized() -> usize {
+    TIERS.with(|tiers| tiers.get().specialized)
+}
+
+/// Start the tally [`specialized`] reads over.
+fn fresh_tally() {
+    TIERS.with(|tiers| tiers.set(Tiers::default()));
 }
 
 /// The key a test names by `at`.
@@ -85,6 +97,7 @@ fn loaded(type_region: &Bump) -> (TestGraph<'_>, crate::scheduler::Roots) {
 #[test]
 fn a_missed_specialization_is_built_once_and_found_warm_by_the_next_birth() {
     reset();
+    fresh_tally();
     let type_region = Bump::new();
     let (mut graph, roots) = loaded(&type_region);
     let mut scheduler = Scheduler::over(&mut graph);
@@ -107,7 +120,7 @@ fn a_missed_specialization_is_built_once_and_found_warm_by_the_next_birth() {
         first, second,
         "the second birth finds the first's specialization"
     );
-    assert_eq!(scheduler.specialized(), 1);
+    assert_eq!(specialized(), 1);
     assert_eq!(
         scheduler.peak_live_cells(),
         2,
@@ -119,6 +132,7 @@ fn a_missed_specialization_is_built_once_and_found_warm_by_the_next_birth() {
 #[test]
 fn two_bindings_give_two_specializations_under_one_parent() {
     reset();
+    fresh_tally();
     let type_region = Bump::new();
     let (mut graph, roots) = loaded(&type_region);
     let mut scheduler = Scheduler::over(&mut graph);
@@ -133,13 +147,14 @@ fn two_bindings_give_two_specializations_under_one_parent() {
         panic!("two frames ran: {:?}", builds())
     };
     assert_ne!(first, second);
-    assert_eq!(scheduler.specialized(), 2);
+    assert_eq!(specialized(), 2);
     assert_eq!(scheduler.graph().table_len(roots.build), Ok(Some(2)));
 }
 
 #[test]
 fn a_graph_with_no_build_root_births_every_seeking_frame_cold() {
     reset();
+    fresh_tally();
     let type_region = Bump::new();
     let mut graph = TestGraph::new(1, Root::seeded(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
@@ -148,7 +163,7 @@ fn a_graph_with_no_build_root_births_every_seeking_frame_cold() {
         .run(work(seek_two, KValue::Number(1.0)), root, Placement::Fresh)
         .expect("the root work ends");
     assert_eq!(builds(), [BuildRef::ROOT, BuildRef::ROOT]);
-    assert_eq!(scheduler.specialized(), 0);
+    assert_eq!(specialized(), 0);
 }
 
 /// Seek key 1 under the root, then from inside it key 2 under its own specialization, and key 1
@@ -193,6 +208,7 @@ fn seek_under_stashed<'graph>(
 #[test]
 fn a_specialization_nests_under_its_frames_and_evicts_leaf_first() {
     reset();
+    fresh_tally();
     let type_region = Bump::new();
     let (mut graph, roots) = loaded(&type_region);
     let mut scheduler = Scheduler::over(&mut graph);
@@ -211,7 +227,7 @@ fn a_specialization_nests_under_its_frames_and_evicts_leaf_first() {
         again, outer,
         "a recursive birth of the same key finds the entry"
     );
-    assert_eq!(scheduler.specialized(), 2);
+    assert_eq!(specialized(), 2);
     assert_eq!(scheduler.graph().table_len(roots.build), Ok(Some(1)));
     assert!(
         scheduler.evict(outer).is_err(),
@@ -243,11 +259,7 @@ fn a_specialization_nests_under_its_frames_and_evicts_leaf_first() {
             Placement::Fresh,
         )
         .expect("the root work ends");
-    assert_eq!(
-        scheduler.specialized(),
-        3,
-        "the evicted specialization is rebuilt"
-    );
+    assert_eq!(specialized(), 3, "the evicted specialization is rebuilt");
     assert_eq!(scheduler.graph().table_len(roots.build), Ok(Some(1)));
     let [rebuilt, _] = builds()[..] else {
         panic!("two frames ran")
@@ -314,6 +326,7 @@ fn ask_hop<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action
 #[test]
 fn a_hop_of_the_same_callee_borrows_its_frames_specialization_and_runs_cold_once_it_is_gone() {
     reset();
+    fresh_tally();
     let type_region = Bump::new();
     let (mut graph, roots) = loaded(&type_region);
     let mut scheduler = Scheduler::over(&mut graph);
@@ -328,7 +341,7 @@ fn a_hop_of_the_same_callee_borrows_its_frames_specialization_and_runs_cold_once
         successor, frame,
         "the successor borrows its predecessor's specialization"
     );
-    assert_eq!(scheduler.specialized(), 1, "a hop looks nothing up");
+    assert_eq!(specialized(), 1, "a hop looks nothing up");
     scheduler.evict(frame).expect("the leaf evicts");
     reset();
     BUILDS.with(|builds| builds.borrow_mut().push(frame));

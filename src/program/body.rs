@@ -198,6 +198,14 @@ fn called_shape<'graph>(callee: KValue<'graph, '_>) -> Option<&'graph BodyShape<
     Some(node.function()?.shape())
 }
 
+/// The build cell `callee`'s function was born under, behind every barrier: where a frame of it
+/// that borrows no specialization runs.
+fn born_under(callee: KValue<'_, '_>) -> BuildRef {
+    (callee.as_callable())
+        .and_then(|member| member.behind_barriers().function())
+        .map_or(BuildRef::ROOT, |function| function.closure().build())
+}
+
 /// [`run`] on the chain `types` it picked; `routes` is a call's, taken at its frame's first step.
 fn ran<'graph, 'here, 'scratch>(
     mut step: Taking<'_, 'graph, '_, 'here, 'scratch, '_>,
@@ -236,7 +244,7 @@ fn ran<'graph, 'here, 'scratch>(
                 barrier,
                 within: Within {
                     routes,
-                    build: BuildRef::ROOT,
+                    build: step.build_ref(born_under(callee)),
                 },
                 ..Runner::at(program, activation, Level::Frame, Some(contract))
             },

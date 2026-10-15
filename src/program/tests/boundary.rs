@@ -1,11 +1,12 @@
 //! The import boundary and the storage discipline, as a test over this module's own source.
 //!
-//! `program` may name the layers it stands over — `elaborate`, `knot`, `memory`, `parse`,
+//! `program` may name the layers it stands over — `build`, `elaborate`, `knot`, `memory`, `parse`,
 //! `scheduler`, `scope`, `symbols`, `type_lattice` and `values`. Outside its tests it holds no
 //! owning heap type but a refused load's rendered shape error, reported once and never stored.
 
 /// The path prefixes `program` may name.
 const PREFIXES: &[&str] = &[
+    "crate::build",
     "crate::elaborate",
     "crate::knot",
     "crate::memory",

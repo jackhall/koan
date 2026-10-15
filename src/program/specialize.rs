@@ -1,0 +1,60 @@
+//! What a call seeks, and what a specialization runs.
+//!
+//! A call whose callee's frame is born `Fresh` and whose body keys a specialization — its caching
+//! record lists the parameters its invariant sites read — hands the drain a [`Seek`]: the build cell
+//! the callee was born under, the key of its segment under the arguments at those parameters, and
+//! [`specialize`], the work a missed specialization runs. Today that step only enlists the cell in
+//! its parent's table; what it holds is the warm types its borrowers intern into it. See
+//! [build/README.md](../build/README.md).
+
+use crate::build::key_of;
+use crate::knot::KValue;
+use crate::memory::{Bump, BumpVec};
+use crate::scheduler::{Action, Placement, Seek, Step, StepError, Work};
+use crate::values::Chain;
+
+use super::bundle::{KBirth, KBundle, KState};
+
+/// What a call of `callee` over `arguments`, a record of its parameters by name, born at
+/// `placement`, seeks: `None` for a `Shares` frame, a callee that is no function, a body that keys
+/// no specialization, and arguments missing a keyed parameter, whose frame is born as any other.
+pub fn seek<'graph>(
+    callee: KValue<'graph, '_>,
+    arguments: KValue<'graph, '_>,
+    placement: Placement,
+    types: &Chain<'_, '_, '_, '_, '_>,
+) -> Option<Seek<'graph, KBundle>> {
+    if placement != Placement::Fresh {
+        return None;
+    }
+    let function = callee.as_callable()?.behind_barriers().function()?;
+    let shape = function.shape();
+    let keyed = shape.caching()?.invariant?;
+    let scratch = Bump::new();
+    let mut digests = BumpVec::with_capacity_in(keyed.len(), &scratch);
+    for slot in keyed {
+        let name = shape.slot_name(*slot).symbol();
+        let argument = arguments.field(name, types, &scratch)?.value();
+        digests.push(argument.digest(types, &scratch));
+    }
+    let key = key_of(shape.segment(), digests.into_iter());
+    Some(Seek {
+        parent: function.closure().build(),
+        key,
+        work: Work {
+            step: specialize,
+            state: KBirth::Specialize { key },
+        },
+    })
+}
+
+/// A specialization's step: enter the cell in its parent's table under its key, and quiesce.
+pub fn specialize<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
+) -> Action<'graph, KBundle> {
+    let (step, state) = step.state();
+    match state {
+        KState::Born(KBirth::Specialize { key }) => step.enlist(key),
+        _ => step.failed(StepError::Refused),
+    }
+}

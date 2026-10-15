@@ -486,8 +486,9 @@ pub enum BodyClass {
 pub enum Mint {
     /// Over a closed content tree: the same content at every run, its types in the root.
     Closed,
-    /// The same content at every hop born under one park: interned into the warm tier, the
-    /// scratch branch that park holds.
+    /// The same content at every frame of one binding: interned into the warm tier, the
+    /// specialization the frame borrows, or where it was born with none, the scratch branch its
+    /// asker's park holds.
     Invariant,
     /// Content that may differ per hop: interned into the cold tier.
     Varying,

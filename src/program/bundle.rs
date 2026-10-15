@@ -12,7 +12,7 @@ use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant
 use crate::scheduler::{Born, StepBundle};
 use crate::scope::{BodyShape, Site};
 use crate::type_lattice::{Halves, KType, Root};
-use crate::values::{BuildRef, Half, TypeHeader, Types, copy_severed};
+use crate::values::{BuildRef, Half, SpecKey, TypeHeader, Types, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -74,6 +74,9 @@ pub enum KBirth<'graph, 'cell> {
         program: &'graph Program<'graph>,
         view: KActivationView<'graph, 'cell>,
     },
+    /// A specialization: it enters itself in its parent's table under `key`. Born at `'graph` by
+    /// the drain, awake, so it never crosses.
+    Specialize { key: SpecKey },
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
@@ -174,6 +177,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
     {
         match birth {
             KBirth::Program { .. } => size_of::<usize>(),
+            KBirth::Specialize { .. } => size_of::<SpecKey>(),
             KBirth::Call {
                 callee,
                 arguments,
@@ -214,6 +218,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
             }
             CrossedOperand::Copied { view: copied, .. } => match *copied {
                 KBirth::Program { program } => KBirth::Program { program },
+                KBirth::Specialize { key } => KBirth::Specialize { key },
                 // The values of one birth cross through one copy, so they share each knot.
                 KBirth::Call {
                     program,

@@ -13,7 +13,7 @@
 //! evaluation runs; the embedder supplies the [`Output`] sinks at load, and a run reports its
 //! [`Outcome`].
 //!
-//! **Imports.** Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
+//! **Imports.** Outside `#[cfg(test)]` this module names `crate::build`, `crate::elaborate`, `crate::knot`,
 //! `crate::memory`, `crate::parse`, `crate::scheduler`, `crate::scope`, `crate::symbols`,
 //! `crate::type_lattice` and `crate::values`; [`tests::boundary`] reads the source to hold it
 //! there.
@@ -24,6 +24,7 @@ mod body;
 mod bundle;
 mod exit;
 mod record;
+mod specialize;
 mod substrate;
 
 #[cfg(test)]
@@ -33,4 +34,5 @@ pub use body::{CodeRefused, Runner, block, call, eval, placement_of, run, surfac
 pub use bundle::{KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Within};
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
+pub use specialize::{seek, specialize};
 pub use substrate::{CellSubstrate, Running, STACK_BYTES};

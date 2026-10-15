@@ -36,6 +36,10 @@
 //! and a value owed a frame's contract. Under `routes` an invariant view's operand and view, and a
 //! warm composite's own memo, are adopted into the warm tier.
 //!
+//! A call to a body keyed on its bindings is handed to the drain with what it seeks ([`seek`]), so
+//! its frame is born borrowing its specialization; a hop of the frame's own callee borrows the
+//! frame's, with no lookup.
+//!
 //! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
 //! as it evaluates. Debug builds check that a finished value's carried type lies within its node's
 //! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
@@ -48,7 +52,9 @@ use crate::memory::{Bump, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{CallKind, Evaluated, Exit, KBirth, KBundle, KState, block, surfaced_block};
+use crate::program::{
+    CallKind, Contract, Evaluated, Exit, KBirth, KBundle, KState, block, seek, surfaced_block,
+};
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
@@ -761,12 +767,7 @@ fn call<'graph, 'here>(
             };
             // A call through a barrier never tails: its value crosses the barrier where its
             // frame ends.
-            if let Some(contract) = tails {
-                let request = call(Some(contract));
-                return step.tail(request.placement, request.work);
-            }
-            let asked = step.spawn(call(None));
-            return park(step, at, asked, FINISHING);
+            return called(step, at, callee, arguments, tails, call);
         }
         Selection::NoOverload => Raised::NoOverload {
             key: list.elements,
@@ -906,11 +907,45 @@ fn apply<'graph, 'here>(
             Use::Forwards,
         )
     };
-    if let Some(contract) = tails {
-        let request = call(Some(contract));
-        return step.tail(request.placement, request.work);
+    called(step, at, head, argument, tails, call)
+}
+
+/// Run the frame `call` asks for over `callee` and `arguments`: a hop owing `tails` where it keeps
+/// the contract, else a child this evaluation parks on. A frame keyed on its bindings is born
+/// borrowing its specialization: a hop of the frame this evaluation runs in borrows that frame's
+/// own, and every other one is sought by the drain.
+fn called<'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    callee: KValue<'graph, 'here>,
+    arguments: KValue<'graph, 'here>,
+    tails: Option<Contract>,
+    call: impl Fn(Option<Contract>) -> Request<'graph, 'here, KBundle>,
+) -> Action<'graph, KBundle> {
+    let request = call(tails);
+    let same = callee.as_callable().is_some() && callee.as_callable() == at.view.callable();
+    let keyed = || {
+        (callee.as_callable())
+            .and_then(|member| member.behind_barriers().function())
+            .and_then(|function| function.shape().caching()?.invariant)
+            .is_some()
+    };
+    if tails.is_some() {
+        let Request {
+            placement, work, ..
+        } = request;
+        if same && placement == Placement::Fresh && keyed() {
+            return step.tail_under(placement, work, at.within.build);
+        }
+        return match seek(callee, arguments, placement, &at.types) {
+            Some(seek) => step.tail_seeking(placement, work, seek),
+            None => step.tail(placement, work),
+        };
     }
-    let asked = step.spawn(call(None));
+    let asked = match seek(callee, arguments, request.placement, &at.types) {
+        Some(seek) => step.spawn_seeking(request, seek),
+        None => step.spawn(request),
+    };
     park(step, at, asked, FINISHING)
 }
 

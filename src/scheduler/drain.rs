@@ -1,6 +1,11 @@
 //! The drain: the loop that runs one root work to its end over a ready stack, and the graph it runs
 //! over.
 //!
+//! The graph holds two slab roots when the [load door](super::load) stood it up: the run root every
+//! root work is born under, and the build root whose region holds the root-level specialization
+//! table. Before a `Fresh` frame is born the drain resolves what it borrows: its parent's scratch,
+//! or the specialization its asker's [`Seek`] finds or builds with one synchronous step.
+//!
 //! Every field here is one scheduler's own. There is no static, no thread-local and no lazily
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
 //! text and the shapes in it.
@@ -94,6 +99,24 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         })
     }
 
+    /// One specialization the table in `cell`'s region header names, live or not: what a test of a
+    /// one-entry table reads to evict it.
+    #[cfg(test)]
+    pub(crate) fn table_entry(
+        &self,
+        cell: impl Into<CellHandle>,
+    ) -> Option<crate::values::BuildRef> {
+        let mut first = None;
+        let _ = self.cells.peek(cell, |header, _| {
+            if let Some(table) = header.into_value().table() {
+                table.each(|entry| {
+                    first.get_or_insert(crate::values::BuildRef::of(entry.handle()));
+                });
+            }
+        });
+        first
+    }
+
     /// The graph itself, for a test that drives the raw slot doors a step never reaches.
     #[cfg(test)]
     pub(super) fn cells(
@@ -103,8 +126,9 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     }
 }
 
-/// The most any step has left in each of its cell's type tiers: what a test reads to see a loop's
-/// tiers hold flat across hops.
+/// The most any step has left in each of its cell's type tiers, and how many frames sought and
+/// built a specialization: what a test reads to see a loop's tiers hold flat across hops and its
+/// specialization found once.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Tiers {
@@ -118,6 +142,10 @@ pub(crate) struct Tiers {
     pub lent_verdicts: usize,
     /// Bytes the scratch bump has handed out.
     pub scratch_bytes: usize,
+    /// How many frames sought a specialization: a count, not a high-water mark.
+    pub sought: usize,
+    /// How many of those built one on a miss: a count.
+    pub specialized: usize,
 }
 
 #[cfg(test)]
@@ -130,6 +158,8 @@ thread_local! {
             lent: 0,
             lent_verdicts: 0,
             scratch_bytes: 0,
+            sought: 0,
+            specialized: 0,
         })
     };
 }
@@ -373,6 +403,13 @@ where
     /// anything else runs, entering itself in the table. A parent that is not live, or a graph
     /// with no build root, births the frame cold: borrowing its parent's scratch.
     fn seek(&mut self, seek: Seek<'graph, B>) -> Result<Lend, DrainStalled> {
+        #[cfg(test)]
+        TIERS.with(|tiers| {
+            tiers.set(Tiers {
+                sought: tiers.get().sought + 1,
+                ..tiers.get()
+            })
+        });
         let parent: CellHandle = match (seek.parent.opened(), self.graph.build_root) {
             (Some(spec), _) => spec.into(),
             (None, Some(root)) => root.into(),
@@ -400,9 +437,12 @@ where
             .create_tree_lent(parent, Lend::Named(parent), Some(continuation))
             .map_err(|_| DrainStalled::Unspawnable)?;
         #[cfg(test)]
-        {
-            self.census.specialized += 1;
-        }
+        TIERS.with(|tiers| {
+            tiers.set(Tiers {
+                specialized: tiers.get().specialized + 1,
+                ..tiers.get()
+            })
+        });
         let (action, _) = self.step(spec.into())?;
         match action.kind() {
             Kind::Quiesced => Ok(Lend::Named(spec.into())),
@@ -502,6 +542,8 @@ where
                     TIERS.with(|tiers| {
                         let most = tiers.get();
                         tiers.set(Tiers {
+                            sought: most.sought,
+                            specialized: most.specialized,
                             region: most
                                 .region
                                 .max(len(context.header().get().map(HalfHeader::branch))),
@@ -580,13 +622,6 @@ where
     pub(crate) fn peak_live_cells(&self) -> usize {
         self.census.peak
     }
-
-    /// How many specializations the drain has built: what a test reads to see a birth found its
-    /// specialization warm. A specialization is not counted among the live cells.
-    #[cfg(test)]
-    pub(crate) fn specialized(&self) -> usize {
-        self.census.specialized
-    }
 }
 
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and
@@ -644,7 +679,6 @@ impl<'graph, B: StepBundle<'graph>> Copy for Resting<'graph, B> where Erased<'gr
 struct Census {
     live: usize,
     peak: usize,
-    specialized: usize,
 }
 
 #[cfg(test)]

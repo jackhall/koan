@@ -619,3 +619,188 @@ fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
     }
     assert_eq!(segments(), first, "a second load assigns the same segments");
 }
+
+/// What one load of `source` at depth 1 leaves after each run: the tiers, what the build root's
+/// table holds, and what it printed; `between` runs on the loaded program between the runs.
+fn runs(
+    source: &str,
+    count: usize,
+    between: impl Fn(&mut crate::program::Running<'_>),
+) -> Vec<(Tiers, Option<usize>, String)> {
+    let program = program(1, source);
+    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, output())
+        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    (0..count)
+        .map(|_| {
+            WRITTEN.with(|written| written.borrow_mut().clear());
+            TIERS.with(|tiers| tiers.set(Tiers::default()));
+            substrate
+                .with(|running| running.run())
+                .expect("the program runs");
+            let table = substrate.with(|running| {
+                let build = running.roots().build;
+                let table = running.scheduler().graph().table_len(build);
+                between(running);
+                table.expect("the build root is live")
+            });
+            let printed = WRITTEN.with(|written| written.borrow().join("\n"));
+            (TIERS.with(Cell::get), table, printed)
+        })
+        .collect()
+}
+
+#[test]
+fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
+    let once = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)\n");
+    let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(
+        (alone.sought, alone.specialized),
+        (1, 1),
+        "one seek for the whole loop"
+    );
+    let twice = format!("{once}PRINT (COUNTDOWN ints chain)");
+    let [(both, table, ref printed)] = runs(&twice, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(printed, "7\n7");
+    assert_eq!(
+        (both.sought, both.specialized),
+        (2, 1),
+        "the second caller builds nothing"
+    );
+    assert_eq!(table, Some(1));
+    let warm = |source: &str| -> usize {
+        laid(&program(1, source))
+            .iter()
+            .map(|(_, _, warm)| warm)
+            .sum()
+    };
+    let warm_once = warm(&once);
+    assert!(warm_once > 0, "the loop's view is adopted warm");
+    assert_eq!(
+        warm(&twice),
+        warm_once,
+        "the second caller finds every warm type laid"
+    );
+    let [(apart, table, _)] = runs(&format!("{once}PRINT (COUNTDOWN words chain)"), 1, |_| {})[..]
+    else {
+        unreachable!()
+    };
+    assert_eq!(apart.specialized, 2, "two bindings, two specializations");
+    assert_eq!(table, Some(2));
+}
+
+#[test]
+fn a_callable_born_under_a_specialization_keys_its_own_beneath_it() {
+    let inner =
+        "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
+    for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
+        let source = format!(
+            "EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) {body})\n\
+             PRINT (OUTER ints)"
+        );
+        let [(tiers, table, ref printed)] = runs(&source, 1, |_| {})[..] else {
+            unreachable!()
+        };
+        assert_eq!(printed, "1", "{body}");
+        assert_eq!(
+            (tiers.specialized, table),
+            (2, Some(1)),
+            "`g`'s specialization is a child of `OUTER`'s, not of the root: {body}"
+        );
+    }
+}
+
+#[test]
+fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() {
+    let source = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)");
+    let evict = |running: &mut crate::program::Running<'_>| {
+        let build = running.roots().build;
+        let mut scheduler = running.scheduler();
+        let spec = (scheduler.graph().table_entry(build)).expect("the table names one");
+        let _ = scheduler.evict(spec);
+    };
+    let ran = runs(&source, 2, evict);
+    let [
+        (first, first_table, ref first_printed),
+        (second, second_table, ref second_printed),
+    ] = ran[..]
+    else {
+        unreachable!()
+    };
+    assert_eq!(first_printed, second_printed);
+    assert_eq!(
+        (first.specialized, second.specialized),
+        (1, 1),
+        "the miss rebuilds it"
+    );
+    assert_eq!(
+        (first_table, second_table),
+        (Some(1), Some(1)),
+        "its entry is renewed"
+    );
+}
+
+/// The allocations one run of `source` makes.
+fn allocations(source: &str) -> u64 {
+    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 2, output())
+        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    let before = crate::tests::allocation_count();
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    crate::tests::allocation_count() - before
+}
+
+#[test]
+fn a_birth_keyed_on_a_list_digests_it_at_a_cost_below_its_length() {
+    // `TAKE` views a module built over the list it is handed, so its specialization is keyed on
+    // the list's digest, computed at each birth.
+    let per_birth = |length: usize| {
+        let list = (0..length)
+            .map(|at| at.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let calls = |count: usize| {
+            let mut source = format!(
+                "{PRELUDE}EXPR #(TAKE xs :Any) -> Number = \
+                 #((MODULE h OVER #[xs] = (LET held = xs)) (LET seen = (h :| Holder)) (1))\n\
+                 LET l = [{list}]\n"
+            );
+            source.push_str(&"PRINT (TAKE l)\n".repeat(count));
+            allocations(&source)
+        };
+        TIERS.with(|tiers| tiers.set(Tiers::default()));
+        let cost = (calls(4) - calls(1)) / 3;
+        let tiers = TIERS.with(Cell::get);
+        assert_eq!(
+            (tiers.sought, tiers.specialized),
+            (5, 2),
+            "each run builds one"
+        );
+        cost
+    };
+    let (short, long) = (per_birth(1), per_birth(64));
+    assert!(
+        long - short < 64,
+        "a birth over a 64-element list costs {long} allocations against {short} over one"
+    );
+}
+
+#[test]
+fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
+    // `SHARE` returns no scalar, so it is a tenant of `OUTER`'s frame; the callable it births
+    // was born under the root, as `SHARE` itself was, so its specialization is the root's child.
+    let source = "EXPR #(SHARE m :Counter) -> Any = \
+                  #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
+                  (g {x = 1}))\n\
+                  EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) (SHARE m) (2))\n\
+                  PRINT (OUTER ints)";
+    let [(tiers, table, ref printed)] = runs(source, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(printed, "2");
+    assert_eq!((tiers.specialized, table), (2, Some(2)));
+}
