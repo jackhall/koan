@@ -138,7 +138,7 @@ pub fn cross_view_against<'graph, 'cell, XF: KnottedFamily<'graph>>(
         CrossedOperand::Pinned {
             view: value, home, ..
         } => {
-            home.read(|header, _| types.merge(header.into_value()));
+            home.read(|header, _| types.merge(header.into_value().branch()));
             #[cfg(debug_assertions)]
             match check {
                 Some(check) => check_pinned_habitat::<XF>(check, &value),
@@ -199,8 +199,10 @@ fn copied<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, const N: usize>(
 where
     'graph: 'from,
 {
-    home.read(|header, _| rebuilt::<XF, N>(writer, types, Some(header.into_value()), values))
-        .unwrap_or_else(|| rebuilt::<XF, N>(writer, types, None, values))
+    home.read(|header, _| {
+        rebuilt::<XF, N>(writer, types, Some(header.into_value().branch()), values)
+    })
+    .unwrap_or_else(|| rebuilt::<XF, N>(writer, types, None, values))
 }
 
 /// [`copied`], its types adopted from `source`, the home's branch, or from nowhere where the home

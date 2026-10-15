@@ -18,6 +18,8 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::type_lattice::Root;
+#[cfg(test)]
+use crate::values::HalfHeader;
 use crate::values::TypeHeader;
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
@@ -38,10 +40,15 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
     /// over `type_root`.
     pub fn new(cap: u32, type_root: &'graph Root<'graph>) -> Self {
-        Graph {
-            cells: CellGraph::new(cap, crate::values::verdict),
-            type_root,
-        }
+        Graph::assemble(CellGraph::new(cap, crate::values::verdict), type_root)
+    }
+
+    /// A graph over `cells`, its steps' types read over `type_root`.
+    pub(super) fn assemble(
+        cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
+        type_root: &'graph Root<'graph>,
+    ) -> Self {
+        Graph { cells, type_root }
     }
 
     /// A storage-only slab cell no drain enters or releases: the region a root work is born under
@@ -63,6 +70,18 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// Whether the named cell is still live — what a test reads to watch a release land.
     pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
         self.cells.is_live(cell)
+    }
+
+    /// How many entries the specialization table in `cell`'s region header holds: `None` where no
+    /// header is laid, `0` where the header has no table yet.
+    #[cfg(test)]
+    pub(crate) fn table_len(
+        &self,
+        cell: impl Into<CellHandle>,
+    ) -> Result<Option<usize>, crate::memory::PeekError> {
+        self.cells.peek(cell, |header, _| {
+            header.into_value().table().map_or(0, |table| table.len())
+        })
     }
 
     /// The graph itself, for a test that drives the raw slot doors a step never reaches.
@@ -366,8 +385,14 @@ where
                     let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
                         branch.map_or(0, crate::type_lattice::Branch::len)
                     };
-                    let lent = context.lent_scratch().and_then(|(_, header)| header.get());
-                    (len(context.scratch_header().get()), len(lent))
+                    let lent = context
+                        .lent_scratch()
+                        .and_then(|(_, header)| header.get())
+                        .map(HalfHeader::branch);
+                    (
+                        len(context.scratch_header().get().map(HalfHeader::branch)),
+                        len(lent),
+                    )
                 };
                 let step = step(Step::new(
                     context,
@@ -382,9 +407,13 @@ where
                     let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
                         branch.map_or(0, crate::type_lattice::Branch::len)
                     };
-                    let lent = context.lent_scratch().and_then(|(_, header)| header.get());
+                    let lent = context
+                        .lent_scratch()
+                        .and_then(|(_, header)| header.get())
+                        .map(HalfHeader::branch);
                     if let Some(shape) = CACHING.take() {
-                        let scratch = len(context.scratch_header().get()).saturating_sub(before.0);
+                        let scratch = len(context.scratch_header().get().map(HalfHeader::branch))
+                            .saturating_sub(before.0);
                         let warm = len(lent).saturating_sub(before.1);
                         LAID.with(|laid| {
                             let mut laid = laid.borrow_mut();
@@ -395,8 +424,12 @@ where
                     TIERS.with(|tiers| {
                         let most = tiers.get();
                         tiers.set(Tiers {
-                            region: most.region.max(len(context.header().get())),
-                            scratch: most.scratch.max(len(context.scratch_header().get())),
+                            region: most
+                                .region
+                                .max(len(context.header().get().map(HalfHeader::branch))),
+                            scratch: most
+                                .scratch
+                                .max(len(context.scratch_header().get().map(HalfHeader::branch))),
                             lent: most.lent.max(len(lent)),
                             lent_verdicts: (most.lent_verdicts)
                                 .max(lent.map_or(0, crate::type_lattice::Branch::verdict_count)),

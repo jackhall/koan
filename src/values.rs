@@ -41,6 +41,7 @@ mod lower;
 mod record;
 mod render;
 mod retyped;
+mod specialization;
 mod surface;
 mod tagged;
 mod type_value;
@@ -66,11 +67,12 @@ pub use crossing::{check_habitat, check_pinned_habitat};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use digest::{ContentDigest, Digests};
 pub use equality::Incomparable;
-pub use habitat::{Chain, Half, TypeHeader, Types};
+pub use habitat::{Chain, Half, HalfHeader, TypeHeader, Types};
 pub use link::Link;
 pub use list::List;
 pub use record::Record;
 pub use retyped::Retyped;
+pub use specialization::{BuildRef, SpecEntry, SpecKey, SpecTable};
 pub use surface::{
     Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target, retyped_to,
     retypes_by_header, under, unknown,

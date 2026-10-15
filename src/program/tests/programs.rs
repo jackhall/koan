@@ -55,8 +55,8 @@ fn more_statements_than_the_slab_cap_run_to_completion() {
     let source: Vec<String> = (0..STATEMENTS)
         .map(|at| format!("LET v{at} = {at}"))
         .collect();
-    // One cell: the root is the slab's only slot.
-    let mut substrate = loaded(&source.join("\n"), 1);
+    // Two cells: the build root and the run root fill the slab.
+    let mut substrate = loaded(&source.join("\n"), 2);
     let name = format!("v{}", STATEMENTS - 1);
     assert_eq!(
         run_and_read(&mut substrate, &[&name]),
@@ -177,7 +177,7 @@ fn a_recursion_deeper_than_the_slab_cap_runs_on_tree_cells() {
         "LET count = (FN :{{n :Number}} -> Number = #(WHEN n THEN (count (n MINUS 1)) ELSE 0))\n\
          LET r = (count {DEPTH})"
     );
-    let mut substrate = loaded(&source, 1);
+    let mut substrate = loaded(&source, 2);
     assert_eq!(run_and_read(&mut substrate, &["r"]), ["0"]);
 }
 
@@ -209,7 +209,7 @@ fn a_whole_program() {
          LET deep = (count {DEPTH})\n\
          LET last = (f 0)"
     );
-    let mut substrate = loaded(&source, 1);
+    let mut substrate = loaded(&source, 2);
     let read = run_and_read(&mut substrate, &["deep", "m"]);
     assert_eq!(read[0], "0");
     assert_eq!(read[1], "module(3)");

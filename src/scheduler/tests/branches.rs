@@ -15,8 +15,8 @@ use crate::memory::{Active, Bump};
 use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Scheduler, Step, Use, Work};
+use crate::type_lattice::KType;
 use crate::type_lattice::Root;
-use crate::type_lattice::{Branch, KType};
 
 thread_local! {
     /// How many types the spawner mints before it spawns.
@@ -70,12 +70,16 @@ fn mint_list(step: &Step<'_, '_, '_, '_, '_, '_, Native>) {
 /// How many reach steps the merges into `step`'s write home's branch have taken, or 0 where it has
 /// none.
 fn reach_steps(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
-    step.header().get().map_or(0, Branch::reach_steps)
+    step.header()
+        .get()
+        .map_or(0, |header| header.branch().reach_steps())
 }
 
 /// The length of `step`'s write home's branch, or 0 where it has none.
 fn branch_length(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
-    step.header().get().map_or(0, Branch::len)
+    step.header()
+        .get()
+        .map_or(0, |header| header.branch().len())
 }
 
 /// Run `start` as a root work over a slab of `cells`, starting from `Number`, and hand back what

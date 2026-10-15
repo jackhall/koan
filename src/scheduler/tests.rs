@@ -8,6 +8,7 @@ mod continuation;
 mod delivery;
 mod drain;
 mod gather;
+mod load;
 mod native;
 mod placement;
 mod subtree;

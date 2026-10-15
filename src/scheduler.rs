@@ -23,6 +23,7 @@ mod action;
 mod continuation;
 mod delivery;
 mod drain;
+mod load;
 
 #[cfg(test)]
 mod tests;
@@ -34,3 +35,4 @@ pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
 pub(crate) use drain::{CACHING, LAID, TIERS, Tiers};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
+pub use load::{LoadStep, Roots};

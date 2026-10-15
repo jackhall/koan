@@ -179,8 +179,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
             CrossedOperand::Pinned { view, home, .. } => {
                 let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
                 home.read(|header, _| match born {
-                    Born::Child => types.link(header.into_value()),
-                    Born::Hop | Born::Left => types.link_or_merge(header.into_value()),
+                    Born::Child => types.link(header.into_value().branch()),
+                    Born::Hop | Born::Left => types.link_or_merge(header.into_value().branch()),
                 });
                 #[cfg(debug_assertions)]
                 view.values(&mut |value| {
