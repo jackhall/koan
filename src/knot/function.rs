@@ -26,7 +26,9 @@ use crate::type_lattice::{
     DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
 };
 use crate::values::digest::function_content;
-use crate::values::{Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight};
+use crate::values::{
+    BuildRef, Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight,
+};
 
 use super::{Coerced, KActivationView, KValue, Knotted, Node, Untieable, composed};
 
@@ -292,17 +294,19 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
 }
 
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
-    /// This node's closure run and typing record laid down in `writer`'s region, beside what the two
-    /// add to the knot's weight. A plain unquantified `FN` has no typing record and writes none.
+    /// This node's closure run, born under the build cell `build`, and typing record laid down in
+    /// `writer`'s region, beside what the two add to the knot's weight. A plain unquantified `FN` has
+    /// no typing record and writes none.
     pub(super) fn laid_down(
         &self,
         writer: Writer<'cell, '_>,
+        build: BuildRef,
     ) -> (
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
         Option<&'cell Typing<'cell>>,
         Weight,
     ) {
-        let closure = ClosureBindings::of(writer, &self.captures);
+        let closure = ClosureBindings::of(writer, &self.captures, build);
         let typing = Typing::laid_down(
             writer,
             self.quantifier_map,
@@ -535,11 +539,12 @@ pub(super) fn stage<'graph, 'cell, 'x>(
 /// load left unknown that does not elaborate refuses `Type`, and writes nothing.
 ///
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
-/// never asks for it, so no capture here is an edge.
+/// never asks for it, so no capture here is an edge. It is born under the build cell `build`.
 pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     site: Site,
+    build: BuildRef,
     types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>> {
@@ -551,7 +556,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     let staged = staged(body, None, activation, types, scratch, |_| {
         unreachable!("only the tie births a callable that captures a fellow member")
     })?;
-    let (closure, typing, weight) = staged.laid_down(writer);
+    let (closure, typing, weight) = staged.laid_down(writer, build);
     let knot_weight = Weight::flat::<usize>()
         .plus(weight)
         .plus(Weight::flat::<Node<'graph, 'cell>>());
@@ -653,7 +658,8 @@ pub fn instance<'graph, 'cell>(
         Link::Edge(edge) => Link::Value(Value::Knotted(member.sibling(*edge))),
         Link::Value(value) => Link::Value(*value),
     }));
-    let closure = ClosureBindings::of(writer, &links);
+    // The same body over the same captures, so the same build cell.
+    let closure = ClosureBindings::of(writer, &links, function.closure().build());
     let map = function.quantifier_map();
     let typing = Typing::laid_down(writer, map, None, solution, None);
     let knot_weight = Weight::flat::<usize>()

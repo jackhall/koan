@@ -56,9 +56,9 @@ use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
     Variance, admits_with, display_name, substitute_quantified,
 };
-use crate::values::{CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
+use crate::values::{BuildRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
 
-use super::bundle::{KBirth, KBundle, KState};
+use super::bundle::{KBirth, KBundle, KState, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
 
@@ -80,9 +80,9 @@ pub struct Runner<'graph, 'cell> {
     /// The outermost barrier a frame was called through, which its value crosses outwards.
     barrier: Option<Barrier<'graph, 'cell>>,
     stage: Stage,
-    /// Whether the body runs in the own body of a caching frame holding its scratch: what it
-    /// hands each evaluation and block it asks for ([`KBirth::Evaluate`]).
-    routes: bool,
+    /// What the body runs within: what it hands each evaluation and block it asks for
+    /// ([`KBirth::Evaluate`]), and the build cell a callable born in it is born under.
+    within: Within,
 }
 
 /// Whether the runner performs the top level, a frame — a called body or the code an `EVAL` runs
@@ -170,8 +170,8 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
             }
             routes
         }
-        KState::Born(KBirth::Block { routes, .. }) => *routes,
-        KState::Runner(runner) => runner.routes,
+        KState::Born(KBirth::Block { within, .. }) => within.routes,
+        KState::Runner(runner) => runner.within.routes,
         KState::Born(_) | KState::Evaluating { .. } => false,
     };
     #[cfg(test)]
@@ -234,7 +234,10 @@ fn ran<'graph, 'here, 'scratch>(
         ) {
             Ok((activation, contract, barrier)) => Runner {
                 barrier,
-                routes,
+                within: Within {
+                    routes,
+                    build: BuildRef::ROOT,
+                },
                 ..Runner::at(program, activation, Level::Frame, Some(contract))
             },
             // The message lies in the region, so the error value needs no adopt.
@@ -258,7 +261,7 @@ fn ran<'graph, 'here, 'scratch>(
             shape,
             enclosing,
             module,
-            routes,
+            within,
         }) => {
             let writer = step.writer();
             let enclosing = resident(writer, enclosing);
@@ -272,7 +275,7 @@ fn ran<'graph, 'here, 'scratch>(
                 }
             }
             Runner {
-                routes,
+                within,
                 ..Runner::at(program, activation, Level::Block, None)
             }
         }
@@ -329,15 +332,15 @@ pub fn call<'graph, 'here>(
 
 /// What an evaluator asks for to run the block `shape`, a synthesized block part's, beside
 /// `enclosing`, the view it sits in: a tenant of the asker, since the view borrows its region.
-/// `routes` is [`KBirth::Block`]'s.
+/// `within` is [`KBirth::Block`]'s.
 pub fn block<'graph, 'here>(
     program: &'graph Program<'graph>,
     shape: &'graph BodyShape<'graph>,
     enclosing: KActivationView<'graph, 'here>,
     use_: Use,
-    routes: bool,
+    within: Within,
 ) -> Request<'graph, 'here, KBundle> {
-    surfaced_block(program, shape, enclosing, None, use_, routes)
+    surfaced_block(program, shape, enclosing, None, use_, within)
 }
 
 /// What an evaluator asks for to run `shape`, a `USING … SCOPE` body, inside `enclosing`, its
@@ -349,7 +352,7 @@ pub fn surfaced_block<'graph, 'here>(
     enclosing: KActivationView<'graph, 'here>,
     module: Option<KValue<'graph, 'here>>,
     use_: Use,
-    routes: bool,
+    within: Within,
 ) -> Request<'graph, 'here, KBundle> {
     debug_assert_eq!(shape.kind(), ShapeKind::Block);
     Request {
@@ -362,7 +365,7 @@ pub fn surfaced_block<'graph, 'here>(
                 shape,
                 enclosing,
                 module,
-                routes,
+                within,
             },
         },
     }
@@ -506,7 +509,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
             contract,
             barrier: None,
             stage: Stage::Next,
-            routes: false,
+            within: Within::TOP,
         }
     }
 
@@ -1141,7 +1144,8 @@ fn code_frame<'graph, 'here>(
         };
         links.push(Link::Value(value));
     }
-    let closure = ClosureBindings::of(writer, &links);
+    // A quote's lexical chain of build cells is not placed, so its frame seeks from the root.
+    let closure = ClosureBindings::of(writer, &links, BuildRef::ROOT);
     Some(resident(
         writer,
         KActivation::of_code(writer, shape, closure, program.builtins()),
@@ -1247,6 +1251,7 @@ fn tied<'graph, 'here>(
         step.writer(),
         runner.activation,
         component,
+        runner.within.build,
         types,
         &scratch,
         &mut |site, _| {
@@ -1363,7 +1368,7 @@ fn perform<'graph, 'here>(
                 if runner.tails(unit) {
                     // The frame's scratch departs after the successor's first step, while the
                     // statement still reads the frame's bindings: adopt what it reads first.
-                    if runner.routes {
+                    if runner.within.routes {
                         let scratch = Bump::new();
                         let view = runner.activation.view();
                         let exit = Exit::new(step.types(), types, &view, &[], &scratch);
@@ -1378,8 +1383,12 @@ fn perform<'graph, 'here>(
                     }
                     let program = runner.program;
                     // The successor writes the frame's parent, whose scratch is its own tier.
-                    let work =
-                        program.evaluate(node, runner.activation.view(), runner.contract, false);
+                    let work = program.evaluate(
+                        node,
+                        runner.activation.view(),
+                        runner.contract,
+                        runner.within.handed_off(),
+                    );
                     return step.tail(Placement::Shares, work);
                 }
                 // A caching body keeps its value, so it leaves only where the frame adopts it.
@@ -1451,7 +1460,7 @@ fn ask<'graph, 'here>(
 ) -> Asked {
     let work = runner
         .program
-        .evaluate(node, runner.activation.view(), None, runner.routes);
+        .evaluate(node, runner.activation.view(), None, runner.within);
     step.spawn(Request {
         placement: runner.placement(),
         use_,
@@ -1474,6 +1483,7 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
         step.writer(),
         runner.activation,
         component,
+        runner.within.build,
         types,
         &scratch,
         &mut |site, part| {
@@ -1545,7 +1555,7 @@ fn declared<'graph, 'here>(
         // Under `routes` an invariant nominal's types are adopted into the warm tier, so the next
         // hop finds them there.
         let site = (shape.declarations(component.members[0])).map(Site::of_node);
-        if runner.routes
+        if runner.within.routes
             && site.and_then(|site| shape.mint_at(site)) == Some(Mint::Invariant)
             && let Some(warm) = step.warm_types()
         {
@@ -1611,6 +1621,7 @@ fn left<'graph, 'here>(
         step.writer(),
         activation,
         activation.shape().component_of(outer.binder),
+        body.within.build,
         types,
         &scratch,
         &mut |_, _| Some(Supplied::Body(body.activation)),

@@ -137,15 +137,15 @@ pub(super) fn evaluate<'graph>(
         KState::Evaluating { birth, stage } => (birth, stage),
         KState::Runner(_) => return step.failed(StepError::Refused),
     };
-    let KBirth::Evaluate { view, routes, .. } = birth else {
+    let KBirth::Evaluate { view, within, .. } = birth else {
         return step.failed(StepError::Refused);
     };
     #[cfg(test)]
-    if routes || view.shape().caches() {
+    if within.routes || view.shape().caches() {
         let address = std::ptr::from_ref(view.shape()).addr();
         crate::scheduler::CACHING.set(Some(address));
     }
-    if routes {
+    if within.routes {
         let types = step
             .reading_types()
             .expect("a routing evaluation has a lender");
@@ -171,7 +171,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
         node,
         view,
         contract,
-        routes,
+        within,
     } = birth
     else {
         unreachable!("an evaluation is born to evaluate")
@@ -180,7 +180,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
         program,
         view,
         contract,
-        routes,
+        within,
         birth,
         types,
     };
@@ -192,14 +192,14 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
         Form::Name(part) => read(step, &at, part),
         Form::Block(shape) => {
             let mut step = step;
-            let asked = step.spawn(block(program, shape, view, inside(&at), routes));
+            let asked = step.spawn(block(program, shape, view, inside(&at), within));
             park(step, &at, asked, FINISHING)
         }
         Form::Lambda(node) => {
             let site = Site::of_body(node).expect("a `FN` has a body");
             let scratch = Bump::new();
             let writer = step.writer();
-            let value = match lambda(writer, &view, site, &at.types, &scratch) {
+            let value = match lambda(writer, &view, site, within.build, &at.types, &scratch) {
                 Ok(member) => Value::Knotted(member),
                 Err(refused) => program.error(
                     writer,
@@ -404,7 +404,7 @@ fn ascribe<'graph, 'here>(
         // Under `routes` an invariant site's operand and view are adopted into the warm tier, so
         // the next hop finds both there and the verdicts over them stay warm.
         let invariant = at.view.shape().mint_at(Site::of_node(node)) == Some(Mint::Invariant);
-        let warm = (at.routes && invariant)
+        let warm = (at.within.routes && invariant)
             .then(|| step.warm_types())
             .flatten();
         if let Some(warm) = &warm {
@@ -489,7 +489,7 @@ fn using<'graph, 'here>(
     let body = Site::of_body(node)
         .and_then(|site| at.view.shape().nested(site))
         .expect("a `USING … SCOPE` body is a block its shape holds");
-    let request = surfaced_block(program, body, at.view, Some(module), inside(at), at.routes);
+    let request = surfaced_block(program, body, at.view, Some(module), inside(at), at.within);
     let asked = step.spawn(request);
     park(step, at, asked, FINISHING)
 }
@@ -677,7 +677,7 @@ fn warmed<'graph, 'here>(
     site: Site,
     value: &KValue<'graph, 'here>,
 ) {
-    if at.routes
+    if at.within.routes
         && at.view.shape().warm_at(site)
         && let Some(warm) = step.warm_types()
     {
@@ -1020,7 +1020,7 @@ fn gathered<'x, 'graph, 'here>(
                     use_: Use::Keeps,
                     work: at
                         .program
-                        .evaluate(Evaluated::Part(part), at.view, None, at.routes),
+                        .evaluate(Evaluated::Part(part), at.view, None, at.within),
                 }),
             );
         }

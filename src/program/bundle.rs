@@ -12,7 +12,7 @@ use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant
 use crate::scheduler::{Born, StepBundle};
 use crate::scope::{BodyShape, Site};
 use crate::type_lattice::{Halves, KType, Root};
-use crate::values::{Half, TypeHeader, Types, copy_severed};
+use crate::values::{BuildRef, Half, TypeHeader, Types, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -50,25 +50,23 @@ pub enum KBirth<'graph, 'cell> {
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     /// A frame's tail hands its last statement over with the frame's `contract`, which the
-    /// evaluation then owes its value. `routes` says it runs in the own body of a caching frame
-    /// that holds its scratch, which it then interns through: set on every evaluation and block
-    /// such a frame's body spawns, and cleared on the tail's hand-off.
+    /// evaluation then owes its value. `within` is what its frame runs within.
     Evaluate {
         program: &'graph Program<'graph>,
         node: Evaluated<'graph>,
         view: KActivationView<'graph, 'cell>,
         contract: Option<Contract>,
-        routes: bool,
+        within: Within,
     },
     /// A block — a synthesized block part's shape, or a `USING … SCOPE` body — run beside the
     /// view of the activation it sits in, its last statement's value its own; a `USING` body's
-    /// parameters bound to what `module` surfaces. `routes` as an evaluation's.
+    /// parameters bound to what `module` surfaces. `within` as an evaluation's.
     Block {
         program: &'graph Program<'graph>,
         shape: &'graph BodyShape<'graph>,
         enclosing: KActivationView<'graph, 'cell>,
         module: Option<KValue<'graph, 'cell>>,
-        routes: bool,
+        within: Within,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
     /// work to read a top-level binding through.
@@ -76,6 +74,32 @@ pub enum KBirth<'graph, 'cell> {
         program: &'graph Program<'graph>,
         view: KActivationView<'graph, 'cell>,
     },
+}
+
+/// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
+/// the own body of a caching frame that holds its scratch, which it then interns through, and the
+/// build cell its frame runs under, which a callable born in it is born under.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Within {
+    pub routes: bool,
+    pub build: BuildRef,
+}
+
+impl Within {
+    /// The top level's: no caching frame, and the build root.
+    pub const TOP: Within = Within {
+        routes: false,
+        build: BuildRef::ROOT,
+    };
+
+    /// What the evaluation a frame's tail hands its last statement runs within: it writes the
+    /// frame's parent, so it routes no more, and its frame's build cell stays.
+    pub fn handed_off(self) -> Self {
+        Within {
+            routes: false,
+            ..self
+        }
+    }
 }
 
 impl<'graph, 'cell> KBirth<'graph, 'cell> {

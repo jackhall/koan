@@ -46,7 +46,7 @@ mod tests;
 use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{Contract, KBirth, KBundle, Language, Program};
+use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
 use crate::scheduler::NativeStep;
 use crate::scope::{BodyShape, ShapeError};
 use crate::symbols::{BinderSymbol, SymbolInterner};
@@ -84,14 +84,14 @@ impl Language for Koan {
 }
 
 /// What one evaluation is born over: the program, the view it reads names through, the contract
-/// it owes a frame it finishes, whether it [routes](KBirth::Evaluate), and the birth it parks with
+/// it owes a frame it finishes, what it runs [within](KBirth::Evaluate), and the birth it parks with
 /// — beside the chain the step reads and interns types through, built at the step's entry and
 /// never parked.
 struct Evaluation<'graph, 'here, 'tier, 'reg, 'door> {
     program: &'graph Program<'graph>,
     view: KActivationView<'graph, 'here>,
     contract: Option<Contract>,
-    routes: bool,
+    within: Within,
     birth: KBirth<'graph, 'here>,
     types: Chain<'graph, 'tier, 'here, 'reg, 'door>,
 }
