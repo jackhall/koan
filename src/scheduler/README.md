@@ -37,6 +37,17 @@ outlives every drain over it and is never entered — gives it back with
 `Graph::release_root`, and asks `is_empty` and `is_live`. Every other cell is
 the drain's.
 
+A loaded program's graph is stood up instead by the **load door**,
+`Graph::load` ([load.rs](load.rs)): it takes two slab roots, the **build
+root** and the **run root**, and enters the build root once with the
+caller's load closure, before any root work. The closure is handed the build
+root's region writer and header door (`LoadStep`) and nothing else, and
+returns the frozen type root every later step reads; a refusal it returns
+drops the graph with it. The build root's region holds the root-level
+specialization table ([the build module](../build/README.md)); the run root
+is where every root work is born. A graph `Graph::new` makes has no build
+root, and every frame in it is born cold.
+
 `Scheduler` owns no graph. It is a view made per call: `Scheduler::over` borrows
 a `Graph` mutably and keeps the ready stack and a buffer of requests beside it.
 Whatever owns the graph keeps it across calls — a loaded
@@ -77,6 +88,10 @@ runs the step its continuation names, and acts on the `Kind` the returned
   successor's first step has run.
 - `Failed` — the drain abandons the work.
 
+A specialization's step ends `Quiesced`, which only the drain's own entry of
+a specialization reads ([below](#specializations)); none is ever on the
+stack.
+
 A stack makes the drain **depth-first**. The child asked first runs to
 completion — its own children, their children, and its delivery — before the
 child asked second is born. Three things follow.
@@ -113,7 +128,8 @@ work, so nothing a stalled run left there is ever popped.
 ## What a step may name
 
 `enter` quantifies a step's four brands — `'step`, `'here`, `'scratch` and
-`'lent`, a tree cell's borrow of its lender's scratch — per call, so a step's
+`'lent`, a tree cell's borrow of its lender's half, its parent's scratch or
+its specialization's region — per call, so a step's
 return type can name none of them. That is why `Action`
 carries no region borrow, and why the children a step asks for go into a
 drain-owned buffer rather than into what it returns.
@@ -134,7 +150,8 @@ previous step parked, and exposes:
   over the lent branch and the cell's own scratch, whose branch
   `link_reading_types` links to its region once `hold_scratch` has held that
   scratch for the cell's life; and `warm_types`, the lent branch alone. The
-  last two are `None` where the cell borrows no scratch. `results_with` and
+  lent branch is the lent half's, a specialization's region or a parent's
+  scratch, and the last two are `None` where the cell borrows nothing. `results_with` and
   `finish_with` run a pinned value's debug check against such a chain;
 - `state` and `scratch`, which take the cell's state and its parked scratch
   state, each once. A state is a projection of the step bundle, which a
@@ -146,15 +163,21 @@ previous step parked, and exposes:
   second take to call. A step that never takes its scratch state leaves it in
   the `Step`, and the end hands its bump back unless the step parks again;
 - `results`, the children's results it parked on;
-- `spawn`, to ask for a child;
-- the ends — `park`, `tail`, `finish_fresh`, `finish_in_home`, `finish`,
-  `done`, `leave` and `failed`.
+- `spawn`, to ask for a child, and `spawn_seeking`, to ask for one born
+  borrowing the specialization a `Seek` names ([below](#specializations));
+- `build_ref`, the build cell the cell's frame runs under;
+- the ends — `park`, `tail`, `tail_seeking`, `tail_under`, `finish_fresh`,
+  `finish_in_home`, `finish`, `done`, `leave`, `enlist` and `failed`.
 
 **No step names a place that is not its own.** There is no handle among those
 doors — not the cell's own, not its consumer's, not its result's home — and no
 carrier door: no `alloc_into`, `lift`, `keep`, `redeem` or `receipt`. A step
-holds values at its own brands and nothing else. Each crossing a computation
-needs is the veneer's to perform, from the provenance the drain filled:
+holds values at its own brands and nothing else. A build cell travels above
+the scheduler as a `BuildRef`, an opaque token only the scheduler and
+`values` open: a step is handed one by `build_ref` and hands one back in a
+`Seek` or to `tail_under`, so it can name to the drain only a build cell the
+scheduler named to it. Each crossing a computation needs is the veneer's to
+perform, from the provenance the drain filled:
 
 - **A child's birth is handed over awake and arrives awake.** `spawn` and
   `tail` take the birth the new cell starts from as the step holds it, at
@@ -205,7 +228,7 @@ delayed reclaim, and soundness rests on the substrate's brands either way.
 
 | `Placement` | door | the child's region | the spawner's price |
 |---|---|---|---|
-| `Fresh` | `create_tree` | its own, reclaimed whole at death | a result placed operand-free crosses free |
+| `Fresh` | `create_tree_lent` | its own, reclaimed whole at death | a result placed operand-free crosses free |
 | `Shares` | `create_tenant` | none — the spawner's, at the spawner's own brand | an embedded argument crosses free, because nothing crosses |
 
 The same bit decides a tail hop. A `Fresh` hop draws a recycled region and the
@@ -346,9 +369,9 @@ that was homed in it. The hand-off:
    and its birth, awake.
 2. The veneer rests that birth into the successor's birth continuation, and the
    drain pushes the successor and holds the predecessor aside.
-3. The drain creates the successor — `create_tree` under the predecessor's own
-   parent for `Fresh`, `create_tenant` on the same host for `Shares` — and
-   enters it.
+3. The drain creates the successor — `create_tree_lent` under the
+   predecessor's own parent for `Fresh`, borrowing what its door names,
+   `create_tenant` on the same host for `Shares` — and enters it.
 4. The veneer wakes the birth, entitled by root identity, crossing it to the
    successor's `'here`, and the successor's first step runs over it.
 5. Only then does the drain release the predecessor.
@@ -364,6 +387,38 @@ to `hold` its predecessor to redeem, which pins the predecessor's region into
 its row, so the release would seal rather than reclaim and constant occupancy
 would be lost. Tree siblings share a root, and root identity is the
 entitlement — no hold, no pin, no seal.
+
+## Specializations
+
+A `Fresh` cell is born borrowing a half of another cell, which the drain
+resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
+
+- `spawn` and `tail` lend its parent's scratch, as every cell born under no
+  binding borrows.
+- `spawn_seeking` and `tail_seeking` hand a `Seek`: the build cell the
+  callee was born under, the key, and the work a missed specialization runs.
+  The drain reads that build cell's table through a read-only `peek`. A live
+  hit is the specialization; a miss creates one, a tree cell under that build
+  cell borrowing its region, and enters it at once, outside the ready stack,
+  before anything else runs. Its step enters it in the table and ends
+  `enlist`, which refuses a cell that asked for children and returns
+  `Quiesced`: the cell stays alive with no continuation, reporting to nobody,
+  and is never on the stack. The frame is then born borrowing the
+  specialization's region. A build cell that is not live, or a graph with no
+  build root, births the frame cold, borrowing its parent's scratch.
+- `tail_under` hands the `BuildRef` its frame ran under, for a hop of the
+  same callee: the successor borrows that specialization with no lookup, or
+  its parent's scratch where the specialization is no longer live.
+
+So a warm birth costs one peek, a cold birth one synchronous step, and no cell
+parks for either. A tenant borrows through its host, so a `Shares` request's
+seek is never read. `build_ref` reads the specialization a tree cell borrows
+off its region header, which `enlist` stamped with the specialization's own
+handle, and answers the fallback it is handed for any other cell. A
+specialization lives until its parent evicts it: `Scheduler::evict`, a
+test-only door, releases a childless one, which waits dead but undisposed
+until its last borrower disposes, and the next miss on its key renews the
+table's entry in place.
 
 ## Memory
 
@@ -387,11 +442,14 @@ tests included, which may name the crate's test scaffolding besides. It does
 not name `scope`, `parse`, `elaborate`, `symbols` or `program`. It names the
 lattice for the frozen root and a branch alone, the root a graph holds and
 hands every step and crossing, and `values` for the type chain those doors
-build and the header a graph keeps per habitat half (`TypeHeader`). `cellgraph` is reached only
-through `memory`, and `cellgraph` itself depends on neither this module nor
-koan. `tests/boundary.rs` reads the source to hold the rule there; the ready
-stack and the request buffer are the owning heap types it blanks, because each
-is the scheduler's own runtime state and never a value in a region.
+build, the header a graph keeps per habitat half (`TypeHeader`) and the
+specialization's key and token (`SpecKey`, `BuildRef`). `cellgraph` is reached
+only through `memory`, and `cellgraph` itself depends on neither this module
+nor koan. `tests/boundary.rs` reads the source to hold the rule there; the
+ready stack and the request buffer are the owning heap types it blanks,
+because each is the scheduler's own runtime state and never a value in a
+region. It also holds `Step`'s public signatures free of every handle, and
+every module but this one and `values` from opening a `BuildRef`.
 
 ## Testing
 
@@ -426,14 +484,16 @@ no layer of koan's above present. They hold, each with a workload of its own:
   turn, and a view dropped mid-work leaving a graph its root's release does not
   empty;
 - the round trip a continuation makes between `'graph` and a step's `'here`,
-  through the raw slot doors a step never reaches.
+  through the raw slot doors a step never reaches;
+- the load door standing two roots and laying the build root's header, and
+  handing a refusal back ([tests/load.rs](tests/load.rs));
+- a missed specialization built once and found warm by the next birth, two
+  bindings giving two under one parent, a graph with no build root birthing
+  every seeking frame cold, a specialization nesting under the frame that
+  seeks beneath it, eviction leaf-first and a rebuild renewing the entry, a
+  frame under an evicted parent born cold, and a hop of the same callee
+  borrowing its frame's specialization and running cold once it is gone
+  ([tests/seek.rs](tests/seek.rs)).
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.
-
-## Open work
-
-- [The build tree](../../roadmap/type-tiers/build-tree.md) — a second slab
-  root beside the run root, build cells as enterable work under the one
-  drain, and the counted borrow a run cell takes of its build cell, per
-  [the build module](../build/README.md).

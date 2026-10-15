@@ -277,8 +277,11 @@ in a `Cell` the substrate never reads, so a slot adds no drop glue. The region's
 slot travels with the region: a seal keeps it in the sealed cell, a splice or
 an absorb keeps the absorber's and discards the absorbed region's — an
 unwritten absorber taking the source over whole included — and a retire
-discards it; a [recycled region](#recycled-regions) starts with none. The
-scratch half's slot is cleared at every reset. `Storage` holds none.
+discards it; a [recycled region](#recycled-regions) starts with none. A header
+may borrow its own half's bytes, inside a `Cell` or not: a retire takes the
+region apart first and hands the spare list its bumps alone, so no slot naming
+those bytes is live while they are freed or reused. The scratch half's slot is
+cleared at every reset. `Storage` holds none.
 
 A step reaches its own halves' slots through **`Header`**, a door handed out
 beside the writer into the same half and, like it, invariant in that half's

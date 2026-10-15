@@ -7,9 +7,9 @@ What a program's text decides, written out once and read back by every run.
 shape, runs [the type channel](../../src/elaborate/README.md#the-type-channel-at-load)
 and the static pass, and stands the graph up, all inside one process, and
 nothing of that work outlives the process: program storage, the frozen type
-root and — once [the build tree](../type-tiers/build-tree.md) ships — the
-specializations settled under each observed binding are released when it
-exits. A program run twice loads twice, and a warm tier a long run built is
+root and the specializations [the build tree](../../src/build/README.md)
+settled under each observed binding are released when it exits. A program
+run twice loads twice, and a warm tier a long run built is
 cold again at the next start. Nothing in the process has a form outside it:
 a reference into program storage or a region is a native `&'graph T` or
 `&'cell T`, a handle is a slab slot plus a generation
@@ -88,9 +88,7 @@ turns the things those keys name into an image, and nothing resumes from one.
 
 ## Dependencies
 
-**Requires:**
-
-- [The build tree](../type-tiers/build-tree.md) — the tree the image
-  serializes, and the segment index that names a body across processes.
+**Requires:** none — the [build tree](../../src/build/README.md) it serializes
+stands.
 
 **Unblocks:** none — a leaf.

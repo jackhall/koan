@@ -1,9 +1,10 @@
 # Type tiers
 
 A type the load builds lives in program storage for the life of the program. A
-type the run builds lives in one of two shorter tiers, chosen by what can
-still reach it, and is released with that tier: a region's branch with the
-region, a scratch branch with its habitat's reset.
+type the run builds lives in one of three shorter tiers, chosen by what can
+still reach it, and is released with that tier: a specialization's branch
+with the specialization, a region's branch with the region, a scratch branch
+with its habitat's reset.
 
 This doc tells that story across the modules that carry it.
 [The type lattice](../lattice/src/types/identity.md#storage-a-root-and-its-branches)
@@ -12,12 +13,14 @@ types every site and classifies every body, [values](../src/values/README.md#cro
 re-intern at a crossing and [knots](../src/knot/README.md#a-lambda) at a
 closure's birth, and [cellgraph](../cellgraph/README.md#the-contract-four-embedder-types)
 brands each tier's door and owns the scratch habitat's reset.
+[The build module](../src/build/README.md) owns the specializations.
 
-## Three tiers
+## Four tiers
 
 | tier | lives from | to | holds |
 |---|---|---|---|
 | root | the load | the program's end | every type the load builds |
+| specialization branch | the first miss on its binding | its eviction, then its last borrower's disposal | what the invariant sites of a caching frame keyed on that binding mint and copy |
 | region branch | the region's birth | its death | a porous body's run-built types, and what a caching body's exits carry |
 | scratch branch | the habitat's reset | its next reset | a step's scratch types, and every type a caching body builds |
 
@@ -49,12 +52,13 @@ and root are ordered, and a scratch branch is under the region of the cell
 that writes it. So a region node references region and root nodes alone, and
 content crosses from scratch into region by copy: a node relaid in the
 destination tier, its children relaid before it, insert-if-absent, so a
-content relaid twice is one node. A scratch branch lent to a frame in another
-cell ([below](#the-scratch-branch-as-a-cache)) and that frame's region are
-unordered: the region retires at the frame's disposal, before the lent
-branch's reset, unless a pin splices it into an ancestor, which outlives that
-reset. So neither holds a node over the other. The lent branch is written
-through a chain over the root and itself alone, at a brand of its own that
+content relaid twice is one node. A branch lent to a frame in another cell —
+a specialization's ([below](#the-specialization-as-the-warm-tier)), or a
+scratch branch its asker's park holds ([below](#the-scratch-branch-as-a-cache))
+— and that frame's region are unordered: the region retires at the frame's
+disposal, before the lent branch goes, unless a pin splices it into an
+ancestor, which may outlive it. So neither holds a node over the other. The
+lent branch is written through a chain over the root and itself alone, at a brand of its own that
 outlives the frame's scratch and is unrelated to its region, and a node over a
 child in the frame's region misses at the lay. The frame's scratch is under
 both, so its nodes reference either.
@@ -101,7 +105,7 @@ but a knot's copy, which the exit walk closes too. An open capture, typed
 `[Never, Any]`, is porous by definition.
 
 Porosity promises only that a value at a non-porous site reaches no minted
-content, never that its handles are the root's (§ Three tiers).
+content, never that its handles are the root's (§ Four tiers).
 
 ## Two classes of body
 
@@ -174,8 +178,10 @@ declared per call is classed alike by the type binders its declaration reads:
   would intern anything and finds itself there after the first.
 - **invariant**: a tree whose every leaf is a capture or a parameter the
   body's tail loop passes through unchanged, so the site mints the same
-  content each hop. Into the **warm tier**: the scratch branch the frame's
-  park holds ([below](#the-scratch-branch-as-a-cache)).
+  content each hop. Into the **warm tier**: under `Fresh`, the branch of the
+  specialization the frame borrows
+  ([below](#the-specialization-as-the-warm-tier)); under `Shares`, the
+  host's scratch.
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
   body, an action's result or an inline `MATCH`, or on a parameter the loop
   rebinds. Into the **cold tier**: the frame's own scratch under `Fresh`, held
@@ -193,15 +199,16 @@ chain over the root, the host's region and that scratch, writing the scratch,
 and its classes route nothing. A scratch chain holds the tier it reads between
 the root and its own by value, so building one per step lays nothing; no
 branch holds that tier, since a habitat's door lives one step and a branch
-lives as long as its half. Under `Fresh` the two are the lent branch and
-the frame's scratch, and the frame's scratch is under both it and the frame's
-region (§ A node lives in a tier its children outlive). So a `Fresh` caching
+lives as long as its half. Under `Fresh` the two are the lent branch, the
+specialization's, and the frame's scratch, and the frame's scratch is under
+both it and the frame's region (§ A node lives in a tier its children outlive). So a `Fresh` caching
 body reads through a chain whose own tier is its scratch, whose read tier is
 the lent branch and whose scratch branch links its region, laid before
 anything else lays that branch. A type it builds stays in its scratch, and an
 invariant site copies its operands' types and what it mints into the lent
-branch, insert-if-absent, so after the first hop it hits. Verdicts over the
-lent branch's types are recorded there and stay warm across hops.
+branch, insert-if-absent, so after the first frame under the binding it
+hits. Verdicts over the lent branch's types are recorded there and stay warm
+across hops and callers.
 
 A chain carries a pairing brand naming the writer it serves, beside the brand
 its tiers sit at, and a value door takes a writer and a chain paired to it.
@@ -219,9 +226,25 @@ whose name escapes as a value can be tail-called from a site the load cannot
 read, so its parameters are varying. The rule is conservative: an argument
 built over invariant leaves has the same content from the second round on,
 yet counts as varying. A wrong class is never unsound — a varying site routed
-warm grows the scratch until the park ends, an invariant site routed cold
-re-lays each hop — since soundness rests on the sealed class and the park
-alone.
+warm grows the warm tier until it goes, an invariant site routed cold re-lays
+each hop — since soundness rests on the sealed class and the lend alone.
+
+## The specialization as the warm tier
+
+A caching frame born `Fresh` whose caching record lists the parameters its
+invariant sites read is born borrowing a **specialization** of its body
+under the content at those parameters
+([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)): a
+build cell the drain finds in, or builds into, the table of the build cell the
+callee was born under, before the frame is born. The specialization's region
+branch is the frame's warm tier, and every frame of that body under that
+binding borrows the same one, whatever park asked for it: a second caller
+finds the first's invariant types and verdicts laid, and a hop of a tail loop
+of one callee borrows the specialization its frame ran under, with no lookup.
+A specialization lives until its parent evicts it and its last borrower
+disposes, so its warm tier outlives the parks that filled it. A frame whose
+specialization's parent is already evicted is born with none, and warms the
+scratch its asker's park holds, as below.
 
 ## The scratch branch as a cache
 
@@ -231,11 +254,12 @@ holds that habitat's reset off until the registration that replaces it or the
 cell's death ([the cell](../cellgraph/README.md#the-cell)). So the host's
 scratch lives from the ask to the delivery, whatever the callee does in
 between, and resets at the first quiet step end after the evaluation wakes.
-Every frame born under that park has the same scratch branch as its warm
-tier: a `Shares` callee is a tenant of the host, whose scratch is its own; a
-`Fresh` callee is **lent** the branch its asker's park holds by a cellgraph
-door, and names that scratch until it departs; a hop's successor inherits its
-predecessor's warm tier, lent or own, whatever either's placement. A tail
+Every frame born under that park with no specialization has the same scratch
+branch as its warm tier: a `Shares` callee is a tenant of the host, whose
+scratch is its own; a `Fresh` callee is **lent** the branch its asker's park
+holds by a cellgraph door, and names that scratch until it departs; a hop's
+successor born with no specialization keeps its predecessor's warm tier,
+lent or own, whatever either's placement. A tail
 loop of any placement, a chain across bodies of mixed placement included, is
 therefore warm at its invariant sites, where the same carrier or per-call
 nominal minted each hop probes and hits, and the scratch grows by those
@@ -244,7 +268,8 @@ one park — the operands of one operator run, the parts of one tie — are warm
 to each other, and so are the statements of a `Shares` callee, since the
 asker's park holds across them; two calls from the host's own body in
 separate statements are cold, since that body replaces its own receipt
-between them. A `Fresh` caching frame also holds its own scratch, its cold
+between them, save a keyed `Fresh` callee's, warm through its
+specialization. A `Fresh` caching frame also holds its own scratch, its cold
 tier, for its life, and drops it with the frame. A loop that parks once a hop
 lays no receipt run per hop: the scratch habitat keeps the runs its cells
 released, drained, on a free list a registration searches first fit, cleared
@@ -296,7 +321,6 @@ types, and released with that tier.
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch
   laid at a predicted size.
-- [The build tree](../roadmap/type-tiers/build-tree.md) — the tiers restated
-  over a second tree of cells: the root tier as the build root's branch, a
-  specialization's branch for each seam under a binding, then the region
-  and scratch branches, per [the build module](../src/build/README.md).
+- [Evicting specializations](../roadmap/type-tiers/specialization-eviction.md)
+  — the policy a build cell evicts its specializations by, so a loop over new
+  invariant content each call holds a bounded warm tier.

@@ -21,7 +21,11 @@ A scope is built in three tiers, each at the moment its contents become known.
   at, the class of every mention and the components its bindings form, and it
   resolves every name the body reads. It walks a builtin node's parts by the
   [roles](../parse/builtin_shapes/role.rs) that node's `BUILTIN_SHAPES` entry
-  gives them.
+  gives them. Each shape a load builds carries its **segment**, an index the
+  one shape builder assigns in the order it seals shapes: distinct per shape,
+  the same in every load of one text, and what a
+  [specialization's key](../build/README.md#keys-which-bindings-make-a-specialization)
+  names the body by.
 
   **A reader takes a body's statements from `BodyShape::body()`, never from the
   parse.** Every site a shape records — a mention's part, a nested shape's
@@ -36,7 +40,11 @@ A scope is built in three tiers, each at the moment its contents become known.
   own [component](#visibility) is held as an edge into the knot the component
   is born in, never as a copied value. A callable's birth reads every capture into
   scratch first and lays the run down only once every read is finished, so a
-  closure binding is never a placeholder.
+  closure binding is never a placeholder. Beside the run the bindings carry
+  the build cell the callable was born under, a
+  [`BuildRef`](../build/README.md#references-between-the-trees) a call seeks
+  its specialization beneath; it is not content, so the closure's digest and
+  equality read the run alone.
 - **Per-call bindings** — one activation per call, laid down in the call's
   frame region, and the top level's in the region of the program's
   [root](../program/README.md#the-top-level): a pointer to the callable's
@@ -1191,8 +1199,8 @@ type outside the one error that lists names, and on a retired lifetime name.
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
-- [The build tree](../../roadmap/type-tiers/build-tree.md) — shapes homed in
-  the build root and read at a borrow's brand, and the write-once cell as a
-  monotone type fact, per [the build module](../build/README.md).
+- [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
+  — the write-once cell as a monotone type fact, per
+  [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

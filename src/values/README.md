@@ -332,7 +332,15 @@ over the graph's frozen type root and the build's writer and header.
 **A crossing carries types with the value.** A type the run builds lives in the
 branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
-The branch is the habitat half's header, [`TypeHeader`](habitat.rs), and a
+The branch is kept in the habitat half's header, [`TypeHeader`](habitat.rs),
+whose form is a `HalfHeader`: the branch, laid with the header; for a build
+cell's region, the table of its specializations by key, laid on the first
+entry, insert-only, and renewed in place when a child is rebuilt; and for a
+specialization's region, its own handle, which the scheduler reads to name the
+build cell a frame runs under
+([specialization.rs](specialization.rs), [the build module](../build/README.md#references-between-the-trees)).
+A `BuildRef`, the opaque token naming a build cell above the scheduler, lives
+there too, opened only by `values` and the scheduler. A
 [`Chain`](habitat.rs) carries a pairing brand naming the writer it serves
 beside the brand its tiers sit at, so a value door handed one half's writer and
 a chain paired to another does not compile. [`Types`](habitat.rs) is the chain

@@ -55,10 +55,12 @@ dependency, so it cannot say which facts a binding would settle.
   bind; neither entry-only nor every-binding is set program-wide.
 - *Refusal at a resumption* — decided. A use with no candidate faults at the
   resumption point, not at the use.
-- *The termination proof* — open. A shared specialization's key ranges over
-  root types and invariant content, a finite set per program; what remains
-  is that one resumption's facts range over a finite set under join, meet
-  and the solve. Recommended: bound a resumption's domain by the types its
+- *The termination proof* — open. A specialization's key ranges over root
+  types and invariant content, and content the run builds is unbounded, so
+  the proof cannot rest on the key space: it rests on one resumption's facts
+  ranging over a finite set under join, meet and the solve, with
+  [eviction](../type-tiers/specialization-eviction.md) bounding how many
+  specializations live at once. Recommended: bound a resumption's domain by the types its
   binding and the root can name, and show the solve mints nothing outside
   it.
 - *Deepening the borrow at a mid-body seam* — open. The build tree fixes a
@@ -74,6 +76,15 @@ dependency, so it cannot say which facts a binding would settle.
   parent's, since no brand lets a build child hold a reference into its
   parent's region; facts that reference a parent binding's types need a link
   or an adopt.
+- *A specialization that resumes* — open. A specialization's one step enters
+  it in its parent's table and quiesces with no continuation
+  (`src/program/specialize.rs`); a resumption under its binding needs it to
+  keep one, so `Step::enlist` grows a successor. Its key digests only the
+  parameters its caching record's invariant sites read, so a capture reaches
+  the key only through the encloser's own specialization: a fact whose
+  frontier names a capture of an encloser that keys on nothing shares one
+  specialization across every binding of that capture, and the key needs that
+  capture's digest beside the parameters'.
 
 ## Dependencies
 
@@ -81,10 +92,8 @@ The worklist is a monotone data-flow framework (Kildall, 1973; Kam and
 Ullman, 1977), and the residual is a solver's undischarged constraint
 (Pottier and Rémy, 2005).
 
-**Requires:**
-
-- [The build tree](../type-tiers/build-tree.md) — the build cells the
-  solver's products land in, and the steps it runs as.
+**Requires:** none — the [build tree](../../src/build/README.md)'s cells
+stand.
 
 **Unblocks:**
 

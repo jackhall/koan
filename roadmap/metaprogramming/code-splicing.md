@@ -90,13 +90,21 @@ exists only at run time to live.
   the code value lives, as invisible as a view, and code keeps its syntactic kind
   ([the code family](../../lattice/src/types/vocabulary.md#the-code-family)). Code
   becomes a callable as the body of an `FN` ([quotes and functions](../../src/scope/README.md#quotes-and-functions)).
+- *A composed body's segment and build cell* — open. A specialization's key
+  names its callee's body by the segment index the load's shape builder
+  assigns in seal order ([keys](../../src/build/README.md#keys-which-bindings-make-a-specialization)),
+  so a composed body's shapes need indices that never collide with the
+  load's. An `EVAL` frame runs under the build root, so a callable born in
+  composed code keys under the root whatever encloses the `EVAL`.
+  Recommended: continue the count past the load's last index, kept on the
+  `Program` record, and seek an `EVAL` frame's specialization under the
+  composed-code cell.
 
 ## Dependencies
 
 **Requires:**
 
 - [Slicing and splicing](slicing-and-splicing.md) — slice as a builtin, views, and `..` outside a quote.
-- [The build tree](../type-tiers/build-tree.md) — the build root a composed-code cell lives under.
 - [`parse`](../../src/parse/README.md#the-syntax-depth-limit) — shipped: the syntax depth limit composed code is checked against.
 
 **Unblocks:**

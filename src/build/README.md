@@ -57,8 +57,8 @@ door and the lookup before a birth, and nothing else.
   value's home run cell counts it, and it is released when that count reaches
   zero.
 - **One core, not one per segment.** Every written segment is program-long, a
-  specialization's key already names its segment through the levels of its
-  bound variables, and the root type tier wants one table. Written code has
+  specialization's key already names its segment by its index, and the root
+  type tier wants one table. Written code has
   one core; composed code adds a build cell per code value.
 - A specialization never rebuilds shapes: written code's shapes live in
   program storage, composed code's in its cell. The raw parse stays in program
@@ -151,19 +151,24 @@ By variance alone:
   child.
 
 A binding is content, digests and root handles, so a specialization reaches
-nothing of the run tree. Its key digests the slots the caching record's
-invariant sites read and nothing else a frame binds, so a parameter no
-invariant site reads costs a birth nothing.
+nothing of the run tree. Its key digests the callee's **segment**, the index
+the one shape builder gives every body it seals, in seal order, so it is the
+same in every load of one text and tells apart two bodies of one text whose
+captures differ in type; then the content of the arguments at the parameters
+its caching record's invariant sites read, in slot order, the frame's blocks
+included ([`key_of`](key.rs)). Nothing else a frame binds enters it, so a
+parameter no invariant site reads costs a birth nothing, and only a caching
+frame born `Fresh` seeks one: no other frame reads a warm tier.
 
 ## References between the trees
 
 - **Run to build: one counted borrow per write home born under a binding.**
   A run cell born under a binding borrows its specialization, and an `EVAL`
   of composed code borrows the composed-code cell; a tail successor of the
-  same callee keeps its predecessor's borrow; a run cell born under no
-  binding keeps the lend it has today, since the shapes and the root tier
-  rest at `'graph` and nothing of the build root is read from a step; a
-  tenant reads through its host's. The build tree is structural, a parent
+  same callee borrows the specialization its frame ran under, with no lookup;
+  a run cell born under no binding borrows its parent's scratch, since the
+  shapes and the root tier rest at `'graph` and nothing of the build root is
+  read from a step; a tenant reads through its host's. The build tree is structural, a parent
   outliving its children, so one count covers the whole chain above. This is
   cellgraph's named lend
   ([tree cells](../../cellgraph/src/tree/README.md#death)): a creation names
@@ -176,9 +181,17 @@ invariant site reads costs a birth nothing.
 - **Build to run: nothing.** A build cell holds no handle to a run cell. A
   binding reaches a build cell as the key the drain hands its birth; a
   settled answer reaches a run cell through the chain alone.
+- **A callable to the build cell it was born under: an opaque token.** A
+  callable's closure bindings carry the build cell its birth ran under, the
+  specialization of the frame that bore it or the build root, as a
+  `BuildRef` ([values](../values/specialization.rs)) that only the scheduler
+  and `values` open. It is not content: the closure's digest and equality
+  skip it. A call seeks its frame's specialization under that cell, so
+  nesting follows the lexical chain with no chain stored, and no step can
+  hand the drain a build cell the scheduler did not name to it.
 - **Build parent to build child: bare handles.** A table keyed by the
-  binding's digest in the parent's region, as a type branch's digest table
-  is: its keys are never removed, and an evicted child's entry is renewed in
+  binding's digest in the parent's region header, beside its type branch, as
+  a type branch's digest table is: its keys are never removed, and an evicted child's entry is renewed in
   place. A bare handle holds nothing alive, and a stale one is a miss. The
   parent evicts a childless specialization by pricing warmth against its
   bytes; cellgraph ships the bytes and no threshold, as it does for the spare
@@ -228,9 +241,10 @@ invariant site reads costs a birth nothing.
   under the parent and runs its one step at once, before anything else. The
   run cell is then created borrowing it, and its first step lays its
   activation. A warm birth costs one peek; a cold birth one build step; no
-  run cell parks for either; a hop of a tail loop carries its predecessor's
-  borrow and looks nothing up; and a parent that has itself been evicted
-  births the frame cold, with no specialization.
+  run cell parks for either; a hop of a tail loop of one callee borrows the
+  specialization its frame ran under and looks nothing up, or its parent's
+  scratch once that specialization is evicted; and a parent that has itself
+  been evicted births the frame cold, with no specialization.
 - **A seam mid-body** deepens the borrow between steps as a birth takes it,
   once nothing the cell holds names the shallower one: the drain resolves
   the deeper specialization and re-lends the cell before its next step.
@@ -280,10 +294,14 @@ and bindings; the closed one-shot load is the oracle.
   content written as a declared pin, a `FOR ALL` name as an alias.
 - **Quiescence is exact.** A fact parks only on an unknown its rule reads;
   nothing closed is left to the run.
-- **Termination.** A shared specialization's key ranges over root types and
-  invariant content, a finite set per program, and a varying binding never
-  makes one; one resumption's facts range over a finite set under join, meet
-  and the solve.
+- **Termination.** One resumption's facts range over a finite set under
+  join, meet and the solve, and a varying binding never makes a
+  specialization. The specializations themselves are not bounded by the
+  program text: a key over invariant content the run builds, a list passed
+  bare to a keyed callee, takes a new value per distinct content, so a loop
+  calling such a callee over new content each iteration makes a
+  specialization per iteration, and only eviction bounds how many live at
+  once.
 
 ## In the literature
 
@@ -306,8 +324,9 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 
 ## Open work
 
-- [The build tree](../../roadmap/type-tiers/build-tree.md) — the module stood
-  up: the build root, specializations, the counted borrow, the drain's part.
+- [Evicting specializations](../../roadmap/type-tiers/specialization-eviction.md)
+  — the policy a build cell evicts its specializations by, a stale ancestor,
+  and sibling redundancy.
 - [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
   — the worklist driver, frontiers and seams, and the properties as laws.
 - [Activation typing](../../roadmap/gradual-typing/activation-typing.md) — a

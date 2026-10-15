@@ -47,7 +47,5 @@ and the run binds a path variable per read (`elaborate::bound_path`).
 
 - [Monotone elaboration](monotone-elaboration.md) — the solver that parks and
   resumes.
-- [The build tree](../type-tiers/build-tree.md) — the specialization a frame
-  settles into.
 
 **Unblocks:** none — a leaf.

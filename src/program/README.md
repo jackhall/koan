@@ -31,7 +31,8 @@ than a generic `cellgraph` type.
 - **The dependent**, `Running<'graph>`, is everything that names `'graph`:
   - the **graph**, by value. Reclaiming one of its recycling regions needs
     exclusive access, which a shared borrow of the owner cannot give.
-  - the graph's **root**, [below](#the-top-level).
+  - the graph's two **roots**: the build root the load ran in, and the run
+    root, [below](#the-top-level).
   - the **program record**, [below](#the-program-record), in program storage,
     which holds the **types' root**: laid down in the owner's bump rather than
     held by value, so the record and the graph can both borrow it at `'graph`.
@@ -70,9 +71,14 @@ owner's bump and builds every load-time type through one chain over it, has
 its type channel through
 [the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load),
 has `L` check it and record what it types, freezes the types' root so no step
-can intern into it, lays the record down beside the
-[output sinks](#faults-and-output) the embedder hands `load`, and makes the cell
-graph over the frozen root and takes its root cell. It returns a `Result`, and
+can intern into it, and lays the record down beside the
+[output sinks](#faults-and-output) the embedder hands `load`. All of that runs
+as the **build root's** one step: the scheduler's
+[load door](../scheduler/README.md#the-drain) stands the graph up over two slab
+roots, the build root and the run root, and enters the build root with the
+load, which also lays the build root's region header, whose table the
+root-level [specializations](#specializations) fill. A slab of two cells
+holds both. It returns a `Result`, and
 `LoadError` carries the parse error, or the rendering of the `ShapeError` that
 stopped it. A shape error borrows program storage and names symbols and types
 through the interner and the load's chain, all of which a refused builder drops with
@@ -127,8 +133,11 @@ a program's steps run over, with its three families:
   `Eval`, a quote's code, a record of the names its `EVAL` offers and the
   contract its declared return makes; `Evaluate`, a node, the view it is read
   through and the [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
-  synthesized block's shape and the view it sits in; and `Inspect`, the view
-  the top level leaves at rest. The family's `covariant!`
+  synthesized block's shape and the view it sits in; `Inspect`, the view
+  the top level leaves at rest; and `Specialize`, the key a
+  [specialization](#specializations) enters itself under. An `Evaluate` and a
+  `Block` carry what their frame runs **within**: whether it
+  [routes](#caching-bodies), and the build cell it runs under. The family's `covariant!`
   witness is what checks that an activation's view is covariant in its brand.
 - **`KState`**, what a cell holds at a step and parks with: the birth on a
   first step, the body runner between units, or an evaluator's resumption.
@@ -153,10 +162,10 @@ graph priced.
 
 ## The top level
 
-A top-level binding lives in the region of the **root**: a storage-only slab
-cell taken at load, never entered, and released with the substrate. The slab
-holds the root and nothing else, so a program with more statements than the
-slab cap runs to completion — a call subtree is tree cells and tenants under
+A top-level binding lives in the region of the **run root**: a storage-only
+slab cell taken at load, never entered, and released with the substrate. The
+slab holds the run root and the build root and nothing else, so a program
+with more statements than the slab cap runs to completion — a call subtree is tree cells and tenants under
 the root, a module activation is data, and a binding lives in the root.
 
 `Running::run` births the body runner as the root work, a **tenant** of the
@@ -371,11 +380,11 @@ Each step picks one chain at its entry ([`run`](body.rs), and the evaluator's
 - the **reading chain** in the own body of a `Fresh` caching frame, which
   holds its scratch for its life at its first step and links that scratch's
   branch to its region before anything lays it. It reads the root, the lent
-  branch — the scratch its asker parked in — and the frame's scratch, and
-  the frame's region through the link. A
-  `routes` bit on each evaluation and block the frame asks for
-  ([`KBirth`](bundle.rs)) carries the pick down, and the hand-off of the last
-  statement clears it;
+  branch — its specialization's region, or where it was born with none the
+  scratch its asker parked in — and the frame's scratch, and the frame's
+  region through the link. The `routes` bit of the `Within` on each
+  evaluation and block the frame asks for ([`KBirth`](bundle.rs)) carries the
+  pick down, and the hand-off of the last statement clears it;
 - the **`Shares` chain** anywhere else in a caching body, over the root, the
   write home's region and its scratch;
 - the region chain in every other body.
@@ -395,6 +404,32 @@ that statement reading, and the frame's contract. A value the frame received
 adopts its own memo alone, and so does an argument the load
 [recorded](../dispatch/README.md#body-classes) as passing one on: an operand of
 a keyworded call, or a call by name's argument or record-literal field.
+
+### Specializations
+
+A call into a caching frame born `Fresh` whose caching record lists the
+parameters its invariant sites read hands the drain a `Seek`
+([`seek`](specialize.rs)): the build cell the callee was born under, read off
+its closure bindings; the key, the callee's segment and the content digest of
+each argument at those parameters, read by name
+([the build module](../build/README.md#keys-which-bindings-make-a-specialization));
+and the work a missed specialization runs, [`specialize`](specialize.rs),
+which enlists the new cell in its parent's table. The frame is born borrowing
+the specialization, and its lent branch is the specialization's region, so
+every frame of that body under that binding finds its invariant types warm.
+Dispatch picks the door where it calls: a hop of the frame's own callee, from
+a frame that borrows a specialization, `tail_under` the frame's build cell; any
+other keyed call `spawn_seeking` or `tail_seeking`; and every other call
+`spawn` or `tail`. A frame borrows one exactly when the build cell it runs
+under is not the one its callee was born under
+([`called_function`](specialize.rs) reads the callee's function).
+
+A frame's runner takes the build cell it runs under at its first step, the
+specialization it borrows or else the build cell its callee was born under, and
+hands it, in its `Within`, to every evaluation and block it asks for, so a
+callable a tie or a lambda births in the frame, its blocks included, is born
+under it and seeks beneath it. The top level, a module's closure and an
+`EVAL`'s frame run under the build root.
 
 ### Faults and output
 
@@ -467,7 +502,7 @@ substrate still runs a later root work, and is otherwise only ever dropped.
 
 ## Imports and tests
 
-Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
+Outside `#[cfg(test)]` this module names `crate::build`, `crate::elaborate`, `crate::knot`,
 `crate::memory`, `crate::parse`, `crate::scheduler`, `crate::scope`,
 `crate::symbols`, `crate::type_lattice` and `crate::values`.
 `tests/boundary.rs` reads the source to hold the rule there.
@@ -512,8 +547,5 @@ before the program ran, and a stalled substrate. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [The build tree](../../roadmap/type-tiers/build-tree.md) — the load as the
-  build root's steps, run to quiescence before the top level's first value
-  step, per [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   bytes a `Shares` tail hop leaves in its host.

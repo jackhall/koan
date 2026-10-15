@@ -30,7 +30,8 @@
 //!
 //! Each half of a habitat also carries a **header slot**, the embedder's one value about that half
 //! ([`header`](crate::header)): the region's travels with it, and the scratch half's is cleared at
-//! every reset. The substrate never reads either.
+//! every reset. The substrate never reads either. A header may borrow its own region's bytes, so a
+//! retire takes the region apart and frees its bumps alone ([`Regions::retire`]).
 //!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
