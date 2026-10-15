@@ -57,10 +57,10 @@ the same binding starts cold.
   solved to closed points name a shared one, varying content resumes into the
   run cell's scratch. Porosity, exposure and observed demand may enter the
   decision; it is not variance alone.
-- *The run-to-build reference* — decided. A counted borrow, cellgraph's lend
-  generalized so that a creation names its lender, per
-  [a counted borrow of a named cell](../../cellgraph/roadmap/named-lend.md);
-  never a matrix pin. A tenant reads through its host's.
+- *The run-to-build reference* — decided. A counted borrow, cellgraph's
+  named lend ([tree cells](../../cellgraph/src/tree/README.md#death)), whose
+  creation names its lender; never a matrix pin. A tenant reads through its
+  host's.
 - *Where the lookup runs* — decided. In the drain, when it gives a frame its
   cell: it reads the parent's table through a read-only peek and, on a miss,
   creates the specialization and runs its one step before the frame, so no
@@ -88,13 +88,10 @@ the same binding starts cold.
 A refused written program's step stops at the refusal; keeping what it
 wrote is what
 [a refused program stays loaded](../rewrite/refused-programs-stay-loaded.md)
-asks for. It builds on cellgraph's [tree cells](../../cellgraph/src/tree/README.md)
-and [the type tiers](../../design/type-tiers.md).
+asks for. It builds on cellgraph's [tree cells](../../cellgraph/src/tree/README.md),
+their named lend and peek, and [the type tiers](../../design/type-tiers.md).
 
-**Requires:**
-
-- [A counted borrow of a named cell](../../cellgraph/roadmap/named-lend.md)
-  — the lend a run cell takes of its specialization, and the drain's peek.
+**Requires:** none — cellgraph's substrate stands.
 
 **Unblocks:**
 

@@ -4,10 +4,12 @@
 //! ([../README.md § Invariants](../README.md#invariants)):
 //!
 //! - a recycled slot is named by nothing — no occupant's pin row, and no frozen aggregate;
-//! - a cell undisposed after its declared death has an undisposed tree cell under it or a tenant
-//!   still writing its region, which are the two things that can hold a cell past its death;
+//! - a cell undisposed after its declared death has an undisposed tree cell under it, a tenant
+//!   still writing its region or a tree cell borrowing that region, which are the three things
+//!   that can hold a cell past its death;
 //! - every host's two tenant counts equal the tenants that name it, and the ones among them that
-//!   name its scratch bump — with a scratch state at rest, or with a receipt run;
+//!   name its scratch bump — with a scratch state at rest, or with a receipt run — and its two
+//!   borrower counts equal the undisposed tree cells that borrow its scratch bump and its region;
 //! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
 //!   naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a dormant carrier's mask is covered by storage its cell is answerable
@@ -35,6 +37,7 @@ use proptest::prelude::*;
 
 use super::super::*;
 use super::{Borrowed, Number, live_bytes, number_here, one, operand_at, pin, take};
+use crate::lend::Lent;
 use crate::tree::{Ancestor, TreeState};
 
 /// The scratch state these graphs park: one number in the executing cell's scratch bump, which is
@@ -68,6 +71,15 @@ enum Verb {
     CreateTree {
         parent: usize,
         under_tree: bool,
+    },
+    CreateTreeLent {
+        parent: usize,
+        under_tree: bool,
+        /// Which lend: the parent's scratch, a named cell's region, or a copy of a cell's lend.
+        lend: u8,
+        lender: usize,
+        /// Which list the named cell is drawn from: slab cells, tree cells, or tenants.
+        lender_kind: u8,
     },
     PlaceFromTree {
         producer: usize,
@@ -156,12 +168,22 @@ fn wrapped<H: Copy>(handles: &[H], index: usize) -> Option<H> {
     }
 }
 
-/// The tree pool's own verbs: the three that move a cell through its life, the placement door a
-/// tree step drives, and the two dormant-carrier doors keyed to a tree home.
+/// The tree pool's own verbs: the four that move a cell through its life, a named lend among
+/// them, the placement door a tree step drives, and the two dormant-carrier doors keyed to a tree
+/// home.
 fn tree_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
         (0..8usize, any::<bool>())
             .prop_map(|(parent, under_tree)| Verb::CreateTree { parent, under_tree }),
+        (0..8usize, any::<bool>(), 0..3u8, 0..8usize, 0..3u8).prop_map(
+            |(parent, under_tree, lend, lender, lender_kind)| Verb::CreateTreeLent {
+                parent,
+                under_tree,
+                lend,
+                lender,
+                lender_kind,
+            }
+        ),
         (0..8usize, 0..8usize, any::<bool>()).prop_map(|(producer, consumer, into_tree)| {
             Verb::PlaceFromTree {
                 producer,
@@ -243,13 +265,13 @@ fn check_invariants(
                     "slot {slot} is free but kept a sealed hold"
                 );
             }
-            // Two things keep a dead cell in place, and neither is a hold: an undisposed tree cell
-            // under it, whose own disposal still has to find its root, and a tenant, whose writer
-            // is minted from the region at this slot.
+            // Three things keep a dead cell in place, and none is a hold: an undisposed tree cell
+            // under it, whose own disposal still has to find its root, and a tenant or a tree cell
+            // borrowing its region, whose doors are minted from the region at this slot.
             SlabState::Dead => assert!(
                 graph.cells.tree_children_of(graph.cells.occupant(slot)) > 0
-                    || graph.cells.tenancy(CellHome::Slab(slot)).tenants > 0,
-                "slot {slot} is undisposed with no tree child under it and no tenant, so it should have left the slab"
+                    || graph.cells.tenancy(CellHome::Slab(slot)).holds_disposal(),
+                "slot {slot} is undisposed with no tree child under it, no tenant and no borrower, so it should have left the slab"
             ),
             SlabState::Live => {}
         }
@@ -678,12 +700,12 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
     // A host's tenant counts are tallies too: recounted from the pool, over every cell that can
     // host — and a dead tree cell with neither a child nor a tenant should have disposed.
     let census: Vec<(CellHome, bool)> = graph.cells.tenants.census().collect();
-    // A live tree cell borrows its lender's scratch bump until its death.
-    let lenders: Vec<CellHome> = occupied
+    // An undisposed tree cell borrows its lent half until its disposal.
+    let lends: Vec<Lent> = occupied
         .iter()
         .copied()
-        .filter(|index| pool.state(*index) == TreeState::Live)
-        .filter_map(|index| graph.cells.lender(CellHome::Tree(index)))
+        .filter(|index| alive(*index))
+        .map(|index| pool.lent(index))
         .collect();
     let recount = |home: CellHome| crate::tenant::Tenancy {
         tenants: census.iter().filter(|(host, _)| *host == home).count() as u32,
@@ -691,7 +713,14 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
             .iter()
             .filter(|(host, named)| *host == home && *named)
             .count() as u32,
-        scratch_borrowers: lenders.iter().filter(|lender| **lender == home).count() as u32,
+        scratch_borrowers: lends
+            .iter()
+            .filter(|lent| **lent == Lent::Scratch(home))
+            .count() as u32,
+        region_borrowers: lends
+            .iter()
+            .filter(|lent| **lent == Lent::Region(home))
+            .count() as u32,
     };
     for slot in 0..graph.cells.cap {
         let home = CellHome::Slab(slot);
@@ -711,8 +740,8 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
         assert!(
             pool.state(index) != TreeState::Dead
                 || pool.children(index) > 0
-                || graph.cells.tenancy(home).tenants > 0,
-            "pool slot {index} is undisposed with no child under it and no tenant"
+                || graph.cells.tenancy(home).holds_disposal(),
+            "pool slot {index} is undisposed with no child under it, no tenant and no borrower"
         );
     }
     for (host, _) in &census {
@@ -926,6 +955,36 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
             Verb::ReleaseTree { cell } => {
                 if let Some(cell) = wrapped(&grown, cell) {
                     let _ = graph.release_tree(cell);
+                }
+            }
+            // A tree cell lent what the draw names. A refusal changes nothing, so it is ignored;
+            // the sweep's recounts check every lend that is taken.
+            Verb::CreateTreeLent {
+                parent,
+                under_tree,
+                lend,
+                lender,
+                lender_kind,
+            } => {
+                let parent: Option<CellHandle> = under_tree
+                    .then(|| wrapped(&grown, parent).map(CellHandle::Tree))
+                    .flatten()
+                    .or_else(|| wrapped(&minted, parent).map(CellHandle::Slab));
+                let lender: Option<CellHandle> = match lender_kind {
+                    0 => wrapped(&minted, lender).map(CellHandle::Slab),
+                    1 => wrapped(&grown, lender).map(CellHandle::Tree),
+                    _ => wrapped(&lodged, lender).map(CellHandle::Tenant),
+                };
+                let lend = match (lend, lender) {
+                    (1, Some(lender)) => Some(Lend::Named(lender)),
+                    (2, Some(lender)) => Some(Lend::Of(lender)),
+                    (0, _) => Some(Lend::ParentScratch),
+                    _ => None,
+                };
+                if let (Some(parent), Some(lend)) = (parent, lend)
+                    && let Ok(handle) = graph.create_tree_lent(parent, lend, None)
+                {
+                    grown.push(handle);
                 }
             }
             // A tenant of any live cell. Naming a tenant as the host means that tenant's host,

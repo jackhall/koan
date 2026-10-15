@@ -14,6 +14,7 @@
 //! that say where its bytes went once it did.
 
 use crate::handle::{HomeHandle, SlabHandle, Stale, TreeHandle};
+use crate::lend::Lent;
 use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
 use crate::receipt::{Delivery, ReceiptRun};
 use crate::scratch::Scratch;
@@ -106,6 +107,8 @@ struct Branch<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, 
     /// `1` for a child of the root, and the parent's depth plus one otherwise. What makes the
     /// ancestry rule's test cost the level distance rather than the depth of the tree.
     depth: u32,
+    /// What this cell borrows, resolved at its creation.
+    lent: Lent,
     /// Tree children that have not disposed — live and dead-but-undisposed alike. A parent disposes
     /// only once this reaches zero, which is what lets an embedder tear a subtree down in any
     /// order.
@@ -215,12 +218,14 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
         }
     }
 
-    /// Take a slot for a new cell under `root`, with `parent` the chain link one level up.
+    /// Take a slot for a new cell under `root`, with `parent` the chain link one level up and `lent`
+    /// what it borrows.
     pub(crate) fn create(
         &mut self,
         root: u32,
         parent: Ancestor,
         depth: u32,
+        lent: Lent,
         continuation: Option<Erased<'graph, C>>,
     ) -> TreeHandle {
         let slot = TreeSlot::InTree(Branch {
@@ -228,6 +233,7 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
             root,
             parent,
             depth,
+            lent,
             children: 0,
             tenancy: Tenancy::default(),
             executing: false,
@@ -299,6 +305,12 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
 
     pub(crate) fn depth(&self, index: u32) -> u32 {
         self.branch(index).depth
+    }
+
+    /// What the cell at `index` borrows. Answers for a dead-but-undisposed cell too, whose count on
+    /// its lender stands until it disposes.
+    pub(crate) fn lent(&self, index: u32) -> Lent {
+        self.branch(index).lent
     }
 
     pub(crate) fn children(&self, index: u32) -> u32 {

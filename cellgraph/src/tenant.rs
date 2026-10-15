@@ -12,7 +12,9 @@
 //! off: a host whose death is declared waits, region in place, until its last tenant leaves —
 //! which is what makes the bare slot or pool index a tenant keeps a sound name for it. The second
 //! holds its scratch bump's reset off while any tenant names it — with a scratch state at rest, or
-//! with a receipt run, which is the tenant's own though the bytes under it are the host's.
+//! with a receipt run, which is the tenant's own though the bytes under it are the host's. The
+//! same struct carries the counts of the tree cells that borrow a half of the cell's storage
+//! ([lend.rs](lend.rs)), since each holds that half in place the way a tenant does.
 //!
 //! A tenant has no dead-but-undisposed state. Nothing can be under one — a tenant named as a
 //! parent, a host or a destination means its host — so its release takes it out at once, and its
@@ -27,7 +29,8 @@ use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
 use crate::receipt::{Delivery, ReceiptRun};
 use crate::slots::StepSlots;
 
-/// What a region-owning cell carries for the tenants that write its region.
+/// What a region-owning cell carries for the tenants that write its region and the tree cells
+/// that borrow from it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) struct Tenancy {
     /// Tenants created on this cell and not yet released. The second thing, beside an undisposed
@@ -39,11 +42,24 @@ pub(crate) struct Tenancy {
     /// cell's own slots. Moved where a tenant step ends, where a run is laid down and where a
     /// tenant leaves, and read only where a step ends.
     pub(crate) scratch_tenants: u32,
-    /// Tree cells whose tree parent's write home this is, created and not yet dead: each borrows
-    /// this cell's scratch bump from its creation to its death
-    /// ([`lent_scratch`](crate::StepContext::lent_scratch)), so the bump's reset waits on this
-    /// count too.
+    /// Tree cells borrowing this cell's scratch bump, created and not yet disposed: each holds the
+    /// bump's reset off, since a dead borrower's scratch may still name the lent bytes
+    /// ([`lent_scratch`](crate::StepContext::lent_scratch)). Each is this cell's own child, so
+    /// the child count already holds this cell's disposal.
     pub(crate) scratch_borrowers: u32,
+    /// Tree cells borrowing this cell's region, created and not yet disposed: each holds this
+    /// cell's disposal off, since the borrower's doors are minted from the region table at this
+    /// cell's index ([`lent_region`](crate::StepContext::lent_region)).
+    pub(crate) region_borrowers: u32,
+}
+
+impl Tenancy {
+    /// Whether these counts hold the cell's disposal off: a tenant writing its region, or a tree
+    /// cell borrowing it. A scratch borrower is left out: it is a child, and the child count
+    /// covers it.
+    pub(crate) fn holds_disposal(&self) -> bool {
+        self.tenants > 0 || self.region_borrowers > 0
+    }
 }
 
 /// One tenant.

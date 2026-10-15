@@ -19,7 +19,7 @@ Several are both: a real borrow made invariant so it also brands.
 | `'step` | exclusive borrow of the cells, per `enter` | `'graph: 'step`; none to `'here` or any habitat brand | `Ready` covariant |
 | `'here` | shared borrow of the region table, per `enter` | `'graph: 'here`; `'here: 'scratch` | invariant |
 | `'scratch` | brand of the scratch habitat, per `enter` | `'here: 'scratch`, `'lent: 'scratch`, nothing else | invariant |
-| `'lent` | brand of a tree cell's lender's scratch, per `enter` | `'graph: 'lent`; `'lent: 'scratch`; none to `'here` | invariant |
+| `'lent` | brand of the half a tree cell borrows, per `enter` | `'graph: 'lent`; `'lent: 'scratch`; none to `'here` | invariant |
 | `'cell` | a habitat half's brand, generically | `'graph: 'cell` | per door; `Writer`, `Header`, `Active` and `OnceRun` invariant |
 | `'door` | a door's own life, generically | filled with `'step` by every step and build door, with the storage borrow by `Storage` | `Writer`, `Header`, `Run` and `Prose` covariant |
 | `'severed` | a copied operand's brand, per build | `'graph: 'severed`; none to `'cell` | quantified |
@@ -166,16 +166,23 @@ holds one off, so no header laid at `'scratch` outlives the bytes it may name.
 never taken at `'scratch`: a scratch-lived value is never laid in storage, where
 its bytes would be stranded until the cell dies.
 
-## `'lent`: a borrowed scratch outlives the borrower
+## `'lent`: a borrowed half outlives the borrower
 
-`'lent` is the brand of the scratch a tree cell borrows from its lender, the
-write home of its tree parent, from the cell's creation to its death
-([`lent_scratch`](graph.rs)). The lender's reset waits on every live borrower
-(the lender's borrower count, which [`scratch_named`](graph.rs) reads), so the lent bytes
+`'lent` is the brand of the half a tree cell borrows from its lender from its
+creation to its disposal ([lend.rs](lend.rs)): the scratch of its tree parent's
+write home (`lent_scratch`), or the region of a named cell (`lent_region`). The
+lent half outlives the borrower on a count per half. A lent scratch's reset
+waits on its scratch borrowers, which [`scratch_named`](graph.rs) reads, and
+its disposal on the borrower as a child; a lent region's disposal waits on its
+region borrowers, and a region's chunks never move while it lives. Both counts
+drop at the borrower's disposal, not its release, because a dead borrower's
+scratch outlives the release and may name the lent bytes. So the lent bytes
 outlive every step of the borrower and every scratch it parks: `'lent:
-'scratch` is honest, and the borrower's scratch may name the lent bump. `'lent`
-has no relation to `'here`, so nothing in the lent bump names the borrower's
-region, which retires at the borrower's disposal while the lent bump stays.
+'scratch` is honest, and the borrower's scratch may name the lent half. `'lent`
+has no relation to `'here`, so nothing in the lent half names the borrower's
+region, which retires at the borrower's disposal while the lent half stays.
+A value laid in the lent half names `'graph`, the lent half itself and what the
+lender's own storage may name, so the lender reads it back at its own brand.
 
 ## `'cell`: the brand a door is generic over
 
@@ -287,11 +294,16 @@ brands, checked for size and alignment at compile time and otherwise trusted
   outlive `'cell`, re-anchored at the same `'cell` by an invariant marker.
 - **A header slot.** Laid through an invariant `Header` at its habitat half's
   brand, reattached by `Header::get` at that half's brand of a later step or
-  build. Proof: what was laid names the half's own bytes, `'graph` (a
+  build, or at a borrower's `'lent` while the half is lent. Proof: what was laid names the half's own bytes, `'graph` (a
   `Storage` writer among it), storage the half's cell holds, or, for a scratch
   half, the write home's region — never a door onto a habitat, whose `'step`
   outlives no habitat brand; a region's slot travels with its chunks, no
   recycled region keeps one, and a scratch slot is cleared at every reset.
+- **A peeked header.** Anchored by `CellGraph::peek` through `Active` at a
+  brand its closure is generic over, between steps. Proof: the header's
+  referents are any region header's (`Header::get`), and `peek` holds the graph
+  shared for the call, so no verb can move or drop the region or release the
+  holds they name; the closure is handed no door, so it lays nothing.
 - **A home header.** Anchored by `HomeHeader::read` through `Active` at the
   `'h` its closure is generic over. Proof: the header is read only from a
   region the operand's reach names, so its referents are kept on the grounds

@@ -98,7 +98,10 @@ Four absences are design statements rather than gaps:
   absorbed into it. Inside a step the executing cell's own region is reachable
   at its own brand, `'here`, distinct from the step's. Each region also carries
   one [header slot](#the-contract-four-embedder-types), the embedder's value
-  about the region, which travels with it.
+  about the region, which travels with it. A tree cell may **borrow** a named
+  slab or tree cell's region, under any root, from its creation to its
+  disposal, and writes it at `'lent` (`StepContext::lent_region`); the region's
+  owner disposes only after its last borrower does.
 
   One shape in a region is laid down for reading at a shorter brand: the
   **once-written run** ([src/once.rs](src/once.rs)), `Writer::once_run`, a run
@@ -123,9 +126,11 @@ Four absences are design statements rather than gaps:
   state** and the receipt run below, either on the cell itself or on any of its
   tenants; a **hold**, which a tree cell's step takes on its own scratch for
   the rest of the cell's life (`StepContext::hold_scratch`); and a tree cell
-  **borrowing** it. A tree cell borrows the scratch of its tree parent's write
-  home, its **lender**, from its creation to its death, and writes it at a
-  brand of its own, `'lent` (`StepContext::lent_scratch`). A departing cell's
+  **borrowing** it, from the borrower's creation to its disposal. `create_tree`
+  lends a tree cell the scratch of its tree parent's write home, its
+  **lender**, which a step in it writes at a brand of its own, `'lent`
+  (`StepContext::lent_scratch`); a scratch is lent only to its owner's own
+  children ([tree cells](src/tree/README.md#death)). A departing cell's
   scratch is dropped at its disposal. A tenant's scratch is its host's. The habitat has a header slot
   of its own, cleared at every reset and no part of what holds one off.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
@@ -286,7 +291,10 @@ never meet in one call. Like the writer, it is branded to the step that minted
 it, so no slot holds one (*A door dies with its step*, below). The door sits
 beside the writer rather than inside it because a slot inside `Writer` would put
 `'graph` and the family on every writer an embedder names, and `Storage` could
-hold no slot at all: its `'graph` would be a borrow of itself. A door copies the
+hold no slot at all: its `'graph` would be a borrow of itself. A borrower's step
+is handed its lent half's header at `'lent` the same way, and between steps
+`peek` reads a live cell's region header through a closure as `read` below
+does, handing out no door. A door copies the
 erased value in and out and never lends a reference into the slot, which is why
 the slot is a `Cell` and not a `OnceCell`: a reference from
 `OnceCell::get_or_init` descends from a unique borrow, and a later interior
@@ -344,13 +352,14 @@ its brand, so a writer at `'here` is never taken at `'scratch`, and a
 scratch-lived value is never laid in storage, where its bytes would be stranded
 until the cell dies.
 
-`'lent` is a tree cell's borrow of its lender's scratch: invariant and
-quantified per `enter`, with `'lent: 'scratch` the whole of its relation to the
-step's other brands. So the cell's own scratch may name the lent bump, and
-nothing of the cell's region or scratch may be laid there, since `'lent` is
-unrelated to `'here`. The lender's reset waits on every borrower, so what a
-step writes there outlives the step, and the lender reads it back at its own
-`'scratch`.
+`'lent` is a tree cell's borrow of its lender's half — its tree parent's
+scratch, or a named cell's region: invariant and quantified per `enter`, with
+`'lent: 'scratch` the whole of its relation to the step's other brands. So the
+cell's own scratch may name the lent half, and nothing of the cell's region or
+scratch may be laid there, since `'lent` is unrelated to `'here`. A lent
+scratch's reset and a lent region's disposal wait on every undisposed
+borrower, so what a step writes there outlives the step, and the lender reads
+it back at its own brand ([lifetimes](src/lifetimes.md#lent-a-borrowed-half-outlives-the-borrower)).
 
 **A door dies with its step.** A door onto a habitat half — `Writer`, `Header`,
 and the `Run` and `Prose` a writer opens — carries two brands: the half's, which
@@ -450,7 +459,19 @@ on the read out, which re-anchors at the same `'cell`.
   nothing is lost by refusing it.
 - **`create_tree` / `release_tree`** are birth and death over the tree pool;
   `enter` is one door over all three kinds. See
-  [src/tree/README.md](src/tree/README.md).
+  [src/tree/README.md](src/tree/README.md). `create_tree` lends the new cell its
+  parent's scratch; **`create_tree_lent(parent, lend, continuation?)`** names
+  the lend (`Lend`): that scratch, a named live slab or tree cell's region, or
+  a copy of what a named live cell borrows. A step finds the lent half through
+  `lent_scratch` or `lent_region`, each `None` for the other kind of lend. It
+  refuses, changing nothing, a dead or stale parent or named cell, a name with
+  nothing to lend, and a copied scratch lend under any parent but its lender
+  (`CreateTreeError`). A lend mints no pin.
+- **`peek(cell, read)`** reads a live slab or tree cell's region header between
+  steps, handing it to a closure at a brand quantified per call, with no door
+  to lay through; it refuses a dead, stale or tenant handle (`PeekError`).
+  **`is_childless(tree)`** asks whether a live tree cell has no undisposed
+  child. Both are reads for a drain deciding what to create or release next.
 - **`create_tenant(host, continuation?)` / `release_tenant`** are birth and
   death over the tenant pool. Birth draws no bump and takes no slab slot, so it
   has no full refusal; it refuses only a stale name. Death is **a count
@@ -463,8 +484,9 @@ on the read out, which re-anchors at the same `'cell`.
   to enter the cell again. The slot leaves the slab within that same call —
   reclaimed if nothing reaches its storage, folded into the one thing that
   reaches it if there is exactly one, sealed otherwise — unless a tree cell
-  under it has not disposed or a tenant is still writing its region, the two
-  things that make a death outlive its own `release`. `absorption` is the embedder's say over that fold, recorded
+  under it has not disposed, a tenant is still writing its region or a tree
+  cell borrows that region, the three things that make a death outlive its own
+  `release`. `absorption` is the embedder's say over that fold, recorded
   on the slot and read when the slot actually leaves.
 - **`is_empty()`** asks whether the graph holds nothing at all — every slot
   free, no sealed cell left, no tree cell or tombstone left in the pool, and no
@@ -670,8 +692,10 @@ exactly one decision.
   exclusively, and the region table shared.
 - [src/tree.rs](src/tree.rs) — the tree pool: chain links and depth, the
   undisposed-child count, the pledge, and the tombstone chain.
-- [src/tenant.rs](src/tenant.rs) — the tenant pool, and the two counts a host
-  carries for its tenants.
+- [src/tenant.rs](src/tenant.rs) — the tenant pool, and the counts a cell
+  carries for its tenants and its borrowers.
+- [src/lend.rs](src/lend.rs) — `Lend`, what a tree cell's creation borrows, and
+  the resolved lend the pool stores on the cell.
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits, and the
   pin relation as an inline array of those rows.
 - [src/reach.rs](src/reach.rs) — reach as a hybrid mask: an inline `Bits` row

@@ -12,12 +12,13 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, Config, Covariant, CreateError, CrossedOperand, DeliverError,
-    Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader, Header, HomeHeader,
-    NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, Operand, Prices, Prose, Ready,
-    Reattachable, Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
-    ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext,
-    Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, Written, covariant, reattachable,
+    Active, CellGraph, CellHandle, Config, Covariant, CreateError, CreateTreeError, CrossedOperand,
+    DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
+    Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, Operand,
+    PeekError, Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError,
+    RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run,
+    SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer,
+    Written, covariant, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -205,6 +206,24 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
     match error {
         ReleaseTreeError::Stale(_) => "stale",
         ReleaseTreeError::Executing => "executing",
+    }
+}
+
+/// Every refusal `create_tree_lent` can give, matched by name for the same reason.
+fn name_create_tree_error(error: CreateTreeError) -> &'static str {
+    match error {
+        CreateTreeError::Parent(_) => "parent",
+        CreateTreeError::Lender(_) => "lender",
+        CreateTreeError::Unlendable(_) => "unlendable",
+        CreateTreeError::ForeignScratch(_) => "foreign scratch",
+    }
+}
+
+/// Every refusal `peek` can give, matched by name for the same reason.
+fn name_peek_error(error: PeekError) -> &'static str {
+    match error {
+        PeekError::Stale(_) => "stale",
+        PeekError::Tenant(_) => "tenant",
     }
 }
 
@@ -705,6 +724,91 @@ fn a_graph_is_built_with_the_spare_lists_bound_chosen() {
     let mut graph: CellGraph<'static, Work> = CellGraph::with_config(config, weigh);
     let cell = graph.create(None).unwrap();
     graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_named_lend_and_the_peek_answer_from_outside_the_crate() {
+    let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
+        CellGraph::new(2, weigh);
+    let build = graph.create(None).unwrap();
+    let run = graph.create(None).unwrap();
+    let lender = graph.create_tree(build, None).unwrap();
+    graph
+        .enter(lender, |context| {
+            let number = one(context.writer(), 41u32);
+            context
+                .header()
+                .get_or_lay(|| one(context.writer(), Cell::new(number)));
+        })
+        .unwrap();
+
+    // One cell per lend: the parent's scratch, the lender's region, and a copy of that.
+    let scratch = (graph.create_tree_lent(run, Lend::ParentScratch, None)).unwrap();
+    let named = (graph.create_tree_lent(run, Lend::Named(lender.into()), None)).unwrap();
+    let copied = (graph.create_tree_lent(run, Lend::Of(named.into()), None)).unwrap();
+    let read = graph
+        .enter(scratch, |context| {
+            assert!(context.lent_region().is_none());
+            let (writer, header) = context.lent_scratch().expect("lent its parent's scratch");
+            let number = one(writer, 3u32);
+            *header.get_or_lay(|| one(writer, Cell::new(number))).get()
+        })
+        .unwrap();
+    assert_eq!(read, 3);
+    for cell in [named, copied] {
+        let read = graph
+            .enter(cell, |context| {
+                assert!(context.lent_scratch().is_none());
+                let (writer, header) = context.lent_region().expect("lent the lender's region");
+                one(writer, 9u32);
+                *header.get().expect("the lender laid a header").get()
+            })
+            .unwrap();
+        assert_eq!(read, 41);
+    }
+
+    // Each refusal.
+    let tenant = graph.create_tenant(run, None).unwrap();
+    let gone = graph.create_tree(run, None).unwrap();
+    graph.release_tree(gone).unwrap();
+    let refusals: [(CellHandle, Lend, &str); 4] = [
+        (gone.into(), Lend::ParentScratch, "parent"),
+        (run.into(), Lend::Named(gone.into()), "lender"),
+        (run.into(), Lend::Named(tenant.into()), "unlendable"),
+        (build.into(), Lend::Of(scratch.into()), "foreign scratch"),
+    ];
+    for (parent, lend, name) in refusals {
+        let Err(error) = graph.create_tree_lent(parent, lend, None) else {
+            panic!("the lend must be refused");
+        };
+        assert_eq!(name_create_tree_error(error), name);
+    }
+
+    // The reads between steps.
+    let peeked = graph.peek(lender, |header, _| *header.into_value().get());
+    assert_eq!(peeked, Ok(Some(41)));
+    assert_eq!(graph.peek(run, |_, _| ()), Ok(None));
+    for (cell, name) in [(CellHandle::from(tenant), "tenant"), (gone.into(), "stale")] {
+        let Err(error) = graph.peek(cell, |_, _| ()) else {
+            panic!("the peek must be refused");
+        };
+        assert_eq!(name_peek_error(error), name);
+    }
+    assert_eq!(graph.is_childless(lender), Ok(true));
+    let child = graph.create_tree(lender, None).unwrap();
+    assert_eq!(graph.is_childless(lender), Ok(false));
+    assert_eq!(
+        graph.is_childless(gone).map_err(|stale| stale.name()),
+        Err(gone)
+    );
+
+    for cell in [child, scratch, named, copied, lender] {
+        graph.release_tree(cell).unwrap();
+    }
+    graph.release_tenant(tenant).unwrap();
+    graph.release(build, ReleaseAbsorption::IntoHolder).unwrap();
+    graph.release(run, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }
 

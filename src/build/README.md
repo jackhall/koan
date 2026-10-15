@@ -164,11 +164,11 @@ invariant site reads costs a birth nothing.
   binding keeps the lend it has today, since the shapes and the root tier
   rest at `'graph` and nothing of the build root is read from a step; a
   tenant reads through its host's. The build tree is structural, a parent
-  outliving its children, so one count covers the whole chain above. This is cellgraph's lend generalized: a tree cell borrows a
-  lender's scratch at `'lent` from creation to death, the lender counts its
-  borrowers, and the lender's reset waits on the count. Here a creation names
-  its lender and borrows its region, and the lender's disposal waits on the
-  count, which drops at a borrower's disposal. No matrix pin runs in either
+  outliving its children, so one count covers the whole chain above. This is
+  cellgraph's named lend
+  ([tree cells](../../cellgraph/src/tree/README.md#death)): a creation names
+  its lender and borrows its region at `'lent`, and the lender's disposal
+  waits on the count, which drops at a borrower's disposal. No matrix pin runs in either
   direction: the run root pins nothing of the build tree, and a build cell is
   never pinned by a run cell. The drain resolves the borrow before the run
   cell is born, and the cell holds it for its life, deepened between steps at

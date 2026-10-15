@@ -142,9 +142,10 @@ where
     /// The half's header at its brand, or `None` while nothing has laid one.
     pub fn get(self) -> Option<H::At<'cell>> {
         let header = self.slot.get()?;
-        // SAFETY: the slot belongs to one habitat half and this door is at that half's brand.
+        // SAFETY: the slot belongs to one habitat half and this door is at that half's brand: its
+        // own cell's, or a borrower's `'lent` while the half is lent and its owner undisposed.
         // Every value in it was put there by `get_or_lay` through a door onto the same half, at
-        // that half's brand of some step or build. Its referents are of four kinds: the half's
+        // one of those brands of some step or build. Its referents are of four kinds: the half's
         // own bytes; `'graph`, which outlives the graph — a door onto `Storage` among them;
         // storage the half's cell holds (a region's hold set, monotone for its life, including
         // what a placement into it minted before its build ran); and, for the scratch half, the

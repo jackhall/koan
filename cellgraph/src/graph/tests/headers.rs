@@ -20,7 +20,7 @@ use super::{Number, Owned, one, operand, operand_at, pin};
 
 /// A header: a table in the half's own bytes, or a label borrowing storage outside the graph.
 #[derive(Clone, Copy)]
-enum Mark<'graph, 'cell> {
+pub(super) enum Mark<'graph, 'cell> {
     /// Invariant in `'cell` through the `Cell`, and a real borrow across the slot.
     Table(&'cell Cell<&'cell u32>),
     /// Laid without writing a byte.
@@ -28,41 +28,41 @@ enum Mark<'graph, 'cell> {
 }
 
 /// The header family.
-struct Marks;
+pub(super) struct Marks;
 crate::reattachable!(Marks => Mark<'graph, 'cell>);
 
 /// The scratch state: a borrow of the cell's own scratch bump, so a parked state holds the bump.
-struct Held;
+pub(super) struct Held;
 crate::reattachable!(both Held => &'scratch u32);
 
 /// The delivered scratch family: a number a producer writes into the consumer's scratch habitat.
-struct Note;
+pub(super) struct Note;
 crate::reattachable!(Note => &'cell u32);
 impl DropFree for Note {}
 
 /// The bundle: a note built in the consumer's scratch, a [`Number`] carrier filed at rest.
-struct Push;
+pub(super) struct Push;
 impl<'graph> Delivery<'graph> for Push {
     type Scratch = Note;
     type Carrier = Number;
 }
 
-type Graph = CellGraph<'static, Owned, Held, Push, 1, Marks>;
-type Context<'step, 'here, 'scratch, 'lent> =
+pub(super) type Graph = CellGraph<'static, Owned, Held, Push, 1, Marks>;
+pub(super) type Context<'step, 'here, 'scratch, 'lent> =
     StepContext<'static, 'step, 'here, 'scratch, 'lent, Owned, Held, Push, 1, Marks>;
 
-fn new_graph(cap: u32) -> Graph {
+pub(super) fn new_graph(cap: u32) -> Graph {
     CellGraph::new(cap, pin)
 }
 
 /// A table over `value`, laid through `writer`: the number, then the `Cell` pointing at it.
-fn table<'cell>(writer: Writer<'cell, '_>, value: u32) -> Mark<'static, 'cell> {
+pub(super) fn table<'cell>(writer: Writer<'cell, '_>, value: u32) -> Mark<'static, 'cell> {
     let number = one(writer, value);
     Mark::Table(one(writer, Cell::new(number)))
 }
 
 /// The number a table header points at; `None` for a label.
-fn value_of(mark: Mark<'_, '_>) -> Option<u32> {
+pub(super) fn value_of(mark: Mark<'_, '_>) -> Option<u32> {
     match mark {
         Mark::Table(table) => Some(*table.get()),
         Mark::Label(_) => None,
@@ -70,7 +70,7 @@ fn value_of(mark: Mark<'_, '_>) -> Option<u32> {
 }
 
 /// The table's own borrow, at the header's brand.
-fn number_of<'cell>(mark: Mark<'_, 'cell>) -> &'cell u32 {
+pub(super) fn number_of<'cell>(mark: Mark<'_, 'cell>) -> &'cell u32 {
     match mark {
         Mark::Table(table) => table.get(),
         Mark::Label(_) => panic!("the header is a table"),
@@ -78,7 +78,7 @@ fn number_of<'cell>(mark: Mark<'_, 'cell>) -> &'cell u32 {
 }
 
 /// Lay a table over `value` in the step's region header, or read back the one already there.
-fn lay(context: &Context<'_, '_, '_, '_>, value: u32) -> Option<u32> {
+pub(super) fn lay(context: &Context<'_, '_, '_, '_>, value: u32) -> Option<u32> {
     value_of(
         context
             .header()

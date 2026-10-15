@@ -19,6 +19,7 @@ mod dormant;
 mod graph;
 mod handle;
 mod header;
+mod lend;
 mod matrix;
 mod once;
 mod reach;
@@ -34,12 +35,13 @@ mod tree;
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
 pub use graph::{
-    CellGraph, Config, CreateError, CrossedOperand, DeliverError, EnterError, Operand, Prices,
-    Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError,
-    ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
+    CellGraph, Config, CreateError, CreateTreeError, CrossedOperand, DeliverError, EnterError,
+    Operand, PeekError, Prices, Receipt, ReceiptError, RedeemError, RegisterError,
+    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
 pub use header::{HabitatHeader, Header, HomeHeader, NoHeader};
+pub use lend::Lend;
 pub use once::{OnceRun, OnceView, Written};
 pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};
 pub use receipt::{Delivered, Delivery, NoDelivery};

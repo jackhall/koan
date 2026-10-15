@@ -31,15 +31,17 @@ no drop-ordering discipline in the embedder's loop.
 A cell that dies with a *nonzero* pin column does not linger: it **seals** into
 the second tier and its slot recycles. A pin keeps the cell's *storage*, and
 storage always has somewhere to go — a seal or a fold — so a pin never keeps the
-slot itself. Two things do. One is an undisposed **tree cell** under the
+slot itself. Three things do. One is an undisposed **tree cell** under the
 slot ([../tree/README.md](../tree/README.md)), because that child's own disposal
-still has to find its root. The other is a **tenant** — a cell with no region of
+still has to find its root. Another is a **tenant** — a cell with no region of
 its own, which writes this one's
 ([../../README.md § The cell](../../README.md#the-cell)) — because a tenant's
 writer is minted from the region table at this slot, so the region stays *in
-the slot* until the last tenant leaves. Each is a count on the slot. So the
-slab holds live cells and the dead ones a tree child or a tenant is still
-counted on; admission control bounds that population, and the matrix is square
+the slot* until the last tenant leaves. The third is a tree cell **borrowing**
+the region ([../tree/README.md § Death](../tree/README.md#death)), whose doors
+are minted from the same table entry. Each is a count on the slot. So the slab
+holds live cells and the dead ones a tree child, a tenant or a borrower is
+still counted on; admission control bounds that population, and the matrix is square
 at the cap.
 
 A tenant is in no relation and has no liveness of its own to decide. A step in
@@ -68,21 +70,29 @@ and a per-cell count of undisposed children rather than bits — no tree cell is
 the matrix at all ([../tree/README.md](../tree/README.md)), and `Ancestry` is
 read off the links, not off a row.
 
-## Disposal, and the one walk left
+## Disposal, and the worklist
 
 A slab `release` disposes the slot inside its own call, unless a tree cell under
-it is still undisposed or a tenant still writes its region. Nothing cascades along the slab, because no slab cell
-stands above another: the released cell is the only slot its own death can free.
+it is still undisposed, a tenant still writes its region or a tree cell borrows
+it. Nothing cascades along the slab, because no slab cell stands above another
+and a slab cell borrows nothing: the released cell is the only slot its own
+death can free.
 
-The one walk is the pool's. A tree cell's disposal steps up its chain, dropping
+The cascade is the pool's. A tree cell's disposal steps up its chain, dropping
 each parent's child count and disposing every parent the drop leaves dead and
-childless, innermost first, and it ends at the root — which is under nothing, and
-which disposes there if this was the last child a declared death was waiting on.
-The walk is complete because only creation and disposal move a child count, so
-the cells one release can bring to zero are exactly the ones on its own chain
-upward, and the first ancestor still live, still holding another child or
-still hosting a tenant stops it. Nothing scans the pool and no list of dead cells is kept anywhere. Order does
-change retention — a dead child pinning a dead parent that a live cell also pins
+held by nothing, innermost first, and it ends at the root — which is under
+nothing, and which disposes there if this was the last child a declared death
+was waiting on. The chain walk is complete for child counts because only
+creation and disposal move one, so the cells one disposal can bring to zero
+through them are exactly the ones on its own chain upward, and the first
+ancestor still live or still held stops it. Each disposal also drops a count on
+its lender, which may sit off the chain, so the walk pushes every disposed
+cell's lender onto a worklist, and each popped home starts a walk of its own if
+its death is done waiting. No generation rides on the worklist: no cell is
+created inside a cascade, so a popped home names its occupant or a disposed
+slot, which fails the gate. Each cell disposes once and a lend names an older
+cell, so the worklist empties. Nothing scans the pool and no list of dead cells
+outlives the cascade. Order does change retention — a dead child pinning a dead parent that a live cell also pins
 reclaims first and lets the parent absorb into the live cell — but the mirror
 image favours the other order, so no fixed order dominates and the walk's own is
 taken.
@@ -90,7 +100,7 @@ taken.
 A tenant's death is a count decrement on its host and nothing else: no reclaim,
 no splice, no pledge, no tombstone, since what it wrote is the host's. If the
 host is dead and that was the last count it waited on, the host disposes there
-— a slab host directly, a tree host by starting the same upward walk at itself,
+— a slab host directly, a tree host by starting the same cascade at itself,
 which returns at once for a host still live. Every disposal, by whichever exit,
 also hands the departing cell's scratch bump back: the scratch habitat is
 beside the region and not in it, so no seal, fold or splice ever carries it.
@@ -381,7 +391,10 @@ was running when the value landed.
 for the cell. The host's region cannot move or drop while the tenant is counted
 on it, since both disposal gates wait on that count; the host's hold set — its
 row, or its root's — is monotone until the host disposes, which is after the
-tenant; and for a tree host the chain is the host's.
+tenant; and for a tree host the chain is the host's. **A borrower's `'lent` is
+its lender's half** on the same grounds: the lender cannot dispose, nor a lent
+scratch reset, while the borrower is undisposed, and the lender's hold set is
+monotone until then ([../lifetimes.md](../lifetimes.md#lent-a-borrowed-half-outlives-the-borrower)).
 
 **Recycling rests on `release`'s own argument.** A bump reaches the spare list
 only from a reclaim that owns it outright — nothing holds the region, so nothing

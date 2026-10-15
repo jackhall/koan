@@ -23,7 +23,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-59 tests, grouped by the unsafe site each pins down. Names below are the exact
+62 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -272,6 +272,19 @@ every birth finds no header in a slot whose previous occupant laid one.
   — a header laid at a tree cell's `'lent` and read back at its lender's `'scratch`, then gone
   after the borrower's death.
 
+**The named lend and the peek** ([src/graph.rs](../src/graph.rs),
+[src/lend.rs](../src/lend.rs)) — the `retype` primitive at the doors a borrowed half adds. `enter`
+re-anchors a parked scratch state naming the lent half; `Header::get` reattaches a lender's region
+header at `'lent`; and `peek` anchors a region header through `Active` at a brand quantified per
+call, outside any step. What Miri checks: a borrower reads and lays in a named cell's region across
+the region table moving and the lender's release; a peeked header read across its region growing;
+and a dead borrower's scratch, naming its own lender's scratch, read by that borrower's child after
+the lender stepped — the count that drops at disposal, not release, is what keeps those bytes.
+
+- `graph::tests::lend::a_named_lend_reads_and_lays_in_its_lenders_region_at_lent`
+- `graph::tests::lend::peek_reads_a_header_laid_in_a_live_region`
+- `graph::tests::lend::a_dead_borrowers_scratch_holds_its_lenders_scratch_until_its_disposal`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute,
@@ -291,9 +304,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-10-15: 196.77s — 207 tests, 0 leaks, 0 UB
 - 2026-10-14: 287.34s — 191 tests, 0 leaks, 0 UB
 - 2026-10-14: 235.43s — 190 tests, 0 leaks, 0 UB
 - 2026-10-09: 271.37s — 181 tests, 0 leaks, 0 UB
 - 2026-09-21: 298.18s — 165 tests, 0 leaks, 0 UB
-- 2026-09-19: 276.90s — 164 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

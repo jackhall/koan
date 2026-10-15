@@ -66,7 +66,7 @@ dependency, so it cannot say which facts a binding would settle.
   is born, so a seam mid-body needs cellgraph to re-lend a live cell, refused
   while the cell's scratch state is parked, its scratch held or a tenant's
   scratch state parked, each of which may name the old lender at `'lent`
-  ([a counted borrow of a named cell](../../cellgraph/roadmap/named-lend.md));
+  ([cellgraph's lend](../../cellgraph/src/tree/README.md#death));
   the alternative is adopting what the scratch holds over the old lend before
   the frame takes the deeper one. A `Shares` frame reads through its host's
   lend, so facts per specialization for one need a per-cell lend or a `Fresh`

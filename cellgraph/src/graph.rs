@@ -17,6 +17,7 @@ use crate::carrier::{Active, CellHome, Ready};
 use crate::dormant::{Dormant, DormantKey, ReachTable};
 use crate::handle::{CellHandle, HomeHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
 use crate::header::{HabitatHeader, Header, HomeHeader, NoHeader};
+use crate::lend::{Lend, Lent};
 use crate::matrix::{Bits, Matrix};
 use crate::reach::GraphReach;
 use crate::reattach::{
@@ -55,6 +56,31 @@ pub enum ReleaseError {
     Stale(Stale<SlabHandle>),
     /// The cell is executing. Death is declared from outside a step, never from within one.
     Executing,
+}
+
+/// Refusals from [`CellGraph::create_tree_lent`]. Each is given before anything changes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CreateTreeError {
+    /// The parent is not a live cell: the one refusal [`CellGraph::create_tree`] gives.
+    Parent(Stale<CellHandle>),
+    /// The cell a [`Lend::Named`] or [`Lend::Of`] names is not live.
+    Lender(Stale<CellHandle>),
+    /// The cell a lend names has nothing to lend: a tenant named by [`Lend::Named`] owns no
+    /// region, and a slab cell named by [`Lend::Of`], or a tenant of one, borrows nothing.
+    Unlendable(CellHandle),
+    /// The cell [`Lend::Of`] names borrows the scratch of a cell other than the new cell's parent.
+    /// A scratch is lent only to its owner's own children, whose child count holds the owner's
+    /// disposal.
+    ForeignScratch(CellHandle),
+}
+
+/// Refusals from [`CellGraph::peek`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PeekError {
+    /// The cell is not live: free, a later generation, dead, or a tombstone.
+    Stale(Stale<CellHandle>),
+    /// The cell is a tenant, which owns no region.
+    Tenant(TenantHandle),
 }
 
 /// Refusals from [`CellGraph::release_tree`].
@@ -554,9 +580,9 @@ struct TransitivePins {
 }
 
 /// What a slab slot currently holds. `Dead` is the undisposed state: the embedder declared the
-/// cell's death, but a tree cell under it has not disposed or a tenant is still writing its
-/// region, so the slot is not yet disposable. Those are the two reasons a death outlives its own
-/// `release`.
+/// cell's death, but a tree cell under it has not disposed, a tenant is still writing its region,
+/// or a tree cell borrows that region, so the slot is not yet disposable. Those are the three
+/// reasons a death outlives its own `release`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SlabState {
     Free,
@@ -972,13 +998,20 @@ impl<
             let scratch_writer = regions.scratch_writer(home);
             let header = regions.region(home).header();
             let scratch_header = regions.scratch_header(home);
-            // A tree cell's lender: the scratch bump of its tree parent's write home, which the
-            // borrower count keeps from resetting while this cell can step.
-            let lent = (self.cells.lender(home)).map(|lender| {
-                (
-                    regions.scratch_writer(lender),
-                    regions.scratch_header(lender),
-                )
+            // A tree cell's lend: its tree parent's scratch, or a named cell's region. The
+            // lender's counts keep that half in place while this cell is undisposed.
+            let lent = self.cells.lent(home).map(|lent| {
+                let (writer, header) = match lent {
+                    Lent::Scratch(lender) => (
+                        regions.scratch_writer(lender),
+                        regions.scratch_header(lender),
+                    ),
+                    Lent::Region(lender) => {
+                        let region = regions.region(lender);
+                        (region.writer(), region.header())
+                    }
+                };
+                (lent, writer, header)
             });
             // Both parked slots are re-anchored here, beside the two writers whose brands they
             // come back at, so the pairing of slot with brand is made in this one place. The
@@ -1009,8 +1042,8 @@ impl<
             let continuation = stored.map(|parked| unsafe { parked.reattach() });
             // SAFETY: the value came in through `store_scratch_state` at some earlier step's
             // `'here` and `'scratch`, and its region referents are of two kinds, each re-anchored
-            // at its own brand. A form may name a lent scratch at `'scratch` too, since
-            // `'lent: 'scratch`: see the clause on the lent bump below. The ones the form holds
+            // at its own brand. A form may name a lent half at `'scratch` too, since
+            // `'lent: 'scratch`: see the clause on the lent half below. The ones the form holds
             // at `'here` are storage the executing cell's hold set covers, by the argument above clause for clause — the form names
             // them at `'here` itself, so nothing about them rests on this slot. The ones at
             // `'scratch` are chunks of the write home's scratch bump, which is pinned to its table
@@ -1020,10 +1053,13 @@ impl<
             // the store and the cell live. Both brands are quantified by this call's `step` and
             // nameable nowhere outside it, which discharges the invariant-family condition at each
             // position; and `'here: 'scratch` is the only relation between them, so no form holds
-            // a scratch referent where it names `'here`. A lent bump — a tree cell's tree parent's
-            // write home's scratch — is held from this cell's creation to its death by the
-            // lender's borrower count, which `scratch_named` reads, so a referent in it outlives
-            // every step of the cell, and every scratch it parks. No capture is a door onto a
+            // a scratch referent where it names `'here`. A lent half is held from this cell's
+            // creation to its disposal. A lent scratch is the tree parent's, whose disposal waits
+            // on this cell as a child and whose reset waits on the scratch count, which
+            // `scratch_named` reads; a lent region's owner's disposal waits on the region count.
+            // Both counts drop at this cell's disposal. A region's chunks never move, and it
+            // leaves the table only at its owner's disposal. So a referent in the lent half
+            // outlives every step of the cell and every scratch it parks. No capture is a door onto a
             // habitat, for the reason the continuation's holds none: its minting step's `'step`
             // outlives neither `'here` nor `'scratch`.
             let scratch_state = stored_scratch.map(|parked| unsafe { parked.reattach() });
@@ -1123,13 +1159,56 @@ impl<
     /// what bounds the pool is the depth of the call tree, not the slab's cap. It takes no row and
     /// no column either — a placement into it mints into its root, and a carrier homed in it
     /// travels with the root's bit ([tree/README.md](tree/README.md)).
+    ///
+    /// It lends the child its parent's scratch, as [`create_tree_lent`](Self::create_tree_lent)
+    /// with [`Lend::ParentScratch`] does.
     pub fn create_tree(
         &mut self,
         parent: impl Into<CellHandle>,
         continuation: Option<C::At<'graph>>,
     ) -> Result<TreeHandle, Stale<CellHandle>> {
         // A tenant named as a parent means its host: the child is the host's child.
-        let (root, tree_parent, depth) = match self.cells.write_home(parent.into())? {
+        let parent = self.cells.write_home(parent.into())?;
+        Ok(self.create_tree_under(parent, Lent::Scratch(parent), continuation))
+    }
+
+    /// Create a tree cell under `parent`, as [`create_tree`](Self::create_tree) does, borrowing what
+    /// `lend` names from its creation to its disposal. A step in it, or in a tenant of it, is handed
+    /// the borrowed half at `'lent`: [`Lend::ParentScratch`] lends the parent's write home's scratch,
+    /// through [`StepContext::lent_scratch`]; [`Lend::Named`] lends the named cell's region, through
+    /// [`StepContext::lent_region`]; and [`Lend::Of`] lends again what the named cell borrows.
+    ///
+    /// A lend mints no pin row and enters no relation: the lender's region stays in place because
+    /// its disposal waits on this cell's, and a lent scratch because its reset does.
+    ///
+    /// Refuses, before anything changes, a parent or a named cell that is not live, a name with
+    /// nothing to lend, and a copied scratch lend under any parent but its lender
+    /// ([`CreateTreeError`]). A cell named by [`Lend::Of`] may borrow from a lender that is dead but
+    /// undisposed: its own count holds that lender.
+    pub fn create_tree_lent(
+        &mut self,
+        parent: impl Into<CellHandle>,
+        lend: Lend,
+        continuation: Option<C::At<'graph>>,
+    ) -> Result<TreeHandle, CreateTreeError> {
+        let parent = (self.cells.write_home(parent.into())).map_err(CreateTreeError::Parent)?;
+        let lent = self.cells.resolve_lend(parent, lend)?;
+        Ok(self.create_tree_under(parent, lent, continuation))
+    }
+
+    /// Create a tree cell under the write home `parent`, borrowing `lent`. Refuses nothing: both
+    /// doors resolved and checked what they were named.
+    fn create_tree_under(
+        &mut self,
+        parent: CellHome,
+        lent: Lent,
+        continuation: Option<C::At<'graph>>,
+    ) -> TreeHandle {
+        debug_assert!(
+            !matches!(lent, Lent::Scratch(lender) if lender != parent),
+            "a scratch is lent to a cell other than its owner's child"
+        );
+        let (root, tree_parent, depth) = match parent {
             CellHome::Slab(slot) => (slot, Ancestor::Root, 1),
             CellHome::Tree(index) => (
                 self.cells.trees.root(index),
@@ -1145,19 +1224,15 @@ impl<
         let handle = self
             .cells
             .trees
-            .create(root, tree_parent, depth, continuation);
+            .create(root, tree_parent, depth, lent, continuation);
         self.regions.reach_tree(handle.index());
         self.regions.warm(CellHome::Tree(handle.index()));
         match tree_parent {
             Ancestor::Tree(index) => self.cells.trees.add_child(index),
             Ancestor::Root => self.cells.slots[root as usize].tree_children += 1,
         }
-        // The child borrows its parent's write home's scratch bump until its death.
-        let lender = self.cells.lender(CellHome::Tree(handle.index()));
-        self.cells
-            .tenancy_mut(lender.expect("a tree cell has a lender"))
-            .scratch_borrowers += 1;
-        Ok(handle)
+        self.cells.borrow(lent);
+        handle
     }
 
     /// Declare a tree cell's death. **No absorption argument**: where its bytes go was settled at
@@ -1181,14 +1256,9 @@ impl<
         if let Some(run) = self.cells.trees.mark_dead(index) {
             self.cells.release_run(CellHome::Tree(index), run);
         }
-        // The cell will never step again, so it stops borrowing its lender's bump.
-        let lender = self
-            .cells
-            .lender(CellHome::Tree(index))
-            .expect("a tree cell has a lender");
-        self.cells.tenancy_mut(lender).scratch_borrowers -= 1;
-        self.park()
-            .run(|cells, regions, scratch| cells.dispose_tree_chain(index, regions, scratch));
+        self.park().run(|cells, regions, scratch| {
+            cells.dispose_from(CellHome::Tree(index), regions, scratch)
+        });
         Ok(())
     }
 
@@ -1274,6 +1344,34 @@ impl<
         self.cells.write_home(cell.into()).is_ok()
     }
 
+    /// Read a live slab or tree cell's region header between steps, under a brand this call
+    /// quantifies: the closure receives the header and a witness that `'graph` outlives the brand,
+    /// never a door, so nothing can be laid through it. `Ok(None)` when no header is laid. Refuses
+    /// a cell that is dead or stale, and a tenant, which owns no region.
+    pub fn peek<R>(
+        &self,
+        cell: impl Into<CellHandle>,
+        read: impl for<'p> FnOnce(Active<'graph, 'p, H>, &'p &'graph ()) -> R,
+    ) -> Result<Option<R>, PeekError> {
+        let cell = cell.into();
+        if let CellHandle::Tenant(tenant) = cell {
+            return Err(PeekError::Tenant(tenant));
+        }
+        let home = self.cells.write_home(cell).map_err(PeekError::Stale)?;
+        // The claim `anchored` asks for: the header's referents are what any region header's are
+        // (`Header::get`), and `&self` is held for the call, so no verb can move or drop the
+        // region or release the holds they name.
+        let header = self.regions.region(home).laid_header();
+        Ok(header.map(|header| read(Active::anchored(header), &&())))
+    }
+
+    /// Whether a live tree cell has no undisposed tree child, live or dead. A cache that evicts
+    /// only leaves asks this before [`release_tree`](Self::release_tree).
+    pub fn is_childless(&self, cell: TreeHandle) -> Result<bool, Stale<TreeHandle>> {
+        let index = self.cells.trees.live_index(cell)?;
+        Ok(self.cells.trees.children(index) == 0)
+    }
+
     /// Chunk bytes a live cell's region bundle occupies, absorbed bumps included. `0` for a cell
     /// that never allocated.
     #[cfg(test)]
@@ -1354,37 +1452,64 @@ impl<
         Ok(SlabHandle::new(slot, cell.generation))
     }
 
-    /// Dispose of the just-released tree cell and then of every dead-but-undisposed ancestor its
-    /// disposal leaves with no undisposed child, innermost first — and, at the top, of the root if
-    /// this was the last tree child a declared death was waiting on. It is the crate's one walk.
+    /// Dispose of everything the change at `start` lets go: `start` if its death is done waiting,
+    /// each dead tree ancestor its disposal leaves with nothing holding it, and each lender whose
+    /// last borrower that was, with that lender's own chain. A worklist rather than one walk,
+    /// because a disposal drops a count on its lender, which may sit off the disposed cell's chain.
     ///
-    /// The walk is complete because only creation and disposal move a child count, so the only
-    /// cells this release can bring to zero are the ones on its own chain upward, and the first
-    /// ancestor that is still live, still has another child, or still has a tenant stops it. A
-    /// tenant's departure starts the same walk at its host, which returns at once for a host that
-    /// is live. It ends at the root, which
-    /// is under nothing.
-    fn dispose_tree_chain(
+    /// No generation rides on the worklist: nothing is created inside a cascade, so a pushed home
+    /// names its occupant or a disposed slot when popped, and a disposed slot fails both gates.
+    /// It terminates because each cell disposes once and pushes one lender.
+    fn dispose_from(
         &mut self,
-        released: u32,
+        start: CellHome,
         regions: &mut Regions<'graph, H>,
         scratch: &Scratch,
     ) {
-        let mut next = Some(released);
+        let mut pending = scratch.vec();
+        pending.push(start);
+        while let Some(home) = pending.pop() {
+            match home {
+                CellHome::Slab(slot) => self.dispose_if_disposable(slot, regions, scratch),
+                CellHome::Tree(index) => {
+                    self.dispose_tree_chain(index, regions, scratch, &mut pending)
+                }
+            }
+        }
+    }
+
+    /// Dispose of the tree cell at `index` if its death is done waiting, then of every
+    /// dead-but-undisposed ancestor its disposal leaves with nothing holding it, innermost first,
+    /// and, at the top, of the root if this was the last tree child a declared death was waiting
+    /// on. Each disposed cell's lender goes on `pending` for [`dispose_from`](Self::dispose_from).
+    ///
+    /// The walk is complete for the child counts: only creation and disposal move one, so the only
+    /// cells a disposal can bring to zero are on its own chain upward, and the first ancestor that
+    /// is still live or still held stops it. It ends at the root, which is under nothing.
+    fn dispose_tree_chain(
+        &mut self,
+        start: u32,
+        regions: &mut Regions<'graph, H>,
+        scratch: &Scratch,
+        pending: &mut ScratchVec<'_, CellHome>,
+    ) {
+        let mut next = Some(start);
         while let Some(index) = next {
-            // Two things hold a tree cell past its death: an undisposed child, and a tenant still
-            // writing its region. Either one, or a cell still live, stops the walk here.
-            if self.trees.state(index) != TreeState::Dead
-                || self.trees.children(index) > 0
-                || self.trees.tenancy(index).tenants > 0
-            {
+            if !self.tree_disposable(index) {
                 return;
             }
             // Read the links first: disposal recycles the slot or turns it into a tombstone, and
             // either way the chain fields stop answering for the cell that was there.
             let parent = self.trees.parent(index);
             let root = self.trees.root(index);
+            let lent = self.trees.lent(index);
             self.dispose_tree(index, regions, scratch);
+            // The cell stops borrowing only now: its own scratch, reset by the disposal, is the
+            // last thing that could name the lent bytes, and it outlives a release that left the
+            // cell waiting. Dropped before the parent is visited, so a lender that is the parent
+            // or the root disposes in this walk; its second visit off `pending` fails the gate.
+            self.unborrow(lent);
+            pending.push(lent.lender());
             match parent {
                 Ancestor::Tree(parent) => {
                     self.trees.drop_child(parent);
@@ -1574,11 +1699,8 @@ impl<
         if let Some(run) = departed.run {
             self.release_run(departed.host, run);
         }
-        match departed.host {
-            CellHome::Slab(slot) => self.dispose_if_disposable(slot, regions, scratch),
-            // The chain walk returns at once unless the host is dead with nothing else under it.
-            CellHome::Tree(index) => self.dispose_tree_chain(index, regions, scratch),
-        }
+        // Returns at once unless the host is dead with nothing else holding it.
+        self.dispose_from(departed.host, regions, scratch);
     }
 
     /// Whether anything at rest names the scratch bump `home` owns — what holds off that bump's
@@ -1587,7 +1709,7 @@ impl<
     /// host whose death was declared had its own slots cleared then, so it stops holding the reset
     /// off while its tenants run on. Read where a step ends, once both slots are back on the cell
     /// and a tenant's count has moved. A tree cell that borrows the bump names it too, from its
-    /// creation to its death.
+    /// creation to its disposal.
     fn scratch_named(&self, home: CellHome) -> bool {
         let own = match home {
             CellHome::Slab(slot) => self.slots[slot as usize].step_slots.names_scratch(),
@@ -1597,16 +1719,70 @@ impl<
         own || tenancy.scratch_tenants > 0 || tenancy.scratch_borrowers > 0
     }
 
-    /// The write home whose scratch bump a tree cell at `home` borrows: its tree parent's write
-    /// home. `None` for a slab cell, which borrows none.
-    fn lender(&self, home: CellHome) -> Option<CellHome> {
-        let CellHome::Tree(index) = home else {
-            return None;
+    /// What the cell at `home` borrows. `None` for a slab cell, which borrows nothing.
+    fn lent(&self, home: CellHome) -> Option<Lent> {
+        match home {
+            CellHome::Slab(_) => None,
+            CellHome::Tree(index) => Some(self.trees.lent(index)),
+        }
+    }
+
+    /// Resolve what a new tree cell under the write home `parent` is lent, touching nothing. So
+    /// every scratch lend resolves to the parent's own: the one `ParentScratch` names, or a copy
+    /// taken under the copied cell's lender.
+    fn resolve_lend(&self, parent: CellHome, lend: Lend) -> Result<Lent, CreateTreeError> {
+        match lend {
+            Lend::ParentScratch => Ok(Lent::Scratch(parent)),
+            Lend::Named(cell @ CellHandle::Tenant(_)) => Err(CreateTreeError::Unlendable(cell)),
+            Lend::Named(cell) => (self.write_home(cell))
+                .map(Lent::Region)
+                .map_err(CreateTreeError::Lender),
+            // A tenant means its host, whose lend is the one its steps are handed. A lender that is
+            // dead but undisposed is fine: the named cell's own count holds it.
+            Lend::Of(cell) => {
+                let home = self.write_home(cell).map_err(CreateTreeError::Lender)?;
+                match self.lent(home) {
+                    None => Err(CreateTreeError::Unlendable(cell)),
+                    Some(Lent::Scratch(lender)) if lender != parent => {
+                        Err(CreateTreeError::ForeignScratch(cell))
+                    }
+                    Some(lent) => Ok(lent),
+                }
+            }
+        }
+    }
+
+    /// Count a new borrower of the half `lent` names on its lender.
+    fn borrow(&mut self, lent: Lent) {
+        let tenancy = self.tenancy_mut(lent.lender());
+        match lent {
+            Lent::Scratch(_) => tenancy.scratch_borrowers += 1,
+            Lent::Region(_) => tenancy.region_borrowers += 1,
+        }
+    }
+
+    /// Drop a disposed borrower's count on its lender.
+    fn unborrow(&mut self, lent: Lent) {
+        let tenancy = self.tenancy_mut(lent.lender());
+        let count = match lent {
+            Lent::Scratch(_) => &mut tenancy.scratch_borrowers,
+            Lent::Region(_) => &mut tenancy.region_borrowers,
         };
-        Some(match self.trees.parent(index) {
-            Ancestor::Root => CellHome::Slab(self.trees.root(index)),
-            Ancestor::Tree(parent) => CellHome::Tree(parent),
-        })
+        debug_assert!(
+            *count > 0,
+            "a borrower disposed under a lender that counted none"
+        );
+        *count -= 1;
+    }
+
+    /// Whether the tree cell at `index` is dead and may leave the pool now. Three things hold a
+    /// tree cell past its death: an undisposed child, a tenant still writing its region, and a tree
+    /// cell borrowing that region.
+    fn tree_disposable(&self, index: u32) -> bool {
+        // The state first: the counts panic on a free slot or a tombstone.
+        self.trees.state(index) == TreeState::Dead
+            && self.trees.children(index) == 0
+            && !self.trees.tenancy(index).holds_disposal()
     }
 
     /// Hand `home`'s scratch bump back whole, and the free runs in it with it. The one reset of a
@@ -1720,13 +1896,14 @@ impl<
         (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlabState::Free)
     }
 
-    /// Whether the slot is dead and may leave the slab now: no tree cell under it is undisposed,
-    /// and no tenant is still writing its region.
+    /// Whether the slot is dead and may leave the slab now: no tree cell under it is undisposed, no
+    /// tenant is still writing its region, and no tree cell borrows that region.
     ///
-    /// Those two counts are the only things that can hold a slot past its death. A pin keeps the
+    /// Those three counts are the only things that can hold a slot past its death. A pin keeps the
     /// cell's *storage*, which seals or folds and lets the slot go; a tree child keeps the slot
-    /// itself, because the child's own disposal still has to find its root; and a tenant keeps the
-    /// region *in the slot*, because its writer is minted from the region table at that index.
+    /// itself, because the child's own disposal still has to find its root; and a tenant or a
+    /// borrower keeps the region *in the slot*, because its doors are minted from the region table
+    /// at that index.
     ///
     /// Execution does not enter the question: `release` refuses an executing cell and `begin`
     /// refuses a dead one, so a dead cell is never executing.
@@ -1736,7 +1913,7 @@ impl<
             return false;
         }
         debug_assert!(!self.executing.test(slot), "a dead cell is executing");
-        cell.tree_children == 0 && cell.tenancy.tenants == 0
+        cell.tree_children == 0 && !cell.tenancy.holds_disposal()
     }
 
     /// Dispose of the slot if its death is done waiting — the whole of what a site that may have
@@ -3324,10 +3501,12 @@ where
 /// handed back whole at the end of the first step that leaves nothing naming it: that slot, the
 /// cell's receipt run, its [hold](Self::hold_scratch), or a tree cell borrowing it.
 ///
-/// `'lent` is a tree cell's **lent** scratch: the bump of its tree parent's write home, which the
-/// cell borrows from its creation to its death ([`lent_scratch`](Self::lent_scratch)). Invariant
-/// and quantified per `enter`, unrelated to `'here`, and outliving `'scratch`, so the cell's own
-/// scratch may name the lent bump and nothing of the cell's may be laid there.
+/// `'lent` is a tree cell's **lent** half: its tree parent's scratch bump
+/// ([`lent_scratch`](Self::lent_scratch)) or a named cell's region
+/// ([`lent_region`](Self::lent_region)), which the cell borrows from its creation to its
+/// disposal. Invariant and quantified per `enter`, unrelated to `'here`, and outliving
+/// `'scratch`, so the cell's own scratch may name the lent half and nothing of the cell's may be
+/// laid there.
 ///
 /// `'graph` outlives all three. It is the graph's lifetime — storage the embedder owns outside the graph,
 /// which the graph cannot outlive — and the where-clause is what lets a step capture a `&'graph`
@@ -3383,9 +3562,9 @@ pub struct StepContext<
     header: Header<'graph, 'here, 'step, H>,
     /// The write home's scratch header door, minted beside `scratch_writer`.
     scratch_header: Header<'graph, 'scratch, 'step, H>,
-    /// For a tree cell, its lender's scratch writer and header door: see
-    /// [`lent_scratch`](Self::lent_scratch).
-    lent: Option<(Writer<'lent, 'step>, Header<'graph, 'lent, 'step, H>)>,
+    /// For a tree cell, what it borrows and that half's writer and header door: see
+    /// [`lent_scratch`](Self::lent_scratch) and [`lent_region`](Self::lent_region).
+    lent: Option<(Lent, Writer<'lent, 'step>, Header<'graph, 'lent, 'step, H>)>,
     /// The graph's scratch region, held here for the length of the step and handed back by `Drop`.
     /// A door splits this off the cells borrow so a transient and a `&mut Cells` coexist.
     ///
@@ -3928,17 +4107,33 @@ where
         self.scratch_writer
     }
 
-    /// For a step whose write home is a tree cell, the scratch bump of that cell's tree parent's
-    /// write home — its **lender** — as a writer and a header door at `'lent`; `None` for a slab
-    /// home. A tree cell borrows its lender's bump from its creation to its death, and the bump's
-    /// reset waits on every borrower, so what the step writes there outlives the step and every
-    /// scratch the cell parks, and the lender reads it back at its own `'scratch` once it steps.
+    /// For a step whose write home is a tree cell lent its tree parent's scratch — its
+    /// **lender** — that bump as a writer and a header door at `'lent`; `None` for a slab home, or
+    /// a cell lent a region ([`lent_region`](Self::lent_region)). A tree cell borrows its lender's
+    /// bump from its creation to its disposal, and the bump's reset waits on every borrower, so
+    /// what the step writes there outlives the step and every scratch the cell parks, and the
+    /// lender reads it back at its own `'scratch` once it steps.
     ///
-    /// `'lent` is unrelated to `'here`, and outlives only `'scratch`: a value in the lent bump may
-    /// name `'graph`, the lent bump itself and what the lender's own scratch may name, never the
-    /// borrower's region or scratch, and the borrower's scratch may name the lent bump.
+    /// `'lent` is unrelated to `'here`, and outlives only `'scratch`: a value in the lent half may
+    /// name `'graph`, the lent half itself and what the lender's own storage may name, never the
+    /// borrower's region or scratch, and the borrower's scratch may name the lent half.
     pub fn lent_scratch(&self) -> Option<(Writer<'lent, 'step>, Header<'graph, 'lent, 'step, H>)> {
-        self.lent
+        match self.lent {
+            Some((Lent::Scratch(_), writer, header)) => Some((writer, header)),
+            _ => None,
+        }
+    }
+
+    /// For a step whose write home is a tree cell lent a named cell's region ([`Lend::Named`], or
+    /// a copy of one), that region as a writer and a header door at `'lent`; `None` otherwise. The
+    /// region's owner disposes only after this cell does, so what the step writes there outlives
+    /// the step and every scratch the cell parks, and stays in the owner's region for the owner's
+    /// life. `'lent`'s relations are [`lent_scratch`](Self::lent_scratch)'s.
+    pub fn lent_region(&self) -> Option<(Writer<'lent, 'step>, Header<'graph, 'lent, 'step, H>)> {
+        match self.lent {
+            Some((Lent::Region(_), writer, header)) => Some((writer, header)),
+            _ => None,
+        }
     }
 
     /// Hold the executing cell's scratch bump for the rest of its life, so no step end resets it

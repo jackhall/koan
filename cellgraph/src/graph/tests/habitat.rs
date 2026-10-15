@@ -492,8 +492,8 @@ fn a_released_hosts_scratch_slot_no_longer_blocks_its_tenants() {
     assert!(graph.is_empty());
 }
 
-/// A tree cell borrows its parent's scratch bump from its creation to its death: the parent's
-/// step ends hand nothing back meanwhile, and the first quiet step end after the child's death
+/// A tree cell borrows its parent's scratch bump from its creation to its disposal: the parent's
+/// step ends hand nothing back meanwhile, and the first quiet step end after the child's disposal
 /// does.
 #[test]
 fn a_parents_scratch_waits_on_a_tree_child_and_goes_after_its_death() {
