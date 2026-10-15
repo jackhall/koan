@@ -25,7 +25,7 @@ use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
 use super::keyed::Keyed;
-use super::shape::{Candidate, Coordinate, Site};
+use super::shape::{Candidate, Coordinate, Site, Slot};
 use super::tree::{Binder, Tree};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
@@ -508,6 +508,11 @@ pub struct Caching<'graph> {
     /// Each argument part of a call that passes on a value the frame body received, or a member
     /// read of one, sorted: its types crossed into the region at the frame's birth.
     pub received: Keyed<'graph, Site>,
+    /// On a caching frame body's own record, when it or a block or module body it runs has an
+    /// invariant minting site or an invariant composite site: the frame's parameter slots those
+    /// sites read, sorted, which may be none. A call to the frame seeks the specialization these
+    /// slots' arguments key. `None` on every other record.
+    pub invariant: Option<&'graph [Slot]>,
 }
 
 /// The value channel's load-time facts for one body: a static type for every value expression and

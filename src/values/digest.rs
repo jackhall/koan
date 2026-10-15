@@ -127,6 +127,8 @@ pub enum Tag {
     /// What the load cannot see of a module's content, keyed on its binder: a load-time key, never
     /// a value's digest.
     Leaf = 0x30,
+    /// A specialization's key: a body's segment index and the argument digests it is keyed on.
+    Specialization = 0x31,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's

@@ -9,11 +9,11 @@
 //! last statement makes, and every callable whose name escapes as a value. A site's class depends
 //! on edges from every body in the program and on every path's resolution, so the classes are
 //! fixed once the whole pass has run ([`Pass::cache`]), into each shape's write-once [`Caching`]
-//! cell. A wrong class costs growth or warmth, never soundness: an edge or an escape the pass
+//! cell, beside the frame parameters its invariant sites read, which key its specialization. A wrong class costs growth or warmth, never soundness: an edge or an escape the pass
 //! misses only keeps a parameter invariant too long, and one it over-counts only keeps a site
 //! cold.
 
-use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, resident};
+use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, collect, resident};
 use crate::parse::ExpressionPart;
 use crate::scope::{
     BodyClass, BodyShape, Caching, Candidate, Coordinate, Keyed, Leaf, Mint, NodeCapture,
@@ -610,17 +610,36 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 break;
             }
         }
+        // A site's class, beside the frame parameters an invariant one reads.
         let resolve = |pass: &Self, record: &SiteRecord<'p, 'graph>| match record.deps(scratch) {
-            Deps::Closed => Mint::Closed,
-            Deps::Varying => Mint::Varying,
+            Deps::Closed => (Mint::Closed, &[][..]),
+            Deps::Varying => (Mint::Varying, &[][..]),
             Deps::On(slots) => {
                 let frame = record.frame;
                 let held = slots.iter().all(|slot| {
                     invariant_body(pass, frame) && !varying.contains(&(address(frame), *slot))
                 });
-                if held { Mint::Invariant } else { Mint::Varying }
+                if held {
+                    (Mint::Invariant, slots)
+                } else {
+                    (Mint::Varying, &[][..])
+                }
             }
         };
+        // Per frame body, the parameters its invariant sites read, across every holder it runs:
+        // what keys its specialization. A frame with an invariant site and no entry here reads
+        // captures alone.
+        let mut keyed_frames: BumpBackedSet<'p, usize> = bump_set(scratch);
+        let mut keyed_slots = BumpVec::new_in(scratch);
+        for record in self.sites.iter() {
+            let (class, slots) = resolve(self, record);
+            if class == Mint::Invariant {
+                keyed_frames.insert(address(record.frame));
+                keyed_slots.extend(slots.iter().map(|slot| (address(record.frame), *slot)));
+            }
+        }
+        keyed_slots.sort_unstable();
+        keyed_slots.dedup();
         self.sites.sort_by_key(|record| address(record.holder));
         self.received.sort_by_key(|(holder, _)| address(holder));
         for (holder, frame) in self.holders.iter() {
@@ -640,13 +659,22 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             received.sort_unstable();
             received.dedup();
             for record in self.sites[from..to].iter() {
-                let class = resolve(self, record);
+                let (class, _) = resolve(self, record);
                 if record.minting {
                     mints.push((record.site, class));
                 } else if class == Mint::Invariant {
                     warm.push(record.site);
                 }
             }
+            let invariant = (caches && std::ptr::eq(*holder, *frame) && keyed_frames.contains(&at))
+                .then(|| {
+                    let from = keyed_slots.partition_point(|(each, _)| *each < at);
+                    let to = keyed_slots.partition_point(|(each, _)| *each <= at);
+                    collect(
+                        self.writer,
+                        keyed_slots[from..to].iter().map(|(_, slot)| *slot),
+                    )
+                });
             holder.fix_caching(resident(
                 self.writer,
                 Caching {
@@ -654,6 +682,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     mints: Keyed::sorted(self.writer, &mut mints),
                     warm: Keyed::sorted(self.writer, &mut warm),
                     received: Keyed::sorted(self.writer, &mut received),
+                    invariant,
                 },
             ));
         }

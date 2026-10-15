@@ -1,6 +1,9 @@
 //! Library facade for the koan interpreter: the modules the binary and the tests reach the
 //! interpreter through.
 
+/// The build tree: what the program's text decides, held in cells beside the run tree. Here, the
+/// key a specialization is found by.
+pub mod build;
 /// The language koan's programs run under: the builtin table, keyword selection over a use's
 /// candidates, and the step every evaluation runs.
 pub mod dispatch;

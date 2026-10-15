@@ -51,9 +51,9 @@ pub use keyed::{Keyed, KeyedEntry};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
-    Position, QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead,
-    Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, each_part, part_of,
-    selection_refused, source_of, spelled, view_refused,
+    Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind, Site, Slot,
+    SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, each_part,
+    part_of, selection_refused, source_of, spelled, view_refused,
 };
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};
 pub use typed::{

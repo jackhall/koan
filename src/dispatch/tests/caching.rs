@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::program::CellSubstrate;
 use crate::scheduler::{LAID, TIERS, Tiers};
-use crate::scope::{BodyShape, ShapeKind};
+use crate::scope::{BodyShape, ShapeKind, Slot};
 
 use super::super::Koan;
 use super::classes::tutorial_snippets;
@@ -507,4 +507,115 @@ fn laid_through_caching_chains() {
             }
         }
     }
+}
+
+/// Every shape under `shape`, itself included, depth first.
+fn every_shape<'graph>(shape: &'graph BodyShape<'graph>, out: &mut Vec<&'graph BodyShape<'graph>>) {
+    out.push(shape);
+    for (_, nested) in shape.nested_shapes() {
+        every_shape(nested, out);
+    }
+}
+
+/// Bodies whose invariant sites read a parameter, captures alone, a block's site, and nothing.
+const KEYED: &str = "EXPR #(OUTER m :Counter) -> Number = \
+                     #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g 1))\n\
+                     EXPR #(BLOCKED m :Counter k :Number) -> Number = \
+                     #(USING empty SCOPE ((LET v = (m :| Counter)) (k)))\n\
+                     LET plain = (FN :{x :Number} -> Number = #(x))\n";
+
+/// Each shape's slot names, beside its kind and the parameters its record keys a
+/// specialization on, by name.
+fn keyed(source: &str) -> Vec<(ShapeKind, Vec<String>, Option<Vec<String>>)> {
+    loaded(source, |program| {
+        let mut shapes = Vec::new();
+        every_shape(program.shape(), &mut shapes);
+        let name = |shape: &BodyShape<'_>, slot: Slot| {
+            let symbol = shape.slot_name(slot).symbol();
+            program.symbols().display(symbol).to_string()
+        };
+        (shapes.into_iter())
+            .map(|shape| {
+                let names = (0..shape.slots())
+                    .map(|index| name(shape, Slot(index as u32)))
+                    .collect();
+                let invariant = (shape.caching().and_then(|caching| caching.invariant))
+                    .map(|slots| slots.iter().map(|slot| name(shape, *slot)).collect());
+                (shape.kind(), names, invariant)
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn a_caching_frame_keys_on_the_parameters_its_invariant_sites_read() {
+    let shapes = keyed(&format!("{PRELUDE}{INVARIANT}{KEYED}"));
+    let of = |names: &[&str]| {
+        let found = (shapes.iter()).find(|(_, each, _)| each == names);
+        let (kind, _, invariant) = found.unwrap_or_else(|| panic!("a shape binds {names:?}"));
+        (*kind, invariant.clone())
+    };
+    let some = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect());
+    assert_eq!(
+        of(&["link", "v", "m"]),
+        (ShapeKind::Callable, some(&["m"])),
+        "a loop viewing the module it passes on keys on it"
+    );
+    assert_eq!(
+        of(&["m", "end"]),
+        (ShapeKind::Callable, None),
+        "a body with no invariant site keys on nothing"
+    );
+    assert_eq!(
+        of(&["x", "v"]),
+        (ShapeKind::Callable, some(&[])),
+        "a body viewing a capture alone keys on no parameter"
+    );
+    assert_eq!(of(&["g", "m"]), (ShapeKind::Callable, None));
+    assert_eq!(
+        of(&["m", "k"]),
+        (ShapeKind::Callable, some(&["m"])),
+        "a frame keys on what its blocks' invariant sites read"
+    );
+    assert_eq!(
+        of(&["unused", "v"]),
+        (ShapeKind::Block, None),
+        "a block's own record keys on nothing"
+    );
+    assert!(
+        (shapes.iter())
+            .filter(|(kind, _, _)| *kind != ShapeKind::Callable)
+            .all(|(_, _, invariant)| invariant.is_none()),
+        "only a frame body's record keys a specialization"
+    );
+}
+
+#[test]
+fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
+    let source = format!("{PRELUDE}{INVARIANT}{KEYED}LET q = #(1)\n");
+    let segments = || {
+        loaded(&source, |program| {
+            let mut shapes = Vec::new();
+            every_shape(program.shape(), &mut shapes);
+            (shapes.iter())
+                .map(|shape| (shape.kind(), shape.segment()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let first = segments();
+    let distinct: std::collections::BTreeSet<_> =
+        first.iter().map(|(_, segment)| *segment).collect();
+    assert_eq!(distinct.len(), first.len(), "no two shapes share a segment");
+    for kind in [
+        ShapeKind::Callable,
+        ShapeKind::Block,
+        ShapeKind::Module,
+        ShapeKind::Code,
+    ] {
+        assert!(
+            first.iter().any(|(each, _)| *each == kind),
+            "the program holds a {kind:?} shape"
+        );
+    }
+    assert_eq!(segments(), first, "a second load assigns the same segments");
 }
