@@ -101,3 +101,5 @@ their named lend and peek, and [the type tiers](../../design/type-tiers.md).
   specialization is a build cell.
 - [Code splicing](../metaprogramming/code-splicing.md) — composed code's
   shape lives in a composed-code cell under the build root.
+- [The build image](../rewrite/build-image.md) — the tree the image
+  serializes.

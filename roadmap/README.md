@@ -12,19 +12,13 @@ prerequisites and the items it unblocks.
 
 Work is grouped into project subdirectories, each a coherent body of work whose items
 share design constraints and ship together. Each has a README naming what the project
-buys the language and listing its ready-to-start items. The live projects are
+buys the language and listing its ready-to-start items. The projects are
 [rewrite/](rewrite/README.md), the runtime's layers, and the four bodies of work
 that build on it:
 [conditionals/](conditionals/README.md),
 [gradual-typing/](gradual-typing/README.md),
 [metaprogramming/](metaprogramming/README.md) and
 [type-tiers/](type-tiers/README.md).
-
-The one `old_`-prefixed project, [old_editor_tooling/](old_editor_tooling/README.md),
-was written against the first runtime. Its item is stale as work to pick up, but it
-records a requirement the language has. The `old_` prefix is what `doclinks` keys on:
-such an item stays in the link and dependency gates but never appears in a "Next
-items" list.
 
 The cell substrate Koan embeds carries its own roadmap,
 [cellgraph/roadmap/](../cellgraph/roadmap/README.md). Items cross-link across
