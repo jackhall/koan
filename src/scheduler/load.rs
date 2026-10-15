@@ -70,6 +70,10 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
                 })
             })
             .expect("a fresh build root is enterable")?;
-        Ok((Graph::assemble(cells, type_root), Roots { build, run }, out))
+        Ok((
+            Graph::assemble(cells, type_root, Some(build)),
+            Roots { build, run },
+            out,
+        ))
     }
 }

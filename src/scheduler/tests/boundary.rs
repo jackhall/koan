@@ -31,6 +31,8 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
 /// What no public method of `Step` may spell: a handle, a carrier door, or a carrier.
 const STEP_MAY_NOT_NAME: &[&str] = &[
     "CellHandle",
+    "TreeHandle",
+    "SlabHandle",
     "alloc_into",
     "alloc_here",
     "lift",
@@ -45,6 +47,34 @@ const STEP_MAY_NOT_NAME: &[&str] = &[
 #[test]
 fn scheduler_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_lifetimes() {
     crate::tests::boundary::holds("scheduler", PREFIXES, OWNING_ALLOWED);
+}
+
+/// Only the scheduler and `values` open a `BuildRef` or make one from a handle: every other module
+/// holds and passes the token, so a step can hand the drain only a build cell the scheduler named to
+/// it.
+#[test]
+fn only_the_scheduler_and_values_open_a_build_ref() {
+    let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    let mut files = Vec::new();
+    crate::tests::boundary::collect_sources(&source, &mut files);
+    let opening = |file: &std::path::Path| {
+        ["scheduler", "values"].iter().any(|module| {
+            file.starts_with(source.join(module)) || file == source.join(format!("{module}.rs"))
+        })
+    };
+    let offenders: Vec<_> = (files.iter())
+        .filter(|file| !opening(file))
+        .filter(|file| {
+            let text = std::fs::read_to_string(file).expect("a source file reads");
+            let code = crate::tests::boundary::strip_comments_and_strings(&text);
+            code.contains("BuildRef::of") || code.contains(".opened()")
+        })
+        .collect();
+    assert!(files.len() > 100, "the walk found the crate's sources");
+    assert!(
+        offenders.is_empty(),
+        "a module outside the scheduler opens a `BuildRef`: {offenders:?}"
+    );
 }
 
 #[test]

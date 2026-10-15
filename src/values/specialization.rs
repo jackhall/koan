@@ -78,4 +78,14 @@ pub struct BuildRef(Option<TreeHandle>);
 impl BuildRef {
     /// The build root.
     pub const ROOT: BuildRef = BuildRef(None);
+
+    /// The specialization `handle` names.
+    pub(crate) fn of(handle: TreeHandle) -> Self {
+        BuildRef(Some(handle))
+    }
+
+    /// The specialization this names, or `None` for the build root.
+    pub(crate) fn opened(self) -> Option<TreeHandle> {
+        self.0
+    }
 }

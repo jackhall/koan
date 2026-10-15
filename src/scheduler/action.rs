@@ -26,9 +26,10 @@ use crate::scheduler::continuation::{
     StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::seek::{Lending, Seek};
 use crate::type_lattice::Root;
 use crate::type_lattice::{Habitat, Halves, Own};
-use crate::values::{Chain, Half, TypeHeader, Types};
+use crate::values::{BuildRef, Chain, Half, SpecKey, TypeHeader, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -75,6 +76,10 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     Left(Dormant<'graph, B::Birth>),
     /// The step could not proceed. The drain abandons the work.
     Failed(StepError),
+    /// A specialization's step has entered itself in its parent's table and stays alive with no
+    /// continuation, reporting to nobody. Only the drain's own synchronous entry of a
+    /// specialization sees it.
+    Quiesced,
 }
 
 impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
@@ -410,12 +415,23 @@ where
         .link(region);
     }
 
+    /// The half this cell borrows, whichever it is: a specialization's region, or the scratch of
+    /// the cell its asker parked in. `None` for a cell with no lender.
+    fn lent(
+        &self,
+    ) -> Option<(
+        Writer<'lent, 'step>,
+        Header<'graph, 'lent, 'step, TypeHeader>,
+    )> {
+        (self.context.lent_region()).or_else(|| self.context.lent_scratch())
+    }
+
     /// The chain a held `Fresh` caching frame's own body reads and lays through: the graph's type
-    /// root, the lent branch — the scratch of the cell its asker parked in — then this cell's own
-    /// scratch, whose branch links its region. Paired to the region writer. `None` for a cell
-    /// with no lender.
+    /// root, the lent branch — its specialization's region, or the scratch of the cell its asker
+    /// parked in — then this cell's own scratch, whose branch links its region. Paired to the
+    /// region writer. `None` for a cell with no lender.
     pub fn reading_types(&self) -> Option<Chain<'graph, 'scratch, 'here, 'lent, 'step>> {
-        let (lent_writer, lent_header) = self.context.lent_scratch()?;
+        let (lent_writer, lent_header) = self.lent()?;
         let scratch_header = self.context.scratch_header();
         debug_assert!(
             scratch_header.get().is_some(),
@@ -429,10 +445,11 @@ where
     }
 
     /// The warm tier alone, over the graph's type root: the lent branch, which outlives every hop
-    /// born under the asker's park. What an invariant site's types are adopted into, so the next
-    /// hop finds them. Paired to the region writer; `None` for a cell with no lender.
+    /// born under the same specialization, or under the asker's park. What an invariant site's
+    /// types are adopted into, so the next hop finds them. Paired to the region writer; `None` for
+    /// a cell with no lender.
     pub fn warm_types(&self) -> Option<Chain<'graph, 'lent, 'here, 'lent, 'step>> {
-        let (lent_writer, lent_header) = self.context.lent_scratch()?;
+        let (lent_writer, lent_header) = self.lent()?;
         Some(Chain::new(
             self.type_root,
             Halves::alone(Half::paired(lent_writer, lent_header)),
@@ -445,13 +462,45 @@ where
     /// The child's birth is handed over as this step holds it, at `'here`, and put to rest here as
     /// a carrier in this cell; the child's first entry wakes it at its own `'here`.
     pub fn spawn(&mut self, request: Request<'graph, 'here, B>) -> Slot {
+        self.spawn_lending(request, Lending::Parent)
+    }
+
+    /// [`spawn`](Self::spawn) a frame born borrowing the specialization `seek` finds: the drain
+    /// looks it up, or builds it, before the child is born. A `Shares` child is a tenant and
+    /// borrows through its host, so `seek` is not read.
+    pub fn spawn_seeking(
+        &mut self,
+        request: Request<'graph, 'here, B>,
+        seek: Seek<'graph, B>,
+    ) -> Slot {
+        self.spawn_lending(request, Lending::Seek(seek))
+    }
+
+    fn spawn_lending(
+        &mut self,
+        request: Request<'graph, 'here, B>,
+        lending: Lending<'graph, B>,
+    ) -> Slot {
         let state = self.rest(request.work.state);
         self.spawns.push(Asked {
             placement: request.placement,
             use_: request.use_,
             step: request.work.step,
             state,
+            lending,
         })
+    }
+
+    /// The build cell this cell's frame runs under: the specialization whose region it borrows,
+    /// where it is a tree cell born borrowing one, and `fallback` otherwise. A tenant borrows
+    /// through its host, so it always gets `fallback`.
+    pub fn build_ref(&self, fallback: BuildRef) -> BuildRef {
+        let CellHandle::Tree(_) = self.context.cell() else {
+            return fallback;
+        };
+        (self.context.lent_region())
+            .and_then(|(_, header)| header.get()?.me())
+            .map_or(fallback, BuildRef::of)
     }
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
@@ -527,7 +576,39 @@ where
 
     /// Hand this cell's work to a successor at `placement`, which inherits its provenance verbatim.
     /// The successor's birth is handed over at `'here` and put to rest here, as a spawn's is.
-    pub fn tail(mut self, placement: Placement, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
+    pub fn tail(self, placement: Placement, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
+        self.tail_lending(placement, work, Lending::Parent)
+    }
+
+    /// [`tail`](Self::tail) into a frame born borrowing the specialization `seek` finds, as
+    /// [`spawn_seeking`](Self::spawn_seeking) asks for a child.
+    pub fn tail_seeking(
+        self,
+        placement: Placement,
+        work: Work<'graph, 'here, B>,
+        seek: Seek<'graph, B>,
+    ) -> Action<'graph, B> {
+        self.tail_lending(placement, work, Lending::Seek(seek))
+    }
+
+    /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
+    /// born borrowing that same specialization with no lookup; or its parent's scratch, where that
+    /// specialization is no longer live.
+    pub fn tail_under(
+        self,
+        placement: Placement,
+        work: Work<'graph, 'here, B>,
+        build: BuildRef,
+    ) -> Action<'graph, B> {
+        self.tail_lending(placement, work, Lending::Under(build))
+    }
+
+    fn tail_lending(
+        mut self,
+        placement: Placement,
+        work: Work<'graph, 'here, B>,
+        lending: Lending<'graph, B>,
+    ) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
         }
@@ -538,7 +619,30 @@ where
             use_: Use::Reads,
             step: work.step,
             state,
+            lending,
         }))
+    }
+
+    /// End a specialization's step: enter this cell in its parent's table under `key`, laying the
+    /// table on the first entry and renewing the key's entry where it has one, and record in its own
+    /// region header that the region is this specialization. The cell stays alive with no
+    /// continuation. Refused for a cell that asked for children, and for one that borrows no
+    /// region.
+    pub fn enlist(self, key: SpecKey) -> Action<'graph, B> {
+        if !self.spawns.is_empty() {
+            return self.failed(StepError::Unparked);
+        }
+        let (CellHandle::Tree(me), Some((lent_writer, lent_header))) =
+            (self.context.cell(), self.context.lent_region())
+        else {
+            return self.failed(StepError::Refused);
+        };
+        let parent = Half::of(lent_writer, lent_header);
+        let _ = parent.own_or_lay();
+        (lent_header.get().expect("the parent's header is laid")).insert(parent, key, me);
+        let _ = Half::of(self.writer(), self.header()).own_or_lay();
+        (self.header().get().expect("the header is laid")).set_me(me);
+        Action(Kind::Quiesced)
     }
 
     /// Finish with a result built by `build`, which takes no operands, and deliver it where the
@@ -827,6 +931,8 @@ pub(super) struct Asked<'graph, B: StepBundle<'graph>> {
     pub use_: Use,
     pub step: NativeStep<'graph, B>,
     pub state: Dormant<'graph, B::Birth>,
+    /// What the cell borrows, which the drain resolves at its creation.
+    pub lending: Lending<'graph, B>,
 }
 
 /// The drain's own buffer of requests, reached by a step only through [`Step::spawn`] and emptied

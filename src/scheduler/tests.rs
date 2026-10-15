@@ -11,5 +11,6 @@ mod gather;
 mod load;
 mod native;
 mod placement;
+mod seek;
 mod subtree;
 mod tail;

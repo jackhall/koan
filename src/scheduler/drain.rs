@@ -6,8 +6,8 @@
 //! text and the shapes in it.
 
 use crate::memory::{
-    CellGraph, CellHandle, CreateError, Dormant, Erased, Operand, RedeemError, ReleaseAbsorption,
-    ReleaseError, SlabHandle,
+    CellGraph, CellHandle, CreateError, Dormant, Erased, Lend, Operand, RedeemError,
+    ReleaseAbsorption, ReleaseError, SlabHandle,
 };
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
@@ -17,6 +17,7 @@ use crate::scheduler::continuation::{
     StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::seek::{Lending, Seek};
 use crate::type_lattice::Root;
 #[cfg(test)]
 use crate::values::HalfHeader;
@@ -34,21 +35,30 @@ use crate::values::TypeHeader;
 pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
     type_root: &'graph Root<'graph>,
+    /// The build tree's core cell, whose region holds the root-level specialization table: `Some`
+    /// for a graph the [load door](Graph::load) stood up, `None` for one [`new`](Graph::new) made,
+    /// whose every frame is born cold.
+    build_root: Option<SlabHandle>,
 }
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
     /// over `type_root`.
     pub fn new(cap: u32, type_root: &'graph Root<'graph>) -> Self {
-        Graph::assemble(CellGraph::new(cap, crate::values::verdict), type_root)
+        Graph::assemble(CellGraph::new(cap, crate::values::verdict), type_root, None)
     }
 
-    /// A graph over `cells`, its steps' types read over `type_root`.
+    /// A graph over `cells`, its steps' types read over `type_root`, its build root `build_root`.
     pub(super) fn assemble(
         cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
         type_root: &'graph Root<'graph>,
+        build_root: Option<SlabHandle>,
     ) -> Self {
-        Graph { cells, type_root }
+        Graph {
+            cells,
+            type_root,
+            build_root,
+        }
     }
 
     /// A storage-only slab cell no drain enters or releases: the region a root work is born under
@@ -236,6 +246,7 @@ where
         let root = self.born(
             under,
             placement,
+            Lend::ParentScratch,
             Continuation {
                 step,
                 provenance: Provenance {
@@ -287,6 +298,8 @@ where
                     asked,
                     release_after: Some(cell),
                 }),
+                // Only the drain's own entry of a specialization runs one.
+                Kind::Quiesced => unreachable!("a specialization is never on the ready stack"),
                 // Only a root work leaves: `leave` refuses a cell that reports to somebody.
                 Kind::Left(dormant) => {
                     self.retire(cell)?;
@@ -329,22 +342,85 @@ where
     }
 
     /// Give a request its cell, under the parent its provenance names, its birth crossing as
-    /// `born` says.
+    /// `born` says, borrowing what its lending resolves to.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
         born: Born,
     ) -> Result<CellHandle, DrainStalled> {
+        let lend = match (asked.placement, asked.lending) {
+            (Placement::Fresh, Lending::Seek(seek)) => self.seek(seek)?,
+            (Placement::Fresh, Lending::Under(build)) => (build.opened())
+                .filter(|spec| self.graph.cells.is_live(*spec))
+                .map_or(Lend::ParentScratch, |spec| Lend::Named(spec.into())),
+            _ => Lend::ParentScratch,
+        };
         self.born(
             provenance.parent,
             asked.placement,
+            lend,
             Continuation {
                 step: asked.step,
                 provenance,
                 state: Rested::Dormant(asked.state, born),
             },
         )
+    }
+
+    /// What a frame `seek` asks for borrows: the specialization the parent's table names under the
+    /// key, if it is live, or else one created under the parent and stepped at once, before
+    /// anything else runs, entering itself in the table. A parent that is not live, or a graph
+    /// with no build root, births the frame cold: borrowing its parent's scratch.
+    fn seek(&mut self, seek: Seek<'graph, B>) -> Result<Lend, DrainStalled> {
+        let parent: CellHandle = match (seek.parent.opened(), self.graph.build_root) {
+            (Some(spec), _) => spec.into(),
+            (None, Some(root)) => root.into(),
+            (None, None) => return Ok(Lend::ParentScratch),
+        };
+        let found =
+            match (self.graph.cells).peek(parent, |header, _| header.into_value().find(seek.key)) {
+                Ok(found) => found.flatten(),
+                Err(_) => return Ok(Lend::ParentScratch),
+            };
+        if let Some(spec) = found.filter(|spec| self.graph.cells.is_live(*spec)) {
+            return Ok(Lend::Named(spec.into()));
+        }
+        // A specialization reports to nobody and is entered here, never from the ready stack.
+        let continuation = Continuation {
+            step: seek.work.step,
+            provenance: Provenance {
+                parent,
+                report: None,
+                home: parent,
+            },
+            state: Rested::Awake(B::born(seek.work.state)),
+        };
+        let spec = (self.graph.cells)
+            .create_tree_lent(parent, Lend::Named(parent), Some(continuation))
+            .map_err(|_| DrainStalled::Unspawnable)?;
+        #[cfg(test)]
+        {
+            self.census.specialized += 1;
+        }
+        let (action, _) = self.step(spec.into())?;
+        match action.kind() {
+            Kind::Quiesced => Ok(Lend::Named(spec.into())),
+            Kind::Failed(error) => Err(DrainStalled::Step(error)),
+            _ => Err(DrainStalled::Step(StepError::Refused)),
+        }
+    }
+
+    /// Evict the specialization `spec` names: refused unless it is a live specialization with no
+    /// undisposed child. It waits dead but undisposed until its last borrower disposes, and the
+    /// next miss on its key rebuilds it. What decides an eviction is open; a test drives this.
+    #[cfg(test)]
+    pub(crate) fn evict(&mut self, spec: crate::values::BuildRef) -> Result<(), DrainStalled> {
+        let spec = spec.opened().ok_or(DrainStalled::Unreleasable)?;
+        if self.graph.cells.is_childless(spec) != Ok(true) {
+            return Err(DrainStalled::Unreleasable);
+        }
+        (self.graph.cells.release_tree(spec)).map_err(|_| DrainStalled::Unreleasable)
     }
 
     /// Enter one cell, wake its state, and run the step its continuation names.
@@ -385,8 +461,9 @@ where
                     let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
                         branch.map_or(0, crate::type_lattice::Branch::len)
                     };
-                    let lent = context
-                        .lent_scratch()
+                    // The half a step's warm chain reads: a specialization's region, or a scratch.
+                    let lent = (context.lent_region())
+                        .or_else(|| context.lent_scratch())
                         .and_then(|(_, header)| header.get())
                         .map(HalfHeader::branch);
                     (
@@ -407,8 +484,9 @@ where
                     let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
                         branch.map_or(0, crate::type_lattice::Branch::len)
                     };
-                    let lent = context
-                        .lent_scratch()
+                    // The half a step's warm chain reads: a specialization's region, or a scratch.
+                    let lent = (context.lent_region())
+                        .or_else(|| context.lent_scratch())
                         .and_then(|(_, header)| header.get())
                         .map(HalfHeader::branch);
                     if let Some(shape) = CACHING.take() {
@@ -444,24 +522,28 @@ where
             .map_err(|_| DrainStalled::Unenterable)
     }
 
-    /// One cell born under another, through the door its placement names.
+    /// One cell born under another, through the door its placement names, a tree cell borrowing
+    /// what `lend` names.
     fn born(
         &mut self,
         under: CellHandle,
         placement: Placement,
+        lend: Lend,
         continuation: Continuation<'graph, 'graph, B>,
     ) -> Result<CellHandle, DrainStalled> {
         let born = match placement {
             Placement::Fresh => self
                 .graph
                 .cells
-                .create_tree(under, Some(continuation))
-                .map(CellHandle::from),
+                .create_tree_lent(under, lend, Some(continuation))
+                .map(CellHandle::from)
+                .map_err(|_| ()),
             Placement::Shares => self
                 .graph
                 .cells
                 .create_tenant(under, Some(continuation))
-                .map(CellHandle::from),
+                .map(CellHandle::from)
+                .map_err(|_| ()),
         }
         .map_err(|_| DrainStalled::Unspawnable)?;
         #[cfg(test)]
@@ -497,6 +579,13 @@ where
     #[cfg(test)]
     pub(crate) fn peak_live_cells(&self) -> usize {
         self.census.peak
+    }
+
+    /// How many specializations the drain has built: what a test reads to see a birth found its
+    /// specialization warm. A specialization is not counted among the live cells.
+    #[cfg(test)]
+    pub(crate) fn specialized(&self) -> usize {
+        self.census.specialized
     }
 }
 
@@ -555,6 +644,7 @@ impl<'graph, B: StepBundle<'graph>> Copy for Resting<'graph, B> where Erased<'gr
 struct Census {
     live: usize,
     peak: usize,
+    specialized: usize,
 }
 
 #[cfg(test)]
