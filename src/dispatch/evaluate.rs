@@ -53,7 +53,8 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{
-    CallKind, Contract, Evaluated, Exit, KBirth, KBundle, KState, block, seek, surfaced_block,
+    CallKind, Contract, Evaluated, Exit, KBirth, KBundle, KState, block, called_function, seek,
+    surfaced_block,
 };
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
@@ -923,12 +924,17 @@ fn called<'graph, 'here>(
     call: impl Fn(Option<Contract>) -> Request<'graph, 'here, KBundle>,
 ) -> Action<'graph, KBundle> {
     let request = call(tails);
+    // The frame's own callee, keyed, where the frame borrows a specialization: its build cell is
+    // then not the one the callee was born under, which a frame born with none runs under.
     let same = callee.as_callable().is_some() && callee.as_callable() == at.view.callable();
     let keyed = || {
-        (callee.as_callable())
-            .and_then(|member| member.behind_barriers().function())
-            .and_then(|function| function.shape().caching()?.invariant)
-            .is_some()
+        called_function(callee).is_some_and(|function| {
+            function
+                .shape()
+                .caching()
+                .is_some_and(|caching| caching.invariant.is_some())
+                && at.within.build != function.closure().build()
+        })
     };
     if tails.is_some() {
         let Request {

@@ -620,3 +620,39 @@ fn a_tree_cell_lays_a_header_in_its_lenders_scratch_and_the_lender_reads_it() {
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }
+
+/// A header whose form borrows plain bytes of its own half, with no `Cell` around them.
+struct Plain;
+crate::reattachable!(Plain => &'cell u32);
+
+/// A region whose header borrows its own frozen bytes goes back to the allocator with the header
+/// still laid, from a tree cell's disposal and from a slab cell's release.
+#[test]
+fn a_region_whose_header_borrows_its_plain_bytes_retires() {
+    let mut graph: CellGraph<'static, Owned, NoScratch, NoDelivery, 1, Plain> =
+        CellGraph::new(2, pin);
+    let root = graph.create(None).expect("a slot is free");
+    let tree = graph.create_tree(root, None).expect("the root is live");
+    let lay = |context: &mut StepContext<
+        'static,
+        '_,
+        '_,
+        '_,
+        '_,
+        Owned,
+        NoScratch,
+        NoDelivery,
+        1,
+        Plain,
+    >| {
+        let writer = context.writer();
+        *context.header().get_or_lay(|| one(writer, 7))
+    };
+    assert_eq!(graph.enter(tree, lay), Ok(7));
+    assert_eq!(graph.enter(root, lay), Ok(7));
+    graph.release_tree(tree).expect("the tree cell releases");
+    graph
+        .release(root, ReleaseAbsorption::IntoHolder)
+        .expect("the root releases");
+    assert!(graph.is_empty());
+}

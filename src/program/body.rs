@@ -61,6 +61,7 @@ use crate::values::{BuildRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, V
 use super::bundle::{KBirth, KBundle, KState, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
+use super::specialize::called_function;
 
 /// The body runner's state between units: which body it is performing, how far it got, and where
 /// it parked.
@@ -194,16 +195,13 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
 /// The shape a call of `callee` runs: its function's, behind every barrier. `None` for a callee
 /// that is no function, which the frame refuses.
 fn called_shape<'graph>(callee: KValue<'graph, '_>) -> Option<&'graph BodyShape<'graph>> {
-    let node = callee.as_callable()?.behind_barriers();
-    Some(node.function()?.shape())
+    Some(called_function(callee)?.shape())
 }
 
 /// The build cell `callee`'s function was born under, behind every barrier: where a frame of it
 /// that borrows no specialization runs.
 fn born_under(callee: KValue<'_, '_>) -> BuildRef {
-    (callee.as_callable())
-        .and_then(|member| member.behind_barriers().function())
-        .map_or(BuildRef::ROOT, |function| function.closure().build())
+    called_function(callee).map_or(BuildRef::ROOT, |function| function.closure().build())
 }
 
 /// [`run`] on the chain `types` it picked; `routes` is a call's, taken at its frame's first step.

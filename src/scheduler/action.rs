@@ -10,7 +10,8 @@
 //!
 //! **No step names a place that is not its own.** No method takes or returns a handle, and none is
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
-//! a child, a wait, a successor, a result — beside the hints that place it.
+//! a child, a wait, a successor, a result — beside the hints that place it. A build cell reaches a
+//! step only as an opaque [`BuildRef`], which the scheduler alone opens.
 //!
 //! Every arm of an `Action` carries no region borrow. `enter` quantifies a step's three brands per
 //! call, so a step's return type can name none of them: what crosses back out is a dormant carrier,

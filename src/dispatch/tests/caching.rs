@@ -288,9 +288,10 @@ fn a_loops_scratch_resets_once_its_value_is_delivered() {
 }
 
 #[test]
-fn a_fresh_loops_warm_tier_resets_once_its_value_is_delivered() {
+fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
     // A `Fresh` frame asks for two loops in turn, over content of different types: the second
-    // starts on the branch the first's delivery reset, so the two leave what the larger leaves.
+    // starts on the branch the first's delivery reset or, where it keys a specialization, on a
+    // specialization of its own binding, so the two leave what the larger leaves.
     let cases = [
         (
             INVARIANT.to_string(),

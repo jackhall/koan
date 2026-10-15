@@ -34,5 +34,5 @@ pub use body::{CodeRefused, Runner, block, call, eval, placement_of, run, surfac
 pub use bundle::{KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Within};
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
-pub use specialize::{seek, specialize};
+pub use specialize::{called_function, seek, specialize};
 pub use substrate::{CellSubstrate, Running, STACK_BYTES};

@@ -37,8 +37,8 @@ pub type CellGraph<'graph, C, S = NoScratch, D = NoDelivery, H = NoHeader> =
     cellgraph::CellGraph<'graph, C, S, D, WIDTH, H>;
 
 /// What a step running in a cell holds: the cell's brand `'here`, its scratch habitat's brand
-/// `'scratch`, a writer and a header door at each, a tree cell's lent scratch at `'lent`, and the
-/// step's doors.
+/// `'scratch`, a writer and a header door at each, a tree cell's borrow of its lender's scratch or
+/// region at `'lent`, and the step's doors.
 pub type StepContext<
     'graph,
     'step,

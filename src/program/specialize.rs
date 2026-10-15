@@ -8,12 +8,20 @@
 //! [build/README.md](../build/README.md).
 
 use crate::build::key_of;
-use crate::knot::KValue;
+use crate::knot::{Function, KValue, Knotted};
 use crate::memory::{Bump, BumpVec};
 use crate::scheduler::{Action, Placement, Seek, Step, StepError, Work};
 use crate::values::Chain;
 
 use super::bundle::{KBirth, KBundle, KState};
+
+/// The function a call of `callee` runs, behind every barrier: `None` for a callee that is no
+/// function.
+pub fn called_function<'graph, 'cell>(
+    callee: KValue<'graph, 'cell>,
+) -> Option<&'cell Function<'graph, 'cell, Knotted<'graph, 'cell>>> {
+    callee.as_callable()?.behind_barriers().function()
+}
 
 /// What a call of `callee` over `arguments`, a record of its parameters by name, born at
 /// `placement`, seeks: `None` for a `Shares` frame, a callee that is no function, a body that keys
@@ -27,7 +35,7 @@ pub fn seek<'graph>(
     if placement != Placement::Fresh {
         return None;
     }
-    let function = callee.as_callable()?.behind_barriers().function()?;
+    let function = called_function(callee)?;
     let shape = function.shape();
     let keyed = shape.caching()?.invariant?;
     let scratch = Bump::new();

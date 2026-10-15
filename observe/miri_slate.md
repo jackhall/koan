@@ -75,6 +75,11 @@ silence the stale-anchor check; delete a redundant test instead.
   of one host, where the body runner's tail test hops `Fresh` frames over `Fresh` children. No
   `unsafe` of its own; the backing `unsafe` is `cellgraph`'s tenant creation and release, its
   keep and redeem doors and its reattach seam.
+- `src/values/habitat.rs` — a habitat half's header is laid once through its header door, and
+  holds `Cell`s written after it is laid: a build cell's specialization table, laid on the first
+  insert and renewed in place, and a specialization's own handle. A specialization writes its
+  parent's table through its lent region's writer, and the drain reads it through `peek` between
+  steps. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s header reattach and `peek`.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -277,14 +282,26 @@ in a tenant's storage and crossed into the callee's birth.
   a barrier reached by its key, over a value member the block reads, its result crossing the
   block's frame and the barrier both, every captured byte read back.
 
+**Build tree** ([src/values/habitat.rs](../src/values/habitat.rs)) — a header's interior cells
+written after the header is laid: through the half's own door, through a borrower's lent region,
+and read back through `peek` between steps.
+
+- `a_header_table_renews_an_entry_in_place`
+  a slab cell's header laid, its table laid on the first insert, an entry renewed in place and the
+  cell's own handle set, every cell read back through the same header.
+- `a_specialization_nests_under_its_frames_and_evicts_leaf_first`
+  specializations enlisting into the build root's table and into one another's through their lent
+  regions, frames born borrowing them, the tables peeked between steps, the leaves evicted and one
+  rebuilt into its renewed entry, and the graph emptied.
+
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-15: 280s — 36 tests, 0 leaks, 0 UB
 - 2026-10-11: 259s — 34 tests, 0 leaks, 0 UB
 - 2026-10-09: 371s — 31 tests, 0 leaks, 0 UB
 - 2026-10-04: 398s — 28 tests, 0 leaks, 0 UB
 - 2026-10-02: 264s — 27 tests, 0 leaks, 0 UB
-- 2026-09-30: 307s — 26 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

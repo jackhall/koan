@@ -1537,7 +1537,7 @@ impl<
         let region = regions.take_tree(index);
         let into = match self.trees.pledge(index) {
             None => {
-                regions.retire(region);
+                regions.retire(region.into_bumps());
                 None
             }
             Some(Ancestor::Root) => {
@@ -2652,7 +2652,7 @@ impl<
         }
         self.forget_chain(sealed_cell.lineage, scratch);
         // Nothing reaches these chunks any more, so they go to the next birth.
-        regions.retire(sealed_cell.storage);
+        regions.retire(sealed_cell.storage.into_bumps());
         sealed_cell.aggregate.into_sealed()
     }
 

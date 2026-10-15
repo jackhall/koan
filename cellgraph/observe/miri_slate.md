@@ -254,8 +254,9 @@ later, by a tenant and by a placement; a scratch header read across a park and g
 reset, including one a delivery laid; no header surviving into a recycled region, slab or tree,
 including a header-only one; a header borrow crossing a pin into a destination and read there
 after its home sealed, and one crossing out of sealed storage, before and after a `keep`; the
-absorber's header kept through an absorb, a takeover and a tree splice; and a tail loop whose
-every birth finds no header in a slot whose previous occupant laid one.
+absorber's header kept through an absorb, a takeover and a tree splice; a tail loop whose
+every birth finds no header in a slot whose previous occupant laid one; and a region whose header
+borrows its own plain bytes, outside any `Cell`, retired from a tree disposal and a slab release.
 
 - `graph::tests::headers::a_header_laid_in_a_step_comes_back_at_the_next_step`
 - `graph::tests::headers::a_tenant_reads_its_hosts_header`
@@ -268,6 +269,7 @@ every birth finds no header in a slot whose previous occupant laid one.
 - `graph::tests::headers::an_operand_redeemed_from_sealed_storage_carries_the_sealed_header`
 - `graph::tests::headers::a_splice_and_an_absorb_keep_the_absorbers_header`
 - `graph::tests::headers::a_tail_loop_lays_a_header_on_every_hop`
+- `graph::tests::headers::a_region_whose_header_borrows_its_plain_bytes_retires`
 - `graph::tests::headers::a_tree_cell_lays_a_header_in_its_lenders_scratch_and_the_lender_reads_it`
   — a header laid at a tree cell's `'lent` and read back at its lender's `'scratch`, then gone
   after the borrower's death.

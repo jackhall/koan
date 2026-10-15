@@ -92,6 +92,12 @@ pub(crate) struct Region<'graph, H: HabitatHeader<'graph>> {
 }
 
 impl<'graph, H: HabitatHeader<'graph>> Region<'graph, H> {
+    /// The region's own bump and the bumps it absorbed, for [`Regions::retire`]. The header and
+    /// the memo go with the region here, before any of its bytes can be handed out again.
+    pub(crate) fn into_bumps(self) -> (Bump, Vec<Bump>) {
+        (self.bump, self.absorbed)
+    }
+
     pub(crate) fn new() -> Self {
         Region {
             bump: Bump::new(),
@@ -349,11 +355,14 @@ impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
         self.sample();
     }
 
-    /// Give up a region nothing reaches: every bump of its bundle is retired, its own last, so the
-    /// next birth draws the chunk the departing cell wrote into most recently. The memo goes with
-    /// the region, before any of its bytes can be handed out again.
-    pub(crate) fn retire(&mut self, region: Region<'graph, H>) {
-        let Region { bump, absorbed, .. } = region;
+    /// Give up a region nothing reaches, as its [`bumps`](Region::into_bumps): every bump of its
+    /// bundle is retired, its own last, so the next birth draws the chunk the departing cell wrote
+    /// into most recently.
+    ///
+    /// It takes the bumps alone, never the region: a region argument's header is a borrow into
+    /// these chunks, which a call protects for its whole length, so freeing a chunk under it would
+    /// be a write through a protected borrow wherever the header names bytes outside a `Cell`.
+    pub(crate) fn retire(&mut self, (bump, absorbed): (Bump, Vec<Bump>)) {
         for absorbed in absorbed {
             self.retire_bump(absorbed);
         }
@@ -480,8 +489,8 @@ impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
     /// as it is; one that claimed or drew a chunk is replaced, and its bumps retired.
     pub(crate) fn clear_slab(&mut self, slot: u32) {
         if !self.slab[slot as usize].region.is_untouched() {
-            let region = self.take_slab(slot);
-            self.retire(region);
+            let bumps = self.take_slab(slot).into_bumps();
+            self.retire(bumps);
         }
     }
 
