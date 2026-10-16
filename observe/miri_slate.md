@@ -106,6 +106,9 @@ buffers live in a scratch region the caller hands it.
 - `the_table_is_laid_once_and_never_grows`
   the verdict table laid in the registry's bump on its first record, and a hundred keys through
   one two-slot bucket, every slot written back in place.
+- `a_late_link_reads_through_to_its_home`
+  a branch laid and holding a node, then linked to a home in another region: both nodes resolved
+  by handle, one of them through a link set after its branch's table was laid.
 
 **Tied component** ([lattice/src/types/component.rs](../lattice/src/types/component.rs)) — a
 sealed component laid in the registry's region over its relative member table, repointed once at
@@ -299,15 +302,24 @@ and read back through `peek` between steps.
   specializations enlisting into the build root's table and into one another's through their lent
   regions, frames born borrowing them, the tables peeked between steps, the leaves evicted and one
   rebuilt into its renewed entry, and the graph emptied.
+- `an_evicted_specialization_stays_readable_to_the_shares_frame_borrowing_it`
+  a tenant lent a specialization's region parks, the specialization is evicted under it, and the
+  tenant wakes and reads what it laid there; the region goes only once the host's scratch resets.
+- `a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm`
+  a keyed `Shares` body interning into its lent branch over its host's scratch at two parks, the
+  second reading the types and verdicts the first laid.
+- `a_keyed_shares_call_links_a_host_scratch_laid_before_it`
+  a host's scratch branch laid unlinked, then linked late to the host's region by a keyed tenant's
+  reading chain, and read through that link.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-16: 990s — 41 tests, 0 leaks, 0 UB
 - 2026-10-16: 300s — 37 tests, 0 leaks, 0 UB
 - 2026-10-15: 280s — 36 tests, 0 leaks, 0 UB
 - 2026-10-11: 259s — 34 tests, 0 leaks, 0 UB
 - 2026-10-09: 371s — 31 tests, 0 leaks, 0 UB
-- 2026-10-04: 398s — 28 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
