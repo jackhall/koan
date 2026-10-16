@@ -138,7 +138,7 @@ fn one_hosts_scratch_holds_one_count_per_lender() {
     assert_eq!(counts(&graph, lender).region_borrowers, 2);
     graph.release_tenant(second).unwrap();
     assert_eq!(counts(&graph, lender).region_borrowers, 1);
-    assert_eq!(graph.cells.held.len(), 1);
+    assert_eq!(graph.cells.held.values().flatten().count(), 1);
 
     graph.enter(run, |_| ()).unwrap();
     assert_eq!(counts(&graph, lender).region_borrowers, 0);

@@ -722,17 +722,19 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
         .map(|index| pool.lent(index));
     let tenant_lends = (census.iter())
         .filter_map(|(host, _, lent)| lent.filter(|lent| graph.cells.counted(*host, *lent)));
-    for (at, (home, lent)) in graph.cells.held.iter().enumerate() {
+    for (home, lents) in &graph.cells.held {
         assert!(
-            graph.cells.counted(*home, *lent),
-            "the scratch of {home:?} holds a count it never takes"
+            !lents.is_empty(),
+            "the scratch of {home:?} holds an empty entry"
         );
-        assert!(
-            !graph.cells.held[..at].contains(&(*home, *lent)),
-            "the scratch of {home:?} holds two counts on one lender"
-        );
+        for lent in lents {
+            assert!(
+                graph.cells.counted(*home, *lent),
+                "the scratch of {home:?} holds a count it never takes"
+            );
+        }
     }
-    let held_lends = graph.cells.held.iter().map(|(_, lent)| *lent);
+    let held_lends = graph.cells.held.values().flatten().copied();
     let lends: Vec<Lent> = tree_lends.chain(tenant_lends).chain(held_lends).collect();
     assert!(
         graph.cells.unheld.is_empty(),
@@ -775,8 +777,7 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
             "pool slot {index} is undisposed with no child under it, no tenant and no borrower"
         );
     }
-    let hosts = (census.iter().map(|(host, _, _)| host))
-        .chain(graph.cells.held.iter().map(|(host, _)| host));
+    let hosts = (census.iter().map(|(host, _, _)| host)).chain(graph.cells.held.keys());
     for host in hosts {
         let undisposed = match *host {
             CellHome::Slab(slot) => graph.cells.slots[slot as usize].state != SlabState::Free,

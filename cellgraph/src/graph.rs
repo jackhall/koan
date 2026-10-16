@@ -10,6 +10,7 @@ mod lend_cycle;
 #[cfg(test)]
 mod tests;
 
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
 use smallvec::SmallVec;
@@ -845,8 +846,9 @@ struct Cells<
     /// The counts a write home's scratch holds for the tenants of it that were lent a region
     /// other than its own lend and have been released, one per lender: the tenants' steps may have
     /// left a `'lent` reference in the scratch, so the lender stays until the scratch next resets
-    /// ([lend.rs](crate::lend)). Keyed by home, as `free_runs` is.
-    held: Vec<(CellHome, Lent)>,
+    /// ([lend.rs](crate::lend)). Keyed by home, so a release finds its pair and a reset takes its
+    /// home's lenders without reading another home's.
+    held: HashMap<CellHome, HashSet<Lent>>,
     /// The lenders a scratch reset dropped a held count on, which the next disposal walk visits.
     unheld: Vec<CellHome>,
     /// The embedder's crossing verdict, taken at construction. There is no verdict-free
@@ -1503,7 +1505,7 @@ impl<
             relocated: (0..cap).map(|_| SmallVec::new()).collect(),
             departed_tombstones: Vec::new(),
             free_runs: Vec::new(),
-            held: Vec::new(),
+            held: HashMap::new(),
             unheld: Vec::new(),
             verdict: Box::new(verdict),
             scratch: Some(Scratch::new()),
@@ -1770,12 +1772,9 @@ impl<
         // next resets; a count the scratch already holds on that lender is enough.
         if let Some(lent) = departed.lent
             && self.counted(departed.host, lent)
+            && !self.held.entry(departed.host).or_default().insert(lent)
         {
-            if self.held.contains(&(departed.host, lent)) {
-                self.unborrow(lent);
-            } else {
-                self.held.push((departed.host, lent));
-            }
+            self.unborrow(lent);
         }
         let tenancy = self.tenancy_mut(departed.host);
         debug_assert!(
@@ -1952,15 +1951,9 @@ impl<
         if !self.free_runs.is_empty() {
             self.free_runs.retain(|(at, _, _)| *at != home);
         }
-        let mut at = 0;
-        while at < self.held.len() {
-            if self.held[at].0 == home {
-                let (_, lent) = self.held.swap_remove(at);
-                self.unborrow(lent);
-                self.unheld.push(lent.lender());
-            } else {
-                at += 1;
-            }
+        for lent in self.held.remove(&home).into_iter().flatten() {
+            self.unborrow(lent);
+            self.unheld.push(lent.lender());
         }
     }
 

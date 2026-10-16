@@ -82,7 +82,9 @@ impl<
         let tenant_lends =
             (self.tenants.census()).filter_map(|(host, _, lent)| lent.map(|lent| (host, lent)));
         let mut starts = Vec::new();
-        for (host, lent) in tenant_lends.chain(self.held.iter().copied()) {
+        for (host, lent) in tenant_lends.chain(
+            (self.held.iter()).flat_map(|(host, lents)| lents.iter().map(|lent| (*host, *lent))),
+        ) {
             if self.counted(host, lent) {
                 let lender = Wait::Disposal(lent.lender());
                 edge(lender, Wait::Reset(host));
