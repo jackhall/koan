@@ -20,7 +20,7 @@
 //! passes without exercising the law is invisible to proptest. A [`Vocabulary`] says what a draw
 //! may hold — variables, and whether a shape or function is drawn under a group of its own — and
 //! the paired strategies build what independent draws line up only by accident: two shapes over
-//! one key ([`arb_shape_pair`]), arguments a candidate admits ([`arb_argument_pair`]), a shape
+//! one key ([`arb_shape_pair`]), arguments a candidate admits ([`arb_admitted_pair`]), a shape
 //! below another ([`arb_shape_below`]), an ordered pair or chain by [`Widening`]s ([`arb_chain`]),
 //! and a scheme with its own instance ([`arb_own_instance`]). What still misses a precondition is a
 //! `prop_assume!` the laws' reject budget counts.
@@ -1165,15 +1165,38 @@ pub fn arb_shape_pair(
         .boxed()
 }
 
-/// A candidate shape drawn under `candidate` and a shape over its key and ranking, binding no
-/// group, whose slots are arguments for it: three times in four the candidate's own slots at
-/// bindings within its group's bounds — each slot at a binding-pool type or, where `candidate` has
-/// variables and the slot's coin says so, at the lexical variable over that type, so one slot
-/// sits at the type another holds the variable over — each kept or met with a pool type;
-/// otherwise an unrelated draw. A slot whose instance holds a binder takes the unrelated draw's
-/// slot, and one whose meet is `Never` stays unmet. Two independent draws admit one another only
-/// by accident.
+/// A candidate shape drawn under `candidate` and arguments it admits: three times in four from
+/// [`arb_admitted_pair`], and otherwise a shape over its key binding no group, drawn on its own.
+/// Two independent draws admit one another only by accident.
 pub fn arb_argument_pair(
+    world: World,
+    depth: u32,
+    candidate: Vocabulary,
+) -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
+    let shapes = world.clone();
+    let unrelated = arb_key(world.clone(), 1..5)
+        .prop_flat_map(move |key| {
+            let none = || Rc::new(Vec::new());
+            (
+                arb_shape_over(shapes.clone(), key.clone(), depth, none(), candidate),
+                arb_shape_over(shapes.clone(), key, depth, none(), Vocabulary::CONCRETE),
+            )
+        })
+        .prop_map({
+            let world = world.clone();
+            move |(a, b)| (world.declared(a), world.declared(b))
+        });
+    prop_oneof![3 => arb_admitted_pair(world, depth, candidate), 1 => unrelated].boxed()
+}
+
+/// A candidate shape drawn under `candidate` and a shape over its key and ranking, binding no
+/// group, whose slots it admits by construction: the candidate's own slots at bindings within its
+/// group's bounds — each slot at a binding-pool type or, where `candidate` has variables and the
+/// slot's coin says so, at the lexical variable over that type, so one slot sits at the type
+/// another holds the variable over — each kept or met with a pool type, though one whose meet is
+/// `Never` stays unmet. A slot whose instance holds a binder takes `Never`, which every slot
+/// admits. The return is a concrete draw's over the key.
+pub fn arb_admitted_pair(
     world: World,
     depth: u32,
     candidate: Vocabulary,
@@ -1188,24 +1211,20 @@ pub fn arb_argument_pair(
             (
                 arb_shape_over(shapes.clone(), key.clone(), depth, none(), candidate),
                 arb_shape_over(shapes.clone(), key, depth, none(), Vocabulary::CONCRETE),
-                prop::bool::weighted(0.75),
                 // One binding per name: more than any group binds, and zipped with the bounds.
                 prop::collection::vec(arb_binding(&bindings), bindings.type_names.len()),
                 prop::collection::vec(any::<bool>(), positions),
                 prop::collection::vec(prop::option::of(0..pools), positions),
             )
         })
-        .prop_map(move |(a, unrelated, own, picks, lexicals, narrowings)| {
-            if !own {
-                return (world.declared(a), world.declared(unrelated));
-            }
+        .prop_map(move |(a, concrete, picks, lexicals, narrowings)| {
             let types = &world.types;
             let (
                 TypeNode::ExpressionShape { classes, .. },
                 TypeNode::ExpressionShape { elements, ret, .. },
             ) = (
                 types.node(types.split(a).1),
-                types.node(types.split(unrelated).1),
+                types.node(types.split(concrete).1),
             )
             else {
                 unreachable!("a drawn shape is one");
@@ -1229,14 +1248,14 @@ pub fn arb_argument_pair(
                 let run: Vec<DispatchTokenElement> = elements
                     .iter()
                     .map(|element| match element {
-                        DispatchTokenElement::Slot(unrelated) => {
+                        DispatchTokenElement::Slot(_) => {
                             let ((slot, narrowing), lexical) =
                                 own.next().expect("one key, one arity");
                             let bindings = if *lexical { &variables } else { &plain };
                             let instance =
                                 substitute::substitute_quantified(types, scratch, slot, bindings);
                             DispatchTokenElement::Slot(if holds_binder(types, scratch, instance) {
-                                unrelated
+                                Handle::NEVER
                             } else {
                                 narrowing
                                     .map(|index| {

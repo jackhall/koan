@@ -46,11 +46,11 @@ use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
 use super::generators::{
-    Groups, Vocabulary, World, arb_any, arb_any_with, arb_argument_pair, arb_arguments,
-    arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain, arb_function_type,
-    arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair, arb_over_head_parameter,
-    arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
-    arb_signature_type, arb_wanted_instance, under_with,
+    Groups, Vocabulary, World, arb_admitted_pair, arb_any, arb_any_with, arb_argument_pair,
+    arb_arguments, arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain,
+    arb_function_type, arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair,
+    arb_over_head_parameter, arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type,
+    arb_signature, arb_signature_type, arb_wanted_instance, under_with,
 };
 
 thread_local! {
@@ -1150,7 +1150,7 @@ proptest! {
 
     #[test]
     fn a_solution_is_the_least_instance_of_its_contributions(
-        (a, b) in arb_argument_pair(world(), 3, BINDER),
+        (a, b) in arb_admitted_pair(world(), 3, BINDER),
     ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
@@ -1162,9 +1162,12 @@ proptest! {
         let arguments: Vec<Handle> = shape_slots(b, &types).collect();
         prop_assert!(keys_equal(a, b, &types), "the pair shares one key");
         let mut collector = Collector::<Handle>::new(&types, scratch, bounds);
-        prop_assume!(slots.iter().zip(arguments.iter()).all(|(slot, argument)| {
-            admits(&types, scratch, *slot, *argument, Variance::Co, &mut collector).is_ok()
-        }));
+        for (slot, argument) in slots.iter().zip(arguments.iter()) {
+            prop_assert!(
+                admits(&types, scratch, *slot, *argument, Variance::Co, &mut collector).is_ok(),
+                "a slot refused its own instance",
+            );
+        }
         let solution = match collector.solve(&types) {
             Ok(solution) => solution,
             // A solve fails only where the set its pair denotes is empty.
