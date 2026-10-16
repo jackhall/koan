@@ -4,7 +4,11 @@
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
-use crate::values::{MemoBits, ValueFamily, Weight, cross};
+use std::cell::Cell;
+
+use crate::values::{
+    ADOPTED, Destination, MemoBits, NoKnot, ValueFamily, Weight, adopt_value, cross,
+};
 
 use super::{Fixture, List, Record, TestGraph, Value, copy, pin, with_fixture};
 
@@ -186,5 +190,53 @@ fn a_copy_is_settled_at_its_destination() {
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
         assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn an_exit_settles_what_it_walked() {
+    with_fixture(|fixture| {
+        let (outer, inner) = names(fixture);
+        let scratch = fixture.scratch();
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let own = &fixture.tiers.own(context);
+            let shares = &fixture.tiers.shares(context);
+            let laid = || {
+                let part = Record::new(writer, &[(inner, Value::Number(1.0))], shares, scratch);
+                let fields = [(outer, Value::Record(part))];
+                (part, Record::new(writer, &fields, shares, scratch))
+            };
+            let adopted = |into, record: &Record<'_>| {
+                ADOPTED.with(|adopted| adopted.set(0));
+                adopt_value::<NoKnot>(into, shares, &Value::Record(record));
+                ADOPTED.with(Cell::get)
+            };
+            let settled = MemoBits {
+                root_closed: false,
+                settled: true,
+            };
+
+            let (part, record) = laid();
+            assert_eq!(record.bits(), MemoBits::NONE);
+            adopted(Destination::Region(own), record);
+            assert_eq!((record.bits(), part.bits()), (settled, settled));
+            assert_eq!(
+                adopted(Destination::Region(own), record),
+                1,
+                "a settled value adopts its own memo alone"
+            );
+
+            let (part, record) = laid();
+            let warm = Destination::Warm {
+                warm: own,
+                region: own,
+            };
+            adopted(warm, record);
+            assert_eq!(
+                (record.bits(), part.bits()),
+                (MemoBits::NONE, MemoBits::NONE)
+            );
+        })
     });
 }

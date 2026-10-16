@@ -229,15 +229,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             )
     }
 
-    /// Note that the argument `part` of a call in the shape at `level` passes on a value its frame
-    /// body received, where that body may cache.
-    pub(super) fn note_received(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) {
-        if self.records(level) {
-            self.received
-                .push((self.chain[level].shape, Site::of(part)));
-        }
-    }
-
     /// Record `site` in the shape at `level`, whose chain up to it is `shapes`.
     fn record(
         &mut self,
@@ -641,23 +632,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         keyed_slots.sort_unstable();
         keyed_slots.dedup();
         self.sites.sort_by_key(|record| address(record.holder));
-        self.received.sort_by_key(|(holder, _)| address(holder));
         for (holder, frame) in self.holders.iter() {
             let caches = matches!(frame.class(), Some(BodyClass::Sealed { caches: true, .. }));
             let (mut mints, mut warm) = (BumpVec::new_in(scratch), BumpVec::new_in(scratch));
             let at = address(holder);
             let from = (self.sites).partition_point(|record| address(record.holder) < at);
             let to = (self.sites).partition_point(|record| address(record.holder) <= at);
-            let from_received = (self.received).partition_point(|(each, _)| address(each) < at);
-            let to_received = (self.received).partition_point(|(each, _)| address(each) <= at);
-            let mut received = BumpVec::new_in(scratch);
-            received.extend(
-                self.received[from_received..to_received]
-                    .iter()
-                    .map(|(_, site)| *site),
-            );
-            received.sort_unstable();
-            received.dedup();
             for record in self.sites[from..to].iter() {
                 let (class, _) = resolve(self, record);
                 if record.minting {
@@ -681,7 +661,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     caches,
                     mints: Keyed::sorted(self.writer, &mut mints),
                     warm: Keyed::sorted(self.writer, &mut warm),
-                    received: Keyed::sorted(self.writer, &mut received),
                     invariant,
                 },
             ));

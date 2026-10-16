@@ -26,7 +26,7 @@ use crate::values::{Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
-use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
+use super::shape::{BodyShape, Coordinate, ShapeKind, Slot, Target};
 
 /// The read half of one body's bindings for one call or one block entry: what an evaluation is
 /// handed. Covariant in `'cell`, and without a door that binds a slot.
@@ -318,31 +318,5 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     /// The value bound at `slot`, or `None` while it is empty.
     pub fn bound(&self, slot: Slot) -> Option<Value<'cell, XF::Closed<'cell>>> {
         self.slots.get(slot.index())
-    }
-
-    /// What the frame body this view runs in received, handed to `each`: each parameter it has
-    /// bound, each value its closure bindings hold, and the callable it runs. Nothing for the
-    /// program or a module body, whose bindings their own units built. A value that leaves a
-    /// caching body and is one of these adopts its own memo alone: its parts crossed into the
-    /// region where the frame was born.
-    pub fn received(&self, each: &mut dyn FnMut(Value<'cell, XF::Closed<'cell>>)) {
-        let mut view = self;
-        while let Some(enclosing) = view.enclosing {
-            view = enclosing;
-        }
-        if !matches!(view.shape.kind(), ShapeKind::Callable | ShapeKind::Code) {
-            return;
-        }
-        for slot in (0..view.shape.slots()).map(|index| Slot(index as u32)) {
-            if view.shape.position_of(slot) == Position::PARAMETER
-                && let Some(value) = view.bound(slot)
-            {
-                each(value);
-            }
-        }
-        view.closure.held(each);
-        if let Some(callable) = view.callable {
-            each(Value::Knotted(callable));
-        }
     }
 }

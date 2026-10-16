@@ -207,6 +207,58 @@ fn a_loop_passing_on_a_module_built_over_its_link_caches_and_holds_flat() {
 }
 
 #[test]
+fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_flat() {
+    // `wrapped_peeks` with both bodies `Fresh`: `PEEK` adopts the module it views into the lent
+    // branch at an invariant site, which stops at the link the module holds, settled by the exit
+    // that handed it on.
+    let source = "EXPR #(PEEK m :Holder) -> Number = #((LET v = (m :| Holder)) (1))\n\
+                  EXPR #(WRAP m :Counter link :Link) -> Number = \
+                  #((LET v = (m :| Counter)) (MODULE h OVER #[link] = (LET held = link)) \
+                  (LET seen = (PEEK h)) (WRAP m (ATTR link next)))\n\
+                  EXPR #(WRAP m :Counter end :Null) -> Number = #(7)\n\
+                  PRINT (WRAP ints chain)";
+    assert_eq!(caching(source), 2, "`WRAP` and `PEEK` cache");
+    let ran_adopting = |depth: u32| {
+        crate::values::ADOPTED.with(|adopted| adopted.set(0));
+        let ran = ran(depth, source);
+        (ran, crate::values::ADOPTED.with(Cell::get))
+    };
+    let [(few, few_adopted), (_, many_adopted)] = DEPTHS.map(ran_adopting);
+    assert_eq!(few.printed, "7");
+    assert!(few_adopted > 0, "the loop's exits adopt");
+    // A hop's adoptions at the greater depth cost no more than at the lesser.
+    assert!(
+        many_adopted * DEPTHS[0] as usize <= few_adopted * DEPTHS[1] as usize,
+        "adoptions {few_adopted} over {} hops against {many_adopted} over {}",
+        DEPTHS[0],
+        DEPTHS[1]
+    );
+}
+
+#[test]
+fn a_member_reached_through_a_call_is_adopted_by_its_memo_alone() {
+    // `GETA`'s result is a member of the record the loop received, reached by a route the load
+    // records nothing for: the exit handing it to `peek` stops at its memo, whatever its length.
+    let adopted = |length: usize| {
+        let items = vec!["1"; length].join(", ");
+        let source = format!(
+            "LET peek = (FN :{{xs :(LIST OF Number)}} -> Number = #(1))\n\
+             EXPR #(GETA p :{{a :(LIST OF Number)}}) -> :(LIST OF Number) = #(ATTR p a)\n\
+             EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} link :Link) -> Number = \
+             #((LET v = (m :| Counter)) (LET l = (GETA p)) (LET t = (peek {{xs = l}})) \
+             (PASS m p (ATTR link next)))\n\
+             EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} end :Null) -> Number = #(7)\n\
+             PRINT (PASS ints {{a = [{items}]}} chain)"
+        );
+        assert_eq!(caching(&source), 1);
+        crate::values::ADOPTED.with(|adopted| adopted.set(0));
+        assert_eq!(ran(DEPTHS[0], &source).printed, "7");
+        crate::values::ADOPTED.with(Cell::get)
+    };
+    assert_eq!(adopted(8), adopted(64));
+}
+
+#[test]
 fn a_fresh_loop_over_an_invariant_module_holds_its_lent_branch_flat() {
     let source = invariant_loop();
     assert_eq!(caching(&source), 1);

@@ -1112,12 +1112,6 @@ impl<'graph> BodyShape<'graph> {
         (self.caching.get()).is_some_and(|caching| caching.warm.get(site).is_some())
     }
 
-    /// Whether the argument part at `site` passes on a value the frame body received, or a member
-    /// read of one: an exit adopts its own memo alone.
-    pub fn received_at(&self, site: Site) -> bool {
-        (self.caching.get()).is_some_and(|caching| caching.received.get(site).is_some())
-    }
-
     /// Where the body's types intern at run, once the static pass has run.
     pub fn caching(&self) -> Option<&'graph Caching<'graph>> {
         self.caching.get()

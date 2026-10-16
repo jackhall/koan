@@ -165,6 +165,16 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
     pub fn bits(&self) -> MemoBits {
         self.weight.get().bits()
     }
+
+    /// Record that every memo the value reaches resolves in its home half's branch — an exit's
+    /// mark on what it adopted. Keeps root-closed.
+    pub(crate) fn settle(&self) {
+        let weight = self.weight.get();
+        self.weight.set(weight.with_bits(MemoBits {
+            settled: true,
+            ..weight.bits()
+        }));
+    }
 }
 
 /// The runs a read outside `values` reaches only through [the door](super::surface).

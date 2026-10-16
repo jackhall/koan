@@ -1370,9 +1370,8 @@ fn perform<'graph, 'here>(
                     // The frame's scratch departs after the successor's first step, while the
                     // statement still reads the frame's bindings: adopt what it reads first.
                     if runner.within.routes {
-                        let scratch = Bump::new();
                         let view = runner.activation.view();
-                        let exit = Exit::new(step.types(), types, &view, &[], &scratch);
+                        let exit = Exit::new(step.types(), types);
                         for slot in shape.last_reads() {
                             if let Some(value) = view.bound(*slot) {
                                 exit.value(&value);
@@ -1687,15 +1686,7 @@ fn ended<'graph, 'here>(
                 None => value,
             };
             if runner.shape().caches() {
-                let scratch = Bump::new();
-                Exit::new(
-                    step.types(),
-                    types,
-                    &runner.activation.view(),
-                    &[],
-                    &scratch,
-                )
-                .value(&value);
+                Exit::new(step.types(), types).value(&value);
             }
             step.finish(value)
         }

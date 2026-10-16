@@ -60,8 +60,8 @@ pub use circular::{Circular, CodeView, Resolved};
 #[cfg(test)]
 pub use crossing::ADOPTED;
 pub use crossing::{
-    COPY_RATIO, adopt_value, copy_severed, cross, cross_here, cross_view, cross_view_against,
-    each_carried_type, verdict,
+    COPY_RATIO, Destination, adopt_value, copy_severed, cross, cross_here, cross_view,
+    cross_view_against, verdict,
 };
 #[cfg(debug_assertions)]
 pub use crossing::{check_habitat, check_pinned_habitat};
