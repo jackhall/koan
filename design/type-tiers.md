@@ -178,10 +178,10 @@ declared per call is classed alike by the type binders its declaration reads:
   would intern anything and finds itself there after the first.
 - **invariant**: a tree whose every leaf is a capture or a parameter the
   body's tail loop passes through unchanged, so the site mints the same
-  content each hop. Into the **warm tier**: under `Fresh`, the branch of the
-  specialization the frame borrows
-  ([below](#the-specialization-as-the-warm-tier)); under `Shares`, the
-  host's scratch.
+  content each hop. Into the **warm tier**: the branch of the specialization
+  the frame borrows, whatever its placement
+  ([below](#the-specialization-as-the-warm-tier)), or the host's scratch
+  for a `Shares` body that keys nothing.
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
   body, an action's result or an inline `MATCH`, or on a parameter the loop
   rebinds. Into the **cold tier**: the frame's own scratch under `Fresh`, held
@@ -193,22 +193,30 @@ A composite site follows its children: warm where its static type reaches
 invariant carriers alone, cold otherwise, a type that reaches a carrier the
 load cannot name included.
 
-Under `Shares` the warm and cold tiers are one branch, the host's scratch,
-under the host's region. So a `Shares` caching body runs every step on one
-chain over the root, the host's region and that scratch, writing the scratch,
-and its classes route nothing. A scratch chain holds the tier it reads between
+For a `Shares` body that keys nothing the warm and cold tiers are one branch,
+the host's scratch, under the host's region. So such a body runs every step on
+one chain over the root, the host's region and that scratch, writing the
+scratch, and its classes route nothing; a keyed `Shares` body borrows its
+specialization through a lend of its own and runs on a reading chain over the
+lent branch and the host's scratch, as a `Fresh` body's below runs over its
+own. A scratch chain holds the tier it reads between
 the root and its own by value, so building one per step lays nothing; no
 branch holds that tier, since a habitat's door lives one step and a branch
 lives as long as its half. Under `Fresh` the two are the lent branch, the
 specialization's, and the frame's scratch, and the frame's scratch is under
-both it and the frame's region (§ A node lives in a tier its children outlive). So a `Fresh` caching
-body reads through a chain whose own tier is its scratch, whose read tier is
-the lent branch and whose scratch branch links its region, laid before
-anything else lays that branch. A type it builds stays in its scratch, and an
+both it and the frame's region (§ A node lives in a tier its children outlive). So a caching body
+that borrows a lent branch reads through a chain whose own tier is a
+scratch, its own under `Fresh` and its host's under `Shares`, whose read tier
+is the lent branch, and whose scratch branch links the region it writes,
+linked by the first reading chain over it: laid linked where no branch is
+laid yet, linked late where one is. A type it builds stays in its scratch, and an
 invariant site copies its operands' types and what it mints into the lent
 branch, insert-if-absent, so after the first frame under the binding it
 hits. Verdicts over the lent branch's types are recorded there and stay warm
-across hops and callers.
+across hops and callers. Under `Shares` the host's scratch may hold a node
+over the lent branch's after the frame is gone, so the frame's lend is held
+until that scratch resets
+([tree cells](../cellgraph/src/tree/README.md#death)).
 
 A chain carries a pairing brand naming the writer it serves, beside the brand
 its tiers sit at, and a value door takes a writer and a chain paired to it.
@@ -231,14 +239,16 @@ each hop — since soundness rests on the sealed class and the lend alone.
 
 ## The specialization as the warm tier
 
-A caching frame born `Fresh` whose caching record lists the parameters its
-invariant sites read is born borrowing a **specialization** of its body
-under the content at those parameters
-([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)): a
-build cell the drain finds in, or builds into, the table of the build cell the
-callee was born under, before the frame is born. The specialization's region
-branch is the frame's warm tier, and every frame of that body under that
-binding borrows the same one, whatever park asked for it: a second caller
+A caching frame whose body keys a specialization — its caching record lists
+the parameters its invariant sites read, or a frontier waits at its entry
+([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)) —
+is born borrowing a **specialization** of its body under the content at those
+names: a build cell the drain finds in, or builds into, the table of the build
+cell the callee was born under, before the frame is born. A `Fresh` frame
+takes it as its lend, and a `Shares` tenant through a lend of its own beside
+its host's. The specialization's region branch is the frame's warm tier, and
+every frame of that body under that binding borrows the same one, whatever
+park asked for it and whatever its placement: a second caller
 finds the first's invariant types and verdicts laid, and a hop of a tail loop
 of one callee borrows the specialization its frame ran under, with no lookup.
 A specialization lives until its parent evicts it and its last borrower
@@ -268,7 +278,7 @@ one park — the operands of one operator run, the parts of one tie — are warm
 to each other, and so are the statements of a `Shares` callee, since the
 asker's park holds across them; two calls from the host's own body in
 separate statements are cold, since that body replaces its own receipt
-between them, save a keyed `Fresh` callee's, warm through its
+between them, save a keyed callee's, warm through its
 specialization. A `Fresh` caching frame also holds its own scratch, its cold
 tier, for its life, and drops it with the frame. A loop that parks once a hop
 lays no receipt run per hop: the scratch habitat keeps the runs its cells
@@ -280,9 +290,10 @@ lend is a miss at the lay, never a dangling read.
 laid in the region its writer lays into, and their memos in a scratch tier.
 The static pass is what guarantees no reader of that memo outlives the
 scratch: nothing the body minted is reachable after it returns, and every
-exit adopts what it carries into the region first, walking the values and
-every value and handle their knots hold, since a part keeps its own memo under
-`Any`, a union or a carrier. The lattice does not check this
+exit adopts what it carries into the region first, walking the value and
+every value and handle its knots hold up to a settled part (below), since a
+part keeps its own memo under `Any`, a union or a carrier. The lattice does
+not check this
 ([storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 The debug build's crossing check reads a value inside a caching body against
 the chain the body runs on, and a value leaving it against the root and the
@@ -298,16 +309,28 @@ caching frame that hands its last statement to the evaluator departs while
 that statement runs, and its scratch with it, so the binders that statement
 reads, which the load lists, and the frame's contract are adopted at the
 hand-off. The adopt reads the whole chain the body ran on, since a `Fresh`
-type's children may lie both in the lent branch and in the frame's scratch. A
-value the frame received — a parameter's, a closure binding's or the
-callable's own — adopts its own memo alone: its parts crossed into the region
-at the frame's birth, and admission at a slot restamps only the top. So does
-an argument the load records as passing one on, a builtin `ATTR` member read
-of one included. So a loop that passes a large value through unchanged, or
-walks a chain one member a hop, walks none of it per hop.
+type's children may lie both in the lent branch and in the frame's scratch.
 A sealed exit carries no minted content, but it may carry a
 composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.
+
+**An adoption stops at a settled part.** Exits and invariant sites adopt
+through one door, whose contract is that every memo a value reaches resolves
+where the value's readers read. A value carries two bits beside its weight,
+memoized as its weight is, on every composite header and on a knot's root
+node: **root-closed**, every memo it reaches is the root's, set where it is
+built from its parts; and **settled**, every memo it reaches resolves in the
+root or its home region's branch, set where a porous writer builds it over
+settled parts and on every value an adoption into a region finishes. A part
+with either bit set already meets the contract — a root type resolves
+everywhere, and a settled type in the region every chain over a value there
+links — so the walk does not enter it, at an exit and at an invariant site
+alike, and the debug check walks with the same cutoff. A clear bit is always
+safe and a set bit is true: a restamp recomputes both from the new type, a
+copy recomputes them at its destination, and a composite keeps the bits it
+computed when it was built. So a loop that passes a large value through
+unchanged, walks a chain one member a hop, or hands a module built over the
+chain to a caching helper each hop, walks none of the chain per hop.
 
 ## Verdicts
 
@@ -324,3 +347,7 @@ types, and released with that tier.
 - [Evicting specializations](../roadmap/type-tiers/specialization-eviction.md)
   — the policy a build cell evicts its specializations by, so a loop over new
   invariant content each call holds a bounded warm tier.
+- [A tenant's own lend](../roadmap/type-tiers/tenant-lend.md) — a `Shares`
+  frame borrowing its specialization through a lend of its own.
+- [Settled values](../roadmap/type-tiers/settled-values.md) — the two bits on
+  a value an adoption walk stops at.

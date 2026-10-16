@@ -7,8 +7,11 @@ The substrate's own build-out is complete, as are the representation changes
 its measurement harness gates, the doors koan's `memory` module needs, and the
 graph lifetime koan's values borrow program storage through, the receipt
 run and delivery doors a producer files its consumer's result through, and the
-named lend and the peek koan's build tree takes. What is open is the gaps under
-Unplanned work, which nothing is scheduled against. Koan's
+named lend and the peek koan's build tree takes. The one door koan's roadmap
+still asks of the substrate is
+[a tenant's own lend](../../roadmap/type-tiers/tenant-lend.md), and
+[a tenant's own scratch](tenant-scratch.md) follows it. What is open
+here is the gaps under Unplanned work, which nothing is scheduled against. Koan's
 work over the crate is on [its own roadmap](../../roadmap/README.md).
 
 ## Next items

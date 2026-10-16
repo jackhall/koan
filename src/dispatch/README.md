@@ -852,7 +852,8 @@ declared per call by the type binders its declaration reads — and holds every
 composite site warm whose parts read invariant views alone. A caching frame
 body's own record also lists the parameters its invariant sites read, its
 blocks' and module bodies' included, which key its
-[specialization](../build/README.md#keys-which-bindings-make-a-specialization):
+[specialization](../build/README.md#keys-which-bindings-make-a-specialization)
+beside the names the solver's frontiers wait on at its entry:
 none where they read captures alone, and no list at all where it has no
 invariant site, since such a frame reads no warm tier. A leaf is
 invariant where it is a capture, or a parameter every tail edge into its body

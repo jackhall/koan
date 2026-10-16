@@ -86,6 +86,10 @@ Four absences are design statements rather than gaps:
   a placement destination — means its host, whether or not the host's own death
   has been declared, so a chain of tenants each created by naming the one
   before it shares the first host's region for as long as any of them lives.
+  A tenant borrows a half of its own at `'lent`: by default a copy of what the
+  cell named at its creation borrows, so a tenant of a tree cell is handed
+  that cell's lend; or one named as a tree cell's is
+  ([tree cells](src/tree/README.md#death)); or nothing.
   Tenants sit in an uncapped pool of their own, in no relation. When to make a
   cell a tenant is the embedder's election: the substrate ships the kind and no
   rule.
@@ -131,7 +135,10 @@ Four absences are design statements rather than gaps:
   **lender**, which a step in it writes at a brand of its own, `'lent`
   (`StepContext::lent_scratch`); a scratch is lent only to its owner's own
   children ([tree cells](src/tree/README.md#death)). A departing cell's
-  scratch is dropped at its disposal. A tenant's scratch is its host's. The habitat has a header slot
+  scratch is dropped at its disposal. A tenant's scratch is its host's, so a
+  lend of its own that is not its host's outlives that scratch: at the
+  tenant's release its count passes to the host's scratch, which drops it at
+  its next reset. The habitat has a header slot
   of its own, cleared at every reset and no part of what holds one off.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and

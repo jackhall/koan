@@ -407,20 +407,21 @@ a keyworded call, or a call by name's argument or record-literal field.
 
 ### Specializations
 
-A call into a caching frame born `Fresh` whose caching record lists the
-parameters its invariant sites read hands the drain a `Seek`
+A call into a keyed frame, whatever its placement, hands the drain a `Seek`
 ([`seek`](specialize.rs)): the build cell the callee was born under, read off
 its closure bindings; the key, the callee's segment and the content digest of
-each argument at those parameters, read by name
+each argument at its keyed names, read by name
 ([the build module](../build/README.md#keys-which-bindings-make-a-specialization));
 and the work a missed specialization runs, [`specialize`](specialize.rs),
 which enlists the new cell in its parent's table. The frame is born borrowing
 the specialization, and its lent branch is the specialization's region, so
 every frame of that body under that binding finds its invariant types warm.
-Dispatch picks the door where it calls: a hop of the frame's own callee, from
-a frame that borrows a specialization, `tail_under` the frame's build cell; any
-other keyed call `spawn_seeking` or `tail_seeking`; and every other call
-`spawn` or `tail`. A frame borrows one exactly when the build cell it runs
+A frame borrowing one routes whatever its placement: a `Fresh` frame holds its
+scratch, and a `Shares` frame writes its host's. Dispatch picks the door where
+it calls: a hop of the frame's own callee, from a frame that borrows a
+specialization, `tail_under` the frame's build cell; any other call
+`spawn_seeking` or `tail_seeking`, with a `Seek` where the body keys one; and
+an evaluation, a block or a hand-off `spawn` or `tail`. A frame borrows one exactly when the build cell it runs
 under is not the one its callee was born under
 ([`called_function`](specialize.rs) reads the callee's function).
 
@@ -541,6 +542,8 @@ before the program ran, and a stalled substrate. The two-program test,
 
 ## Open work
 
+- [A tenant's own lend](../../roadmap/type-tiers/tenant-lend.md) — a `Shares`
+  frame's call handing the drain its seek.
 - [Faults and call traces](../../roadmap/conditionals/faults.md) — faults apart
   from values, the frames they keep, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY` and `CATCH`,

@@ -10,7 +10,9 @@ caching frame's invariant sites read (`src/program/specialize.rs`), so a loop
 that calls such a frame over new content each iteration builds one
 specialization per iteration, each a tree cell with a region and a type
 branch, all held until the program ends: such a program's memory grows with
-its iteration count, where a loop's bytes and lattice otherwise hold flat. No
+its iteration count, where a loop's bytes and lattice otherwise hold flat. A
+helper with no tail loop is the sharpest case: every one of its parameters is
+trivially invariant, so each call over new content is a miss. No
 test runs such a loop; `a_birth_keyed_on_a_list_digests_it_at_a_cost_below_its_length`
 in `src/dispatch/tests/caching.rs` calls over one list only. A frame born with no specialization
 warms the scratch its asker's park holds, which resets after the delivery

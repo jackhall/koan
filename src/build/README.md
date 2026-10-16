@@ -90,6 +90,13 @@ binding removes are a parameter's content, which is its path class
 `:Type` argument at frame entry; a lexical variable's type at the statement
 that binds it; and a path variable's hop.
 
+An unknown is named by its **lexical address**, the segment and the
+coordinate the shape binds it at, never by its lattice node, which every body
+numbering its chain alike shares. A mention of a fellow member of its own
+component, itself included, is no unknown: it reads the fellow's annotation,
+the type its birth declares or `[Never, Any]` and records no edge, so the
+facts form no cycle.
+
 The lattice is untouched: `substitute`, *fits*, `judge_by_class` and the
 unifier are what the rules call, and this module lives downstream of them.
 
@@ -102,7 +109,14 @@ unifier are what the rules call, and this module lives downstream of them.
   frame entry when a rigid's binding completes a frontier, a statement when a
   binding there completes one. A statement that binds nothing any frontier
   waits on is no seam, and costs its run cell nothing. The load lists the
-  seams per segment.
+  seams per segment. An **entry seam** keys a specialization
+  ([below](#keys-which-bindings-make-a-specialization)). A **statement
+  seam** is cold: its binding is content the run produces, an `EVAL`'s or an
+  action's result, which keys nothing, so the run cell resumes the frontier
+  into its own scratch and its lend never changes. A statement's binding that
+  entry content determines — a `MATCH` arm's `it` over a parameter, a
+  `USING … SCOPE` key over one, a path hop rooted at one — is settled at the
+  entry seam, since a load with that content declared would type it closed.
 - **One build cell per seam per observed binding.** Facts that wake together,
   settle together and mint types under the same binding are one build cell
   with one type branch, never several. The build cell holds every fact any
@@ -154,11 +168,21 @@ A binding is content, digests and root handles, so a specialization reaches
 nothing of the run tree. Its key digests the callee's **segment**, the index
 the one shape builder gives every body it seals, in seal order, so it is the
 same in every load of one text and tells apart two bodies of one text whose
-captures differ in type; then the content of the arguments at the parameters
-its caching record's invariant sites read, in slot order, the frame's blocks
-included ([`key_of`](key.rs)). Nothing else a frame binds enters it, so a
-parameter no invariant site reads costs a birth nothing, and only a caching
-frame born `Fresh` seeks one: no other frame reads a warm tier.
+captures differ in type; then the content at each **keyed name**, in slot
+order: the parameters, `FOR ALL` names and `:Type` arguments any frontier at
+the entry waits on, facts in nested bodies included, beside the parameters
+its caching record's invariant sites read, the frame's blocks included
+([`key_of`](key.rs)). A name a hop of the body's own tail rebinds is not
+keyed, since a hop of the same callee borrows its predecessor's specialization
+with no lookup; a hop into another callee seeks with the actual content, so a
+callable called from sites the load cannot read — a lambda written in place,
+a `MODULE` body's member — keys on its names like any other, though its mint
+sites stay varying. Nothing else a frame binds enters the key, so a name no
+frontier or invariant site reads costs a birth nothing, a body that keys
+nothing seeks nothing, and a keyed frame seeks whatever its placement. A
+capture never enters a key: `inner`'s fact on a capture `xs` waits at
+`outer`'s entry, so `outer` keys on `xs`, and a fact whose frontier the chain's
+keys do not cover resumes cold.
 
 ## References between the trees
 
@@ -168,7 +192,13 @@ frame born `Fresh` seeks one: no other frame reads a warm tier.
   same callee borrows the specialization its frame ran under, with no lookup;
   a run cell born under no binding borrows its parent's scratch, since the
   shapes and the root tier rest at `'graph` and nothing of the build root is
-  read from a step; a tenant reads through its host's. The build tree is structural, a parent
+  read from a step; a `Shares` tenant of a keyed body borrows its
+  specialization through a lend of its own, counted on the specialization
+  until its host's scratch next resets after the tenant's release, since its
+  host's scratch may hold nodes over the specialization's; a `Shares` call of
+  a body that keys nothing, or born cold, borrows nothing; and an evaluation,
+  block or hand-off tenant copies its asker's lend, so it reads what its frame
+  reads. The build tree is structural, a parent
   outliving its children, so one count covers the whole chain above. This is
   cellgraph's named lend
   ([tree cells](../../cellgraph/src/tree/README.md#death)): a creation names
@@ -176,8 +206,7 @@ frame born `Fresh` seeks one: no other frame reads a warm tier.
   waits on the count, which drops at a borrower's disposal. No matrix pin runs in either
   direction: the run root pins nothing of the build tree, and a build cell is
   never pinned by a run cell. The drain resolves the borrow before the run
-  cell is born, and the cell holds it for its life, deepened between steps at
-  each seam it crosses.
+  cell is born, and the cell holds it, unchanged, for its life.
 - **Build to run: nothing.** A build cell holds no handle to a run cell. A
   binding reaches a build cell as the key the drain hands its birth; a
   settled answer reaches a run cell through the chain alone.
@@ -202,12 +231,16 @@ frame born `Fresh` seeks one: no other frame reads a warm tier.
 ## Types across the trees
 
 - **The tiers, longest-lived first:** the root tier, the frozen root the
-  load builds; the specializations down the borrowed chain; the run cell's
-  region branch; its scratch branch. A run cell's chain reads them in that
-  order, and the build chain is as deep as seams nest.
+  load builds; the specialization the run cell borrows; its region branch;
+  its scratch branch. A run cell's chain reads them in that order and probes
+  one specialization however deep seams nest. A `Shares` run cell's scratch
+  is its host's, and it reaches its host's region through that branch's link,
+  which the first reading chain over the branch lays.
   [Type tiers](../../design/type-tiers.md) tells the story across modules.
 - **A node lives in a tier its children outlive.** A specialization lays
-  type nodes over the root tier and itself alone. A run cell's scratch tier
+  type nodes over the root tier and itself alone: a fact of a child that
+  names a type its parent minted relays that type into the child's branch,
+  insert-if-absent, so no branch links its parent's. A run cell's scratch tier
   may reference its specialization's nodes, as a scratch tier references the
   lent branch's today; its region reaches them only by adopt at an exit, as
   it reaches the lent branch's; and the reverse never holds. A composite a
@@ -229,25 +262,30 @@ frame born `Fresh` seeks one: no other frame reads a warm tier.
   scheduler's load door rather than the ready stack: its step runs the load,
   shape building, the type channel and the solver to quiescence. A
   specialization is a tree cell the drain creates and runs as it does a run
-  cell: its first step writes its own handle into its parent's table, runs
-  the resumption under its binding to quiescence, and quiesces, staying alive
-  with no continuation and reporting to nobody. The solver's parked facts are
-  data in the build cell's region.
+  cell: its one step writes its own handle into its parent's table, runs the
+  resumption under its binding to quiescence and quiesces, staying alive with
+  no continuation and reporting to nobody. What the resumption leaves parked
+  is the cell's **residual**, data in its region beside the settled facts: a
+  child specialization reads it through the parent region it borrows, and a
+  run cell resumes it in its scratch, so no binding wakes a quiesced build
+  cell. A resumption that leaves a use with no candidate ends the step
+  failed, and the drain hands the fault to the asker as the frame's own.
 - **The drain finds a run cell's build cell before the cell is born**, from
   the key the asker computed: the build cell the callable was born under,
-  and a digest of the callee's segment with the bindings its invariant
-  sites read. The drain reads that parent's table through a read-only peek
+  and a digest of the callee's segment with the content at its keyed names.
+  The drain reads that parent's table through a read-only peek
   between steps; a live hit is the specialization, and a miss creates one
   under the parent and runs its one step at once, before anything else. The
-  run cell is then created borrowing it, and its first step lays its
+  run cell is then created borrowing it, a `Fresh` cell as its lend and a
+  `Shares` tenant through a lend of its own, and its first step lays its
   activation. A warm birth costs one peek; a cold birth one build step; no
   run cell parks for either; a hop of a tail loop of one callee borrows the
   specialization its frame ran under and looks nothing up, or its parent's
   scratch once that specialization is evicted; and a parent that has itself
   been evicted births the frame cold, with no specialization.
-- **A seam mid-body** deepens the borrow between steps as a birth takes it,
-  once nothing the cell holds names the shallower one: the drain resolves
-  the deeper specialization and re-lends the cell before its next step.
+- **A statement seam** changes no lend: the run cell resumes the frontier
+  into its own scratch, and what it borrows stands from its creation to its
+  disposal.
 - **The load** stands the build root up beside the run root and runs the build
   root's step to quiescence over the written program before the top-level
   run cell's first value step. The root tier is written during the load and
@@ -275,7 +313,7 @@ time.
 | cell | lives from | to | holds |
 |---|---|---|---|
 | build root | the load | the program's end | the root-level table; it writes the shapes, facts, residual and root tier into the owner's storage |
-| specialization | first miss on its binding | eviction, then its last borrower's disposal | settled facts, verdicts, warm types, its children's table |
+| specialization | first miss on its binding | eviction, then its last borrower's disposal | settled facts, its residual, verdicts, warm types, its children's table |
 | composed-code cell | the code value's birth | the value's home's death | the code's shape and facts |
 | run root | the load | the program's end | top-level bindings |
 | run cell | its birth | its disposal | activation, values, region branch, scratch |
@@ -294,8 +332,15 @@ and bindings; the closed one-shot load is the oracle.
   content written as a declared pin, a `FOR ALL` name as an alias.
 - **Quiescence is exact.** A fact parks only on an unknown its rule reads;
   nothing closed is left to the run.
-- **Termination.** One resumption's facts range over a finite set under
-  join, meet and the solve, and a varying binding never makes a
+- **Termination.** One resumption's facts range over the types of bounded
+  depth over the root's types and the binding's content, a finite set: join,
+  meet and the solve never deepen a type, substitution deepens by at most
+  the binding's depth at each variable position, and the facts form no
+  cycle, since a parameter's and a return's static type come from the
+  declaration, a local's from an earlier unit, and a mention inside a cyclic
+  component is a leaf. Each re-run of a fact strictly narrows it, so one
+  resumption's re-runs total at most its facts times the domain's height,
+  and a varying binding never makes a
   specialization. The specializations themselves are not bounded by the
   program text: a key over invariant content the run builds, a list passed
   bare to a keyed callee, takes a new value per distinct content, so a loop
@@ -327,6 +372,8 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 - [Evicting specializations](../../roadmap/type-tiers/specialization-eviction.md)
   — the policy a build cell evicts its specializations by, a stale ancestor,
   and sibling redundancy.
+- [A tenant's own lend](../../roadmap/type-tiers/tenant-lend.md) — a `Shares`
+  frame borrowing its specialization through a lend of its own.
 - [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
   — the worklist driver, frontiers and seams, and the properties as laws.
 - [Activation typing](../../roadmap/gradual-typing/activation-typing.md) — a

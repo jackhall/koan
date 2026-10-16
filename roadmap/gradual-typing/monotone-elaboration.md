@@ -27,21 +27,35 @@ dependency, so it cannot say which facts a binding would settle.
   closed is left to the run.
 - The unknowns a binding removes are a parameter's content, a `FOR ALL`
   group's solution and a `:Type` argument at frame entry, a lexical variable's
-  type at the statement that binds it, and a path variable's hop.
-- Every parked fact's frontier is computed at the load's quiescence, the
-  seams are listed per segment, and a frontier resumes at the seam where its
-  last member binds, at entry or mid-body alike.
-- Facts a resumption settles land in the build cell its seam and binding
-  name, and a call a resumption judges *always* runs without admitting or
-  ranking.
-- A use left with no candidate at a resumption faults at the resumption
-  point, naming the call.
+  type at the statement that binds it, and a path variable's hop. An unknown,
+  in an edge and in a key, is named by its lexical address — the segment and
+  the coordinate the shape binds it at — never by its symbol or its lattice
+  node.
+- A mention of a fellow member of its own component, itself included, reads
+  the fellow's annotation, the type its birth declares or `[Never, Any]`, and
+  records no edge.
+- Every parked fact's frontier is computed at the load's quiescence and the
+  seams are listed per segment. A frontier whose members bind at a frame's
+  entry resumes in the specialization that entry's binding keys; one with a
+  member a statement binds resumes at that statement in the run cell's
+  scratch, and no run cell's lend changes after its creation.
+- A specialization keys on its segment and the content at the names any
+  frontier at its entry waits on, facts in nested bodies included, beside the
+  parameters its invariant sites read; a name a hop of the body's own tail
+  rebinds is not keyed. A keyed frame seeks whatever its placement.
+- A specialization's one step runs its resumption to quiescence and
+  quiesces. Facts the resumption settles land in that cell, what it leaves
+  parked is the cell's residual, and a call it judges *always* runs without
+  admitting or ranking.
+- A use left with no candidate at a resumption faults the asker at the
+  resumption point, naming the call.
 - A verdict a resumption reaches holds at every run of a frame under that
   binding, by the laws the load's verdicts hold by.
 - The properties hold as property tests in the dispatch suite, generated over
   programs and bindings with the closed one-shot load as the oracle:
   monotone, confluent, resume equals restart, quiescence is exact, and
-  termination.
+  termination — each re-run of a fact strictly narrows it, and the re-runs
+  of one resumption total at most its facts times the domain's height.
 - The per-expression typing rules in `elaborate` keep their meaning: every
   rule maps both ends of an interval, and the lattice is unchanged.
 
@@ -55,45 +69,59 @@ dependency, so it cannot say which facts a binding would settle.
   bind; neither entry-only nor every-binding is set program-wide.
 - *Refusal at a resumption* — decided. A use with no candidate faults at the
   resumption point, not at the use.
-- *The termination proof* — open. A specialization's key ranges over root
-  types and invariant content, and content the run builds is unbounded, so
-  the proof cannot rest on the key space: it rests on one resumption's facts
-  ranging over a finite set under join, meet and the solve, with
-  [eviction](../type-tiers/specialization-eviction.md) bounding how many
-  specializations live at once. Recommended: bound a resumption's domain by the types its
-  binding and the root can name, and show the solve mints nothing outside
-  it.
-- *Deepening the borrow at a mid-body seam* — open. The build tree fixes a
-  run cell's lend at its creation and the drain resolves it before the frame
-  is born, so a seam mid-body needs cellgraph to re-lend a live cell, refused
-  while the cell's scratch state is parked, its scratch held or a tenant's
-  scratch state parked, each of which may name the old lender at `'lent`
-  ([cellgraph's lend](../../cellgraph/src/tree/README.md#death));
-  the alternative is adopting what the scratch holds over the old lend before
-  the frame takes the deeper one. A `Shares` frame reads through its host's
-  lend, so facts per specialization for one need a per-cell lend or a `Fresh`
-  placement for a specialized body. No specialization's branch links to its
-  parent's, since no brand lets a build child hold a reference into its
-  parent's region; facts that reference a parent binding's types need a link
-  or an adopt.
-- *A specialization that resumes* — open. A specialization's one step enters
-  it in its parent's table and quiesces with no continuation
-  (`src/program/specialize.rs`); a resumption under its binding needs it to
-  keep one, so `Step::enlist` grows a successor. Its key digests only the
-  parameters its caching record's invariant sites read, so a capture reaches
-  the key only through the encloser's own specialization: a fact whose
-  frontier names a capture of an encloser that keys on nothing shares one
-  specialization across every binding of that capture, and the key needs that
-  capture's digest beside the parameters'.
+- *The termination proof* — decided. One resumption's facts range over the
+  types of bounded depth over the root's types and the binding's content, a
+  finite set: join, meet and the solve never deepen a type, substitution
+  deepens by at most the binding's depth at each variable position, and the
+  facts form no cycle, since a parameter's and a return's static type come
+  from the declaration (`callable_type`), a local's from an earlier unit,
+  and a mention inside a cyclic component is a leaf with no edge. The last is
+  a rule the driver enforces, not a property it inherits: `Pass::component`
+  in `src/dispatch/statics.rs` breaks a cycle by typing its members in order
+  and reading an untyped fellow at `[Never, Any]`, and a worklist that gave
+  the fellow an edge would narrow `LET a = LIST [b]; LET b = LIST [a]`
+  forever, each step monotone. How many specializations live is bounded by
+  [eviction](../type-tiers/specialization-eviction.md), not by the text.
+- *Deepening the borrow at a mid-body seam* — decided. Never. A statement's
+  binding is either determined by entry content — a `MATCH` arm's `it` over
+  a parameter, a `USING … SCOPE` key over one, a path hop rooted at one —
+  and settled at the entry seam, since a load with that content declared
+  would type it closed; or produced by the run — an `EVAL`'s or an action's
+  result — which is varying content and keys nothing, so the run cell
+  resumes it into its own scratch. Cellgraph's lend stays fixed at creation.
+  A `Shares` frame reaches its specialization through
+  [a lend of its own](../type-tiers/tenant-lend.md). A child specialization
+  whose facts name a type its parent minted relays it into its own branch,
+  insert-if-absent, so no branch links its parent's and a run cell's chain
+  probes one specialization.
+- *A specialization that resumes* — decided, on the working assumption that
+  no binding wakes a quiesced build cell: a specialization is one seam under
+  one binding, what its resumption leaves parked waits on a binding its key
+  does not fix, and two frames under it may fix that binding differently,
+  so the parked remainder is the cell's residual and the work over it runs
+  in the cell the next binding names — a child specialization, which reads
+  the residual through the parent region it borrows, or a run cell's
+  scratch. `Step::enlist` grows no successor. A case where the same cell is
+  the right place to resume — a remaining unknown with one possible binding
+  — would reopen this; none is known. A capture is
+  answered by keying on the seam's names: `inner`'s fact on a capture `xs`
+  waits at `outer`'s entry, so `outer` keys on `xs`, and a fact whose
+  frontier the chain's keys do not cover resumes cold. A body whose name
+  escapes keys on its names like any other, since a hop into another callee
+  seeks with the actual content and only a hop of the same callee reuses a
+  specialization with no lookup; its mint sites stay varying.
 
 ## Dependencies
 
 The worklist is a monotone data-flow framework (Kildall, 1973; Kam and
 Ullman, 1977), and the residual is a solver's undischarged constraint
-(Pottier and Rémy, 2005).
+(Pottier and Rémy, 2005). The [build tree](../../src/build/README.md)'s
+cells stand.
 
-**Requires:** none — the [build tree](../../src/build/README.md)'s cells
-stand.
+**Requires:**
+
+- [A tenant's own lend](../type-tiers/tenant-lend.md) — a resumption under a
+  `Shares` frame's binding needs a build cell the frame borrows.
 
 **Unblocks:**
 

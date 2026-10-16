@@ -390,13 +390,15 @@ entitlement — no hold, no pin, no seal.
 
 ## Specializations
 
-A `Fresh` cell is born borrowing a half of another cell, which the drain
+A cell is born borrowing a half of another cell, which the drain
 resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
 
-- `spawn` and `tail` lend its parent's scratch, as every cell born under no
-  binding borrows.
-- `spawn_seeking` and `tail_seeking` hand a `Seek`: the build cell the
-  callee was born under, the key, and the work a missed specialization runs.
+- `spawn` and `tail` ask for an evaluation, a block or a hand-off: a tree
+  cell borrows its parent's scratch, as every cell born under no binding
+  does, and a tenant copies its parent's lend.
+- `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a
+  `Seek` where the body keys one: the build cell the callee was born under,
+  the key, and the work a missed specialization runs.
   The drain reads that build cell's table through a read-only `peek`. A live
   hit is the specialization; a miss creates one, a tree cell under that build
   cell borrowing its region, and enters it at once, outside the ready stack,
@@ -404,17 +406,21 @@ resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
   `enlist`, which refuses a cell that asked for children and returns
   `Quiesced`: the cell stays alive with no continuation, reporting to nobody,
   and is never on the stack. The frame is then born borrowing the
-  specialization's region. A build cell that is not live, or a graph with no
-  build root, births the frame cold, borrowing its parent's scratch.
+  specialization's region, a `Fresh` cell as its lend and a `Shares` tenant
+  as a lend of its own, counted on the specialization until its host's
+  scratch next resets after the tenant's release. A call with no `Seek`, a
+  build cell that is not live, or a graph with no build root births the
+  frame cold: a tree cell borrowing its parent's scratch, a tenant borrowing
+  nothing.
 - `tail_under` hands the `BuildRef` its frame ran under, for a hop of the
-  same callee: the successor borrows that specialization with no lookup, or
-  its parent's scratch where the specialization is no longer live.
+  same callee, of either placement: the successor borrows that
+  specialization with no lookup, or is born cold where the specialization is
+  no longer live.
 
 So a warm birth costs one peek, a cold birth one synchronous step, and no cell
-parks for either. A tenant borrows through its host, so a `Shares` request's
-seek is never read. `build_ref` reads the specialization a tree cell borrows
-off its region header, which `enlist` stamped with the specialization's own
-handle, and answers the fallback it is handed for any other cell. A
+parks for either. `build_ref` reads the specialization a cell borrows off
+its region header, which `enlist` stamped with the specialization's own
+handle, and answers the fallback it is handed for any cell borrowing none. A
 specialization lives until its parent evicts it: `Scheduler::evict`, a
 test-only door, releases a childless one, which waits dead but undisposed
 until its last borrower disposes, and the next miss on its key renews the
@@ -497,3 +503,8 @@ no layer of koan's above present. They hold, each with a workload of its own:
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.
+
+## Open work
+
+- [A tenant's own lend](../../roadmap/type-tiers/tenant-lend.md) — a `Shares`
+  tenant borrowing its specialization through a lend of its own.
