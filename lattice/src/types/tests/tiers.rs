@@ -1,6 +1,6 @@
 //! The tiers' own contract, which no law states: a branch's size when laid, the root's variance,
-//! that a link is read once per chain and never by an intern, which tier keeps a verdict, and how
-//! far a merge walks.
+//! that a link is read once per chain and never by an intern, where a late link is taken, which
+//! tier keeps a verdict, and how far a merge walks.
 
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, SymbolInterner};
@@ -220,6 +220,73 @@ fn a_laid_branch_takes_no_link() {
     let laid = TypeChain::new(root, BumpHalf::new(&region));
     let _ = record_named(&laid, &symbols, "y");
     laid.link(BumpHalf::branch_of(&home));
+}
+
+/// A branch laid and holding a node, linked late to a home holding another, resolves both by
+/// handle; its own node stays its own.
+#[test]
+fn a_late_link_reads_through_to_its_home() {
+    let symbols = SymbolInterner::new();
+    let (root_region, home_region, region) = (Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let home = TypeChain::new(root, BumpHalf::new(&home_region));
+    let held = record_named(&home, &symbols, "x");
+    let laid = TypeChain::new(root, BumpHalf::new(&region));
+    let own = record_named(&laid, &symbols, "y");
+    assert!(!laid.resolves(held), "nothing links the home yet");
+    let laid_len = laid.own_len();
+
+    laid.link_late(BumpHalf::branch_of(&home));
+    assert_eq!(laid.own_len(), laid_len, "a late link enters nothing");
+    assert!(laid.resolves(held));
+    assert!(laid.resolves(own));
+}
+
+/// A late link to the home a branch already links changes nothing; an unlaid half is linked as
+/// `link` links it.
+#[test]
+fn a_late_link_to_the_home_it_links_changes_nothing() {
+    let symbols = SymbolInterner::new();
+    let (root_region, home_region, region) = (Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let home = TypeChain::new(root, BumpHalf::new(&home_region));
+    let held = record_named(&home, &symbols, "x");
+    let child = TypeChain::new(root, BumpHalf::new(&region));
+    child.link_late(BumpHalf::branch_of(&home));
+    assert!(child.resolves(held));
+    let _ = record_named(&child, &symbols, "y");
+    let child_len = child.own_len();
+    child.link_late(BumpHalf::branch_of(&home));
+    assert_eq!(child.own_len(), child_len);
+    assert!(child.resolves(held));
+}
+
+#[test]
+#[should_panic(expected = "a branch another links is linked late")]
+fn a_late_link_is_refused_where_another_branch_links_the_branch() {
+    let symbols = SymbolInterner::new();
+    let regions = [Bump::new(), Bump::new(), Bump::new(), Bump::new()];
+    let root = Root::seeded(&regions[0]);
+    let home = TypeChain::new(root, BumpHalf::new(&regions[1]));
+    let _ = record_named(&home, &symbols, "x");
+    let laid = TypeChain::new(root, BumpHalf::new(&regions[2]));
+    let _ = record_named(&laid, &symbols, "y");
+    let linking = TypeChain::new(root, BumpHalf::new(&regions[3]));
+    linking.link(BumpHalf::branch_of(&laid));
+    laid.link_late(BumpHalf::branch_of(&home));
+}
+
+/// A branch reached through links is one some branch links, which the flag refuses first; what
+/// is left to the cycle check is a branch linked to itself.
+#[test]
+#[should_panic(expected = "a late link closes a cycle")]
+fn a_late_link_is_refused_where_the_home_reaches_the_branch() {
+    let symbols = SymbolInterner::new();
+    let (root_region, region) = (Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let laid = TypeChain::new(root, BumpHalf::new(&region));
+    let _ = record_named(&laid, &symbols, "x");
+    laid.link_late(BumpHalf::branch_of(&laid));
 }
 
 /// A birth links where the destination has laid no branch, and merges where it has.

@@ -146,10 +146,9 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 /// frame, or as a block.
 ///
 /// Each step runs on one chain ([type tiers](../../design/type-tiers.md#where-each-body-interns)):
-/// the reading chain in the own body of a caching frame that holds its scratch — which a
-/// `Fresh` caching frame's first step takes, linking its scratch branch to its region before
-/// anything lays it — the `Shares` chain elsewhere in a caching body, and its region's anywhere
-/// else.
+/// the reading chain in the own body of a caching frame that holds its scratch, which a `Fresh`
+/// caching frame's first step takes; the `Shares` chain elsewhere in a caching body; and its
+/// region's anywhere else.
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
@@ -164,13 +163,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     };
     let caches = shape.is_some_and(BodyShape::caches);
     let routes = match &state {
-        KState::Born(KBirth::Call { .. }) => {
-            let routes = caches && step.hold_scratch();
-            if routes {
-                step.link_reading_types();
-            }
-            routes
-        }
+        KState::Born(KBirth::Call { .. }) => caches && step.hold_scratch(),
         KState::Born(KBirth::Block { within, .. }) => within.routes,
         KState::Runner(runner) => runner.within.routes,
         KState::Born(_) | KState::Evaluating { .. } => false,

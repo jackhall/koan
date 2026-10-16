@@ -131,9 +131,12 @@ outliving its destination.
   cell; an intern probes no link, laying a duplicate of content an ancestor
   holds, which identity by digest allows. A home with no branch needs no link:
   its values carry root handles alone. A link follows a pin rather than the
-  call tree, and a branch links once, as it is laid, and only to a branch
-  already laid, so links never cycle and a branch's depth on its chain never
-  changes.
+  call tree, and a branch links once, to a branch already laid that does not
+  reach it, so links never cycle. A birth links as it lays. A branch nothing
+  links may also take its link late, where it links nothing yet: its depth and
+  bottom change then, and only a branch linking it would have recorded them.
+  An embedder links a scratch branch to its region so, since no branch links
+  a scratch.
 - A **merge** enters every node of the home's branch into the destination's by
   reference: at a pinned result or view, and at a pinned birth into a half
   that has already laid a branch — a tenant's, whose branch is its host's. A

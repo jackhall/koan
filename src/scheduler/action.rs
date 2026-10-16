@@ -398,24 +398,6 @@ where
         self.context.hold_scratch()
     }
 
-    /// Link this cell's scratch branch to its region branch, laying both, so the
-    /// [reading chain](Self::reading_types) reaches the region through the link. Called once, by a
-    /// `Fresh` caching frame right after its [hold](Self::hold_scratch), before anything lays its
-    /// scratch branch: the link refuses a laid branch.
-    pub fn link_reading_types(&self) {
-        let Own::Branch(region) = Half::of(self.writer(), self.header()).own_or_lay() else {
-            unreachable!("a step's region half lays a branch");
-        };
-        Chain::new(
-            self.type_root,
-            Halves::alone(Half::paired(
-                self.scratch_writer(),
-                self.context.scratch_header(),
-            )),
-        )
-        .link(region);
-    }
-
     /// The half this cell borrows, whichever it is: a specialization's region, or the scratch of
     /// the cell its asker parked in. `None` for a cell with no lender.
     fn lent(
@@ -429,15 +411,22 @@ where
 
     /// The chain a held `Fresh` caching frame's own body reads and lays through: the graph's type
     /// root, the lent branch — its specialization's region, or the scratch of the cell its asker
-    /// parked in — then this cell's own scratch, whose branch links its region. Paired to the
-    /// region writer. `None` for a cell with no lender.
+    /// parked in — then this cell's write home's scratch, whose branch links its region. A scratch
+    /// chain reads one tier between the root and its own, so the region is reached through that
+    /// link, which this lays: with the scratch branch where it is unlaid, late where another door
+    /// laid it first. No branch links a scratch branch, so the late link is always open. Paired to
+    /// the region writer. `None` for a cell with no lender.
     pub fn reading_types(&self) -> Option<Chain<'graph, 'scratch, 'here, 'lent, 'step>> {
         let (lent_writer, lent_header) = self.lent()?;
+        let Own::Branch(region) = Half::of(self.writer(), self.header()).own_or_lay() else {
+            unreachable!("a step's region half lays a branch");
+        };
         let scratch_header = self.context.scratch_header();
-        debug_assert!(
-            scratch_header.get().is_some(),
-            "a held frame's scratch branch is laid by its link"
-        );
+        Chain::new(
+            self.type_root,
+            Halves::alone(Half::paired(self.scratch_writer(), scratch_header)),
+        )
+        .link_late(region);
         Some(Chain::scratch(
             self.type_root,
             Half::paired(lent_writer, lent_header),
