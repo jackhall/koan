@@ -12,6 +12,7 @@ mod recycling;
 mod scratch;
 mod sealing;
 mod tenancy;
+mod tenant_lend;
 mod tree;
 mod values;
 

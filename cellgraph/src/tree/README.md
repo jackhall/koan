@@ -107,15 +107,15 @@ cleared, since a dead cell is never entered; its lend stands until it disposes.
 
 **A tree cell borrows a lend.** From its creation to its disposal a tree cell
 borrows one half of another cell's storage, its **lend**
-([../lend.rs](../lend.rs)), from its **lender**, and a step in it or in a tenant
-of it writes that half at `'lent`
+([../lend.rs](../lend.rs)), from its **lender**, and a step in it writes that
+half at `'lent`
 ([lifetimes](../lifetimes.md#lent-a-borrowed-half-outlives-the-borrower)).
 `create_tree` lends the scratch bump of the new cell's tree parent, or of its
 root where it sits directly under one, handed to a step by `lent_scratch`.
 `create_tree_lent` names the lend: that same scratch; the region of a named
 live slab or tree cell, in this tree or under another root, handed to a step by
 `lent_region`; or a copy of what a named live cell borrows, a tenant's being
-its host's. A lend mints no pin and enters no relation; what keeps the lent half
+its own. A lend mints no pin and enters no relation; what keeps the lent half
 in place is a count on the lender per half:
 
 - **A lent scratch** does not reset while a borrower of it is undisposed,
@@ -132,6 +132,20 @@ in place is a count on the lender per half:
 
 Both counts drop at the borrower's disposal, never its release: a dead
 borrower's scratch, kept until it disposes, may still name the lent bytes.
+
+**A tenant borrows a lend too**, fixed at its creation: by default a copy of
+what the cell it is created naming borrows, which may be nothing; or one
+named as a tree cell's is, a named cell's region or a copy of what a named
+cell borrows. A copied scratch lend is taken only where it is the host's own,
+and the host's own region is refused, since the tenant writes it already. A
+lend equal to the host's own is held by the host's count and takes none. Any
+other is counted on its lender from the tenant's creation, and it does not
+drop at the tenant's release: a tenant's scratch is its host's, which
+outlives the tenant and whose header later steps read. The count passes to
+the host's scratch, which holds one count per lender and drops them at its
+next reset. A dead cell's scratch resets as soon as nothing names it, so a
+lender waiting on the host never holds the host's disposal off, and a reset
+that drops a count runs the lender's disposal as a borrower's disposal does.
 
 If it has undisposed children, tenants or region borrowers it stops there —
 **dead but undisposed**, exactly as a slab root one of them is still counted

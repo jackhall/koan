@@ -27,7 +27,7 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 ///
 /// Crate-private and paired with the value, like the mask beside it. A tree home is not a mask bit
 /// — no relation names a tree cell — so the two kinds are a sum here rather than one number.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum CellHome {
     Slab(u32),
     Tree(u32),

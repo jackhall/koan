@@ -8,7 +8,7 @@
 pub const WIDTH: usize = 1;
 
 pub use cellgraph::{
-    Active, CellHandle, Config, Covariant, CreateError, CreateTreeError, CrossedOperand,
+    Active, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
     DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
     Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, PeekError,
     Prices, Prose, Reattachable, ReattachableOverBoth, ReceiptError, RedeemError, RegisterError,

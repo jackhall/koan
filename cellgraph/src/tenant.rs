@@ -4,7 +4,8 @@
 //! A tenant is the composition the other two kinds cannot express — many units of work, one region.
 //! It has what a step needs and nothing a region needs: the two parked slots, an executing
 //! flag and a generation, plus the write home of its host, a slab or tree cell named at its
-//! creation. A step in it is handed the host's writer and the host's scratch writer, places and
+//! creation, and its lend ([lend.rs](lend.rs)), the half it is handed at `'lent`, resolved at its
+//! creation too. A step in it is handed the host's writer and the host's scratch writer, places and
 //! mints as the host, and redeems what the host may; so a value it writes embeds a host-homed
 //! borrow like any own-region write, with no operand, no pin and no price.
 //!
@@ -18,13 +19,16 @@
 //!
 //! A tenant has no dead-but-undisposed state. Nothing can be under one — a tenant named as a
 //! parent, a host or a destination means its host — so its release takes it out at once, and its
-//! death is a count decrement: no reclaim, no splice, no pledge, no tombstone.
+//! death is a count decrement: no reclaim, no splice, no pledge, no tombstone. A lend it counted
+//! on its lender outlives it in its host's scratch, which may still name the lent bytes, until
+//! that scratch next resets ([lend.rs](lend.rs)).
 //!
 //! No cap, like the tree pool: a tenant is in no relation, so nothing about the slab's width
 //! bounds it.
 
 use crate::carrier::CellHome;
 use crate::handle::{Stale, TenantHandle};
+use crate::lend::Lent;
 use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
 use crate::receipt::{Delivery, ReceiptRun};
 use crate::slots::StepSlots;
@@ -47,9 +51,11 @@ pub(crate) struct Tenancy {
     /// ([`lent_scratch`](crate::StepContext::lent_scratch)). Each is this cell's own child, so
     /// the child count already holds this cell's disposal.
     pub(crate) scratch_borrowers: u32,
-    /// Tree cells borrowing this cell's region, created and not yet disposed: each holds this
-    /// cell's disposal off, since the borrower's doors are minted from the region table at this
-    /// cell's index ([`lent_region`](crate::StepContext::lent_region)).
+    /// Borrowers of this cell's region, each holding this cell's disposal off, since the
+    /// borrower's doors are minted from the region table at this cell's index
+    /// ([`lent_region`](crate::StepContext::lent_region)): a tree cell created and not yet
+    /// disposed, a tenant whose lend is not its host's own, and a host's scratch holding the count
+    /// of such a tenant since its release ([lend.rs](crate::lend)).
     pub(crate) region_borrowers: u32,
 }
 
@@ -69,6 +75,8 @@ struct Tenant<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, 
     /// dispose while this tenant is counted on it, so the index names the same occupant for the
     /// tenant's whole life.
     host: CellHome,
+    /// What a step in the tenant is handed at `'lent`, resolved at its creation and never changed.
+    lent: Option<Lent>,
     executing: bool,
     /// What the tenant carries between its steps. The receipt run among them is the tenant's own;
     /// only the bytes it lives in — the host's scratch bump — are the host's.
@@ -86,10 +94,12 @@ struct TenantCell<
     occupant: Option<Tenant<'graph, C, S, D>>,
 }
 
-/// What a released tenant leaves its host to settle: which host, whether the tenant's scratch
-/// state was at rest and so in the host's count, and the receipt run it left in the host's bump.
+/// What a released tenant leaves its host to settle: which host, what the tenant borrowed,
+/// whether its scratch state was at rest and so in the host's count, and the receipt run it left
+/// in the host's bump.
 pub(crate) struct Departed<'graph, D: Delivery<'graph>> {
     pub(crate) host: CellHome,
+    pub(crate) lent: Option<Lent>,
     pub(crate) scratch_named: bool,
     pub(crate) run: Option<Erased<'graph, ReceiptRun<D>>>,
 }
@@ -120,14 +130,16 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
         self.free.len() == self.slots.len()
     }
 
-    /// Take a slot for a new tenant of `host`.
+    /// Take a slot for a new tenant of `host`, borrowing `lent`.
     pub(crate) fn create(
         &mut self,
         host: CellHome,
+        lent: Option<Lent>,
         continuation: Option<Erased<'graph, C>>,
     ) -> TenantHandle {
         let occupant = Some(Tenant {
             host,
+            lent,
             executing: false,
             step_slots: StepSlots::born(continuation),
         });
@@ -176,6 +188,11 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
         self.tenant(index).host
     }
 
+    /// What the tenant borrows.
+    pub(crate) fn lent(&self, index: u32) -> Option<Lent> {
+        self.tenant(index).lent
+    }
+
     pub(crate) fn is_executing(&self, index: u32) -> bool {
         self.tenant(index).executing
     }
@@ -206,19 +223,20 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
         let scratch_named = tenant.step_slots.names_scratch();
         Departed {
             host: tenant.host,
+            lent: tenant.lent,
             scratch_named,
             run: tenant.step_slots.clear_scratch(),
         }
     }
 
-    /// Every live tenant's host and whether it names that host's scratch bump — what the property
-    /// test recounts the hosts' tallies from.
-    #[cfg(test)]
-    pub(crate) fn census(&self) -> impl Iterator<Item = (CellHome, bool)> + '_ {
+    /// Every live tenant's host, whether it names that host's scratch bump, and what it borrows —
+    /// what the property test recounts the hosts' and lenders' tallies from.
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn census(&self) -> impl Iterator<Item = (CellHome, bool, Option<Lent>)> + '_ {
         self.slots.iter().filter_map(|cell| {
             cell.occupant
                 .as_ref()
-                .map(|tenant| (tenant.host, tenant.step_slots.names_scratch()))
+                .map(|tenant| (tenant.host, tenant.step_slots.names_scratch(), tenant.lent))
         })
     }
 }
