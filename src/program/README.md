@@ -400,10 +400,11 @@ region first: a call's callee, arguments, contributions and the contract a
 tail hands on, an `EVAL`'s code, offered record and declared type, a value
 owed a frame's contract, the frame's end, and — in a frame holding its scratch
 — the hand-off of its last statement, which adopts the binders the shape lists
-that statement reading, and the frame's contract. A value the frame received
-adopts its own memo alone, and so does an argument the load
-[recorded](../dispatch/README.md#body-classes) as passing one on: an operand of
-a keyworded call, or a call by name's argument or record-literal field.
+that statement reading, and the frame's contract. The walk stops at a part
+whose [memo bits](../values/README.md#weight) say its types already resolve
+there, adopting its memo alone, and marks what it walked settled, so a value
+the frame received or passes on is walked once
+([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
 
 ### Specializations
 

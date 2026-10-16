@@ -138,7 +138,8 @@ is `cellgraph`'s reattach, reached from koan's safe façade.
 
 **Values in a cell's region** ([src/values/crossing.rs](../src/values/crossing.rs)) — a composite
 value copied across a crossing is rebuilt through the destination's writer and read after the
-region it came from is released.
+region it came from is released, and a pinned one's header is written through its `Cell` and read
+in a later step.
 
 - `a_copied_list_outlives_its_home`
   a list of a string list and a string-keyed dict crosses under a copy verdict, is kept, its home

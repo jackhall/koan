@@ -315,22 +315,37 @@ composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.
 
 **An adoption stops at a settled part.** Exits and invariant sites adopt
-through one door, whose contract is that every memo a value reaches resolves
-where the value's readers read. A value carries two bits beside its weight,
-memoized as its weight is, on every composite header and on a knot's root
-node: **root-closed**, every memo it reaches is the root's, set where it is
-built from its parts; and **settled**, every memo it reaches resolves in the
-root or its home region's branch, set where a porous writer builds it over
-settled parts and on every value an adoption into a region finishes. A part
-with either bit set already meets the contract — a root type resolves
-everywhere, and a settled type in the region every chain over a value there
-links — so the walk does not enter it, at an exit and at an invariant site
-alike, and the debug check walks with the same cutoff. A clear bit is always
-safe and a set bit is true: a restamp recomputes both from the new type, a
-copy recomputes them at its destination, and a composite keeps the bits it
-computed when it was built. So a loop that passes a large value through
-unchanged, walks a chain one member a hop, or hands a module built over the
-chain to a caching helper each hop, walks none of the chain per hop.
+through one door ([`adopt_value`](../src/values/crossing.rs)), whose contract
+is that every memo a value reaches resolves where the value's readers read. A
+value carries two bits in its weight's top, memoized as its weight is, on every
+composite header and on a knot's root node: **root-closed**, every memo it
+reaches is the root's; and **settled**, every memo it reaches resolves in the
+root or its home region's branch. A value door sets both where it builds the
+value from its parts ([settled.rs](../src/values/settled.rs)): root-closed
+where every part is and its own memo lies in the root, settled where every
+part has either bit and the door's chain interns where it lays — a chain over
+one half alone, paired to that half's own writer, or the load's — so every type
+the door interned lands in the root or the branch of the half the value lies
+in. A knot's birth stamps its root node the same way, from the types it carries
+and the values it holds; a builtin's answers both. A leaf, a type value and a
+header over a knot member carry no bits of their own: a header is adopted at
+its memo and read through to its member's. A part with either bit set already
+meets the contract — a root type resolves everywhere, and a settled type in the
+region every chain over a value there links — so the walk does not enter it,
+at an exit and at an invariant site alike, and the debug check walks with the
+same cutoff. An exit marks every value it entered settled after adopting its
+memos into the region; an invariant site adopts into the lent branch, where
+the value does not lie, and marks nothing. A clear bit is always safe and a
+set bit is true: a restamp keeps the old bits only as far as the new memo
+allows — root-closed where the new type lies in the root, settled where its
+chain interns where it lays — a copy recomputes both through the same doors at
+its destination, its knots re-stamped there, and a region's branch only grows
+while the region lives, so a set bit stays true for the value's life. A test
+build audits the law at the cutoff: every part an adoption skips is walked
+whole and each memo checked against the bit it was skipped on. So a loop that
+passes a large value through unchanged, walks a chain one member a hop, or
+hands a module built over the chain to a caching helper each hop, walks none of
+the chain per hop.
 
 ## Verdicts
 
@@ -349,5 +364,3 @@ types, and released with that tier.
   invariant content each call holds a bounded warm tier.
 - [A tenant's own lend](../roadmap/type-tiers/tenant-lend.md) — a `Shares`
   frame borrowing its specialization through a lend of its own.
-- [Settled values](../roadmap/type-tiers/settled-values.md) — the two bits on
-  a value an adoption walk stops at.

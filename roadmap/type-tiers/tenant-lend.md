@@ -66,11 +66,7 @@ The lend is cellgraph's [named lend](../../cellgraph/src/tree/README.md#death)
 taken by a tenant, and the seek is
 [the scheduler's](../../src/scheduler/README.md#specializations).
 
-**Requires:**
-
-- [Settled values](settled-values.md) — a keyed `Shares` body's invariant
-  sites walk their operands into the lent branch on every call, affordable
-  only past a settled part.
+**Requires:** none — the lend and the seek above stand.
 
 **Unblocks:**
 

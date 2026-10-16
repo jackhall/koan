@@ -405,20 +405,23 @@ pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
     source: &Chain<'_, '_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
 ) {
-    let scratch = Bump::new();
     match into {
         Destination::Region(region) => {
-            let entered = adopted::<XF>(region, region, source, value, &scratch);
+            let scratch = Bump::new();
+            let mut entered = BumpVec::new_in(&scratch);
+            adopted::<XF>(region, region, source, value, &mut |part| {
+                entered.push(part)
+            });
             entered.iter().for_each(settle);
         }
         Destination::Warm { warm, region } => {
-            adopted::<XF>(warm, region, source, value, &scratch);
+            adopted::<XF>(warm, region, source, value, &mut |_| {});
         }
     }
 }
 
-/// [`adopt_value`]'s walk into `dest`, its skipped parts audited against `region`: the values it
-/// entered, staged over `scratch`.
+/// [`adopt_value`]'s walk into `dest`, its skipped parts audited against `region`, each value it
+/// entered handed to `entered`.
 #[cfg_attr(
     not(test),
     expect(
@@ -426,16 +429,17 @@ pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
         reason = "only the test build's audit reads the region"
     )
 )]
-fn adopted<'x, 'graph, 'cell, XF: KnottedFamily<'graph>>(
+fn adopted<'graph, 'cell, XF: KnottedFamily<'graph>>(
     dest: &Chain<'_, '_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_, '_>,
     source: &Chain<'_, '_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
-    scratch: &'x Bump,
-) -> BumpVec<'x, Value<'cell, XF::Closed<'cell>>> {
-    let mut entered = BumpVec::new_in(scratch);
+    entered: &mut dyn FnMut(Value<'cell, XF::Closed<'cell>>),
+) {
     #[cfg(test)]
-    let mut skipped = BumpVec::new_in(scratch);
+    let scratch = Bump::new();
+    #[cfg(test)]
+    let mut skipped = BumpVec::new_in(&scratch);
     carried::<XF>(
         value,
         usize::MAX,
@@ -451,7 +455,7 @@ fn adopted<'x, 'graph, 'cell, XF: KnottedFamily<'graph>>(
             #[cfg(not(test))]
             let _ = part;
         },
-        &mut |part| entered.push(part),
+        entered,
     );
     #[cfg(test)]
     for part in &skipped {
@@ -459,7 +463,6 @@ fn adopted<'x, 'graph, 'cell, XF: KnottedFamily<'graph>>(
     }
     #[cfg(debug_assertions)]
     check_parts::<XF>(dest, value, usize::MAX, true);
-    entered
 }
 
 /// The test build's audit of a part an adoption skipped: walked whole, every memo its bits answer

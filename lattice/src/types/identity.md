@@ -112,7 +112,9 @@ probe, so a branch laid there during the step is seen and the lattice needs no
 half by value beside the one it writes (`Halves`, which `Habitat::region`
 hands the chain), so building one lays nothing; no branch holds it, since a
 half's door is valid for one step. A chain is built per step and never
-stored.
+stored. Two read-only doors let an embedder see where a type lands:
+`TypeChain::half`, the half the chain writes, and `TypeChain::in_root`, whether
+a type's node lies in the root — on the load's chain, in the root builder.
 
 How a value's types reach another habitat is the crossing's
 ([crossing](../../../src/values/README.md#crossing)), over three doors

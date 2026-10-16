@@ -836,9 +836,7 @@ capture named bare, or a member of one read through the builtin `ATTR`; a record
 literal written in place whose every field holds nothing minted; or a module
 whose content tree ([paths](#paths)) reaches no view, no closure, no module body
 holding a minting site and no leaf but a value the body received
-([`holds_nothing_minted`](statics.rs)). The caching record lists the
-site of each argument passing on a received value, for the run's exits to adopt
-by its memo alone. A sealed
+([`holds_nothing_minted`](statics.rs)). A sealed
 callable or quote's code
 that mints at run **caches**: its types live in a scratch tier
 ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
@@ -1162,8 +1160,10 @@ specialization rebuilt with the same answer, the allocations a birth keyed on
 a list costs, and each exit — a retyped value, a closure, a quote, a knot
 member, a held frame's hand-off, a received list adopted by its memo alone,
 a loop passing on a member of a received chain adopting a hop at a time,
-and a loop handing a callee a module built over its link each hop, caching and
-flat;
+a member of a received value reached through a call's result adopted by its
+memo alone whatever its length, and a loop handing a callee a module built
+over its link each hop, caching and flat, a `Fresh` callee viewing it at an
+invariant site included;
 and [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md). Every runnable

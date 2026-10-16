@@ -102,8 +102,8 @@ a cycle — with a fellow binder, which the shape refuses as an eager cycle, nor
 with itself, which is refused a step earlier, since an eager read at the
 binder's own position does not see that binder. So there is one representation
 and one copy per kind of node, and a function is staged and laid down the same
-way whichever door births it. A node is region-resident, `Copy` and so
-`Drop`-free, and a node's fields are private to this module: a node exists only
+way whichever door births it. A node is region-resident and `Drop`-free, which
+a `const` assertion pins, and a node's fields are private to this module: a node exists only
 because the tie, the lambda door, the view door one layer up, or a copy of a
 tied knot, laid it down.
 
@@ -385,6 +385,14 @@ crossing rebuilds that knot whole. It is summed at the tie and memoized on every
 crossing prices a member by reading one field, under the ordinary
 [verdict](../values/README.md#crossing).
 
+The root node's weight also carries the knot's
+[memo bits](../values/README.md#weight), in a `Cell`, and every member reads
+and sets them there; every other node's stay clear. Every birth door — the
+tie, the lambda and instance doors, a module's or a barrier's tie and a
+quote's — stamps them through the chain it was born through, from the types
+the knot carries and the values it holds, and a builtin's member answers both
+bits, its record being the root's.
+
 **Every knot member copies.** The copy is two walks over the knot, in
 [copy.rs](copy.rs). `held` lists every value the knot holds — each node in
 index order, and within a node exactly the values its rebuild asks for — and
@@ -397,7 +405,8 @@ through the destination's writer, a code node's bound and supplied runs, a data
 node through `Circular::copied`, a module's member run and a barrier's
 underlying function — each edge carried verbatim, since an edge names a node by
 index and so means the same node in the copy, anonymous nodes included, and
-the types, body and code shapes, quote bodies and knot weight carried over. The
+the types, body and code shapes, quote bodies and knot weight's bytes carried
+over, and the crossing stamps the copy's memo bits where it lands. The
 copied member is the one at the source's own index. A copy never shares a node
 with its source, so a copied knot outlives the region it was copied from.
 
@@ -529,6 +538,10 @@ carries the scalar types alone.
   themselves knot members (`a_copied_module_is_the_same_members_rebuilt`); and
   two members of one knot copied together through `copy_severed` share one copy
   of it (`values_copied_in_one_placement_share_one_copy_of_a_knot`).
+- [`tests/bits.rs`](tests/bits.rs) — a knot's memo bits set through any
+  member and read back off its root node; a knot born through a step's own
+  chain stamped settled, and one born through a chain that does not intern
+  where it lays left unsettled; and a copy re-stamped at its destination.
 - [`tests/code.rs`](tests/code.rs) — the quote door binding `$` names where the
   quote is written and printing its marks, code compared by its text and the
   values its names bind, a quote reading its own binder as a one-node knot, and

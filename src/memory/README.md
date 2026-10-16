@@ -109,8 +109,8 @@ continuation captures either by value, and the binding vocabulary is this
 file's: the run beneath it knows nothing of names or binders.
 
 **A value at rest in the region.** `Writer` has two write verbs, `fill` and
-`text`, and every simpler shape is derived here: `resident` lays one `Copy`
-value down (`fill` at length one) and `collect` an exact-size run (`fill`
+`text`, and every simpler shape is derived here: `resident` lays one value
+with no drop glue down (`fill` at length one) and `collect` an exact-size run (`fill`
 driven by the iterator, with no growth path). Both live beside the re-export in
 [substrate.rs](substrate.rs) and are how `values` and `scope` lay down their
 region-resident structs. `fill` hands back a shared `&'cell` borrow, never
