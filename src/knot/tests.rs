@@ -10,6 +10,7 @@
 //! module suites read this fixture too, so its doors are `pub(crate)`.
 
 mod birth;
+mod bits;
 mod boundary;
 mod code;
 mod copy;

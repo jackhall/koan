@@ -16,6 +16,8 @@
 //! variable the solution names is read where the site runs, the typing record carries the solution
 //! so bound, and a frame binds the body's `FOR ALL` names from it.
 
+use std::cell::Cell;
+
 use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
@@ -45,17 +47,10 @@ pub struct Function<'graph, 'cell, X> {
     typing: Option<&'cell Typing<'cell>>,
     shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'cell, X>,
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
+    /// node's also carries the knot's memo bits.
+    knot_weight: Cell<Weight>,
 }
-
-impl<X> Clone for Function<'_, '_, X> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<X> Copy for Function<'_, '_, X> {}
 
 impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     /// The function `ktype` runs through `shape` over `closure`, inside a knot weighing
@@ -72,7 +67,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
             typing,
             shape,
             closure,
-            knot_weight,
+            knot_weight: Cell::new(knot_weight),
         }
     }
 
@@ -137,7 +132,12 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     }
 
     pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+        self.knot_weight.get()
+    }
+
+    /// The knot weight's cell, where a knot's root node keeps its memo bits.
+    pub(super) fn knot_weight_cell(&self) -> &Cell<Weight> {
+        &self.knot_weight
     }
 
     /// This function over `closure` rebuilt at another region lifetime — the copy's arm. The type,
@@ -159,7 +159,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
             ),
             shape: self.shape,
             closure,
-            knot_weight: self.knot_weight,
+            knot_weight: Cell::new(self.knot_weight.get().without_bits()),
         }
     }
 }

@@ -27,7 +27,7 @@ use crate::values::digest::{DigestHasher, Tag};
 use crate::values::tests::TestTypes;
 use crate::values::{Chain, ContentDigest, Seen, Types};
 use crate::values::{
-    DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
+    DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
 
 use super::{Builtins, ShapeError};
@@ -49,6 +49,13 @@ impl Knotted for Probe {
     fn weight(&self) -> Weight {
         Weight::ZERO
     }
+
+    /// A stand-in stores no weight, so it records no bits: a clear bit is always safe.
+    fn bits(&self) -> MemoBits {
+        MemoBits::NONE
+    }
+
+    fn set_bits(&self, _: MemoBits) {}
 
     /// A probe holds no value: every probe is a member of one empty knot, told apart by its index.
     fn held<'a>(

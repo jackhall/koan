@@ -13,6 +13,7 @@ mod equality;
 mod habitat;
 mod render;
 mod satisfaction;
+mod settled;
 mod surface;
 mod working;
 
@@ -31,7 +32,7 @@ use crate::type_lattice::{
     RootBuilder,
 };
 use crate::values::{
-    Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Seen, ValueCarrier,
+    Circular, CodeView, DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, Seen, ValueCarrier,
     ValueFamily, Weight, cross_view,
 };
 
@@ -344,6 +345,13 @@ impl Knotted for Stand<'_> {
         Weight::ZERO
     }
 
+    /// A stand-in stores no weight, so it records no bits: a clear bit is always safe.
+    fn bits(&self) -> MemoBits {
+        MemoBits::NONE
+    }
+
+    fn set_bits(&self, _: MemoBits) {}
+
     /// A stand-in holds no value: its knot is its identity.
     fn held<'a>(
         &self,
@@ -419,6 +427,13 @@ impl Knotted for Node<'_> {
     fn weight(&self) -> Weight {
         Weight::ZERO
     }
+
+    /// A stand-in stores no weight, so it records no bits: a clear bit is always safe.
+    fn bits(&self) -> MemoBits {
+        MemoBits::NONE
+    }
+
+    fn set_bits(&self, _: MemoBits) {}
 
     /// Every value link of every node of the knot, nodes in index order, as the knot layer lists
     /// a data node's.

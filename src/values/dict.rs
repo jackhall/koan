@@ -1,6 +1,7 @@
 //! A dict: two aligned runs in the region, keys sorted and cells beside them, so a lookup is a
 //! binary search and entry order is key order.
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::fmt;
 use std::marker::PhantomData;
@@ -8,7 +9,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::KType;
 
-use super::{Chain, Knotted, Link, Nothing, Value, Weight, dict_type};
+use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with
@@ -142,12 +143,12 @@ impl fmt::Display for Key<'_> {
 
 /// A dict value, resident in the region its keys and cells live in. Its cells are value words, or
 /// [`Link`]s when the dict is a knot's data node.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Dict<'cell, X = Nothing, C = Value<'cell, X>> {
     keys: &'cell [Key<'cell>],
     cells: &'cell [C],
     ktype: KType,
-    weight: Weight,
+    weight: Cell<Weight>,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -283,7 +284,7 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
                 keys,
                 cells,
                 ktype,
-                weight,
+                weight: Cell::new(weight),
                 member: PhantomData,
             },
         )
@@ -291,7 +292,7 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
 
     /// The same entries under `ktype` — an ascription's retype, sharing both runs.
     pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
-        Self::from_runs(writer, self.keys, self.cells, ktype, self.weight)
+        Self::from_runs(writer, self.keys, self.cells, ktype, self.weight.get())
     }
 
     pub fn len(&self) -> usize {
@@ -307,7 +308,12 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
     }
 
     pub fn weight(&self) -> Weight {
-        self.weight
+        self.weight.get()
+    }
+
+    /// Where the value's type memos resolve, as its weight records it.
+    pub fn bits(&self) -> MemoBits {
+        self.weight.get().bits()
     }
 }
 

@@ -15,6 +15,8 @@
 //! arrive as members of one copy of that knot. A barrier's underlying function goes the same way,
 //! as the value word it would be if a member held it.
 
+use std::cell::Cell;
+
 use crate::memory::{KnotPlan, Writer, resident};
 use crate::type_lattice::{DeclaredType, Parametric};
 use crate::values::{self, DeepCopy, Value};
@@ -101,7 +103,7 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     knot_weight,
                 } => Node::Data {
                     circular: circular.copied(writer, copy),
-                    knot_weight: *knot_weight,
+                    knot_weight: Cell::new(knot_weight.get().without_bits()),
                 },
                 Node::Module(module) => {
                     let source = module.members();

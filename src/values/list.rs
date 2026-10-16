@@ -2,19 +2,20 @@
 //! key's candidates, which dispatch alone reads. Its cells are value words, or [`Link`]s when the
 //! list is a knot's data node.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::KType;
 
-use super::{Chain, Knotted, Link, Nothing, Value, Weight, list_type};
+use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct List<'cell, X = Nothing, C = Value<'cell, X>> {
     cells: &'cell [C],
     ktype: KType,
-    weight: Weight,
+    weight: Cell<Weight>,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -115,7 +116,7 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
             List {
                 cells,
                 ktype,
-                weight,
+                weight: Cell::new(weight),
                 member: PhantomData,
             },
         )
@@ -123,7 +124,7 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
 
     /// The same cells under `ktype` — an ascription's retype, sharing the run.
     pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
-        Self::from_run(writer, self.cells, ktype, self.weight)
+        Self::from_run(writer, self.cells, ktype, self.weight.get())
     }
 
     pub fn len(&self) -> usize {
@@ -139,7 +140,12 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
     }
 
     pub fn weight(&self) -> Weight {
-        self.weight
+        self.weight.get()
+    }
+
+    /// Where the value's type memos resolve, as its weight records it.
+    pub fn bits(&self) -> MemoBits {
+        self.weight.get().bits()
     }
 }
 

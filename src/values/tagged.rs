@@ -1,23 +1,24 @@
 //! The one nominal wrap: a payload tagged with a type identity — a newtype construction, a union
 //! variant, an abstract-type re-tag, a lowered error.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::KType;
 
 use super::{
-    Chain, ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Value, Weight,
-    construction, sealing,
+    Chain, ConstructionRefused, Knotted, Link, MemoBits, Nothing, SealRefused, TypeValue, Value,
+    Weight, construction, sealing,
 };
 
 /// A tagged value. The identity is its type, so no tag symbol rides beside the payload. Its payload
 /// is a value word, or a [`Link`] when the tagged value is a knot's data node.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Tagged<'cell, X = Nothing, C = Value<'cell, X>> {
     payload: C,
     ktype: KType,
-    weight: Weight,
+    weight: Cell<Weight>,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -106,7 +107,7 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
             Tagged {
                 payload,
                 ktype,
-                weight,
+                weight: Cell::new(weight),
                 member: PhantomData,
             },
         )
@@ -114,7 +115,7 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
 
     /// The same payload under another identity.
     pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
-        resident(writer, Tagged { ktype, ..*self })
+        Self::from_payload(writer, self.payload, ktype, self.weight.get())
     }
 
     pub fn payload(&self) -> &C {
@@ -126,6 +127,11 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
     }
 
     pub fn weight(&self) -> Weight {
-        self.weight
+        self.weight.get()
+    }
+
+    /// Where the value's type memos resolve, as its weight records it.
+    pub fn bits(&self) -> MemoBits {
+        self.weight.get().bits()
     }
 }

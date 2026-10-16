@@ -24,6 +24,8 @@
 //! member, and so is a quote that reads one. The tie hands back each annotation it resolved beside
 //! the knot ([`Tied`]), so the caller holds each slot to it without resolving it again.
 
+use std::cell::Cell;
+
 use crate::elaborate::denoted;
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
@@ -216,7 +218,7 @@ pub fn tie<'graph, 'cell, 'x>(
             )),
             (None, Some(circular)) => Node::Data {
                 circular,
-                knot_weight,
+                knot_weight: Cell::new(knot_weight),
             },
             (None, None) => unreachable!("every node is a function, a code or a data node"),
         }

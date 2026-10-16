@@ -53,8 +53,9 @@ pub type StepContext<
 
 /// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
 /// one.
-pub fn resident<'cell, T: Copy>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
-    &writer.fill(1, |_| value)[0]
+pub fn resident<'cell, T>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
+    let mut value = Some(value);
+    &writer.fill(1, |_| value.take().expect("one cell is filled once"))[0]
 }
 
 /// Copy an exact-length run into the region — [`Writer::fill`] driven by the iterator, with no

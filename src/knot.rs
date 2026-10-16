@@ -60,6 +60,7 @@ pub use function::{Function, barrier_instance, header_instance, instance, lambda
 pub use module::{Coerced, Module, body_activation};
 pub use tie::{Tied, tie};
 
+use std::cell::Cell;
 use std::fmt;
 
 use crate::memory::{BumpAllocator, DropFree, Edge, Member, Writer, covariant, reattachable};
@@ -70,12 +71,11 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
-    self, Chain, Circular, ConstructionRefused, ContentDigest, KeyRejected, Resolved, Seen, Value,
-    ValueCarrier, ValueFamily, Weight,
+    self, Chain, Circular, ConstructionRefused, ContentDigest, KeyRejected, MemoBits, Resolved,
+    Seen, Value, ValueCarrier, ValueFamily, Weight,
 };
 
 /// The payload of a knot node.
-#[derive(Clone, Copy)]
 pub enum Node<'graph, 'cell> {
     Function(Function<'graph, 'cell, Knotted<'graph, 'cell>>),
     /// A builtin overload, its record in program storage.
@@ -84,8 +84,9 @@ pub enum Node<'graph, 'cell> {
     /// a sibling mention.
     Data {
         circular: Circular<'cell, Knotted<'graph, 'cell>>,
-        /// What rebuilding the whole knot this node sits in writes, the same on every node.
-        knot_weight: Weight,
+        /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
+        /// node's also carries the knot's memo bits.
+        knot_weight: Cell<Weight>,
     },
     /// A module: its self-signature, its members in layout order, and the same weight.
     Module(Module<'graph, 'cell>),
@@ -193,6 +194,19 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
             .map_or(self, |barrier| barrier.underlying())
     }
 
+    /// The weight cell of this member's knot's root node, where the knot's memo bits sit; `None`
+    /// for a builtin, whose record in program storage holds none.
+    fn root_weight(self) -> Option<&'cell Cell<Weight>> {
+        match values::Knotted::root(&self).node() {
+            Node::Function(function) => Some(function.knot_weight_cell()),
+            Node::Builtin(_) => None,
+            Node::Data { knot_weight, .. } => Some(knot_weight),
+            Node::Module(module) => Some(module.knot_weight_cell()),
+            Node::Coerced(coerced) => Some(coerced.knot_weight_cell()),
+            Node::Code(code) => Some(code.knot_weight_cell()),
+        }
+    }
+
     /// Every value this node holds that its content covers, in the order
     /// [`content`](Self::content) asks for their digests. A builtin's node is a knot of its own and
     /// digests as its overload, never through here.
@@ -259,10 +273,21 @@ impl values::Knotted for Knotted<'_, '_> {
         match self.node() {
             Node::Function(function) => function.knot_weight(),
             Node::Builtin(_) => BuiltinFunction::knot_weight(),
-            Node::Data { knot_weight, .. } => *knot_weight,
+            Node::Data { knot_weight, .. } => knot_weight.get(),
             Node::Module(module) => module.knot_weight(),
             Node::Coerced(coerced) => coerced.knot_weight(),
             Node::Code(code) => code.knot_weight(),
+        }
+    }
+
+    fn bits(&self) -> MemoBits {
+        self.root_weight()
+            .map_or(MemoBits::BOTH, |weight| weight.get().bits())
+    }
+
+    fn set_bits(&self, bits: MemoBits) {
+        if let Some(weight) = self.root_weight() {
+            weight.set(weight.get().with_bits(bits));
         }
     }
 

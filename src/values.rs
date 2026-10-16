@@ -79,7 +79,7 @@ pub use surface::{
 };
 pub use tagged::Tagged;
 pub use type_value::TypeValue;
-pub use weight::Weight;
+pub use weight::{MemoBits, Weight};
 pub use working::{WorkingExpression, WorkingPart};
 
 use std::hash::Hash;
@@ -100,6 +100,12 @@ pub trait Knotted: Copy + Eq + Hash {
     /// The bytes a rebuild of this member's knot at a destination writes, past the value word
     /// holding it.
     fn weight(&self) -> Weight;
+
+    /// Where the memos of this member's knot resolve, read off its root node.
+    fn bits(&self) -> MemoBits;
+
+    /// Record `bits` on this member's knot, at its root node.
+    fn set_bits(&self, bits: MemoBits);
 
     /// Every value this member's knot holds that its digest covers, each seen at the type the knot
     /// reads it at, handed to `out` in the order [`digest_held`](Self::digest_held) asks for their
@@ -196,6 +202,14 @@ impl Knotted for Nothing {
     }
 
     fn weight(&self) -> Weight {
+        match *self {}
+    }
+
+    fn bits(&self) -> MemoBits {
+        match *self {}
+    }
+
+    fn set_bits(&self, _: MemoBits) {
         match *self {}
     }
 

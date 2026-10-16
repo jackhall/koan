@@ -1,23 +1,24 @@
 //! A record: field names and cells as two aligned runs in the region, sorted by symbol so a field
 //! read is a binary search.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::KType;
 
-use super::{Chain, Knotted, Link, Nothing, Value, Weight, record_type};
+use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
 /// nominal identity, only its fields; equality over two is blind to the order they were written in.
 /// Its cells are value words, or [`Link`]s when the record is a knot's data node.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Record<'cell, X = Nothing, C = Value<'cell, X>> {
     names: &'cell [Symbol],
     cells: &'cell [C],
     ktype: KType,
-    weight: Weight,
+    weight: Cell<Weight>,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -129,7 +130,7 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
                 names,
                 cells,
                 ktype,
-                weight,
+                weight: Cell::new(weight),
                 member: PhantomData,
             },
         )
@@ -137,7 +138,7 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
 
     /// The same fields under `ktype` — an ascription's retype, sharing both runs.
     pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
-        Self::from_runs(writer, self.names, self.cells, ktype, self.weight)
+        Self::from_runs(writer, self.names, self.cells, ktype, self.weight.get())
     }
 
     pub fn ktype(&self) -> KType {
@@ -145,7 +146,12 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
     }
 
     pub fn weight(&self) -> Weight {
-        self.weight
+        self.weight.get()
+    }
+
+    /// Where the value's type memos resolve, as its weight records it.
+    pub fn bits(&self) -> MemoBits {
+        self.weight.get().bits()
     }
 }
 
