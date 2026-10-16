@@ -10,9 +10,10 @@ since a part keeps its own memo under `Any`, a union or a carrier. Its one
 cutoff is `received`: the values the load lists per site as a parameter, a
 capture or a builtin `ATTR` member read of one, which the walk does not enter
 (`Caching.received`, computed in `src/dispatch/statics/caching.rs`). A
-received part reached by any other route — a `MATCH` arm, a call's result —
-is walked whole, so a body handing out a wrapper over such a part walks
-O(depth) per call. At an invariant site under `routes` (`ascribe` in
+received part reached by any other route, such as a call's result, is walked
+whole on every call: a loop passing on a member of a received record, through
+a call that returns it, adopts 40 handles per hop for a member of eight
+numbers and 96 for one of sixty-four. At an invariant site under `routes` (`ascribe` in
 `src/dispatch/evaluate.rs`) the same door adopts the operand and the view into
 the lent branch with no `received` at all, on every call: a module built over
 a received chain is walked to the chain's end each hop, and `wrapped_peeks` in
@@ -46,8 +47,10 @@ value reaches, built from its parts at construction and read only through
 - `Caching.received`, the statics computing it and the walk's `same_word`
   scan are deleted, and the tests over received values pass on the bits.
 - A `Fresh` loop handing a module built over its link each hop to a `Fresh`
-  caching helper holds adoptions flat per hop; so does a loop handing out a
-  wrapper over a received part reached through a `MATCH` arm.
+  caching helper holds adoptions flat per hop.
+- A loop passing on a wrapper over a member of a received value, reached
+  through a call's result, adopts the member by its memo alone: its adoptions
+  per hop do not grow with the member's size.
 - The `Cell` write through a laid header is on the Miri slate.
 
 **Directions.**
@@ -66,6 +69,11 @@ value reaches, built from its parts at construction and read only through
   interior mutability (`Writer::fill` asserts `!needs_drop`, not `Copy`); the
   headers and nodes drop `Copy`, which nothing copies by value after the lay
   but `Tagged::with_type`, rewritten as the other restamps are.
+- *Reading the lattice* — decided. `TypeChain::half` turns public and a
+  read-only `TypeChain::in_root` is added, so root-closed can ask whether a
+  type lies in the root and settled can ask whether a chain interns where it
+  lays. Rejected: each caller passing whether its values settle, which no
+  check catches when wrong.
 - *Leaves and retypes* — decided. A scalar, a `Str`, a `TypeValue` and a
   `Retyped` carry no bits: none has parts of its own, and a `Retyped` is
   adopted at its memo and then read through to its member's bits.
