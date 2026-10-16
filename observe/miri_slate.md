@@ -147,6 +147,11 @@ region it came from is released.
   a type value whose record type its home's branch minted crosses under a copy verdict, its home
   is released, and the destination reads the record's node: the copy re-laid it in the
   destination's branch rather than entering the home's by reference.
+- `a_settled_bit_written_through_a_pinned_header_reads_in_a_later_step`
+  pins interior mutation through a shared borrow of a header laid in another cell's region: a
+  record laid in a home cell's region is pinned into a holder and its home sealed; the holder's
+  step marks it settled through its `Cell<Weight>`, and its next step reads the bit and every
+  byte of the record before both cells are released.
 
 **Knots in a cell's region** ([src/knot/copy.rs](../src/knot/copy.rs)) — a knot
 member copied across a crossing, a function, a quote or a data node, re-ties its whole knot through the
@@ -299,9 +304,9 @@ and read back through `peek` between steps.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-16: 300s — 37 tests, 0 leaks, 0 UB
 - 2026-10-15: 280s — 36 tests, 0 leaks, 0 UB
 - 2026-10-11: 259s — 34 tests, 0 leaks, 0 UB
 - 2026-10-09: 371s — 31 tests, 0 leaks, 0 UB
 - 2026-10-04: 398s — 28 tests, 0 leaks, 0 UB
-- 2026-10-02: 264s — 27 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

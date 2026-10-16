@@ -105,6 +105,59 @@ fn a_pinned_record_reads_after_its_home_seals() {
     });
 }
 
+/// An exit marks a value it walked settled through a shared borrow of its header, which may lie in
+/// another cell's region: here a pinned record's, written in the holder's step and read in its next.
+#[test]
+fn a_settled_bit_written_through_a_pinned_header_reads_in_a_later_step() {
+    with_fixture(|fixture| {
+        let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
+        let name = BinderSymbol::declared("name", symbols).unwrap();
+        let mut graph: TestGraph<'_> = CellGraph::new(2, pin);
+        let home = graph.create(None).unwrap();
+        let holder = graph.create(None).unwrap();
+        let dormant = graph
+            .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
+                let writer = context.writer();
+                let fields = [(name, text(writer, "koan"))];
+                let record = Record::new(writer, &fields, types, scratch);
+                assert!(!record.bits().settled);
+                let source = context.lift::<ValueFamily>(Value::Record(record));
+                let crossed = fixture.tiers.cross(context, holder, &source).unwrap();
+                context.keep(crossed)
+            })
+            .unwrap();
+        graph.release(home, ReleaseAbsorption::Refused).unwrap();
+        let dormant = graph
+            .enter(holder, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let Value::Record(pinned) = context.read(&carrier).value() else {
+                    panic!("the kept record redeems as a record");
+                };
+                pinned.settle();
+                context.keep(carrier)
+            })
+            .unwrap();
+        graph
+            .enter(holder, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let Value::Record(record) = context.read(&carrier).value() else {
+                    panic!("the kept record redeems as a record");
+                };
+                assert!(record.bits().settled);
+                assert_eq!(
+                    held(record, name.symbol()).and_then(Value::as_str),
+                    Some("koan")
+                );
+            })
+            .unwrap();
+        graph
+            .release(holder, ReleaseAbsorption::IntoHolder)
+            .unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
 #[test]
 fn a_kept_value_redeems_in_a_later_step() {
     with_fixture(|fixture| {
