@@ -442,3 +442,29 @@ fn an_adopt_from_a_chain_reads_through_its_link() {
     assert!(there.find(inner.raw().digest()).is_some());
     assert_eq!(child.own_len(), child_len, "the source caches nothing");
 }
+
+#[test]
+fn in_root_finds_a_root_type_and_not_a_branch_type() {
+    let symbols = SymbolInterner::new();
+    let (root_region, region) = (Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let types = TypeChain::new(root, BumpHalf::new(&region));
+    let minted = record_named(&types, &symbols, "x");
+    assert!(types.in_root(KType::NUMBER), "a constant is the root's");
+    assert!(types.resolves(minted));
+    assert!(!types.in_root(minted), "a branch's mint is not the root's");
+}
+
+#[test]
+fn in_root_on_the_loads_chain_reads_the_builder() {
+    let symbols = SymbolInterner::new();
+    let region = Bump::new();
+    let types = crate::types::tests::building(&region);
+    let field = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let minted = types.record(&Bump::new(), &[(field, KType::NUMBER)]);
+    assert!(types.in_root(KType::NUMBER));
+    assert!(
+        types.in_root(minted),
+        "the load's chain interns into the root"
+    );
+}
