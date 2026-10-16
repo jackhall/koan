@@ -15,7 +15,9 @@
 //! host's own lend, which the host's count already holds past every reset of the host's scratch;
 //! and at the tenant's release the count passes to the host's scratch, which holds one per lender
 //! and drops them where it next resets. That reset also comes in a disposal walk, for a dead host
-//! nothing names the scratch of, so a lender waiting on its borrower's host does not leak it.
+//! nothing names the scratch of, so a lender waiting on its borrower's host does not leak it. A
+//! lender that borrows that scratch itself closes a lend cycle, which the substrate names rather
+//! than refuses ([lend_cycle.rs](graph/lend_cycle.rs)).
 
 use crate::carrier::CellHome;
 use crate::handle::CellHandle;
@@ -41,7 +43,7 @@ pub enum Lend {
 
 /// A lend resolved at creation: which half of which write home. Stored on the tree cell or tenant
 /// and never changed.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Lent {
     Scratch(CellHome),
     Region(CellHome),

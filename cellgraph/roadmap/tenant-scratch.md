@@ -8,14 +8,14 @@ region writer and its host's scratch writer, and a scratch state or receipt
 run it parks lies in its host's bump ([tenant.rs](../src/tenant.rs)). What a
 tenant step writes at `'scratch` therefore outlives the tenant, until the
 host's scratch next resets, and the host's scratch header, which every later
-step of the host and of its other tenants reads, may hold it. Once a tenant
-borrows a half of its own
-([a tenant's own lend](../../roadmap/type-tiers/tenant-lend.md)), `'lent:
-'scratch` holds only if that lend outlives the host's scratch, so its count
-passes to the host's scratch at the tenant's release and drops at that
+step of the host and of its other tenants reads, may hold it. A tenant
+borrows a half of its own ([tree cells](../src/tree/README.md#death)), and
+`'lent: 'scratch` holds only if that lend outlives the host's scratch, so its
+count passes to the host's scratch at the tenant's release and drops at that
 scratch's reset: a region an embedder releases stays in place until its
 borrower's host's scratch resets, which for a host holding its scratch is
-the host's death. And a header a tenant needs
+the host's death, and a lender that borrows the host's scratch itself closes
+a lend cycle that never disposes (`CellGraph::lend_cycle`). And a header a tenant needs
 laid a particular way in its scratch, such as one whose content links its
 host's region, is the host's to lay first.
 
@@ -52,7 +52,4 @@ What this removes from koan is the count a tenant's lend leaves on its host's
 scratch, and the warm and cold tiers of a keyed `Shares` body outliving the
 call ([type tiers](../../design/type-tiers.md#where-each-body-interns)).
 
-**Requires:**
-
-- [A tenant's own lend](../../roadmap/type-tiers/tenant-lend.md) — the lend
-  this scratch lets a tenant drop at its release.
+**Requires:** none — a tenant's own lend stands.

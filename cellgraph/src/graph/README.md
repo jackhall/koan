@@ -90,8 +90,9 @@ its lender, which may sit off the chain, so the walk pushes every disposed
 cell's lender onto a worklist, and each popped home starts a walk of its own if
 its death is done waiting. No generation rides on the worklist: no cell is
 created inside a cascade, so a popped home names its occupant or a disposed
-slot, which fails the gate. Each cell disposes once and a lend names an older
-cell, so the worklist empties. Nothing scans the pool and no list of dead cells
+slot, which fails the gate. A scratch reset that drops a count it held for a
+released tenant's lend pushes that lender too. Each cell disposes once and
+each held count drops once, so the worklist empties. Nothing scans the pool and no list of dead cells
 outlives the cascade. Order does change retention — a dead child pinning a dead parent that a live cell also pins
 reclaims first and lets the parent absorb into the live cell — but the mirror
 image favours the other order, so no fixed order dominates and the walk's own is

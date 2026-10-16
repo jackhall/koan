@@ -90,7 +90,7 @@ dependency, so it cannot say which facts a binding would settle.
   result — which is varying content and keys nothing, so the run cell
   resumes it into its own scratch. Cellgraph's lend stays fixed at creation.
   A `Shares` frame reaches its specialization through
-  [a lend of its own](../type-tiers/tenant-lend.md). A child specialization
+  [a lend of its own](../../design/type-tiers.md#the-specialization-as-the-warm-tier). A child specialization
   whose facts name a type its parent minted relays it into its own branch,
   insert-if-absent, so no branch links its parent's and a run cell's chain
   probes one specialization.
@@ -118,10 +118,7 @@ Ullman, 1977), and the residual is a solver's undischarged constraint
 (Pottier and Rémy, 2005). The [build tree](../../src/build/README.md)'s
 cells stand.
 
-**Requires:**
-
-- [A tenant's own lend](../type-tiers/tenant-lend.md) — a resumption under a
-  `Shares` frame's binding needs a build cell the frame borrows.
+**Requires:** none — the build tree's cells and a tenant's own lend stand.
 
 **Unblocks:**
 

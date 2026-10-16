@@ -80,7 +80,7 @@ pub enum KBirth<'graph, 'cell> {
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
-/// the own body of a caching frame that holds its scratch, which it then interns through, and the
+/// the own body of a routing caching frame, whose reading chain it then interns through, and the
 /// build cell its frame runs under, which a callable born in it is born under.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Within {

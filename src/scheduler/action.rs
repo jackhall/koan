@@ -398,8 +398,8 @@ where
         self.context.hold_scratch()
     }
 
-    /// Whether this cell borrows a specialization: a region rather than a scratch, which only a
-    /// call's frame the drain found one for is born borrowing.
+    /// Whether this cell borrows a specialization: a region rather than a scratch, which in a run
+    /// cell is a call's frame the drain found one for, or an evaluation or block copying its lend.
     pub fn borrows_specialization(&self) -> bool {
         self.context.lent_region().is_some()
     }

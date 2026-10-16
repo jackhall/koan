@@ -196,9 +196,10 @@ keys do not cover resumes cold.
   specialization through a lend of its own, counted on the specialization
   until its host's scratch next resets after the tenant's release, since its
   host's scratch may hold nodes over the specialization's; a `Shares` call of
-  a body that keys nothing, or born cold, borrows nothing; and an evaluation,
-  block or hand-off tenant copies its asker's lend, so it reads what its frame
-  reads. The build tree is structural, a parent
+  a body that keys nothing, or born cold, borrows nothing; an evaluation or
+  block tenant copies its asker's lend, so it reads what its frame reads; and
+  a hand-off tenant copies the lend of its frame's parent, whose region it
+  writes. The build tree is structural, a parent
   outliving its children, so one count covers the whole chain above. This is
   cellgraph's named lend
   ([tree cells](../../cellgraph/src/tree/README.md#death)): a creation names
@@ -372,8 +373,6 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 - [Evicting specializations](../../roadmap/type-tiers/specialization-eviction.md)
   — the policy a build cell evicts its specializations by, a stale ancestor,
   and sibling redundancy.
-- [A tenant's own lend](../../roadmap/type-tiers/tenant-lend.md) — a `Shares`
-  frame borrowing its specialization through a lend of its own.
 - [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
   — the worklist driver, frontiers and seams, and the properties as laws.
 - [Activation typing](../../roadmap/gradual-typing/activation-typing.md) — a

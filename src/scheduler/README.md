@@ -147,9 +147,11 @@ previous step parked, and exposes:
 - the chains a [caching body](../program/README.md#caching-bodies) runs on,
   paired to the region writer while their tiers sit in scratch:
   `shares_types`, over the write home's region and scratch; `reading_types`,
-  over the lent branch and the cell's own scratch, whose branch
-  `link_reading_types` links to its region once `hold_scratch` has held that
-  scratch for the cell's life; and `warm_types`, the lent branch alone. The
+  over the lent branch and the write home's scratch, whose branch it links to
+  the write home's region, laid linked or linked late where another chain laid
+  it first; and `warm_types`, the lent branch alone. A frame routes onto
+  `reading_types` once `hold_scratch` has held its scratch for the cell's life,
+  or, as a tenant, where `borrows_specialization` says it borrows one. The
   lent branch is the lent half's, a specialization's region or a parent's
   scratch, and the last two are `None` where the cell borrows nothing. `results_with` and
   `finish_with` run a pinned value's debug check against such a chain;
@@ -498,13 +500,18 @@ no layer of koan's above present. They hold, each with a workload of its own:
   every seeking frame cold, a specialization nesting under the frame that
   seeks beneath it, eviction leaf-first and a rebuild renewing the entry, a
   frame under an evicted parent born cold, and a hop of the same callee
-  borrowing its frame's specialization and running cold once it is gone
+  borrowing its frame's specialization and running cold once it is gone; and
+  at `Shares`, two tenants seeking one key borrowing one specialization that
+  their plain children copy, a call seeking nothing borrowing nothing under a
+  frame that borrows one, a hop keeping its lend, and a tenant whose
+  specialization is evicted under it waking to read what it laid there
   ([tests/seek.rs](tests/seek.rs)).
+
+Every root work run under `cfg(test)` ends by asserting that koan's lends
+close no wait cycle (`CellGraph::lend_cycle` finds none,
+[tree cells](../../cellgraph/src/tree/README.md#death)): a run cell never
+waits on a specialization, so the count a host's scratch holds on one is
+never what that specialization waits on.
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.
-
-## Open work
-
-- [A tenant's own lend](../../roadmap/type-tiers/tenant-lend.md) — a `Shares`
-  tenant borrowing its specialization through a lend of its own.

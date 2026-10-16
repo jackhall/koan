@@ -377,11 +377,13 @@ values in the region its writer lays into and its types in a scratch tier
 Each step picks one chain at its entry ([`run`](body.rs), and the evaluator's
 `evaluate`):
 
-- the **reading chain** in the own body of a `Fresh` caching frame, which
-  holds its scratch for its life at its first step and links that scratch's
-  branch to its region before anything lays it. It reads the root, the lent
-  branch — its specialization's region, or where it was born with none the
-  scratch its asker parked in — and the frame's scratch, and the frame's
+- the **reading chain** in the own body of a caching frame that routes: a
+  `Fresh` one, which holds its scratch for its life at its first step, or a
+  `Shares` one borrowing a specialization, which writes its host's scratch.
+  The chain links that scratch's branch to the region it writes, laid linked,
+  or linked late where another chain laid it first. It reads the root, the
+  lent branch — its specialization's region, or where a `Fresh` frame was
+  born with none the scratch its asker parked in — and the scratch, and the
   region through the link. The `routes` bit of the `Within` on each
   evaluation and block the frame asks for ([`KBirth`](bundle.rs)) carries the
   pick down, and the hand-off of the last statement clears it;
@@ -398,8 +400,8 @@ rather than `Forwards`, so a value leaves it only through an **exit**
 ([`Exit`](exit.rs)), where every type the value reaches is adopted into the
 region first: a call's callee, arguments, contributions and the contract a
 tail hands on, an `EVAL`'s code, offered record and declared type, a value
-owed a frame's contract, the frame's end, and — in a frame holding its scratch
-— the hand-off of its last statement, which adopts the binders the shape lists
+owed a frame's contract, the frame's end, and — in a frame that routes — the
+hand-off of its last statement, which adopts the binders the shape lists
 that statement reading, and the frame's contract. The walk stops at a part
 whose [memo bits](../values/README.md#weight) say its types already resolve
 there, adopting its memo alone, and marks what it walked settled, so a value
@@ -543,8 +545,6 @@ before the program ran, and a stalled substrate. The two-program test,
 
 ## Open work
 
-- [A tenant's own lend](../../roadmap/type-tiers/tenant-lend.md) — a `Shares`
-  frame's call handing the drain its seek.
 - [Faults and call traces](../../roadmap/conditionals/faults.md) — faults apart
   from values, the frames they keep, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY` and `CATCH`,

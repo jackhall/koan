@@ -12,15 +12,15 @@ specialization per iteration, each a tree cell with a region and a type
 branch, all held until the program ends: such a program's memory grows with
 its iteration count, where a loop's bytes and lattice otherwise hold flat. A
 helper with no tail loop is the sharpest case: every one of its parameters is
-trivially invariant, so each call over new content is a miss. No
-test runs such a loop; `a_birth_keyed_on_a_list_digests_it_at_a_cost_below_its_length`
-in `src/dispatch/tests/caching.rs` calls over one list only. A frame born with no specialization
+trivially invariant, so each call over new content is a miss:
+`a_fresh_loop_calling_a_shares_caching_helper_holds_each_specialization_flat`
+in `src/dispatch/tests/caching.rs` asserts one specialization per link of
+the list its loop walks. A frame born with no specialization
 warms the scratch its asker's park holds, which resets after the delivery
 ([the scratch branch as a cache](../../design/type-tiers.md#the-scratch-branch-as-a-cache));
 a keyed frame's warm tier never resets. Each such birth also walks its keyed
 arguments to digest them. A frame under an evicted ancestor is born cold and
-nothing rebuilds the ancestor, and no test evicts a specialization while a
-frame still borrows it.
+nothing rebuilds the ancestor.
 
 **Acceptance criteria.**
 
@@ -32,6 +32,9 @@ frame still borrows it.
 - A test evicts a specialization while a frame borrows it: the frame runs to
   its end over the dead but undisposed specialization, the next miss on its
   key builds a fresh one, and the old one disposes with its last borrower.
+  Where that borrower is a `Shares` frame, the test observes that the old
+  specialization is still undisposed after the frame's release and disposes
+  only when the frame's host's scratch next resets.
 - A frame whose specialization's ancestor was evicted runs to the same
   answer as one born warm.
 

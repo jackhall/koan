@@ -104,8 +104,9 @@ Four absences are design statements rather than gaps:
   one [header slot](#the-contract-four-embedder-types), the embedder's value
   about the region, which travels with it. A tree cell may **borrow** a named
   slab or tree cell's region, under any root, from its creation to its
-  disposal, and writes it at `'lent` (`StepContext::lent_region`); the region's
-  owner disposes only after its last borrower does.
+  disposal, and a tenant from its creation until its host's scratch resets
+  after its release; either writes it at `'lent` (`StepContext::lent_region`),
+  and the region's owner disposes only after its last borrower lets go.
 
   One shape in a region is laid down for reading at a shorter brand: the
   **once-written run** ([src/once.rs](src/once.rs)), `Writer::once_run`, a run
@@ -476,7 +477,13 @@ on the read out, which re-anchors at the same `'cell`.
   `lent_scratch` or `lent_region`, each `None` for the other kind of lend. It
   refuses, changing nothing, a dead or stale parent or named cell, a name with
   nothing to lend, and a copied scratch lend under any parent but its lender
-  (`CreateTreeError`). A lend mints no pin.
+  (`CreateLentError`). A lend mints no pin.
+- **`lend_cycle()`** names a **lend cycle**, if the graph holds one: cells
+  whose disposals wait on one another through the counts their lends leave,
+  which a tenant's lend can close and no creation refuses. Cells on one never
+  dispose. It changes nothing and runs in every profile: an audit for an
+  embedder's tests to state a law against cycles with
+  ([tree cells](src/tree/README.md#death)).
 - **`peek(cell, read)`** reads a live slab or tree cell's region header between
   steps, handing it to a closure at a brand quantified per call, with no door
   to lay through; it refuses a dead, stale or tenant handle (`PeekError`).
@@ -490,6 +497,10 @@ on the read out, which re-anchors at the same `'cell`.
   stays the host's. A tenant has no dead-but-undisposed state, since nothing
   can be under one. If the host's own death was already declared and this
   tenant was the last thing it waited on, the host disposes within the call.
+  A tenant borrows what the cell named as its host borrows;
+  **`create_tenant_lent(host, lend?, continuation?)`** names its lend instead,
+  as `create_tree_lent` does, or none, and refuses as it does, besides the
+  host's own region and `Lend::ParentScratch` (`CreateLentError`).
 - **`release(handle, absorption)`** declares death: the embedder promises never
   to enter the cell again. The slot leaves the slab within that same call —
   reclaimed if nothing reaches its storage, folded into the one thing that
@@ -700,12 +711,14 @@ exactly one decision.
   crossing verdict is taken here at construction. The graph is two halves a
   step borrows apart: the cells — identity, relations, holds, the sealed tier —
   exclusively, and the region table shared.
+- [src/graph/lend_cycle.rs](src/graph/lend_cycle.rs) — the lend-cycle audit, a
+  walk over the waits disposal reads.
 - [src/tree.rs](src/tree.rs) — the tree pool: chain links and depth, the
   undisposed-child count, the pledge, and the tombstone chain.
 - [src/tenant.rs](src/tenant.rs) — the tenant pool, and the counts a cell
   carries for its tenants and its borrowers.
-- [src/lend.rs](src/lend.rs) — `Lend`, what a tree cell's creation borrows, and
-  the resolved lend the pool stores on the cell.
+- [src/lend.rs](src/lend.rs) — `Lend`, what a tree cell's or a tenant's
+  creation borrows, and the resolved lend the pool stores on the cell.
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits, and the
   pin relation as an inline array of those rows.
 - [src/reach.rs](src/reach.rs) — reach as a hybrid mask: an inline `Bits` row

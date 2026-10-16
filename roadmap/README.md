@@ -37,6 +37,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Matching](conditionals/matching.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)
+- [Monotone elaboration](gradual-typing/monotone-elaboration.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [The build image](rewrite/build-image.md)
 - [Dict defaults](rewrite/dict-defaults.md)
@@ -47,5 +48,4 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Presizing a branch](type-tiers/branch-presizing.md)
 - [Invariance around a tail cycle](type-tiers/cycle-invariance.md)
 - [Evicting specializations](type-tiers/specialization-eviction.md)
-- [A tenant's own lend](type-tiers/tenant-lend.md)
 

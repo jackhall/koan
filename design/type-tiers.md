@@ -181,7 +181,7 @@ declared per call is classed alike by the type binders its declaration reads:
   content each hop. Into the **warm tier**: the branch of the specialization
   the frame borrows, whatever its placement
   ([below](#the-specialization-as-the-warm-tier)), or the host's scratch
-  for a `Shares` body that keys nothing.
+  for a `Shares` body that borrows none.
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
   body, an action's result or an inline `MATCH`, or on a parameter the loop
   rebinds. Into the **cold tier**: the frame's own scratch under `Fresh`, held
@@ -193,8 +193,9 @@ A composite site follows its children: warm where its static type reaches
 invariant carriers alone, cold otherwise, a type that reaches a carrier the
 load cannot name included.
 
-For a `Shares` body that keys nothing the warm and cold tiers are one branch,
-the host's scratch, under the host's region. So such a body runs every step on
+For a `Shares` body that borrows no specialization, since it keys nothing or
+was born cold, the warm and cold tiers are one branch, the host's scratch,
+under the host's region. So such a body runs every step on
 one chain over the root, the host's region and that scratch, writing the
 scratch, and its classes route nothing; a keyed `Shares` body borrows its
 specialization through a lend of its own and runs on a reading chain over the
@@ -362,5 +363,3 @@ types, and released with that tier.
 - [Evicting specializations](../roadmap/type-tiers/specialization-eviction.md)
   — the policy a build cell evicts its specializations by, so a loop over new
   invariant content each call holds a bounded warm tier.
-- [A tenant's own lend](../roadmap/type-tiers/tenant-lend.md) — a `Shares`
-  frame borrowing its specialization through a lend of its own.
