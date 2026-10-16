@@ -779,7 +779,6 @@ fn a_named_lend_a_tenant_lend_and_the_peek_answer_from_outside_the_crate() {
         })
         .unwrap();
     assert_eq!(read, 41);
-    #[cfg(debug_assertions)]
     assert_eq!(graph.lend_cycle(), None);
     graph.release_tenant(lent_tenant).unwrap();
 

@@ -168,7 +168,8 @@ cellgraph_surface() {
         cargo test -p cellgraph --release --test surface --quiet
     ok surface-release 'holds under --release' 'surface ok under --release'
 
-    OUT="$(grep -rn 'cfg(debug_assertions)' cellgraph/src || true)"
+    # Any `cfg` or `cfg!` naming the profile, alone or inside `any`/`all`/`not`.
+    OUT="$(grep -rnE 'cfg!?\(.*debug_assertions' cellgraph/src || true)"
     if [ -z "$OUT" ]; then
         ok profile-free 'no cfg(debug_assertions) under cellgraph/src' 'surface profile-free'
     else

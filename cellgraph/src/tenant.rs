@@ -230,8 +230,8 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
     }
 
     /// Every live tenant's host, whether it names that host's scratch bump, and what it borrows —
-    /// what the property test recounts the hosts' and lenders' tallies from.
-    #[cfg(any(test, debug_assertions))]
+    /// what the lend-cycle audit reads, and the property test recounts the hosts' and lenders'
+    /// tallies from.
     pub(crate) fn census(&self) -> impl Iterator<Item = (CellHome, bool, Option<Lent>)> + '_ {
         self.slots.iter().filter_map(|cell| {
             cell.occupant

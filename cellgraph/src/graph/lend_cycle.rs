@@ -1,4 +1,4 @@
-//! The debug-build audit for a **lend cycle**: cells whose disposals wait on one another through
+//! The audit for a **lend cycle**: cells whose disposals wait on one another through
 //! the counts a lend leaves, so that none of them disposes after every release
 //! ([../lend.rs](../lend.rs)).
 //!
@@ -43,7 +43,8 @@ impl<
     /// once. Cells on a cycle never dispose, however they are released, and so neither does
     /// anything under them; a graph with none empties once everything in it is released.
     ///
-    /// Debug and test builds only, and linear in the graph's size: an audit for tests, not a door.
+    /// Linear in the graph's size, and changes nothing: an audit for an embedder's tests, not a
+    /// door its steps should call.
     pub fn lend_cycle(&self) -> Option<Vec<CellHandle>> {
         self.cells.lend_cycle()
     }

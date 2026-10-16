@@ -6,7 +6,6 @@
 //! [../README.md](../README.md) § Verbs and § The crossing verdict, and
 //! [graph/README.md](graph/README.md) § The model.
 
-#[cfg(any(test, debug_assertions))]
 mod lend_cycle;
 #[cfg(test)]
 mod tests;
