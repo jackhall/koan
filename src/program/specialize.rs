@@ -1,7 +1,7 @@
 //! What a call seeks, and what a specialization runs.
 //!
-//! A call whose callee's frame is born `Fresh` and whose body keys a specialization — its caching
-//! record lists the parameters its invariant sites read — hands the drain a [`Seek`]: the build cell
+//! A call whose callee's body keys a specialization — its caching record lists the parameters its
+//! invariant sites read — hands the drain a [`Seek`], whatever its frame's placement: the build cell
 //! the callee was born under, the key of its segment under the arguments at those parameters, and
 //! [`specialize`], the work a missed specialization runs. Today that step only enlists the cell in
 //! its parent's table; what it holds is the warm types its borrowers intern into it. See
@@ -10,7 +10,7 @@
 use crate::build::key_of;
 use crate::knot::{Function, KValue, Knotted};
 use crate::memory::{Bump, BumpVec};
-use crate::scheduler::{Action, Placement, Seek, Step, StepError, Work};
+use crate::scheduler::{Action, Seek, Step, StepError, Work};
 use crate::values::Chain;
 
 use super::bundle::{KBirth, KBundle, KState};
@@ -23,18 +23,14 @@ pub fn called_function<'graph, 'cell>(
     callee.as_callable()?.behind_barriers().function()
 }
 
-/// What a call of `callee` over `arguments`, a record of its parameters by name, born at
-/// `placement`, seeks: `None` for a `Shares` frame, a callee that is no function, a body that keys
-/// no specialization, and arguments missing a keyed parameter, whose frame is born as any other.
+/// What a call of `callee` over `arguments`, a record of its parameters by name, seeks: `None` for
+/// a callee that is no function, a body that keys no specialization, and arguments missing a keyed
+/// parameter, whose frame is born cold.
 pub fn seek<'graph>(
     callee: KValue<'graph, '_>,
     arguments: KValue<'graph, '_>,
-    placement: Placement,
     types: &Chain<'_, '_, '_, '_, '_>,
 ) -> Option<Seek<'graph, KBundle>> {
-    if placement != Placement::Fresh {
-        return None;
-    }
     let function = called_function(callee)?;
     let shape = function.shape();
     let keyed = shape.caching()?.invariant?;

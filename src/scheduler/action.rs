@@ -398,6 +398,12 @@ where
         self.context.hold_scratch()
     }
 
+    /// Whether this cell borrows a specialization: a region rather than a scratch, which only a
+    /// call's frame the drain found one for is born borrowing.
+    pub fn borrows_specialization(&self) -> bool {
+        self.context.lent_region().is_some()
+    }
+
     /// The half this cell borrows, whichever it is: a specialization's region, or the scratch of
     /// the cell its asker parked in. `None` for a cell with no lender.
     fn lent(
@@ -409,9 +415,9 @@ where
         (self.context.lent_region()).or_else(|| self.context.lent_scratch())
     }
 
-    /// The chain a held `Fresh` caching frame's own body reads and lays through: the graph's type
-    /// root, the lent branch — its specialization's region, or the scratch of the cell its asker
-    /// parked in — then this cell's write home's scratch, whose branch links its region. A scratch
+    /// The chain a routing caching frame's own body reads and lays through: the graph's type root,
+    /// the lent branch — its specialization's region, or the scratch of the cell its asker parked
+    /// in — then this cell's write home's scratch, whose branch links its region. A scratch
     /// chain reads one tier between the root and its own, so the region is reached through that
     /// link, which this lays: with the scratch branch where it is unlaid, late where another door
     /// laid it first. No branch links a scratch branch, so the late link is always open. Paired to
@@ -455,15 +461,16 @@ where
         self.spawn_lending(request, Lending::Parent)
     }
 
-    /// [`spawn`](Self::spawn) a frame born borrowing the specialization `seek` finds: the drain
-    /// looks it up, or builds it, before the child is born. A `Shares` child is a tenant and
-    /// borrows through its host, so `seek` is not read.
+    /// [`spawn`](Self::spawn) a call's frame, born borrowing the specialization `seek` finds: the
+    /// drain looks it up, or builds it, before the child is born. With no `seek`, or none found,
+    /// the frame is born cold: a `Fresh` frame borrowing this cell's scratch, a `Shares` one
+    /// borrowing nothing, so it never reads this cell's specialization as its own.
     pub fn spawn_seeking(
         &mut self,
         request: Request<'graph, 'here, B>,
-        seek: Seek<'graph, B>,
+        seek: Option<Seek<'graph, B>>,
     ) -> Slot {
-        self.spawn_lending(request, Lending::Seek(seek))
+        self.spawn_lending(request, Lending::Call(seek))
     }
 
     fn spawn_lending(
@@ -482,12 +489,8 @@ where
     }
 
     /// The build cell this cell's frame runs under: the specialization whose region it borrows,
-    /// where it is a tree cell born borrowing one, and `fallback` otherwise. A tenant borrows
-    /// through its host, so it always gets `fallback`.
+    /// where it was born borrowing one, and `fallback` otherwise.
     pub fn build_ref(&self, fallback: BuildRef) -> BuildRef {
-        let CellHandle::Tree(_) = self.context.cell() else {
-            return fallback;
-        };
         (self.context.lent_region())
             .and_then(|(_, header)| header.get()?.me())
             .map_or(fallback, BuildRef::of)
@@ -570,20 +573,20 @@ where
         self.tail_lending(placement, work, Lending::Parent)
     }
 
-    /// [`tail`](Self::tail) into a frame born borrowing the specialization `seek` finds, as
-    /// [`spawn_seeking`](Self::spawn_seeking) asks for a child.
+    /// [`tail`](Self::tail) into a call's frame, born borrowing the specialization `seek` finds,
+    /// or cold, as [`spawn_seeking`](Self::spawn_seeking) asks for a child.
     pub fn tail_seeking(
         self,
         placement: Placement,
         work: Work<'graph, 'here, B>,
-        seek: Seek<'graph, B>,
+        seek: Option<Seek<'graph, B>>,
     ) -> Action<'graph, B> {
-        self.tail_lending(placement, work, Lending::Seek(seek))
+        self.tail_lending(placement, work, Lending::Call(seek))
     }
 
     /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
-    /// born borrowing that same specialization with no lookup; or its parent's scratch, where that
-    /// specialization is no longer live.
+    /// born borrowing that same specialization with no lookup; or cold, where that specialization
+    /// is no longer live.
     pub fn tail_under(
         self,
         placement: Placement,

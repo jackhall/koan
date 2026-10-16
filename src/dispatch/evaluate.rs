@@ -946,18 +946,14 @@ fn called<'graph, 'here>(
         let Request {
             placement, work, ..
         } = request;
-        if same && placement == Placement::Fresh && keyed() {
+        if same && keyed() {
             return step.tail_under(placement, work, at.within.build);
         }
-        return match seek(callee, arguments, placement, &at.types) {
-            Some(seek) => step.tail_seeking(placement, work, seek),
-            None => step.tail(placement, work),
-        };
+        let seek = seek(callee, arguments, &at.types);
+        return step.tail_seeking(placement, work, seek);
     }
-    let asked = match seek(callee, arguments, request.placement, &at.types) {
-        Some(seek) => step.spawn_seeking(request, seek),
-        None => step.spawn(request),
-    };
+    let seek = seek(callee, arguments, &at.types);
+    let asked = step.spawn_seeking(request, seek);
     park(step, at, asked, FINISHING)
 }
 

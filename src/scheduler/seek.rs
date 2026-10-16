@@ -5,8 +5,10 @@
 //! born under, the key, and the specialization's own work. The drain reads that parent's table
 //! through a peek between steps; a live hit is the specialization, and a miss creates one under the
 //! parent and runs its one step at once, so the frame is born borrowing it and parks for nothing.
-//! A parent that is no longer live births the frame cold, borrowing its parent's scratch as any
-//! other frame does. See [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
+//! A parent that is no longer live births the frame cold: a `Fresh` frame borrowing its parent's
+//! scratch as any other tree cell does, a `Shares` frame borrowing nothing. Either placement borrows
+//! what it finds, a `Fresh` frame as its tree cell's lend and a `Shares` frame as its tenant's own.
+//! See [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
 
 use crate::scheduler::continuation::{StepBundle, Work};
 use crate::values::{BuildRef, SpecKey};
@@ -20,14 +22,16 @@ pub struct Seek<'graph, B: StepBundle<'graph>> {
     pub work: Work<'graph, 'graph, B>,
 }
 
-/// What a request's cell borrows, resolved by the drain at its creation. Read only for a `Fresh`
-/// placement: a tenant borrows through its host.
+/// What a request's cell borrows, resolved by the drain at its creation.
 pub(super) enum Lending<'graph, B: StepBundle<'graph>> {
-    /// Its tree parent's scratch, as every frame born under no binding does.
+    /// What its asker reads, as an evaluation, a block or a hand-off does: a tree cell borrows its
+    /// parent's scratch, and a tenant copies its parent's lend.
     Parent,
-    /// The specialization a [`Seek`] finds or builds.
-    Seek(Seek<'graph, B>),
+    /// A call's frame: the specialization a [`Seek`] finds or builds, or, with no `Seek` or with
+    /// none found, what a cold frame borrows: its parent's scratch for a tree cell, nothing for a
+    /// tenant.
+    Call(Option<Seek<'graph, B>>),
     /// The specialization a `BuildRef` names, as a tail hop of the same callee borrows its
-    /// frame's; its parent's scratch where that one is no longer live.
+    /// frame's; a cold frame's lend where that one is no longer live.
     Under(BuildRef),
 }

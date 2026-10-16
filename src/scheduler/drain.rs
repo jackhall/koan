@@ -3,8 +3,9 @@
 //!
 //! The graph holds two slab roots when the [load door](super::load) stood it up: the run root every
 //! root work is born under, and the build root whose region holds the root-level specialization
-//! table. Before a `Fresh` frame is born the drain resolves what it borrows: its parent's scratch,
-//! or the specialization its asker's [`Seek`] finds or builds with one synchronous step.
+//! table. Before a call's frame is born the drain resolves what it borrows: the specialization its
+//! asker's [`Seek`] finds or builds with one synchronous step, or, born cold, its parent's scratch
+//! for a `Fresh` frame and nothing for a `Shares` one. Any other cell borrows what its parent reads.
 //!
 //! Every field here is one scheduler's own. There is no static, no thread-local and no lazily
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
@@ -166,6 +167,11 @@ thread_local! {
 
 #[cfg(test)]
 thread_local! {
+    /// A specialization the drain evicts before its next step, for a test whose step cannot reach
+    /// [`Scheduler::evict`]: set by the step, taken by the drain. A refused eviction panics.
+    pub(crate) static EVICT_BEFORE_STEP: std::cell::Cell<Option<crate::values::BuildRef>> =
+        const { std::cell::Cell::new(None) };
+
     /// The caching body the running step runs, by its shape's address: set by the step, taken by
     /// the drain as the step returns.
     pub(crate) static CACHING: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
@@ -174,6 +180,16 @@ thread_local! {
     /// and in the lent branch. Tests reset it.
     pub(crate) static LAID: std::cell::RefCell<std::collections::BTreeMap<usize, (usize, usize)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// What a new cell borrows, as the drain resolved it from its asker's [`Lending`].
+enum Borrows {
+    /// What its parent reads: a tree cell its parent's scratch, a tenant a copy of its parent's
+    /// lend.
+    Parent,
+    /// A call's frame: the specialization it found, or, `None`, what a cold frame borrows: its
+    /// parent's scratch for a tree cell, nothing for a tenant.
+    Call(Option<CellHandle>),
 }
 
 /// The drain: a ready stack and a request buffer, made per call over a graph it borrows.
@@ -276,7 +292,7 @@ where
         let root = self.born(
             under,
             placement,
-            Lend::ParentScratch,
+            Borrows::Parent,
             Continuation {
                 step,
                 provenance: Provenance {
@@ -304,6 +320,10 @@ where
                     (self.create(provenance, asked, born)?, release_after)
                 }
             };
+            #[cfg(test)]
+            if let Some(spec) = EVICT_BEFORE_STEP.take() {
+                self.evict(spec).expect("the test's specialization evicts");
+            }
             let (action, provenance) = self.step(cell)?;
             // A hop's successor has woken what its predecessor kept, so the predecessor can go.
             if let Some(predecessor) = release_after {
@@ -316,6 +336,8 @@ where
                     // off the continuation, so no step can name the cell that wakes.
                     if provenance.report.is_none() {
                         debug_assert!(self.ready.is_empty(), "the root work ended last");
+                        #[cfg(test)]
+                        self.no_lend_cycle();
                         return Ok(None);
                     }
                     if completed {
@@ -334,6 +356,8 @@ where
                 Kind::Left(dormant) => {
                     self.retire(cell)?;
                     debug_assert!(self.ready.is_empty(), "the root work ended last");
+                    #[cfg(test)]
+                    self.no_lend_cycle();
                     return Ok(Some(Resting(dormant)));
                 }
                 Kind::Failed(error) => return Err(DrainStalled::Step(error)),
@@ -379,17 +403,20 @@ where
         asked: Asked<'graph, B>,
         born: Born,
     ) -> Result<CellHandle, DrainStalled> {
-        let lend = match (asked.placement, asked.lending) {
-            (Placement::Fresh, Lending::Seek(seek)) => self.seek(seek)?,
-            (Placement::Fresh, Lending::Under(build)) => (build.opened())
-                .filter(|spec| self.graph.cells.is_live(*spec))
-                .map_or(Lend::ParentScratch, |spec| Lend::Named(spec.into())),
-            _ => Lend::ParentScratch,
+        let borrows = match asked.lending {
+            Lending::Parent => Borrows::Parent,
+            Lending::Call(None) => Borrows::Call(None),
+            Lending::Call(Some(seek)) => Borrows::Call(self.seek(seek)?),
+            Lending::Under(build) => Borrows::Call(
+                (build.opened())
+                    .filter(|spec| self.graph.cells.is_live(*spec))
+                    .map(CellHandle::from),
+            ),
         };
         self.born(
             provenance.parent,
             asked.placement,
-            lend,
+            borrows,
             Continuation {
                 step: asked.step,
                 provenance,
@@ -398,11 +425,11 @@ where
         )
     }
 
-    /// What a frame `seek` asks for borrows: the specialization the parent's table names under the
-    /// key, if it is live, or else one created under the parent and stepped at once, before
-    /// anything else runs, entering itself in the table. A parent that is not live, or a graph
-    /// with no build root, births the frame cold: borrowing its parent's scratch.
-    fn seek(&mut self, seek: Seek<'graph, B>) -> Result<Lend, DrainStalled> {
+    /// The specialization a frame `seek` asks for borrows: the one the parent's table names under
+    /// the key, if it is live, or else one created under the parent and stepped at once, before
+    /// anything else runs, entering itself in the table. `None` for a parent that is not live, or
+    /// a graph with no build root, whose frame is born cold.
+    fn seek(&mut self, seek: Seek<'graph, B>) -> Result<Option<CellHandle>, DrainStalled> {
         #[cfg(test)]
         TIERS.with(|tiers| {
             tiers.set(Tiers {
@@ -413,15 +440,15 @@ where
         let parent: CellHandle = match (seek.parent.opened(), self.graph.build_root) {
             (Some(spec), _) => spec.into(),
             (None, Some(root)) => root.into(),
-            (None, None) => return Ok(Lend::ParentScratch),
+            (None, None) => return Ok(None),
         };
         let found =
             match (self.graph.cells).peek(parent, |header, _| header.into_value().find(seek.key)) {
                 Ok(found) => found.flatten(),
-                Err(_) => return Ok(Lend::ParentScratch),
+                Err(_) => return Ok(None),
             };
         if let Some(spec) = found.filter(|spec| self.graph.cells.is_live(*spec)) {
-            return Ok(Lend::Named(spec.into()));
+            return Ok(Some(spec.into()));
         }
         // A specialization reports to nobody and is entered here, never from the ready stack.
         let continuation = Continuation {
@@ -445,7 +472,7 @@ where
         });
         let (action, _) = self.step(spec.into())?;
         match action.kind() {
-            Kind::Quiesced => Ok(Lend::Named(spec.into())),
+            Kind::Quiesced => Ok(Some(spec.into())),
             Kind::Failed(error) => Err(DrainStalled::Step(error)),
             _ => Err(DrainStalled::Step(StepError::Refused)),
         }
@@ -461,6 +488,18 @@ where
             return Err(DrainStalled::Unreleasable);
         }
         (self.graph.cells.release_tree(spec)).map_err(|_| DrainStalled::Unreleasable)
+    }
+
+    /// The law every test run checks as its root work ends: koan's lends close no wait cycle
+    /// ([`CellGraph::lend_cycle`]). A run cell never waits on a specialization, so a host's
+    /// scratch holding a specialization's count is never what that specialization waits on.
+    #[cfg(test)]
+    fn no_lend_cycle(&self) {
+        assert_eq!(
+            self.graph.cells.lend_cycle(),
+            None,
+            "a lend cycle leaks its cells"
+        );
     }
 
     /// Enter one cell, wake its state, and run the step its continuation names.
@@ -564,26 +603,32 @@ where
             .map_err(|_| DrainStalled::Unenterable)
     }
 
-    /// One cell born under another, through the door its placement names, a tree cell borrowing
-    /// what `lend` names.
+    /// One cell born under another, through the door its placement names, borrowing what
+    /// `borrows` says.
     fn born(
         &mut self,
         under: CellHandle,
         placement: Placement,
-        lend: Lend,
+        borrows: Borrows,
         continuation: Continuation<'graph, 'graph, B>,
     ) -> Result<CellHandle, DrainStalled> {
-        let born = match placement {
-            Placement::Fresh => self
-                .graph
-                .cells
-                .create_tree_lent(under, lend, Some(continuation))
+        let cells = &mut self.graph.cells;
+        let continuation = Some(continuation);
+        let born = match (placement, borrows) {
+            (Placement::Fresh, Borrows::Call(Some(spec))) => cells
+                .create_tree_lent(under, Lend::Named(spec), continuation)
                 .map(CellHandle::from)
                 .map_err(|_| ()),
-            Placement::Shares => self
-                .graph
-                .cells
-                .create_tenant(under, Some(continuation))
+            (Placement::Fresh, Borrows::Parent | Borrows::Call(None)) => cells
+                .create_tree_lent(under, Lend::ParentScratch, continuation)
+                .map(CellHandle::from)
+                .map_err(|_| ()),
+            (Placement::Shares, Borrows::Call(spec)) => cells
+                .create_tenant_lent(under, spec.map(Lend::Named), continuation)
+                .map(CellHandle::from)
+                .map_err(|_| ()),
+            (Placement::Shares, Borrows::Parent) => cells
+                .create_tenant(under, continuation)
                 .map(CellHandle::from)
                 .map_err(|_| ()),
         }

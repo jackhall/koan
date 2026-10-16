@@ -146,9 +146,9 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 /// frame, or as a block.
 ///
 /// Each step runs on one chain ([type tiers](../../design/type-tiers.md#where-each-body-interns)):
-/// the reading chain in the own body of a caching frame that holds its scratch, which a `Fresh`
-/// caching frame's first step takes; the `Shares` chain elsewhere in a caching body; and its
-/// region's anywhere else.
+/// the reading chain in the own body of a routing caching frame — a `Fresh` one, which holds its
+/// scratch at its first step, or a `Shares` one borrowing a specialization; the `Shares` chain
+/// elsewhere in a caching body; and its region's anywhere else.
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
@@ -163,7 +163,11 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     };
     let caches = shape.is_some_and(BodyShape::caches);
     let routes = match &state {
-        KState::Born(KBirth::Call { .. }) => caches && step.hold_scratch(),
+        // A tree cell holds its scratch whatever it borrows; a tenant routes where it borrows a
+        // specialization, writing its host's scratch.
+        KState::Born(KBirth::Call { .. }) => {
+            caches && (step.hold_scratch() || step.borrows_specialization())
+        }
         KState::Born(KBirth::Block { within, .. }) => within.routes,
         KState::Runner(runner) => runner.within.routes,
         KState::Born(_) | KState::Evaluating { .. } => false,
@@ -174,7 +178,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         crate::scheduler::CACHING.set(address);
     }
     if routes {
-        let types = step.reading_types().expect("a `Fresh` frame has a lender");
+        let types = step.reading_types().expect("a routing frame has a lender");
         ran(step, state, scratch, routes, &types)
     } else if caches {
         let types = step.shares_types();
