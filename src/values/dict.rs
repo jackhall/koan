@@ -9,6 +9,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::KType;
 
+use super::settled::{composite_bits, restamp_bits};
 use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
@@ -171,7 +172,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
                 .zip(cells)
                 .map(|(key, cell)| (key.ktype(), cell.concrete_ktype())),
         );
-        Self::weighed(writer, keys, cells, ktype)
+        Self::weighed(writer, keys, cells, ktype, types)
     }
 
     /// Lay down `entries` as [`new`](Self::new) does, under `ktype`, a type the caller knows they
@@ -180,10 +181,11 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Value<'cell, X>)],
         ktype: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let (keys, cells) = Self::kept(writer, entries, scratch);
-        Self::weighed(writer, keys, cells, ktype)
+        Self::weighed(writer, keys, cells, ktype, types)
     }
 
     /// The keys and cells of `entries` that stay, sorted by key, written into `writer`'s region.
@@ -206,6 +208,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         keys: &'cell [Key<'cell>],
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = keys.iter().fold(Weight::flat::<Self>(), |weight, key| {
             weight.plus(key.weight())
@@ -213,7 +216,8 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         let weight = cells
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
-        Self::from_runs(writer, keys, cells, ktype, weight)
+        let bits = composite_bits(types, ktype, cells);
+        Self::from_runs(writer, keys, cells, ktype, weight.with_bits(bits))
     }
 }
 
@@ -290,9 +294,17 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
         )
     }
 
-    /// The same entries under `ktype` — an ascription's retype, sharing both runs.
-    pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
-        Self::from_runs(writer, self.keys, self.cells, ktype, self.weight.get())
+    /// The same entries under `ktype` — an ascription's retype, sharing both runs, its bits
+    /// recomputed from the new memo.
+    pub fn with_type(
+        &self,
+        writer: Writer<'cell, '_>,
+        ktype: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
+    ) -> &'cell Self {
+        let weight = self.weight.get();
+        let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));
+        Self::from_runs(writer, self.keys, self.cells, ktype, weight)
     }
 
     pub fn len(&self) -> usize {

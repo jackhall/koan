@@ -591,7 +591,11 @@ fn offered<'graph, 'here>(
                         }
                     }
                 }
-                Value::List(List::of_candidates(writer, functions.iter().copied()))
+                Value::List(List::of_candidates(
+                    writer,
+                    functions.iter().copied(),
+                    types,
+                ))
             }
         };
         fields.push((*name, offered));
@@ -1016,9 +1020,9 @@ fn in_place<'graph, 'here>(
     let types = &at.types;
     match part {
         ExpressionPart::Literal(_) => Value::lower_part(writer, part, types, scratch),
-        ExpressionPart::QuotedExpression(_) => {
-            Some(Value::Knotted(quote(writer, &at.view, part, scratch)))
-        }
+        ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(quote(
+            writer, &at.view, part, types, scratch,
+        ))),
         _ => {
             let shape = at.view.shape();
             let mention = shape.mention(Site::of(part))?;

@@ -116,7 +116,11 @@ fn a_module_member_carries_the_type_its_value_carries_not_one_walked_from_its_co
                 program.types,
                 program.scratch,
             )
-            .with_type(program.writer, program.types.list(KType::ANY));
+            .with_type(
+                program.writer,
+                program.types.list(KType::ANY),
+                program.types,
+            );
             program.bind_member(body, "xs", Value::List(list));
             let handle =
                 crate::elaborate::self_signature(body, &[], program.types, program.scratch);

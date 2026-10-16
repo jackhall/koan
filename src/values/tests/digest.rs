@@ -71,7 +71,7 @@ fn a_retype_changes_the_digest_and_a_hidden_cell_does_not() {
                 scratch,
             );
             let only_x = record_type(types, scratch, [(x, KType::NUMBER)].into_iter());
-            let narrowed = wide.with_type(writer, only_x);
+            let narrowed = wide.with_type(writer, only_x, types);
             assert_ne!(digest(Value::Record(wide)), digest(Value::Record(narrowed)));
             let narrow = Record::new(writer, &[(x, Value::Number(1.0))], types, scratch);
             assert_eq!(narrow.ktype(), narrowed.ktype());

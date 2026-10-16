@@ -5,6 +5,7 @@
 //! The byte count is the weight proper. The two flags in its top bits, [`MemoBits`], record where
 //! every type memo the value reaches resolves; an adoption does not enter a part that carries one
 //! ([design/type-tiers.md § An adoption stops at a settled part](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
+//! [settled.rs](settled.rs) computes them.
 
 /// Set when every memo the value reaches is the root's.
 const ROOT_CLOSED: usize = 1 << (usize::BITS - 1);

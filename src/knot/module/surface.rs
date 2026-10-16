@@ -70,7 +70,7 @@ pub fn surface<'graph, 'cell>(
                 .expect("a registration parameter is a surfaced key")
                 .key;
             let functions = layout::functions_at(writer, module, key, types, scratch);
-            let list = List::of_candidates(writer, functions.iter().copied());
+            let list = List::of_candidates(writer, functions.iter().copied(), types);
             bindings.push((slot, Value::List(list)));
             continue;
         }

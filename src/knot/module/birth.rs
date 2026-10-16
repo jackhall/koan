@@ -118,5 +118,5 @@ pub fn tie_member<'graph, 'cell, 'x>(
             .map(|(index, link)| (index, link.digest(&mut memo))),
     );
     let content = ModuleContent::body(body.shape().code_digest(), &captures);
-    Ok(Module::tie(writer, ktype, &members, content))
+    Ok(Module::tie(writer, ktype, &members, content, types))
 }

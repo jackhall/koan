@@ -370,7 +370,7 @@ fn a_copy_lays_down_each_part_at_the_type_its_holder_names() {
                     (z, Value::Number(3.0)),
                 ];
                 let payload = Value::Record(Record::new(writer, &fields, types, scratch));
-                let tagged = Value::Tagged(Tagged::hold(writer, payload, point));
+                let tagged = Value::Tagged(Tagged::hold(writer, payload, point, types));
                 let source = context.lift::<ValueFamily>(tagged);
                 let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
                 let Value::Tagged(copied) = context.read(&crossed).value() else {

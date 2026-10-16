@@ -66,7 +66,7 @@ pub fn member<'graph, 'cell>(
     Some(
         Seen::of(held)
             .seen_at(declared, types, scratch)
-            .restamped(writer),
+            .restamped(writer, types),
     )
 }
 
@@ -175,7 +175,7 @@ pub fn retyped_at_shape<'graph, 'cell>(
     let registered = registered_shape(function).expect("a registration member is a function");
     Seen::registered(function, registered)
         .seen_at(declared, types, scratch)
-        .restamped(writer)
+        .restamped(writer, types)
 }
 
 /// The keyworded members the signature type `carried` declares, each read under its

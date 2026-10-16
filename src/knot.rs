@@ -63,7 +63,7 @@ pub use tie::{Tied, tie};
 use std::cell::Cell;
 use std::fmt;
 
-use crate::memory::{BumpAllocator, DropFree, Edge, Member, Writer, covariant, reattachable};
+use crate::memory::{BumpAllocator, DropFree, Edge, Knot, Member, Writer, covariant, reattachable};
 use crate::parse::ExpressionPart;
 use crate::scope::Elaboration;
 use crate::scope::{Activation, ActivationView, BodyShape, Builtins, CaptureSlot, Site};
@@ -99,6 +99,17 @@ pub enum Node<'graph, 'cell> {
 }
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
+
+/// Stamp a newborn `knot`'s memo bits on its root node, read off what it carries and holds, as
+/// born through `types` ([`values::stamp_knot`]). Every birth door but a builtin's hands its knot
+/// through here; a builtin's record answers both bits.
+fn stamped<'graph, 'cell>(
+    knot: Knot<'cell, Node<'graph, 'cell>>,
+    types: &Chain<'_, '_, '_, '_, '_>,
+) -> Knot<'cell, Node<'graph, 'cell>> {
+    values::stamp_knot::<KnottedFamily>(&Knotted::of(knot, 0), types);
+    knot
+}
 
 /// Every capture of `links`, a closure of `shape`, that its code digest does not name — every one
 /// but a read of the program's top level, and every type capture — beside its slot: what a
@@ -387,7 +398,7 @@ fn field<'graph, 'cell>(
         _ => Some(
             source
                 .field(name.symbol(), types, scratch)?
-                .restamped(writer),
+                .restamped(writer, types),
         ),
     }
 }

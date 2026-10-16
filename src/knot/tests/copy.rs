@@ -592,7 +592,7 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                 );
                 // `g` is quantified, so only a key's candidate list holds it as a cell.
                 let pair = [Value::Knotted(f), Value::Knotted(g)];
-                let list = Value::List(List::of_candidates(writer, pair.into_iter()));
+                let list = Value::List(List::of_candidates(writer, pair.into_iter(), types));
                 let source = context.lift::<KValueFamily>(list);
                 let operand = Operand {
                     carrier: &source,
@@ -608,15 +608,17 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                                 panic!("the operand is copied");
                             };
                             let cells = parts(view, types, scratch);
+                            let dest_types = fixture.tiers.half(writer, header);
                             let copies = copy_severed::<_, KnottedFamily, 2>(
                                 writer,
-                                &fixture.tiers.half(writer, header),
+                                &dest_types,
                                 &views[0],
                                 [&cells[0], &cells[1]],
                             );
                             Active::new(Value::List(List::of_candidates(
                                 writer,
                                 copies.into_iter(),
+                                &dest_types,
                             )))
                         },
                     )
@@ -655,7 +657,8 @@ fn a_copied_barrier_outlives_its_home() {
                 // is the module layer's work. What is pinned here is that the node and the function
                 // behind it both rebuild at the destination.
                 let plain = f.ktype().as_type().expect("`f` is unquantified");
-                let knot = Coerced::tie(writer, f, f.ktype(), f.ktype().into(), plain, plain);
+                let knot =
+                    Coerced::tie(writer, f, f.ktype(), f.ktype().into(), plain, plain, types);
                 let barrier = Knotted::of(knot, 0);
                 let source = context.lift::<KValueFamily>(Value::Knotted(barrier));
                 let crossed = fixture.tiers.cross(context, dest, &source).unwrap();

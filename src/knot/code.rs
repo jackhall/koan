@@ -244,6 +244,7 @@ fn one_node<'graph, 'cell>(
     shape: &'graph BodyShape<'graph>,
     bound: &[Binding<'graph, 'cell>],
     supplied: &[Binding<'graph, 'cell>],
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> Knotted<'graph, 'cell> {
     let bound = collect(writer, bound.iter().copied());
     let supplied = collect(writer, supplied.iter().copied());
@@ -265,7 +266,7 @@ fn one_node<'graph, 'cell>(
             },
         ))
     });
-    Knotted::of(knot, 0)
+    Knotted::of(super::stamped(knot, types), 0)
 }
 
 /// The quote door: birth the quote `part` that `activation`'s shape holds as a one-node knot in
@@ -279,6 +280,7 @@ pub fn quote<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     part: &'graph ExpressionPart<'graph>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let (body, shape) = shape_of(activation.shape(), part)
@@ -286,7 +288,7 @@ pub fn quote<'graph, 'cell>(
     let staged = staged(body, shape, activation, scratch, |_| {
         unreachable!("only the tie births a quote that reads a fellow member")
     });
-    one_node(writer, body, shape, &staged.bound, &[])
+    one_node(writer, body, shape, &staged.bound, &[], types)
 }
 
 /// Why a `USING` refused to fill a code's holes.
@@ -341,7 +343,7 @@ pub fn using<'graph, 'cell>(
                 keyed.clear();
                 self::keyed(writer, shape, key, source, types, scratch, &mut keyed)?;
                 (!keyed.is_empty())
-                    .then(|| Value::List(List::of_candidates(writer, keyed.iter().copied())))
+                    .then(|| Value::List(List::of_candidates(writer, keyed.iter().copied(), types)))
             }
             name => super::field(writer, source, name, types, scratch),
         };
@@ -355,7 +357,14 @@ pub fn using<'graph, 'cell>(
     supplied.sort_unstable_by_key(|(name, _)| *name);
     let mut bound = BumpVec::with_capacity_in(node.bound().len(), scratch);
     bound.extend(node.bound().iter().map(resolved));
-    Ok(one_node(writer, node.body(), shape, &bound, &supplied))
+    Ok(one_node(
+        writer,
+        node.body(),
+        shape,
+        &bound,
+        &supplied,
+        types,
+    ))
 }
 
 /// Push onto `found` each function the module `source` offers at `key` — a registration, an

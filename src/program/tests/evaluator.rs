@@ -223,7 +223,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             });
         }
         Form::Leaf(part @ ExpressionPart::QuotedExpression(_)) => {
-            let member = quote(step.writer(), &view, part, &scratch);
+            let member = quote(step.writer(), &view, part, types, &scratch);
             return {
                 let writer = step.writer();
                 step.finish(held(
@@ -281,7 +281,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                         None => return step.failed(StepError::Refused),
                     },
                     ExpressionPart::QuotedExpression(_) => {
-                        cells.push(Value::Knotted(quote(writer, &view, item, &scratch)));
+                        cells.push(Value::Knotted(quote(writer, &view, item, types, &scratch)));
                     }
                     _ => match Value::lower_part(writer, item, types, &scratch) {
                         Some(value) => cells.push(value),

@@ -91,11 +91,14 @@ pub enum Half<'graph, 'cell, 'pair, 'door>
 where
     'graph: 'cell,
 {
-    /// A cell region or a scratch habitat: its writer beside its header door.
+    /// A cell region or a scratch habitat: its writer beside its header door. `own_brand` is set
+    /// where the half is paired to its own brand ([`of`](Half::of)), so a door beside it lays its
+    /// value in the half it interns into.
     Habitat {
         writer: Writer<'cell, 'door>,
         header: Header<'graph, 'cell, 'door, TypeHeader>,
         pair: Pairing<'pair>,
+        own_brand: bool,
     },
     /// The load: the root builder the load's chain writes, at `'cell = 'graph`.
     Load(&'cell RootBuilder<'cell>, Pairing<'pair>),
@@ -115,6 +118,7 @@ impl<'graph, 'cell, 'door> Half<'graph, 'cell, 'cell, 'door> {
             writer,
             header,
             pair: PhantomData,
+            own_brand: true,
         }
     }
 
@@ -135,6 +139,16 @@ impl<'graph, 'cell, 'pair, 'door> Half<'graph, 'cell, 'pair, 'door> {
             writer,
             header,
             pair: PhantomData,
+            own_brand: false,
+        }
+    }
+
+    /// Whether a value door beside this half lays its value where the half interns: a half paired
+    /// to its own brand, or the load's, whose types all land in the root.
+    pub(crate) fn interns_where_it_lays(&self) -> bool {
+        match self {
+            Half::Habitat { own_brand, .. } => *own_brand,
+            Half::Load(..) => true,
         }
     }
 }

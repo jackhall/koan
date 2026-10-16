@@ -39,7 +39,7 @@ fn a_barrier_holds_its_view_and_the_function_behind_it() {
                 let f = callable(fixture, activation, "f");
                 let dist = declared(fixture, activation, "Dist");
                 let plain = f.ktype().as_type().expect("`f` is unquantified");
-                let knot = Coerced::tie(writer, f, f.ktype(), dist.into(), dist, plain);
+                let knot = Coerced::tie(writer, f, f.ktype(), dist.into(), dist, plain, types);
                 let barrier = Knotted::of(knot, 0);
 
                 assert_eq!(knot.len(), 1, "a barrier is a one-node knot of its own");
@@ -71,7 +71,7 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 let f = callable(fixture, activation, "f");
                 let plain = f.ktype().as_type().expect("`f` is unquantified");
                 let barrier = Knotted::of(
-                    Coerced::tie(writer, f, f.ktype(), f.ktype().into(), plain, plain),
+                    Coerced::tie(writer, f, f.ktype(), f.ktype().into(), plain, plain, types),
                     0,
                 );
                 let value = Value::Knotted(barrier);
@@ -89,7 +89,15 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 // A view of a view stacks barriers rather than collapsing them: each one holds the
                 // substitution it was built at.
                 let outer = Knotted::of(
-                    Coerced::tie(writer, barrier, f.ktype(), f.ktype().into(), plain, plain),
+                    Coerced::tie(
+                        writer,
+                        barrier,
+                        f.ktype(),
+                        f.ktype().into(),
+                        plain,
+                        plain,
+                        types,
+                    ),
                     0,
                 );
                 assert_eq!(outer.coerced().expect("a barrier").underlying(), barrier);

@@ -808,7 +808,9 @@ fn frame<'graph, 'here>(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
-                argument.seen_at(declared, types, scratch).restamped(writer)
+                argument
+                    .seen_at(declared, types, scratch)
+                    .restamped(writer, types)
             }
             // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
             // argument like any other, passed by keyword or by name.
@@ -1009,7 +1011,7 @@ fn shown_admitted<'graph, 'here>(
             .ok_or(Miss::Misnamed)?;
         let retyped = argument
             .seen_at(solved(declared), types, scratch)
-            .restamped(writer);
+            .restamped(writer, types);
         fields.push((parameter, retyped));
     }
     let record = Record::new(writer, &fields, types, scratch);
@@ -1032,7 +1034,7 @@ fn restricted<'graph, 'here>(
     let mut fields = BumpVec::with_capacity_in(params.len(), scratch);
     for (parameter, _) in params.iter() {
         if let Some(seen) = arguments.field(parameter.symbol(), types, scratch) {
-            fields.push((parameter, seen.restamped(writer)));
+            fields.push((parameter, seen.restamped(writer, types)));
         }
     }
     Value::Record(Record::new(writer, &fields, types, scratch))

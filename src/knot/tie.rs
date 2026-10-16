@@ -223,7 +223,10 @@ pub fn tie<'graph, 'cell, 'x>(
             (None, None) => unreachable!("every node is a function, a code or a data node"),
         }
     });
-    Ok(Tied { knot, annotations })
+    Ok(Tied {
+        knot: super::stamped(knot, types),
+        annotations,
+    })
 }
 
 impl<'graph, 'cell> Knotted<'graph, 'cell> {

@@ -68,7 +68,7 @@ fn types_tags_and_quotes_render_their_surface() {
             let writer = context.writer();
             let number = Value::Type(TypeValue::new(writer, KType::NUMBER, types));
             assert_eq!(rendered(fixture, types, number), "Number");
-            let tagged = Value::Tagged(Tagged::hold(writer, text(writer, "x"), KType::STR));
+            let tagged = Value::Tagged(Tagged::hold(writer, text(writer, "x"), KType::STR, types));
             assert_eq!(rendered(fixture, types, tagged), "Str(x)");
             let code = crate::values::Value::Knotted(Stand::Code(quote(fixture, "#($a \\b)")));
             let mut out = String::new();

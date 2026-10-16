@@ -381,7 +381,10 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
             ));
         }
     }
-    Ok(Knotted::of(Module::tie(writer, view, &members, content), 0))
+    Ok(Knotted::of(
+        Module::tie(writer, view, &members, content, types),
+        0,
+    ))
 }
 
 /// The view's bindings under `:|`: a carrier per head parameter of `sig` that `pins` leaves

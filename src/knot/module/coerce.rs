@@ -258,6 +258,7 @@ pub fn coerce<'graph, 'cell>(
                 cx.writer,
                 cells.iter().copied(),
                 dst,
+                cx.types,
             )))
         }
         // Keys are untouched: a dict's key type names no parameter a view hides.
@@ -274,7 +275,7 @@ pub fn coerce<'graph, 'cell>(
                 entries.push((*surface.key(at), coerce(cx, cell, cell_type.into())?));
             }
             Ok(Value::Dict(Dict::typed(
-                cx.writer, &entries, dst, cx.scratch,
+                cx.writer, &entries, dst, cx.types, cx.scratch,
             )))
         }
         TypeNode::Record { fields } => {
@@ -290,7 +291,7 @@ pub fn coerce<'graph, 'cell>(
                 built.push((binder, coerce(cx, cell, field_type.into())?));
             }
             Ok(Value::Record(Record::typed(
-                cx.writer, &built, dst, cx.scratch,
+                cx.writer, &built, dst, cx.types, cx.scratch,
             )))
         }
         // The member whose source side admits the value, by a rule blind to the union's member
@@ -332,6 +333,7 @@ pub fn coerce<'graph, 'cell>(
                 declared,
                 cx.from.handle,
                 cx.to.handle,
+                cx.types,
             );
             Ok(Value::Knotted(Knotted::of(knot, 0)))
         }

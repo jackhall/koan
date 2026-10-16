@@ -41,6 +41,7 @@ mod lower;
 mod record;
 mod render;
 mod retyped;
+mod settled;
 mod specialization;
 mod surface;
 mod tagged;
@@ -72,6 +73,7 @@ pub use link::Link;
 pub use list::List;
 pub use record::Record;
 pub use retyped::Retyped;
+pub(crate) use settled::stamp_knot;
 pub use specialization::{BuildRef, SpecEntry, SpecKey, SpecTable};
 pub use surface::{
     Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target, retyped_to,

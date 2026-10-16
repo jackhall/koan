@@ -8,6 +8,7 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::KType;
 
+use super::settled::{composite_bits, restamp_bits};
 use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
@@ -40,7 +41,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
                 .iter()
                 .map(|(name, cell)| (*name, cell.concrete_ktype())),
         );
-        Self::typed(writer, fields, ktype, scratch)
+        Self::typed(writer, fields, ktype, types, scratch)
     }
 
     /// Lay down `fields` as [`new`](Self::new) does, under `ktype`, a type the caller knows they
@@ -49,12 +50,13 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         writer: Writer<'cell, '_>,
         fields: &[(BinderSymbol, Value<'cell, X>)],
         ktype: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
         let order = symbol_order(fields, scratch);
         let names = writer.fill(order.len(), |at| fields[order[at]].0.symbol());
         let cells = writer.fill(order.len(), |at| fields[order[at]].1);
-        Self::weighed(writer, names, cells, ktype)
+        Self::weighed(writer, names, cells, ktype, types)
     }
 
     /// A record over sorted names and aligned value cells already resident in `writer`'s region
@@ -64,12 +66,14 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         names: &'cell [Symbol],
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = Weight::flat::<Self>().plus(Weight::run::<Symbol>(names.len()));
         let weight = cells
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
-        Self::from_runs(writer, names, cells, ktype, weight)
+        let bits = composite_bits(types, ktype, cells);
+        Self::from_runs(writer, names, cells, ktype, weight.with_bits(bits))
     }
 }
 
@@ -136,9 +140,17 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
         )
     }
 
-    /// The same fields under `ktype` — an ascription's retype, sharing both runs.
-    pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
-        Self::from_runs(writer, self.names, self.cells, ktype, self.weight.get())
+    /// The same fields under `ktype` — an ascription's retype, sharing both runs, its bits
+    /// recomputed from the new memo.
+    pub fn with_type(
+        &self,
+        writer: Writer<'cell, '_>,
+        ktype: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
+    ) -> &'cell Self {
+        let weight = self.weight.get();
+        let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));
+        Self::from_runs(writer, self.names, self.cells, ktype, weight)
     }
 
     pub fn ktype(&self) -> KType {

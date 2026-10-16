@@ -496,7 +496,7 @@ fn field<'graph, 'here>(
         let payload = seen.surface(types, scratch).expect("a tagged value opens");
         seen = payload.child(0, types, scratch);
     }
-    Some(seen.field(name, types, scratch)?.restamped(writer))
+    Some(seen.field(name, types, scratch)?.restamped(writer, types))
 }
 
 /// Whether `value` is tagged, a knot's data node included.

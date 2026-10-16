@@ -54,7 +54,7 @@ use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 pub use crate::values::digest::Operator;
 use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
-use crate::values::{ContentDigest, Knotted as _, Seen, Value, Weight};
+use crate::values::{Chain, ContentDigest, Knotted as _, Seen, Value, Weight};
 
 use super::{KValue, Knotted, Node};
 
@@ -85,6 +85,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
         content: ModuleContent,
+        types: &Chain<'_, '_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         let knot_weight = members.iter().fold(
             Weight::flat::<usize>()
@@ -94,14 +95,15 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         );
         let members = collect(writer, members.iter().copied());
         let content = resident(writer, content);
-        KnotPlan::new(1).tie(writer, |_| {
+        let knot = KnotPlan::new(1).tie(writer, |_| {
             Node::Module(Module {
                 ktype,
                 members,
                 knot_weight: Cell::new(knot_weight),
                 content,
             })
-        })
+        });
+        super::stamped(knot, types)
     }
 
     /// The module's self-signature, or the signature a view was built at.
@@ -209,6 +211,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         declared: DeclaredType<Parametric>,
         from: KType,
         to: KType,
+        types: &Chain<'_, '_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         debug_assert!(
             underlying.function().is_some() || underlying.coerced().is_some(),
@@ -218,7 +221,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
             .plus(Weight::flat::<Node<'graph, 'cell>>())
             .plus(Weight::flat::<Coerced<'graph, 'cell>>())
             .plus(underlying.weight());
-        KnotPlan::new(1).tie(writer, |_| {
+        let knot = KnotPlan::new(1).tie(writer, |_| {
             Node::Coerced(resident(
                 writer,
                 Coerced {
@@ -230,7 +233,8 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
                     knot_weight: Cell::new(knot_weight),
                 },
             ))
-        })
+        });
+        super::stamped(knot, types)
     }
 
     /// The function the call runs once it is through the barrier — itself a function or a coerced

@@ -569,7 +569,7 @@ pub fn lambda<'graph, 'cell, 'x>(
             knot_weight,
         ))
     });
-    Ok(Knotted::of(knot, 0))
+    Ok(Knotted::of(super::stamped(knot, types), 0))
 }
 
 /// `member`, a quantified function behind an opaque view's barrier, read where the load solved its
@@ -603,6 +603,7 @@ pub fn barrier_instance<'graph, 'cell>(
         declared,
         barrier.from(),
         barrier.to(),
+        types,
     );
     Knotted::of(knot, 0)
 }
@@ -675,5 +676,5 @@ pub fn instance<'graph, 'cell>(
             knot_weight,
         ))
     });
-    Knotted::of(knot, 0)
+    Knotted::of(super::stamped(knot, types), 0)
 }

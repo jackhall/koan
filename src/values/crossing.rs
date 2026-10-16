@@ -26,6 +26,7 @@ use crate::memory::{
 use crate::type_lattice::{Branch, DeclaredType, Halves, KType, Parametric, Root};
 
 use super::habitat::{Chain, Half, TypeHeader, Types};
+use super::settled::stamp_knot;
 use super::surface::Parts;
 use super::{
     Dict, Knotted, KnottedFamily, List, Record, Retyped, Seen, Surface, Tagged, Value,
@@ -371,7 +372,8 @@ enum Frame<'x, 'from, X> {
 /// The deep copy of one placement: every region part of a value rebuilt through `writer` at the
 /// type it is seen at, laying down only what that type names and weighing what it lays down; every
 /// program node embedded as the same node; a knot member rebuilt by its family once per knot, its
-/// memos and weights carried over. Total. Built only by [`cross_view`] and
+/// memos and weights carried over and its memo bits stamped where it lands. A composite's bits are
+/// computed by the door that lays it, through the destination's chain. Total. Built only by [`cross_view`] and
 /// [`copy_severed`], so every copy is one the graph priced.
 struct Copying<'graph, 'x, 'from, 'to, 'home, 'reg, XF: KnottedFamily<'graph>>
 where
@@ -564,16 +566,20 @@ where
                 let ktype = surface.ktype();
                 let cells = || writer.fill(built.len(), |at| built[at]);
                 let finished = match surface.parts() {
-                    Parts::List { .. } => Value::List(List::weighed(writer, cells(), ktype)),
+                    Parts::List { .. } => {
+                        Value::List(List::weighed(writer, cells(), ktype, self.types))
+                    }
                     Parts::Dict { .. } => {
                         let keys = writer.fill(surface.len(), |at| surface.key(at).rehomed(writer));
-                        Value::Dict(Dict::weighed(writer, keys, cells(), ktype))
+                        Value::Dict(Dict::weighed(writer, keys, cells(), ktype, self.types))
                     }
                     Parts::Record { .. } => {
                         let names = collect(writer, (0..surface.len()).map(|at| surface.name(at)));
-                        Value::Record(Record::weighed(writer, names, cells(), ktype))
+                        Value::Record(Record::weighed(writer, names, cells(), ktype, self.types))
                     }
-                    Parts::Tagged { .. } => Value::Tagged(Tagged::hold(writer, built[0], ktype)),
+                    Parts::Tagged { .. } => {
+                        Value::Tagged(Tagged::hold(writer, built[0], ktype, self.types))
+                    }
                 };
                 (base, finished)
             }
@@ -595,6 +601,7 @@ where
                 };
                 XF::carried_types(&member, &mut |kt| self.adopt(kt));
                 let copied = XF::copy_into(writer, &member, &mut cursor);
+                stamp_knot::<XF>(&copied, self.types);
                 debug_assert!(
                     answers.next().is_none(),
                     "copy_into asks for every held value"

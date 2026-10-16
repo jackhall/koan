@@ -243,7 +243,12 @@ impl<'graph> Program<'graph> {
         let field = BinderSymbol::declared("message", self.symbols).expect("a value name");
         let text = Value::Str(rendered(writer, message));
         let payload = Record::new(writer, &[(field, text)], types, &scratch);
-        Value::Tagged(Tagged::hold(writer, Value::Record(payload), self.error))
+        Value::Tagged(Tagged::hold(
+            writer,
+            Value::Record(payload),
+            self.error,
+            types,
+        ))
     }
 
     /// The message `value` carries, if it is an error value, read through `types`.
