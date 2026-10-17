@@ -1,5 +1,7 @@
 # Invariance around a tail cycle
 
+**Optional.** An optimization nothing needs yet.
+
 **Problem.** The static pass classes a sealed body's mint sites by whether
 the loop passes each leaf of the site's content tree through unchanged
 ([where each body interns](../../design/type-tiers.md#where-each-body-interns)),

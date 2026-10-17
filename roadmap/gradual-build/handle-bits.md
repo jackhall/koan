@@ -15,6 +15,10 @@ loop hop, none of which lays a node. Every lookup of a branch handle also
 probes the root first and misses there. *Is this type concrete?*
 `TypeChain::concrete` reads a flag the intern stored, one lookup per call, at
 some seventy run-time sites, fifteen of them in `src/dispatch/statics.rs`.
+Four koan helpers lift that conversion over a declared type, keeping a scheme
+as it is: `close_declared` (`src/elaborate/channel.rs`), `concrete_declared`
+(`src/knot/function.rs`), `concrete` (`src/knot/module/coerce.rs`) and `close`
+(`src/dispatch/statics/paths.rs`).
 
 **Acceptance criteria.**
 
@@ -32,6 +36,9 @@ some seventy run-time sites, fifteen of them in `src/dispatch/statics.rs`.
   nothing up; adopting a root handle is a bit test; a lookup of a handle whose
   in-root bit is clear skips the root; a verdict lookup over two root handles
   probes the root's table alone.
+- `TypeChain::concrete_declared` answers a declared type as a concrete one, a
+  scheme as it is, and `None` where a variable is reachable; it replaces the
+  four koan helpers, and each caller names the invariant behind its answer.
 - The caching suite's per-hop adoption probes, counted under the `counters`
   feature, fall to the handles that are not the root's.
 
@@ -39,6 +46,11 @@ some seventy run-time sites, fifteen of them in `src/dispatch/statics.rs`.
 
 - *Bit placement* — decided. The high word's top two bits: a branch table
   slots on the digest's low word (`DigestTable::word`), which stays whole.
+- *Where the two questions are asked* — decided. On the chain, as
+  `TypeChain::in_root` and `TypeChain::concrete`, not on the handle: the
+  chain hides how it answers, and `concrete` stays the one checked conversion
+  a reviewer can search for. On the handle, nine koan functions would drop a
+  chain parameter, at the cost of rewriting every call site.
 
 ## Dependencies
 

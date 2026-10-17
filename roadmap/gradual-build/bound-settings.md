@@ -1,5 +1,7 @@
 # Setting the specialization bounds
 
+**Optional.** A user-facing setting matters once the language is releasable.
+
 **Problem.** How many live specializations a build cell keeps is two
 parameters of the load, the build root's bound and every specialization's
 ([keys and eviction](../../src/build/README.md#references-between-the-trees)),

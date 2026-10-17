@@ -1,5 +1,7 @@
 # Presizing a branch
 
+**Optional.** An optimization nothing needs yet.
+
 **Problem.** A
 [type branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches) starts at its smallest size
 and doubles as the run interns into it, laying each doubled run in its region.
