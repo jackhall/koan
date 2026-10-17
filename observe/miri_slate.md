@@ -295,14 +295,18 @@ in a tenant's storage and crossed into the callee's birth.
 written after the header is laid: through the half's own door, through a borrower's lent region,
 and read back through `peek` between steps.
 
-- `a_header_table_renews_an_entry_in_place`
-  a slab cell's header laid, its table laid on the first insert, an entry renewed in place and the
-  cell's own handle set, every cell read back through the same header.
-- `a_specialization_nests_under_its_frames_and_evicts_leaf_first`
-  specializations enlisting into the build root's table and into one another's through their lent
-  regions, frames born borrowing them, the tables peeked between steps, the leaves evicted and one
-  rebuilt into its renewed entry, and the graph emptied.
-- `an_evicted_specialization_stays_readable_to_the_shares_frame_borrowing_it`
+- `a_header_table_decides_hits_free_entries_and_its_least_recently_born_victim`
+  a slab cell's header laid, its fixed table laid through the half's own door, entries filled,
+  stamped and rekeyed in place through `Cell` writes, and its home set, every cell read back through
+  the same header.
+- `a_parent_past_its_bound_releases_its_least_recently_born_child`
+  the drain writing a parent's books through `peek` between steps — a hit's stamp, a new child's
+  entry and home — under the root's table and a specialization's own, its victims released and an
+  entry rebuilt in place, and the graph emptied.
+- `a_miss_releases_its_victims_subtree_leaf_first`
+  a specialization with a child of its own released by a miss, leaf first, a frame born cold under
+  the dead parent, and a test's eviction releasing a subtree.
+- `an_evicted_specialization_a_shares_frame_borrowed_waits_on_its_hosts_scratch`
   a tenant lent a specialization's region parks, the specialization is evicted under it, and the
   tenant wakes and reads what it laid there; the region goes only once the host's scratch resets.
 - `a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm`
@@ -317,9 +321,9 @@ and read back through `peek` between steps.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-17: 671s — 42 tests, 0 leaks, 0 UB
 - 2026-10-16: 990s — 41 tests, 0 leaks, 0 UB
 - 2026-10-16: 300s — 37 tests, 0 leaks, 0 UB
 - 2026-10-15: 280s — 36 tests, 0 leaks, 0 UB
 - 2026-10-11: 259s — 34 tests, 0 leaks, 0 UB
-- 2026-10-09: 371s — 31 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
