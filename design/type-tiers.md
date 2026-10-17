@@ -182,13 +182,17 @@ declared per call is classed alike by the type binders its declaration reads:
   would intern anything and finds itself there after the first.
 - **invariant**: a tree whose every leaf is a capture or a parameter the
   body's tail loop passes through unchanged, so the site mints the same
-  content each hop. Into the **warm tier**: the branch of the specialization
+  content each hop, and whose every parameter leaf keys a specialization — a
+  type binder, or one declared closed under `Module` or as a type value
+  ([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)).
+  Into the **warm tier**: the branch of the specialization
   the frame borrows, whatever its placement
   ([below](#the-specialization-as-the-warm-tier)), or the host's scratch
   for a `Shares` body that borrows none.
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
-  body, an action's result or an inline `MATCH`, or on a parameter the loop
-  rebinds. Into the **cold tier**: the frame's own scratch under `Fresh`, held
+  body, an action's result or an inline `MATCH`, on a parameter the loop
+  rebinds, or on a parameter of any other declared type, whose digest costs
+  its size. Into the **cold tier**: the frame's own scratch under `Fresh`, held
   for the frame's life and dropped with it, so each hop recycles it; and the
   host's scratch under `Shares`, where it grows with the loop as the loop's
   bytes do.
@@ -374,6 +378,3 @@ types, and released with that tier.
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch
   laid at a predicted size.
-- [Where a content digest is demanded](../roadmap/gradual-build/digest-demand.md)
-  — a parameter keyed by its static type, the seek's digests kept beside the
-  frame's values, and a module's content computed where a view first asks.

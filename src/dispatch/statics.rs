@@ -3079,18 +3079,24 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Interval, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         let wanted = slots(node, scratch);
+        // A builtin runs no frame to keep a memo in, so a use that can select only builtins hands
+        // nothing on.
+        let builtins_only = (list.candidates.iter())
+            .all(|candidate| matches!(candidate, Candidate::One(Coordinate::Builtin(_))));
         let mut handed = BumpVec::new_in(scratch);
-        handed.extend(
-            (wanted.iter().enumerate()).filter_map(|(position, wanted)| {
-                let Wanted::Evaluated(part) = wanted else {
-                    return None;
-                };
-                Some(Handoff {
-                    to: HandedTo::Position(position as u32),
-                    from: self.digested_read(level, part)?,
-                })
-            }),
-        );
+        if !builtins_only {
+            handed.extend(
+                (wanted.iter().enumerate()).filter_map(|(position, wanted)| {
+                    let Wanted::Evaluated(part) = wanted else {
+                        return None;
+                    };
+                    Some(Handoff {
+                        to: HandedTo::Position(position as u32),
+                        from: self.digested_read(level, part)?,
+                    })
+                }),
+            );
+        }
         self.handoffs(level, Site::of_node(node), &handed);
         let mut given = BumpVec::with_capacity_in(wanted.len(), scratch);
         // Each argument that is an instance site is typed per candidate, at the slot it fills.

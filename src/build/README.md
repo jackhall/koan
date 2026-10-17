@@ -178,7 +178,7 @@ hashes the content it keeps and a type value's its handle, where a list's or a
 record's costs its size, so a parameter of any other type keys nothing and the
 site over it routes cold. A key's digests therefore cost a few hashes each,
 and the frame it births keeps none of them
-([where a digest is demanded](../../roadmap/gradual-build/digest-demand.md)).
+([`Pass::keys`](../dispatch/statics/caching.rs)).
 A name a hop of the body's own tail rebinds is not
 keyed, since a hop of the same callee borrows its predecessor's specialization
 with no lookup; a hop into another callee seeks with the actual content, so a
@@ -399,9 +399,6 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 
 - [Setting the specialization bounds](../../roadmap/gradual-build/bound-settings.md)
   — the bounds as a setting a user names.
-- [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)
-  — a parameter keyed by its static type, and the seek's digests kept in the
-  frame's slots.
 - [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
   — the worklist driver, frontiers and seams, and the properties as laws.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a

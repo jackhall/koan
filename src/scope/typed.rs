@@ -593,7 +593,7 @@ pub struct Handoff {
 }
 
 /// Which argument a [`Handoff`] is: a call by name's record field, or a keyworded use's slot by
-/// its position among the use's evaluated slots.
+/// its position among the use's slots, keywords aside.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HandedTo {
     Field(Symbol),

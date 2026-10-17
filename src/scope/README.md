@@ -58,7 +58,8 @@ A scope is built in three tiers, each at the moment its contents become known.
   against the knot it already lives in.
 
   An activation has a read half of its own, the **`ActivationView`**: the
-  header pointers, the callable, and a read view of the slots, with no door that
+  header pointers, the callable, a read view of the slots, and the digest memo
+  of each slot the load marks digested (`digest_memo`), with no door that
   binds. An evaluation is handed the view of the activation it was asked from
   and reads names through it where they lie, so a binding never travels to its
   reader. The view is covariant in its region brand, so it rides a birth into a
@@ -607,9 +608,12 @@ each `:|` ascription at a closed signature builds, by the ascription's site
 (`view_tree`); where the run reads
 each lexical variable of a path's declared application, per path
 (`through_at`);
-and each call by name's contributions, by its argument's site, a static type
+each call by name's contributions, by its argument's site, a static type
 per parameter of its callee in symbol order, `Unknown` where the frame reads the
-carried type. It lives here for the same reason the type channel's
+carried type; and the **digested** slots that keep a digest memo, beside where
+each `:|` over a module binder reads its captures' memos (`view_slots`) and
+which digested slot each call passes bare (`handoffs`)
+([memos](../dispatch/statics/memos.rs)). It lives here for the same reason the type channel's
 cells do, and the shape reads it by site (`value_type`, `use_statics`,
 `settled`, `instance_at`, `named_contributions`) or statement index; a shape the
 pass has not fixed — a quote's code it refused — has no static types, every
@@ -1161,8 +1165,9 @@ faults call too, so the load and the run say one thing.
 An activation is `Drop`-free and laid down in its frame's region, so a frame's
 death releases it with the region. It is a header of four pointers — its shape,
 its closure bindings, the builtin table and, for a block, the enclosing
-activation — beside the callable it runs, if any, and one slot array over the
-shape's slot count. It holds no
+activation — beside the callable it runs, if any, one slot array over the
+shape's slot count, and one digest memo, a `Cell` empty until a `:|` or a
+call's hand-off fills it, per slot the load marks digested. It holds no
 pointer into itself: its shape lives in program storage, its builtin table
 outlives every frame, its closure bindings live in the callable value, which
 the caller keeps alive across the call, an enclosing activation lives in the

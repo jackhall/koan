@@ -861,6 +861,22 @@ fixed once the whole pass has run, a call by name's arguments paired with the
 callee's parameters by field and a keyworded use's by slot. A callable whose
 name is read as a value, or which is born in a `MODULE` or `GROUP` body or
 written in place, may be called from anywhere, so its parameters are varying.
+A parameter leaf holds its site invariant only where it keys
+([`Pass::keys`](statics/caching.rs)): a type binder, or a parameter declared
+closed under `Module` or as a type value, whose every argument digests at a
+constant cost; a site reading any other parameter is varying.
+
+**Digest memos.** The pass also places the memos a content digest is kept in
+([`memos`](statics/memos.rs)). At a `:|` over a module binder read bare, each
+capture the module's content composes that its body read from a slot of the
+view's activation chain marks that slot **digested**, and the pass records the
+capture beside the slot's coordinate from the view; the run's `:|` fills the
+module's content from those slots' memos, filling an empty one from the
+capture. A call by name or a keyworded use that passes a digested slot bare
+records the hand-off, by field or by position, and the run hands the filled
+memo to the callee's parameter at the frame's birth. A slot is marked when its
+`:|` is typed, so a call typed before it hands nothing: a lost saving, never a
+wrong digest.
 
 ## Tails under a contract
 

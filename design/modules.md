@@ -31,13 +31,14 @@ on demand, when a view or a specialization's key asks for it, and composed
 from its parts' digests, as a type's digest is composed from its children's;
 one demand digests a part shared many times over once. A module's content is
 computed where a view or a key first reaches the module and kept on the
-module, which holds what it captures until then, as a closure does, so a
-module only surfaced, read or passed on digests nothing. A slot a module
-captures keeps its value's digest beside it where a view reaches the module
-in the slot's own activation — the load reads which slots off the view at
-each `:|` — so two views over modules capturing one value, or the hops of a
-loop passing it on bare, digest it once
-([where a digest is demanded](../roadmap/gradual-build/digest-demand.md)). The
+module, which holds what it captures, as a closure does, so a module only
+surfaced, read or passed on digests nothing. A slot a module captures keeps
+its value's digest beside it where a view reaches the module in the slot's
+own activation or a block inside it — the load reads which slots off the view
+at each `:|` — and a call passing that slot bare hands the digest to the
+parameter it binds, so two views over modules capturing one value, or the hops
+of a loop passing it on bare, digest it once
+([memos](../src/dispatch/statics/memos.rs)). The
 digest covers what a value's type shows of it, as a copy of the value lays it
 down, so a copy keeps its digest. A module, a function or a quote
 retyped to a type other than its own digests as its own content beside that
@@ -269,5 +270,3 @@ equal content give two types; koan keys it on content, so they give one.
 
 - [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.
-- [Where a content digest is demanded](../roadmap/gradual-build/digest-demand.md)
-  — a module's content computed where a view first asks, and kept on it.

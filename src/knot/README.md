@@ -464,10 +464,11 @@ call per knot. A node's content is what it is:
   solution it is an instance at, and the digest of each capture the code digest
   does not name — every one but a read of the program's top level, and every
   type capture;
-- a **module**: the content computed where it was born
-  ([birth](module/README.md#birth)) — a body-born module's code over its
-  captures, a view's operator and application over its source's bare member and
-  what *fits* solved;
+- a **module**: the content it keeps ([birth](module/README.md#birth)) — a
+  view's operator and application over its source's bare member and what
+  *fits* solved, computed where the view is built, and a body-born module's
+  code over each capture the code digest does not name, computed where a
+  demand first reaches it, its captures listed as a function's are until then;
 - a **barrier**: the digest of the function it stands before, the type a caller
   sees, the declared type and both substitutions;
 - a **code** node: its quote's code digest, its carried type, and each bound and

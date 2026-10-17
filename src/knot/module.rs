@@ -8,9 +8,9 @@
 //! application over its source's bare member and what its fit solved. [`ModuleContent`] owns that
 //! recipe, and an opaque view's carriers are keyed on it. A view's content is computed where the
 //! view is built. A body-born module's is computed where a demand first reaches it — a `:|` over
-//! it ([`view::fill_at_view`]) or a digest walk — and kept: until then the module holds its body
-//! and its closure, as a function does, so a module only surfaced, read or passed on digests
-//! nothing. A module is always a one-node knot:
+//! it ([`view::fill_at_view`]) or a digest walk — and kept. The module holds its body and its
+//! closure for life, as a function does, so a copy computes the content its source would, and a
+//! module only surfaced, read or passed on digests nothing. A module is always a one-node knot:
 //! a mention reached from a module binder's root is eager whatever body it sits in. [`birth`] is
 //! where a body-born one comes from, [`Module::tie`] the one private-field door a body-born module
 //! and a view both go through, so there is one representation and one copy.

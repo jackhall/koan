@@ -208,7 +208,9 @@ Born as `KBirth::Program` it lays the top level's activation down; born as
 `KBirth::Call` it lays the callee's activation down in the frame's own cell and
 binds each value parameter from the argument record, which must name them
 exactly, **retyped** to the parameter's declared type with the call's
-type-parameter solution substituted; born as `KBirth::Eval` it lays the code's activation down in the
+type-parameter solution substituted, a digested parameter taking the digest
+memo the caller handed for it where the value it binds carries the type the
+caller's did; born as `KBirth::Eval` it lays the code's activation down in the
 frame's own cell over a closure run it assembles in the code shape's capture
 order — each `$` name from the bindings the code carries, each hole from those
 a `USING` supplied, each `\` name from the offered record — every edge resolved

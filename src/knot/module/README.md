@@ -42,11 +42,12 @@ digest of its source's bare member — the module behind any header — and what
 module's content is computed one way wherever one is tied. It is computed at
 the first view or key that reaches the module and kept on the module behind a
 pointer, so the node keeps its width and a module nothing views pays for no
-digest. Until then a body-born module holds its body's closure, as a function
-does, and its copy and the exit walk carry it. A `:|` over a module born in
-its own activation fills the content from the digests the captured slots
-keep, which the load reads off the view
-([where a digest is demanded](../../../roadmap/gradual-build/digest-demand.md)).
+digest. A body-born module holds its body's closure for life, as a function
+does, and its copy and the exit walk carry it, so a copy computes the content
+its source would. A `:|` over a module binder read bare, in the activation
+the module was born in or a block inside it, fills the content from the
+digests the captured slots keep, which the load reads off the view
+([memos](../../dispatch/statics/memos.rs), `view::fill_at_view`).
 
 ## Layout order
 
@@ -330,5 +331,3 @@ open a module and call through a barrier are
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
   data member coerced through a barrier, and a dict's keys crossing a barrier
   unsealed.
-- [Where a content digest is demanded](../../../roadmap/gradual-build/digest-demand.md)
-  — a module's content computed where a view first reaches it.

@@ -543,7 +543,8 @@ at each keyed parameter ([keys](../build/README.md#keys-which-bindings-make-a-sp
 and nothing else, so a value no view or key reaches never pays for one. A
 value carries no digest but a module, which keeps its content from the first
 view or key that reaches it; a slot the load marks as digested — the source of
-a capture of a module that a `:|` in the slot's activation views — keeps its
+a capture of a module that a `:|` in the slot's activation, or a block inside
+it, views — keeps its
 value's digest beside it, filled by that view or handed in at the frame's
 birth by a call passing a digested slot bare
 ([a module is its content](../../design/modules.md#a-module-is-its-content)).
@@ -758,6 +759,6 @@ knots as deep as the chain of newtypes digests beside it.
   — the lattice walks over a value's carried type, as deep as the value.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — whether
   `Module` and `Code` re-stamp a value.
-- [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)
-  — the digest memo beside a keyed parameter, and a module's content computed
-  where a view first asks.
+- [A digest memo on every value](../../roadmap/gradual-build/value-digest-memos.md)
+  — a value's digest kept on the value, so a chain a loop views a new module
+  over each hop is walked once.

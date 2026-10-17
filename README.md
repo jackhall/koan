@@ -267,6 +267,7 @@ src/
     ├── statics/paths.rs  each path resolved at load, closed or to its class; the crossing rule; member reads under transient pins
     ├── statics/caching.rs where a caching body's types intern: each mint and composite site classed by what it reads, the tail edges and escapes, and the invariance fixpoint
     ├── statics/views.rs  the load's half of a view: what each nested module carries, read off the operand's tree, and the types the run's view would intern laid in the root
+    ├── statics/memos.rs  where a content digest's memos sit: the slots a `:|` reads a module's captures from, and each call handing one on bare
     └── errors.rs         the messages of the error values dispatch raises
 ```
 

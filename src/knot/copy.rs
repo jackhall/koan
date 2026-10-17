@@ -3,9 +3,9 @@
 //! Every node of the source knot is rebuilt in index order, so an edge means the same node in the
 //! copy and is carried verbatim; each closure binding's value — a body-born module's too — each
 //! data node's value cell and each module member is the finished copy the crossing hands back, and
-//! the types, body shapes, knot weight's bytes and a module's content, where known, ride over; the crossing stamps the copy's memo bits
-//! where it lands. A builtin's node points into program storage, so it is
-//! carried as-is. The copied member is the one at the source's own index.
+//! the types, body shapes, knot weight's bytes and a module's content, where known, ride over; the
+//! crossing stamps the copy's memo bits where it lands. A builtin's node points into program
+//! storage, so it is carried as-is. The copied member is the one at the source's own index.
 //!
 //! [`carried_types`](values::KnottedFamily::carried_types) lists every type a node carries beside
 //! them, which the crossing makes resolve in the destination before the rebuild runs.

@@ -36,7 +36,6 @@ subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
-- [Where a content digest is demanded](gradual-build/digest-demand.md)
 - [Monotone elaboration](gradual-build/monotone-elaboration.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)

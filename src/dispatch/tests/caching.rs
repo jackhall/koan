@@ -489,6 +489,24 @@ fn a_loop_passing_a_record_on_bare_digests_it_once_per_loop() {
 }
 
 #[test]
+fn only_a_use_that_may_call_a_function_hands_a_memo_on() {
+    // `RUN`'s `cfg` keeps a memo; `ATTR` can select only a builtin, which runs no frame to keep it,
+    // while the tail call may select `RUN`.
+    let source = "EXPR #(RUN cfg :{items :(LIST OF Number)} link :Link) -> Number = \
+                  #((MODULE ops OVER #[cfg] = (LET held = cfg)) (LET v = (ops :| Holder)) \
+                  (LET n = (ATTR cfg items)) (RUN cfg (ATTR link next)))\n";
+    let handed = loaded(&format!("{PRELUDE}{source}"), |program| {
+        let mut shapes = Vec::new();
+        every_shape(program.shape(), &mut shapes);
+        (shapes.into_iter())
+            .filter_map(|shape| shape.statics())
+            .map(|statics| statics.handoffs.len())
+            .sum::<usize>()
+    });
+    assert_eq!(handed, 1, "the tail call alone hands `cfg`'s memo on");
+}
+
+#[test]
 fn a_memo_holds_the_digest_of_the_value_its_slot_holds() {
     use crate::knot::module::view::CHECK_SLOT_MEMOS;
     // `OUTER`'s `cfg :Any` is handed bare to `INNER`'s `cfg`, which binds it at a type of its own.
