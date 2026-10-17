@@ -25,7 +25,7 @@ use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
 use super::keyed::Keyed;
-use super::shape::{Candidate, Coordinate, Site};
+use super::shape::{Candidate, Coordinate, Site, Slot};
 use super::tree::{Binder, Tree};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
@@ -486,8 +486,9 @@ pub enum BodyClass {
 pub enum Mint {
     /// Over a closed content tree: the same content at every run, its types in the root.
     Closed,
-    /// The same content at every hop born under one park: interned into the warm tier, the
-    /// scratch branch that park holds.
+    /// The same content at every frame of one binding: interned into the warm tier, the
+    /// specialization the frame borrows, or where it was born with none, the scratch branch its
+    /// asker's park holds.
     Invariant,
     /// Content that may differ per hop: interned into the cold tier.
     Varying,
@@ -505,9 +506,11 @@ pub struct Caching<'graph> {
     pub mints: Keyed<'graph, (Site, Mint)>,
     /// Each composite site whose parts the load classed invariant, sorted.
     pub warm: Keyed<'graph, Site>,
-    /// Each argument part of a call that passes on a value the frame body received, or a member
-    /// read of one, sorted: its types crossed into the region at the frame's birth.
-    pub received: Keyed<'graph, Site>,
+    /// On a caching frame body's own record, when it or a block or module body it runs has an
+    /// invariant minting site or an invariant composite site: the frame's parameter slots those
+    /// sites read, sorted, which may be none. A call to the frame seeks the specialization these
+    /// slots' arguments key. `None` on every other record.
+    pub invariant: Option<&'graph [Slot]>,
 }
 
 /// The value channel's load-time facts for one body: a static type for every value expression and

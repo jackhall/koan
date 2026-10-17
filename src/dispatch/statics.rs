@@ -210,7 +210,6 @@ pub(super) fn statics<'graph>(
         escaping: bump_set(scratch),
         bound_at_binder: bump_set(scratch),
         holders: BumpVec::new_in(scratch),
-        received: BumpVec::new_in(scratch),
         module_mints: bump_table(scratch),
         heading: false,
     };
@@ -415,8 +414,6 @@ struct Pass<'p, 'x, 'graph> {
     bound_at_binder: BumpBackedSet<'p, usize>,
     /// Each shape the pass fixed, beside the frame body it runs in.
     holders: BumpVec<'p, (&'graph BodyShape<'graph>, &'graph BodyShape<'graph>)>,
-    /// Each argument part passing on what its frame body received, beside the shape it sits in.
-    received: BumpVec<'p, (&'graph BodyShape<'graph>, Site)>,
     /// Each `MODULE` or `GROUP` body the pass typed, by address: whether it, or a block or module
     /// body it runs, holds a minting site.
     module_mints: BumpBackedMap<'p, usize, bool>,
@@ -2660,7 +2657,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Some(callee) => self.called(level, callee, argument, node),
             None => {
                 let typed = self.part(level, argument)?;
-                self.note_argument(level, argument);
                 if porous_site(self.types, typed)
                     && !self.holds_nothing_minted_part(level, argument, typed)?
                 {
@@ -2820,7 +2816,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         let (types, scratch) = (self.types, self.scratch);
         let minted_free = self.minted_free_fields(level, callee.names, argument, whole)?;
-        self.note_argument(level, argument);
         if self.slot_exits(callee.shape, arguments, minted_free) {
             self.chain[level].exits = true;
         }
@@ -3099,15 +3094,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             given.push(each);
         }
         let arguments = typed_of(&given, scratch);
-        let received = scratch.alloc_slice_fill_iter(wanted.iter().map(|wanted| match wanted {
-            Wanted::Evaluated(part) => self.received(level, part),
-            Wanted::Label(_) => false,
-        }));
-        for (wanted, received) in wanted.iter().zip(received.iter()) {
-            if let (Wanted::Evaluated(part), true) = (wanted, received) {
-                self.note_received(level, part);
-            }
-        }
         // Only a porous argument's judgement is read.
         let mut minted_free = BumpVec::with_capacity_in(wanted.len(), scratch);
         for (wanted, typed) in wanted.iter().zip(arguments.iter()) {
@@ -3630,22 +3616,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         Ok(free.leak())
-    }
-
-    /// Note, for the run's exits, each value `argument` passes on that the frame body at `level`
-    /// received: a record literal field by field, any other argument whole.
-    fn note_argument(&mut self, level: usize, argument: &'graph ExpressionPart<'graph>) {
-        match argument {
-            ExpressionPart::RecordLiteral(fields) => {
-                for (_, value) in fields.iter() {
-                    if self.received(level, value) {
-                        self.note_received(level, value);
-                    }
-                }
-            }
-            _ if self.received(level, argument) => self.note_received(level, argument),
-            _ => {}
-        }
     }
 
     /// Record the instance each of `sites`, the instance arguments of the keyworded use `node`,

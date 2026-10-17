@@ -99,7 +99,7 @@ fn a_tagged_value_never_equals_its_payload() {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let tagged =
-                |identity| Value::Tagged(Tagged::hold(writer, Value::Number(1.0), identity));
+                |identity| Value::Tagged(Tagged::hold(writer, Value::Number(1.0), identity, types));
             assert!(
                 tagged(KType::STR)
                     .equals(&tagged(KType::STR), types, scratch)
@@ -225,8 +225,14 @@ fn circular_values_compare_as_a_bisimulation() {
                 Holding::Knotted(one(Some(Holding::Number(2.0)))),
             ));
 
-            let tagged =
-                |payload| Holding::Tagged(crate::values::Tagged::hold(writer, payload, KType::STR));
+            let tagged = |payload| {
+                Holding::Tagged(crate::values::Tagged::hold(
+                    writer,
+                    payload,
+                    KType::STR,
+                    types,
+                ))
+            };
             let record = |cell| {
                 Holding::Record(crate::values::Record::new(
                     writer,

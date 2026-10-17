@@ -13,6 +13,7 @@ mod equality;
 mod habitat;
 mod render;
 mod satisfaction;
+mod settled;
 mod surface;
 mod working;
 
@@ -31,7 +32,7 @@ use crate::type_lattice::{
     RootBuilder,
 };
 use crate::values::{
-    Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Seen, ValueCarrier,
+    Circular, CodeView, DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, Seen, ValueCarrier,
     ValueFamily, Weight, cross_view,
 };
 
@@ -103,6 +104,13 @@ impl<'graph> TestTypes<'graph> {
         }
     }
 
+    /// End the test's load: the builder frozen into a root of its own, which a step's own chain
+    /// reads over as a run's does. Every fixture chain reads the builder as a tier, so none reads
+    /// a type interned before this once it has run.
+    pub fn freeze(&self) -> &'graph Root<'graph> {
+        self.builder.freeze()
+    }
+
     /// The chain a test's load-time work goes through: the builder, as the load's chain.
     pub fn load(&self) -> Types<'graph, 'graph, 'graph> {
         Types::building(Halves::alone(Half::load(self.builder)))
@@ -132,6 +140,42 @@ impl<'graph> TestTypes<'graph> {
         D: Delivery<'graph>,
     {
         self.half(context.writer(), context.header())
+    }
+
+    /// The chain a step's own `types` builds for what it lays in
+    /// its cell: the root, then the cell's branch, with no builder tier between. The one fixture
+    /// chain that interns where it lays, so the only one a door settles through.
+    pub fn own<'step, 'here, C, S, D>(
+        &self,
+        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
+    ) -> Types<'graph, 'here, 'step>
+    where
+        C: Reattachable<'graph>,
+        S: ReattachableOverBoth<'graph>,
+        D: Delivery<'graph>,
+    {
+        Types::new(
+            self.root,
+            Halves::alone(Half::of(context.writer(), context.header())),
+        )
+    }
+
+    /// The chain a `Shares` caching body runs on, as a step's `shares_types` builds it: the cell's
+    /// branch, then its scratch's, paired to the cell's writer.
+    pub fn shares<'step, 'here, 'scratch, C, S, D>(
+        &self,
+        context: &StepContext<'graph, 'step, 'here, 'scratch, '_, C, S, D, TypeHeader>,
+    ) -> Chain<'graph, 'scratch, 'here, 'here, 'step>
+    where
+        C: Reattachable<'graph>,
+        S: ReattachableOverBoth<'graph>,
+        D: Delivery<'graph>,
+    {
+        Chain::scratch(
+            self.root,
+            Half::of(context.writer(), context.header()),
+            Half::paired(context.scratch_writer(), context.scratch_header()),
+        )
     }
 
     /// [`values::cross`](crate::values::cross) over this test's chains.
@@ -344,6 +388,13 @@ impl Knotted for Stand<'_> {
         Weight::ZERO
     }
 
+    /// A stand-in stores no weight, so it records no bits: a clear bit is always safe.
+    fn bits(&self) -> MemoBits {
+        MemoBits::NONE
+    }
+
+    fn set_bits(&self, _: MemoBits) {}
+
     /// A stand-in holds no value: its knot is its identity.
     fn held<'a>(
         &self,
@@ -419,6 +470,13 @@ impl Knotted for Node<'_> {
     fn weight(&self) -> Weight {
         Weight::ZERO
     }
+
+    /// A stand-in stores no weight, so it records no bits: a clear bit is always safe.
+    fn bits(&self) -> MemoBits {
+        MemoBits::NONE
+    }
+
+    fn set_bits(&self, _: MemoBits) {}
 
     /// Every value link of every node of the knot, nodes in index order, as the knot layer lists
     /// a data node's.

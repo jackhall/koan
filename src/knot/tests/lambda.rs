@@ -56,7 +56,15 @@ fn born<'graph, 'cell>(
 ) -> Knotted<'graph, 'cell> {
     let node = statement_lambda(activation.shape(), statement);
     let site = Site::of_body(node).expect("a `FN` has a body");
-    lambda(writer, activation, site, types, fixture.scratch()).expect("the lambda is born")
+    lambda(
+        writer,
+        activation,
+        site,
+        crate::values::BuildRef::ROOT,
+        types,
+        fixture.scratch(),
+    )
+    .expect("the lambda is born")
 }
 
 #[test]

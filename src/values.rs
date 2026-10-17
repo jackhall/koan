@@ -41,6 +41,8 @@ mod lower;
 mod record;
 mod render;
 mod retyped;
+mod settled;
+mod specialization;
 mod surface;
 mod tagged;
 mod type_value;
@@ -58,26 +60,28 @@ pub use circular::{Circular, CodeView, Resolved};
 #[cfg(test)]
 pub use crossing::ADOPTED;
 pub use crossing::{
-    COPY_RATIO, adopt_value, copy_severed, cross, cross_here, cross_view, cross_view_against,
-    each_carried_type, verdict,
+    COPY_RATIO, Destination, adopt_value, copy_severed, cross, cross_here, cross_view,
+    cross_view_against, verdict,
 };
 #[cfg(debug_assertions)]
 pub use crossing::{check_habitat, check_pinned_habitat};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use digest::{ContentDigest, Digests};
 pub use equality::Incomparable;
-pub use habitat::{Chain, Half, TypeHeader, Types};
+pub use habitat::{Chain, Half, HalfHeader, TypeHeader, Types};
 pub use link::Link;
 pub use list::List;
 pub use record::Record;
 pub use retyped::Retyped;
+pub(crate) use settled::stamp_knot;
+pub use specialization::{BuildRef, SpecEntry, SpecKey, SpecTable};
 pub use surface::{
     Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target, retyped_to,
     retypes_by_header, under, unknown,
 };
 pub use tagged::Tagged;
 pub use type_value::TypeValue;
-pub use weight::Weight;
+pub use weight::{MemoBits, Weight};
 pub use working::{WorkingExpression, WorkingPart};
 
 use std::hash::Hash;
@@ -98,6 +102,12 @@ pub trait Knotted: Copy + Eq + Hash {
     /// The bytes a rebuild of this member's knot at a destination writes, past the value word
     /// holding it.
     fn weight(&self) -> Weight;
+
+    /// Where the memos of this member's knot resolve, read off its root node.
+    fn bits(&self) -> MemoBits;
+
+    /// Record `bits` on this member's knot, at its root node.
+    fn set_bits(&self, bits: MemoBits);
 
     /// Every value this member's knot holds that its digest covers, each seen at the type the knot
     /// reads it at, handed to `out` in the order [`digest_held`](Self::digest_held) asks for their
@@ -194,6 +204,14 @@ impl Knotted for Nothing {
     }
 
     fn weight(&self) -> Weight {
+        match *self {}
+    }
+
+    fn bits(&self) -> MemoBits {
+        match *self {}
+    }
+
+    fn set_bits(&self, _: MemoBits) {
         match *self {}
     }
 

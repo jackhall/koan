@@ -11,6 +11,8 @@
 //! neither is held here: a hole is filled only by `USING`, and a `\` name by the `EVAL` that runs
 //! the code.
 
+use std::cell::Cell;
+
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
@@ -34,17 +36,10 @@ pub struct Code<'graph, 'cell> {
     bound: &'cell [Binding<'graph, 'cell>],
     /// Each hole a `USING` filled, sorted by name.
     supplied: &'cell [Binding<'graph, 'cell>],
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
+    /// node's also carries the knot's memo bits.
+    knot_weight: Cell<Weight>,
 }
-
-impl Clone for Code<'_, '_> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl Copy for Code<'_, '_> {}
 
 impl<'graph, 'cell> Code<'graph, 'cell> {
     /// The quote's body as written.
@@ -73,7 +68,12 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
     }
 
     pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+        self.knot_weight.get()
+    }
+
+    /// The knot weight's cell, where a knot's root node keeps its memo bits.
+    pub(super) fn knot_weight_cell(&self) -> &Cell<Weight> {
+        &self.knot_weight
     }
 
     /// The values the node's content covers, in the order [`content`](Self::content) asks for
@@ -143,7 +143,7 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
             ktype: self.ktype,
             bound,
             supplied,
-            knot_weight: self.knot_weight,
+            knot_weight: Cell::new(self.knot_weight.get().without_bits()),
         }
     }
 }
@@ -192,7 +192,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
                 ktype: self.ktype,
                 bound,
                 supplied: &[],
-                knot_weight,
+                knot_weight: Cell::new(knot_weight),
             },
         ))
     }
@@ -244,6 +244,7 @@ fn one_node<'graph, 'cell>(
     shape: &'graph BodyShape<'graph>,
     bound: &[Binding<'graph, 'cell>],
     supplied: &[Binding<'graph, 'cell>],
+    types: &Chain<'_, '_, '_, '_, '_>,
 ) -> Knotted<'graph, 'cell> {
     let bound = collect(writer, bound.iter().copied());
     let supplied = collect(writer, supplied.iter().copied());
@@ -261,11 +262,11 @@ fn one_node<'graph, 'cell>(
                 ktype: shape.code_type(),
                 bound,
                 supplied,
-                knot_weight,
+                knot_weight: Cell::new(knot_weight),
             },
         ))
     });
-    Knotted::of(knot, 0)
+    Knotted::of(super::stamped(knot, types), 0)
 }
 
 /// The quote door: birth the quote `part` that `activation`'s shape holds as a one-node knot in
@@ -279,6 +280,7 @@ pub fn quote<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     part: &'graph ExpressionPart<'graph>,
+    types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let (body, shape) = shape_of(activation.shape(), part)
@@ -286,7 +288,7 @@ pub fn quote<'graph, 'cell>(
     let staged = staged(body, shape, activation, scratch, |_| {
         unreachable!("only the tie births a quote that reads a fellow member")
     });
-    one_node(writer, body, shape, &staged.bound, &[])
+    one_node(writer, body, shape, &staged.bound, &[], types)
 }
 
 /// Why a `USING` refused to fill a code's holes.
@@ -341,7 +343,7 @@ pub fn using<'graph, 'cell>(
                 keyed.clear();
                 self::keyed(writer, shape, key, source, types, scratch, &mut keyed)?;
                 (!keyed.is_empty())
-                    .then(|| Value::List(List::of_candidates(writer, keyed.iter().copied())))
+                    .then(|| Value::List(List::of_candidates(writer, keyed.iter().copied(), types)))
             }
             name => super::field(writer, source, name, types, scratch),
         };
@@ -355,7 +357,14 @@ pub fn using<'graph, 'cell>(
     supplied.sort_unstable_by_key(|(name, _)| *name);
     let mut bound = BumpVec::with_capacity_in(node.bound().len(), scratch);
     bound.extend(node.bound().iter().map(resolved));
-    Ok(one_node(writer, node.body(), shape, &bound, &supplied))
+    Ok(one_node(
+        writer,
+        node.body(),
+        shape,
+        &bound,
+        &supplied,
+        types,
+    ))
 }
 
 /// Push onto `found` each function the module `source` offers at `key` — a registration, an

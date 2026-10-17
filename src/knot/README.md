@@ -102,8 +102,8 @@ a cycle — with a fellow binder, which the shape refuses as an eager cycle, nor
 with itself, which is refused a step earlier, since an eager read at the
 binder's own position does not see that binder. So there is one representation
 and one copy per kind of node, and a function is staged and laid down the same
-way whichever door births it. A node is region-resident, `Copy` and so
-`Drop`-free, and a node's fields are private to this module: a node exists only
+way whichever door births it. A node is region-resident and `Drop`-free, which
+a `const` assertion pins, and a node's fields are private to this module: a node exists only
 because the tie, the lambda door, the view door one layer up, or a copy of a
 tied knot, laid it down.
 
@@ -279,7 +279,11 @@ nested callable is a read of its statement, and the body runner performs a
 statement after every unit it reads — so a `FN` that captures a name declared
 after it is born once that name is bound. The door shares the tie's staging and
 lay-down for a function node, so a door-born function weighs exactly what the
-tie gives the same function in a one-node knot. No capture it reads is an edge:
+tie gives the same function in a one-node knot. The tie and the door are each
+handed the build cell the birth runs under, which every function they lay
+records on its closure bindings, and an instance keeps its function's: a call
+of it seeks its [specialization](../build/README.md#references-between-the-trees)
+beneath that cell. No capture it reads is an edge:
 a callable that captures a fellow member is a node of its binder's knot, which
 the tie never asks the evaluator for. Its type is read as the tie's is, and a
 signature the load left unknown that does not elaborate refuses `Type` and
@@ -381,6 +385,14 @@ crossing rebuilds that knot whole. It is summed at the tie and memoized on every
 crossing prices a member by reading one field, under the ordinary
 [verdict](../values/README.md#crossing).
 
+The root node's weight also carries the knot's
+[memo bits](../values/README.md#weight), in a `Cell`, and every member reads
+and sets them there; every other node's stay clear. Every birth door — the
+tie, the lambda and instance doors, a module's or a barrier's tie and a
+quote's — stamps them through the chain it was born through, from the types
+the knot carries and the values it holds, and a builtin's member answers both
+bits, its record being the root's.
+
 **Every knot member copies.** The copy is two walks over the knot, in
 [copy.rs](copy.rs). `held` lists every value the knot holds — each node in
 index order, and within a node exactly the values its rebuild asks for — and
@@ -393,7 +405,8 @@ through the destination's writer, a code node's bound and supplied runs, a data
 node through `Circular::copied`, a module's member run and a barrier's
 underlying function — each edge carried verbatim, since an edge names a node by
 index and so means the same node in the copy, anonymous nodes included, and
-the types, body and code shapes, quote bodies and knot weight carried over. The
+the types, body and code shapes, quote bodies and knot weight's bytes carried
+over, and the crossing stamps the copy's memo bits where it lands. The
 copied member is the one at the source's own index. A copy never shares a node
 with its source, so a copied knot outlives the region it was copied from.
 
@@ -525,6 +538,10 @@ carries the scalar types alone.
   themselves knot members (`a_copied_module_is_the_same_members_rebuilt`); and
   two members of one knot copied together through `copy_severed` share one copy
   of it (`values_copied_in_one_placement_share_one_copy_of_a_knot`).
+- [`tests/bits.rs`](tests/bits.rs) — a knot's memo bits set through any
+  member and read back off its root node; a knot born through a step's own
+  chain stamped settled, and one born through a chain that does not intern
+  where it lays left unsettled; and a copy re-stamped at its destination.
 - [`tests/code.rs`](tests/code.rs) — the quote door binding `$` names where the
   quote is written and printing its marks, code compared by its text and the
   values its names bind, a quote reading its own binder as a one-node knot, and

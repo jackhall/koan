@@ -9,15 +9,17 @@ use std::collections::HashSet;
 
 use crate::memory::{CellGraph, Header, ReleaseAbsorption};
 use crate::symbols::BinderSymbol;
+use crate::type_lattice::Habitat;
 use crate::type_lattice::{KType, TypeDigest, TypeNode};
-use crate::values::{Key, TypeHeader, TypeValue, ValueFamily};
+use crate::values::digest::{DigestHasher, Tag};
+use crate::values::{Half, HalfHeader, Key, SpecKey, TypeHeader, TypeValue, ValueFamily};
 
 use super::{Dict, List, Record, TestGraph, Value, copy, pin, text, with_fixture};
 
 /// The digests the branch behind `header` holds, or none where the half has no branch.
 fn branch_digests(header: Header<'_, '_, '_, TypeHeader>) -> HashSet<TypeDigest> {
     let mut digests = HashSet::new();
-    if let Some(branch) = header.get() {
+    if let Some(branch) = header.get().map(HalfHeader::branch) {
         branch.each_digest(|digest| {
             digests.insert(digest);
         });
@@ -171,5 +173,43 @@ fn a_handle_laid_without_a_crossing_fails_the_habitat_check() {
                     .unwrap();
             })
             .unwrap();
+    });
+}
+
+#[test]
+fn a_header_table_renews_an_entry_in_place() {
+    with_fixture(|_| {
+        let mut graph: TestGraph<'_> = CellGraph::new(1, pin);
+        let parent = graph.create(None).unwrap();
+        let first = graph.create_tree(parent, None).unwrap();
+        let second = graph.create_tree(parent, None).unwrap();
+        let key = |at| SpecKey(DigestHasher::new(Tag::Number).count(at).finished());
+        graph
+            .enter(parent, |context| {
+                let half = Half::of(context.writer(), context.header());
+                let _ = half.own_or_lay();
+                let header = context.header().get().expect("the header is laid");
+                assert!(
+                    header.table().is_none(),
+                    "the table is laid on the first insert"
+                );
+                assert_eq!(header.find(key(0)), None);
+                header.insert(half, key(0), first);
+                header.insert(half, key(1), second);
+                assert_eq!(header.find(key(0)), Some(first));
+                header.insert(half, key(0), second);
+                assert_eq!(header.find(key(0)), Some(second), "the entry is renewed");
+                assert_eq!(header.table().map(|table| table.len()), Some(2));
+                assert_eq!(header.me(), None);
+                header.set_me(first);
+                assert_eq!(header.me(), Some(first));
+            })
+            .unwrap();
+        graph.release_tree(first).unwrap();
+        graph.release_tree(second).unwrap();
+        graph
+            .release(parent, ReleaseAbsorption::IntoHolder)
+            .unwrap();
+        assert!(graph.is_empty());
     });
 }

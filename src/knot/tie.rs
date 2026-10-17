@@ -24,13 +24,15 @@
 //! member, and so is a quote that reads one. The tie hands back each annotation it resolved beside
 //! the knot ([`Tied`]), so the caller holds each slot to it without resolving it again.
 
+use std::cell::Cell;
+
 use crate::elaborate::denoted;
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
-use crate::values::{Chain, Weight, retype_target};
+use crate::values::{BuildRef, Chain, Weight, retype_target};
 
 use super::data::{self, Stager};
 use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
@@ -50,11 +52,12 @@ pub struct Tied<'graph, 'cell, 'x> {
 /// several learns them all at once. A refusal writes nothing.
 ///
 /// Member `i` of `component` is the knot's node `i`; the caller binds each member's slot to the
-/// member at that node.
+/// member at that node. A function member is born under the build cell `build`.
 pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
+    build: BuildRef,
     types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
@@ -169,7 +172,7 @@ pub fn tie<'graph, 'cell, 'x>(
     let mut laid = BumpVec::with_capacity_in(functions.len(), scratch);
     for staged in functions.iter() {
         laid.push(staged.as_ref().map(|staged| {
-            let (closure, typing, weight) = staged.laid_down(writer);
+            let (closure, typing, weight) = staged.laid_down(writer, build);
             knot_weight = knot_weight.plus(weight);
             (closure, typing)
         }));
@@ -215,12 +218,15 @@ pub fn tie<'graph, 'cell, 'x>(
             )),
             (None, Some(circular)) => Node::Data {
                 circular,
-                knot_weight,
+                knot_weight: Cell::new(knot_weight),
             },
             (None, None) => unreachable!("every node is a function, a code or a data node"),
         }
     });
-    Ok(Tied { knot, annotations })
+    Ok(Tied {
+        knot: super::stamped(knot, types),
+        annotations,
+    })
 }
 
 impl<'graph, 'cell> Knotted<'graph, 'cell> {

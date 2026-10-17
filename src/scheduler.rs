@@ -10,7 +10,8 @@
 //! A step cannot create or release a cell, and names no handle and no carrier door: it hands the
 //! drain an [`Action`] naming nothing but `'graph`, and the drain performs every birth and every
 //! death. A request has no cell until the drain pops it, so the only thing a live cell ever waits
-//! on is its receipt run.
+//! on is its receipt run. A frame keyed on its bindings is born borrowing its specialization, a
+//! build cell the drain finds or builds before the birth ([`Seek`]), so it never waits on one.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
 //! `crate::memory`, `crate::type_lattice` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads
@@ -23,6 +24,8 @@ mod action;
 mod continuation;
 mod delivery;
 mod drain;
+mod load;
+mod seek;
 
 #[cfg(test)]
 mod tests;
@@ -32,5 +35,7 @@ pub use action::{
 };
 pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
-pub(crate) use drain::{CACHING, LAID, TIERS, Tiers};
+pub(crate) use drain::{CACHING, EVICT_BEFORE_STEP, LAID, TIERS, Tiers};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
+pub use load::{LoadStep, Roots};
+pub use seek::Seek;

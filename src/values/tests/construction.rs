@@ -160,13 +160,14 @@ fn peeling_replaces_one_tagged_layer_and_holding_keeps_every_layer() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let inner = Tagged::hold(writer, Value::Number(1.0), KType::NUMBER);
-            let held = Tagged::hold(writer, Value::Tagged(inner), KType::STR);
+            let types = &fixture.tiers.of(context);
+            let inner = Tagged::hold(writer, Value::Number(1.0), KType::NUMBER, types);
+            let held = Tagged::hold(writer, Value::Tagged(inner), KType::STR, types);
             assert!(matches!(held.payload(), Value::Tagged(layer) if ptr::eq(*layer, inner)));
-            let peeled = Tagged::peel(writer, Value::Tagged(inner), KType::STR);
+            let peeled = Tagged::peel(writer, Value::Tagged(inner), KType::STR, types);
             assert_eq!(peeled.ktype(), KType::STR);
             assert!(matches!(peeled.payload(), Value::Number(1.0)));
-            let bare = Tagged::peel(writer, Value::Bool(true), KType::BOOL);
+            let bare = Tagged::peel(writer, Value::Bool(true), KType::BOOL, types);
             assert!(matches!(bare.payload(), Value::Bool(true)));
         })
     });
@@ -223,14 +224,14 @@ fn a_tagged_value_takes_the_member_naming_its_constructor_it_lies_under() {
             let writer = context.writer();
             let (types, scratch) = (types, fixture.scratch());
             let union = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
-            let tagged = Tagged::hold(writer, Value::Number(1.0), KType::STR);
+            let tagged = Tagged::hold(writer, Value::Number(1.0), KType::STR, types);
             let Value::Tagged(stamped) =
                 Value::Tagged(tagged).retyped(writer, union, types, scratch)
             else {
                 panic!("a tagged value stays tagged");
             };
             assert_eq!(stamped.ktype(), KType::STR);
-            let outside = Tagged::hold(writer, Value::Number(1.0), KType::BOOL);
+            let outside = Tagged::hold(writer, Value::Number(1.0), KType::BOOL, types);
             let Value::Tagged(kept) = Value::Tagged(outside).retyped(writer, union, types, scratch)
             else {
                 panic!("a tagged value stays tagged");
@@ -454,7 +455,7 @@ fn a_newtype_construction_is_checked_against_its_representation() {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let head = |handle| TypeValue::new(writer, handle, types);
-            let inner = Value::Tagged(Tagged::hold(writer, Value::Null, ring));
+            let inner = Value::Tagged(Tagged::hold(writer, Value::Null, ring, types));
             let fitting = Value::Record(Record::new(writer, &[(next, inner)], types, scratch));
             let built = Tagged::construct(writer, head(ring), fitting, types, scratch).unwrap();
             assert_eq!(built.ktype(), ring);
@@ -604,7 +605,7 @@ fn a_member_seals_under_a_carrier_its_source_binding_admits() {
             assert_eq!(sealed.map(|tagged| tagged.ktype()), Ok(hidden));
 
             // A tagged payload takes the carrier as its one layer, not a second one.
-            let tagged = Value::Tagged(Tagged::hold(writer, Value::Number(2.0), distance));
+            let tagged = Value::Tagged(Tagged::hold(writer, Value::Number(2.0), distance, types));
             let sealed = Tagged::seal(writer, tagged, hidden, distance, types, scratch).unwrap();
             assert_eq!(sealed.ktype(), hidden);
             assert!(matches!(sealed.payload(), Value::Number(2.0)));

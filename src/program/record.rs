@@ -21,7 +21,7 @@ use crate::type_lattice::{
 };
 use crate::values::{Chain, Record, Tagged, Value, satisfies};
 
-use super::bundle::{KBirth, KBundle};
+use super::bundle::{KBirth, KBundle, Within};
 
 /// What the layer above `program` supplies: the builtin table a shape resolves builtin names
 /// against, and the step that evaluates a node. Dispatch implements it; the tests implement a
@@ -212,13 +212,13 @@ impl<'graph> Program<'graph> {
     /// The one door every evaluation is asked through: `node`, read through `view`, as a child the
     /// drain can create — or as the successor a frame's tail hands `contract`. The caller picks its
     /// placement and its `Use`; what the node means is the evaluator's, so nothing in `program`
-    /// names an expression shape. `routes` is [`KBirth::Evaluate`]'s.
+    /// names an expression shape. `within` is [`KBirth::Evaluate`]'s.
     pub fn evaluate<'here>(
         &'graph self,
         node: Evaluated<'graph>,
         view: KActivationView<'graph, 'here>,
         contract: Option<Contract>,
-        routes: bool,
+        within: Within,
     ) -> Work<'graph, 'here, KBundle> {
         Work {
             step: self.evaluator,
@@ -227,7 +227,7 @@ impl<'graph> Program<'graph> {
                 node,
                 view,
                 contract,
-                routes,
+                within,
             },
         }
     }
@@ -243,7 +243,12 @@ impl<'graph> Program<'graph> {
         let field = BinderSymbol::declared("message", self.symbols).expect("a value name");
         let text = Value::Str(rendered(writer, message));
         let payload = Record::new(writer, &[(field, text)], types, &scratch);
-        Value::Tagged(Tagged::hold(writer, Value::Record(payload), self.error))
+        Value::Tagged(Tagged::hold(
+            writer,
+            Value::Record(payload),
+            self.error,
+            types,
+        ))
     }
 
     /// The message `value` carries, if it is an error value, read through `types`.

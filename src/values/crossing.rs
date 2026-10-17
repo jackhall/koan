@@ -17,6 +17,11 @@
 //! [lists](KnottedFamily::held), tied once they are all copied. One copy serves one placement and
 //! keys every knot it rebuilds by its root, so two references to one knot arrive as members of one
 //! copy of it. Plain values reached twice still copy twice.
+//!
+//! An adoption ([`adopt_value`]) is the other walk: a value leaving a caching body, or an operand at
+//! an invariant site, keeps its words, and only the type memos it reaches are made to resolve in
+//! the destination. It stops at a part whose memo bits ([settled.rs](settled.rs)) say its memos
+//! already resolve there, and an exit marks what it walked settled after.
 
 use crate::memory::{
     Active, Bump, BumpAllocator, BumpBackedMap, BumpVec, CellHandle, Covariant, CrossedOperand,
@@ -26,9 +31,10 @@ use crate::memory::{
 use crate::type_lattice::{Branch, DeclaredType, Halves, KType, Parametric, Root};
 
 use super::habitat::{Chain, Half, TypeHeader, Types};
+use super::settled::stamp_knot;
 use super::surface::Parts;
 use super::{
-    Dict, Knotted, KnottedFamily, List, Record, Retyped, Seen, Surface, Tagged, Value,
+    Dict, Knotted, KnottedFamily, List, MemoBits, Record, Retyped, Seen, Surface, Tagged, Value,
     ValueCarrier, ValueFamily, text,
 };
 
@@ -138,7 +144,7 @@ pub fn cross_view_against<'graph, 'cell, XF: KnottedFamily<'graph>>(
         CrossedOperand::Pinned {
             view: value, home, ..
         } => {
-            home.read(|header, _| types.merge(header.into_value()));
+            home.read(|header, _| types.merge(header.into_value().branch()));
             #[cfg(debug_assertions)]
             match check {
                 Some(check) => check_pinned_habitat::<XF>(check, &value),
@@ -199,8 +205,10 @@ fn copied<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, const N: usize>(
 where
     'graph: 'from,
 {
-    home.read(|header, _| rebuilt::<XF, N>(writer, types, Some(header.into_value()), values))
-        .unwrap_or_else(|| rebuilt::<XF, N>(writer, types, None, values))
+    home.read(|header, _| {
+        rebuilt::<XF, N>(writer, types, Some(header.into_value().branch()), values)
+    })
+    .unwrap_or_else(|| rebuilt::<XF, N>(writer, types, None, values))
 }
 
 /// [`copied`], its types adopted from `source`, the home's branch, or from nowhere where the home
@@ -236,7 +244,7 @@ pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
     types: &Chain<'_, '_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
 ) {
-    check_parts::<XF>(types, value, usize::MAX);
+    check_parts::<XF>(types, value, usize::MAX, false);
 }
 
 /// [`check_habitat`] for a pinned value, over the first [`PINNED_PARTS`] parts a depth-first walk
@@ -247,33 +255,46 @@ pub fn check_pinned_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
     types: &Chain<'_, '_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
 ) {
-    check_parts::<XF>(types, value, PINNED_PARTS);
+    check_parts::<XF>(types, value, PINNED_PARTS, false);
 }
 
-/// The habitat check over the first `limit` parts of `value`.
+/// The habitat check over the first `limit` parts of `value`, entering a part whose bits meet the
+/// contract only where `cutoff` is unset.
 #[cfg(debug_assertions)]
 fn check_parts<'graph, 'cell, XF: KnottedFamily<'graph>>(
     types: &Chain<'_, '_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
     limit: usize,
+    cutoff: bool,
 ) {
-    each_carried_type::<XF>(value, limit, &[], &mut |kt| {
-        assert!(
-            types.resolves(kt),
-            "a crossed value carries a type its habitat cannot resolve: {kt:?}"
-        );
-    });
+    carried::<XF>(
+        value,
+        limit,
+        cutoff,
+        &mut |kt| {
+            assert!(
+                types.resolves(kt),
+                "a crossed value carries a type its habitat cannot resolve: {kt:?}"
+            );
+        },
+        &mut |_| {},
+        &mut |_| {},
+    );
 }
 
 /// Every type `value` carries over its first `limit` parts, handed to `each`: each part's own memo,
 /// hidden parts included, each type value's payload, and every type a knot it reaches carries — so
-/// every closure's and quote's captures and every knot member. A part that is the same word as one
-/// of `received` hands over its own memo and a type value's payload, and is not entered.
-pub fn each_carried_type<'graph, 'cell, XF: KnottedFamily<'graph>>(
+/// every closure's and quote's captures and every knot member. Under `cutoff`, a part whose
+/// [bits](super::MemoBits) meet the contract hands over its own memo and a type value's payload, is
+/// handed to `skipped`, and is not entered; every composite and knot member the walk does enter is
+/// handed to `entered`, a knot once.
+fn carried<'graph, 'cell, XF: KnottedFamily<'graph>>(
     value: &Value<'cell, XF::Closed<'cell>>,
     limit: usize,
-    received: &[Value<'cell, XF::Closed<'cell>>],
+    cutoff: bool,
     each: &mut dyn FnMut(DeclaredType<Parametric>),
+    skipped: &mut dyn FnMut(Value<'cell, XF::Closed<'cell>>),
+    entered: &mut dyn FnMut(Value<'cell, XF::Closed<'cell>>),
 ) {
     use crate::memory::{BumpBackedSet, bump_set};
     // A value with no part is read where it stands, so a scalar's crossing touches no heap.
@@ -300,7 +321,8 @@ pub fn each_carried_type<'graph, 'cell, XF: KnottedFamily<'graph>>(
         if let Value::Type(type_value) = value {
             each(type_value.handle().into());
         }
-        if received.iter().any(|seen| same_word(seen, &value)) {
+        if cutoff && bits(&value).is_some_and(MemoBits::meets) {
+            skipped(value);
             continue;
         }
         match value {
@@ -308,38 +330,181 @@ pub fn each_carried_type<'graph, 'cell, XF: KnottedFamily<'graph>>(
             Value::Knotted(_) | Value::Retyped(_) => {
                 let member = value.knot_member().expect("a knot member");
                 if knots.insert(member.root()) {
+                    entered(value);
                     XF::carried_types(&member, &mut |kt| each(kt));
                     XF::held(&member, &mut |held| stack.push(held));
                 }
             }
-            _ => super::surface::raw_parts(value, &mut |part| stack.push(part)),
+            Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) => {}
+            Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => {
+                entered(value);
+                super::surface::raw_parts(value, &mut |part| stack.push(part));
+            }
         }
     }
 }
 
-/// Make every type `value` carries ([`each_carried_type`]) resolve in `dest`, adopting it from
-/// `source`: what a caching body does at each exit before `value` leaves it, `source` the body's
-/// chain and `dest` its region's, so nothing the value reaches names a scratch tier once the
-/// scratch resets. `received` is what the body received, whose parts crossed into the region
-/// where its frame was born. Debug builds check the whole value resolves in `dest` after.
+/// The bits a part the walk reaches carries: a composite's own, or a knot member's knot's; `None`
+/// for a leaf or a type value, which has no part to enter.
+fn bits<X: Knotted>(value: &Value<'_, X>) -> Option<MemoBits> {
+    match value {
+        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) | Value::Type(_) => None,
+        Value::List(list) => Some(list.bits()),
+        Value::Dict(dict) => Some(dict.bits()),
+        Value::Record(record) => Some(record.bits()),
+        Value::Tagged(tagged) => Some(tagged.bits()),
+        Value::Knotted(member) => Some(member.bits()),
+        Value::Retyped(header) => Some(header.member().bits()),
+    }
+}
+
+/// Mark `value`, which an exit's walk entered, settled: every memo it reaches now resolves in its
+/// home's branch, or below a part that says so itself.
+fn settle<X: Knotted>(value: &Value<'_, X>) {
+    match value {
+        Value::List(list) => list.settle(),
+        Value::Dict(dict) => dict.settle(),
+        Value::Record(record) => record.settle(),
+        Value::Tagged(tagged) => tagged.settle(),
+        Value::Knotted(member) => settle_knot(member),
+        Value::Retyped(header) => settle_knot(&header.member()),
+        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) | Value::Type(_) => {}
+    }
+}
+
+fn settle_knot<X: Knotted>(member: &X) {
+    member.set_bits(MemoBits {
+        settled: true,
+        ..member.bits()
+    });
+}
+
+/// Where [`adopt_value`] makes a value's types resolve.
+pub enum Destination<'d, 'graph, 'here, 'lent, 'door> {
+    /// An exit: the region chain of the step whose caching body the value leaves. The adoption
+    /// marks every value it entered settled.
+    Region(&'d Types<'graph, 'here, 'door>),
+    /// An invariant site under `routes`: the warm tier, beside the region chain of the step the
+    /// value lies in, which a test build's audit reads. Marks nothing: the warm tier is not where
+    /// the value lies.
+    Warm {
+        warm: &'d Chain<'graph, 'lent, 'here, 'lent, 'door>,
+        region: &'d Types<'graph, 'here, 'door>,
+    },
+}
+
+/// Make every type `value` carries resolve in `into`, adopting it from `source`, the chain the body
+/// runs on — the one door at a caching body's exits and at an invariant site. The walk does not
+/// enter a part whose bits meet the contract: a root-closed part's memos resolve everywhere, and a
+/// settled one's in its home's branch, which every chain reading the value reads. Only the part's
+/// own memo is adopted. At an exit every value it entered is marked settled after. A test build
+/// audits every part it skipped, and a debug build checks what it adopted resolves, with the same
+/// cutoff. See [design/type-tiers.md § An adoption stops at a settled part](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part).
 pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    dest: &Chain<'_, '_, '_, '_, '_>,
+    into: Destination<'_, 'graph, '_, '_, '_>,
     source: &Chain<'_, '_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
-    received: &[Value<'cell, XF::Closed<'cell>>],
 ) {
-    each_carried_type::<XF>(value, usize::MAX, received, &mut |kt| {
-        #[cfg(test)]
-        ADOPTED.with(|adopted| adopted.set(adopted.get() + 1));
-        dest.adopt_from(source, kt);
-    });
+    match into {
+        Destination::Region(region) => {
+            let scratch = Bump::new();
+            let mut entered = BumpVec::new_in(&scratch);
+            adopted::<XF>(region, region, source, value, &mut |part| {
+                entered.push(part)
+            });
+            entered.iter().for_each(settle);
+        }
+        Destination::Warm { warm, region } => {
+            adopted::<XF>(warm, region, source, value, &mut |_| {});
+        }
+    }
+}
+
+/// [`adopt_value`]'s walk into `dest`, its skipped parts audited against `region`, each value it
+/// entered handed to `entered`.
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_variables,
+        reason = "only the test build's audit reads the region"
+    )
+)]
+fn adopted<'graph, 'cell, XF: KnottedFamily<'graph>>(
+    dest: &Chain<'_, '_, '_, '_, '_>,
+    region: &Chain<'_, '_, '_, '_, '_>,
+    source: &Chain<'_, '_, '_, '_, '_>,
+    value: &Value<'cell, XF::Closed<'cell>>,
+    entered: &mut dyn FnMut(Value<'cell, XF::Closed<'cell>>),
+) {
+    #[cfg(test)]
+    let scratch = Bump::new();
+    #[cfg(test)]
+    let mut skipped = BumpVec::new_in(&scratch);
+    carried::<XF>(
+        value,
+        usize::MAX,
+        true,
+        &mut |kt| {
+            #[cfg(test)]
+            ADOPTED.with(|adopted| adopted.set(adopted.get() + 1));
+            dest.adopt_from(source, kt);
+        },
+        &mut |part| {
+            #[cfg(test)]
+            skipped.push(part);
+            #[cfg(not(test))]
+            let _ = part;
+        },
+        entered,
+    );
+    #[cfg(test)]
+    for part in &skipped {
+        audit::<XF>(region, part);
+    }
     #[cfg(debug_assertions)]
-    check_habitat::<XF>(dest, value);
+    check_parts::<XF>(dest, value, usize::MAX, true);
+}
+
+/// The test build's audit of a part an adoption skipped: walked whole, every memo its bits answer
+/// for must lie in the root where it is root-closed, and resolve in `region`, the chain of the
+/// region the value lies in, where it is settled.
+#[cfg(test)]
+fn audit<'graph, 'cell, XF: KnottedFamily<'graph>>(
+    region: &Chain<'_, '_, '_, '_, '_>,
+    part: &Value<'cell, XF::Closed<'cell>>,
+) {
+    let bits = bits(part).expect("only a part with bits is skipped");
+    // A header's bits answer for its member, not for the header's own memo, which was adopted.
+    let part = &match part {
+        Value::Retyped(header) => Value::Knotted(header.member()),
+        other => *other,
+    };
+    carried::<XF>(
+        part,
+        usize::MAX,
+        false,
+        &mut |kt| {
+            if bits.root_closed {
+                assert!(
+                    region.in_root(kt),
+                    "a root-closed part {:?} reaches {kt:?}, which is no root type",
+                    part.ktype(),
+                );
+            } else {
+                assert!(
+                    region.resolves(kt),
+                    "a settled part reaches {kt:?}, which its home region cannot resolve"
+                );
+            }
+        },
+        &mut |_| {},
+        &mut |_| {},
+    );
 }
 
 #[cfg(test)]
 thread_local! {
-    /// How many handles [`adopt_value`] has adopted: what a test reads to see a received value's
+    /// How many handles [`adopt_value`] has adopted: what a test reads to see a settled value's
     /// parts left unwalked.
     pub static ADOPTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -369,7 +534,8 @@ enum Frame<'x, 'from, X> {
 /// The deep copy of one placement: every region part of a value rebuilt through `writer` at the
 /// type it is seen at, laying down only what that type names and weighing what it lays down; every
 /// program node embedded as the same node; a knot member rebuilt by its family once per knot, its
-/// memos and weights carried over. Total. Built only by [`cross_view`] and
+/// memos and weights carried over and its memo bits stamped where it lands. A composite's bits are
+/// computed by the door that lays it, through the destination's chain. Total. Built only by [`cross_view`] and
 /// [`copy_severed`], so every copy is one the graph priced.
 struct Copying<'graph, 'x, 'from, 'to, 'home, 'reg, XF: KnottedFamily<'graph>>
 where
@@ -562,16 +728,20 @@ where
                 let ktype = surface.ktype();
                 let cells = || writer.fill(built.len(), |at| built[at]);
                 let finished = match surface.parts() {
-                    Parts::List { .. } => Value::List(List::weighed(writer, cells(), ktype)),
+                    Parts::List { .. } => {
+                        Value::List(List::weighed(writer, cells(), ktype, self.types))
+                    }
                     Parts::Dict { .. } => {
                         let keys = writer.fill(surface.len(), |at| surface.key(at).rehomed(writer));
-                        Value::Dict(Dict::weighed(writer, keys, cells(), ktype))
+                        Value::Dict(Dict::weighed(writer, keys, cells(), ktype, self.types))
                     }
                     Parts::Record { .. } => {
                         let names = collect(writer, (0..surface.len()).map(|at| surface.name(at)));
-                        Value::Record(Record::weighed(writer, names, cells(), ktype))
+                        Value::Record(Record::weighed(writer, names, cells(), ktype, self.types))
                     }
-                    Parts::Tagged { .. } => Value::Tagged(Tagged::hold(writer, built[0], ktype)),
+                    Parts::Tagged { .. } => {
+                        Value::Tagged(Tagged::hold(writer, built[0], ktype, self.types))
+                    }
                 };
                 (base, finished)
             }
@@ -593,6 +763,7 @@ where
                 };
                 XF::carried_types(&member, &mut |kt| self.adopt(kt));
                 let copied = XF::copy_into(writer, &member, &mut cursor);
+                stamp_knot::<XF>(&copied, self.types);
                 debug_assert!(
                     answers.next().is_none(),
                     "copy_into asks for every held value"

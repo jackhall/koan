@@ -170,7 +170,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     }
 
     /// This node rebuilt in `writer`'s region: each link through [`Link::copied`], keys rehomed,
-    /// names collected, type and weight carried over.
+    /// names collected, type and weight's bytes carried over: a data node keeps no memo bits.
     pub fn copied<'to, Y: Knotted>(
         &self,
         writer: Writer<'to, '_>,
@@ -181,7 +181,12 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
             Circular::List(list) => {
                 let source = list.cells();
                 let cells = writer.fill(source.len(), |at| source[at].copied(&mut copy));
-                Circular::List(List::from_run(writer, cells, list.ktype(), list.weight()))
+                Circular::List(List::from_run(
+                    writer,
+                    cells,
+                    list.ktype(),
+                    list.weight().without_bits(),
+                ))
             }
             Circular::Dict(dict) => {
                 let (source_keys, source) = (dict.keys(), dict.cells());
@@ -192,7 +197,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
                     keys,
                     cells,
                     dict.ktype(),
-                    dict.weight(),
+                    dict.weight().without_bits(),
                 ))
             }
             Circular::Record(record) => {
@@ -204,14 +209,14 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
                     names,
                     cells,
                     record.ktype(),
-                    record.weight(),
+                    record.weight().without_bits(),
                 ))
             }
             Circular::Tagged(tagged) => Circular::Tagged(Tagged::from_payload(
                 writer,
                 tagged.payload().copied(&mut copy),
                 tagged.ktype(),
-                tagged.weight(),
+                tagged.weight().without_bits(),
             )),
         }
     }

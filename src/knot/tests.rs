@@ -10,6 +10,7 @@
 //! module suites read this fixture too, so its doors are `pub(crate)`.
 
 mod birth;
+mod bits;
 mod boundary;
 mod code;
 mod copy;
@@ -20,16 +21,19 @@ mod properties;
 
 use crate::elaborate::type_declarations;
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, NoDelivery, NoScratch, Prices, ProgramBrand, ReleaseAbsorption,
-    StepContext, Verdict, Writer, program_storage, reattachable, resident,
+    Bump, BumpAllocator, CellGraph, Header, NoDelivery, NoScratch, Prices, ProgramBrand,
+    ReleaseAbsorption, StepContext, Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::scope::{BodyShape, Builtins, Component, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
+use crate::type_lattice::{Halves, Root};
 use crate::values::tests::TestTypes;
-use crate::values::{Chain, Circular, Knotted as _, Link, TypeHeader, TypeValue, Types, Value};
+use crate::values::{
+    Chain, Circular, Half, Knotted as _, Link, TypeHeader, TypeValue, Types, Value,
+};
 
 use super::module::body_activation;
 use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
@@ -152,7 +156,43 @@ impl<'graph> Fixture<'_, 'graph> {
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
         let builtins = self.builtins(writer, types);
-        let shape = BodyShape::of_program(
+        let shape = self.shaped(lines, builtins);
+        self.activated(writer, types, shape, builtins, leave)
+    }
+
+    /// `lines` run as [`run`](Self::run) runs them over a load that ends once the program shapes:
+    /// the builder is frozen into a root, and every component is brought in through the chain a
+    /// step's own `types` builds over it — the one chain a birth settles through, which comes
+    /// back beside the activation and the root. The fixture's other chains read nothing of the
+    /// load after.
+    pub fn run_frozen<'cell, 'door>(
+        &self,
+        writer: Writer<'cell, 'door>,
+        header: Header<'graph, 'cell, 'door, TypeHeader>,
+        lines: &[KExpression<'graph>],
+    ) -> (
+        &'cell KActivation<'graph, 'cell>,
+        Types<'graph, 'cell, 'door>,
+        &'graph Root<'graph>,
+    ) {
+        let builtins = self.builtins(writer, &self.tiers.half(writer, header));
+        let shape = self.shaped(lines, builtins);
+        let root = self.tiers.freeze();
+        let types = Types::new(root, Halves::alone(Half::of(writer, header)));
+        (
+            self.activated(writer, &types, shape, builtins, &[]),
+            types,
+            root,
+        )
+    }
+
+    /// `lines` shaped through the load's chain over `builtins`.
+    fn shaped<'cell>(
+        &self,
+        lines: &[KExpression<'graph>],
+        builtins: &'cell Builtins<'cell, Knotted<'graph, 'cell>>,
+    ) -> &'graph BodyShape<'graph> {
+        BodyShape::of_program(
             self.program,
             lines,
             builtins,
@@ -165,7 +205,19 @@ impl<'graph> Fixture<'_, 'graph> {
                 "the program shapes: {}",
                 error.display(self.symbols, self.types)
             )
-        });
+        })
+    }
+
+    /// `shape` activated in `writer`'s region over `builtins`, every component brought in through
+    /// `types` unless one of its members is named in `leave`.
+    fn activated<'cell>(
+        &self,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        shape: &'graph BodyShape<'graph>,
+        builtins: &'cell Builtins<'cell, Knotted<'graph, 'cell>>,
+        leave: &[&str],
+    ) -> &'cell KActivation<'graph, 'cell> {
         let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
@@ -225,6 +277,7 @@ impl<'graph> Fixture<'_, 'graph> {
                 writer,
                 activation,
                 component,
+                crate::values::BuildRef::ROOT,
                 types,
                 self.scratch,
                 &mut |_, _| None,
@@ -250,6 +303,7 @@ impl<'graph> Fixture<'_, 'graph> {
                     writer,
                     activation,
                     &rhs.value,
+                    types,
                     self.scratch,
                 ))),
                 _ => Value::lower_part(writer, &rhs.value, types, self.scratch),
@@ -289,6 +343,7 @@ impl<'graph> Fixture<'_, 'graph> {
             writer,
             activation,
             component,
+            crate::values::BuildRef::ROOT,
             types,
             self.scratch,
             &mut |_, _| Some(Supplied::Body(body)),

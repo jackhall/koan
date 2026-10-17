@@ -24,7 +24,7 @@ fn leaves_any_and_never_answer_by_the_order() {
             assert!(satisfies(KType::NULL, &Value::Null, types, scratch));
             assert!(satisfies(KType::ANY, &Value::Bool(false), types, scratch));
             assert!(!satisfies(KType::NEVER, &Value::Null, types, scratch));
-            let tagged = Tagged::hold(context.writer(), Value::Number(1.0), KType::STR);
+            let tagged = Tagged::hold(context.writer(), Value::Number(1.0), KType::STR, types);
             assert!(!satisfies(
                 KType::NUMBER,
                 &Value::Tagged(tagged),

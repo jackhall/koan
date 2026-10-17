@@ -9,11 +9,11 @@
 //! last statement makes, and every callable whose name escapes as a value. A site's class depends
 //! on edges from every body in the program and on every path's resolution, so the classes are
 //! fixed once the whole pass has run ([`Pass::cache`]), into each shape's write-once [`Caching`]
-//! cell. A wrong class costs growth or warmth, never soundness: an edge or an escape the pass
+//! cell, beside the frame parameters its invariant sites read, which key its specialization. A wrong class costs growth or warmth, never soundness: an edge or an escape the pass
 //! misses only keeps a parameter invariant too long, and one it over-counts only keeps a site
 //! cold.
 
-use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, resident};
+use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, collect, resident};
 use crate::parse::ExpressionPart;
 use crate::scope::{
     BodyClass, BodyShape, Caching, Candidate, Coordinate, Keyed, Leaf, Mint, NodeCapture,
@@ -227,15 +227,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.chain[self.frame_level(level)].shape.kind(),
                 ShapeKind::Callable | ShapeKind::Code
             )
-    }
-
-    /// Note that the argument `part` of a call in the shape at `level` passes on a value its frame
-    /// body received, where that body may cache.
-    pub(super) fn note_received(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) {
-        if self.records(level) {
-            self.received
-                .push((self.chain[level].shape, Site::of(part)));
-        }
     }
 
     /// Record `site` in the shape at `level`, whose chain up to it is `shapes`.
@@ -610,50 +601,67 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 break;
             }
         }
+        // A site's class, beside the frame parameters an invariant one reads.
         let resolve = |pass: &Self, record: &SiteRecord<'p, 'graph>| match record.deps(scratch) {
-            Deps::Closed => Mint::Closed,
-            Deps::Varying => Mint::Varying,
+            Deps::Closed => (Mint::Closed, &[][..]),
+            Deps::Varying => (Mint::Varying, &[][..]),
             Deps::On(slots) => {
                 let frame = record.frame;
                 let held = slots.iter().all(|slot| {
                     invariant_body(pass, frame) && !varying.contains(&(address(frame), *slot))
                 });
-                if held { Mint::Invariant } else { Mint::Varying }
+                if held {
+                    (Mint::Invariant, slots)
+                } else {
+                    (Mint::Varying, &[][..])
+                }
             }
         };
+        // Per frame body, the parameters its invariant sites read, across every holder it runs:
+        // what keys its specialization. A frame with an invariant site and no entry here reads
+        // captures alone.
+        let mut keyed_frames: BumpBackedSet<'p, usize> = bump_set(scratch);
+        let mut keyed_slots = BumpVec::new_in(scratch);
+        for record in self.sites.iter() {
+            let (class, slots) = resolve(self, record);
+            if class == Mint::Invariant {
+                keyed_frames.insert(address(record.frame));
+                keyed_slots.extend(slots.iter().map(|slot| (address(record.frame), *slot)));
+            }
+        }
+        keyed_slots.sort_unstable();
+        keyed_slots.dedup();
         self.sites.sort_by_key(|record| address(record.holder));
-        self.received.sort_by_key(|(holder, _)| address(holder));
         for (holder, frame) in self.holders.iter() {
             let caches = matches!(frame.class(), Some(BodyClass::Sealed { caches: true, .. }));
             let (mut mints, mut warm) = (BumpVec::new_in(scratch), BumpVec::new_in(scratch));
             let at = address(holder);
             let from = (self.sites).partition_point(|record| address(record.holder) < at);
             let to = (self.sites).partition_point(|record| address(record.holder) <= at);
-            let from_received = (self.received).partition_point(|(each, _)| address(each) < at);
-            let to_received = (self.received).partition_point(|(each, _)| address(each) <= at);
-            let mut received = BumpVec::new_in(scratch);
-            received.extend(
-                self.received[from_received..to_received]
-                    .iter()
-                    .map(|(_, site)| *site),
-            );
-            received.sort_unstable();
-            received.dedup();
             for record in self.sites[from..to].iter() {
-                let class = resolve(self, record);
+                let (class, _) = resolve(self, record);
                 if record.minting {
                     mints.push((record.site, class));
                 } else if class == Mint::Invariant {
                     warm.push(record.site);
                 }
             }
+            let invariant = (caches && std::ptr::eq(*holder, *frame) && keyed_frames.contains(&at))
+                .then(|| {
+                    let from = keyed_slots.partition_point(|(each, _)| *each < at);
+                    let to = keyed_slots.partition_point(|(each, _)| *each <= at);
+                    collect(
+                        self.writer,
+                        keyed_slots[from..to].iter().map(|(_, slot)| *slot),
+                    )
+                });
             holder.fix_caching(resident(
                 self.writer,
                 Caching {
                     caches,
                     mints: Keyed::sorted(self.writer, &mut mints),
                     warm: Keyed::sorted(self.writer, &mut warm),
-                    received: Keyed::sorted(self.writer, &mut received),
+                    invariant,
                 },
             ));
         }

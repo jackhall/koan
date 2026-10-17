@@ -15,8 +15,8 @@ use crate::memory::{Active, Bump};
 use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Scheduler, Step, Use, Work};
+use crate::type_lattice::KType;
 use crate::type_lattice::Root;
-use crate::type_lattice::{Branch, KType};
 
 thread_local! {
     /// How many types the spawner mints before it spawns.
@@ -70,12 +70,16 @@ fn mint_list(step: &Step<'_, '_, '_, '_, '_, '_, Native>) {
 /// How many reach steps the merges into `step`'s write home's branch have taken, or 0 where it has
 /// none.
 fn reach_steps(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
-    step.header().get().map_or(0, Branch::reach_steps)
+    step.header()
+        .get()
+        .map_or(0, |header| header.branch().reach_steps())
 }
 
 /// The length of `step`'s write home's branch, or 0 where it has none.
 fn branch_length(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
-    step.header().get().map_or(0, Branch::len)
+    step.header()
+        .get()
+        .map_or(0, |header| header.branch().len())
 }
 
 /// Run `start` as a root work over a slab of `cells`, starting from `Number`, and hand back what
@@ -453,7 +457,6 @@ fn a_shares_chain_lays_in_the_hosts_scratch_and_leaves_its_region() {
 /// neither the region nor the lent branch grows.
 fn reading<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     assert!(step.hold_scratch(), "a tree cell holds its own scratch");
-    step.link_reading_types();
     let in_region = step.types().list(step.types().list(KType::NUMBER));
     let warm = step.warm_types().expect("a tree cell has a lender");
     let in_lent = warm.list(warm.list(KType::BOOL));
@@ -482,6 +485,35 @@ fn a_held_fresh_child_reads_its_region_and_its_lenders_scratch() {
         laid >= 2,
         "the reading chain laid {laid} nodes in its own scratch"
     );
+}
+
+/// A held `Fresh` child whose scratch branch another chain laid, unlinked, before its reading
+/// chain: the reading chain links it late, and a type in the region resolves through it beside the
+/// one the scratch already held.
+fn reading_after_scratch<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    assert!(step.hold_scratch(), "a tree cell holds its own scratch");
+    let in_scratch = step.scratch_types().list(KType::BOOL);
+    let in_region = step.types().list(step.types().list(KType::NUMBER));
+    let chain = step.reading_types().expect("a tree cell has a lender");
+    let _ = chain.list(in_region);
+    let _ = chain.list(in_scratch);
+    let again = step
+        .reading_types()
+        .expect("a second reading chain finds the link");
+    let _ = again.list(in_region);
+    record(chain.own_len().to_string());
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+#[test]
+fn a_reading_chain_links_a_scratch_branch_laid_before_it() {
+    fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        asking(step, reading_after_scratch, true)
+    }
+    let laid: usize = run(2, start)[0].parse().unwrap();
+    assert!(laid >= 3, "the scratch branch holds {laid} nodes");
 }
 
 /// A `Fresh` child interning through the warm chain alone over a type in its region: the lent

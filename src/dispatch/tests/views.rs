@@ -6,7 +6,6 @@ use std::cell::Cell;
 
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
 use crate::scheduler::{Action, Step, StepError};
-use crate::type_lattice::Branch;
 
 use super::super::Koan;
 use super::output;
@@ -24,7 +23,13 @@ fn branch_length<'graph>(
     let KState::Born(birth @ KBirth::Inspect { .. }) = state else {
         return step.failed(StepError::Refused);
     };
-    BRANCH.with(|branch| branch.set(step.header().get().map_or(0, Branch::len)));
+    BRANCH.with(|branch| {
+        branch.set(
+            step.header()
+                .get()
+                .map_or(0, |header| header.branch().len()),
+        )
+    });
     step.leave(birth)
 }
 

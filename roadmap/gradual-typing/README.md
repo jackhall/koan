@@ -1,13 +1,15 @@
 # Gradual typing
 
-Generic code typed as far as its static types reach, and checked by the call
-for the rest. The load fixes what the declarations decide — a call's type
-parameters solved, a candidate selected, a mismatch refused — and where the
-load knows only `Any`, as it does of an argument nothing ascribed or an `EVAL`
-declared `-> Any`, the run carries the check. What it buys the language: a
-program that states its types is refused early where they decide it, and a
-program that leaves them out still runs, each call checking what the load could
-not.
+What a type can say, and what type a value has. Generic code is typed as far
+as its static types reach and checked by the call for the rest, so the items
+here widen what the declarations can decide — a signature reading its own
+parameters, a literal's element type keeping every field a program wrote, a
+projection by schema — and settle what a value carries where today's rule
+loses something. What it buys the language: a program that states its types
+is refused early where they decide it, and a program that leaves them out
+still runs, each call checking what the load could not. Where the load's pass
+runs, and where what it settles lives, is the
+[gradual build](../gradual-build/README.md) project's.
 
 [The design](../../design/gradual-typing.md) follows a type from its
 declaration to a call. The pieces sit in the [type lattice](../../lattice/src/types/README.md), the

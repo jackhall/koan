@@ -12,7 +12,7 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, Config, Covariant, CreateError, CreateTreeError, CrossedOperand,
+    Active, CellGraph, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
     DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
     Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, Operand,
     PeekError, Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError,
@@ -209,13 +209,13 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
     }
 }
 
-/// Every refusal `create_tree_lent` can give, matched by name for the same reason.
-fn name_create_tree_error(error: CreateTreeError) -> &'static str {
+/// Every refusal `create_tree_lent` and `create_tenant_lent` can give, matched by name for the same reason.
+fn name_create_lent_error(error: CreateLentError) -> &'static str {
     match error {
-        CreateTreeError::Parent(_) => "parent",
-        CreateTreeError::Lender(_) => "lender",
-        CreateTreeError::Unlendable(_) => "unlendable",
-        CreateTreeError::ForeignScratch(_) => "foreign scratch",
+        CreateLentError::Under(_) => "under",
+        CreateLentError::Lender(_) => "lender",
+        CreateLentError::Unlendable(_) => "unlendable",
+        CreateLentError::ForeignScratch(_) => "foreign scratch",
     }
 }
 
@@ -728,7 +728,7 @@ fn a_graph_is_built_with_the_spare_lists_bound_chosen() {
 }
 
 #[test]
-fn a_named_lend_and_the_peek_answer_from_outside_the_crate() {
+fn a_named_lend_a_tenant_lend_and_the_peek_answer_from_outside_the_crate() {
     let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
         CellGraph::new(2, weigh);
     let build = graph.create(None).unwrap();
@@ -768,12 +768,26 @@ fn a_named_lend_and_the_peek_answer_from_outside_the_crate() {
         assert_eq!(read, 41);
     }
 
+    // A tenant lent the lender's region, and the audit finding no cycle in it.
+    let lent_tenant = graph
+        .create_tenant_lent(run, Some(Lend::Named(lender.into())), None)
+        .unwrap();
+    let read = graph
+        .enter(lent_tenant, |context| {
+            let (_, header) = context.lent_region().expect("lent the lender's region");
+            *header.get().expect("the lender laid a header").get()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+    assert_eq!(graph.lend_cycle(), None);
+    graph.release_tenant(lent_tenant).unwrap();
+
     // Each refusal.
     let tenant = graph.create_tenant(run, None).unwrap();
     let gone = graph.create_tree(run, None).unwrap();
     graph.release_tree(gone).unwrap();
     let refusals: [(CellHandle, Lend, &str); 4] = [
-        (gone.into(), Lend::ParentScratch, "parent"),
+        (gone.into(), Lend::ParentScratch, "under"),
         (run.into(), Lend::Named(gone.into()), "lender"),
         (run.into(), Lend::Named(tenant.into()), "unlendable"),
         (build.into(), Lend::Of(scratch.into()), "foreign scratch"),
@@ -782,8 +796,12 @@ fn a_named_lend_and_the_peek_answer_from_outside_the_crate() {
         let Err(error) = graph.create_tree_lent(parent, lend, None) else {
             panic!("the lend must be refused");
         };
-        assert_eq!(name_create_tree_error(error), name);
+        assert_eq!(name_create_lent_error(error), name);
     }
+    let Err(error) = graph.create_tenant_lent(run, Some(Lend::ParentScratch), None) else {
+        panic!("a tenant has no parent scratch to borrow");
+    };
+    assert_eq!(name_create_lent_error(error), "unlendable");
 
     // The reads between steps.
     let peeked = graph.peek(lender, |header, _| *header.into_value().get());

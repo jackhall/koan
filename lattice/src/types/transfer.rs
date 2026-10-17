@@ -1,6 +1,7 @@
 //! How a crossing makes another half's handles resolve in a chain: [`TypeChain::link`] at a spawned
 //! child's birth, [`TypeChain::link_or_merge`] at any other birth, [`TypeChain::merge`] at a pinned
-//! result or view, and [`TypeChain::adopt`] in a copy.
+//! result or view, and [`TypeChain::adopt`] in a copy; and how a scratch branch reaches its own
+//! region's: [`TypeChain::link_late`].
 //!
 //! A pinned value is embedded as it is, so every handle it carries must resolve in the
 //! destination as it did in its home, and nothing may walk the value to learn which ones it
@@ -11,7 +12,9 @@
 //!   birth costs the same whatever the home holds. A branch links once, as it is laid, and `link`
 //!   refuses a laid half, which keeps every branch's depth on its chain fixed: a spawned child
 //!   links its spawner's, and any other birth links its home's where it has laid no branch yet, as
-//!   a new cell has not.
+//!   a new cell has not. A **late link** sets a laid branch's link where it links nothing and no
+//!   branch links it, so no stamp it changes was recorded: a scratch branch, which nothing links,
+//!   linked to its region's by the chain that reads both.
 //! - A **merge** enters every node of the home's branch in the destination's by reference, laying
 //!   nothing, then each branch the home's links reach, up to the first the destination already
 //!   reaches. A value of the home may carry a part whose type the home only reached through its
@@ -52,6 +55,38 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         assert!(half.own().is_none(), "a branch links as it is laid");
         let tier: &'t dyn Tier<'t> = lay_one(half, BranchTier(home));
         half.own_or_lay().branch().set_link(tier, home.position());
+        home.mark_linked();
+    }
+
+    /// Link the own branch to `home` where it links nothing yet: a [`link`](Self::link) where the
+    /// half has laid no branch, and a late link where it has laid one. Nothing where it links
+    /// `home` already.
+    ///
+    /// A link sets the branch's depth and bottom, which only a branch linking it records, so a
+    /// late link panics where another branch links this one; and where `home` reaches this one,
+    /// which would close a cycle; and where the branch links another tier. A handle the branch
+    /// resolved before resolves as it did: a link is read only on a miss.
+    pub fn link_late<'h: 't>(&self, home: &'h Branch<'h>) {
+        let half = self.half();
+        let Some(own) = half.own() else {
+            return self.link(home);
+        };
+        let branch = own.branch();
+        if branch.links(home.position()) {
+            return;
+        }
+        assert!(!branch.links_any(), "a branch links once");
+        assert!(
+            !branch.is_linked(),
+            "a branch another links is linked late, changing the stamps it recorded"
+        );
+        assert!(
+            !home.reaches_branch(branch.address()),
+            "a late link closes a cycle"
+        );
+        let tier: &'t dyn Tier<'t> = lay_one(half, BranchTier(home));
+        branch.set_link(tier, home.position());
+        home.mark_linked();
     }
 
     /// Make `home`'s handles resolve at a pinned birth: a [`link`](Self::link) where the half has

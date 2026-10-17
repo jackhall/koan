@@ -203,8 +203,9 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         self.any
     }
 
-    /// The half the chain lays into.
-    pub(super) fn half(&self) -> H {
+    /// The half the chain lays into. A caller reads it to see where a type the chain interns
+    /// lands: in the root, or in this half's own tier or the region tier it reads.
+    pub fn half(&self) -> H {
         self.half
     }
 
@@ -402,6 +403,17 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     pub fn resolves(&self, kt: impl Into<DeclaredType<Parametric>>) -> bool {
         let digest = kt.into().raw().digest();
         self.find(digest).is_some() || self.linked_reach(digest).is_some()
+    }
+
+    /// Whether `kt`'s node lies in the frozen root, or, on the load's chain, in the root builder:
+    /// a type every chain over the root resolves. Reads no link and caches nothing.
+    pub fn in_root(&self, kt: impl Into<DeclaredType<Parametric>>) -> bool {
+        let digest = kt.into().raw().digest();
+        match (self.root, self.half.own()) {
+            (Some(root), _) => root.find(digest).is_some(),
+            (None, Some(Own::Builder(builder))) => builder.find(digest).is_some(),
+            (None, _) => unreachable!("a chain with no root writes the root builder"),
+        }
     }
 
     /// The node under `digest` in the root, the region tier or the own tier, longest-lived first —

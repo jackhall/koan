@@ -566,9 +566,8 @@ impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delive
         }
     }
 
-    /// Every index the pool currently occupies, in any state but free — what the property test
-    /// walks and what the emptiness assert counts.
-    #[cfg(test)]
+    /// Every index the pool currently occupies, in any state but free — what the lend-cycle audit
+    /// and the property test walk, and what the emptiness assert counts.
     pub(crate) fn occupied(&self) -> impl Iterator<Item = u32> + '_ {
         (0..self.slots.len() as u32).filter(|index| self.state(*index) != TreeState::Free)
     }

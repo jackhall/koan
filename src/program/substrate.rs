@@ -7,10 +7,12 @@ use self_cell::self_cell;
 use crate::elaborate::{builtin_error, type_channel};
 use crate::memory::{Bump, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident};
 use crate::parse::parse_with_path;
-use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
+use crate::scheduler::{
+    DrainStalled, Graph, NativeStep, Placement, Resting, Roots, Scheduler, Work,
+};
 use crate::scope::BodyShape;
 use crate::symbols::SymbolInterner;
-use crate::type_lattice::{Halves, RootBuilder};
+use crate::type_lattice::{Habitat, Halves, RootBuilder};
 use crate::values::{Chain, Half, Types};
 
 use super::body;
@@ -36,12 +38,12 @@ struct Owner {
 }
 
 /// Everything that names `'graph`: the graph by value, since reclaiming a region needs exclusive
-/// access, and its root, the region every root work is born under and the top level's bindings
-/// live in; the program record in program storage, holding the types' frozen root, so what a step
+/// access, and its two roots — the build root the load ran in, and the run root every root work is
+/// born under and the top level's bindings live in; the program record in program storage, holding the types' frozen root, so what a step
 /// reads is a `'graph` borrow; and what the top level left at rest when it last ran.
 pub struct Running<'graph> {
     graph: Graph<'graph, KBundle>,
-    root: SlabHandle,
+    roots: Roots,
     brand: ProgramBrand<'graph>,
     symbols: &'graph SymbolInterner,
     program: &'graph Program<'graph>,
@@ -67,7 +69,8 @@ impl<'graph> Running<'graph> {
         };
         let uncaught = self.program.uncaught();
         uncaught.set(false);
-        self.resting = Scheduler::over(&mut self.graph).run(work, self.root, Placement::Shares)?;
+        self.resting =
+            Scheduler::over(&mut self.graph).run(work, self.roots.run, Placement::Shares)?;
         Ok(if uncaught.get() {
             Outcome::Uncaught
         } else {
@@ -81,8 +84,12 @@ impl<'graph> Running<'graph> {
     /// [`DrainStalled::Unfinished`] before the program has run.
     pub fn inspect(&mut self, step: NativeStep<'graph, KBundle>) -> Result<(), DrainStalled> {
         let resting = self.resting.ok_or(DrainStalled::Unfinished)?;
-        self.resting =
-            Scheduler::over(&mut self.graph).resume(step, resting, self.root, Placement::Shares)?;
+        self.resting = Scheduler::over(&mut self.graph).resume(
+            step,
+            resting,
+            self.roots.run,
+            Placement::Shares,
+        )?;
         Ok(())
     }
 
@@ -91,11 +98,16 @@ impl<'graph> Running<'graph> {
         self.program
     }
 
-    /// The graph's root: a storage-only slab cell taken at load, which no drain enters or releases,
-    /// so every root work is born under it and a result built there outlives the drain that built
-    /// it.
+    /// The graph's run root: a storage-only slab cell taken at load, which no drain enters or
+    /// releases, so every root work is born under it and a result built there outlives the drain
+    /// that built it.
     pub fn root(&self) -> SlabHandle {
-        self.root
+        self.roots.run
+    }
+
+    /// The graph's two slab roots: the build root the load ran in, and the run root.
+    pub fn roots(&self) -> Roots {
+        self.roots
     }
 
     /// The program storage this substrate's AST and program record rest in.
@@ -122,9 +134,9 @@ pub struct CellSubstrate(Joined);
 
 impl CellSubstrate {
     /// Parse `source` into fresh program storage and stand the program up beside it, over a slab of
-    /// `cap` cells, one of which is its root: `language`'s builtin table at `'graph`, the program's
-    /// shape over it and checked by the language, the root, and the [`Program`] record writing to
-    /// `output`. `cap` is at least one.
+    /// `cap` cells, two of which are its build root and its run root: `language`'s builtin table at
+    /// `'graph`, the program's shape over it and checked by the language, and the [`Program`]
+    /// record writing to `output`, all written by the build root's one step. `cap` is at least two.
     ///
     /// The load builds the types' root through one chain over a root builder, and freezes it when
     /// the load ends, so no step can intern into it. A refused shape is rendered into its
@@ -145,44 +157,53 @@ impl CellSubstrate {
             let brand = owner.storage.brand();
             let parsed =
                 parse_with_path(brand, &owner.symbols, source, path).map_err(LoadError::Parse)?;
-            // Everything the root owns is laid in the owner's registry arena, which releases it
-            // whole. The load's chain never leaves the load: its end freezes the root.
-            let builder = RootBuilder::in_region(&owner.registry);
-            let types: &Chain<'_, '_, '_, '_, '_> =
-                &Types::building(Halves::alone(Half::load(builder)));
-            let scratch = Bump::new();
-            let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
-            let refused = |error: crate::scope::ShapeError<'_>| LoadError::Shape {
-                rendered: error.display(&owner.symbols, types).to_string(),
-            };
-            let shape =
-                BodyShape::of_program(brand, &parsed, builtins, types, &owner.symbols, &scratch)
-                    .map_err(refused)?;
-            type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
-            L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
-            let error = builtin_error(types, &owner.symbols, &scratch);
-            let root = builder.freeze();
-            let writer = brand.writer();
-            let program = resident(
-                writer,
-                Program::new(
-                    shape,
+            // The load is the build root's one step: what it writes rests in program storage and
+            // the owner's registry, and it lays the build root's header, whose table the root-level
+            // specializations fill.
+            let (graph, roots, program) = Graph::load(cap, |step| {
+                let _ = Half::of(step.writer(), step.header()).own_or_lay();
+                // Everything the root owns is laid in the owner's registry arena, which releases it
+                // whole. The load's chain never leaves the load: its end freezes the root.
+                let builder = RootBuilder::in_region(&owner.registry);
+                let types: &Chain<'_, '_, '_, '_, '_> =
+                    &Types::building(Halves::alone(Half::load(builder)));
+                let scratch = Bump::new();
+                let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
+                let refused = |error: crate::scope::ShapeError<'_>| LoadError::Shape {
+                    rendered: error.display(&owner.symbols, types).to_string(),
+                };
+                let shape = BodyShape::of_program(
+                    brand,
+                    &parsed,
                     builtins,
-                    root,
-                    error,
+                    types,
                     &owner.symbols,
-                    L::evaluator(),
-                    output,
-                    &writer.fill(1, |_| Cell::new(false))[0],
-                ),
-            );
-            let mut graph = Graph::new(cap, root);
-            let root = graph
-                .root()
-                .expect("a fresh slab of at least one cell admits its root");
+                    &scratch,
+                )
+                .map_err(refused)?;
+                type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
+                L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
+                let error = builtin_error(types, &owner.symbols, &scratch);
+                let root = builder.freeze();
+                let writer = brand.writer();
+                let program = resident(
+                    writer,
+                    Program::new(
+                        shape,
+                        builtins,
+                        root,
+                        error,
+                        &owner.symbols,
+                        L::evaluator(),
+                        output,
+                        &writer.fill(1, |_| Cell::new(false))[0],
+                    ),
+                );
+                Ok((root, program))
+            })?;
             Ok(Running {
                 graph,
-                root,
+                roots,
                 brand,
                 symbols: &owner.symbols,
                 program,

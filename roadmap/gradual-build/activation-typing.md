@@ -19,10 +19,10 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   frontier settled in the specialization its seam and binding name before
   its first value step, and a call judged *always* there runs without
   admitting or ranking.
-- A second frame under the same binding reads that specialization and
-  recomputes nothing.
-- A frontier with a mid-body member settles at that statement, the run
-  cell's borrow deepening there.
+- A second frame under the same binding, whatever its placement, reads that
+  specialization and recomputes nothing.
+- A frontier with a member a statement binds settles at that statement in
+  the run cell's scratch.
 - An evicted specialization costs a recomputation and never a different
   answer.
 - Every type a specialization interns, and every verdict over one, lives in
@@ -47,7 +47,5 @@ and the run binds a path variable per read (`elaborate::bound_path`).
 
 - [Monotone elaboration](monotone-elaboration.md) — the solver that parks and
   resumes.
-- [The build tree](../type-tiers/build-tree.md) — the specialization a frame
-  settles into.
 
 **Unblocks:** none — a leaf.

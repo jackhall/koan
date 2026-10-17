@@ -16,8 +16,8 @@ use crate::knot::{
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
 use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
 use crate::symbols::BinderSymbol;
-use crate::values::Chain;
 use crate::values::digest::Digests;
+use crate::values::{BuildRef, Chain};
 
 use super::{Module, ModuleContent};
 
@@ -38,7 +38,8 @@ pub fn body_activation<'graph, 'cell>(
     let captures = ClosureBindings::read_captures(body, enclosing, scratch, |_| {
         unreachable!("a module captures no fellow member: it is alone in its component")
     });
-    let closure = ClosureBindings::of(writer, &captures);
+    // A module is never called, so its closure seeks no specialization.
+    let closure = ClosureBindings::of(writer, &captures, BuildRef::ROOT);
     Activation::of_module(writer, body, closure, enclosing.builtins())
 }
 
@@ -117,5 +118,5 @@ pub fn tie_member<'graph, 'cell, 'x>(
             .map(|(index, link)| (index, link.digest(&mut memo))),
     );
     let content = ModuleContent::body(body.shape().code_digest(), &captures);
-    Ok(Module::tie(writer, ktype, &members, content))
+    Ok(Module::tie(writer, ktype, &members, content, types))
 }

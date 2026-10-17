@@ -101,6 +101,12 @@ enum Verb {
         /// Which list the host is drawn from: slab cells, tree cells, or tenants — the last of
         /// which resolves to a host of its own.
         kind: u8,
+        /// Which door and lend: `create_tenant`, which copies the host's named cell's lend, or
+        /// `create_tenant_lent` lent nothing, a named cell's region, or a copy of a cell's lend.
+        lend: u8,
+        lender: usize,
+        /// Which list the named cell is drawn from, as for a tree cell's lend.
+        lender_kind: u8,
     },
     TenantPlace {
         tenant: usize,
@@ -201,7 +207,15 @@ fn tree_verb() -> impl Strategy<Value = Verb> {
 /// scratch state stored or taken — which is what moves a host's second count — and a release.
 fn tenant_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
-        2 => (0..8usize, 0..3u8).prop_map(|(host, kind)| Verb::CreateTenant { host, kind }),
+        2 => (0..8usize, 0..3u8, 0..4u8, 0..8usize, 0..3u8).prop_map(
+            |(host, kind, lend, lender, lender_kind)| Verb::CreateTenant {
+                host,
+                kind,
+                lend,
+                lender,
+                lender_kind,
+            }
+        ),
         1 => (0..8usize, 0..8usize)
             .prop_map(|(tenant, consumer)| Verb::TenantPlace { tenant, consumer }),
         1 => (0..8usize, any::<bool>())
@@ -699,19 +713,38 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
 
     // A host's tenant counts are tallies too: recounted from the pool, over every cell that can
     // host — and a dead tree cell with neither a child nor a tenant should have disposed.
-    let census: Vec<(CellHome, bool)> = graph.cells.tenants.census().collect();
-    // An undisposed tree cell borrows its lent half until its disposal.
-    let lends: Vec<Lent> = occupied
-        .iter()
-        .copied()
+    let census: Vec<(CellHome, bool, Option<Lent>)> = graph.cells.tenants.census().collect();
+    // An undisposed tree cell borrows its lent half until its disposal; a live tenant a region
+    // other than its host's own lend; and a host's scratch one count per lender of the released
+    // tenants it held such a lend for.
+    let tree_lends = (occupied.iter().copied())
         .filter(|index| alive(*index))
-        .map(|index| pool.lent(index))
-        .collect();
+        .map(|index| pool.lent(index));
+    let tenant_lends = (census.iter())
+        .filter_map(|(host, _, lent)| lent.filter(|lent| graph.cells.counted(*host, *lent)));
+    for (home, lents) in &graph.cells.held {
+        assert!(
+            !lents.is_empty(),
+            "the scratch of {home:?} holds an empty entry"
+        );
+        for lent in lents {
+            assert!(
+                graph.cells.counted(*home, *lent),
+                "the scratch of {home:?} holds a count it never takes"
+            );
+        }
+    }
+    let held_lends = graph.cells.held.values().flatten().copied();
+    let lends: Vec<Lent> = tree_lends.chain(tenant_lends).chain(held_lends).collect();
+    assert!(
+        graph.cells.unheld.is_empty(),
+        "a held count's lender went unvisited"
+    );
     let recount = |home: CellHome| crate::tenant::Tenancy {
-        tenants: census.iter().filter(|(host, _)| *host == home).count() as u32,
+        tenants: census.iter().filter(|(host, _, _)| *host == home).count() as u32,
         scratch_tenants: census
             .iter()
-            .filter(|(host, named)| *host == home && *named)
+            .filter(|(host, named, _)| *host == home && *named)
             .count() as u32,
         scratch_borrowers: lends
             .iter()
@@ -744,14 +777,15 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
             "pool slot {index} is undisposed with no child under it, no tenant and no borrower"
         );
     }
-    for (host, _) in &census {
+    let hosts = (census.iter().map(|(host, _, _)| host)).chain(graph.cells.held.keys());
+    for host in hosts {
         let undisposed = match *host {
             CellHome::Slab(slot) => graph.cells.slots[slot as usize].state != SlabState::Free,
             CellHome::Tree(index) => alive(index),
         };
         assert!(
             undisposed,
-            "a tenant names the host {host:?}, which has disposed"
+            "a tenant or a held count names the host {host:?}, which has disposed"
         );
     }
 }
@@ -773,6 +807,8 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     let mut next_value: u32 = 0;
     // Nothing has been priced yet, so no sealed cell may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
+    // Whether a lend cycle has formed: nothing undoes one, so the audit must keep finding it.
+    let mut cycled = false;
 
     for step in verbs {
         match *step {
@@ -987,17 +1023,38 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     grown.push(handle);
                 }
             }
-            // A tenant of any live cell. Naming a tenant as the host means that tenant's host,
-            // whatever has been declared about it since.
-            Verb::CreateTenant { host, kind } => {
+            // A tenant of any live cell, lent what the draw names. Naming a tenant as the host
+            // means that tenant's host, whatever has been declared about it since. A refusal
+            // changes nothing, so it is ignored; the sweep's recounts check every lend taken.
+            Verb::CreateTenant {
+                host,
+                kind,
+                lend,
+                lender,
+                lender_kind,
+            } => {
                 let host: Option<CellHandle> = match kind {
                     0 => wrapped(&minted, host).map(CellHandle::Slab),
                     1 => wrapped(&grown, host).map(CellHandle::Tree),
                     _ => wrapped(&lodged, host).map(CellHandle::Tenant),
                 };
-                if let Some(host) = host
-                    && let Ok(handle) = graph.create_tenant(host, None)
-                {
+                let lender: Option<CellHandle> = match lender_kind {
+                    0 => wrapped(&minted, lender).map(CellHandle::Slab),
+                    1 => wrapped(&grown, lender).map(CellHandle::Tree),
+                    _ => wrapped(&lodged, lender).map(CellHandle::Tenant),
+                };
+                let created = match (host, lend, lender) {
+                    (Some(host), 0, _) => graph.create_tenant(host, None).ok(),
+                    (Some(host), 1, _) => graph.create_tenant_lent(host, None, None).ok(),
+                    (Some(host), 2, Some(lender)) => {
+                        (graph.create_tenant_lent(host, Some(Lend::Named(lender)), None)).ok()
+                    }
+                    (Some(host), _, Some(lender)) => {
+                        (graph.create_tenant_lent(host, Some(Lend::Of(lender)), None)).ok()
+                    }
+                    _ => None,
+                };
+                if let Some(handle) = created {
                     lodged.push(handle);
                 }
             }
@@ -1113,6 +1170,12 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
             }
         }
         check_invariants(&graph, &mut memoized, matches!(*step, Verb::Price { .. }));
+        let cycle = graph.lend_cycle();
+        assert!(
+            !cycled || cycle.is_some(),
+            "a lend cycle the audit found went away"
+        );
+        cycled = cycle.is_some();
     }
 
     // Winding the run down: once every cell's death is declared, the cascade returns every slot,
@@ -1130,6 +1193,25 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
         let _ = graph.release(*handle, ReleaseAbsorption::IntoHolder);
     }
     check_invariants(&graph, &mut memoized, false);
+    // A lend cycle is the one shape a full release leaves behind in the pool or the slab, and the
+    // audit names it exactly when one is there.
+    if let Some(cycle) = graph.lend_cycle() {
+        assert!(cycled, "the wind-down's releases closed a lend cycle");
+        for cell in cycle {
+            let undisposed = match cell {
+                CellHandle::Slab(cell) => {
+                    graph.cells.slots[cell.slot() as usize].state == SlabState::Dead
+                }
+                CellHandle::Tree(cell) => graph.cells.trees.state(cell.index()) == TreeState::Dead,
+                CellHandle::Tenant(_) => false,
+            };
+            assert!(
+                undisposed,
+                "the audit named {cell:?}, which is not left dead"
+            );
+        }
+        return graph.cells.merges;
+    }
     assert!(
         graph.cells.trees().occupied().next().is_none(),
         "a wound-down run left a tree cell or a tombstone in the pool"

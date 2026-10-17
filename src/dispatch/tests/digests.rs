@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
 use crate::scheduler::{Action, Step, StepError};
 use crate::type_lattice::TypeDigest;
+use crate::values::HalfHeader;
 
 thread_local! {
     /// What [`interned_digests`] read: every digest the root and the root cell's branch hold.
@@ -26,7 +27,7 @@ fn interned_digests<'graph>(
     };
     let mut digests = Vec::new();
     program.root().each_digest(|digest| digests.push(digest));
-    if let Some(branch) = step.header().get() {
+    if let Some(branch) = step.header().get().map(HalfHeader::branch) {
         branch.each_digest(|digest| digests.push(digest));
     }
     INTERNED.with(|interned| *interned.borrow_mut() = digests);

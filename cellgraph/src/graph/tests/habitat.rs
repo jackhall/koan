@@ -481,10 +481,10 @@ fn a_released_hosts_scratch_slot_no_longer_blocks_its_tenants() {
     graph.enter(tenant, |_| ()).unwrap();
     assert!(scratch_in_use(&graph, tenant) > 0);
 
-    // Its death clears the state — a dead cell is never entered — and the bump stays, for the
-    // tenant to have whole at its next step.
+    // Its death clears the state — a dead cell is never entered — and with nothing else naming
+    // the bump, the release hands it back.
     graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(scratch_in_use(&graph, tenant) > 0);
+    assert_eq!(scratch_in_use(&graph, tenant), 0);
     graph.enter(tenant, |_| ()).unwrap();
     assert_eq!(scratch_in_use(&graph, tenant), 0);
 

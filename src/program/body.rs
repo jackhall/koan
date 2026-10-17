@@ -56,11 +56,12 @@ use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
     Variance, admits_with, display_name, substitute_quantified,
 };
-use crate::values::{CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
+use crate::values::{BuildRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
 
-use super::bundle::{KBirth, KBundle, KState};
+use super::bundle::{KBirth, KBundle, KState, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
+use super::specialize::called_function;
 
 /// The body runner's state between units: which body it is performing, how far it got, and where
 /// it parked.
@@ -80,9 +81,9 @@ pub struct Runner<'graph, 'cell> {
     /// The outermost barrier a frame was called through, which its value crosses outwards.
     barrier: Option<Barrier<'graph, 'cell>>,
     stage: Stage,
-    /// Whether the body runs in the own body of a caching frame holding its scratch: what it
-    /// hands each evaluation and block it asks for ([`KBirth::Evaluate`]).
-    routes: bool,
+    /// What the body runs within: what it hands each evaluation and block it asks for
+    /// ([`KBirth::Evaluate`]), and the build cell a callable born in it is born under.
+    within: Within,
 }
 
 /// Whether the runner performs the top level, a frame — a called body or the code an `EVAL` runs
@@ -145,10 +146,9 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 /// frame, or as a block.
 ///
 /// Each step runs on one chain ([type tiers](../../design/type-tiers.md#where-each-body-interns)):
-/// the reading chain in the own body of a caching frame that holds its scratch — which a
-/// `Fresh` caching frame's first step takes, linking its scratch branch to its region before
-/// anything lays it — the `Shares` chain elsewhere in a caching body, and its region's anywhere
-/// else.
+/// the reading chain in the own body of a routing caching frame — a `Fresh` one, which holds its
+/// scratch at its first step, or a `Shares` one borrowing a specialization; the `Shares` chain
+/// elsewhere in a caching body; and its region's anywhere else.
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
@@ -163,15 +163,13 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     };
     let caches = shape.is_some_and(BodyShape::caches);
     let routes = match &state {
+        // A tree cell holds its scratch whatever it borrows; a tenant routes where it borrows a
+        // specialization, writing its host's scratch.
         KState::Born(KBirth::Call { .. }) => {
-            let routes = caches && step.hold_scratch();
-            if routes {
-                step.link_reading_types();
-            }
-            routes
+            caches && (step.hold_scratch() || step.borrows_specialization())
         }
-        KState::Born(KBirth::Block { routes, .. }) => *routes,
-        KState::Runner(runner) => runner.routes,
+        KState::Born(KBirth::Block { within, .. }) => within.routes,
+        KState::Runner(runner) => runner.within.routes,
         KState::Born(_) | KState::Evaluating { .. } => false,
     };
     #[cfg(test)]
@@ -180,7 +178,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         crate::scheduler::CACHING.set(address);
     }
     if routes {
-        let types = step.reading_types().expect("a `Fresh` frame has a lender");
+        let types = step.reading_types().expect("a routing frame has a lender");
         ran(step, state, scratch, routes, &types)
     } else if caches {
         let types = step.shares_types();
@@ -194,8 +192,13 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
 /// The shape a call of `callee` runs: its function's, behind every barrier. `None` for a callee
 /// that is no function, which the frame refuses.
 fn called_shape<'graph>(callee: KValue<'graph, '_>) -> Option<&'graph BodyShape<'graph>> {
-    let node = callee.as_callable()?.behind_barriers();
-    Some(node.function()?.shape())
+    Some(called_function(callee)?.shape())
+}
+
+/// The build cell `callee`'s function was born under, behind every barrier: where a frame of it
+/// that borrows no specialization runs.
+fn born_under(callee: KValue<'_, '_>) -> BuildRef {
+    called_function(callee).map_or(BuildRef::ROOT, |function| function.closure().build())
 }
 
 /// [`run`] on the chain `types` it picked; `routes` is a call's, taken at its frame's first step.
@@ -234,7 +237,10 @@ fn ran<'graph, 'here, 'scratch>(
         ) {
             Ok((activation, contract, barrier)) => Runner {
                 barrier,
-                routes,
+                within: Within {
+                    routes,
+                    build: step.build_ref(born_under(callee)),
+                },
                 ..Runner::at(program, activation, Level::Frame, Some(contract))
             },
             // The message lies in the region, so the error value needs no adopt.
@@ -258,7 +264,7 @@ fn ran<'graph, 'here, 'scratch>(
             shape,
             enclosing,
             module,
-            routes,
+            within,
         }) => {
             let writer = step.writer();
             let enclosing = resident(writer, enclosing);
@@ -272,7 +278,7 @@ fn ran<'graph, 'here, 'scratch>(
                 }
             }
             Runner {
-                routes,
+                within,
                 ..Runner::at(program, activation, Level::Block, None)
             }
         }
@@ -329,15 +335,15 @@ pub fn call<'graph, 'here>(
 
 /// What an evaluator asks for to run the block `shape`, a synthesized block part's, beside
 /// `enclosing`, the view it sits in: a tenant of the asker, since the view borrows its region.
-/// `routes` is [`KBirth::Block`]'s.
+/// `within` is [`KBirth::Block`]'s.
 pub fn block<'graph, 'here>(
     program: &'graph Program<'graph>,
     shape: &'graph BodyShape<'graph>,
     enclosing: KActivationView<'graph, 'here>,
     use_: Use,
-    routes: bool,
+    within: Within,
 ) -> Request<'graph, 'here, KBundle> {
-    surfaced_block(program, shape, enclosing, None, use_, routes)
+    surfaced_block(program, shape, enclosing, None, use_, within)
 }
 
 /// What an evaluator asks for to run `shape`, a `USING … SCOPE` body, inside `enclosing`, its
@@ -349,7 +355,7 @@ pub fn surfaced_block<'graph, 'here>(
     enclosing: KActivationView<'graph, 'here>,
     module: Option<KValue<'graph, 'here>>,
     use_: Use,
-    routes: bool,
+    within: Within,
 ) -> Request<'graph, 'here, KBundle> {
     debug_assert_eq!(shape.kind(), ShapeKind::Block);
     Request {
@@ -362,7 +368,7 @@ pub fn surfaced_block<'graph, 'here>(
                 shape,
                 enclosing,
                 module,
-                routes,
+                within,
             },
         },
     }
@@ -506,7 +512,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
             contract,
             barrier: None,
             stage: Stage::Next,
-            routes: false,
+            within: Within::TOP,
         }
     }
 
@@ -806,7 +812,9 @@ fn frame<'graph, 'here>(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
-                argument.seen_at(declared, types, scratch).restamped(writer)
+                argument
+                    .seen_at(declared, types, scratch)
+                    .restamped(writer, types)
             }
             // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
             // argument like any other, passed by keyword or by name.
@@ -1007,7 +1015,7 @@ fn shown_admitted<'graph, 'here>(
             .ok_or(Miss::Misnamed)?;
         let retyped = argument
             .seen_at(solved(declared), types, scratch)
-            .restamped(writer);
+            .restamped(writer, types);
         fields.push((parameter, retyped));
     }
     let record = Record::new(writer, &fields, types, scratch);
@@ -1030,7 +1038,7 @@ fn restricted<'graph, 'here>(
     let mut fields = BumpVec::with_capacity_in(params.len(), scratch);
     for (parameter, _) in params.iter() {
         if let Some(seen) = arguments.field(parameter.symbol(), types, scratch) {
-            fields.push((parameter, seen.restamped(writer)));
+            fields.push((parameter, seen.restamped(writer, types)));
         }
     }
     Value::Record(Record::new(writer, &fields, types, scratch))
@@ -1141,7 +1149,8 @@ fn code_frame<'graph, 'here>(
         };
         links.push(Link::Value(value));
     }
-    let closure = ClosureBindings::of(writer, &links);
+    // A quote's lexical chain of build cells is not placed, so its frame seeks from the root.
+    let closure = ClosureBindings::of(writer, &links, BuildRef::ROOT);
     Some(resident(
         writer,
         KActivation::of_code(writer, shape, closure, program.builtins()),
@@ -1247,6 +1256,7 @@ fn tied<'graph, 'here>(
         step.writer(),
         runner.activation,
         component,
+        runner.within.build,
         types,
         &scratch,
         &mut |site, _| {
@@ -1363,10 +1373,9 @@ fn perform<'graph, 'here>(
                 if runner.tails(unit) {
                     // The frame's scratch departs after the successor's first step, while the
                     // statement still reads the frame's bindings: adopt what it reads first.
-                    if runner.routes {
-                        let scratch = Bump::new();
+                    if runner.within.routes {
                         let view = runner.activation.view();
-                        let exit = Exit::new(step.types(), types, &view, &[], &scratch);
+                        let exit = Exit::new(step.types(), types);
                         for slot in shape.last_reads() {
                             if let Some(value) = view.bound(*slot) {
                                 exit.value(&value);
@@ -1378,8 +1387,12 @@ fn perform<'graph, 'here>(
                     }
                     let program = runner.program;
                     // The successor writes the frame's parent, whose scratch is its own tier.
-                    let work =
-                        program.evaluate(node, runner.activation.view(), runner.contract, false);
+                    let work = program.evaluate(
+                        node,
+                        runner.activation.view(),
+                        runner.contract,
+                        runner.within.handed_off(),
+                    );
                     return step.tail(Placement::Shares, work);
                 }
                 // A caching body keeps its value, so it leaves only where the frame adopts it.
@@ -1451,7 +1464,7 @@ fn ask<'graph, 'here>(
 ) -> Asked {
     let work = runner
         .program
-        .evaluate(node, runner.activation.view(), None, runner.routes);
+        .evaluate(node, runner.activation.view(), None, runner.within);
     step.spawn(Request {
         placement: runner.placement(),
         use_,
@@ -1474,6 +1487,7 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
         step.writer(),
         runner.activation,
         component,
+        runner.within.build,
         types,
         &scratch,
         &mut |site, part| {
@@ -1545,7 +1559,7 @@ fn declared<'graph, 'here>(
         // Under `routes` an invariant nominal's types are adopted into the warm tier, so the next
         // hop finds them there.
         let site = (shape.declarations(component.members[0])).map(Site::of_node);
-        if runner.routes
+        if runner.within.routes
             && site.and_then(|site| shape.mint_at(site)) == Some(Mint::Invariant)
             && let Some(warm) = step.warm_types()
         {
@@ -1611,6 +1625,7 @@ fn left<'graph, 'here>(
         step.writer(),
         activation,
         activation.shape().component_of(outer.binder),
+        body.within.build,
         types,
         &scratch,
         &mut |_, _| Some(Supplied::Body(body.activation)),
@@ -1675,15 +1690,7 @@ fn ended<'graph, 'here>(
                 None => value,
             };
             if runner.shape().caches() {
-                let scratch = Bump::new();
-                Exit::new(
-                    step.types(),
-                    types,
-                    &runner.activation.view(),
-                    &[],
-                    &scratch,
-                )
-                .value(&value);
+                Exit::new(step.types(), types).value(&value);
             }
             step.finish(value)
         }

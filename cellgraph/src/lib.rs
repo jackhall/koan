@@ -35,7 +35,7 @@ mod tree;
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
 pub use graph::{
-    CellGraph, Config, CreateError, CreateTreeError, CrossedOperand, DeliverError, EnterError,
+    CellGraph, Config, CreateError, CreateLentError, CrossedOperand, DeliverError, EnterError,
     Operand, PeekError, Prices, Receipt, ReceiptError, RedeemError, RegisterError,
     ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };

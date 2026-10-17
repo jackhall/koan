@@ -223,7 +223,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             });
         }
         Form::Leaf(part @ ExpressionPart::QuotedExpression(_)) => {
-            let member = quote(step.writer(), &view, part, &scratch);
+            let member = quote(step.writer(), &view, part, types, &scratch);
             return {
                 let writer = step.writer();
                 step.finish(held(
@@ -281,7 +281,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                         None => return step.failed(StepError::Refused),
                     },
                     ExpressionPart::QuotedExpression(_) => {
-                        cells.push(Value::Knotted(quote(writer, &view, item, &scratch)));
+                        cells.push(Value::Knotted(quote(writer, &view, item, types, &scratch)));
                     }
                     _ => match Value::lower_part(writer, item, types, &scratch) {
                         Some(value) => cells.push(value),
@@ -298,7 +298,14 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
         Form::Lambda(node) => {
             let site = Site::of_body(node).expect("a lambda has a body");
             let writer = step.writer();
-            let Ok(member) = lambda(writer, &view, site, types, &scratch) else {
+            let Ok(member) = lambda(
+                writer,
+                &view,
+                site,
+                crate::values::BuildRef::ROOT,
+                types,
+                &scratch,
+            ) else {
                 return step.failed(StepError::Refused);
             };
             record(format!("born {}", born(member, program, types)));
@@ -329,7 +336,12 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             };
             let branch = if holds { taken } else { other };
             if contract.is_some() {
-                let work = program.evaluate(Evaluated::Part(&branch.value), view, contract, false);
+                let work = program.evaluate(
+                    Evaluated::Part(&branch.value),
+                    view,
+                    contract,
+                    crate::program::Within::TOP,
+                );
                 return step.tail(Placement::Shares, work);
             }
             let asked = ask(&mut step, birth, &branch.value, Use::Forwards);
@@ -490,7 +502,12 @@ fn ask<'graph, 'here>(
     step.spawn(Request {
         placement: Placement::Fresh,
         use_,
-        work: program.evaluate(Evaluated::Part(part), view, None, false),
+        work: program.evaluate(
+            Evaluated::Part(part),
+            view,
+            None,
+            crate::program::Within::TOP,
+        ),
     })
 }
 

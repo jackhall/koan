@@ -78,9 +78,9 @@ is no other constructor, no reference count, and no per-value reach
 description: a value built in a step is a plain reference whose reach is the
 executing cell, and a value crossing a step rides the substrate's carrier,
 [`ValueCarrier`](../values.rs), `memory`'s `Ready` bound to
-[`ValueFamily`](../values.rs) over a knot-member family. Every resident struct,
-and every knot member, is `Copy`, so it is
-`Drop`-free by construction and a region releases it whole. Every door lays its
+[`ValueFamily`](../values.rs) over a knot-member family. Every resident struct
+is `Drop`-free, which `Writer::fill` asserts, and every knot member is `Copy`,
+so a region releases each whole. Every door lays its
 struct down through `memory`'s `resident` and its runs through `collect`, the
 two shapes derived from `Writer::fill`; `text` is the one helper here, a string
 value over `Writer::text`.
@@ -307,6 +307,16 @@ weight, and a header weighs its own struct beside its member's weight. So a valu
 them all, while its copy lays down and weighs only what the type shows: the
 [verdict](#crossing) may over-price such a copy, and never under-prices one.
 
+The weight's two top bits are a second memo, [`MemoBits`](weight.rs), which
+the byte count saturates below and which its equality and order never read:
+**root-closed**, every type the value reaches is the root's, and **settled**,
+every type it reaches resolves in the root or its home region's branch. Each
+header holds its weight in a `Cell`, so an exit can set the settled bit
+through the shared borrow a value is read by; a knot keeps its bits on its
+root node. The doors compute both where they lay a value
+([settled.rs](settled.rs)), and an adoption does not enter a part with either
+bit set ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
+
 ## Crossing
 
 Moving a value between regions is one verb over the substrate's two placement
@@ -332,7 +342,16 @@ over the graph's frozen type root and the build's writer and header.
 **A crossing carries types with the value.** A type the run builds lives in the
 branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
-The branch is the habitat half's header, [`TypeHeader`](habitat.rs), and a
+The branch is kept in the habitat half's header, [`TypeHeader`](habitat.rs),
+whose form is a `HalfHeader`: the branch, laid with the header; for a build
+cell's region, the table of its specializations, a fixed run of entries laid
+with the cell, each a key, a handle and the stamp of its child's last birth,
+rekeyed in place when a miss reuses it; and for a specialization's region,
+its own handle and its parent's, which the scheduler reads to name the build
+cell a frame runs under and to stamp a hop's entry
+([specialization.rs](specialization.rs), [the build module](../build/README.md#references-between-the-trees)).
+A `BuildRef`, the opaque token naming a build cell above the scheduler, lives
+there too, opened only by `values` and the scheduler. A
 [`Chain`](habitat.rs) carries a pairing brand naming the writer it serves
 beside the brand its tiers sit at, so a value door handed one half's writer and
 a chain paired to another does not compile. [`Types`](habitat.rs) is the chain
@@ -359,9 +378,13 @@ their memos in a scratch tier, so before a value leaves the body
 [`adopt_value`](crossing.rs) walks it as the crossing check does — each part's
 memo, each type value's payload, each type a knot carries and every value it
 holds — and adopts every type into the region, reading the whole chain the
-body ran on. A part that is the same word as a value the frame received — a
-parameter, a closure binding, the callable, or an argument the load recorded
-as passing one on — adopts its own memo and is not entered ([type tiers](../../design/type-tiers.md#the-scratch-branch-as-a-cache)).
+body ran on. A part whose [memo bits](#weight) meet the contract adopts its own
+memo and is not entered, and the exit marks every value it did enter settled
+after, so a value handed on through a loop is walked once. An invariant site
+adopts its operand and the view built over it into the lent branch through the
+same door, which there marks nothing
+([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
+A test build audits each part the walk skipped, walking it whole.
 
 **A debug build checks every crossing.** After each crossing door, a debug
 build asserts that every type the crossed value carries — each part's memo,
@@ -381,7 +404,9 @@ asks for with its finished copy, in the order `held` listed them, so the knot is
 tied once, after everything it holds has a copy. A data node lists and rebuilds
 through `Circular::held` and `Circular::copied`: each value link through that
 copy, each edge verbatim — an edge names a node by index, so it means the same
-node in the copy — and its memo and weight carried over. A re-tied knot keeps
+node in the copy — and its memo and its weight's bytes carried over. A composite copy is
+laid through the doors that compute its memo bits over the destination's
+chain, and a re-tied knot's bits are stamped there. A re-tied knot keeps
 every cell its nodes hold, a field a tagged node's representation hides
 included, and the door still hides it there.
 
@@ -508,8 +533,16 @@ Inside a knot each node is digested at its own memo, so a cell a tagged node's
 representation hides still counts there, as a copy of the knot keeps it. That
 over-distinction is sound: keying two equal things apart costs only a key.
 
-**A digest is computed on demand**, never stored on a value: only a view asks
-for one, so a value no view reaches never pays for it. A demand walks what the
+**A digest is computed on demand**, and kept where the load says the demand
+recurs: a view asks for its source's, a call of a keyed body for the argument
+at each keyed parameter ([keys](../build/README.md#keys-which-bindings-make-a-specialization)),
+and nothing else, so a value no view or key reaches never pays for one. A
+value carries no digest; the slot the load marks as digested — a keyed
+parameter, filled at the frame's birth from the digests its key was computed
+from — keeps the memo beside the value, and a module keeps its content on
+itself from the first view or key that reaches it
+([a module is its content](../../design/modules.md#a-module-is-its-content)).
+A demand walks what the
 value reaches through one `Digests` memo over the demand's scratch, keyed by
 the resident each part sits in and the type it is seen at — one node seen at
 two types shows two surfaces — and by its root for a knot, so a part shared
@@ -517,9 +550,7 @@ many times over, and a knot met through any of its members, is digested once
 per demand. The walk runs over an explicit stack, as the copy does: a composite
 is a frame over the parts its surface shows and a knot member a frame over the
 values its knot holds, so neither a value's depth nor a chain of knots grows the
-call stack. A module is the one value whose content is digested where it is
-born ([birth](../knot/module/README.md#birth)), since it keeps no captures to
-digest later.
+call stack.
 
 A literal inside a body's [code digest](../scope/README.md#resolution) is
 hashed as syntax, not as the value it lowers to.
@@ -686,14 +717,18 @@ habitat check refusing a value no crossing carried ([tests/habitat.rs](tests/hab
 ([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
 hundred thousand deep rendered, compared, crossed and digested on the default
 test thread, and a chain of headers as deep digested and crossed
-([tests/depth.rs](tests/depth.rs)). Two tests join the koan
+([tests/depth.rs](tests/depth.rs)), and the memo bits — masked out of a
+weight's bytes, set by the doors, a restamp, a copy and an exit, and cleared by
+a porous part or chain ([tests/settled.rs](tests/settled.rs)). Three tests join the koan
 [Miri slate](../../observe/miri_slate.md), the paths only `values` drives:
 `a_copied_list_outlives_its_home` — a deep copy laying down strings, a list and
 a dict whose string keys are written inside its key run's `fill`, read after
-the region it was copied from is released — and
+the region it was copied from is released —
 `a_copied_type_value_names_a_type_its_destination_resolves`, a type node
-re-laid in the destination's branch and read after its home is released. The
-pinned and kept paths they would otherwise pair with are `cellgraph`'s own
+re-laid in the destination's branch and read after its home is released, and
+`a_settled_bit_written_through_a_pinned_header_reads_in_a_later_step`, a
+header pinned from another cell's region marked settled through its `Cell` and
+read in a later step. The plain pinned and kept paths are `cellgraph`'s own
 slate.
 
 The digest recipe is [tests/digest.rs](tests/digest.rs): equal content alike
@@ -715,3 +750,9 @@ knots as deep as the chain of newtypes digests beside it.
   — the lattice walks over a value's carried type, as deep as the value.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — whether
   `Module` and `Code` re-stamp a value.
+- [The cost of an exit's adoption](../../roadmap/gradual-build/exit-adoption-cost.md)
+  — an exit that hands over nothing for a settled part, and lays nothing
+  before reading the top value's bits.
+- [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)
+  — the digest memo beside a keyed parameter, and a module's content computed
+  where a view first asks.

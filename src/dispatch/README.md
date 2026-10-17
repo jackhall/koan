@@ -836,9 +836,7 @@ capture named bare, or a member of one read through the builtin `ATTR`; a record
 literal written in place whose every field holds nothing minted; or a module
 whose content tree ([paths](#paths)) reaches no view, no closure, no module body
 holding a minting site and no leaf but a value the body received
-([`holds_nothing_minted`](statics.rs)). The caching record lists the
-site of each argument passing on a received value, for the run's exits to adopt
-by its memo alone. A sealed
+([`holds_nothing_minted`](statics.rs)). A sealed
 callable or quote's code
 that mints at run **caches**: its types live in a scratch tier
 ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
@@ -849,7 +847,13 @@ Each shape the pass types gets a write-once caching record
 ([`caching`](statics/caching.rs)) that classes every minting site **closed**,
 **invariant** or **varying** by the leaves of its content tree — a nominal
 declared per call by the type binders its declaration reads — and holds every
-composite site warm whose parts read invariant views alone. A leaf is
+composite site warm whose parts read invariant views alone. A caching frame
+body's own record also lists the parameters its invariant sites read, its
+blocks' and module bodies' included, which key its
+[specialization](../build/README.md#keys-which-bindings-make-a-specialization)
+beside the names the solver's frontiers wait on at its entry:
+none where they read captures alone, and no list at all where it has no
+invariant site, since such a frame reads no warm tier. A leaf is
 invariant where it is a capture, or a parameter every tail edge into its body
 passes on bare from an invariant parameter of the caller: a greatest fixpoint
 over the tail edges of every callable's and quote's code's last statement,
@@ -1148,11 +1152,18 @@ arguments by slot, and the tutorial's classes (an ignored measurement);
 [caching](tests/caching.rs) — caching bodies at run: `Shares`, `Fresh`, helper
 and mixed-placement loops holding their tiers flat across hops, warm verdicts,
 a parking loop's scratch bytes flat, the scratch and the lent branch reset
-after a delivery, and each exit — a retyped value, a closure, a quote, a knot
+after a delivery, the parameters each frame keys on and each shape's segment,
+a loop seeking its specialization once and a second caller finding it warm, a
+callable born in a frame or its block keying beneath the frame's
+specialization and a `Shares` callee's under its own chain, an evicted
+specialization rebuilt with the same answer, the allocations a birth keyed on
+a list costs, and each exit — a retyped value, a closure, a quote, a knot
 member, a held frame's hand-off, a received list adopted by its memo alone,
 a loop passing on a member of a received chain adopting a hop at a time,
-and a loop handing a callee a module built over its link each hop, caching and
-flat;
+a member of a received value reached through a call's result adopted by its
+memo alone whatever its length, and a loop handing a callee a module built
+over its link each hop, caching and flat, a `Fresh` callee viewing it at an
+invariant site included;
 and [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md). Every runnable
@@ -1167,9 +1178,9 @@ tutorial snippet is checked against its shown output by
   values, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
   and `Result`.
-- [Invariance around a tail cycle](../../roadmap/type-tiers/cycle-invariance.md)
+- [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
+- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
   — the static pass's driver moved to [the build module](../build/README.md)
   as a worklist, selection reading verdicts through a run cell's borrow.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the

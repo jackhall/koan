@@ -84,6 +84,19 @@ pub struct Slot(pub(crate) u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct CaptureSlot(pub(crate) u32);
 
+/// A body's index among the shapes one load builds, assigned in the order the shapes are sealed:
+/// distinct per shape, the same in every load of one source text, and unrelated to where the shape
+/// lies in memory. A specialization's key names its callee's body by it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Segment(pub(crate) u32);
+
+impl Segment {
+    /// The index itself.
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// An index into the builtin table: values first, types after, overloads last.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct BuiltinIndex(pub(crate) u32);
@@ -483,6 +496,8 @@ struct Binder<'graph> {
 #[derive(Clone, Copy)]
 pub struct BodyShape<'graph> {
     kind: ShapeKind,
+    /// This body's index among the shapes its load built.
+    segment: Segment,
     /// Each declared name at its slot, beside the position it writes at.
     names: Channels<'graph, Position>,
     /// This body's own statements, rewritten — the run every reader takes them from, and the one
@@ -624,6 +639,11 @@ impl<'graph> BodyShape<'graph> {
 
     pub fn kind(&self) -> ShapeKind {
         self.kind
+    }
+
+    /// This body's index among the shapes its load built.
+    pub fn segment(&self) -> Segment {
+        self.segment
     }
 
     /// How many slots an activation of this shape holds.
@@ -1090,12 +1110,6 @@ impl<'graph> BodyShape<'graph> {
     /// Whether the composite site at `site` builds a value whose own type is warm.
     pub fn warm_at(&self, site: Site) -> bool {
         (self.caching.get()).is_some_and(|caching| caching.warm.get(site).is_some())
-    }
-
-    /// Whether the argument part at `site` passes on a value the frame body received, or a member
-    /// read of one: an exit adopts its own memo alone.
-    pub fn received_at(&self, site: Site) -> bool {
-        (self.caching.get()).is_some_and(|caching| caching.received.get(site).is_some())
     }
 
     /// Where the body's types intern at run, once the static pass has run.

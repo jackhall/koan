@@ -1,8 +1,9 @@
 //! Where a value's types live: the type lattice's tiers, reached from a habitat half.
 //!
 //! Each habitat half — a cell's region, or its scratch habitat — keeps one [`Branch`] of the type
-//! lattice as its header ([`TypeHeader`]), laid by the first door that interns into the half and
-//! released with it. A [`Types`] chain is built per step over the frozen
+//! lattice in its header ([`TypeHeader`], whose form is a [`HalfHeader`]), laid by the first door
+//! that interns into the half and released with it. A build cell's region header also keeps its
+//! specialization table and its own name ([specialization.rs](specialization.rs)). A [`Types`] chain is built per step over the frozen
 //! [`Root`](crate::type_lattice::Root) the load built and a [`Half`]: the writer that lays a value
 //! beside the header door of the same half, so a value door that takes both at one brand interns
 //! its type into the branch of the habitat it lays the value in. During the load the chain writes
@@ -12,15 +13,69 @@
 //! writers with types. See [README.md § Crossing](README.md#crossing) for how a crossing makes a
 //! value's types resolve in its destination.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
-use crate::memory::{Header, LaysRuns, Writer, reattachable};
+use crate::memory::{Header, LaysRuns, TreeHandle, Writer, reattachable};
 use crate::type_lattice::{Branch, Habitat, Halves, Own, RootBuilder, TypeChain};
 
-/// The header family a koan graph keeps per habitat half: the half's branch of the type lattice.
+use super::specialization::{SpecKey, SpecTable, enter_in};
+
+/// The header family a koan graph keeps per habitat half: a [`HalfHeader`].
 pub struct TypeHeader;
 
-reattachable!(TypeHeader => &'cell Branch<'cell>);
+reattachable!(TypeHeader => &'cell HalfHeader<'cell>);
+
+/// What a habitat half keeps in its header: its branch of the type lattice, laid with the header;
+/// for a build cell's region, the table of its specializations, laid on the first insert; and for
+/// a specialization's region, its own handle, set when it enlists.
+pub struct HalfHeader<'cell> {
+    branch: &'cell Branch<'cell>,
+    table: Cell<Option<&'cell SpecTable<'cell>>>,
+    me: Cell<Option<TreeHandle>>,
+}
+
+impl<'cell> HalfHeader<'cell> {
+    /// The half's branch of the type lattice.
+    pub fn branch(&self) -> &'cell Branch<'cell> {
+        self.branch
+    }
+
+    /// The half's specialization table, once anything has been inserted.
+    pub fn table(&self) -> Option<&'cell SpecTable<'cell>> {
+        self.table.get()
+    }
+
+    /// The handle `key` names in the table, which may be stale.
+    pub fn find(&self, key: SpecKey) -> Option<TreeHandle> {
+        Some(self.table()?.get(key)?.handle())
+    }
+
+    /// Record `handle` under `key`, laying the table through `lay` on the first insert and
+    /// renewing the key's entry where it has one.
+    pub fn insert(&self, lay: impl LaysRuns<'cell>, key: SpecKey, handle: TreeHandle) {
+        let table = match self.table.get() {
+            Some(table) => table,
+            None => {
+                let mut table = Some(SpecTable::new(lay));
+                let table = &lay.lay(1, |_| table.take().expect("a run of one fills once"))[0];
+                self.table.set(Some(table));
+                table
+            }
+        };
+        enter_in(table, lay, key, handle);
+    }
+
+    /// The specialization whose region this header is, once it has enlisted.
+    pub fn me(&self) -> Option<TreeHandle> {
+        self.me.get()
+    }
+
+    /// Record that this header's region is the specialization `handle`.
+    pub fn set_me(&self, handle: TreeHandle) {
+        self.me.set(Some(handle));
+    }
+}
 
 /// The tier a chain interns into, beside the runs it lays content through: a habitat half's
 /// writer and header door at one brand, or the root builder during the load.
@@ -36,11 +91,14 @@ pub enum Half<'graph, 'cell, 'pair, 'door>
 where
     'graph: 'cell,
 {
-    /// A cell region or a scratch habitat: its writer beside its header door.
+    /// A cell region or a scratch habitat: its writer beside its header door. `own_brand` is set
+    /// where the half is paired to its own brand ([`of`](Half::of)), so a door beside it lays its
+    /// value in the half it interns into.
     Habitat {
         writer: Writer<'cell, 'door>,
         header: Header<'graph, 'cell, 'door, TypeHeader>,
         pair: Pairing<'pair>,
+        own_brand: bool,
     },
     /// The load: the root builder the load's chain writes, at `'cell = 'graph`.
     Load(&'cell RootBuilder<'cell>, Pairing<'pair>),
@@ -60,6 +118,7 @@ impl<'graph, 'cell, 'door> Half<'graph, 'cell, 'cell, 'door> {
             writer,
             header,
             pair: PhantomData,
+            own_brand: true,
         }
     }
 
@@ -80,6 +139,16 @@ impl<'graph, 'cell, 'pair, 'door> Half<'graph, 'cell, 'pair, 'door> {
             writer,
             header,
             pair: PhantomData,
+            own_brand: false,
+        }
+    }
+
+    /// Whether a value door beside this half lays its value where the half interns: a half paired
+    /// to its own brand, or the load's, whose types all land in the root.
+    pub(crate) fn interns_where_it_lays(&self) -> bool {
+        match self {
+            Half::Habitat { own_brand, .. } => *own_brand,
+            Half::Load(..) => true,
         }
     }
 }
@@ -103,17 +172,27 @@ impl<'cell> LaysRuns<'cell> for Half<'_, 'cell, '_, '_> {
 impl<'cell> Habitat<'cell> for Half<'_, 'cell, '_, '_> {
     fn own(self) -> Option<Own<'cell>> {
         match self {
-            Half::Habitat { header, .. } => header.get().map(Own::Branch),
+            Half::Habitat { header, .. } => header.get().map(|header| Own::Branch(header.branch())),
             Half::Load(builder, _) => Some(Own::Builder(builder)),
         }
     }
 
     fn own_or_lay(self) -> Own<'cell> {
         match self {
-            Half::Habitat { writer, header, .. } => Own::Branch(header.get_or_lay(|| {
-                let mut branch = Some(Branch::new(self));
-                &writer.fill(1, |_| branch.take().expect("a run of one fills once"))[0]
-            })),
+            Half::Habitat { writer, header, .. } => Own::Branch(
+                header
+                    .get_or_lay(|| {
+                        let mut branch = Some(Branch::new(self));
+                        let branch =
+                            &writer.fill(1, |_| branch.take().expect("a run of one fills once"))[0];
+                        &writer.fill(1, |_| HalfHeader {
+                            branch,
+                            table: Cell::new(None),
+                            me: Cell::new(None),
+                        })[0]
+                    })
+                    .branch(),
+            ),
             Half::Load(builder, _) => Own::Builder(builder),
         }
     }

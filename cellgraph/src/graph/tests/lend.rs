@@ -26,7 +26,7 @@ use crate::tree::TreeState;
 /// Lay a table over `number` in the step's own scratch header. `number` lives in the lent bump,
 /// which the cell's scratch may name since `'lent: 'scratch`; the coercion to `'scratch` comes
 /// before the `Cell`, which is invariant.
-fn lay_in_scratch<'scratch>(
+pub(super) fn lay_in_scratch<'scratch>(
     context: &Context<'_, '_, 'scratch, '_>,
     number: &'scratch u32,
 ) -> Option<u32> {
@@ -43,7 +43,7 @@ fn lent_of(graph: &Graph, cell: TreeHandle) -> Lent {
 }
 
 /// The counts a slab or tree cell carries, live or dead.
-fn counts(graph: &Graph, cell: impl Into<CellHandle>) -> Tenancy {
+pub(super) fn counts(graph: &Graph, cell: impl Into<CellHandle>) -> Tenancy {
     graph.cells.tenancy(match cell.into() {
         CellHandle::Slab(cell) => CellHome::Slab(cell.slot()),
         CellHandle::Tree(cell) => CellHome::Tree(cell.index()),
@@ -53,7 +53,7 @@ fn counts(graph: &Graph, cell: impl Into<CellHandle>) -> Tenancy {
 
 /// Every occupied tree slot with its state, and every count on every undisposed write home: what
 /// a refusal must leave as it found it.
-fn census(graph: &Graph) -> (Vec<(u32, TreeState)>, Vec<Tenancy>) {
+pub(super) fn census(graph: &Graph) -> (Vec<(u32, TreeState)>, Vec<Tenancy>) {
     let trees: Vec<(u32, TreeState)> = (graph.cells.trees.occupied())
         .map(|index| (index, graph.cells.trees.state(index)))
         .collect();
@@ -66,19 +66,19 @@ fn census(graph: &Graph) -> (Vec<(u32, TreeState)>, Vec<Tenancy>) {
 }
 
 /// Lay a table over `value` in the step's lent region's header, or read back the one there.
-fn lay_lent(context: &Context<'_, '_, '_, '_>, value: u32) -> Option<u32> {
+pub(super) fn lay_lent(context: &Context<'_, '_, '_, '_>, value: u32) -> Option<u32> {
     let (writer, header) = context.lent_region().expect("the cell is lent a region");
     value_of(header.get_or_lay(|| table(writer, value)))
 }
 
 /// What the step's lent region's header points at.
-fn lent_value(context: &Context<'_, '_, '_, '_>) -> Option<u32> {
+pub(super) fn lent_value(context: &Context<'_, '_, '_, '_>) -> Option<u32> {
     let (_, header) = context.lent_region().expect("the cell is lent a region");
     header.get().and_then(value_of)
 }
 
 /// Whether the tree cell `cell` names has left the pool: recycled, or a tombstone.
-fn disposed(graph: &Graph, cell: TreeHandle) -> bool {
+pub(super) fn disposed(graph: &Graph, cell: TreeHandle) -> bool {
     !matches!(
         graph.cells.trees.state(cell.index()),
         TreeState::Live | TreeState::Dead
@@ -417,7 +417,7 @@ fn a_copied_scratch_lend_is_taken_only_under_its_lender() {
     for under in [CellHandle::from(other), copied.into()] {
         assert_eq!(
             graph.create_tree_lent(under, Lend::Of(copied.into()), None),
-            Err(CreateTreeError::ForeignScratch(copied.into()))
+            Err(CreateLentError::ForeignScratch(copied.into()))
         );
         assert_eq!(census(&graph), before);
     }
@@ -522,61 +522,61 @@ fn a_lend_refuses_a_stale_dead_or_unlendable_name() {
     let live = graph.create_tree(root, None).unwrap();
     let tree_tenant = graph.create_tenant(live, None).unwrap();
 
-    let refusals: [(CellHandle, Lend, CreateTreeError); 11] = [
+    let refusals: [(CellHandle, Lend, CreateLentError); 11] = [
         (
             dead_slab.into(),
             Lend::ParentScratch,
-            CreateTreeError::Parent(Stale(dead_slab.into())),
+            CreateLentError::Under(Stale(dead_slab.into())),
         ),
         (
             root.into(),
             Lend::Named(dead_slab.into()),
-            CreateTreeError::Lender(Stale(dead_slab.into())),
+            CreateLentError::Lender(Stale(dead_slab.into())),
         ),
         (
             stale.into(),
             Lend::ParentScratch,
-            CreateTreeError::Parent(Stale(stale.into())),
+            CreateLentError::Under(Stale(stale.into())),
         ),
         (
             dead.into(),
             Lend::ParentScratch,
-            CreateTreeError::Parent(Stale(dead.into())),
+            CreateLentError::Under(Stale(dead.into())),
         ),
         (
             root.into(),
             Lend::Named(dead.into()),
-            CreateTreeError::Lender(Stale(dead.into())),
+            CreateLentError::Lender(Stale(dead.into())),
         ),
         (
             root.into(),
             Lend::Of(dead.into()),
-            CreateTreeError::Lender(Stale(dead.into())),
+            CreateLentError::Lender(Stale(dead.into())),
         ),
         (
             root.into(),
             Lend::Named(stale.into()),
-            CreateTreeError::Lender(Stale(stale.into())),
+            CreateLentError::Lender(Stale(stale.into())),
         ),
         (
             root.into(),
             Lend::Of(stale.into()),
-            CreateTreeError::Lender(Stale(stale.into())),
+            CreateLentError::Lender(Stale(stale.into())),
         ),
         (
             root.into(),
             Lend::Named(tree_tenant.into()),
-            CreateTreeError::Unlendable(tree_tenant.into()),
+            CreateLentError::Unlendable(tree_tenant.into()),
         ),
         (
             live.into(),
             Lend::Of(root.into()),
-            CreateTreeError::Unlendable(root.into()),
+            CreateLentError::Unlendable(root.into()),
         ),
         (
             live.into(),
             Lend::Of(slab_tenant.into()),
-            CreateTreeError::Unlendable(slab_tenant.into()),
+            CreateLentError::Unlendable(slab_tenant.into()),
         ),
     ];
     let before = census(&graph);

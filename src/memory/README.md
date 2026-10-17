@@ -46,8 +46,9 @@ koan names every storage shape as `memory`'s.
   — is staged on the stack or in caller-passed scratch, ordered there, and laid
   down once at its settled length.
 - **Cell storage** — everything else, laid down through cellgraph's `Writer`
-  at the executing cell's own brand, `'here`. There is no run root and no
-  per-call frame: what a frame shell would carry, a cell already is.
+  at the executing cell's own brand, `'here`. A run's top level lives in a
+  slab cell, the run root, and there is no per-call frame: what a frame shell
+  would carry, a cell already is.
 
 ## Shapes, not instantiations
 
@@ -108,8 +109,8 @@ continuation captures either by value, and the binding vocabulary is this
 file's: the run beneath it knows nothing of names or binders.
 
 **A value at rest in the region.** `Writer` has two write verbs, `fill` and
-`text`, and every simpler shape is derived here: `resident` lays one `Copy`
-value down (`fill` at length one) and `collect` an exact-size run (`fill`
+`text`, and every simpler shape is derived here: `resident` lays one value
+with no drop glue down (`fill` at length one) and `collect` an exact-size run (`fill`
 driven by the iterator, with no growth path). Both live beside the re-export in
 [substrate.rs](substrate.rs) and are how `values` and `scope` lay down their
 region-resident structs. `fill` hands back a shared `&'cell` borrow, never
@@ -214,9 +215,3 @@ koan file outside `memory` names `cellgraph`, and no koan file outside
 `symbols` and the type lattice, and `memory` the bump tier. It is a leaf under
 the rest of the tree, and anything not on the list above is a new edge rather
 than a detail.
-
-## Open work
-
-- [The build tree](../../roadmap/type-tiers/build-tree.md) — program storage
-  holding the parse and the builtin table only, shapes and type facts moved
-  to the build root's region, per [the build module](../build/README.md).

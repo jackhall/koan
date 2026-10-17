@@ -75,6 +75,11 @@ silence the stale-anchor check; delete a redundant test instead.
   of one host, where the body runner's tail test hops `Fresh` frames over `Fresh` children. No
   `unsafe` of its own; the backing `unsafe` is `cellgraph`'s tenant creation and release, its
   keep and redeem doors and its reattach seam.
+- `src/values/habitat.rs` — a habitat half's header is laid once through its header door, and
+  holds `Cell`s written after it is laid: a build cell's specialization table, laid on the first
+  insert and renewed in place, and a specialization's own handle. A specialization writes its
+  parent's table through its lent region's writer, and the drain reads it through `peek` between
+  steps. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s header reattach and `peek`.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -101,6 +106,9 @@ buffers live in a scratch region the caller hands it.
 - `the_table_is_laid_once_and_never_grows`
   the verdict table laid in the registry's bump on its first record, and a hundred keys through
   one two-slot bucket, every slot written back in place.
+- `a_late_link_reads_through_to_its_home`
+  a branch laid and holding a node, then linked to a home in another region: both nodes resolved
+  by handle, one of them through a link set after its branch's table was laid.
 
 **Tied component** ([lattice/src/types/component.rs](../lattice/src/types/component.rs)) — a
 sealed component laid in the registry's region over its relative member table, repointed once at
@@ -133,7 +141,8 @@ is `cellgraph`'s reattach, reached from koan's safe façade.
 
 **Values in a cell's region** ([src/values/crossing.rs](../src/values/crossing.rs)) — a composite
 value copied across a crossing is rebuilt through the destination's writer and read after the
-region it came from is released.
+region it came from is released, and a pinned one's header is written through its `Cell` and read
+in a later step.
 
 - `a_copied_list_outlives_its_home`
   a list of a string list and a string-keyed dict crosses under a copy verdict, is kept, its home
@@ -142,6 +151,11 @@ region it came from is released.
   a type value whose record type its home's branch minted crosses under a copy verdict, its home
   is released, and the destination reads the record's node: the copy re-laid it in the
   destination's branch rather than entering the home's by reference.
+- `a_settled_bit_written_through_a_pinned_header_reads_in_a_later_step`
+  pins interior mutation through a shared borrow of a header laid in another cell's region: a
+  record laid in a home cell's region is pinned into a holder and its home sealed; the holder's
+  step marks it settled through its `Cell<Weight>`, and its next step reads the bit and every
+  byte of the record before both cells are released.
 
 **Knots in a cell's region** ([src/knot/copy.rs](../src/knot/copy.rs)) — a knot
 member copied across a crossing, a function, a quote or a data node, re-ties its whole knot through the
@@ -277,14 +291,35 @@ in a tenant's storage and crossed into the callee's birth.
   a barrier reached by its key, over a value member the block reads, its result crossing the
   block's frame and the barrier both, every captured byte read back.
 
+**Build tree** ([src/values/habitat.rs](../src/values/habitat.rs)) — a header's interior cells
+written after the header is laid: through the half's own door, through a borrower's lent region,
+and read back through `peek` between steps.
+
+- `a_header_table_renews_an_entry_in_place`
+  a slab cell's header laid, its table laid on the first insert, an entry renewed in place and the
+  cell's own handle set, every cell read back through the same header.
+- `a_specialization_nests_under_its_frames_and_evicts_leaf_first`
+  specializations enlisting into the build root's table and into one another's through their lent
+  regions, frames born borrowing them, the tables peeked between steps, the leaves evicted and one
+  rebuilt into its renewed entry, and the graph emptied.
+- `an_evicted_specialization_stays_readable_to_the_shares_frame_borrowing_it`
+  a tenant lent a specialization's region parks, the specialization is evicted under it, and the
+  tenant wakes and reads what it laid there; the region goes only once the host's scratch resets.
+- `a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm`
+  a keyed `Shares` body interning into its lent branch over its host's scratch at two parks, the
+  second reading the types and verdicts the first laid.
+- `a_keyed_shares_call_links_a_host_scratch_laid_before_it`
+  a host's scratch branch laid unlinked, then linked late to the host's region by a keyed tenant's
+  reading chain, and read through that link.
+
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-16: 990s — 41 tests, 0 leaks, 0 UB
+- 2026-10-16: 300s — 37 tests, 0 leaks, 0 UB
+- 2026-10-15: 280s — 36 tests, 0 leaks, 0 UB
 - 2026-10-11: 259s — 34 tests, 0 leaks, 0 UB
 - 2026-10-09: 371s — 31 tests, 0 leaks, 0 UB
-- 2026-10-04: 398s — 28 tests, 0 leaks, 0 UB
-- 2026-10-02: 264s — 27 tests, 0 leaks, 0 UB
-- 2026-09-30: 307s — 26 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

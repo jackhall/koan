@@ -122,15 +122,23 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     /// it as its handle over the same cells; a knot member, whose node every holder shares, takes a
     /// [`Retyped`] header over its bare member, or is that bare member where the seen type is its
     /// own.
-    pub fn restamped(self, writer: Writer<'cell, '_>) -> Value<'cell, X> {
+    pub fn restamped(
+        self,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
+    ) -> Value<'cell, X> {
         if self.value.ktype() == self.ktype {
             return self.value;
         }
         match self.value {
-            Value::List(list) => Value::List(list.with_type(writer, self.concrete())),
-            Value::Dict(dict) => Value::Dict(dict.with_type(writer, self.concrete())),
-            Value::Record(record) => Value::Record(record.with_type(writer, self.concrete())),
-            Value::Tagged(tagged) => Value::Tagged(tagged.with_type(writer, self.concrete())),
+            Value::List(list) => Value::List(list.with_type(writer, self.concrete(), types)),
+            Value::Dict(dict) => Value::Dict(dict.with_type(writer, self.concrete(), types)),
+            Value::Record(record) => {
+                Value::Record(record.with_type(writer, self.concrete(), types))
+            }
+            Value::Tagged(tagged) => {
+                Value::Tagged(tagged.with_type(writer, self.concrete(), types))
+            }
             Value::Type(value) => Value::Type(value.with_type(writer, self.concrete())),
             other => match other.knot_member() {
                 Some(member) if member.ktype() == self.ktype => Value::Knotted(member),
@@ -233,7 +241,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     ) -> Value<'cell, X> {
         Seen::of(self)
             .seen_at(declared, types, scratch)
-            .restamped(writer)
+            .restamped(writer, types)
     }
 }
 

@@ -78,8 +78,8 @@ use super::super::typed::Static;
 use super::{
     Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
-    Position, QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, SurfacedHead,
-    Target, TopLevel, TypeExpression, Unit, UnitWork, Which, resolve_here,
+    Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind, Site, Slot,
+    SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitWork, Which, resolve_here,
 };
 use crate::parse::{BodyKind, DefinitionKind, Heads, Opens, Reading, Role};
 use std::cell::Cell;
@@ -726,6 +726,8 @@ struct Builder<'graph, 'x, 'e> {
     in_type: u32,
     /// What the next part may be; see [`Admits`].
     admits: Admits,
+    /// The segment index the next sealed shape takes, so every shape one load builds has its own.
+    next_segment: Cell<u32>,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -755,6 +757,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             skip_floor: 0,
             in_type: 0,
             admits: Admits::Nothing,
+            next_segment: Cell::new(0),
         }
     }
 
@@ -3380,10 +3383,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             deferred_only: component.deferred_only,
             cyclic: component.cyclic,
         }));
+        let segment = Segment(self.next_segment.get());
+        self.next_segment.set(segment.0 + 1);
         resident(
             writer,
             BodyShape {
                 kind: draft.kind,
+                segment,
                 names: Channels::new(
                     collect(writer, draft.values.iter().copied()),
                     collect(writer, draft.types.iter().copied()),

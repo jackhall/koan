@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::program::CellSubstrate;
 use crate::scheduler::{LAID, TIERS, Tiers};
-use crate::scope::{BodyShape, ShapeKind};
+use crate::scope::{BodyShape, ShapeKind, Slot};
 
 use super::super::Koan;
 use super::classes::tutorial_snippets;
@@ -184,7 +184,7 @@ fn a_shares_call_with_new_content_each_call_holds_its_hosts_region_flat() {
 }
 
 #[test]
-fn a_loop_passing_on_a_module_built_over_its_link_caches_and_holds_flat() {
+fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adoptions_flat() {
     let source = wrapped_peeks();
     assert_eq!(caching(&source), 2, "`WRAP` and `PEEK` cache");
     let ran_adopting = |depth: u32| {
@@ -194,8 +194,15 @@ fn a_loop_passing_on_a_module_built_over_its_link_caches_and_holds_flat() {
     };
     let [(few, few_adopted), (many, many_adopted)] = DEPTHS.map(ran_adopting);
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
-    // `PEEK`'s warm tier grows with the loop, as in `hosted_peeks`; the region does not.
-    assert_eq!(few.tiers.region, many.tiers.region);
+    // `PEEK` keys on the module it is handed, so it borrows a specialization of its own each hop,
+    // and `WRAP` one across the loop; the region and each lent branch hold flat.
+    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+        assert_eq!(ran.tiers.specialized, depth as usize + 1);
+    }
+    assert_eq!(
+        (few.tiers.region, few.tiers.lent),
+        (many.tiers.region, many.tiers.lent)
+    );
     assert!(few_adopted > 0, "the loop's exits adopt");
     // A hop's adoptions at the greater depth cost no more than at the lesser.
     assert!(
@@ -204,6 +211,58 @@ fn a_loop_passing_on_a_module_built_over_its_link_caches_and_holds_flat() {
         DEPTHS[0],
         DEPTHS[1]
     );
+}
+
+#[test]
+fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_flat() {
+    // `wrapped_peeks` with both bodies `Fresh`: `PEEK` adopts the module it views into the lent
+    // branch at an invariant site, which stops at the link the module holds, settled by the exit
+    // that handed it on.
+    let source = "EXPR #(PEEK m :Holder) -> Number = #((LET v = (m :| Holder)) (1))\n\
+                  EXPR #(WRAP m :Counter link :Link) -> Number = \
+                  #((LET v = (m :| Counter)) (MODULE h OVER #[link] = (LET held = link)) \
+                  (LET seen = (PEEK h)) (WRAP m (ATTR link next)))\n\
+                  EXPR #(WRAP m :Counter end :Null) -> Number = #(7)\n\
+                  PRINT (WRAP ints chain)";
+    assert_eq!(caching(source), 2, "`WRAP` and `PEEK` cache");
+    let ran_adopting = |depth: u32| {
+        crate::values::ADOPTED.with(|adopted| adopted.set(0));
+        let ran = ran(depth, source);
+        (ran, crate::values::ADOPTED.with(Cell::get))
+    };
+    let [(few, few_adopted), (_, many_adopted)] = DEPTHS.map(ran_adopting);
+    assert_eq!(few.printed, "7");
+    assert!(few_adopted > 0, "the loop's exits adopt");
+    // A hop's adoptions at the greater depth cost no more than at the lesser.
+    assert!(
+        many_adopted * DEPTHS[0] as usize <= few_adopted * DEPTHS[1] as usize,
+        "adoptions {few_adopted} over {} hops against {many_adopted} over {}",
+        DEPTHS[0],
+        DEPTHS[1]
+    );
+}
+
+#[test]
+fn a_member_reached_through_a_call_is_adopted_by_its_memo_alone() {
+    // `GETA`'s result is a member of the record the loop received, reached by a route the load
+    // records nothing for: the exit handing it to `peek` stops at its memo, whatever its length.
+    let adopted = |length: usize| {
+        let items = vec!["1"; length].join(", ");
+        let source = format!(
+            "LET peek = (FN :{{xs :(LIST OF Number)}} -> Number = #(1))\n\
+             EXPR #(GETA p :{{a :(LIST OF Number)}}) -> :(LIST OF Number) = #(ATTR p a)\n\
+             EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} link :Link) -> Number = \
+             #((LET v = (m :| Counter)) (LET l = (GETA p)) (LET t = (peek {{xs = l}})) \
+             (PASS m p (ATTR link next)))\n\
+             EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} end :Null) -> Number = #(7)\n\
+             PRINT (PASS ints {{a = [{items}]}} chain)"
+        );
+        assert_eq!(caching(&source), 1);
+        crate::values::ADOPTED.with(|adopted| adopted.set(0));
+        assert_eq!(ran(DEPTHS[0], &source).printed, "7");
+        crate::values::ADOPTED.with(Cell::get)
+    };
+    assert_eq!(adopted(8), adopted(64));
 }
 
 #[test]
@@ -242,15 +301,25 @@ fn a_fresh_loop_over_varying_content_holds_the_lattice_flat() {
 }
 
 #[test]
-fn a_fresh_loop_calling_a_shares_caching_helper_holds_the_lattice_flat() {
-    // Each hop's frame caches and holds its scratch; the helper, viewing a module over the link it
-    // is handed, is its tenant, so it runs on that frame's own scratch, never the lent branch the
-    // loop's hops share.
+fn a_fresh_loop_calling_a_shares_caching_helper_holds_each_specialization_flat() {
+    // The helper keys on the link it is handed, so each hop builds it a specialization of its own;
+    // the host's region and each lent branch hold flat however long the loop.
     let source = HELPER_LOOP;
     assert_eq!(caching(source), 2);
     let [few, many] = at_depths(source);
     assert_eq!(few.printed, "7");
-    assert_eq!(few, many);
+    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+        assert_eq!(ran.tiers.specialized, depth as usize, "one per link");
+    }
+    let flat = |ran: Ran| Ran {
+        tiers: Tiers {
+            sought: 0,
+            specialized: 0,
+            ..ran.tiers
+        },
+        ..ran
+    };
+    assert_eq!(flat(few), flat(many));
 }
 
 #[test]
@@ -288,9 +357,10 @@ fn a_loops_scratch_resets_once_its_value_is_delivered() {
 }
 
 #[test]
-fn a_fresh_loops_warm_tier_resets_once_its_value_is_delivered() {
+fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
     // A `Fresh` frame asks for two loops in turn, over content of different types: the second
-    // starts on the branch the first's delivery reset, so the two leave what the larger leaves.
+    // starts on the branch the first's delivery reset or, where it keys a specialization, on a
+    // specialization of its own binding, so the two leave what the larger leaves.
     let cases = [
         (
             INVARIANT.to_string(),
@@ -507,4 +577,416 @@ fn laid_through_caching_chains() {
             }
         }
     }
+}
+
+/// Every shape under `shape`, itself included, depth first.
+fn every_shape<'graph>(shape: &'graph BodyShape<'graph>, out: &mut Vec<&'graph BodyShape<'graph>>) {
+    out.push(shape);
+    for (_, nested) in shape.nested_shapes() {
+        every_shape(nested, out);
+    }
+}
+
+/// Bodies whose invariant sites read a parameter, captures alone, a block's site, and nothing.
+const KEYED: &str = "EXPR #(OUTER m :Counter) -> Number = \
+                     #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g 1))\n\
+                     EXPR #(BLOCKED m :Counter k :Number) -> Number = \
+                     #(USING empty SCOPE ((LET v = (m :| Counter)) (k)))\n\
+                     LET plain = (FN :{x :Number} -> Number = #(x))\n";
+
+/// Each shape's slot names, beside its kind and the parameters its record keys a
+/// specialization on, by name.
+fn keyed(source: &str) -> Vec<(ShapeKind, Vec<String>, Option<Vec<String>>)> {
+    loaded(source, |program| {
+        let mut shapes = Vec::new();
+        every_shape(program.shape(), &mut shapes);
+        let name = |shape: &BodyShape<'_>, slot: Slot| {
+            let symbol = shape.slot_name(slot).symbol();
+            program.symbols().display(symbol).to_string()
+        };
+        (shapes.into_iter())
+            .map(|shape| {
+                let names = (0..shape.slots())
+                    .map(|index| name(shape, Slot(index as u32)))
+                    .collect();
+                let invariant = (shape.caching().and_then(|caching| caching.invariant))
+                    .map(|slots| slots.iter().map(|slot| name(shape, *slot)).collect());
+                (shape.kind(), names, invariant)
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn a_caching_frame_keys_on_the_parameters_its_invariant_sites_read() {
+    let shapes = keyed(&format!("{PRELUDE}{INVARIANT}{KEYED}"));
+    let of = |names: &[&str]| {
+        let found = (shapes.iter()).find(|(_, each, _)| each == names);
+        let (kind, _, invariant) = found.unwrap_or_else(|| panic!("a shape binds {names:?}"));
+        (*kind, invariant.clone())
+    };
+    let some = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect());
+    assert_eq!(
+        of(&["link", "v", "m"]),
+        (ShapeKind::Callable, some(&["m"])),
+        "a loop viewing the module it passes on keys on it"
+    );
+    assert_eq!(
+        of(&["m", "end"]),
+        (ShapeKind::Callable, None),
+        "a body with no invariant site keys on nothing"
+    );
+    assert_eq!(
+        of(&["x", "v"]),
+        (ShapeKind::Callable, some(&[])),
+        "a body viewing a capture alone keys on no parameter"
+    );
+    assert_eq!(of(&["g", "m"]), (ShapeKind::Callable, None));
+    assert_eq!(
+        of(&["m", "k"]),
+        (ShapeKind::Callable, some(&["m"])),
+        "a frame keys on what its blocks' invariant sites read"
+    );
+    assert_eq!(
+        of(&["unused", "v"]),
+        (ShapeKind::Block, None),
+        "a block's own record keys on nothing"
+    );
+    assert!(
+        (shapes.iter())
+            .filter(|(kind, _, _)| *kind != ShapeKind::Callable)
+            .all(|(_, _, invariant)| invariant.is_none()),
+        "only a frame body's record keys a specialization"
+    );
+}
+
+#[test]
+fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
+    let source = format!("{PRELUDE}{INVARIANT}{KEYED}LET q = #(1)\n");
+    let segments = || {
+        loaded(&source, |program| {
+            let mut shapes = Vec::new();
+            every_shape(program.shape(), &mut shapes);
+            (shapes.iter())
+                .map(|shape| (shape.kind(), shape.segment()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let first = segments();
+    let distinct: std::collections::BTreeSet<_> =
+        first.iter().map(|(_, segment)| *segment).collect();
+    assert_eq!(distinct.len(), first.len(), "no two shapes share a segment");
+    for kind in [
+        ShapeKind::Callable,
+        ShapeKind::Block,
+        ShapeKind::Module,
+        ShapeKind::Code,
+    ] {
+        assert!(
+            first.iter().any(|(each, _)| *each == kind),
+            "the program holds a {kind:?} shape"
+        );
+    }
+    assert_eq!(segments(), first, "a second load assigns the same segments");
+}
+
+/// What one load of `source` at depth 1 leaves after each run: the tiers, what the build root's
+/// table holds, and what it printed; `between` runs on the loaded program between the runs.
+fn runs(
+    source: &str,
+    count: usize,
+    between: impl Fn(&mut crate::program::Running<'_>),
+) -> Vec<(Tiers, Option<usize>, String)> {
+    let program = program(1, source);
+    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, output())
+        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    (0..count)
+        .map(|_| {
+            WRITTEN.with(|written| written.borrow_mut().clear());
+            TIERS.with(|tiers| tiers.set(Tiers::default()));
+            substrate
+                .with(|running| running.run())
+                .expect("the program runs");
+            let table = substrate.with(|running| {
+                let build = running.roots().build;
+                let table = running.scheduler().graph().table_len(build);
+                between(running);
+                table.expect("the build root is live")
+            });
+            let printed = WRITTEN.with(|written| written.borrow().join("\n"));
+            (TIERS.with(Cell::get), table, printed)
+        })
+        .collect()
+}
+
+#[test]
+fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
+    let once = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)\n");
+    let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(
+        (alone.sought, alone.specialized),
+        (1, 1),
+        "one seek for the whole loop"
+    );
+    let twice = format!("{once}PRINT (COUNTDOWN ints chain)");
+    let [(both, table, ref printed)] = runs(&twice, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(printed, "7\n7");
+    assert_eq!(
+        (both.sought, both.specialized),
+        (2, 1),
+        "the second caller builds nothing"
+    );
+    assert_eq!(table, Some(1));
+    let warm = |source: &str| -> usize {
+        laid(&program(1, source))
+            .iter()
+            .map(|(_, _, warm)| warm)
+            .sum()
+    };
+    let warm_once = warm(&once);
+    assert!(warm_once > 0, "the loop's view is adopted warm");
+    assert_eq!(
+        warm(&twice),
+        warm_once,
+        "the second caller finds every warm type laid"
+    );
+    let [(apart, table, _)] = runs(&format!("{once}PRINT (COUNTDOWN words chain)"), 1, |_| {})[..]
+    else {
+        unreachable!()
+    };
+    assert_eq!(apart.specialized, 2, "two bindings, two specializations");
+    assert_eq!(table, Some(2));
+}
+
+#[test]
+fn a_callable_born_under_a_specialization_keys_its_own_beneath_it() {
+    let inner =
+        "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
+    for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
+        let source = format!(
+            "EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) {body})\n\
+             PRINT (OUTER ints)"
+        );
+        let [(tiers, table, ref printed)] = runs(&source, 1, |_| {})[..] else {
+            unreachable!()
+        };
+        assert_eq!(printed, "1", "{body}");
+        assert_eq!(
+            (tiers.specialized, table),
+            (2, Some(1)),
+            "`g`'s specialization is a child of `OUTER`'s, not of the root: {body}"
+        );
+    }
+}
+
+#[test]
+fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() {
+    let source = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)");
+    let evict = |running: &mut crate::program::Running<'_>| {
+        let build = running.roots().build;
+        let mut scheduler = running.scheduler();
+        let spec = (scheduler.graph().table_entry(build)).expect("the table names one");
+        let _ = scheduler.evict(spec);
+    };
+    let ran = runs(&source, 2, evict);
+    let [
+        (first, first_table, ref first_printed),
+        (second, second_table, ref second_printed),
+    ] = ran[..]
+    else {
+        unreachable!()
+    };
+    assert_eq!(first_printed, second_printed);
+    assert_eq!(
+        (first.specialized, second.specialized),
+        (1, 1),
+        "the miss rebuilds it"
+    );
+    assert_eq!(
+        (first_table, second_table),
+        (Some(1), Some(1)),
+        "its entry is renewed"
+    );
+}
+
+/// The allocations one run of `source` makes.
+fn allocations(source: &str) -> u64 {
+    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 2, output())
+        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    let before = crate::tests::allocation_count();
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    crate::tests::allocation_count() - before
+}
+
+#[test]
+fn a_birth_keyed_on_a_list_digests_it_at_a_cost_below_its_length() {
+    // `TAKE` views a module built over the list it is handed, so its specialization is keyed on
+    // the list's digest, computed at each birth.
+    let per_birth = |length: usize| {
+        let list = (0..length)
+            .map(|at| at.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let calls = |count: usize| {
+            let mut source = format!(
+                "{PRELUDE}EXPR #(TAKE xs :Any) -> Number = \
+                 #((MODULE h OVER #[xs] = (LET held = xs)) (LET seen = (h :| Holder)) (1))\n\
+                 LET l = [{list}]\n"
+            );
+            source.push_str(&"PRINT (TAKE l)\n".repeat(count));
+            allocations(&source)
+        };
+        TIERS.with(|tiers| tiers.set(Tiers::default()));
+        let cost = (calls(4) - calls(1)) / 3;
+        let tiers = TIERS.with(Cell::get);
+        assert_eq!(
+            (tiers.sought, tiers.specialized),
+            (5, 2),
+            "each run builds one"
+        );
+        cost
+    };
+    let (short, long) = (per_birth(1), per_birth(64));
+    assert!(
+        long - short < 64,
+        "a birth over a 64-element list costs {long} allocations against {short} over one"
+    );
+}
+
+#[test]
+fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
+    // `SHARE` returns no scalar, so it is a tenant of `OUTER`'s frame; the callable it births
+    // was born under the root, as `SHARE` itself was, so its specialization is the root's child.
+    let source = "EXPR #(SHARE m :Counter) -> Any = \
+                  #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
+                  (g {x = 1}))\n\
+                  EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) (SHARE m) (2))\n\
+                  PRINT (OUTER ints)";
+    let [(tiers, table, ref printed)] = runs(source, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(printed, "2");
+    assert_eq!((tiers.specialized, table), (2, Some(2)));
+}
+
+/// [`INVARIANT`] at `Shares`: the same loop, ending in a string.
+const SHARES_INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Str = \
+                                #((LET v = (m :| Counter)) (COUNTDOWN m (ATTR link next)))\n\
+                                EXPR #(COUNTDOWN m :Counter end :Null) -> Str = #(\"seven\")\n";
+
+#[test]
+fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm() {
+    let once = format!("{SHARES_INVARIANT}PRINT (COUNTDOWN ints chain)\n");
+    let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(
+        (alone.sought, alone.specialized),
+        (1, 1),
+        "one seek for the whole loop"
+    );
+    let twice = format!("{once}PRINT (COUNTDOWN ints chain)");
+    let [(both, table, ref printed)] = runs(&twice, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(printed, "seven\nseven");
+    assert_eq!(
+        (both.sought, both.specialized),
+        (2, 1),
+        "the second park builds nothing"
+    );
+    assert_eq!(table, Some(1));
+    let warm = |source: &str| -> usize {
+        laid(&program(1, source))
+            .iter()
+            .map(|(_, _, warm)| warm)
+            .sum()
+    };
+    let warm_once = warm(&once);
+    assert!(warm_once > 0, "the loop's view is adopted warm");
+    assert_eq!(
+        warm(&twice),
+        warm_once,
+        "the second park finds every warm type laid"
+    );
+    assert!(
+        alone.lent_verdicts > 0,
+        "the view's verdicts are recorded warm"
+    );
+    assert_eq!(
+        both.lent_verdicts, alone.lent_verdicts,
+        "the second park records no verdict anew"
+    );
+}
+
+#[test]
+fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
+    let inner =
+        "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
+    for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
+        let source = format!(
+            "EXPR #(OUTER m :Counter) -> Any = #((LET w = (m :| Counter)) {body})\n\
+             PRINT (OUTER ints)"
+        );
+        let [(tiers, table, ref printed)] = runs(&source, 1, |_| {})[..] else {
+            unreachable!()
+        };
+        assert_eq!(printed, "1", "{body}");
+        assert_eq!(
+            (tiers.specialized, table),
+            (2, Some(1)),
+            "`g`'s specialization is a child of `OUTER`'s, not of the root: {body}"
+        );
+    }
+}
+
+#[test]
+fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
+    // `OUTER` is a keyed tenant; `SHARE`, keying nothing, borrows nothing, so the callable it
+    // births keys under the root `SHARE` was born under, not under `OUTER`'s specialization.
+    let source = "EXPR #(SHARE m :Counter) -> Any = \
+                  #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
+                  (g {x = 1}))\n\
+                  EXPR #(OUTER m :Counter) -> Any = #((LET w = (m :| Counter)) (SHARE m) (2))\n\
+                  PRINT (OUTER ints)";
+    let [(tiers, table, ref printed)] = runs(source, 1, |_| {})[..] else {
+        unreachable!()
+    };
+    assert_eq!(printed, "2");
+    assert_eq!((tiers.specialized, table), (2, Some(2)));
+}
+
+#[test]
+fn a_keyed_shares_call_links_a_host_scratch_laid_before_it() {
+    // `VARY` caches but keys nothing, so it lays its host's scratch branch through the `Shares`
+    // chain, unlinked; the keyed loop asked for at the same park reads through it next.
+    let vary = "EXPR #(VARY link :Link) -> Str = \
+                #((MODULE m OVER #[link] = (LET held = link)) \
+                (LET seen = (m :| Holder)) (VARY (ATTR link next)))\n\
+                EXPR #(VARY end :Null) -> Str = #(\"done\")\n";
+    let shapes = keyed(&format!("{PRELUDE}{vary}"));
+    assert!(
+        (shapes.iter()).any(|(_, names, invariant)| names[0] == "link" && invariant.is_none()),
+        "`VARY` keys nothing: {shapes:?}"
+    );
+    let printed = |calls: &str| {
+        let [(_, _, ref printed)] =
+            runs(&format!("{SHARES_INVARIANT}{vary}PRINT {calls}"), 1, |_| {})[..]
+        else {
+            unreachable!()
+        };
+        printed.clone()
+    };
+    let both = printed("{first = (VARY chain), second = (COUNTDOWN ints chain)}");
+    assert_eq!(both, "{first = done, second = seven}");
+    assert_eq!(
+        (printed("(VARY chain)"), printed("(COUNTDOWN ints chain)")),
+        ("done".to_string(), "seven".to_string())
+    );
 }

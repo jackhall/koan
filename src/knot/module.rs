@@ -48,11 +48,13 @@ mod tests;
 
 pub use birth::{body_activation, tie_member};
 
+use std::cell::Cell;
+
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 pub use crate::values::digest::Operator;
 use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
-use crate::values::{ContentDigest, Knotted as _, Seen, Value, Weight};
+use crate::values::{Chain, ContentDigest, Knotted as _, Seen, Value, Weight};
 
 use super::{KValue, Knotted, Node};
 
@@ -61,20 +63,13 @@ pub struct Module<'graph, 'cell> {
     ktype: KType,
     /// The bound members, in layout order.
     members: &'cell [KValue<'graph, 'cell>],
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
+    /// node's also carries the knot's memo bits.
+    knot_weight: Cell<Weight>,
     /// What the module is: its knot digests over it. It sits beside the node, as a barrier does, so
     /// the module arm keeps the node's width.
     content: &'cell ModuleContent,
 }
-
-impl Clone for Module<'_, '_> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl Copy for Module<'_, '_> {}
 
 impl<'graph, 'cell> Module<'graph, 'cell> {
     /// A module over `members`, already in layout order under `ktype`, whose content is `content`,
@@ -90,6 +85,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
         content: ModuleContent,
+        types: &Chain<'_, '_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         let knot_weight = members.iter().fold(
             Weight::flat::<usize>()
@@ -99,14 +95,15 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         );
         let members = collect(writer, members.iter().copied());
         let content = resident(writer, content);
-        KnotPlan::new(1).tie(writer, |_| {
+        let knot = KnotPlan::new(1).tie(writer, |_| {
             Node::Module(Module {
                 ktype,
                 members,
-                knot_weight,
+                knot_weight: Cell::new(knot_weight),
                 content,
             })
-        })
+        });
+        super::stamped(knot, types)
     }
 
     /// The module's self-signature, or the signature a view was built at.
@@ -120,7 +117,12 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     }
 
     pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+        self.knot_weight.get()
+    }
+
+    /// The knot weight's cell, where a knot's root node keeps its memo bits.
+    pub(super) fn knot_weight_cell(&self) -> &Cell<Weight> {
+        &self.knot_weight
     }
 
     /// What the module is, computed where it was born.
@@ -138,7 +140,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         Module {
             ktype: self.ktype,
             members,
-            knot_weight: self.knot_weight,
+            knot_weight: Cell::new(self.knot_weight.get().without_bits()),
             content: resident(writer, *self.content),
         }
     }
@@ -190,17 +192,10 @@ pub struct Coerced<'graph, 'cell> {
     declared: DeclaredType<Parametric>,
     from: KType,
     to: KType,
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
+    /// node's also carries the knot's memo bits.
+    knot_weight: Cell<Weight>,
 }
-
-impl Clone for Coerced<'_, '_> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl Copy for Coerced<'_, '_> {}
 
 impl<'graph, 'cell> Coerced<'graph, 'cell> {
     /// A function member behind an opaque view's barrier, laid down as a one-node knot in
@@ -216,6 +211,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         declared: DeclaredType<Parametric>,
         from: KType,
         to: KType,
+        types: &Chain<'_, '_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         debug_assert!(
             underlying.function().is_some() || underlying.coerced().is_some(),
@@ -225,7 +221,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
             .plus(Weight::flat::<Node<'graph, 'cell>>())
             .plus(Weight::flat::<Coerced<'graph, 'cell>>())
             .plus(underlying.weight());
-        KnotPlan::new(1).tie(writer, |_| {
+        let knot = KnotPlan::new(1).tie(writer, |_| {
             Node::Coerced(resident(
                 writer,
                 Coerced {
@@ -234,10 +230,11 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
                     declared,
                     from,
                     to,
-                    knot_weight,
+                    knot_weight: Cell::new(knot_weight),
                 },
             ))
-        })
+        });
+        super::stamped(knot, types)
     }
 
     /// The function the call runs once it is through the barrier — itself a function or a coerced
@@ -269,7 +266,12 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
     }
 
     pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+        self.knot_weight.get()
+    }
+
+    /// The knot weight's cell, where a knot's root node keeps its memo bits.
+    pub(super) fn knot_weight_cell(&self) -> &Cell<Weight> {
+        &self.knot_weight
     }
 
     /// The value the node's content covers: the function member it stands before.
@@ -301,7 +303,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
             declared: self.declared,
             from: self.from,
             to: self.to,
-            knot_weight: self.knot_weight,
+            knot_weight: Cell::new(self.knot_weight.get().without_bits()),
         }
     }
 }

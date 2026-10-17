@@ -107,15 +107,15 @@ cleared, since a dead cell is never entered; its lend stands until it disposes.
 
 **A tree cell borrows a lend.** From its creation to its disposal a tree cell
 borrows one half of another cell's storage, its **lend**
-([../lend.rs](../lend.rs)), from its **lender**, and a step in it or in a tenant
-of it writes that half at `'lent`
+([../lend.rs](../lend.rs)), from its **lender**, and a step in it writes that
+half at `'lent`
 ([lifetimes](../lifetimes.md#lent-a-borrowed-half-outlives-the-borrower)).
 `create_tree` lends the scratch bump of the new cell's tree parent, or of its
 root where it sits directly under one, handed to a step by `lent_scratch`.
 `create_tree_lent` names the lend: that same scratch; the region of a named
 live slab or tree cell, in this tree or under another root, handed to a step by
 `lent_region`; or a copy of what a named live cell borrows, a tenant's being
-its host's. A lend mints no pin and enters no relation; what keeps the lent half
+its own. A lend mints no pin and enters no relation; what keeps the lent half
 in place is a count on the lender per half:
 
 - **A lent scratch** does not reset while a borrower of it is undisposed,
@@ -133,6 +133,33 @@ in place is a count on the lender per half:
 Both counts drop at the borrower's disposal, never its release: a dead
 borrower's scratch, kept until it disposes, may still name the lent bytes.
 
+**A tenant borrows a lend too**, fixed at its creation: by default a copy of
+what the cell it is created naming borrows, which may be nothing; or one
+named as a tree cell's is, a named cell's region or a copy of what a named
+cell borrows. A copied scratch lend is taken only where it is the host's own,
+and the host's own region is refused, since the tenant writes it already. A
+lend equal to the host's own is held by the host's count and takes none. Any
+other is counted on its lender from the tenant's creation, and it does not
+drop at the tenant's release: a tenant's scratch is its host's, which
+outlives the tenant and whose header later steps read. The count passes to
+the host's scratch, which holds one count per lender and drops them at its
+next reset. A dead cell's scratch resets as soon as nothing names it, so a
+lender waiting on the host's disposal never holds it off, and a reset that
+drops a count runs the lender's disposal as a borrower's disposal does.
+
+A tenant's lend can close a **lend cycle**, which no creation refuses: a
+tenant of `H` lent the region of `H`'s own child, which borrows `H`'s scratch,
+leaves the child's disposal waiting on that scratch's reset and the reset
+waiting on the child's disposal, and longer cycles cross hosts. Cells on a
+cycle never dispose. A tree cell's own lends and tree links all point from an
+older cell to a younger one and never close; a tenant's lender may be younger
+than its host. Which lends to take is the embedder's election, so the
+substrate ships an audit instead of a refusal: `lend_cycle`
+([../graph/lend_cycle.rs](../graph/lend_cycle.rs)) walks the waits disposal
+reads — tree links, tree cells' lends, held counts and live tenants' lends —
+and names the cells on a cycle, for an embedder's tests to state a law
+against.
+
 If it has undisposed children, tenants or region borrowers it stops there —
 **dead but undisposed**, exactly as a slab root one of them is still counted
 under. That is what lets an embedder
@@ -145,9 +172,11 @@ top the root's tree-child count falls — and the root disposes there if this wa
 the last child a declared death was waiting on. The walk ends at the root,
 because a slab cell is under nothing. Each disposal also drops its lender's
 count, and a dead lender off the chain that was waiting on nothing else
-disposes in turn and walks up its own chain. So disposal runs over a worklist of homes
-rather than one walk: it terminates because a lend always names an older cell,
-and a lender on the chain, reached both ways, disposes once.
+disposes in turn and walks up its own chain; so does a scratch reset that
+drops a held count. So disposal runs over a worklist of homes rather than one
+walk: it terminates because each cell disposes once and each held count drops
+once, each pushing one lender, and a lender on the chain, reached both ways,
+disposes once.
 
 Disposing one cell is O(1):
 

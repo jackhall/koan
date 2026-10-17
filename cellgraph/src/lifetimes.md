@@ -19,7 +19,7 @@ Several are both: a real borrow made invariant so it also brands.
 | `'step` | exclusive borrow of the cells, per `enter` | `'graph: 'step`; none to `'here` or any habitat brand | `Ready` covariant |
 | `'here` | shared borrow of the region table, per `enter` | `'graph: 'here`; `'here: 'scratch` | invariant |
 | `'scratch` | brand of the scratch habitat, per `enter` | `'here: 'scratch`, `'lent: 'scratch`, nothing else | invariant |
-| `'lent` | brand of the half a tree cell borrows, per `enter` | `'graph: 'lent`; `'lent: 'scratch`; none to `'here` | invariant |
+| `'lent` | brand of the half a tree cell or a tenant borrows, per `enter` | `'graph: 'lent`; `'lent: 'scratch`; none to `'here` | invariant |
 | `'cell` | a habitat half's brand, generically | `'graph: 'cell` | per door; `Writer`, `Header`, `Active` and `OnceRun` invariant |
 | `'door` | a door's own life, generically | filled with `'step` by every step and build door, with the storage borrow by `Storage` | `Writer`, `Header`, `Run` and `Prose` covariant |
 | `'severed` | a copied operand's brand, per build | `'graph: 'severed`; none to `'cell` | quantified |
@@ -183,6 +183,14 @@ has no relation to `'here`, so nothing in the lent half names the borrower's
 region, which retires at the borrower's disposal while the lent half stays.
 A value laid in the lent half names `'graph`, the lent half itself and what the
 lender's own storage may name, so the lender reads it back at its own brand.
+
+A tenant's lent half is its own. Its scratch is its host's, so the lent half
+must outlive that scratch, not the tenant: a lend that is not the host's own
+is held past the tenant's release by the host's scratch until it resets, and
+one that is the host's own is held by the host's count until the host
+disposes, after its scratch. Either way every scratch byte a tenant step
+writes is gone before its lent half can go, and `'lent: 'scratch` stays
+honest.
 
 ## `'cell`: the brand a door is generic over
 

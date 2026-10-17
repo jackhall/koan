@@ -160,7 +160,8 @@ fn is_path_char(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':'
 }
 
-fn collect_sources(directory: &Path, out: &mut Vec<PathBuf>) {
+/// Every `.rs` file under `directory`, recursively.
+pub(crate) fn collect_sources(directory: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(directory).expect("the source directory reads");
     for entry in entries.flatten() {
         let path = entry.path();

@@ -27,12 +27,17 @@ to: each is bound once per program, so it stands for its value, and the load
 knows it without running anything.
 
 Values are immutable, so a value's digest is a fact about it. It is computed
-on demand, when a view asks for its source's, and composed from its parts'
-digests, as a type's digest is composed from its children's; one demand
-digests a part shared many times over once. A module is the exception: it
-keeps no captures to digest later, so its content is digested where it is
-built. The digest covers what a value's type shows of it, as a copy of the
-value lays it down, so a copy keeps its digest. A module, a function or a quote
+on demand, when a view or a specialization's key asks for it, and composed
+from its parts' digests, as a type's digest is composed from its children's;
+one demand digests a part shared many times over once. A module's content is
+computed where a view or a key first reaches the module — which the load
+reads off the view tree at each `:|` — and kept on the module, so a module
+only surfaced, read or passed on digests nothing; a frame keeps the digests
+its key was computed from beside the parameters they digest, so a demand
+inside the body finds them
+([where a digest is demanded](../roadmap/gradual-build/digest-demand.md)). The
+digest covers what a value's type shows of it, as a copy of the value lays it
+down, so a copy keeps its digest. A module, a function or a quote
 retyped to a type other than its own digests as its own content beside that
 type, so a signature that hides a member never hides the capture that brands
 it. Values that reach
@@ -262,3 +267,5 @@ equal content give two types; koan keys it on content, so they give one.
 
 - [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.
+- [Where a content digest is demanded](../roadmap/gradual-build/digest-demand.md)
+  — a module's content computed where a view first asks, and kept on it.

@@ -8,12 +8,12 @@
 pub const WIDTH: usize = 1;
 
 pub use cellgraph::{
-    Active, CellHandle, Config, Covariant, CreateError, CrossedOperand, DeliverError, Delivered,
-    Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader, Header, HomeHeader, NoDelivery,
-    NoHeader, NoScratch, OnceRun, OnceView, Prices, Prose, Reattachable, ReattachableOverBoth,
-    ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
-    ReleaseTreeError, Run, SlabHandle, Stale, Storage, TenantHandle, ThinRun, TreeHandle, Verdict,
-    Writer, covariant, reattachable,
+    Active, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
+    DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
+    Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, PeekError,
+    Prices, Prose, Reattachable, ReattachableOverBoth, ReceiptError, RedeemError, RegisterError,
+    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale,
+    Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, covariant, reattachable,
 };
 
 /// A carrier at rest in the region hosting it, branded by that region's `'home`; `'graph` is the
@@ -37,8 +37,8 @@ pub type CellGraph<'graph, C, S = NoScratch, D = NoDelivery, H = NoHeader> =
     cellgraph::CellGraph<'graph, C, S, D, WIDTH, H>;
 
 /// What a step running in a cell holds: the cell's brand `'here`, its scratch habitat's brand
-/// `'scratch`, a writer and a header door at each, a tree cell's lent scratch at `'lent`, and the
-/// step's doors.
+/// `'scratch`, a writer and a header door at each, a tree cell's borrow of its lender's scratch or
+/// region at `'lent`, and the step's doors.
 pub type StepContext<
     'graph,
     'step,
@@ -53,8 +53,9 @@ pub type StepContext<
 
 /// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
 /// one.
-pub fn resident<'cell, T: Copy>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
-    &writer.fill(1, |_| value)[0]
+pub fn resident<'cell, T>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
+    let mut value = Some(value);
+    &writer.fill(1, |_| value.take().expect("one cell is filled once"))[0]
 }
 
 /// Copy an exact-length run into the region — [`Writer::fill`] driven by the iterator, with no

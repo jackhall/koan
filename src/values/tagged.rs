@@ -1,23 +1,25 @@
 //! The one nominal wrap: a payload tagged with a type identity — a newtype construction, a union
 //! variant, an abstract-type re-tag, a lowered error.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::KType;
 
+use super::settled::{composite_bits, restamp_bits};
 use super::{
-    Chain, ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Value, Weight,
-    construction, sealing,
+    Chain, ConstructionRefused, Knotted, Link, MemoBits, Nothing, SealRefused, TypeValue, Value,
+    Weight, construction, sealing,
 };
 
 /// A tagged value. The identity is its type, so no tag symbol rides beside the payload. Its payload
 /// is a value word, or a [`Link`] when the tagged value is a knot's data node.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Tagged<'cell, X = Nothing, C = Value<'cell, X>> {
     payload: C,
     ktype: KType,
-    weight: Weight,
+    weight: Cell<Weight>,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
     member: PhantomData<Value<'cell, X>>,
 }
@@ -33,7 +35,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, ConstructionRefused> {
         let identity = construction(types, scratch, head.handle(), payload.concrete_ktype())?;
-        Ok(Self::hold(writer, payload, identity))
+        Ok(Self::hold(writer, payload, identity, types))
     }
 
     /// The raw wrap — a union variant, a lowered error, a retype: the payload rides verbatim,
@@ -42,9 +44,11 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         writer: Writer<'cell, '_>,
         payload: Value<'cell, X>,
         identity: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
     ) -> &'cell Tagged<'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
-        Self::from_payload(writer, payload, identity, weight)
+        let bits = composite_bits(types, identity, [&payload]);
+        Self::from_payload(writer, payload, identity, weight.with_bits(bits))
     }
 
     /// A member sealed behind an opaque view's barrier: [`sealing`] checks the identity is a
@@ -59,7 +63,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, SealRefused> {
         let identity = sealing(types, scratch, carrier, witness, value.ktype())?;
-        Ok(Self::peel(writer, value, identity))
+        Ok(Self::peel(writer, value, identity, types))
     }
 
     /// A re-tag: a tagged value's own layer is replaced rather than wrapped, so the payload is never
@@ -68,10 +72,11 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         writer: Writer<'cell, '_>,
         value: Value<'cell, X>,
         identity: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
     ) -> &'cell Tagged<'cell, X> {
         match value {
-            Value::Tagged(tagged) => tagged.with_type(writer, identity),
-            other => Self::hold(writer, other, identity),
+            Value::Tagged(tagged) => tagged.with_type(writer, identity, types),
+            other => Self::hold(writer, other, identity, types),
         }
     }
 }
@@ -106,15 +111,22 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
             Tagged {
                 payload,
                 ktype,
-                weight,
+                weight: Cell::new(weight),
                 member: PhantomData,
             },
         )
     }
 
-    /// The same payload under another identity.
-    pub fn with_type(&self, writer: Writer<'cell, '_>, ktype: KType) -> &'cell Self {
-        resident(writer, Tagged { ktype, ..*self })
+    /// The same payload under another identity, its bits recomputed from the new memo.
+    pub fn with_type(
+        &self,
+        writer: Writer<'cell, '_>,
+        ktype: KType,
+        types: &Chain<'_, '_, 'cell, '_, '_>,
+    ) -> &'cell Self {
+        let weight = self.weight.get();
+        let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));
+        Self::from_payload(writer, self.payload, ktype, weight)
     }
 
     pub fn payload(&self) -> &C {
@@ -126,6 +138,21 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
     }
 
     pub fn weight(&self) -> Weight {
-        self.weight
+        self.weight.get()
+    }
+
+    /// Where the value's type memos resolve, as its weight records it.
+    pub fn bits(&self) -> MemoBits {
+        self.weight.get().bits()
+    }
+
+    /// Record that every memo the value reaches resolves in its home half's branch — an exit's
+    /// mark on what it adopted. Keeps root-closed.
+    pub(crate) fn settle(&self) {
+        let weight = self.weight.get();
+        self.weight.set(weight.with_bits(MemoBits {
+            settled: true,
+            ..weight.bits()
+        }));
     }
 }

@@ -16,6 +16,8 @@
 //! variable the solution names is read where the site runs, the typing record carries the solution
 //! so bound, and a frame binds the body's `FOR ALL` names from it.
 
+use std::cell::Cell;
+
 use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
@@ -26,7 +28,9 @@ use crate::type_lattice::{
     DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
 };
 use crate::values::digest::function_content;
-use crate::values::{Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight};
+use crate::values::{
+    BuildRef, Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight,
+};
 
 use super::{Coerced, KActivationView, KValue, Knotted, Node, Untieable, composed};
 
@@ -43,17 +47,10 @@ pub struct Function<'graph, 'cell, X> {
     typing: Option<&'cell Typing<'cell>>,
     shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'cell, X>,
-    /// What rebuilding the whole knot this node sits in writes, the same on every node.
-    knot_weight: Weight,
+    /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
+    /// node's also carries the knot's memo bits.
+    knot_weight: Cell<Weight>,
 }
-
-impl<X> Clone for Function<'_, '_, X> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<X> Copy for Function<'_, '_, X> {}
 
 impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     /// The function `ktype` runs through `shape` over `closure`, inside a knot weighing
@@ -70,7 +67,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
             typing,
             shape,
             closure,
-            knot_weight,
+            knot_weight: Cell::new(knot_weight),
         }
     }
 
@@ -135,7 +132,12 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     }
 
     pub fn knot_weight(&self) -> Weight {
-        self.knot_weight
+        self.knot_weight.get()
+    }
+
+    /// The knot weight's cell, where a knot's root node keeps its memo bits.
+    pub(super) fn knot_weight_cell(&self) -> &Cell<Weight> {
+        &self.knot_weight
     }
 
     /// This function over `closure` rebuilt at another region lifetime — the copy's arm. The type,
@@ -157,7 +159,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
             ),
             shape: self.shape,
             closure,
-            knot_weight: self.knot_weight,
+            knot_weight: Cell::new(self.knot_weight.get().without_bits()),
         }
     }
 }
@@ -292,17 +294,19 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
 }
 
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
-    /// This node's closure run and typing record laid down in `writer`'s region, beside what the two
-    /// add to the knot's weight. A plain unquantified `FN` has no typing record and writes none.
+    /// This node's closure run, born under the build cell `build`, and typing record laid down in
+    /// `writer`'s region, beside what the two add to the knot's weight. A plain unquantified `FN` has
+    /// no typing record and writes none.
     pub(super) fn laid_down(
         &self,
         writer: Writer<'cell, '_>,
+        build: BuildRef,
     ) -> (
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
         Option<&'cell Typing<'cell>>,
         Weight,
     ) {
-        let closure = ClosureBindings::of(writer, &self.captures);
+        let closure = ClosureBindings::of(writer, &self.captures, build);
         let typing = Typing::laid_down(
             writer,
             self.quantifier_map,
@@ -535,11 +539,12 @@ pub(super) fn stage<'graph, 'cell, 'x>(
 /// load left unknown that does not elaborate refuses `Type`, and writes nothing.
 ///
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
-/// never asks for it, so no capture here is an edge.
+/// never asks for it, so no capture here is an edge. It is born under the build cell `build`.
 pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     site: Site,
+    build: BuildRef,
     types: &Chain<'_, '_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>> {
@@ -551,7 +556,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     let staged = staged(body, None, activation, types, scratch, |_| {
         unreachable!("only the tie births a callable that captures a fellow member")
     })?;
-    let (closure, typing, weight) = staged.laid_down(writer);
+    let (closure, typing, weight) = staged.laid_down(writer, build);
     let knot_weight = Weight::flat::<usize>()
         .plus(weight)
         .plus(Weight::flat::<Node<'graph, 'cell>>());
@@ -564,7 +569,7 @@ pub fn lambda<'graph, 'cell, 'x>(
             knot_weight,
         ))
     });
-    Ok(Knotted::of(knot, 0))
+    Ok(Knotted::of(super::stamped(knot, types), 0))
 }
 
 /// `member`, a quantified function behind an opaque view's barrier, read where the load solved its
@@ -598,6 +603,7 @@ pub fn barrier_instance<'graph, 'cell>(
         declared,
         barrier.from(),
         barrier.to(),
+        types,
     );
     Knotted::of(knot, 0)
 }
@@ -653,7 +659,8 @@ pub fn instance<'graph, 'cell>(
         Link::Edge(edge) => Link::Value(Value::Knotted(member.sibling(*edge))),
         Link::Value(value) => Link::Value(*value),
     }));
-    let closure = ClosureBindings::of(writer, &links);
+    // The same body over the same captures, so the same build cell.
+    let closure = ClosureBindings::of(writer, &links, function.closure().build());
     let map = function.quantifier_map();
     let typing = Typing::laid_down(writer, map, None, solution, None);
     let knot_weight = Weight::flat::<usize>()
@@ -669,5 +676,5 @@ pub fn instance<'graph, 'cell>(
             knot_weight,
         ))
     });
-    Knotted::of(knot, 0)
+    Knotted::of(super::stamped(knot, types), 0)
 }

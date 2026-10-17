@@ -8,21 +8,27 @@
 //! is never a placeholder.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer, collect, resident};
-use crate::values::{Knotted, KnottedFamily, Link, Value, Weight};
+use crate::values::{BuildRef, Knotted, KnottedFamily, Link, Value, Weight};
 
 use super::activation::ActivationView;
 use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
-/// A callable's closure bindings, in capture-slot order.
+/// A callable's closure bindings, in capture-slot order, beside the build cell the callable was
+/// born under: where a call of it looks up its specialization. The build cell is not content, so
+/// the closure's digest and equality read the slots alone.
 #[derive(Clone, Copy)]
 pub struct ClosureBindings<'cell, X = crate::values::Nothing> {
     slots: &'cell [Link<'cell, X>],
+    build: BuildRef,
 }
 
 impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     /// The bindings of a shape that captures nothing — a program's, a block's.
     pub fn empty() -> &'cell ClosureBindings<'cell, X> {
-        &ClosureBindings { slots: &[] }
+        &ClosureBindings {
+            slots: &[],
+            build: BuildRef::ROOT,
+        }
     }
 
     /// Every closure binding of a callable of `shape`, read from `enclosing` into `scratch`.
@@ -57,13 +63,19 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         read
     }
 
-    /// A finished read laid down in `writer`'s region.
+    /// A finished read laid down in `writer`'s region, born under the build cell `build`.
     pub fn of(
         writer: Writer<'cell, '_>,
         captures: &[Link<'cell, X>],
+        build: BuildRef,
     ) -> &'cell ClosureBindings<'cell, X> {
         let slots = collect(writer, captures.iter().copied());
-        resident(writer, ClosureBindings { slots })
+        resident(writer, ClosureBindings { slots, build })
+    }
+
+    /// The build cell the callable was born under.
+    pub fn build(&self) -> BuildRef {
+        self.build
     }
 
     /// Every value these bindings hold, in the order [`copied`](Self::copied) asks for them.
@@ -84,7 +96,13 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     ) -> &'to ClosureBindings<'to, Y> {
         let source = self.slots;
         let slots = writer.fill(source.len(), |at| source[at].copied(&mut copy));
-        resident(writer, ClosureBindings { slots })
+        resident(
+            writer,
+            ClosureBindings {
+                slots,
+                build: self.build,
+            },
+        )
     }
 
     /// What [`copied`](Self::copied) writes: the resident run header, every binding's word, and
