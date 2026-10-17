@@ -115,6 +115,7 @@ fn a_copy_digests_as_its_source() {
             name("held"),
         );
         let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
+        let identity = fixture.ring_type("Ring", "next");
         let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
@@ -155,9 +156,8 @@ fn a_copy_digests_as_its_source() {
                     "a list whose join hides a record's field"
                 );
 
-                let identity = fixture.ring_type("Ring", "next");
                 let held_text = crate::values::text(writer, "held");
-                let members = ring(fixture, writer, identity, &[Some(held_text), None]);
+                let members = ring(fixture, writer, types, identity, &[Some(held_text), None]);
                 let Some(Link::Edge(payload)) = Holding::Knotted(members[0])
                     .as_circular()
                     .and_then(|(_, node)| match node {

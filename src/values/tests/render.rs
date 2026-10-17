@@ -95,9 +95,9 @@ fn a_cycle_labels_its_target_and_a_shared_node_prints_inline() {
                 out
             };
             let writer = context.writer();
-            let one = ring(fixture, writer, ring_type, &[None])[0];
+            let one = ring(fixture, writer, types, ring_type, &[None])[0];
             assert_eq!(rendered(Holding::Knotted(one)), "@0 = Ring({next = @0})");
-            let pair = ring(fixture, writer, ring_type, &[None, None]);
+            let pair = ring(fixture, writer, types, ring_type, &[None, None]);
             assert_eq!(
                 rendered(Holding::Knotted(pair[0])),
                 "@0 = Ring({next = Ring({next = @0})})"
@@ -146,7 +146,13 @@ fn a_header_over_a_cyclic_node_renders_its_cycle_labelled_at_the_top() {
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
-            let member = ring(fixture, writer, ring_type, &[Some(Holding::Number(1.0))])[0];
+            let member = ring(
+                fixture,
+                writer,
+                types,
+                ring_type,
+                &[Some(Holding::Number(1.0))],
+            )[0];
             let Some((_, Circular::Tagged(tagged))) = Holding::Knotted(member).as_circular() else {
                 panic!("a ring member is a tagged node");
             };

@@ -562,11 +562,13 @@ fn a_nested_constructor_on_a_sibling_path_is_an_anonymous_node() {
 #[test]
 fn a_cycle_of_containers_refuses_naming_it() {
     with_fixture(|fixture| {
-        for (source, names) in [
+        // Every program shapes in the load, before the first cell freezes its root.
+        let programs = [
             ("LET a = [1 a]", &["a"][..]),
             ("LET a = [b]\nLET b = {x = a}", &["a", "b"]),
-        ] {
-            let lines = fixture.parse(source);
+        ]
+        .map(|(source, names)| (source, fixture.parse(source), names));
+        for (source, lines, names) in programs {
             fixture.in_cell(pin, |context| {
                 let types = &fixture.tiers.of(context);
                 let writer = context.writer();
@@ -611,9 +613,9 @@ fn a_construction_the_rule_refuses_refuses_the_tie() {
             assert!(matches!(
                 tie_of(fixture, writer, types, activation, "b"),
                 Err(Untieable::Construction {
-                    refused: ConstructionRefused::NotConstructible(KType::NUMBER),
+                    refused: ConstructionRefused::NotConstructible(refused),
                     ..
-                })
+                }) if refused == KType::NUMBER
             ));
         });
     });

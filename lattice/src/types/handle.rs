@@ -3,10 +3,12 @@
 //! [`Scheme`] a quantified callable's type, [`DeclaredType`] either a type or a scheme — plus the
 //! builtin vocabulary that lowers to a fixed handle.
 //!
-//! A `Handle` *is* its type's content digest ([`TypeDigest`]): a bare `u128`, `Copy`, carrying no
-//! pointer, no index, and no reference to the tier that minted it. Equality, hashing and
-//! ordering derive on that one word, so comparing two types is comparing two integers and no
-//! structural descent exists to fall back to. Content lives in the tiers a
+//! A `Handle` is its type's content digest ([`TypeDigest`]) under two flag bits: one `u128`,
+//! `Copy`, carrying no pointer and no index. The top two bits say whether the node lies in the
+//! root and whether it is concrete, both fixed for the program's life, so the chain answers
+//! either question with a bit test; the low 126 are the digest. Equality, hashing and ordering
+//! read the digest alone, so comparing two types is comparing two integers, a type's identity is
+//! its content wherever it lies, and no structural descent exists to fall back to. Content lives in the tiers a
 //! [`TypeChain`](super::chain::TypeChain) reads, keyed by the same digest, so any operation that
 //! needs a type's shape — rendering, kind classification, the relations — takes a chain and reads
 //! the [`TypeNode`]. Inside the lattice a type is named by a reference to its node
@@ -29,20 +31,55 @@ use std::hash::Hash;
 use crate::symbols::{StaticName, TypeSymbol};
 
 use super::chain::TypeChain;
-use super::digest::TypeDigest;
+use super::digest::{DIGEST_BITS, TypeDigest};
 use super::kind::KKind;
 use super::node::{Group, TypeNode};
 use super::stored::{Content, Linked};
 use super::tiers::Habitat;
 
-/// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
-/// Identity only — every relation and door outside the lattice takes a typed handle.
+/// A handle to one interned type: the content digest of its [`TypeNode`] under two flags,
+/// [`IN_ROOT`] and [`CONCRETE`], that the node it was read off fixed. Identity only — every
+/// relation and door outside the lattice takes a typed handle.
 ///
 /// Identity is the digest, so two independently built types with the same content are one handle
-/// — that is the interning contract, not a coincidence of sharing. `Ord` is the numeric order of
-/// the digest: meaningless as a type order, useful only for canonical sorting.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Handle(TypeDigest);
+/// — that is the interning contract, not a coincidence of sharing. Equality, hashing and order
+/// read the digest and never a flag. `Ord` is the numeric order of the digest: meaningless as a
+/// type order, useful only for canonical sorting.
+#[derive(Clone, Copy)]
+pub struct Handle(u128);
+
+/// The handle word's in-root flag: the node lies in the root, or, on the load's chain, in the
+/// root builder. The root is closed after the load, so the flag is fixed for the program's life.
+const IN_ROOT: u128 = 1 << 127;
+/// The handle word's concrete flag: the node's `PARAMETRIC` flag is clear.
+const CONCRETE: u128 = 1 << 126;
+const _: () = assert!(IN_ROOT | CONCRETE == !DIGEST_BITS);
+
+impl PartialEq for Handle {
+    fn eq(&self, other: &Handle) -> bool {
+        self.same_as(*other)
+    }
+}
+
+impl Eq for Handle {}
+
+impl Hash for Handle {
+    fn hash<S: std::hash::Hasher>(&self, state: &mut S) {
+        self.digest().hash(state)
+    }
+}
+
+impl PartialOrd for Handle {
+    fn partial_cmp(&self, other: &Handle) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Handle {
+    fn cmp(&self, other: &Handle) -> std::cmp::Ordering {
+        self.digest().cmp(&other.digest())
+    }
+}
 
 /// A **concrete** type: outside sealed content it holds no variable and no scheme. The
 /// lattice's order, join and meet relate these and nothing else, and every value but a quantified
@@ -203,21 +240,38 @@ pub(super) fn wrap<H: sealed::Wrap>(raw: Handle) -> H {
 }
 
 impl Handle {
-    /// Wrap a digest as the handle naming it. Named rather than a public tuple field, and
-    /// module-internal, so the wrapping is a deliberate act: `digest` must already be the digest
-    /// of interned content, or a member handle derived from its component's digest.
-    pub(super) const fn from_digest(digest: TypeDigest) -> Handle {
-        Handle(digest)
+    /// The handle naming `digest`, its flags as given. Only a node mints one, from the tier it is
+    /// laid in and its own flags, and the fixed handles bake theirs in.
+    pub(super) const fn new(digest: TypeDigest, in_root: bool, concrete: bool) -> Handle {
+        debug_assert!(digest.0 & !DIGEST_BITS == 0, "a digest holds no flag bit");
+        let mut word = digest.0;
+        if in_root {
+            word |= IN_ROOT;
+        }
+        if concrete {
+            word |= CONCRETE;
+        }
+        Handle(word)
     }
 
     /// This type's content digest — its identity, and its key in every tier's node table.
     pub const fn digest(self) -> TypeDigest {
-        self.0
+        TypeDigest(self.0 & DIGEST_BITS)
     }
 
-    /// Handle equality in `const` context.
+    /// Whether the node lies in the root: one bit, no lookup.
+    pub(super) const fn in_root(self) -> bool {
+        self.0 & IN_ROOT != 0
+    }
+
+    /// Whether the node is concrete: one bit, no lookup.
+    pub(super) const fn is_concrete(self) -> bool {
+        self.0 & CONCRETE != 0
+    }
+
+    /// Handle equality in `const` context: the digests compared, never a flag.
     pub(super) const fn same_as(self, other: Handle) -> bool {
-        self.0.0 == other.0.0
+        self.digest().0 == other.digest().0
     }
 
     /// The code kind directly above this one in the code family's tree, or `None` for a handle that
@@ -266,7 +320,7 @@ impl Handle {
 impl KType {
     /// This type's content digest — its identity.
     pub const fn digest(self) -> TypeDigest {
-        self.0.0
+        self.0.digest()
     }
 
     /// Handle equality in `const` context — the one digest word compared. Derived `PartialEq` is
@@ -295,14 +349,14 @@ impl KType {
 impl Parametric {
     /// This type's content digest — its identity.
     pub const fn digest(self) -> TypeDigest {
-        self.0.0
+        self.0.digest()
     }
 }
 
 impl Scheme {
     /// This type's content digest — its identity.
     pub const fn digest(self) -> TypeDigest {
-        self.0.0
+        self.0.digest()
     }
 
     /// The raw handle — the lattice's alone, so no scheme reaches a door or a binding as a type.
@@ -528,7 +582,7 @@ pub(super) fn leaf_name<'run, H: Naming<'run>>(
 macro_rules! fixed_handles {
     ($($(#[$doc:meta])* $name:ident = $digest:literal;)*) => {
         impl KType {
-            $($(#[$doc])* pub const $name: KType = KType(Handle(TypeDigest($digest)));)*
+            $($(#[$doc])* pub const $name: KType = KType(Handle::new(TypeDigest($digest), true, true));)*
         }
     };
 }
@@ -552,72 +606,72 @@ macro_rules! raw_twins {
 // from its own node, so a recipe change fails loudly here rather than silently re-identifying a
 // leaf.
 fixed_handles! {
-    NUMBER = 0xe21d67f1_7aa25f92_e072c1bb_1f72fc48;
-    STR = 0xda8a6add_c7627c0f_ae4be842_dfbe13ab;
+    NUMBER = 0x221d67f1_7aa25f92_e072c1bb_1f72fc48;
+    STR = 0x1a8a6add_c7627c0f_ae4be842_dfbe13ab;
     BOOL = 0x01210944_fd6fb8f8_0c9ba36e_1de8e0e1;
-    NULL = 0xbc9d88bb_75d5fb35_a4fd343e_749a380c;
+    NULL = 0x3c9d88bb_75d5fb35_a4fd343e_749a380c;
     /// A lone value name of code, under [`Self::NAME`].
-    IDENTIFIER = 0x41b73c3e_2391bbb4_6b850e4f_e740cb84;
+    IDENTIFIER = 0x01b73c3e_2391bbb4_6b850e4f_e740cb84;
     /// A lone token of code: a name or a keyword.
-    SYMBOL = 0x7dec3e82_f44adbda_2f8cc4c2_47b790eb;
+    SYMBOL = 0x3dec3e82_f44adbda_2f8cc4c2_47b790eb;
     /// A lone type name of code, under [`Self::NAME`] — never resolved, never lowered.
-    TYPE_NAME_TOKEN = 0xb9978361_a0bb1460_82127faa_0711eeca;
+    TYPE_NAME_TOKEN = 0x39978361_a0bb1460_82127faa_0711eeca;
     /// One statement of code.
-    EXPRESSION = 0x63c296ef_dbe5d41c_9969ddda_6b0b311c;
-    SIGILED_TYPE_EXPR = 0xf6d652dc_848e0f69_4a152496_ddd88b44;
+    EXPRESSION = 0x23c296ef_dbe5d41c_9969ddda_6b0b311c;
+    SIGILED_TYPE_EXPR = 0x36d652dc_848e0f69_4a152496_ddd88b44;
     RECORD_TYPE = 0x387dfced_dc0a5d96_da3b29a5_dde0f32e;
     /// A lone scalar literal or nested quote of code.
-    LITERAL = 0xe0ba0587_757a04b5_57551481_dc141482;
+    LITERAL = 0x20ba0587_757a04b5_57551481_dc141482;
     /// Statements of code: what every body slot takes.
     BLOCK = 0x30bf1d87_d3e4dc58_e64d3a9d_f3cfc6bb;
     /// One statement that declares a name or a shape.
-    DECLARATION = 0x45826e93_1678c023_0193898d_a4337e86;
+    DECLARATION = 0x05826e93_1678c023_0193898d_a4337e86;
     /// One statement that declares and installs where it is written.
     BINDER = 0x33085145_8c8174df_bcb3e348_b6f3c6e2;
     /// A lone value or type name of code.
     NAME = 0x368aa850_9c281105_1746c919_0b150e96;
     /// A lone keyword of code.
     KEYWORD = 0x3ad3317d_c24be1d3_f80ceb6a_f4087539;
-    ANY = 0xd9f70f99_49f95b5c_44d7ce99_10aa1972;
+    ANY = 0x19f70f99_49f95b5c_44d7ce99_10aa1972;
     /// The value family's top — what `Value` lowers to.
-    ANY_VALUE = 0xf04a0d81_ff131a48_101bccdb_85dac271;
+    ANY_VALUE = 0x304a0d81_ff131a48_101bccdb_85dac271;
     /// The code family's top — what `Code` lowers to.
     ANY_CODE = 0x0f08f916_c60a7048_8e16cfb3_f68069e7;
     /// The uninhabited bottom of the lattice — below every other type, admitted by no value, and
     /// the identity element of join and of union canonicalization.
-    NEVER = 0x59dd8c1f_71e395f4_77717ff5_a93c2600;
-    PROPER_TYPE = 0xe082d96a_231e2f4c_af1e256b_459a681f;
-    SIGNATURE_KIND = 0xa74d105b_68705a5a_4c93c325_b2bb4032;
-    ANY_TYPE = 0x6230fb6f_d4cb83ad_59072aad_08f93e54;
+    NEVER = 0x19dd8c1f_71e395f4_77717ff5_a93c2600;
+    PROPER_TYPE = 0x2082d96a_231e2f4c_af1e256b_459a681f;
+    SIGNATURE_KIND = 0x274d105b_68705a5a_4c93c325_b2bb4032;
+    ANY_TYPE = 0x2230fb6f_d4cb83ad_59072aad_08f93e54;
     NEW_TYPE = 0x3079a661_6197d2a5_46103cc5_f0cbfeaa;
     TYPE_CONSTRUCTOR = 0x1522ec89_d5fd3ca8_2db00c80_75beafb3;
     /// `List<Any>` — what the bare `List` name lowers to.
-    LIST_OF_ANY = 0x9d40af7c_078f46c4_bd4a8f94_98f5fd63;
+    LIST_OF_ANY = 0x3b316478_ba7d1083_04792939_947a2d9f;
     /// `Dict<Any, Any>` — what the bare `Dict` name lowers to.
-    DICT_ANY_ANY = 0xf9b9d64d_aa69edda_e7a59f82_4e0f5015;
+    DICT_ANY_ANY = 0x0aa03688_883ed7e2_edcd1514_d47f47f2;
     /// The empty signature — top of the module lattice, the type `:Module` lowers to. It
     /// constrains nothing, so every module value satisfies it.
-    EMPTY_SIGNATURE = 0x9d9c6ff8_d07721a9_90cd6da6_77262d30;
+    EMPTY_SIGNATURE = 0x106902e2_9cd758a6_57ad60d2_6aa0df34;
     /// `TypeNameToken | SigiledTypeExpr | RecordType` — the code a type is written as: a union's
     /// variant payload or a quantifier's bound. Not spellable.
-    TYPE_CODE = 0xc41b235d_9ca37012_2069fcb7_39c1082e;
+    TYPE_CODE = 0x1413395f_7d7c73a4_6b121ffd_7fd4f373;
     /// `List<Name>` — a `FOR ALL` group or `FROM`'s field list.
-    LIST_OF_NAME = 0xe4ef6471_b3309818_6e9fe04f_0c66f18a;
+    LIST_OF_NAME = 0x24ef6471_b3309818_6e9fe04f_0c66f18a;
     /// `List<Expression>` — a `MODULE` or `GROUP` body's `OVER` list, each entry read as written.
-    LIST_OF_EXPRESSION = 0x032c551d_dc7157af_ef4bf417_a34e1910;
+    LIST_OF_EXPRESSION = 0x08165380_1efeb93b_e93c08e1_dbd8a138;
     /// `List<Declaration>` — a `SIG` body, or the heads a bodyless `GROUP` declares.
-    LIST_OF_DECLARATION = 0xdaf2c481_09b90725_35f0053e_594b6591;
+    LIST_OF_DECLARATION = 0x1d49374c_42ceaa3f_eefd92f2_d2a5ad70;
     /// `Dict<Name, Block>` — a `MATCH … OVER` or `TRY` arm set, each guard a label.
-    DICT_NAME_BLOCK = 0xd62f630b_16626d22_68df48ae_99aab59a;
+    DICT_NAME_BLOCK = 0x162f630b_16626d22_68df48ae_99aab59a;
     /// `Dict<TypeCode, Block>` — a `MATCH … WITH` arm set, each guard a type.
-    DICT_TYPE_CODE_BLOCK = 0xf1066a0f_f0fe9f2f_9ba1351a_fb9f479f;
+    DICT_TYPE_CODE_BLOCK = 0x2efc47c2_5f812e70_335cc928_f4dc5ee4;
     /// `Dict<Name, TypeCode>` — a union's variants.
-    DICT_NAME_TYPE_CODE = 0x34fd5145_6f54557d_3aeab867_9093541d;
+    DICT_NAME_TYPE_CODE = 0x308df2ab_2486cbd5_4573fb6d_af592079;
     /// `List<Name> | Dict<Name, TypeCode>` — the code a `FOR ALL` group is written as: a list of
     /// names, or a dict of names to the code of their bounds.
-    QUANTIFIER_CODE = 0xf2388522_88d6156a_8a8a6e23_acdbbf30;
+    QUANTIFIER_CODE = 0x1b77f15c_641cc845_7fcd809a_77c62f04;
     /// The empty record type — `FROM`'s argument and return.
-    EMPTY_RECORD = 0xe7e914e1_0d893b27_988dbbdf_9ae2e427;
+    EMPTY_RECORD = 0x27e914e1_0d893b27_988dbbdf_9ae2e427;
 }
 
 raw_twins! {

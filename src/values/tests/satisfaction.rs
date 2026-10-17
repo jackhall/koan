@@ -114,7 +114,8 @@ fn a_circular_value_satisfies_by_its_node_memo() {
         let ring_type = fixture.ring_type("Ring", "next");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
-            let member = Holding::Knotted(ring(fixture, context.writer(), ring_type, &[None])[0]);
+            let member =
+                Holding::Knotted(ring(fixture, context.writer(), types, ring_type, &[None])[0]);
             assert!(satisfies(ring_type, &member, types, scratch));
             assert!(satisfies(KType::ANY, &member, types, scratch));
             assert!(!satisfies(KType::NUMBER, &member, types, scratch));

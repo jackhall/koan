@@ -1,5 +1,7 @@
 //! Shared scaffolding for `elaborate`'s suites: a program shaped over a builtin table of type
-//! values, activated in a cell with each slot bound — or left empty — as the test asks.
+//! values, activated in program storage with each slot bound — or left empty — as the test asks.
+//! The passes under test are the load's, so they run as a program's load runs them: on the load's
+//! chain, into the root builder.
 
 mod boundary;
 mod builtin;
@@ -10,10 +12,7 @@ mod families;
 mod module;
 mod projections;
 
-use crate::memory::{
-    Bump, BumpAllocator, CellGraph, NoDelivery, NoScratch, ProgramBrand, ReleaseAbsorption,
-    SlabHandle, Verdict, Writer, program_storage, reattachable, resident,
-};
+use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer, program_storage, resident};
 use crate::parse::{KExpression, parse};
 use crate::scope::{
     Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Registration, Slot, Target, Which,
@@ -21,7 +20,7 @@ use crate::scope::{
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::KType;
 use crate::values::tests::TestTypes;
-use crate::values::{Chain, TypeHeader, TypeValue, Types, Value};
+use crate::values::{Chain, TypeValue, Types, Value};
 
 use super::{callable_type, type_declarations};
 use crate::scope::{Callable, Elaboration};
@@ -34,10 +33,6 @@ fn local(slot: Slot) -> Coordinate {
     }
 }
 
-/// A continuation family for a graph whose cells only store.
-struct Step;
-reattachable!(Step => ());
-
 /// What a slot of the program holds when the check runs.
 pub(super) enum Held<'cell> {
     Bound(Value<'cell>),
@@ -45,18 +40,20 @@ pub(super) enum Held<'cell> {
     Empty,
 }
 
-/// What a check reads: the fixture's storage and the activated program, its types through the
-/// cell's chain, which reads what the load built.
+/// What a check reads: the fixture's storage and the program activated in it, its types through
+/// the load's chain.
 pub(super) struct Program<'p, 'graph, 'cell> {
+    /// The load's chain, at the activation's brand.
     pub types: &'p Chain<'graph, 'cell, 'cell, 'graph, 'p>,
-    /// The load's chain, which a load-time pass reads and interns through.
+    /// The same chain, at the brand a load pass takes.
     pub load: &'p Types<'graph, 'graph, 'p>,
     pub symbols: &'p SymbolInterner,
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
     pub writer: Writer<'cell, 'p>,
-    /// Program storage's writer, which the load pass lays its records down through.
+    /// Program storage's writer, which the load pass lays its records down through: `writer`, at
+    /// the brand a load pass takes.
     pub storage: Writer<'graph, 'graph>,
 }
 
@@ -210,65 +207,47 @@ pub(super) fn with_program<R>(
     let lines = parse(program, &symbols, source)
         .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
     let extra = extra(&types, &scratch, &symbols);
-    let mut graph: CellGraph<'_, Step, NoScratch, NoDelivery, TypeHeader> =
-        CellGraph::new(1, |_| Verdict::Pin);
-    let cells: Vec<SlabHandle> = (0..1)
-        .map(|_| graph.create(None).expect("the graph has a free slot"))
-        .collect();
-    let out = graph
-        .enter(cells[0], |context| {
-            let writer = context.writer();
-            let cell_types = tiers.of(context);
-            let scalars = [
-                ("Number", KType::NUMBER),
-                ("Str", KType::STR),
-                ("Bool", KType::BOOL),
-                ("Null", KType::NULL),
-                ("Any", KType::ANY),
-            ];
-            let table: Vec<_> = scalars
-                .iter()
-                .chain(extra.iter())
-                .map(|(name, handle)| {
-                    let name = TypeSymbol::declared(name, &symbols).expect("a Type token");
-                    (name, Value::Type(TypeValue::new(writer, *handle, &types)))
-                })
-                .collect();
-            let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table, &[]);
-            let shape =
-                BodyShape::of_program(program, &lines, builtins, &types, &symbols, &scratch)
-                    .unwrap_or_else(|error| {
-                        panic!("`{source}` shapes: {}", error.display(&symbols, &types))
-                    });
-            let activation: &Activation =
-                resident(writer, Activation::of_program(writer, shape, builtins));
-            for slot in 0..shape.slots() {
-                let slot = Slot(slot as u32);
-                let name = symbols.display(shape.slot_name(slot).symbol()).to_string();
-                if let Held::Bound(value) = hold(&name, writer, &cell_types) {
-                    activation.bind(slot, value).expect("an empty slot binds");
-                }
-            }
-            check(Program {
-                types: &cell_types,
-                load: &types,
-                symbols: &symbols,
-                scratch: &scratch,
-                // A reader takes a body's statements from its shape, never from the parse: the
-                // shape owns them rewritten, and every site it records is an address inside them.
-                lines: shape.body(),
-                activation,
-                writer,
-                storage: program.writer(),
-            })
+    // The passes under test are the load's: as a program's load does, they run on the load's
+    // chain and lay their values in program storage.
+    let writer = program.writer();
+    let scalars = [
+        ("Number", KType::NUMBER),
+        ("Str", KType::STR),
+        ("Bool", KType::BOOL),
+        ("Null", KType::NULL),
+        ("Any", KType::ANY),
+    ];
+    let table: Vec<_> = scalars
+        .iter()
+        .chain(extra.iter())
+        .map(|(name, handle)| {
+            let name = TypeSymbol::declared(name, &symbols).expect("a Type token");
+            (name, Value::Type(TypeValue::new(writer, *handle, &types)))
         })
-        .expect("a fresh cell is enterable");
-    for cell in cells {
-        graph
-            .release(cell, ReleaseAbsorption::IntoHolder)
-            .expect("a cell outside its step releases");
+        .collect();
+    let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table, &[]);
+    let shape = BodyShape::of_program(program, &lines, builtins, &types, &symbols, &scratch)
+        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(&symbols, &types)));
+    let activation: &Activation = resident(writer, Activation::of_program(writer, shape, builtins));
+    for slot in 0..shape.slots() {
+        let slot = Slot(slot as u32);
+        let name = symbols.display(shape.slot_name(slot).symbol()).to_string();
+        if let Held::Bound(value) = hold(&name, writer, &types) {
+            activation.bind(slot, value).expect("an empty slot binds");
+        }
     }
-    out
+    check(Program {
+        types: &types,
+        load: &types,
+        symbols: &symbols,
+        scratch: &scratch,
+        // A reader takes a body's statements from its shape, never from the parse: the shape owns
+        // them rewritten, and every site it records is an address inside them.
+        lines: shape.body(),
+        activation,
+        writer,
+        storage: writer,
+    })
 }
 
 /// Shape and activate `source` with every slot empty, run the door over every component of type

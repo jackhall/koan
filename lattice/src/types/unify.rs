@@ -689,13 +689,13 @@ pub(super) fn member_at_least<'run>(
     a: Linked<'run>,
     b: Linked<'run>,
 ) -> bool {
-    if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::MemberAtLeast) {
+    if let Some(known) = types.verdict(a.handle(), b.handle(), Relation::MemberAtLeast) {
         return known;
     }
     let mut collector = Collector::<Linked<'run>>::new(types, scratch, &[]);
     let answer = admits(types, scratch, b, a, Variance::Co, &mut collector).is_ok()
         && collector.solve(types).is_ok();
-    types.record_verdict(a.digest(), b.digest(), Relation::MemberAtLeast, answer);
+    types.record_verdict(a.handle(), b.handle(), Relation::MemberAtLeast, answer);
     answer
 }
 

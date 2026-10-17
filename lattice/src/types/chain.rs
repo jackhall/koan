@@ -9,12 +9,14 @@
 //! the tiers themselves.
 //!
 //! Each node is a [`StoredNode`](super::stored::StoredNode) laid alone in the half the chain
-//! writes, holding its own digest beside its content and a reference to each child's node. A
-//! [`Handle`] *is* the digest of its node, and the digest is already a uniformly distributed hash,
+//! writes, holding its own handle beside its content and a reference to each child's node. A
+//! [`Handle`] is the digest of its node under two flags, and the digest is already a uniformly distributed hash,
 //! so each tier's table finds a node by its digest's low word and compares against the digest the
-//! node holds — it stores no second copy. Interning is insert-if-absent: [`find`](TypeChain::find)
-//! probes the root, the region tier, then the own tier, longest-lived first, and a miss lays the
-//! node in the own tier. Building the same content twice in a chain yields one node and two equal
+//! node holds — it stores no second copy. Interning is insert-if-absent: [`find`](TypeChain::find),
+//! which has a digest and no flags, probes the root, the region tier, then the own tier,
+//! longest-lived first, and a miss lays the node in the own tier. A lookup by handle
+//! ([`locate`](TypeChain::locate)) is routed by the handle's in-root bit: a root handle probes the
+//! root alone, and any other skips it. Building the same content twice in a chain yields one node and two equal
 //! handles. Nothing ever leaves a tier and nothing in one carries drop glue, so a half releases its
 //! branch and every node in it whole.
 //!
@@ -30,9 +32,9 @@
 //! outside sealed content, whether an opaque carrier outside sealed content is reachable, and
 //! whether the type is porous or exposing — so each probe is one read of the node.
 //!
-//! A verdict is read from the own tier, the region tier and the root, shortest-lived first, and
-//! recorded in the shortest-lived tier holding one of its two types
-//! ([`verdicts`](super::verdicts)).
+//! A verdict over two root types is read from the root's table alone, and any other from the own
+//! tier's and the region tier's; it is recorded in the shortest-lived tier holding one of its two
+//! types ([`verdicts`](super::verdicts)).
 //!
 //! [`adopt`](TypeChain::adopt), [`merge`](TypeChain::merge) and [`link`](TypeChain::link) are how a
 //! crossing makes another half's handles resolve here ([transfer.rs](super::transfer)).
@@ -143,6 +145,12 @@ pub struct TypeChain<'t, H> {
     /// `test`-only: how many handles have been entered, so a test can count a walk's lookups.
     #[cfg(test)]
     lookups: Cell<usize>,
+    /// `test`-only: how many probes the frozen root's node or verdict table has taken.
+    #[cfg(test)]
+    root_probes: Cell<usize>,
+    /// `test`-only: how many probes the own or region tier's verdict table has taken.
+    #[cfg(test)]
+    branch_verdict_probes: Cell<usize>,
 }
 
 impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> TypeChain<'t, Halves<'r, 't, H, R>> {
@@ -150,6 +158,11 @@ impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> TypeChain<'t, Halves<'r, 't, H,
     /// own. The region is held by value, so building the chain lays nothing, and it is re-read on
     /// every probe, so a branch the region lays during the step is seen.
     pub fn scratch(root: &'t Root<'t>, region: R, half: H) -> Self {
+        debug_assert!(
+            !matches!(region.own(), Some(Own::Builder(_))),
+            "a root builder is no region tier: its nodes are the root's, and a lookup by handle \
+             reads them in the root alone"
+        );
         Self::new(root, Halves::over(half, region))
     }
 }
@@ -184,6 +197,10 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             half,
             #[cfg(test)]
             lookups: Cell::new(0),
+            #[cfg(test)]
+            root_probes: Cell::new(0),
+            #[cfg(test)]
+            branch_verdict_probes: Cell::new(0),
         }
     }
 
@@ -213,6 +230,31 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     #[cfg(test)]
     pub(super) fn lookups(&self) -> usize {
         self.lookups.get()
+    }
+
+    /// `test`-only: how many probes the frozen root's node or verdict table has taken.
+    #[cfg(test)]
+    pub(super) fn root_probes(&self) -> usize {
+        self.root_probes.get()
+    }
+
+    /// `test`-only: how many probes the own or region tier's verdict table has taken.
+    #[cfg(test)]
+    pub(super) fn branch_verdict_probes(&self) -> usize {
+        self.branch_verdict_probes.get()
+    }
+
+    /// `test`-only: count one probe of the frozen root's tables.
+    fn count_root_probe(&self) {
+        #[cfg(test)]
+        self.root_probes.set(self.root_probes.get() + 1);
+    }
+
+    /// `test`-only: count one probe of a branch tier's verdict table.
+    fn count_branch_verdict_probe(&self) {
+        #[cfg(test)]
+        self.branch_verdict_probes
+            .set(self.branch_verdict_probes.get() + 1);
     }
 
     /// Intern every constant node, so a fixed handle always resolves. `scratch` serves the doors
@@ -329,7 +371,11 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         }
         let content = lay();
         debug_assert!(self.find(digest).is_none(), "`lay` interns nothing");
-        let node: Linked<'t> = lay_one(self.half, StoredNode::new(digest, content));
+        // The load's chain, the one with no root, lays into the root builder.
+        let node: Linked<'t> = lay_one(
+            self.half,
+            StoredNode::new(digest, content, self.root.is_none()),
+        );
         self.half.own_or_lay().insert(self.half, node);
         node
     }
@@ -380,20 +426,25 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     pub(super) fn enter(&self, handle: Handle) -> Linked<'t> {
         #[cfg(test)]
         self.lookups.set(self.lookups.get() + 1);
-        let digest = handle.digest();
-        match self.resolve(digest) {
+        match self.resolve(handle) {
             Some(found) => found,
-            None => panic!("type handle 0x{:032x} names no interned node", digest.0),
+            None => panic!(
+                "type handle 0x{:032x} names no interned node",
+                handle.digest().0
+            ),
         }
     }
 
-    /// The node under `digest` in a tier the chain probes, else through a link, cached in the own
-    /// tier so the next read probes no link.
-    pub(super) fn resolve(&self, digest: TypeDigest) -> Option<Linked<'t>> {
-        if let Some(found) = self.find(digest) {
+    /// The node under `handle` in a tier the chain probes, else — for a handle not the root's —
+    /// through a link, cached in the own tier so the next read probes no link.
+    pub(super) fn resolve(&self, handle: Handle) -> Option<Linked<'t>> {
+        if let Some(found) = self.locate(handle) {
             return Some(found);
         }
-        let found = self.linked_reach(digest)?;
+        if handle.in_root() {
+            return None;
+        }
+        let found = self.linked_reach(handle.digest())?;
         self.half.own_or_lay().insert(self.half, found);
         Some(found)
     }
@@ -401,40 +452,73 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// Whether `handle` names a node this chain can read: in a tier it probes, or through a link.
     /// Caches nothing, so a check that reads it leaves the tiers as they were.
     pub fn resolves(&self, kt: impl Into<DeclaredType<Parametric>>) -> bool {
-        let digest = kt.into().raw().digest();
-        self.find(digest).is_some() || self.linked_reach(digest).is_some()
+        let handle = kt.into().raw();
+        self.locate(handle).is_some()
+            || (!handle.in_root() && self.linked_reach(handle.digest()).is_some())
     }
 
     /// Whether `kt`'s node lies in the frozen root, or, on the load's chain, in the root builder:
-    /// a type every chain over the root resolves. Reads no link and caches nothing.
+    /// a type every chain over the root resolves. Reads the handle's in-root bit: looks nothing
+    /// up.
     pub fn in_root(&self, kt: impl Into<DeclaredType<Parametric>>) -> bool {
-        let digest = kt.into().raw().digest();
-        match (self.root, self.half.own()) {
-            (Some(root), _) => root.find(digest).is_some(),
-            (None, Some(Own::Builder(builder))) => builder.find(digest).is_some(),
-            (None, _) => unreachable!("a chain with no root writes the root builder"),
-        }
+        kt.into().raw().in_root()
     }
 
     /// The node under `digest` in the root, the region tier or the own tier, longest-lived first —
-    /// the intern's probe, which reads no link.
+    /// the intern's probe, which knows no bits and reads no link.
     pub(super) fn find(&self, digest: TypeDigest) -> Option<Linked<'t>> {
-        Some(self.placed(digest)?.1)
-    }
-
-    /// The node under `digest` and the tier [`find`](Self::find) finds it in.
-    fn placed(&self, digest: TypeDigest) -> Option<(Placed, Linked<'t>)> {
-        if let Some(found) = self.root.and_then(|root| root.find(digest)) {
-            return Some((Placed::Root, found));
+        if let Some(root) = self.root {
+            self.count_root_probe();
+            if let Some(found) = root.find(digest) {
+                return Some(found);
+            }
         }
-        if let Some(found) = self
-            .half
+        self.half
             .region()
             .and_then(|region| region.tier().find(digest))
-        {
-            return Some((Placed::Region, found));
+            .or_else(|| self.half.own()?.find(digest))
+    }
+
+    /// The node under `handle` in a tier the chain probes, routed by its in-root bit: a root
+    /// handle's in the root alone — on the load's chain, the builder, its own tier — and any
+    /// other's in the region tier, then the own tier, never the root. Reads no link.
+    pub(super) fn locate(&self, handle: Handle) -> Option<Linked<'t>> {
+        let digest = handle.digest();
+        if handle.in_root() {
+            return match self.root {
+                Some(root) => {
+                    self.count_root_probe();
+                    root.find(digest)
+                }
+                None => self.half.own()?.find(digest),
+            };
         }
-        Some((Placed::Own, self.half.own()?.find(digest)?))
+        self.half
+            .region()
+            .and_then(|region| region.tier().find(digest))
+            .or_else(|| self.half.own()?.find(digest))
+    }
+
+    /// The tier holding `handle`, longest-lived first, without probing the root: a root handle's
+    /// is the root (the own tier on the load's chain); any other's is the region tier or the own
+    /// tier, and the own tier where neither finds it — a child of a node read through a link.
+    fn tier_of(&self, handle: Handle) -> Placed {
+        if handle.in_root() {
+            return if self.root.is_some() {
+                Placed::Root
+            } else {
+                Placed::Own
+            };
+        }
+        let in_region = self
+            .half
+            .region()
+            .is_some_and(|region| region.tier().find(handle.digest()).is_some());
+        if in_region {
+            Placed::Region
+        } else {
+            Placed::Own
+        }
     }
 
     /// The node under `digest` through the own branch's link, then the region tier's.
@@ -683,7 +767,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         names: &[BinderSymbol],
     ) -> N {
         debug_assert!(
-            Handle::from_digest(kind.digest()).code_parent().is_some(),
+            kind.linked(self).handle().code_parent().is_some(),
             "a code kind needing names is a kind below `Code`",
         );
         if names.is_empty() {
@@ -1305,9 +1389,22 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     // The probes themselves read a node's flags ([`StoredNode`]); these are their public doors.
 
     /// `kt` as a [`KType`] where it is concrete — the one checked conversion from a parametric
-    /// type. `None` where a variable is reachable from it.
+    /// type. `None` where a variable is reachable from it. Reads the handle's concrete bit.
     pub fn concrete(&self, kt: Parametric) -> Option<KType> {
-        self.enter(kt.raw()).is_concrete().then(|| wrap(kt.raw()))
+        kt.raw().is_concrete().then(|| wrap(kt.raw()))
+    }
+
+    /// `declared` as a value's type: a type narrowed to concrete through
+    /// [`concrete`](Self::concrete), `None` where a variable is reachable from it, and a scheme as
+    /// it is.
+    pub fn concrete_declared(
+        &self,
+        declared: DeclaredType<Parametric>,
+    ) -> Option<DeclaredType<KType>> {
+        match declared {
+            DeclaredType::Type(kt) => self.concrete(kt).map(DeclaredType::Type),
+            DeclaredType::Scheme(scheme) => Some(DeclaredType::Scheme(scheme)),
+        }
     }
 
     /// Whether `kt` holds an opaque carrier outside sealed content. A bound holds none, so the
@@ -1402,50 +1499,59 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
 
     // --- Verdicts ---
 
-    /// The verdict recorded for the key in the own tier, the region tier or the root,
-    /// shortest-lived first.
+    /// The verdict recorded for the pair: over two root types, in the root's table alone — on the
+    /// load's chain, the builder's — and over any other pair in the own tier's, then the region
+    /// tier's. A pair over a branch type is recorded in a branch, never in the root.
     pub(super) fn verdict(
         &self,
-        subject: TypeDigest,
-        candidate: TypeDigest,
+        subject: Handle,
+        candidate: Handle,
         relation: Relation,
     ) -> Option<bool> {
         let key = VerdictKey {
-            subject,
-            candidate,
+            subject: subject.digest(),
+            candidate: candidate.digest(),
             relation,
         };
+        if subject.in_root() && candidate.in_root() {
+            return match self.root {
+                Some(root) => {
+                    self.count_root_probe();
+                    root.verdict(key)
+                }
+                None => self.half.own()?.verdict(key),
+            };
+        }
         self.half
             .own()
-            .and_then(|own| own.verdict(key))
-            .or_else(|| {
-                self.half
-                    .region()
-                    .and_then(|region| region.tier().verdict(key))
+            .and_then(|own| {
+                self.count_branch_verdict_probe();
+                own.verdict(key)
             })
-            .or_else(|| self.root.and_then(|root| root.verdict(key)))
+            .or_else(|| {
+                self.half.region().and_then(|region| {
+                    self.count_branch_verdict_probe();
+                    region.tier().verdict(key)
+                })
+            })
     }
 
-    /// Record `verdict` for the key in the shortest-lived tier holding one of its two types, where
-    /// [`find`](Self::find) finds each. A type it finds in no tier — a child of a node read through
-    /// a link — counts as the own tier's: the shortest-lived the chain writes.
+    /// Record `verdict` for the pair in the shortest-lived tier holding one of its two types, as
+    /// [`tier_of`](Self::tier_of) places each. A type it finds in no tier — a child of a node read
+    /// through a link — counts as the own tier's: the shortest-lived the chain writes.
     pub(super) fn record_verdict(
         &self,
-        subject: TypeDigest,
-        candidate: TypeDigest,
+        subject: Handle,
+        candidate: Handle,
         relation: Relation,
         verdict: bool,
     ) {
         let key = VerdictKey {
-            subject,
-            candidate,
+            subject: subject.digest(),
+            candidate: candidate.digest(),
             relation,
         };
-        let placed = |digest| {
-            self.placed(digest)
-                .map_or(Placed::Own, |(placed, _)| placed)
-        };
-        match placed(subject).max(placed(candidate)) {
+        match self.tier_of(subject).max(self.tier_of(candidate)) {
             Placed::Root => {
                 if let Some(root) = self.root {
                     root.record(key, verdict);

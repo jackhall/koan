@@ -134,14 +134,16 @@ fn a_module_is_incomparable() {
 fn a_ring_renders_with_a_label_where_it_closes() {
     with_fixture(|fixture| {
         let (symbols, scratch) = (fixture.symbols, fixture.scratch());
-        for (source, expected) in [
+        // Every program shapes in the load, before the first cell freezes its root.
+        let programs = [
             (
                 "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = a})",
                 "@0 = Ring({next = @0})",
             ),
             (RING, "@0 = Ring({next = Ring({next = @0})})"),
-        ] {
-            let lines = fixture.parse(source);
+        ]
+        .map(|(source, expected)| (fixture.parse(source), expected));
+        for (lines, expected) in programs {
             fixture.in_cell(pin, |context| {
                 let types = &fixture.tiers.of(context);
                 let activation = fixture.run(context.writer(), types, &lines, &[]);

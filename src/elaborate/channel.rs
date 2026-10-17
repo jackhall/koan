@@ -900,24 +900,14 @@ type Signatures<'p> = BumpVec<'p, ((usize, Slot), Option<(KType, BumpVec<'p, Hea
 /// own group's variables, so none escapes free.
 const FREE: &str = "a load-time type that read no lexical variable holds no variable";
 
-/// `declared` where it read no lexical variable: a scheme as it is, a type narrowed to concrete.
-fn close_declared(
-    types: &Chain<'_, '_, '_, '_, '_>,
-    declared: DeclaredType<Parametric>,
-) -> DeclaredType<KType> {
-    match declared {
-        DeclaredType::Type(kt) => DeclaredType::Type(types.concrete(kt).expect(FREE)),
-        DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
-    }
-}
-
-/// [`close_declared`] over a callable and its bucket entry.
+/// A callable and its bucket entry that read no lexical variable, each declared type narrowed to
+/// concrete and a scheme kept as it is.
 fn close_callable<'graph>(
     types: &Chain<'_, '_, '_, '_, '_>,
     callable: Callable<'graph>,
 ) -> Callable<'graph, KType> {
     Callable {
-        ktype: close_declared(types, callable.ktype),
+        ktype: types.concrete_declared(callable.ktype).expect(FREE),
         quantifier_map: callable.quantifier_map,
         registered: callable
             .registered
@@ -925,13 +915,14 @@ fn close_callable<'graph>(
     }
 }
 
-/// [`close_declared`] over a bucket entry.
+/// A bucket entry that read no lexical variable, its shape narrowed as
+/// [`close_callable`] narrows a callable's type.
 fn close_registered<'graph>(
     types: &Chain<'_, '_, '_, '_, '_>,
     registered: Registered<'graph>,
 ) -> Registered<'graph, KType> {
     Registered {
-        shape: close_declared(types, registered.shape),
+        shape: types.concrete_declared(registered.shape).expect(FREE),
         quantifier_map: registered.quantifier_map,
         parameters: registered.parameters,
     }

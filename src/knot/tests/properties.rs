@@ -420,10 +420,10 @@ proptest! {
                 .enter(home, |context| {
                     let types = &fixture.tiers.of(context);
                     let writer = context.writer();
-                    let builtins = fixture.builtins(writer, types);
-                    let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.types, fixture.symbols, fixture.scratch())
-                        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.symbols, fixture.types)));
-                    let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
+                    let activation = resident(
+                        writer,
+                        KActivation::of_program(writer, lines.shape, fixture.builtins()),
+                    );
                     let mut tied = Vec::new();
                     run(fixture, writer, types, activation, &mut 0.0, &mut tied);
 

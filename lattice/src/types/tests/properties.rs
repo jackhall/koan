@@ -1375,7 +1375,7 @@ fn static_and_carried<'ty>(
                     upper: static_type,
                 },
                 match lattice::meet_through_variables(types, scratch, run, draw.drawn[k].raw()) {
-                    Handle::NEVER => run,
+                    met if met == Handle::NEVER => run,
                     met => met,
                 },
             ),
@@ -1865,7 +1865,7 @@ fn beside<'r>(world: &World, region: &'r Bump) -> TypeChain<'r, BumpHalf<'r>> {
 }
 
 /// Whether `kt` reads in `there` exactly as in the world: one digest recomputed off its content,
-/// one set of flags, one rendering — which enters every handle a side table holds.
+/// one set of flags, one pair of handle bits, one rendering — which enters every handle a side table holds.
 fn reads_alike<'r>(
     world: &World,
     there: &TypeChain<'r, BumpHalf<'r>>,
@@ -1875,6 +1875,8 @@ fn reads_alike<'r>(
     let (here, laid) = (world.types.enter(kt.raw()), there.enter(kt.raw()));
     crate::types::digest::node_digest(&scratch, &laid.view()) == here.digest()
         && laid.flags() == here.flags()
+        && laid.handle().in_root() == here.handle().in_root()
+        && laid.handle().is_concrete() == here.handle().is_concrete()
         && crate::types::display_name(kt, there, &world.symbols).to_string()
             == crate::types::display_name(kt, &world.types, &world.symbols).to_string()
 }
@@ -1927,5 +1929,58 @@ proptest! {
         let before = read;
         there.enter(kt.raw());
         prop_assert_eq!(there.own_len(), before, "a second read caches nothing more");
+    }
+}
+
+// --- Handle flags ---
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// A handle's two flags are not its identity: under any flags, it equals, hashes and orders
+    /// as itself, and its digest holds neither.
+    #[test]
+    fn a_handles_flags_are_not_its_identity(kt in one()) {
+        use std::hash::BuildHasher;
+        let handle = kt.raw();
+        let hasher = std::collections::hash_map::RandomState::new();
+        for (in_root, concrete) in [(false, false), (false, true), (true, false), (true, true)] {
+            let flagged = Handle::new(handle.digest(), in_root, concrete);
+            prop_assert_eq!(flagged, handle);
+            prop_assert_eq!(hasher.hash_one(flagged), hasher.hash_one(handle));
+            prop_assert_eq!(flagged.cmp(&handle), std::cmp::Ordering::Equal);
+        }
+        prop_assert_eq!(handle.digest().0 >> 126, 0);
+    }
+
+    /// A handle's flags are true of its node, and so are each of its children's: in-root where the
+    /// root holds the node, concrete where nothing parametric is reachable from it.
+    #[test]
+    fn a_handles_flags_are_true(kt in one()) {
+        let world = world();
+        let node = world.types.enter(kt.raw());
+        let mut handles = vec![node.handle()];
+        crate::types::walk::unary::children(&node.view(), &mut |child, _| {
+            handles.push(child.handle());
+        });
+        for handle in handles {
+            prop_assert_eq!(handle.in_root(), world.root.find(handle.digest()).is_some());
+            prop_assert_eq!(handle.is_concrete(), world.types.enter(handle).is_concrete());
+        }
+    }
+
+    /// `concrete_declared` is `concrete` lifted over a declared type: a scheme as it is.
+    #[test]
+    fn concrete_declared_lifts_concrete(kt in one()) {
+        let world = world();
+        let lifted = world.types.concrete_declared(kt);
+        match kt {
+            DeclaredType::Scheme(scheme) => {
+                prop_assert_eq!(lifted, Some(DeclaredType::Scheme(scheme)));
+            }
+            DeclaredType::Type(kt) => {
+                prop_assert_eq!(lifted, world.types.concrete(kt).map(DeclaredType::Type));
+            }
+        }
     }
 }

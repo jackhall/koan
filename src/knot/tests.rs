@@ -5,6 +5,10 @@
 //! through the tie, each lone data binder whose right-hand side lowers, and each lone binder of a
 //! quote through the quote door — beside readers for what a slot then holds.
 //!
+//! As a program's load does, [`Fixture::parse`] shapes a program through the load's chain over a
+//! builtin table in program storage; the first cell's chain then freezes the root, so every
+//! program a test runs is parsed before its first cell.
+//!
 //! A module binder is brought body-first: the runner builds its body's activation, runs every
 //! component of that body, and only then ties the binder with the finished activation. The
 //! module suites read this fixture too, so its doors are `pub(crate)`.
@@ -21,19 +25,16 @@ mod properties;
 
 use crate::elaborate::type_declarations;
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, Header, NoDelivery, NoScratch, Prices, ProgramBrand,
-    ReleaseAbsorption, StepContext, Verdict, Writer, program_storage, reattachable, resident,
+    Bump, BumpAllocator, CellGraph, NoDelivery, NoScratch, Prices, ProgramBrand, ReleaseAbsorption,
+    StepContext, Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::scope::{BodyShape, Builtins, Component, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
-use crate::type_lattice::{Halves, Root};
 use crate::values::tests::TestTypes;
-use crate::values::{
-    Chain, Circular, Half, Knotted as _, Link, TypeHeader, TypeValue, Types, Value,
-};
+use crate::values::{Chain, Circular, Knotted as _, Link, TypeHeader, TypeValue, Types, Value};
 
 use super::module::body_activation;
 use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
@@ -57,6 +58,24 @@ pub(crate) struct Fixture<'f, 'graph> {
     pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
+    /// The builtin table every program is shaped and activated over, laid in program storage by
+    /// the load, as a program's is.
+    loaded: &'graph Builtins<'graph, Knotted<'graph, 'graph>>,
+}
+
+/// A program the load shaped: its parsed lines, and the shape [`Fixture::parse`] built over them
+/// before any cell ran. Reads as its lines.
+pub(crate) struct Parsed<'graph> {
+    lines: Vec<KExpression<'graph>>,
+    pub shape: &'graph BodyShape<'graph>,
+}
+
+impl<'graph> std::ops::Deref for Parsed<'graph> {
+    type Target = [KExpression<'graph>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.lines
+    }
 }
 
 /// Run `test` against a fresh fixture.
@@ -70,12 +89,14 @@ pub(crate) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
     let types = tiers.load();
     let symbols = SymbolInterner::new();
     let scratch = Bump::new();
+    let loaded = builtin_table(program.writer(), &types, &symbols, &scratch);
     test(&Fixture {
         program,
         types: &types,
         tiers: &tiers,
         symbols: &symbols,
         scratch: &scratch,
+        loaded,
     })
 }
 
@@ -84,10 +105,27 @@ impl<'graph> Fixture<'_, 'graph> {
         self.scratch
     }
 
-    /// Every top-level line of `source`, parsed into program storage.
-    pub fn parse(&self, source: &str) -> Vec<KExpression<'graph>> {
-        parse(self.program, self.symbols, source)
-            .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"))
+    /// Every top-level line of `source`, parsed into program storage and shaped through the
+    /// load's chain over the fixture's builtins — the load's work, done before any cell's chain
+    /// freezes the root.
+    pub fn parse(&self, source: &str) -> Parsed<'graph> {
+        let lines = parse(self.program, self.symbols, source)
+            .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
+        let shape = BodyShape::of_program(
+            self.program,
+            &lines,
+            self.loaded,
+            self.types,
+            self.symbols,
+            self.scratch,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "the program shapes: {}",
+                error.display(self.symbols, self.types)
+            )
+        });
+        Parsed { lines, shape }
     }
 
     /// Run `step` in one cell of a graph built under `verdict`.
@@ -107,105 +145,26 @@ impl<'graph> Fixture<'_, 'graph> {
         out
     }
 
+    /// The builtin table every program is shaped and activated over.
+    pub fn builtins(&self) -> &'graph Builtins<'graph, Knotted<'graph, 'graph>> {
+        self.loaded
+    }
+
     pub fn name(&self, text: &str) -> BinderSymbol {
         BinderSymbol::declared(text, self.symbols).expect("a binder name")
     }
 
-    /// `origin = 0`, the scalar types, and a `Null` overload at the generated plans' `ZZ _` and
-    /// `ZZ _ _`, laid down in `writer`'s region, typed through `types`.
-    pub fn builtins<'cell>(
-        &self,
-        writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
-    ) -> &'cell Builtins<'cell, Knotted<'graph, 'cell>> {
-        let origin = ValueSymbol::declared("origin", self.symbols).expect("a value token");
-        let types: Vec<_> = [
-            ("Number", KType::NUMBER),
-            ("Str", KType::STR),
-            ("Bool", KType::BOOL),
-            ("Null", KType::NULL),
-            ("Any", KType::ANY),
-            ("Value", KType::ANY_VALUE),
-        ]
-        .into_iter()
-        .map(|(name, handle)| {
-            let name = TypeSymbol::declared(name, self.symbols).expect("a Type token");
-            (name, Value::Type(TypeValue::new(writer, handle, types)))
-        })
-        .collect();
-        Builtins::new(
-            writer,
-            self.scratch,
-            &[(origin, Value::Number(0.0))],
-            &types,
-            &[
-                (self.symbols.key("ZZ _").expect("a key"), Value::Null),
-                (self.symbols.key("ZZ _ _").expect("a key"), Value::Null),
-            ],
-        )
-    }
-
-    /// `lines` shaped through the load's chain and activated in `writer`'s region, then run through
-    /// `types`, the cell's chain: each component, in the order the shape emitted them, is brought
-    /// into being unless one of its members is named in `leave`, whose slots stay empty.
+    /// `parsed` activated in `writer`'s region, then run through `types`, the cell's chain: each
+    /// component, in the order the shape emitted them, is brought into being unless one of its
+    /// members is named in `leave`, whose slots stay empty.
     pub fn run<'cell>(
         &self,
         writer: Writer<'cell, '_>,
         types: &Chain<'graph, 'cell, 'cell, '_, '_>,
-        lines: &[KExpression<'graph>],
+        parsed: &Parsed<'graph>,
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
-        let builtins = self.builtins(writer, types);
-        let shape = self.shaped(lines, builtins);
-        self.activated(writer, types, shape, builtins, leave)
-    }
-
-    /// `lines` run as [`run`](Self::run) runs them over a load that ends once the program shapes:
-    /// the builder is frozen into a root, and every component is brought in through the chain a
-    /// step's own `types` builds over it — the one chain a birth settles through, which comes
-    /// back beside the activation and the root. The fixture's other chains read nothing of the
-    /// load after.
-    pub fn run_frozen<'cell, 'door>(
-        &self,
-        writer: Writer<'cell, 'door>,
-        header: Header<'graph, 'cell, 'door, TypeHeader>,
-        lines: &[KExpression<'graph>],
-    ) -> (
-        &'cell KActivation<'graph, 'cell>,
-        Types<'graph, 'cell, 'door>,
-        &'graph Root<'graph>,
-    ) {
-        let builtins = self.builtins(writer, &self.tiers.half(writer, header));
-        let shape = self.shaped(lines, builtins);
-        let root = self.tiers.freeze();
-        let types = Types::new(root, Halves::alone(Half::of(writer, header)));
-        (
-            self.activated(writer, &types, shape, builtins, &[]),
-            types,
-            root,
-        )
-    }
-
-    /// `lines` shaped through the load's chain over `builtins`.
-    fn shaped<'cell>(
-        &self,
-        lines: &[KExpression<'graph>],
-        builtins: &'cell Builtins<'cell, Knotted<'graph, 'cell>>,
-    ) -> &'graph BodyShape<'graph> {
-        BodyShape::of_program(
-            self.program,
-            lines,
-            builtins,
-            self.types,
-            self.symbols,
-            self.scratch,
-        )
-        .unwrap_or_else(|error| {
-            panic!(
-                "the program shapes: {}",
-                error.display(self.symbols, self.types)
-            )
-        })
+        self.activated(writer, types, parsed.shape, self.loaded, leave)
     }
 
     /// `shape` activated in `writer`'s region over `builtins`, every component brought in through
@@ -362,6 +321,41 @@ impl<'graph> Fixture<'_, 'graph> {
             .checked_sub(1)
             .map(|at| at as usize)
     }
+}
+
+/// `origin = 0`, the scalar types, and a `Null` overload at the generated plans' `ZZ _` and
+/// `ZZ _ _`, laid down in `writer`'s region, typed through `types`.
+fn builtin_table<'graph, 'cell>(
+    writer: Writer<'cell, '_>,
+    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    symbols: &SymbolInterner,
+    scratch: BumpAllocator<'_>,
+) -> &'cell Builtins<'cell, Knotted<'graph, 'cell>> {
+    let origin = ValueSymbol::declared("origin", symbols).expect("a value token");
+    let table: Vec<_> = [
+        ("Number", KType::NUMBER),
+        ("Str", KType::STR),
+        ("Bool", KType::BOOL),
+        ("Null", KType::NULL),
+        ("Any", KType::ANY),
+        ("Value", KType::ANY_VALUE),
+    ]
+    .into_iter()
+    .map(|(name, handle)| {
+        let name = TypeSymbol::declared(name, symbols).expect("a Type token");
+        (name, Value::Type(TypeValue::new(writer, handle, types)))
+    })
+    .collect();
+    Builtins::new(
+        writer,
+        scratch,
+        &[(origin, Value::Number(0.0))],
+        &table,
+        &[
+            (symbols.key("ZZ _").expect("a key"), Value::Null),
+            (symbols.key("ZZ _ _").expect("a key"), Value::Null),
+        ],
+    )
 }
 
 /// The body a `MODULE` or `GROUP` node births.

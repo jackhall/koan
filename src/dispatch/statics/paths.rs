@@ -510,7 +510,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         };
         match closed {
             true => Static::Closed(Callable {
-                ktype: close(self, value.ktype),
+                ktype: self.types.concrete_declared(value.ktype).expect(CLOSED),
                 quantifier_map: value.quantifier_map,
                 registered: value
                     .registered
@@ -867,24 +867,19 @@ fn exact(types: &crate::values::Chain<'_, '_, '_, '_, '_>, typed: Interval) -> O
         .flatten()
 }
 
-/// `declared`, read through paths that all resolved closed, as the closed type or scheme it is.
-fn close(pass: &Pass<'_, '_, '_>, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
-    match declared {
-        DeclaredType::Type(value) => DeclaredType::Type(
-            pass.types
-                .concrete(value)
-                .expect("a type over closed paths alone is closed"),
-        ),
-        DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
-    }
-}
+/// Why a declared type read through paths that all resolved closed is concrete: each path reads a
+/// closed type, so no variable is left to reach.
+const CLOSED: &str = "a type over closed paths alone is closed";
 
 fn closed_registered<'graph>(
     pass: &Pass<'_, '_, '_>,
     registered: Registered<'graph>,
 ) -> Registered<'graph, KType> {
     Registered {
-        shape: close(pass, registered.shape),
+        shape: pass
+            .types
+            .concrete_declared(registered.shape)
+            .expect(CLOSED),
         quantifier_map: registered.quantifier_map,
         parameters: registered.parameters,
     }

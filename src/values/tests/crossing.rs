@@ -117,7 +117,8 @@ fn a_settled_bit_written_through_a_pinned_header_reads_in_a_later_step() {
         let holder = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                let types = &fixture.tiers.of(context);
+                // A paired chain settles nothing, so the bit the holder writes shows.
+                let types = &fixture.tiers.paired(context);
                 let writer = context.writer();
                 let fields = [(name, text(writer, "koan"))];
                 let record = Record::new(writer, &fields, types, scratch);
@@ -264,7 +265,13 @@ fn a_circular_value_copies_as_the_same_graph_and_pins_as_the_same_node() {
                 .enter(home, |context| {
                     let types = &fixture.tiers.of(context);
                     let writer = context.writer();
-                    let source = ring(fixture, writer, KType::STR, &[Some(text_in(writer)), None]);
+                    let source = ring(
+                        fixture,
+                        writer,
+                        types,
+                        KType::STR,
+                        &[Some(text_in(writer)), None],
+                    );
                     let carrier =
                         context.lift::<ValueFamily<NodeFamily>>(Holding::Knotted(source[0]));
                     let crossed = fixture.tiers.cross(context, dest, &carrier).unwrap();
@@ -316,7 +323,7 @@ fn two_members_of_one_knot_cross_as_members_of_one_copy() {
             .enter(home, |context| {
                 let types = &fixture.tiers.of(context);
                 let writer = context.writer();
-                let source = ring(fixture, writer, KType::STR, &[None, None]);
+                let source = ring(fixture, writer, types, KType::STR, &[None, None]);
                 let pair = [Holding::Knotted(source[0]), Holding::Knotted(source[1])];
                 let list = crate::values::List::new(writer, pair.into_iter(), types, scratch);
                 let carrier = context.lift::<ValueFamily<NodeFamily>>(Holding::List(list));

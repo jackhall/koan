@@ -24,19 +24,15 @@ pub(crate) fn interns_where_it_lays(types: &Chain<'_, '_, '_, '_, '_>) -> bool {
 
 /// What a holder folds from one part. A leaf's and a type value's memos resolve in the root or in
 /// the half a door over a chain that [interns where it lays][interns_where_it_lays] lays in, which
-/// is the only place their `settled` answer is folded in. `probe` is `false` once the holder is
-/// known not to be root-closed, so no root probe runs that cannot change its answer.
+/// is the only place their `settled` answer is folded in.
 pub(crate) fn part_bits<X: Knotted>(
     part: &Value<'_, X>,
     types: &Chain<'_, '_, '_, '_, '_>,
-    probe: bool,
 ) -> MemoBits {
     match part {
         Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) => MemoBits::BOTH,
         Value::Type(type_value) => MemoBits {
-            root_closed: probe
-                && types.in_root(type_value.ktype())
-                && types.in_root(type_value.handle()),
+            root_closed: types.in_root(type_value.ktype()) && types.in_root(type_value.handle()),
             settled: true,
         },
         Value::List(list) => list.bits(),
@@ -47,7 +43,7 @@ pub(crate) fn part_bits<X: Knotted>(
         Value::Retyped(header) => {
             let member = header.member().bits();
             MemoBits {
-                root_closed: probe && member.root_closed && types.in_root(header.ktype()),
+                root_closed: member.root_closed && types.in_root(header.ktype()),
                 settled: member.meets(),
             }
         }
@@ -55,7 +51,7 @@ pub(crate) fn part_bits<X: Knotted>(
 }
 
 /// The bits of a composite under `ktype` over `parts`, laid beside `types`: root-closed where
-/// every part is and `ktype` lies in the root, probed last; settled where every part meets the
+/// every part is and `ktype` lies in the root; settled where every part meets the
 /// contract and `types` interns where it lays.
 pub(crate) fn composite_bits<'a, X: Knotted + 'a>(
     types: &Chain<'_, '_, '_, '_, '_>,
@@ -67,7 +63,7 @@ pub(crate) fn composite_bits<'a, X: Knotted + 'a>(
         settled: interns_where_it_lays(types),
     };
     for part in parts {
-        let bits = part_bits(part, types, folded.root_closed);
+        let bits = part_bits(part, types);
         folded.root_closed &= bits.root_closed;
         folded.settled &= bits.meets();
         if !folded.meets() {
@@ -112,7 +108,7 @@ pub(crate) fn stamp_knot<'graph, 'cell, XF: KnottedFamily<'graph>>(
     };
     XF::held(member, &mut |held| {
         if bits.meets() {
-            let part = part_bits(&held, types, bits.root_closed);
+            let part = part_bits(&held, types);
             bits.root_closed &= part.root_closed;
             bits.settled &= part.meets();
         }

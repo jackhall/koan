@@ -3,7 +3,8 @@
 //!
 //! Every type carries a digest computed bottom-up from its children (a recursive set at seal,
 //! over its finite SCC presentation). Equality is one digest compare and hashing keys on the
-//! digest; the width is chosen so an accidental collision is less likely than a hardware fault,
+//! digest. A digest is the low 126 bits of the hash, so the two flag bits a handle keeps above it
+//! never reach a recipe, a child digest or a verdict key; the width is chosen so an accidental collision is less likely than a hardware fault,
 //! so digest equality is type equality with no repair path.
 //!
 //! The digest is a pure function of type content, so two independently built types with the same
@@ -34,9 +35,13 @@ use super::node::{ContentKey, NodeSchema, TypeNode};
 use super::schema::{SigOrigin, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
-/// A type's content identity: the low 128 bits of a BLAKE3 hash of its content.
+/// A type's content identity: the low 126 bits of a BLAKE3 hash of its content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct TypeDigest(pub(super) u128);
+
+/// The bits of a word a digest keeps: the low 126. A handle keeps its two flags in the top two
+/// ([`Handle`](super::handle::Handle)), so no digest holds a flag.
+pub(super) const DIGEST_BITS: u128 = u128::MAX >> 2;
 
 /// The digest's hexadecimal spelling — the one reading a caller outside the lattice has of the
 /// bits, for a diagnostic that names a handle by identity.
@@ -155,7 +160,7 @@ impl DigestHasher {
         let low: [u8; 16] = hash.as_bytes()[..16]
             .try_into()
             .expect("BLAKE3 output is 32 bytes");
-        TypeDigest(u128::from_le_bytes(low))
+        TypeDigest(u128::from_le_bytes(low) & DIGEST_BITS)
     }
 }
 

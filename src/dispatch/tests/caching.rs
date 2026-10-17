@@ -183,6 +183,49 @@ fn mixed_chain() -> String {
     format!("{INVARIANT}{START}PRINT (START ints chain)")
 }
 
+/// An adopt of a root handle is a bit test: across every caching loop, a hop's adoption probes
+/// fall to the handles that are not the root's, and hold flat in depth.
+#[test]
+fn adoption_probes_fall_to_branch_handles() {
+    use crate::type_lattice::{ADOPT_ASKED, ADOPT_PROBES};
+    let programs = [
+        ("invariant_loop", invariant_loop()),
+        ("wrapped_peeks", wrapped_peeks()),
+        ("hosted_peeks", hosted_peeks()),
+        ("varying_loop", varying_loop()),
+        ("HELPER_LOOP", HELPER_LOOP.to_string()),
+        ("PARKING_LOOP", PARKING_LOOP.to_string()),
+        ("mixed_chain", mixed_chain()),
+    ];
+    let counted = |depth: u32, source: &str| {
+        ADOPT_ASKED.with(|asked| asked.set(0));
+        ADOPT_PROBES.with(|probes| probes.set(0));
+        ran(depth, source);
+        (ADOPT_ASKED.with(Cell::get), ADOPT_PROBES.with(Cell::get))
+    };
+    let hops = (DEPTHS[1] - DEPTHS[0]) as usize;
+    eprintln!("| program | asked/hop | probes/hop |");
+    for (name, source) in programs {
+        let [(few_asked, few), (many_asked, many)] = DEPTHS.map(|depth| counted(depth, &source));
+        let (asked, probes) = (many_asked - few_asked, many - few);
+        eprintln!(
+            "| {name} | {:.1} | {:.1} |",
+            asked as f64 / hops as f64,
+            probes as f64 / hops as f64
+        );
+        assert!(
+            probes < asked,
+            "{name}: each loop adopts root handles at no lookup, {probes} probes of {asked}"
+        );
+        assert!(
+            many * DEPTHS[0] as usize <= few * DEPTHS[1] as usize,
+            "{name}: probes {few} over {} hops against {many} over {}",
+            DEPTHS[0],
+            DEPTHS[1]
+        );
+    }
+}
+
 #[test]
 fn a_shares_call_with_new_content_each_call_holds_its_hosts_region_flat() {
     let source = hosted_peeks();

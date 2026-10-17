@@ -56,10 +56,7 @@ pub fn member<'graph, 'cell>(
         return Some(Value::Type(TypeValue::new(writer, declared, types)));
     }
     // A module carries a signature pinning every head parameter, so what it declares is closed.
-    let declared = match read.declared {
-        DeclaredType::Type(declared) => DeclaredType::Type(types.concrete(declared)?),
-        DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
-    };
+    let declared = types.concrete_declared(read.declared)?;
     let own = schema_of(node.ktype(), types)?;
     let (index, _) = schema_member(&own, scratch, name)?;
     let held = *node.members().get(index)?;

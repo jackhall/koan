@@ -58,7 +58,7 @@ fn a_composite_over_root_types_is_root_closed_whatever_chain_built_it() {
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let numbers = || [Value::Number(1.0), Value::Number(2.0)].into_iter();
-            let own = &fixture.tiers.own(context);
+            let own = &fixture.tiers.of(context);
             let shares = &fixture.tiers.shares(context);
             let laid = List::typed(writer, numbers(), KType::LIST_OF_ANY, own);
             assert_eq!(laid.bits(), MemoBits::BOTH);
@@ -81,7 +81,7 @@ fn a_composite_is_settled_only_through_a_chain_that_interns_where_it_lays() {
         let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let own = &fixture.tiers.own(context);
+            let own = &fixture.tiers.of(context);
             let shares = &fixture.tiers.shares(context);
             let settled = MemoBits {
                 root_closed: false,
@@ -105,7 +105,7 @@ fn a_part_meeting_no_contract_clears_its_holders_settled_bit() {
         let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let own = &fixture.tiers.own(context);
+            let own = &fixture.tiers.of(context);
             let shares = &fixture.tiers.shares(context);
             let porous = Record::new(writer, &[(inner, Value::Number(1.0))], shares, scratch);
             // Typed `List Any`, so the region chain never reads the part's scratch memo.
@@ -125,7 +125,7 @@ fn a_restamp_recomputes_both_bits_from_its_new_type() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let own = &fixture.tiers.own(context);
+            let own = &fixture.tiers.of(context);
             let shares = &fixture.tiers.shares(context);
             let numbers = [Value::Number(1.0)].into_iter();
             let list = List::typed(writer, numbers, KType::LIST_OF_ANY, own);
@@ -157,15 +157,15 @@ fn a_copy_is_settled_at_its_destination() {
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                // The fixture's chain reads the builder as a region tier, so it settles nothing.
-                let types = &fixture.tiers.of(context);
+                // A paired chain lays its types in the cell's branch, but settles nothing.
+                let types = &fixture.tiers.paired(context);
                 let writer = context.writer();
                 let part = Record::new(writer, &[(inner, Value::Number(1.0))], types, scratch);
                 let fields = [(outer, Value::Record(part))];
                 let record = Record::new(writer, &fields, types, scratch);
                 assert_eq!(record.bits(), MemoBits::NONE);
                 let source = context.lift::<ValueFamily>(Value::Record(record));
-                let crossed = cross(context, dest, &source, fixture.tiers.root).unwrap();
+                let crossed = cross(context, dest, &source, fixture.tiers.root()).unwrap();
                 assert_eq!(record.bits(), MemoBits::NONE, "the original is unchanged");
                 context.keep(crossed)
             })
@@ -200,7 +200,7 @@ fn an_exit_settles_what_it_walked() {
         let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let own = &fixture.tiers.own(context);
+            let own = &fixture.tiers.of(context);
             let shares = &fixture.tiers.shares(context);
             let laid = || {
                 let part = Record::new(writer, &[(inner, Value::Number(1.0))], shares, scratch);

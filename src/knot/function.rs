@@ -411,27 +411,16 @@ fn solved<'graph, 'x>(
 /// its declaration read is bound there.
 const BORN: &str = "a callable's type holds no variable once its levels are bound";
 
-/// `declared` where every level is bound: a scheme as it is, and a type narrowed to concrete.
-fn concrete_declared(
-    types: &Chain<'_, '_, '_, '_, '_>,
-    declared: DeclaredType<Parametric>,
-) -> DeclaredType<KType> {
-    match declared {
-        DeclaredType::Type(kt) => DeclaredType::Type(types.concrete(kt).expect(BORN)),
-        DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
-    }
-}
-
 /// `callable` as a function is born with it, every level its declaration read bound.
 fn born<'x>(
     types: &Chain<'_, '_, '_, '_, '_>,
     callable: Callable<'x, Parametric>,
 ) -> Callable<'x, KType> {
     Callable {
-        ktype: concrete_declared(types, callable.ktype),
+        ktype: types.concrete_declared(callable.ktype).expect(BORN),
         quantifier_map: callable.quantifier_map,
         registered: callable.registered.map(|registered| Registered {
-            shape: concrete_declared(types, registered.shape),
+            shape: types.concrete_declared(registered.shape).expect(BORN),
             quantifier_map: registered.quantifier_map,
             parameters: registered.parameters,
         }),
@@ -450,7 +439,9 @@ fn loaded<'graph, 'x>(
     scratch: BumpAllocator<'x>,
 ) -> Option<Callable<'x, KType>> {
     let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
-        concrete_declared(types, substitute_levels(types, scratch, value, bindings))
+        types
+            .concrete_declared(substitute_levels(types, scratch, value, bindings))
+            .expect(BORN)
     };
     let paths = |at, entry: &_| bound_path(activation, types, at, entry);
     let callable =

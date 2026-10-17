@@ -337,7 +337,7 @@ fn a_branch_verdict_is_recorded_in_the_branch() {
         record_named(&types, &symbols, "y"),
     );
     assert!(!is_subtype_of(&types, &scratch, x, y));
-    let (x, y) = (x.raw().digest(), y.raw().digest());
+    let (x, y) = (x.raw(), y.raw());
     assert_eq!(types.verdict(x, y, Relation::Subtype), Some(false));
     let other = TypeChain::new(root, BumpHalf::new(&other_region));
     assert_eq!(
@@ -360,10 +360,7 @@ fn a_root_verdict_is_kept_by_the_root() {
         KType::ANY_VALUE
     ));
     let other = TypeChain::new(root, BumpHalf::new(&other_region));
-    let (number, value) = (
-        KType::NUMBER.raw().digest(),
-        KType::ANY_VALUE.raw().digest(),
-    );
+    let (number, value) = (KType::NUMBER.raw(), KType::ANY_VALUE.raw());
     assert_eq!(other.verdict(number, value, Relation::Subtype), Some(true));
 }
 
@@ -391,7 +388,7 @@ fn a_scratch_chain_records_a_region_verdict_in_the_region() {
         0,
         "the region's types are read, not laid"
     );
-    let (x, y) = (x.raw().digest(), y.raw().digest());
+    let (x, y) = (x.raw(), y.raw());
     assert_eq!(types.verdict(x, y, Relation::Subtype), Some(false));
     let next = TypeChain::scratch(root, region_half, BumpHalf::new(&second_scratch));
     assert_eq!(next.verdict(x, y, Relation::Subtype), Some(false));
@@ -467,4 +464,70 @@ fn in_root_on_the_loads_chain_reads_the_builder() {
         types.in_root(minted),
         "the load's chain interns into the root"
     );
+}
+
+/// A branch handle's in-root bit is clear, so its lookup never probes the root; a root handle's
+/// probes the root alone.
+#[test]
+fn a_branch_handle_is_looked_up_past_the_root() {
+    let symbols = SymbolInterner::new();
+    let region = Bump::new();
+    let types = crate::types::tests::tiered(&region);
+    let minted = record_named(&types, &symbols, "x");
+    let before = types.root_probes();
+    types.node(minted);
+    assert_eq!(
+        types.root_probes(),
+        before,
+        "a branch handle skips the root"
+    );
+    types.node(KType::NUMBER);
+    assert_eq!(
+        types.root_probes(),
+        before + 1,
+        "a root handle probes it once"
+    );
+}
+
+#[test]
+fn in_root_and_concrete_read_the_handle_alone() {
+    let symbols = SymbolInterner::new();
+    let (root_region, region) = (Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let types = TypeChain::new(root, BumpHalf::new(&region));
+    let minted = record_named(&types, &symbols, "x");
+    let variable = types.quantified(0, KType::ANY);
+    let (lookups, probes) = (types.lookups(), types.root_probes());
+    let answers = [
+        (
+            types.in_root(KType::NUMBER),
+            types.concrete(KType::NUMBER.into()).is_some(),
+        ),
+        (
+            types.in_root(minted),
+            types.concrete(minted.into()).is_some(),
+        ),
+        (types.in_root(variable), types.concrete(variable).is_some()),
+    ];
+    assert_eq!(types.lookups(), lookups, "no handle is entered");
+    assert_eq!(types.root_probes(), probes, "no root table is probed");
+    let truths = [KType::NUMBER.raw(), minted.raw(), variable.raw()].map(|handle| {
+        (
+            root.find(handle.digest()).is_some(),
+            types.enter(handle).is_concrete(),
+        )
+    });
+    assert_eq!(answers, truths);
+}
+
+#[test]
+fn adopting_a_root_handle_lays_and_probes_nothing() {
+    let (root_region, source_region, region) = (Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let source = TypeChain::new(root, BumpHalf::new(&source_region));
+    let types = TypeChain::new(root, BumpHalf::new(&region));
+    types.adopt(None, KType::NUMBER);
+    types.adopt_from(&source, KType::LIST_OF_ANY);
+    assert_eq!(types.own_len(), 0);
+    assert_eq!(types.root_probes(), 0);
 }

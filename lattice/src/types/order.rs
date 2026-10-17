@@ -104,7 +104,7 @@ fn related<'run>(
     if a == Handle::ANY || b == Handle::NEVER {
         return false;
     }
-    if let Some(known) = types.verdict(a.digest(), b.digest(), relation) {
+    if let Some(known) = types.verdict(a.handle(), b.handle(), relation) {
         return known;
     }
     let verdict = lockstep(
@@ -118,7 +118,7 @@ fn related<'run>(
             relation,
         },
     );
-    types.record_verdict(a.digest(), b.digest(), relation, verdict);
+    types.record_verdict(a.handle(), b.handle(), relation, verdict);
     verdict
 }
 

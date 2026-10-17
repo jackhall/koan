@@ -37,7 +37,7 @@ use super::RawSchemes;
 fn reading_an_uninterned_handle_panics() {
     let bump = Bump::new();
     let types = crate::types::tests::tiered(&bump);
-    let stranger = Handle::from_digest(TypeDigest(0xdead_beef));
+    let stranger = Handle::new(TypeDigest(0xdead_beef), false, true);
     types.node(stranger);
 }
 
@@ -1310,11 +1310,11 @@ fn the_order_never_solves_and_fits_does() {
 
     // One `fits` leaves its verdict under its own relation, apart from the order's.
     assert_eq!(
-        types.verdict(same.digest(), either.digest(), Relation::Fits),
+        types.verdict(same.raw(), either.raw(), Relation::Fits),
         Some(true)
     );
     assert_eq!(
-        types.verdict(same.digest(), either.digest(), Relation::Subtype),
+        types.verdict(same.raw(), either.raw(), Relation::Subtype),
         Some(false)
     );
 }

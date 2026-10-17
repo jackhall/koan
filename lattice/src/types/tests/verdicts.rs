@@ -6,16 +6,18 @@
 //! at its default size a realistic run of relations rarely evicts.
 
 use crate::bump::{Bump, BumpVec};
+use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::tests::allocation_count;
 
 use super::raw::order::is_subtype_of;
 use crate::types::chain::TypeChain;
 use crate::types::digest::TypeDigest;
-use crate::types::handle::{KType, TypeHandle};
+use crate::types::handle::{Handle, KType, TypeHandle};
 use crate::types::verdicts::Relation;
 
-fn key(n: u128) -> TypeDigest {
-    TypeDigest(n)
+/// A root handle over `n`: the suite runs on the load's chain, where every handle is in-root.
+fn key(n: u128) -> Handle {
+    Handle::new(TypeDigest(n), true, true)
 }
 
 #[test]
@@ -31,6 +33,56 @@ fn a_recorded_verdict_reads_back() {
     assert_eq!(
         types.verdict(key(2), key(1), Relation::Subtype),
         Some(false)
+    );
+}
+
+/// A record over a field named `x`, minted in a branch: a type the root does not hold.
+fn branch_type<'t, H: crate::types::tiers::Habitat<'t>>(
+    types: &TypeChain<'t, H>,
+    symbols: &SymbolInterner,
+) -> KType {
+    let field = BinderSymbol::declared("x", symbols).expect("a bindable token");
+    types.record(&Bump::new(), &[(field, KType::NUMBER)])
+}
+
+#[test]
+fn a_verdict_over_two_root_types_reads_the_root_table_alone() {
+    let symbols = SymbolInterner::new();
+    let region = Bump::new();
+    let types = crate::types::tests::tiered(&region);
+    // The own branch's verdict table is laid first, so a read that probed it would count.
+    let minted = branch_type(&types, &symbols);
+    types.record_verdict(minted.raw(), KType::NUMBER.raw(), Relation::Subtype, false);
+    let (branch, root) = (types.branch_verdict_probes(), types.root_probes());
+    types.verdict(
+        KType::NUMBER.raw(),
+        KType::ANY_VALUE.raw(),
+        Relation::Subtype,
+    );
+    assert_eq!(
+        types.branch_verdict_probes(),
+        branch,
+        "no branch table is read"
+    );
+    assert_eq!(
+        types.root_probes(),
+        root + 1,
+        "the root's table is read once"
+    );
+}
+
+#[test]
+fn a_verdict_over_a_branch_type_skips_the_root_table() {
+    let symbols = SymbolInterner::new();
+    let region = Bump::new();
+    let types = crate::types::tests::tiered(&region);
+    let minted = branch_type(&types, &symbols);
+    let root = types.root_probes();
+    types.verdict(minted.raw(), KType::NUMBER.raw(), Relation::Subtype);
+    assert_eq!(
+        types.root_probes(),
+        root,
+        "a branch pair never reads the root's table"
     );
 }
 

@@ -148,10 +148,7 @@ fn a_signature_declares_its_parameters_and_manifest_members() {
             assert!(
                 matches!(
                     program.types.node(rigid),
-                    TypeNode::Parameter {
-                        bound: KType::ANY,
-                        ..
-                    }
+                    TypeNode::Parameter { bound, .. } if bound == KType::ANY
                 ),
                 "an unbounded head parameter is bounded by `Any`"
             );

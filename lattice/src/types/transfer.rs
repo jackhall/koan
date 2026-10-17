@@ -32,7 +32,8 @@
 //! chain, lays each node the destination lacks at its own digest and
 //! flags through the third conversion ([`Content::transfer`]), children first, then makes every
 //! handle a side table holds resolve, which closes each cycle through a schema by a hit. A sealed
-//! component is re-laid whole, its table already absolute ([`Component::absolute`]).
+//! component is re-laid whole, its table already absolute ([`Component::absolute`]). An adopt of a
+//! root handle returns at once: every chain over the root resolves it, and its in-root bit says so.
 //!
 //! See [identity.md § Storage](identity.md#storage-a-root-and-its-branches).
 
@@ -40,8 +41,8 @@ use std::cell::Cell;
 
 use super::chain::{TypeChain, member_content};
 use super::component::Component;
-use super::digest::{self, ComponentMember, TypeDigest};
-use super::handle::{DeclaredType, Parametric};
+use super::digest::{self, ComponentMember};
+use super::handle::{DeclaredType, Handle, Parametric};
 use super::node::NodeSchema;
 use super::stored::{Content, Linked, StoredNode};
 use super::tiers::{Branch, BranchTier, Habitat, Tier, lay_one};
@@ -120,7 +121,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
                 reached
             },
             &mut |node| {
-                if self.find(node.digest()).is_none() {
+                if self.locate(node.handle()).is_none() {
                     half.own_or_lay().insert(half, node);
                 }
             },
@@ -150,26 +151,36 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     }
 
     fn adopt_in<'s>(&self, source: &impl Source<'s>, kt: impl Into<DeclaredType<Parametric>>) {
-        self.adopt_digest(source, kt.into().raw().digest());
+        let handle = kt.into().raw();
+        #[cfg(any(test, feature = "counters"))]
+        ADOPT_ASKED.with(|count| count.set(count.get() + 1));
+        // A root handle resolves in every chain over the root: a bit test, no lookup.
+        if handle.in_root() {
+            return;
+        }
+        #[cfg(any(test, feature = "counters"))]
+        ADOPT_PROBES.with(|count| count.set(count.get() + 1));
+        self.adopt_handle(source, handle);
     }
 
-    /// [`adopt`](Self::adopt) by digest, answering the node.
-    fn adopt_digest<'s>(&self, source: &impl Source<'s>, digest: TypeDigest) -> Linked<'t> {
-        if let Some(found) = self.resolve(digest) {
+    /// [`adopt`](Self::adopt) by handle, answering the node. A root child of a node re-laid here
+    /// still takes its one root probe: the re-laid content references the root's node.
+    fn adopt_handle<'s>(&self, source: &impl Source<'s>, handle: Handle) -> Linked<'t> {
+        if let Some(found) = self.resolve(handle) {
             return found;
         }
-        let from = source.reach(digest).unwrap_or_else(|| {
+        let from = source.reach(handle).unwrap_or_else(|| {
             panic!(
                 "a crossed value names type 0x{:032x}, which its home cannot resolve",
-                digest.0
+                handle.digest().0
             )
         });
         let content = from.content().transfer(
             self.half(),
-            &mut |child| self.adopt_digest(source, child.digest()),
+            &mut |child| self.adopt_handle(source, child.handle()),
             &mut |component| self.adopt_component(source, component),
         );
-        let node = self.intern_laid(digest, || content);
+        let node = self.intern_laid(handle.digest(), || content);
         match node.content() {
             Content::Scheme { group, .. } => {
                 for bound in group.bounds {
@@ -241,17 +252,30 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
 
 /// Where an adopt reads a node it lacks: one branch and its links, or a whole chain.
 trait Source<'s> {
-    fn reach(&self, digest: TypeDigest) -> Option<Linked<'s>>;
+    fn reach(&self, handle: Handle) -> Option<Linked<'s>>;
 }
 
 impl<'s> Source<'s> for Option<&Branch<'s>> {
-    fn reach(&self, digest: TypeDigest) -> Option<Linked<'s>> {
-        self.and_then(|branch| branch.reach(digest))
+    fn reach(&self, handle: Handle) -> Option<Linked<'s>> {
+        self.and_then(|branch| branch.reach(handle.digest()))
     }
 }
 
 impl<'s, H: Habitat<'s>> Source<'s> for &TypeChain<'s, H> {
-    fn reach(&self, digest: TypeDigest) -> Option<Linked<'s>> {
-        self.find(digest).or_else(|| self.linked_reach(digest))
+    fn reach(&self, handle: Handle) -> Option<Linked<'s>> {
+        self.locate(handle).or_else(|| {
+            (!handle.in_root())
+                .then(|| self.linked_reach(handle.digest()))
+                .flatten()
+        })
     }
+}
+
+#[cfg(any(test, feature = "counters"))]
+thread_local! {
+    /// How many handles `adopt` and `adopt_from` have been asked to make resolve, a side table's
+    /// included. Koan's caching suite reads it.
+    pub static ADOPT_ASKED: Cell<usize> = const { Cell::new(0) };
+    /// How many of those took a lookup: the ones whose in-root bit is clear.
+    pub static ADOPT_PROBES: Cell<usize> = const { Cell::new(0) };
 }

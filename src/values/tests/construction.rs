@@ -512,17 +512,6 @@ fn a_family_construction_takes_the_application_its_payload_solves() {
         };
 
         let boxed = fixture.family("Boxed", &["Type"], |names| Some(parameter(names, "Type")));
-        fixture.in_cell(pin, |context| {
-            let types = &fixture.tiers.of(context);
-            let writer = context.writer();
-            let head = TypeValue::new(writer, boxed, types);
-            let built = Tagged::construct(writer, head, Value::Number(7.0), types, scratch);
-            assert_eq!(
-                built.map(|tagged| tagged.ktype()),
-                Ok(applied(boxed, &[("Type", KType::NUMBER)]))
-            );
-        });
-
         let pair = fixture.family("Pair", &["Key", "Val"], |names| {
             Some(types.record(
                 scratch,
@@ -579,6 +568,15 @@ fn a_family_construction_takes_the_application_its_payload_solves() {
             construction(types, scratch, number_box, KType::NUMBER),
             Err(ConstructionRefused::NotConstructible(number_box))
         );
+
+        // The load ends here: the cell's chain freezes the root the families were declared into.
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let head = TypeValue::new(writer, boxed, types);
+            let built = Tagged::construct(writer, head, Value::Number(7.0), types, scratch);
+            assert_eq!(built.map(|tagged| tagged.ktype()), Ok(number_box));
+        });
     });
 }
 

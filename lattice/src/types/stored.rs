@@ -1,5 +1,5 @@
-//! [`StoredNode`] — one interned type as a tier's table stores it: its digest beside its
-//! [`Content`]. Each node is laid alone in the half its chain writes, and the table holds a
+//! [`StoredNode`] — one interned type as a tier's table stores it: its handle — the digest under
+//! the two flags it was laid with — beside its [`Content`]. Each node is laid alone in the half its chain writes, and the table holds a
 //! reference to it.
 //!
 //! The table stores a node apart from the [`TypeNode`] a reader sees, so storage can pack what a
@@ -202,7 +202,7 @@ pub(super) enum Content<'run> {
 /// every walk and relation inside the lattice reads.
 pub type Linked<'run> = &'run StoredNode<'run>;
 
-/// One interned node as the table stores it: its digest, then its content. Laid alone in the
+/// One interned node as the table stores it: its handle, then its content. Laid alone in the
 /// half its chain writes on an intern miss, so a reference to it lives as long as that half.
 /// Nominally `pub` so the sealed reading trait can name it; `stored` is private, so nothing
 /// outside the lattice can.
@@ -210,11 +210,12 @@ pub type Linked<'run> = &'run StoredNode<'run>;
 /// Two nodes compare, order and hash by digest. A reference is an identity only within one table,
 /// and a digest is one everywhere.
 pub struct StoredNode<'run> {
-    digest: TypeDigest,
+    /// The node's handle: its digest under the two flags it was laid with.
+    handle: Handle,
     content: Content<'run>,
 }
 
-// A node fills 48 B — its digest and 32 B of content — and the region releases it without running
+// A node fills 48 B — its handle and 32 B of content — and the region releases it without running
 // anything.
 const _: () = assert!(std::mem::size_of::<Content<'static>>() == 32);
 const _: () = assert!(std::mem::size_of::<StoredNode<'static>>() == 48);
@@ -222,19 +223,24 @@ const _: () = assert!(std::mem::align_of::<StoredNode<'static>>() == 16);
 const _: () = assert!(!std::mem::needs_drop::<StoredNode<'static>>());
 
 impl<'run> StoredNode<'run> {
-    /// `content` under `digest`, ready to lay in the region.
-    pub(super) fn new(digest: TypeDigest, content: Content<'run>) -> Self {
-        StoredNode { digest, content }
+    /// `content` under `digest`, ready to lay in the region: in the root's tier when `in_root`,
+    /// and concrete when its content holds nothing parametric.
+    pub(super) fn new(digest: TypeDigest, content: Content<'run>, in_root: bool) -> Self {
+        let concrete = !content.flags().holds(Flags::PARAMETRIC);
+        StoredNode {
+            handle: Handle::new(digest, in_root, concrete),
+            content,
+        }
     }
 
     /// The digest the node is interned under.
     pub(super) fn digest(&self) -> TypeDigest {
-        self.digest
+        self.handle.digest()
     }
 
-    /// The node's handle: its digest, as a handle.
+    /// The node's handle: its digest under its two flags.
     pub(super) fn handle(&self) -> Handle {
-        Handle::from_digest(self.digest)
+        self.handle
     }
 
     /// The node's content, by value.
@@ -448,7 +454,7 @@ impl<'run> StoredNode<'run> {
 
 impl PartialEq for StoredNode<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.digest == other.digest
+        self.digest() == other.digest()
     }
 }
 
@@ -462,26 +468,26 @@ impl PartialOrd for StoredNode<'_> {
 
 impl Ord for StoredNode<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.digest.cmp(&other.digest)
+        self.digest().cmp(&other.digest())
     }
 }
 
 impl Hash for StoredNode<'_> {
     fn hash<S: Hasher>(&self, state: &mut S) {
-        self.digest.hash(state);
+        self.digest().hash(state);
     }
 }
 
 /// A node compares against a handle by digest, so a reference reads against a constant.
 impl PartialEq<Handle> for &StoredNode<'_> {
     fn eq(&self, other: &Handle) -> bool {
-        self.digest == other.digest()
+        self.digest() == other.digest()
     }
 }
 
 impl fmt::Debug for StoredNode<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Linked(0x{:032x})", self.digest.0)
+        write!(f, "Linked(0x{:032x})", self.digest().0)
     }
 }
 

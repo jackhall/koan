@@ -86,29 +86,34 @@ pub(super) fn held<'cell, X: Copy>(
 }
 
 /// The types a test runs over, laid out as a load and a run lay them: a root builder the test's
-/// load-time work interns into through [`load`](Self::load), a seeded root, and a chain per habitat
-/// half that reads the root, then the builder's live table as its region tier, then the half's own
-/// branch — so a type a test interned outside a cell, or a shape built inside one, resolves in
-/// every cell, and a type a cell's value door builds lands in that cell's branch.
+/// load-time work interns into through [`load`](Self::load), frozen into the program's one root
+/// when the first cell's chain is built, and a chain per habitat half over that root — so a type a
+/// test interned before its cells resolves in every cell as a root type, and a type a cell's value
+/// door builds lands in that cell's branch. A handle's in-root bit names the root it was laid for,
+/// so a cell reads no live builder: the load ends before the run starts, as a program's does.
 pub(crate) struct TestTypes<'graph> {
     builder: &'graph RootBuilder<'graph>,
-    root: &'graph Root<'graph>,
+    root: std::cell::Cell<Option<&'graph Root<'graph>>>,
 }
 
 impl<'graph> TestTypes<'graph> {
-    /// A builder and a root, both laid in `bump`.
+    /// A builder laid in `bump`.
     pub fn new(bump: &'graph Bump) -> Self {
         TestTypes {
             builder: RootBuilder::in_region(bump),
-            root: Root::seeded(bump),
+            root: std::cell::Cell::new(None),
         }
     }
 
-    /// End the test's load: the builder frozen into a root of its own, which a step's own chain
-    /// reads over as a run's does. Every fixture chain reads the builder as a tier, so none reads
-    /// a type interned before this once it has run.
-    pub fn freeze(&self) -> &'graph Root<'graph> {
-        self.builder.freeze()
+    /// The program's root: the builder, frozen at the first call. The load's chain interns nothing
+    /// new after it.
+    pub fn root(&self) -> &'graph Root<'graph> {
+        if let Some(root) = self.root.get() {
+            return root;
+        }
+        let root = self.builder.freeze();
+        self.root.set(Some(root));
+        root
     }
 
     /// The chain a test's load-time work goes through: the builder, as the load's chain.
@@ -116,24 +121,22 @@ impl<'graph> TestTypes<'graph> {
         Types::building(Halves::alone(Half::load(self.builder)))
     }
 
-    /// The chain for the half `writer` lays into, whose header door is `header`.
+    /// The chain for the half `writer` lays into, whose header door is `header`: the root, then
+    /// the half's own branch, as a step's own `types` builds it. A door through it settles what it
+    /// lays.
     pub fn half<'here, 'door>(
         &self,
         writer: Writer<'here, 'door>,
         header: Header<'graph, 'here, 'door, TypeHeader>,
-    ) -> Chain<'graph, 'here, 'here, 'graph, 'door> {
-        Chain::scratch(
-            self.root,
-            Half::Load(self.builder, std::marker::PhantomData),
-            Half::of(writer, header),
-        )
+    ) -> Types<'graph, 'here, 'door> {
+        Types::new(self.root(), Halves::alone(Half::of(writer, header)))
     }
 
     /// The chain for what `context`'s step lays in its cell.
     pub fn of<'step, 'here, C, S, D>(
         &self,
         context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
-    ) -> Chain<'graph, 'here, 'here, 'graph, 'step>
+    ) -> Types<'graph, 'here, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
@@ -142,10 +145,10 @@ impl<'graph> TestTypes<'graph> {
         self.half(context.writer(), context.header())
     }
 
-    /// The chain a step's own `types` builds for what it lays in
-    /// its cell: the root, then the cell's branch, with no builder tier between. The one fixture
-    /// chain that interns where it lays, so the only one a door settles through.
-    pub fn own<'step, 'here, C, S, D>(
+    /// [`of`](Self::of)'s tiers, its half paired as a caching body's region half is: it lays its
+    /// types in the cell's branch, but no door through it settles, since its half does not intern
+    /// where it lays.
+    pub fn paired<'step, 'here, C, S, D>(
         &self,
         context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
     ) -> Types<'graph, 'here, 'step>
@@ -155,8 +158,8 @@ impl<'graph> TestTypes<'graph> {
         D: Delivery<'graph>,
     {
         Types::new(
-            self.root,
-            Halves::alone(Half::of(context.writer(), context.header())),
+            self.root(),
+            Halves::alone(Half::paired(context.writer(), context.header())),
         )
     }
 
@@ -172,7 +175,7 @@ impl<'graph> TestTypes<'graph> {
         D: Delivery<'graph>,
     {
         Chain::scratch(
-            self.root,
+            self.root(),
             Half::of(context.writer(), context.header()),
             Half::paired(context.scratch_writer(), context.scratch_header()),
         )
@@ -252,7 +255,7 @@ pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDeliver
 /// and the types live in, which a graph built over it borrows.
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
-    /// The load's chain, which a test interns through outside a cell.
+    /// The load's chain, which a test interns through before its first cell freezes the root.
     pub types: &'f Types<'graph, 'graph, 'f>,
     /// The tiers every cell's chain is built over.
     pub tiers: &'f TestTypes<'graph>,
@@ -659,14 +662,16 @@ impl<'graph> Fixture<'_, 'graph> {
 
 /// A ring of tagged members, member `i` tagged `identity` around a record node whose `next` is an
 /// edge to member `i + 1` (wrapping), beside a `value` field when `values[i]` is given. Member `i`
-/// is node `2i` and its record node `2i + 1`; the members come back in order.
+/// is node `2i` and its record node `2i + 1`; the members come back in order. Each record's memo is
+/// interned through `types`, the cell's chain.
 pub(super) fn ring<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
+    types: &Chain<'_, '_, '_, '_, '_>,
     identity: KType,
     values: &[Option<Holding<'cell>>],
 ) -> Vec<Node<'cell>> {
-    let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+    let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
     let next = crate::symbols::BinderSymbol::declared("next", symbols).unwrap();
     let value = crate::symbols::BinderSymbol::declared("value", symbols).unwrap();
     let count = values.len() as u32;

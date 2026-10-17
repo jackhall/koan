@@ -100,6 +100,7 @@ impl<'g> RootBuilder<'g> {
             let node = bump.alloc(StoredNode::new(
                 digest,
                 Content::lay(leaf, Flags::NONE, bump),
+                true,
             ));
             nodes.insert_unique(slot_hash(digest), &*node, |node| slot_hash(node.digest()));
             node

@@ -162,10 +162,14 @@ impl<'g, 'cell, 'x> Coercion<'_, 'g, '_, 'cell, 'x, '_> {
         declared: DeclaredType<Parametric>,
         bindings: Members<'_, TypeSymbol>,
     ) -> DeclaredType<KType> {
-        match substitute_parameters(self.types, self.scratch, declared, bindings) {
-            DeclaredType::Type(kt) => DeclaredType::Type(self.types.concrete(kt).expect(BOUND)),
-            DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
-        }
+        self.types
+            .concrete_declared(substitute_parameters(
+                self.types,
+                self.scratch,
+                declared,
+                bindings,
+            ))
+            .expect(BOUND)
     }
 
     /// `declared` read under the source module's bindings.
@@ -176,17 +180,6 @@ impl<'g, 'cell, 'x> Coercion<'_, 'g, '_, 'cell, 'x, '_> {
     /// `declared` read under the view's bindings.
     pub(super) fn view_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
         self.read(declared, self.to.bindings)
-    }
-}
-
-/// `declared` read as a type of a value: a type where it holds no variable, a scheme as it is.
-fn concrete(
-    types: &Chain<'_, '_, '_, '_, '_>,
-    declared: DeclaredType<Parametric>,
-) -> Option<DeclaredType<KType>> {
-    match declared {
-        DeclaredType::Type(kt) => types.concrete(kt).map(DeclaredType::Type),
-        DeclaredType::Scheme(scheme) => Some(DeclaredType::Scheme(scheme)),
     }
 }
 
@@ -211,7 +204,8 @@ pub fn coerce<'graph, 'cell>(
     let unsupported = CoercionRefused::Unsupported(declared);
     // A side still naming a variable — a slot over a member's own `FOR ALL` group — has no type
     // to rebuild the value at.
-    let (Some(src), Some(dst)) = (concrete(types, src), concrete(types, dst)) else {
+    let (Some(src), Some(dst)) = (types.concrete_declared(src), types.concrete_declared(dst))
+    else {
         return Err(unsupported);
     };
     let node = declared.view(cx.types).body;

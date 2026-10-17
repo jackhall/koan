@@ -211,11 +211,11 @@ fn circular_values_compare_as_a_bisimulation() {
             let equal = |left: Holding<'_>, right: Holding<'_>| {
                 left.equals(&right, types, scratch).expect("no function")
             };
-            let one = |cell| ring(fixture, writer, KType::STR, &[cell])[0];
+            let one = |cell| ring(fixture, writer, types, KType::STR, &[cell])[0];
             let (first, second) = (one(None), one(None));
             assert!(first != second, "two knots");
             assert!(equal(Holding::Knotted(first), Holding::Knotted(second)));
-            let pair = ring(fixture, writer, KType::STR, &[None, None]);
+            let pair = ring(fixture, writer, types, KType::STR, &[None, None]);
             assert!(
                 equal(Holding::Knotted(pair[0]), Holding::Knotted(first)),
                 "a two-member ring unrolls to the one-member ring"

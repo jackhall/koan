@@ -275,7 +275,7 @@ fn draw<'x>(world: &World<'x, '_>, slots: &[Slot], declared: &[KType]) -> Vec<Dr
                 });
             // Read as `Never`, `I`'s lower end takes `J`'s along, which must lie under it.
             let (lowest, lower) = match world.carried(lower) {
-                KType::NEVER => (KType::NEVER, KType::NEVER),
+                lower if lower == KType::NEVER => (KType::NEVER, KType::NEVER),
                 lower => (world.carried(lowest), lower),
             };
             (

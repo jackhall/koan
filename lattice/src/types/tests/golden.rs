@@ -96,12 +96,13 @@ fn constants_match_freshly_interned_nodes() {
             },
         ),
     ];
+    // Every mismatch is collected before the test fails, each printed as the literal to paste.
+    let mut moved = Vec::new();
     for (name, pinned, node) in pins {
-        assert_eq!(
-            node_digest(region, node),
-            pinned.digest(),
-            "the pinned `KType::{name}` is not the digest its own node computes",
-        );
+        let computed = node_digest(region, node);
+        if computed != pinned.digest() {
+            moved.push(format!("{name}: {:#034x}", computed.0));
+        }
     }
     // The code composites are checked through the doors that mint them, the union's canonical
     // member order being the chain's to choose.
@@ -152,21 +153,38 @@ fn constants_match_freshly_interned_nodes() {
             types.record(region, &[]),
         ),
     ];
-    for (name, pinned, minted) in composites {
-        assert_eq!(
-            minted, pinned,
-            "the pinned `KType::{name}` is not what its door interns",
-        );
-    }
     // The empty signature carries a schema digest computed at intern time, so it is checked through
     // the intern that mints one rather than against a hand-built node; the signature door answers
     // the constant for an empty draft without interning.
-    assert_eq!(
-        types.intern_schema(SigSchema::EMPTY).handle(),
-        Handle::EMPTY_SIGNATURE,
-        "the pinned `KType::EMPTY_SIGNATURE` is not what its intern mints for an empty \
-         schema",
+    let empty_signature = types.intern_schema(SigSchema::EMPTY).handle();
+    for (name, pinned, minted) in composites
+        .into_iter()
+        .map(|(name, pinned, minted)| (name, pinned.raw(), minted.raw()))
+        .chain([("EMPTY_SIGNATURE", Handle::EMPTY_SIGNATURE, empty_signature)])
+    {
+        if minted != pinned {
+            moved.push(format!("{name}: {:#034x}", minted.digest().0));
+        }
+        assert!(
+            minted.in_root() == pinned.in_root() && minted.is_concrete() == pinned.is_concrete(),
+            "`KType::{name}`'s door mints a handle with other flags than its constant",
+        );
+    }
+    assert!(
+        moved.is_empty(),
+        "pinned constants moved:\n{}",
+        moved.join("\n")
     );
+    for (name, pinned) in pins
+        .iter()
+        .map(|(name, pinned, _)| (*name, *pinned))
+        .chain(composites.iter().map(|(name, pinned, _)| (*name, *pinned)))
+    {
+        assert!(
+            pinned.raw().in_root() && pinned.raw().is_concrete(),
+            "`KType::{name}` is pinned in-root and concrete",
+        );
+    }
 }
 
 #[test]
@@ -377,41 +395,41 @@ fn every_compound_variant_digests_as_pinned() {
             types
                 .code_needing(scratch, KType::EXPRESSION, &[y, x])
                 .raw(),
-            0xfcfdcdde7c4ee7fea560ecaadc7367a6,
+            0x1b9f9c4b7b1022f3dd04bf0dcffac4d9,
         ),
         (
             "Parameter",
             parameter.raw(),
-            0xeab26793ef91a05d163942ddcb9280d1,
+            0x2476d823875af7730895eb3d660e1ac4,
         ),
         (
             "Carrier",
             types.carrier(elt, KType::NUMBER, ContentKey(7)).raw(),
-            0x9d7d1ef7069d3a83415f765b50f04946,
+            0x39453534b7a33a0b6f20f7a6e265732c,
         ),
         (
             "List",
             types.list(KType::STR).raw(),
-            0x5a52215e86782a1c25b2072eb3e5df68,
+            0x347d846f62be7f704fc2c14372cae81d,
         ),
         (
             "Dict",
             types.dict(KType::STR, KType::NUMBER).raw(),
-            0x0bd3edd7945855a16694c8e61767ab00,
+            0x2af5e0586a0960c84ce1ece5424faea6,
         ),
         (
             "Record",
             types
                 .record(scratch, &[(x, KType::NUMBER), (y, KType::STR)])
                 .raw(),
-            0xe85691a350586d78e53a6839603cc45c,
+            0x3f7a736478a0028214e5c97673b0ccb8,
         ),
         (
             "KFunction",
             types
                 .function_type(scratch, &[(x, KType::NUMBER), (y, KType::STR)], KType::BOOL)
                 .raw(),
-            0x9001f8924ee0b106dca224cebf77a3f8,
+            0x116b1789a8a15d64fcf59dd65ee09041,
         ),
         (
             "ExpressionShape",
@@ -422,7 +440,7 @@ fn every_compound_variant_digests_as_pinned() {
                     KType::NUMBER,
                 )
                 .raw(),
-            0x2c58ba607b2aa48111934bda4135802e,
+            0x30627a5ddaca7c646dc1094957450816,
         ),
         (
             "ExpressionShape",
@@ -433,7 +451,7 @@ fn every_compound_variant_digests_as_pinned() {
                     KType::NUMBER,
                 )
                 .raw(),
-            0x432b1cc0d9b69372bbe99c659948f2a9,
+            0x2b601dd239baa6e6d48059d38540da83,
         ),
         (
             "Scheme",
@@ -442,7 +460,7 @@ fn every_compound_variant_digests_as_pinned() {
                     .function_scheme(scratch, &[elt], &[KType::ANY], &[(x, variable)], variable)
                     .handle,
             ),
-            0x4cd5007f9497d08fab4d856d24eadabb,
+            0x2219f6bbfe3c6ae14d5bd86993f44594,
         ),
         (
             "Scheme",
@@ -458,85 +476,87 @@ fn every_compound_variant_digests_as_pinned() {
                     )
                     .handle,
             ),
-            0x9b7d42acb416fa2c3b5899f9df6971c1,
+            0x04e4658538df671c96171b62bb119976,
         ),
         (
             "Quantified",
             variable.raw(),
-            0x2af8c8d9a319436e3995725b1d5afc2d,
+            0x30be14e707ac2366d534890ac49c61d0,
         ),
         (
             "Lexical",
             types.lexical(3, elt, KType::ANY).raw(),
-            0xf164da60717456d28cf894cc991cb2e7,
+            0x22ba2db915588771da86140eaf3017ff,
         ),
         (
             "Lexical",
             types
                 .lexical_between(scratch, 3, elt, KType::NUMBER, number_or_str)
                 .raw(),
-            0xfed70962599c6d653afa4918b3b0b177,
+            0x3aafb1d8a61c89a70c6463338076a428,
         ),
         (
             "Union",
             number_or_str.raw(),
-            0x53af01e77c424fc800f36edc0462d536,
+            0x3a7468915d9624ce6495d3589cba8424,
         ),
         (
             "ConstructorApply",
             types
                 .constructor_apply(scratch, family, &[(BinderSymbol::Type(elt), KType::NUMBER)])
                 .raw(),
-            0x0532180519c9dd589a3216e0de102d8f,
+            0x2d203f37a0788b58eadddc0b1897d74c,
         ),
         (
             "Signature",
             interface.raw(),
-            0x71a19019b5dddb550cf6aa7f322066db,
+            0x0f54468d6625dcc29bedb26d82428fb4,
         ),
         (
             "SignatureApply",
             types
                 .signature_apply(scratch, interface, &[(BinderSymbol::Type(elt), KType::STR)])
                 .raw(),
-            0x6eae66cc7abbfd4d4f1dd5d792fef5b2,
+            0x121edf4478ad349afbd04ab05ca194c8,
         ),
         (
             "SignatureMeet",
             types.signature_meet(scratch, &[interface, other]).raw(),
-            0x3ee40c0b74a2172dac6e5c3a6f00bf29,
+            0x130e73e39b31a9cd07c88560b6c4a295,
         ),
         (
             "DeferredReturn",
             types
                 .deferred_return(DeferredReturnSurface::Type(elt))
                 .raw(),
-            0x6445be5d5582fa0f37bd0d40c6d50dfd,
+            0x2445be5d5582fa0f37bd0d40c6d50dfd,
         ),
         (
             "DeferredReturn",
             types
                 .deferred_return(DeferredReturnSurface::Expression("x + 1"))
                 .raw(),
-            0x4ec79454c2e2b295abb93d9c6b5fa542,
+            0x0ec79454c2e2b295abb93d9c6b5fa542,
         ),
         (
             "Sibling",
             types.sibling(0).raw(),
-            0xa9ed2eded73872690bfd24478962b67d,
+            0x29ed2eded73872690bfd24478962b67d,
         ),
         (
             "SetMember",
             newtype.raw(),
-            0x7b3a3bf25eba5ef8341f9c3d0328c38c,
+            0x2a2b50b3cc0c63ac42ade586b211e180,
         ),
         (
             "SetMember",
             family.raw(),
-            0x0dd73ff448568a2a11775f24b3940ac0,
+            0x09d85cd4618dca2b5fb3eb2b5eabef8a,
         ),
     ];
     let mut covered = std::collections::BTreeSet::new();
+    // Every moved digest is collected before the test fails, each printed as the literal to paste.
+    let mut moved = Vec::new();
     for (label, handle, pinned) in rows {
         let node = types.node(*handle);
         assert_eq!(
@@ -549,13 +569,12 @@ fn every_compound_variant_digests_as_pinned() {
             handle.digest(),
             "a `{label}` node read back re-digests to its own handle",
         );
-        assert_eq!(
-            handle.digest().0,
-            *pinned,
-            "a `{label}` node's digest moved"
-        );
+        if handle.digest().0 != *pinned {
+            moved.push(format!("{label}: {:#034x}", handle.digest().0));
+        }
         covered.insert(*label);
     }
+    assert!(moved.is_empty(), "digests moved:\n{}", moved.join("\n"));
     let compound = [
         "CodeNeeding",
         "Parameter",

@@ -517,7 +517,7 @@ pub(super) fn class_at_least<'run>(
     class: u16,
 ) -> bool {
     let relation = Relation::ClassAtLeast(class);
-    if let Some(known) = types.verdict(a.digest(), b.digest(), relation) {
+    if let Some(known) = types.verdict(a.handle(), b.handle(), relation) {
         return known;
     }
     let (Some(ranked_a), Some(ranked_b)) = (Shape::of(a), Shape::of(b)) else {
@@ -533,8 +533,8 @@ pub(super) fn class_at_least<'run>(
             .admit_class(types, scratch, &arguments, each, |_| true)
             .solution;
         types.record_verdict(
-            a.digest(),
-            b.digest(),
+            a.handle(),
+            b.handle(),
             Relation::ClassAtLeast(each),
             solution.is_some(),
         );

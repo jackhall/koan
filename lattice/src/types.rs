@@ -107,6 +107,8 @@ pub use shape::{
 pub use sig_relations::{FitsFailure, InstanceFailure};
 pub use substitute::Side;
 pub use tiers::{Branch, Habitat, Halves, Own, RegionRead, Root, RootBuilder};
+#[cfg(any(test, feature = "counters"))]
+pub use transfer::{ADOPT_ASKED, ADOPT_PROBES};
 pub use typed::{
     Substitutable, admit_by_class, bound_above, erase_rigid, fits, fits_application,
     instance_under, instantiate_quantified, is_subtype_of, join, join_iter, judge_by_class,
