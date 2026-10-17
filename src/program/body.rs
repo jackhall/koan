@@ -593,11 +593,12 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 /// retyped to its declared type with the call's solution substituted, and every type parameter
 /// bound to its solution — the one an instance carries, the one a keyworded call's selection
 /// carried in `arguments`, or, for a call by name, the one solved here while each argument is
-/// admitted against its parameter's declared type — at its entry in `contributed`, per parameter
-/// in symbol order, and its carried type where there is none — beside the contract the frame ends
-/// under, and the barrier its value crosses out through. The error value's message when the callee
-/// is no function, the arguments do not name its parameters exactly, an argument does not fit its
-/// parameter, or the group has no solution.
+/// admitted against its parameter's declared type — at its entry in `contributed`, per parameter in
+/// symbol order, and its carried type where there is none — beside the contract the frame ends
+/// under, and the barrier its value crosses out through. A digested parameter keeps the memo
+/// `handed` for it where the value it binds carries the type the caller's did. The error value's
+/// message when the callee is no function, the arguments do not name its parameters exactly, an
+/// argument does not fit its parameter, or the group has no solution.
 ///
 /// A callee has two types: the one it shows, `callee.ktype()`, and the one its body was checked
 /// against, [`Knotted::declared`]. Where they differ — a header, or a member born at its annotation
