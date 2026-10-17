@@ -16,9 +16,9 @@ buys the language and listing its ready-to-start items. The projects are
 [rewrite/](rewrite/README.md), the runtime's layers, and the four bodies of work
 that build on it:
 [conditionals/](conditionals/README.md),
-[gradual-typing/](gradual-typing/README.md),
-[metaprogramming/](metaprogramming/README.md) and
-[type-tiers/](type-tiers/README.md).
+[gradual-build/](gradual-build/README.md),
+[gradual-typing/](gradual-typing/README.md) and
+[metaprogramming/](metaprogramming/README.md).
 
 The cell substrate Koan embeds carries its own roadmap,
 [cellgraph/roadmap/](../cellgraph/roadmap/README.md). Items cross-link across
@@ -35,9 +35,15 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
+- [Presizing a branch](gradual-build/branch-presizing.md)
+- [Invariance around a tail cycle](gradual-build/cycle-invariance.md)
+- [Where a content digest is demanded](gradual-build/digest-demand.md)
+- [The cost of an exit's adoption](gradual-build/exit-adoption-cost.md)
+- [Two flag bits in a type handle](gradual-build/handle-bits.md)
+- [Monotone elaboration](gradual-build/monotone-elaboration.md)
+- [Evicting specializations](gradual-build/specialization-eviction.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)
-- [Monotone elaboration](gradual-typing/monotone-elaboration.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)
 - [The build image](rewrite/build-image.md)
 - [Dict defaults](rewrite/dict-defaults.md)
@@ -45,7 +51,4 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
-- [Presizing a branch](type-tiers/branch-presizing.md)
-- [Invariance around a tail cycle](type-tiers/cycle-invariance.md)
-- [Evicting specializations](type-tiers/specialization-eviction.md)
 

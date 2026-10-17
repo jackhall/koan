@@ -1199,7 +1199,7 @@ type outside the one error that lists names, and on a retired lifetime name.
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
-- [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
+- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
   — the write-once cell as a monotone type fact, per
   [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE

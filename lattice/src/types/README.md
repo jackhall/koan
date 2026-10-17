@@ -145,8 +145,10 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Open work
 
-- [Presizing a branch](../../../roadmap/type-tiers/branch-presizing.md) — a
+- [Presizing a branch](../../../roadmap/gradual-build/branch-presizing.md) — a
   branch's table laid at a predicted size, and the width of its slots.
+- [Two flag bits in a type handle](../../../roadmap/gradual-build/handle-bits.md)
+  — in-root and concrete in the handle's top bits, masked from identity.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.

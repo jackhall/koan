@@ -12,6 +12,17 @@ comparing two integers**, and no structural descent exists to fall back to. The
 width is chosen so an accidental collision is less likely than a hardware fault,
 which is what makes digest equality *be* type equality with no repair path.
 
+The word's top two bits are flags, not digest, and every comparison, hash,
+table word and child digest masks them out: **in-root**, whether the node lies
+in the root, which is closed after the load, so the bit is fixed for the
+program's life; and **concrete**, the node's concreteness flag. Each is set by
+the door that interns or finds the node, and baked into the builtin
+constants, so a reader asks either question of the handle alone, with no
+lookup: a chain skips the root for a handle whose in-root bit is clear, adopts
+a root handle with a bit test, and answers a verdict over two root handles
+from the root's table alone
+([two flag bits](../../../roadmap/gradual-build/handle-bits.md)).
+
 Three things follow, and each is load-bearing:
 
 - **There is one recipe** ([digest.rs](digest.rs)). A node's digest is its tag
@@ -200,8 +211,8 @@ table.
 The two tiers keep different tables. The root's is a hashbrown table in
 program storage, built during the load, where its grown build and its
 stranded bucket arrays are paid once. A miss there is one group probe of
-control bytes, so a branch handle that enters at the root pays almost nothing
-for the detour. A branch's is a [`DigestTable`](../bump/digest_table.rs) in
+control bytes, and a branch handle's in-root bit spares it even that. A
+branch's is a [`DigestTable`](../bump/digest_table.rs) in
 its region: 16 B slots, each the digest's low word beside the node's
 reference, probed linearly at a load of at most one half. A region's writer
 lays fixed runs and has no allocator, so the table grows by laying a run of

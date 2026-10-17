@@ -42,14 +42,10 @@ body's doors and its past activations both say something about it.
   one hit in two at half load. Warm, the two tie within 2 ns; cold, the bare
   slot pays 25 ns more per hit. Settled by the branch traffic the measurement
   above counts.
-- *A root-only site hint — open.* A site whose static type is exact and closed
-  carries that very type as its memo, which the load interned, so a read of
-  the memo there can skip the branch probe; a type value's payload is a handle
-  of its own. Any other site can hold a memo the run builds, even over root
-  types alone: a list's memo is the join of its cells, so `[p]` over
-  `p :(Number | Str)` builds `LIST OF Number`. With a hashbrown root, the root
-  miss a branch handle pays costs under half a nanosecond, so the hint buys
-  little until the branch probe itself costs more than that.
+- *A root-only site hint — decided.* No site hint: whether a memo is the
+  root's is read off the handle's in-root bit
+  ([two flag bits](handle-bits.md)), which answers per handle what a static
+  site class could answer only where the site is exact and closed.
 
 ## Dependencies
 

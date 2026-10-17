@@ -172,7 +172,15 @@ captures differ in type; then the content at each **keyed name**, in slot
 order: the parameters, `FOR ALL` names and `:Type` arguments any frontier at
 the entry waits on, facts in nested bodies included, beside the parameters
 its caching record's invariant sites read, the frame's blocks included
-([`key_of`](key.rs)). A name a hop of the body's own tail rebinds is not
+([`key_of`](key.rs)). A parameter keys only where its static type is a
+signature or carrier type: a module's digest is the one word its content is
+stored as, where a list's or a record's costs its size, so a parameter of any
+other type keys nothing and the site over it routes cold. The digests a seek
+computes are handed to the frame it births, which keeps each in the slot
+beside the value, so the body's own demand for one — a module born over the
+parameter — walks nothing
+([where a digest is demanded](../../roadmap/gradual-build/digest-demand.md)).
+A name a hop of the body's own tail rebinds is not
 keyed, since a hop of the same callee borrows its predecessor's specialization
 with no lookup; a hop into another callee seeks with the actual content, so a
 callable called from sites the load cannot read — a lambda written in place,
@@ -223,9 +231,10 @@ keys do not cover resumes cold.
   binding's digest in the parent's region header, beside its type branch, as
   a type branch's digest table is: its keys are never removed, and an evicted child's entry is renewed in
   place. A bare handle holds nothing alive, and a stale one is a miss. The
-  parent evicts a childless specialization by pricing warmth against its
-  bytes; cellgraph ships the bytes and no threshold, as it does for the spare
-  list's bound against recent demand. An evicted child waits dead but
+  table is a small least-recently-hit cache: each entry carries the parent's
+  miss count at its last hit, and a miss on a parent past its bound releases
+  the least recently hit childless child before it creates the new one. A
+  borrower's count does not enter the choice. An evicted child waits dead but
   undisposed until its last borrower disposes, as a released run root waits
   on its subtree, and the next miss rebuilds it.
 
@@ -275,7 +284,8 @@ keys do not cover resumes cold.
   the key the asker computed: the build cell the callable was born under,
   and a digest of the callee's segment with the content at its keyed names.
   The drain reads that parent's table through a read-only peek
-  between steps; a live hit is the specialization, and a miss creates one
+  between steps; a live hit is the specialization, and a miss evicts where
+  the parent is past its bound, then creates one
   under the parent and runs its one step at once, before anything else. The
   run cell is then created borrowing it, a `Fresh` cell as its lend and a
   `Shares` tenant through a lend of its own, and its first step lays its
@@ -370,10 +380,13 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 
 ## Open work
 
-- [Evicting specializations](../../roadmap/type-tiers/specialization-eviction.md)
-  — the policy a build cell evicts its specializations by, a stale ancestor,
-  and sibling redundancy.
-- [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
+- [Evicting specializations](../../roadmap/gradual-build/specialization-eviction.md)
+  — the least-recently-hit cache a build cell keeps its specializations in,
+  and its bound.
+- [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)
+  — a parameter keyed by its static type, and the seek's digests kept in the
+  frame's slots.
+- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
   — the worklist driver, frontiers and seams, and the properties as laws.
-- [Activation typing](../../roadmap/gradual-typing/activation-typing.md) — a
+- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams over the content its bindings bring.

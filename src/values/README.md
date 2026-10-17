@@ -532,8 +532,16 @@ Inside a knot each node is digested at its own memo, so a cell a tagged node's
 representation hides still counts there, as a copy of the knot keeps it. That
 over-distinction is sound: keying two equal things apart costs only a key.
 
-**A digest is computed on demand**, never stored on a value: only a view asks
-for one, so a value no view reaches never pays for it. A demand walks what the
+**A digest is computed on demand**, and kept where the load says the demand
+recurs: a view asks for its source's, a call of a keyed body for the argument
+at each keyed parameter ([keys](../build/README.md#keys-which-bindings-make-a-specialization)),
+and nothing else, so a value no view or key reaches never pays for one. A
+value carries no digest; the slot the load marks as digested — a keyed
+parameter, filled at the frame's birth from the digests its key was computed
+from — keeps the memo beside the value, and a module keeps its content on
+itself from the first view or key that reaches it
+([a module is its content](../../design/modules.md#a-module-is-its-content)).
+A demand walks what the
 value reaches through one `Digests` memo over the demand's scratch, keyed by
 the resident each part sits in and the type it is seen at — one node seen at
 two types shows two surfaces — and by its root for a knot, so a part shared
@@ -541,9 +549,7 @@ many times over, and a knot met through any of its members, is digested once
 per demand. The walk runs over an explicit stack, as the copy does: a composite
 is a frame over the parts its surface shows and a knot member a frame over the
 values its knot holds, so neither a value's depth nor a chain of knots grows the
-call stack. A module is the one value whose content is digested where it is
-born ([birth](../knot/module/README.md#birth)), since it keeps no captures to
-digest later.
+call stack.
 
 A literal inside a body's [code digest](../scope/README.md#resolution) is
 hashed as syntax, not as the value it lowers to.
@@ -743,3 +749,9 @@ knots as deep as the chain of newtypes digests beside it.
   — the lattice walks over a value's carried type, as deep as the value.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — whether
   `Module` and `Code` re-stamp a value.
+- [The cost of an exit's adoption](../../roadmap/gradual-build/exit-adoption-cost.md)
+  — an exit that hands over nothing for a settled part, and lays nothing
+  before reading the top value's bits.
+- [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)
+  — the digest memo beside a keyed parameter, and a module's content computed
+  where a view first asks.

@@ -253,9 +253,12 @@ park asked for it and whatever its placement: a second caller
 finds the first's invariant types and verdicts laid, and a hop of a tail loop
 of one callee borrows the specialization its frame ran under, with no lookup.
 A specialization lives until its parent evicts it and its last borrower
-disposes, so its warm tier outlives the parks that filled it. A frame whose
-specialization's parent is already evicted is born with none, and warms the
-scratch its asker's park holds, as below.
+disposes, so its warm tier outlives the parks that filled it. A parent keeps
+its specializations as a small least-recently-hit cache, and a miss past its
+bound evicts the least recently hit childless one, whatever borrows it
+([the build module](../src/build/README.md#references-between-the-trees)). A
+frame whose specialization's parent is already evicted is born with none,
+and warms the scratch its asker's park holds, as below.
 
 ## The scratch branch as a cache
 
@@ -356,10 +359,19 @@ types, and released with that tier.
 
 ## Open work
 
-- [Invariance around a tail cycle](../roadmap/type-tiers/cycle-invariance.md)
+- [Invariance around a tail cycle](../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Presizing a branch](../roadmap/type-tiers/branch-presizing.md) — a branch
+- [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch
   laid at a predicted size.
-- [Evicting specializations](../roadmap/type-tiers/specialization-eviction.md)
-  — the policy a build cell evicts its specializations by, so a loop over new
-  invariant content each call holds a bounded warm tier.
+- [Evicting specializations](../roadmap/gradual-build/specialization-eviction.md)
+  — the bound of the cache a build cell keeps its specializations in, so a
+  loop over new invariant content each call holds a bounded warm tier.
+- [Two flag bits in a type handle](../roadmap/gradual-build/handle-bits.md) —
+  in-root and concrete read off the handle, so an adoption of a root type and
+  a value door's root check look nothing up.
+- [The cost of an exit's adoption](../roadmap/gradual-build/exit-adoption-cost.md)
+  — an exit that hands over nothing for a settled part and lays nothing
+  before reading the top value's bits.
+- [Where a content digest is demanded](../roadmap/gradual-build/digest-demand.md)
+  — a parameter keyed by its static type, the seek's digests kept beside the
+  frame's values, and a module's content computed where a view first asks.

@@ -1178,9 +1178,9 @@ tutorial snippet is checked against its shown output by
   values, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
   and `Result`.
-- [Invariance around a tail cycle](../../roadmap/type-tiers/cycle-invariance.md)
+- [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
+- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
   — the static pass's driver moved to [the build module](../build/README.md)
   as a worklist, selection reading verdicts through a run cell's borrow.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the

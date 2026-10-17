@@ -632,7 +632,7 @@ refusal refusing the load, or kept on its quote's code shape.
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [Monotone elaboration](../../roadmap/gradual-typing/monotone-elaboration.md)
+- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
   — the load pass driven as a worklist from a build cell's step, a rule
   parking on the unknown it reads, per [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's

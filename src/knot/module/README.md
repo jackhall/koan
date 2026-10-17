@@ -39,9 +39,11 @@ digest does not name, a view's its operator and signature application over the
 digest of its source's bare member — the module behind any header — and what
 *fits* solved each head parameter to. `ModuleContent` ([module.rs](../module.rs)) owns that recipe
 — one constructor per kind, and `Module::tie` takes nothing else — so a
-module's content is computed one way wherever one is tied. A module keeps no
-captures to digest later, so its content is computed where it is tied, and it
-sits behind a pointer so the node keeps its width.
+module's content is computed one way wherever one is tied. It is computed at
+the first view or key that reaches the module — which the load reads off the
+view tree at each `:|` — and kept on the module behind a pointer, so the node
+keeps its width and a module nothing views pays for no digest
+([where a digest is demanded](../../../roadmap/gradual-build/digest-demand.md)).
 
 ## Layout order
 
@@ -325,3 +327,5 @@ open a module and call through a barrier are
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
   data member coerced through a barrier, and a dict's keys crossing a barrier
   unsealed.
+- [Where a content digest is demanded](../../../roadmap/gradual-build/digest-demand.md)
+  — a module's content computed where a view first reaches it.
