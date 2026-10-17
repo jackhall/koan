@@ -1011,8 +1011,8 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     }
 }
 
-/// Refuse the first `MATCH … WITH` guard of `shape` that types to the handle an earlier guard of
-/// its arm set does.
+/// Refuse the first `MATCH … WITH` guard of `shape`, in program order, that types to the handle an
+/// earlier guard of its arm set does.
 fn repeated_guards<'graph>(shape: &'graph BodyShape<'graph>) -> Result<(), ShapeError<'graph>> {
     let handle = |typed: StaticType<'_>| match typed {
         Static::Closed(handle) => Some(Parametric::from(handle)),
@@ -1025,27 +1025,29 @@ fn repeated_guards<'graph>(shape: &'graph BodyShape<'graph>) -> Result<(), Shape
             .iter()
             .filter_map(|expression| Some((expression, expression.guard?)))
     };
-    for (expression, (arms, index)) in guards() {
-        let Some(guard) = handle(expression.typed()) else {
-            continue;
-        };
-        let first = guards().find(|(earlier, (held, written))| {
-            *held == arms && *written < index && handle(earlier.typed()) == Some(guard)
-        });
-        if let Some((first, _)) = first {
-            let body = shape.body();
-            let source = |expression: &crate::scope::TypeExpression<'_>| {
-                let statement = &body[expression.statement as usize];
-                source_of(statement, expression.site).unwrap_or(statement.source)
-            };
-            return Err(ShapeError::RepeatedGuard {
-                guard,
-                first: source(first),
-                at: source(expression),
-            });
-        }
-    }
-    Ok(())
+    // The expressions sit in site order, an address's, so the repeat to report is chosen by order.
+    let repeat = guards()
+        .filter_map(|(expression, (arms, index))| {
+            let guard = handle(expression.typed())?;
+            let (first, _) = guards().find(|(earlier, (held, written))| {
+                *held == arms && *written < index && handle(earlier.typed()) == Some(guard)
+            })?;
+            Some((expression, first, guard))
+        })
+        .min_by_key(|(expression, ..)| expression.order);
+    let Some((expression, first, guard)) = repeat else {
+        return Ok(());
+    };
+    let body = shape.body();
+    let source = |expression: &crate::scope::TypeExpression<'_>| {
+        let statement = &body[expression.statement as usize];
+        source_of(statement, expression.site).unwrap_or(statement.source)
+    };
+    Err(ShapeError::RepeatedGuard {
+        guard,
+        first: source(first),
+        at: source(expression),
+    })
 }
 
 /// Where a refusal about the type expression at `site`, written in `statement`, is located: at the

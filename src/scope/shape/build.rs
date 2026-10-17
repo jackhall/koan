@@ -577,7 +577,8 @@ struct Draft<'graph, 'x> {
     reads: BumpVec<'x, (u32, Slot)>,
     /// The body's units in the order they are performed, once the components pass has run.
     units: BumpVec<'x, Unit>,
-    /// Finished nested drafts, waiting on this draft's components to settle their captures.
+    /// Finished nested drafts, waiting on this draft's components to settle their captures, in
+    /// program order, which numbers their segments alike at every load.
     children: BumpVec<'x, (Site, Draft<'graph, 'x>)>,
     /// Each slot's binder as far as the walk has found it, by slot.
     binders: BumpVec<'x, DraftBinder<'graph>>,
@@ -3316,6 +3317,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             let form = self.forms.get(&site).copied();
             nested.push((site, self.seal(child, form)));
         }
+        let nested_order = collect(writer, nested.iter().copied());
         let nested = Keyed::sorted(writer, &mut nested);
         let mut mentions = draft.mentions;
         let mentions = Keyed::sorted(writer, &mut mentions);
@@ -3408,6 +3410,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 code: draft.code,
                 top_captures: collect(writer, draft.top_captures.iter().copied()),
                 nested,
+                nested_order,
                 form,
                 binders,
                 units: collect(writer, draft.units.iter().copied()),

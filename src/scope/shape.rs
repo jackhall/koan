@@ -6,11 +6,11 @@
 //! each entry at its slot — every mention with its class and coordinate, each bucket declaration's
 //! ranking and the ranking each registration carries, each keyworded use's candidate list,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
-//! components of the body's bindings, the shapes nested in it by site, the form node a callable's
-//! body sits in, and the order its units run in. What it knows of each binder — the body it births,
-//! a `LET` binder's right-hand side and annotation, a type binder's declaration node, the
-//! registration bound there — is one record per slot. [`build`] is the one builder every kind goes
-//! through.
+//! components of the body's bindings, the shapes nested in it — found by site, walked in program
+//! order, since a site is an address — the form node a callable's body sits in, and the order its
+//! units run in. What it knows of each binder — the body it births, a `LET` binder's right-hand
+//! side and annotation, a type binder's declaration node, the registration bound there — is one
+//! record per slot. [`build`] is the one builder every kind goes through.
 //!
 //! A **registration** is a binder no text names: the slot a definition's function is bound to
 //! under its bucket key. A keyworded use reaches it by key, through a [`CandidateList`] fixed where
@@ -527,6 +527,9 @@ pub struct BodyShape<'graph> {
     /// `captures`.
     top_captures: &'graph [Option<Slot>],
     nested: Keyed<'graph, (Site, &'graph BodyShape<'graph>)>,
+    /// `nested`'s entries in program order: a site is an address, so the keyed order can differ
+    /// between two loads of one program, and a walk over it would too.
+    nested_order: &'graph [(Site, &'graph BodyShape<'graph>)],
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
     /// Each binder's record, by slot.
@@ -785,9 +788,9 @@ impl<'graph> BodyShape<'graph> {
         self.nested.get(site).map(|(_, body)| *body)
     }
 
-    /// Every nested shape by site.
+    /// Every nested shape beside its site, in program order.
     pub fn nested_shapes(&self) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
-        self.nested.entries()
+        self.nested_order
     }
 
     /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.

@@ -46,7 +46,6 @@ impl<'graph> Builder<'graph, '_, '_> {
         let draft = &mut self.chain[level];
         draft.mentions.sort_unstable_by_key(|mention| mention.site);
         draft.candidates.sort_unstable_by_key(|(site, _)| *site);
-        draft.children.sort_unstable_by_key(|(site, _)| *site);
         let mut top = BumpVec::with_capacity_in(draft.captures.len(), self.scratch);
         for capture in self.chain[level].captures.iter() {
             let landed = match capture.source {
@@ -58,9 +57,16 @@ impl<'graph> Builder<'graph, '_, '_> {
             top.push(self.top_slot(landed));
         }
         let draft = &self.chain[level];
+        // A site is an address, so the children are looked up through an index sorted by it and
+        // stay in program order themselves.
+        let mut children = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
+        children
+            .extend((draft.children.iter().enumerate()).map(|(index, (site, _))| (*site, index)));
+        children.sort_unstable();
         let mut walk = Walk {
             builder: self,
             level,
+            children,
             named: BumpVec::new_in(self.scratch),
         };
         let mut hasher = DigestHasher::new(Tag::Shape);
@@ -104,11 +110,12 @@ impl<'graph> Builder<'graph, '_, '_> {
     }
 }
 
-/// One draft's digest walk: the builder whose chain it reads, the draft's level, and each top-level
-/// binding its code names.
+/// One draft's digest walk: the builder whose chain it reads, the draft's level, each child's
+/// index by its site, and each top-level binding its code names.
 struct Walk<'a, 'graph, 'x, 'e> {
     builder: &'a Builder<'graph, 'x, 'e>,
     level: usize,
+    children: BumpVec<'x, (Site, usize)>,
     named: BumpVec<'x, TopLevel>,
 }
 
@@ -146,10 +153,8 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
     fn part(&mut self, hasher: &mut DigestHasher, part: &ExpressionPart<'graph>) {
         let draft = &self.builder.chain[self.level];
         let site = Site::of(part);
-        if let Ok(index) = draft
-            .children
-            .binary_search_by_key(&site, |(site, _)| *site)
-        {
+        if let Ok(found) = self.children.binary_search_by_key(&site, |(site, _)| *site) {
+            let index = self.children[found].1;
             hasher.tag(Tag::Nested).digest(draft.children[index].1.code);
             return;
         }

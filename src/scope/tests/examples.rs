@@ -1132,3 +1132,58 @@ LET f = (FN FOR ALL #[Elt] :{a :Number, b :Elt, c :Number} -> Any = #((LET u = b
         assert!(!body.last_reads().contains(&slot("b")));
     });
 }
+
+/// A site is an address, so statements parsed last-first lay their nested bodies' sites in another
+/// order: the nested shapes are walked, and their segments numbered, alike either way.
+#[test]
+fn nested_shapes_follow_program_order_not_address() {
+    let statements = [
+        "LET f = (FN :{} -> Number = #(1))",
+        "LET q = #(2)",
+        "LET g = (FN :{} -> Number = #(3))",
+    ];
+    let walked = |reversed: bool| {
+        with_fixture(|fixture| {
+            let mut lines: Vec<KExpression<'_>> = Vec::new();
+            for at in 0..statements.len() {
+                let at = if reversed {
+                    statements.len() - 1 - at
+                } else {
+                    at
+                };
+                lines.push(fixture.parse(statements[at]).remove(0));
+            }
+            if reversed {
+                lines.reverse();
+            }
+            fixture.in_cell(|writer, _| {
+                let table: &Builtins = builtins(fixture, writer);
+                let shape = BodyShape::of_program(
+                    fixture.program,
+                    &lines,
+                    table,
+                    fixture.types,
+                    fixture.symbols,
+                    fixture.scratch(),
+                )
+                .expect("the program shapes");
+                let nested: Vec<_> = (shape.nested_shapes().iter())
+                    .map(|(_, nested)| (nested.kind(), nested.segment(), nested.code_digest()))
+                    .collect();
+                // Each nested shape's rank by address, in program order.
+                let sites: Vec<_> = (shape.nested_shapes().iter())
+                    .map(|(site, _)| *site)
+                    .collect();
+                let ranks: Vec<_> = (sites.iter())
+                    .map(|site| sites.iter().filter(|other| *other < site).count())
+                    .collect();
+                ((shape.segment(), shape.code_digest(), nested), ranks)
+            })
+        })
+    };
+    let ((forward, ranks), (backward, reranked)) = (walked(false), walked(true));
+    assert_ne!(ranks, reranked, "the two parse orders lay the sites apart");
+    let segments: Vec<_> = forward.2.iter().map(|(_, segment, _)| segment.0).collect();
+    assert!(segments.is_sorted(), "segments follow program order");
+    assert_eq!(forward, backward, "address order changes nothing");
+}
