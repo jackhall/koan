@@ -48,7 +48,7 @@
 use crate::elaborate::{bound_path, denoted};
 use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{KValue, Knotted, KnottedFamily, instance, lambda, quote, refused_construction};
-use crate::memory::{Bump, BumpVec, Writer, collect};
+use crate::memory::{Bump, BumpAllocator, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
@@ -420,12 +420,17 @@ fn ascribe<'graph, 'here>(
             region: &region,
         };
         if let Some(warm) = &warm {
-            adopt_value::<KnottedFamily>(into(warm), types, &value);
+            adopt_value::<KnottedFamily>(into(warm), types, &value, &scratch);
         }
         let raised = match view::ascribe(writer, value, ascribed, types, &scratch) {
             Ok(view) => {
                 if let Some(warm) = &warm {
-                    adopt_value::<KnottedFamily>(into(warm), types, &Value::Knotted(view));
+                    adopt_value::<KnottedFamily>(
+                        into(warm),
+                        types,
+                        &Value::Knotted(view),
+                        &scratch,
+                    );
                 }
                 // The load lays a view's types over a closed tree, so that tree is the view's
                 // content.
@@ -552,7 +557,7 @@ fn evaluated<'graph, 'here>(
         );
     }
     let offered = offered(at, writer, &operand.value, &scratch);
-    exits(&step, at, |exit| {
+    exits(&step, at, &scratch, |exit| {
         exit.value(&value);
         exit.value(&offered);
         exit.handle(returns);
@@ -757,7 +762,7 @@ fn call<'graph, 'here>(
                 callee.as_callable().and_then(Knotted::coerced).is_none()
                     && contract.kept_by(types, registered.shape, Some(solution))
             });
-            exits(&step, at, |exit| {
+            exits(&step, at, &scratch, |exit| {
                 exit.value(&callee);
                 exit.value(&arguments);
                 tails.iter().for_each(|owed| exit.contract(owed));
@@ -896,7 +901,7 @@ fn apply<'graph, 'here>(
         (head.as_callable().and_then(Knotted::function)).is_some()
             && contract.kept_by(&at.types, head.ktype(), None)
     });
-    exits(&step, at, |exit| {
+    exits(&step, at, &scratch, |exit| {
         exit.value(&head);
         exit.value(&argument);
         contributed.iter().flatten().for_each(|kt| exit.handle(*kt));
@@ -1179,7 +1184,9 @@ fn delivered<'graph, 'here>(
 ) -> Action<'graph, KBundle> {
     match (at.view.shape().caches(), at.contract) {
         (true, Some(_)) => {
-            exits(&step, at, |exit| exit.value(&value));
+            // No step function's scratch reaches a delivery.
+            let scratch = Bump::new();
+            exits(&step, at, &scratch, |exit| exit.value(&value));
             step.finish(value)
         }
         (true, None) => step.finish_with(value, &at.types),
@@ -1188,13 +1195,15 @@ fn delivered<'graph, 'here>(
 }
 
 /// In a caching body, hand `adopt` the [`Exit`] a value leaving it is adopted through, into the
-/// step's region; elsewhere nothing leaves a scratch tier, and `adopt` is not called.
+/// step's region, its walks laid in `scratch`; elsewhere nothing leaves a scratch tier, and `adopt`
+/// is not called.
 fn exits<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'graph, 'here, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
     adopt: impl FnOnce(&Exit<'_, '_, 'graph, 'here, '_>),
 ) {
     if at.view.shape().caches() {
-        adopt(&Exit::new(step.types(), &at.types));
+        adopt(&Exit::new(step.types(), &at.types, scratch));
     }
 }

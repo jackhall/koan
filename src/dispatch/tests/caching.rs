@@ -452,9 +452,9 @@ fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_fl
 }
 
 #[test]
-fn a_member_reached_through_a_call_is_adopted_by_its_memo_alone() {
+fn a_member_reached_through_a_call_is_not_entered() {
     // `GETA`'s result is a member of the record the loop received, reached by a route the load
-    // records nothing for: the exit handing it to `peek` stops at its memo, whatever its length.
+    // records nothing for: the exit handing it to `peek` stops at it, whatever its length.
     let adopted = |length: usize| {
         let source = member_via_call(length);
         assert_eq!(caching(&source), 1);
@@ -660,7 +660,7 @@ fn a_held_frame_hands_on_what_its_last_statement_reads() {
 }
 
 #[test]
-fn a_received_list_passed_on_is_adopted_by_its_memo_alone() {
+fn a_received_list_passed_on_is_not_entered() {
     let adopted = |length: usize| {
         let source = received_list(length);
         assert_eq!(caching(&source), 1);

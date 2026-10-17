@@ -5,11 +5,12 @@
 //! The body runner adopts at a frame's end and at a held frame's hand-off of its last statement;
 //! the evaluator at each call into a frame, each `EVAL`, and where an evaluation owing a frame's
 //! contract finishes. The walk stops at a part whose memo bits say its types already resolve
-//! there, adopting its own memo alone, and marks every value it walked settled after, so a value
+//! there, handing over nothing for it, and marks every value it walked settled after, so a value
 //! handed on through a loop is walked once
 //! ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
 
 use crate::knot::KnottedFamily;
+use crate::memory::BumpAllocator;
 use crate::type_lattice::{DeclaredType, KType};
 use crate::values::{Chain, Destination, Types, adopt_value};
 
@@ -20,21 +21,33 @@ use super::record::Contract;
 pub struct Exit<'a, 'tier, 'graph, 'here, 'reg> {
     region: Types<'graph, 'here, 'a>,
     body: &'a Chain<'graph, 'tier, 'here, 'reg, 'a>,
+    /// Where each walk lays its stack, knot set and settled list: the step's scratch.
+    scratch: BumpAllocator<'a>,
 }
 
 impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'graph, 'here, 'reg> {
-    /// An exit from the body whose chain is `body` into `region`.
+    /// An exit from the body whose chain is `body` into `region`, walking in `scratch`.
     pub fn new(
         region: Types<'graph, 'here, 'a>,
         body: &'a Chain<'graph, 'tier, 'here, 'reg, '_>,
+        scratch: BumpAllocator<'a>,
     ) -> Self {
-        Exit { region, body }
+        Exit {
+            region,
+            body,
+            scratch,
+        }
     }
 
     /// Adopt every type `value` reaches, stopping at a settled part, and mark what was walked
     /// settled.
     pub fn value(&self, value: &crate::knot::KValue<'graph, 'here>) {
-        adopt_value::<KnottedFamily>(Destination::Region(&self.region), self.body, value);
+        adopt_value::<KnottedFamily>(
+            Destination::Region(&self.region),
+            self.body,
+            value,
+            self.scratch,
+        );
     }
 
     /// Adopt the type `kt`.

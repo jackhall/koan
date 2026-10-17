@@ -1,9 +1,14 @@
 //! A knot's memo bits: kept on its root node and read through every member.
 
-use crate::memory::{CellGraph, ReleaseAbsorption};
-use crate::values::{Knotted as _, MemoBits, Value, cross};
+use std::cell::Cell;
 
-use super::super::{KValueFamily, Knotted};
+use crate::memory::{Bump, CellGraph, ReleaseAbsorption};
+use crate::type_lattice::KType;
+use crate::values::{
+    ADOPTED, Destination, Knotted as _, MemoBits, PARTS_ENTERED, Retyped, Value, adopt_value, cross,
+};
+
+use super::super::{KValueFamily, Knotted, KnottedFamily};
 use super::{TestGraph, bound, callable, copy, pin, with_fixture};
 
 #[test]
@@ -84,6 +89,35 @@ fn a_knot_born_through_its_regions_chain_is_settled_on_its_root() {
             let types = &fixture.tiers.paired(context);
             let activation = fixture.run(context.writer(), types, &lines, &[]);
             assert!(!callable(fixture, activation, "f").bits().settled);
+        });
+    });
+}
+
+#[test]
+fn an_exit_hands_over_a_headers_memo_and_stops_at_its_settled_member() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(CAPTURING);
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let f = callable(fixture, activation, "f");
+            assert!(f.bits().settled);
+            // What an exit into the region adopts for `value`, and how many parts it entered.
+            let exited = |value: Value<'_, _>| {
+                ADOPTED.with(|adopted| adopted.set(0));
+                PARTS_ENTERED.with(|entered| entered.set(0));
+                let into = Destination::Region(types);
+                adopt_value::<KnottedFamily>(into, types, &value, &Bump::new());
+                (ADOPTED.with(Cell::get), PARTS_ENTERED.with(Cell::get))
+            };
+            let header = Retyped::of(writer, f, KType::ANY.into());
+            assert_eq!(
+                exited(Value::Retyped(header)),
+                (1, 0),
+                "a header's own memo is handed over, its settled member is not entered"
+            );
+            assert_eq!(exited(Value::Knotted(f)), (0, 0));
         });
     });
 }

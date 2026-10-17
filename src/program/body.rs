@@ -1375,7 +1375,8 @@ fn perform<'graph, 'here>(
                     // statement still reads the frame's bindings: adopt what it reads first.
                     if runner.within.routes {
                         let view = runner.activation.view();
-                        let exit = Exit::new(step.types(), types);
+                        let scratch = Bump::new();
+                        let exit = Exit::new(step.types(), types, &scratch);
                         for slot in shape.last_reads() {
                             if let Some(value) = view.bound(*slot) {
                                 exit.value(&value);
@@ -1668,6 +1669,7 @@ fn ended<'graph, 'here>(
         }
         (Level::Frame | Level::Block, None) => step.finish(value),
         (Level::Frame | Level::Block, Some(contract)) => {
+            let scratch = Bump::new();
             let value = runner
                 .program
                 .fulfilled(step.writer(), types, value, contract);
@@ -1682,7 +1684,7 @@ fn ended<'graph, 'here>(
                     );
                     match barrier.returns {
                         Some(returns) if runner.program.message(&crossed, types).is_none() => {
-                            crossed.retyped(step.writer(), returns, types, &Bump::new())
+                            crossed.retyped(step.writer(), returns, types, &scratch)
                         }
                         _ => crossed,
                     }
@@ -1690,7 +1692,7 @@ fn ended<'graph, 'here>(
                 None => value,
             };
             if runner.shape().caches() {
-                Exit::new(step.types(), types).value(&value);
+                Exit::new(step.types(), types, &scratch).value(&value);
             }
             step.finish(value)
         }
