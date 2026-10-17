@@ -18,6 +18,7 @@ use crate::type_lattice::display_name;
 use crate::values::tests::parts;
 use crate::values::{Chain, Knotted as _, Link, Value};
 
+use crate::values::SpecBounds;
 use evaluator::{Mini, record};
 
 thread_local! {
@@ -46,7 +47,7 @@ fn written() -> Vec<String> {
 /// `source` loaded over the miniature evaluator on a slab of `cap` cells.
 fn loaded(source: &str, cap: u32) -> CellSubstrate {
     written();
-    CellSubstrate::load::<Mini>(source, "<test>", cap, output())
+    CellSubstrate::load::<Mini>(source, "<test>", cap, SpecBounds::default(), output())
         .unwrap_or_else(|error| panic!("`{source}` loads: {error:?}"))
 }
 

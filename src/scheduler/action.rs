@@ -30,7 +30,7 @@ use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
 use crate::type_lattice::Root;
 use crate::type_lattice::{Habitat, Halves, Own};
-use crate::values::{BuildRef, Chain, Half, SpecKey, TypeHeader, Types};
+use crate::values::{BuildRef, Chain, Half, TypeHeader, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -492,8 +492,8 @@ where
     /// where it was born borrowing one, and `fallback` otherwise.
     pub fn build_ref(&self, fallback: BuildRef) -> BuildRef {
         (self.context.lent_region())
-            .and_then(|(_, header)| header.get()?.me())
-            .map_or(fallback, BuildRef::of)
+            .and_then(|(_, header)| header.get()?.home())
+            .map_or(fallback, |home| BuildRef::of(home.me))
     }
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
@@ -616,25 +616,29 @@ where
         }))
     }
 
-    /// End a specialization's step: enter this cell in its parent's table under `key`, laying the
-    /// table on the first entry and renewing the key's entry where it has one, and record in its own
-    /// region header that the region is this specialization. The cell stays alive with no
-    /// continuation. Refused for a cell that asked for children, and for one that borrows no
-    /// region.
-    pub fn enlist(self, key: SpecKey) -> Action<'graph, B> {
+    /// End a specialization's step: lay this cell's own header and its table, as long as the
+    /// nested bound its parent's table records. The drain enters the cell in its parent's table and
+    /// sets its home once the step returns. The cell stays alive with no continuation. Refused for
+    /// a cell that asked for children, one that is no tree cell, one that borrows no region, and
+    /// one whose lent region holds no table.
+    pub fn enlist(self) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
         }
-        let (CellHandle::Tree(me), Some((lent_writer, lent_header))) =
+        let (CellHandle::Tree(_), Some((_, lent_header))) =
             (self.context.cell(), self.context.lent_region())
         else {
             return self.failed(StepError::Refused);
         };
-        let parent = Half::of(lent_writer, lent_header);
-        let _ = parent.own_or_lay();
-        (lent_header.get().expect("the parent's header is laid")).insert(parent, key, me);
-        let _ = Half::of(self.writer(), self.header()).own_or_lay();
-        (self.header().get().expect("the header is laid")).set_me(me);
+        let Some(nested) = (lent_header.get())
+            .and_then(|header| header.table())
+            .map(|table| table.nested())
+        else {
+            return self.failed(StepError::Refused);
+        };
+        let half = Half::of(self.writer(), self.header());
+        let _ = half.own_or_lay();
+        (self.header().get().expect("the header is laid")).lay_table(half, nested, nested);
         Action(Kind::Quiesced)
     }
 

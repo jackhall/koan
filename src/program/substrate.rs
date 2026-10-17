@@ -12,8 +12,8 @@ use crate::scheduler::{
 };
 use crate::scope::BodyShape;
 use crate::symbols::SymbolInterner;
-use crate::type_lattice::{Habitat, Halves, RootBuilder};
-use crate::values::{Chain, Half, Types};
+use crate::type_lattice::{Halves, RootBuilder};
+use crate::values::{Chain, Half, SpecBounds, Types};
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
@@ -137,6 +137,8 @@ impl CellSubstrate {
     /// `cap` cells, two of which are its build root and its run root: `language`'s builtin table at
     /// `'graph`, the program's shape over it and checked by the language, and the [`Program`]
     /// record writing to `output`, all written by the build root's one step. `cap` is at least two.
+    /// `bounds` sets how many live children the build root's specialization table and every
+    /// specialization's own table hold.
     ///
     /// The load builds the types' root through one chain over a root builder, and freezes it when
     /// the load ends, so no step can intern into it. A refused shape is rendered into its
@@ -146,6 +148,7 @@ impl CellSubstrate {
         source: &str,
         path: &str,
         cap: u32,
+        bounds: SpecBounds,
         output: Output,
     ) -> Result<Self, LoadError> {
         let owner = Owner {
@@ -158,10 +161,9 @@ impl CellSubstrate {
             let parsed =
                 parse_with_path(brand, &owner.symbols, source, path).map_err(LoadError::Parse)?;
             // The load is the build root's one step: what it writes rests in program storage and
-            // the owner's registry, and it lays the build root's header, whose table the root-level
-            // specializations fill.
-            let (graph, roots, program) = Graph::load(cap, |step| {
-                let _ = Half::of(step.writer(), step.header()).own_or_lay();
+            // the owner's registry. The load door lays the build root's header and its table, which
+            // the root-level specializations fill.
+            let (graph, roots, program) = Graph::load(cap, bounds, || {
                 // Everything the root owns is laid in the owner's registry arena, which releases it
                 // whole. The load's chain never leaves the load: its end freezes the root.
                 let builder = RootBuilder::in_region(&owner.registry);

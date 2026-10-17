@@ -3,6 +3,7 @@
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 
 use crate::program::CellSubstrate;
 use crate::scheduler::{LAID, TIERS, Tiers};
@@ -12,6 +13,7 @@ use super::super::Koan;
 use super::classes::tutorial_snippets;
 use super::statics::loaded;
 use super::{WRITTEN, output};
+use crate::values::SpecBounds;
 
 /// `SIG Counter`, whose head parameter an opaque view hides, `MODULE ints` and `MODULE words`,
 /// which fit it at different carriers, `Link`, a chain a loop walks to the `null` at its end, and
@@ -27,12 +29,13 @@ const PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
                        MODULE empty = (LET unused = 0)\n";
 
 /// What one run left: the most any step left in each tier, how many nodes the run added to the
-/// root, and what it printed.
+/// root, what it printed, and how many specializations were live at its end.
 #[derive(Debug, PartialEq, Eq)]
 struct Ran {
     tiers: Tiers,
     root: usize,
     printed: String,
+    live: usize,
 }
 
 /// [`PRELUDE`], a chain of `depth` links bound to `chain`, and `source`.
@@ -50,9 +53,14 @@ fn program(depth: u32, source: &str) -> String {
 
 /// Run [`program`] at `depth` over `source`.
 fn ran(depth: u32, source: &str) -> Ran {
+    ran_under(depth, source, SpecBounds::default())
+}
+
+/// Run [`program`] at `depth` over `source`, its specialization tables `bounds` long.
+fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
     let program = program(depth, source);
     WRITTEN.with(|written| written.borrow_mut().clear());
-    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, output())
+    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, bounds, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = substrate.with(|running| running.program().root().len());
     TIERS.with(|tiers| tiers.set(Tiers::default()));
@@ -60,10 +68,12 @@ fn ran(depth: u32, source: &str) -> Ran {
         .with(|running| running.run())
         .expect("the program runs");
     let after = substrate.with(|running| running.program().root().len());
+    let live = substrate.with(|running| running.scheduler().graph().live_specializations());
     Ran {
         tiers: TIERS.with(Cell::get),
         root: after - before,
         printed: WRITTEN.with(|written| written.borrow().join("\n")),
+        live,
     }
 }
 
@@ -310,13 +320,21 @@ fn a_fresh_loop_calling_a_shares_caching_helper_holds_each_specialization_flat()
     assert_eq!(few.printed, "7");
     for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
         assert_eq!(ran.tiers.specialized, depth as usize, "one per link");
+        assert_eq!(
+            ran.live,
+            (depth as usize).min(SpecBounds::default().root.get()),
+            "the root's bound caps the live ones"
+        );
     }
     let flat = |ran: Ran| Ran {
         tiers: Tiers {
             sought: 0,
             specialized: 0,
+            evicted: 0,
+            cold_births: 0,
             ..ran.tiers
         },
+        live: 0,
         ..ran
     };
     assert_eq!(flat(few), flat(many));
@@ -516,7 +534,9 @@ fn a_barrier_called_caching_frame_keeps_its_blocks_value() {
 /// body's kind: in the scratch branch, then in the lent branch. Empty where `program` refuses at
 /// load.
 fn laid(program: &str) -> Vec<(&'static str, usize, usize)> {
-    let Ok(mut substrate) = CellSubstrate::load::<Koan>(program, "<measured>", 2, output()) else {
+    let Ok(mut substrate) =
+        CellSubstrate::load::<Koan>(program, "<measured>", 2, SpecBounds::default(), output())
+    else {
         return Vec::new();
     };
     let kinds: BTreeMap<usize, &'static str> = substrate.with(|running| {
@@ -698,8 +718,9 @@ fn runs(
     between: impl Fn(&mut crate::program::Running<'_>),
 ) -> Vec<(Tiers, Option<usize>, String)> {
     let program = program(1, source);
-    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, output())
-        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    let mut substrate =
+        CellSubstrate::load::<Koan>(&program, "<test>", 2, SpecBounds::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
     (0..count)
         .map(|_| {
             WRITTEN.with(|written| written.borrow_mut().clear());
@@ -785,38 +806,140 @@ fn a_callable_born_under_a_specialization_keys_its_own_beneath_it() {
 
 #[test]
 fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() {
-    let source = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)");
-    let evict = |running: &mut crate::program::Running<'_>| {
-        let build = running.roots().build;
-        let mut scheduler = running.scheduler();
-        let spec = (scheduler.graph().table_entry(build)).expect("the table names one");
-        let _ = scheduler.evict(spec);
-    };
-    let ran = runs(&source, 2, evict);
-    let [
-        (first, first_table, ref first_printed),
-        (second, second_table, ref second_printed),
-    ] = ran[..]
-    else {
-        unreachable!()
-    };
-    assert_eq!(first_printed, second_printed);
+    let source = format!(
+        "{INVARIANT}PRINT (COUNTDOWN ints chain)\nPRINT (COUNTDOWN words chain)\n\
+         PRINT (COUNTDOWN ints chain)"
+    );
+    let one = NonZeroUsize::MIN;
+    let tight = ran_under(
+        DEPTHS[0],
+        &source,
+        SpecBounds {
+            root: one,
+            nested: one,
+        },
+    );
+    assert_eq!(tight.printed, "7\n7\n7");
     assert_eq!(
-        (first.specialized, second.specialized),
-        (1, 1),
-        "the miss rebuilds it"
+        (tight.tiers.specialized, tight.tiers.evicted),
+        (3, 2),
+        "`words` evicts `ints`, and `ints` again evicts `words`"
+    );
+    let roomy = ran(DEPTHS[0], &source);
+    assert_eq!(roomy.printed, tight.printed);
+    assert_eq!((roomy.tiers.specialized, roomy.tiers.evicted), (2, 0));
+}
+
+/// Bounds of `root` and `nested`.
+fn bounds(root: usize, nested: usize) -> SpecBounds {
+    SpecBounds {
+        root: NonZeroUsize::new(root).expect("a bound is not zero"),
+        nested: NonZeroUsize::new(nested).expect("a bound is not zero"),
+    }
+}
+
+#[test]
+fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations_flat() {
+    // `PEEK` keys on a new module each hop and `WRAP` on `ints` across the loop, both under the
+    // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops are newer births.
+    let source = wrapped_peeks();
+    let [few, many] = DEPTHS.map(|depth| ran_under(depth, &source, bounds(2, 2)));
+    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+        let depth = depth as usize;
+        assert_eq!(ran.printed, "done");
+        assert_eq!(
+            (
+                ran.tiers.specialized,
+                ran.tiers.evicted,
+                ran.tiers.cold_births
+            ),
+            (depth + 1, depth - 1, 0),
+            "every `WRAP` hop runs warm"
+        );
+        assert_eq!(ran.live, 2);
+    }
+    assert_eq!(
+        (few.tiers.region, few.tiers.lent),
+        (many.tiers.region, many.tiers.lent)
+    );
+}
+
+#[test]
+fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_flat() {
+    let source = "EXPR #(OUTER m :Holder) -> Number = \
+                  #((LET w = (m :| Holder)) \
+                  (LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Holder)) (x)))) \
+                  (g {x = 1}))\n\
+                  EXPR #(DRIVE link :Link) -> Number = \
+                  #((MODULE m OVER #[link] = (LET held = link)) (LET seen = (OUTER m)) \
+                  (DRIVE (ATTR link next)))\n\
+                  EXPR #(DRIVE end :Null) -> Number = #(7)\n\
+                  PRINT (DRIVE chain)";
+    let shapes = keyed(&format!(
+        "{PRELUDE}LET chain = (Link {{next = null}})\n{source}"
+    ));
+    let invariant = |names: &[&str]| {
+        let found = (shapes.iter()).find(|(_, each, _)| each == names);
+        found
+            .unwrap_or_else(|| panic!("a shape binds {names:?}"))
+            .2
+            .clone()
+    };
+    assert_eq!(invariant(&["g", "w", "m"]), Some(vec!["m".to_string()]));
+    assert_eq!(
+        invariant(&["x", "v"]),
+        Some(vec![]),
+        "`g` keys on its capture"
     );
     assert_eq!(
-        (first_table, second_table),
-        (Some(1), Some(1)),
-        "its entry is renewed"
+        invariant(&["link", "m", "seen"]),
+        None,
+        "`DRIVE` keys on nothing"
     );
+    // Each hop builds an `OUTER` under the root and a `g` beneath it; a miss on the root's full
+    // table releases the oldest `OUTER` with its `g`.
+    let [few, many] = DEPTHS.map(|depth| ran_under(depth, source, bounds(2, 2)));
+    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+        let depth = depth as usize;
+        assert_eq!(ran.printed, "7");
+        assert_eq!(
+            (ran.tiers.specialized, ran.tiers.evicted, ran.live),
+            (2 * depth, 2 * depth - 4, 4)
+        );
+    }
+    assert_eq!(
+        (few.tiers.region, few.tiers.lent),
+        (many.tiers.region, many.tiers.lent)
+    );
+}
+
+#[test]
+fn a_frame_under_an_evicted_specialization_is_born_cold_with_the_same_answer() {
+    // `SWEEP`'s first `PEEK` miss evicts `OUTER`'s specialization while `OUTER` runs, so `g`, born
+    // under it, is born cold.
+    let source = format!(
+        "{PEEK}EXPR #(SWEEP link :Link) -> Str = \
+         #((MODULE h OVER #[link] = (LET held = link)) (LET seen = (PEEK h)) \
+         (SWEEP (ATTR link next)))\n\
+         EXPR #(SWEEP end :Null) -> Str = #(\"done\")\n\
+         EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) \
+         (LET g = (FN :{{x :Number}} -> Number = #((LET v = (m :| Counter)) (x)))) \
+         (LET swept = (SWEEP chain)) (g {{x = 1}}))\n\
+         PRINT (OUTER ints)"
+    );
+    let tight = ran_under(2, &source, bounds(1, 1));
+    assert_eq!(tight.printed, "1");
+    assert!(tight.tiers.cold_births >= 1, "{:?}", tight.tiers);
+    let roomy = ran(2, &source);
+    assert_eq!(roomy.printed, "1");
+    assert_eq!(roomy.tiers.cold_births, 0);
 }
 
 /// The allocations one run of `source` makes.
 fn allocations(source: &str) -> u64 {
-    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 2, output())
-        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 2, SpecBounds::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = crate::tests::allocation_count();
     substrate
         .with(|running| running.run())

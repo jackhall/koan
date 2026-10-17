@@ -8,6 +8,7 @@ use crate::scheduler::{Action, Placement, Step, StepError, Work};
 
 use super::super::Koan;
 use super::output;
+use crate::values::SpecBounds;
 
 /// A program whose `WALK` follows a chain of `depth` links, each a newtype over a record naming the
 /// next, to the `null` at its end — selecting its overload by the link's type, and calling itself
@@ -36,8 +37,9 @@ fn peak_walking(depth: u32) -> usize {
 
 /// The most cells live at once while `source` runs.
 fn peak_of(source: &str) -> usize {
-    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 2, output())
-        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 2, SpecBounds::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
     substrate.with(|running| {
         let work = Work {
             step: body,
@@ -126,8 +128,9 @@ struct Walk {
 
 /// The heap allocations `running.run()` makes over `source`.
 fn run_allocations(source: &str) -> u64 {
-    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 2, output())
-        .unwrap_or_else(|error| panic!("the countdown loads: {error}"));
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 2, SpecBounds::default(), output())
+            .unwrap_or_else(|error| panic!("the countdown loads: {error}"));
     let before = crate::tests::allocation_count();
     substrate
         .with(|running| running.run())
@@ -140,8 +143,9 @@ fn run_allocations(source: &str) -> u64 {
 fn walking(depth: u32, body: &str) -> Walk {
     let source = countdown(depth, body, true);
     let peak = peak_of(&source);
-    let mut substrate = CellSubstrate::load::<Koan>(&source, "<test>", 2, output())
-        .unwrap_or_else(|error| panic!("the countdown loads: {error}"));
+    let mut substrate =
+        CellSubstrate::load::<Koan>(&source, "<test>", 2, SpecBounds::default(), output())
+            .unwrap_or_else(|error| panic!("the countdown loads: {error}"));
     let before = substrate.with(|running| running.program().root().len());
     substrate
         .with(|running| running.run())

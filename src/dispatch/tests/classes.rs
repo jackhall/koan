@@ -7,6 +7,7 @@ use crate::scope::{BodyClass, BodyShape, Mint, ShapeKind};
 
 use super::run;
 use super::statics::{body, loaded, module_body};
+use crate::values::SpecBounds;
 
 /// `SIG Counter`, whose head parameter an opaque view hides, and `MODULE ints`, which fits it.
 const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
@@ -746,7 +747,8 @@ fn classes_over_the_tutorial() {
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     let mut caching: BTreeMap<u32, usize> = BTreeMap::new();
     for (_, code) in tutorial_snippets() {
-        let Ok(mut substrate) = CellSubstrate::load::<Koan>(&code, "<tutorial>", 8, output())
+        let Ok(mut substrate) =
+            CellSubstrate::load::<Koan>(&code, "<tutorial>", 8, SpecBounds::default(), output())
         else {
             refused += 1;
             continue;

@@ -5,14 +5,18 @@
 //! Every type here is interned in a cell, so it lands in that cell's branch rather than the
 //! fixture's builder, which every cell's chain reads.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 
 use crate::memory::{CellGraph, Header, ReleaseAbsorption};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::Habitat;
 use crate::type_lattice::{KType, TypeDigest, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{Half, HalfHeader, Key, SpecKey, TypeHeader, TypeValue, ValueFamily};
+use crate::values::{
+    Decision, Half, HalfHeader, Key, SpecHome, SpecKey, TypeHeader, TypeValue, ValueFamily,
+};
 
 use super::{Dict, List, Record, TestGraph, Value, copy, pin, text, with_fixture};
 
@@ -177,36 +181,62 @@ fn a_handle_laid_without_a_crossing_fails_the_habitat_check() {
 }
 
 #[test]
-fn a_header_table_renews_an_entry_in_place() {
+fn a_header_table_decides_hits_free_entries_and_its_least_recently_born_victim() {
     with_fixture(|_| {
         let mut graph: TestGraph<'_> = CellGraph::new(1, pin);
         let parent = graph.create(None).unwrap();
-        let first = graph.create_tree(parent, None).unwrap();
-        let second = graph.create_tree(parent, None).unwrap();
+        let a = graph.create_tree(parent, None).unwrap();
+        let b = graph.create_tree(parent, None).unwrap();
+        let c = graph.create_tree(parent, None).unwrap();
         let key = |at| SpecKey(DigestHasher::new(Tag::Number).count(at).finished());
+        let two = NonZeroUsize::new(2).unwrap();
+        let live = RefCell::new(HashSet::from([a, b, c]));
+        let is_live = |handle| live.borrow().contains(&handle);
         graph
             .enter(parent, |context| {
                 let half = Half::of(context.writer(), context.header());
                 let _ = half.own_or_lay();
                 let header = context.header().get().expect("the header is laid");
+                assert!(header.table().is_none(), "no table until one is laid");
+                let table = header.lay_table(half, two, two);
                 assert!(
-                    header.table().is_none(),
-                    "the table is laid on the first insert"
+                    std::ptr::eq(header.lay_table(half, two, two), table),
+                    "a laid table is kept"
                 );
-                assert_eq!(header.find(key(0)), None);
-                header.insert(half, key(0), first);
-                header.insert(half, key(1), second);
-                assert_eq!(header.find(key(0)), Some(first));
-                header.insert(half, key(0), second);
-                assert_eq!(header.find(key(0)), Some(second), "the entry is renewed");
-                assert_eq!(header.table().map(|table| table.len()), Some(2));
-                assert_eq!(header.me(), None);
-                header.set_me(first);
-                assert_eq!(header.me(), Some(first));
+                assert_eq!(table.nested(), two);
+                assert_eq!(table.decide(key(1), is_live), Decision::Fill(0));
+                table.fill(0, key(1), a);
+                assert_eq!(table.decide(key(2), is_live), Decision::Fill(1));
+                table.fill(1, key(2), b);
+                assert_eq!(table.decide(key(1), is_live), Decision::Hit(a));
+                assert_eq!(
+                    table.decide(key(3), is_live),
+                    Decision::Evict(1, b),
+                    "`a`'s hit is the newer birth"
+                );
+                assert!(table.stamp(b), "a hop stamps its specialization's entry");
+                assert_eq!(table.decide(key(3), is_live), Decision::Evict(0, a));
+                assert!(!table.stamp(c), "no entry names `c`");
+                live.borrow_mut().remove(&b);
+                assert_eq!(
+                    table.decide(key(2), is_live),
+                    Decision::Fill(1),
+                    "a stale entry is renewed in place"
+                );
+                assert_eq!(table.decide(key(3), is_live), Decision::Fill(1));
+                assert_eq!(table.len(), 2, "a stale entry is still occupied");
+                assert_eq!(header.home(), None);
+                let home = SpecHome {
+                    me: a,
+                    parent: parent.into(),
+                };
+                header.set_home(home);
+                assert_eq!(header.home(), Some(home));
             })
             .unwrap();
-        graph.release_tree(first).unwrap();
-        graph.release_tree(second).unwrap();
+        for child in [a, b, c] {
+            graph.release_tree(child).unwrap();
+        }
         graph
             .release(parent, ReleaseAbsorption::IntoHolder)
             .unwrap();

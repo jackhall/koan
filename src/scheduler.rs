@@ -35,7 +35,9 @@ pub use action::{
 };
 pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
-pub(crate) use drain::{CACHING, EVICT_BEFORE_STEP, LAID, TIERS, Tiers};
+pub(crate) use drain::{
+    CACHING, EVICT_BEFORE_STEP, LAID, TIERS, Tiers, WATCH_LOG, WATCHED, Watched,
+};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
-pub use load::{LoadStep, Roots};
+pub use load::Roots;
 pub use seek::Seek;

@@ -3,8 +3,11 @@
 //!
 //! An asker that calls a body keyed on its bindings hands a [`Seek`]: the build cell the callee was
 //! born under, the key, and the specialization's own work. The drain reads that parent's table
-//! through a peek between steps; a live hit is the specialization, and a miss creates one under the
-//! parent and runs its one step at once, so the frame is born borrowing it and parks for nothing.
+//! through a peek between steps; a live hit is the specialization, its entry stamped as a birth, and
+//! a miss creates one under the parent and runs its one step at once, so the frame is born borrowing
+//! it and parks for nothing. A miss on a full table first releases the parent's least recently born
+//! child with its subtree, and the new child takes its entry. A tail hop of the same callee under a
+//! live specialization stamps its entry too.
 //! A parent that is no longer live births the frame cold: a `Fresh` frame borrowing its parent's
 //! scratch as any other tree cell does, a `Shares` frame borrowing nothing. Either placement borrows
 //! what it finds, a `Fresh` frame as its tree cell's lend and a `Shares` frame as its tenant's own.

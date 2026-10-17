@@ -3,8 +3,9 @@
 //! A call whose callee's body keys a specialization — its caching record lists the parameters its
 //! invariant sites read — hands the drain a [`Seek`], whatever its frame's placement: the build cell
 //! the callee was born under, the key of its segment under the arguments at those parameters, and
-//! [`specialize`], the work a missed specialization runs. Today that step only enlists the cell in
-//! its parent's table; what it holds is the warm types its borrowers intern into it. See
+//! [`specialize`], the work a missed specialization runs. That step only lays the cell's own header
+//! and table; the drain enters it in its parent's table, and what it holds is the warm types its
+//! borrowers intern into it. See
 //! [build/README.md](../build/README.md).
 
 use crate::build::key_of;
@@ -47,18 +48,19 @@ pub fn seek<'graph>(
         key,
         work: Work {
             step: specialize,
-            state: KBirth::Specialize { key },
+            state: KBirth::Specialize,
         },
     })
 }
 
-/// A specialization's step: enter the cell in its parent's table under its key, and quiesce.
+/// A specialization's step: lay the cell's own header and table, and quiesce. The drain enters it in
+/// its parent's table.
 pub fn specialize<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 ) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     match state {
-        KState::Born(KBirth::Specialize { key }) => step.enlist(key),
+        KState::Born(KBirth::Specialize) => step.enlist(),
         _ => step.failed(StepError::Refused),
     }
 }

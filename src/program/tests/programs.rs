@@ -9,6 +9,7 @@ use crate::type_lattice::KType;
 
 use super::evaluator::{Mini, contribute, recorded, reset};
 use super::{compare_back, loaded, output, read_back, run_and_read, type_back, written};
+use crate::values::SpecBounds;
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
 const DEPTH: u32 = if cfg!(miri) { 2 } else { 300 };
@@ -348,7 +349,13 @@ fn a_generic_function_carries_types_and_code() {
 #[test]
 fn a_capitalized_name_holds_only_a_type() {
     // Whether the refusal comes at load or at run is not this test's business.
-    let refused = |source: &str| match CellSubstrate::load::<Mini>(source, "<test>", 2, output()) {
+    let refused = |source: &str| match CellSubstrate::load::<Mini>(
+        source,
+        "<test>",
+        2,
+        SpecBounds::default(),
+        output(),
+    ) {
         Err(_) => true,
         Ok(mut substrate) => substrate.with(|running| running.run()) != Ok(Outcome::Completed),
     };

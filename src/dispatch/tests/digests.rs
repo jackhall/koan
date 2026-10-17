@@ -35,11 +35,13 @@ fn interned_digests<'graph>(
 }
 
 use super::{Koan, output};
+use crate::values::SpecBounds;
 
 /// The content digest of each of `names`, top-level bindings of `source` once it has run.
 fn digests<const N: usize>(source: &str, names: [&str; N]) -> [String; N] {
-    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 8, output())
-        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
     assert_eq!(
         substrate.with(|running| running.run()),
         Ok(Outcome::Completed)
@@ -183,8 +185,9 @@ EXPR #(MOVE x :Any TO y :Number) -> Str = #("to a number")
 PRINT kept
 PRINT (MOVE 1 TO 1)"##;
     let interned = || {
-        let mut substrate = CellSubstrate::load::<Koan>(PROGRAM, "<test>", 8, output())
-            .unwrap_or_else(|error| panic!("the program loads: {error}"));
+        let mut substrate =
+            CellSubstrate::load::<Koan>(PROGRAM, "<test>", 8, SpecBounds::default(), output())
+                .unwrap_or_else(|error| panic!("the program loads: {error}"));
         substrate.with(|running| {
             assert_eq!(running.run(), Ok(Outcome::Completed));
             running

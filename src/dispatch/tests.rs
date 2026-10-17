@@ -35,6 +35,7 @@ use std::cell::RefCell;
 use crate::program::{CellSubstrate, Outcome, Output};
 
 use super::Koan;
+use crate::values::SpecBounds;
 
 thread_local! {
     /// Every line written to either sink since the last [`run`], in order.
@@ -56,10 +57,11 @@ fn output() -> Output {
 /// refusal as `load: <diagnostic>`.
 fn run(source: &str) -> String {
     WRITTEN.with(|written| written.borrow_mut().clear());
-    let mut substrate = match CellSubstrate::load::<Koan>(source, "<test>", 8, output()) {
-        Ok(substrate) => substrate,
-        Err(error) => return format!("load: {error}"),
-    };
+    let mut substrate =
+        match CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output()) {
+            Ok(substrate) => substrate,
+            Err(error) => return format!("load: {error}"),
+        };
     let outcome = substrate.with(|running| running.run());
     let written = WRITTEN.with(|written| std::mem::take(&mut *written.borrow_mut()));
     match outcome {

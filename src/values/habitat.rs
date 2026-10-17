@@ -3,7 +3,7 @@
 //! Each habitat half — a cell's region, or its scratch habitat — keeps one [`Branch`] of the type
 //! lattice in its header ([`TypeHeader`], whose form is a [`HalfHeader`]), laid by the first door
 //! that interns into the half and released with it. A build cell's region header also keeps its
-//! specialization table and its own name ([specialization.rs](specialization.rs)). A [`Types`] chain is built per step over the frozen
+//! specialization table and its home ([specialization.rs](specialization.rs)). A [`Types`] chain is built per step over the frozen
 //! [`Root`](crate::type_lattice::Root) the load built and a [`Half`]: the writer that lays a value
 //! beside the header door of the same half, so a value door that takes both at one brand interns
 //! its type into the branch of the habitat it lays the value in. During the load the chain writes
@@ -15,11 +15,12 @@
 
 use std::cell::Cell;
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 
-use crate::memory::{Header, LaysRuns, TreeHandle, Writer, reattachable};
+use crate::memory::{Header, LaysRuns, Writer, reattachable};
 use crate::type_lattice::{Branch, Habitat, Halves, Own, RootBuilder, TypeChain};
 
-use super::specialization::{SpecKey, SpecTable, enter_in};
+use super::specialization::{SpecHome, SpecTable};
 
 /// The header family a koan graph keeps per habitat half: a [`HalfHeader`].
 pub struct TypeHeader;
@@ -27,12 +28,12 @@ pub struct TypeHeader;
 reattachable!(TypeHeader => &'cell HalfHeader<'cell>);
 
 /// What a habitat half keeps in its header: its branch of the type lattice, laid with the header;
-/// for a build cell's region, the table of its specializations, laid on the first insert; and for
-/// a specialization's region, its own handle, set when it enlists.
+/// for a build cell's region, the fixed table of its specializations, laid with the cell; and for a
+/// specialization's region, its home, which the drain sets once the cell has enlisted.
 pub struct HalfHeader<'cell> {
     branch: &'cell Branch<'cell>,
     table: Cell<Option<&'cell SpecTable<'cell>>>,
-    me: Cell<Option<TreeHandle>>,
+    home: Cell<Option<SpecHome>>,
 }
 
 impl<'cell> HalfHeader<'cell> {
@@ -41,39 +42,35 @@ impl<'cell> HalfHeader<'cell> {
         self.branch
     }
 
-    /// The half's specialization table, once anything has been inserted.
+    /// The half's specialization table, for a build cell's region.
     pub fn table(&self) -> Option<&'cell SpecTable<'cell>> {
         self.table.get()
     }
 
-    /// The handle `key` names in the table, which may be stale.
-    pub fn find(&self, key: SpecKey) -> Option<TreeHandle> {
-        Some(self.table()?.get(key)?.handle())
+    /// Lay the half's specialization table through `lay`, `length` entries long, its children's
+    /// tables `nested` long. A header that has a table keeps it, and the call returns it.
+    pub fn lay_table(
+        &self,
+        lay: impl LaysRuns<'cell>,
+        length: NonZeroUsize,
+        nested: NonZeroUsize,
+    ) -> &'cell SpecTable<'cell> {
+        if let Some(table) = self.table.get() {
+            return table;
+        }
+        let table = SpecTable::lay(lay, length, nested);
+        self.table.set(Some(table));
+        table
     }
 
-    /// Record `handle` under `key`, laying the table through `lay` on the first insert and
-    /// renewing the key's entry where it has one.
-    pub fn insert(&self, lay: impl LaysRuns<'cell>, key: SpecKey, handle: TreeHandle) {
-        let table = match self.table.get() {
-            Some(table) => table,
-            None => {
-                let mut table = Some(SpecTable::new(lay));
-                let table = &lay.lay(1, |_| table.take().expect("a run of one fills once"))[0];
-                self.table.set(Some(table));
-                table
-            }
-        };
-        enter_in(table, lay, key, handle);
+    /// The specialization whose region this header is, and its parent, once the drain has set it.
+    pub fn home(&self) -> Option<SpecHome> {
+        self.home.get()
     }
 
-    /// The specialization whose region this header is, once it has enlisted.
-    pub fn me(&self) -> Option<TreeHandle> {
-        self.me.get()
-    }
-
-    /// Record that this header's region is the specialization `handle`.
-    pub fn set_me(&self, handle: TreeHandle) {
-        self.me.set(Some(handle));
+    /// Record that this header's region is the specialization `home` names.
+    pub fn set_home(&self, home: SpecHome) {
+        self.home.set(Some(home));
     }
 }
 
@@ -188,7 +185,7 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell, '_, '_> {
                         &writer.fill(1, |_| HalfHeader {
                             branch,
                             table: Cell::new(None),
-                            me: Cell::new(None),
+                            home: Cell::new(None),
                         })[0]
                     })
                     .branch(),
