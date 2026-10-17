@@ -273,6 +273,8 @@ impl<'a, 'g, 'run, 'p, 'reg, X: Knotted> Digests<'a, 'g, 'run, 'p, 'reg, X> {
     /// A demand's memo, reading types in `types` and staging its walks and its tables over
     /// `scratch`.
     pub fn new(types: &'a Chain<'g, 'run, 'p, 'reg, '_>, scratch: BumpAllocator<'a>) -> Self {
+        #[cfg(test)]
+        DIGEST_DEMANDS.with(|count| count.set(count.get() + 1));
         Digests {
             types,
             scratch,
@@ -344,6 +346,8 @@ impl<'a, 'g, 'run, 'p, 'reg, X: Knotted> Digests<'a, 'g, 'run, 'p, 'reg, X> {
             Value::Knotted(_) | Value::Retyped(_) => {
                 let member = value.knot_member().expect("a knot member");
                 if member.ktype() != seen.ktype() {
+                    #[cfg(test)]
+                    DIGEST_VISITS.with(|count| count.set(count.get() + 1));
                     stacks.frames.push(Frame::Retyped {
                         carried: seen.ktype(),
                         member,
@@ -355,6 +359,8 @@ impl<'a, 'g, 'run, 'p, 'reg, X: Knotted> Digests<'a, 'g, 'run, 'p, 'reg, X> {
                 if let Some(knot) = self.knots.get(&member.root()) {
                     return Some(beside_index(*knot, member));
                 }
+                #[cfg(test)]
+                DIGEST_VISITS.with(|count| count.set(count.get() + 1));
                 let held = stacks.held.len();
                 member.held(self.types, self.scratch, &mut |part| stacks.held.push(part));
                 stacks.frames.push(Frame::Knot {
@@ -366,13 +372,19 @@ impl<'a, 'g, 'run, 'p, 'reg, X: Knotted> Digests<'a, 'g, 'run, 'p, 'reg, X> {
                 });
                 return None;
             }
-            leaf => return Some(scalar(leaf)),
+            leaf => {
+                #[cfg(test)]
+                DIGEST_VISITS.with(|count| count.set(count.get() + 1));
+                return Some(scalar(leaf));
+            }
         }
         let (tag, address) = resident(value);
         let key = (tag as u8, address, seen.ktype());
         if let Some(digest) = self.composites.get(&key) {
             return Some(*digest);
         }
+        #[cfg(test)]
+        DIGEST_VISITS.with(|count| count.set(count.get() + 1));
         let surface = seen
             .surface(self.types, self.scratch)
             .expect("a container or a tagged value opens");
@@ -651,4 +663,12 @@ fn resident<X: Knotted>(value: Value<'_, X>) -> (Tag, usize) {
         Value::Tagged(tagged) => (Tag::Tagged, at(tagged)),
         _ => unreachable!("only a plain composite opens a resident"),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many parts the content-digest walk has hashed, memo hits excluded.
+    pub static DIGEST_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many digest demands have been opened: one per [`Digests`] memo.
+    pub static DIGEST_DEMANDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

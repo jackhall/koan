@@ -508,8 +508,10 @@ pub struct Caching<'graph> {
     pub warm: Keyed<'graph, Site>,
     /// On a caching frame body's own record, when it or a block or module body it runs has an
     /// invariant minting site or an invariant composite site: the frame's parameter slots those
-    /// sites read, sorted, which may be none. A call to the frame seeks the specialization these
-    /// slots' arguments key. `None` on every other record.
+    /// sites read, sorted, which may be none. Each is a parameter whose arguments digest at a
+    /// constant cost: one declared under `Module` or as a type value, or a type binder. A call to
+    /// the frame seeks the specialization these slots' arguments key. `None` on every other
+    /// record.
     pub invariant: Option<&'graph [Slot]>,
 }
 

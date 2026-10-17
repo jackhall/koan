@@ -9,7 +9,10 @@
 //! last statement makes, and every callable whose name escapes as a value. A site's class depends
 //! on edges from every body in the program and on every path's resolution, so the classes are
 //! fixed once the whole pass has run ([`Pass::cache`]), into each shape's write-once [`Caching`]
-//! cell, beside the frame parameters its invariant sites read, which key its specialization. A wrong class costs growth or warmth, never soundness: an edge or an escape the pass
+//! cell, beside the frame parameters its invariant sites read, which key its specialization. Only a
+//! parameter whose every argument digests at a constant cost keys one — a type binder, or one
+//! declared under `Module` or as a type value ([`Pass::keys`]); a site reading any other parameter
+//! is varying. A wrong class costs growth or warmth, never soundness: an edge or an escape the pass
 //! misses only keeps a parameter invariant too long, and one it over-counts only keeps a site
 //! cold.
 
@@ -20,7 +23,7 @@ use crate::scope::{
     ParameterBinding, PathEntry, Position, ShapeKind, Site, Slot, Static, Tree,
 };
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{Interval, KType, Side, Variable, read_through};
+use crate::type_lattice::{Interval, KType, Side, TypeNode, Variable, is_subtype_of, read_through};
 
 use super::{Form, Landing, Pass, Wanted, address, of_node, of_part, porous_site, slots};
 
@@ -201,6 +204,28 @@ fn binder_deps<'p>(
 }
 
 impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
+    /// Whether `frame`'s parameter at `slot` keys a specialization: where every argument it holds
+    /// digests at a constant cost — a type value, by its handle, or a module, by the content it
+    /// keeps. A list's or a record's digest costs its size, so any other parameter keys nothing;
+    /// only a closed declaration bounds every argument at the load.
+    fn keys(&self, frame: &BodyShape<'_>, slot: Slot) -> bool {
+        let name = frame.slot_name(slot);
+        if let BinderSymbol::Type(_) = name {
+            return true;
+        }
+        let (types, scratch) = (self.types, self.scratch);
+        let declared = (frame.in_body(types, scratch))
+            .and_then(|ktype| match types.node(ktype) {
+                TypeNode::KFunction { params, .. } => params.get(name.symbol()),
+                _ => None,
+            })
+            .and_then(|declared| types.concrete(declared));
+        declared.is_some_and(|declared| {
+            is_subtype_of(types, scratch, declared, KType::EMPTY_SIGNATURE)
+                || is_subtype_of(types, scratch, declared, KType::ANY_TYPE)
+        })
+    }
+
     /// The chain level of the frame body the shape at `level` runs in: the nearest at or below it
     /// that is the program, a callable or a quote's code.
     pub(super) fn frame_level(&self, level: usize) -> usize {
@@ -608,7 +633,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Deps::On(slots) => {
                 let frame = record.frame;
                 let held = slots.iter().all(|slot| {
-                    invariant_body(pass, frame) && !varying.contains(&(address(frame), *slot))
+                    invariant_body(pass, frame)
+                        && !varying.contains(&(address(frame), *slot))
+                        && pass.keys(frame, *slot)
                 });
                 if held {
                     (Mint::Invariant, slots)

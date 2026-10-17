@@ -67,6 +67,8 @@ pub use crossing::{
 pub use crossing::{check_habitat, check_pinned_habitat};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use digest::{ContentDigest, Digests};
+#[cfg(test)]
+pub use digest::{DIGEST_DEMANDS, DIGEST_VISITS};
 pub use equality::Incomparable;
 pub use habitat::{Chain, Half, HalfHeader, TypeHeader, Types};
 pub use link::Link;

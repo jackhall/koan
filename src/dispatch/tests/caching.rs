@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 
 use crate::program::CellSubstrate;
 use crate::scheduler::{LAID, TIERS, Tiers};
-use crate::scope::{BodyShape, ShapeKind, Slot};
+use crate::scope::{BodyShape, Mint, ShapeKind, Slot};
 
 use super::super::Koan;
 use super::classes::tutorial_snippets;
@@ -501,37 +501,20 @@ fn a_fresh_loop_over_varying_content_holds_the_lattice_flat() {
 }
 
 #[test]
-fn a_fresh_loop_calling_a_shares_caching_helper_holds_each_specialization_flat() {
-    // The helper keys on the link it is handed, so each hop builds it a specialization of its own;
-    // the host's region and each lent branch hold flat however long the loop.
+fn a_fresh_loop_calling_a_helper_over_its_link_keys_nothing_and_holds_flat() {
+    // The helper's parameter is a record, whose digest costs its size, so it keys nothing: its
+    // view routes cold, and no hop seeks or builds a specialization.
     let source = HELPER_LOOP;
     assert_eq!(caching(source), 2);
     let [few, many] = at_ends(source);
     assert_eq!(few.printed, "7");
-    // `ENDS` stops at the root's bound, so an operator run past it shows the bound biting.
-    let bound = SpecBounds::default().root.get();
-    let past = ran(bound as u32 + 4, source);
-    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1]), (&past, bound as u32 + 4)] {
-        assert_eq!(ran.tiers.specialized, depth as usize, "one per link");
+    for ran in [&few, &many] {
         assert_eq!(
-            ran.live,
-            (depth as usize).min(bound),
-            "the root's bound caps the live ones"
+            (ran.tiers.sought, ran.tiers.specialized, ran.live),
+            (0, 0, 0)
         );
     }
-    assert_eq!(past.live, bound, "the cap is reached");
-    let flat = |ran: Ran| Ran {
-        tiers: Tiers {
-            sought: 0,
-            specialized: 0,
-            evicted: 0,
-            cold_births: 0,
-            ..ran.tiers
-        },
-        live: 0,
-        ..ran
-    };
-    assert_eq!(flat(few), flat(many));
+    assert_eq!(few, many);
 }
 
 #[test]
@@ -856,6 +839,66 @@ fn a_caching_frame_keys_on_the_parameters_its_invariant_sites_read() {
     );
 }
 
+/// Each shape's slot names, beside the classes of its own minting sites in site order.
+fn minted(source: &str) -> Vec<(Vec<String>, Vec<Mint>)> {
+    loaded(source, |program| {
+        let mut shapes = Vec::new();
+        every_shape(program.shape(), &mut shapes);
+        (shapes.into_iter())
+            .map(|shape| {
+                let names = (0..shape.slots())
+                    .map(|index| {
+                        let symbol = shape.slot_name(Slot(index as u32)).symbol();
+                        program.symbols().display(symbol).to_string()
+                    })
+                    .collect();
+                let mints = (shape.caching().into_iter())
+                    .flat_map(|caching| caching.mints.iter().map(|(_, mint)| *mint))
+                    .collect();
+                (names, mints)
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn a_parameter_keys_only_where_its_digest_is_constant_cost() {
+    // A list's, a record's or an `Any`'s digest costs its size: a parameter of such a type keys
+    // nothing, and the view of a module built over it routes cold.
+    for parameter in ["xs :(LIST OF Number)", "xs :{a :Number}", "xs :Any"] {
+        let source = format!(
+            "{PRELUDE}EXPR #(KEEP {parameter}) -> Number = \
+             #((MODULE h OVER #[xs] = (LET held = xs)) (LET v = (h :| Holder)) (1))\n"
+        );
+        let keep = ["xs", "v", "h"].map(str::to_string).to_vec();
+        let invariant = (keyed(&source).into_iter())
+            .find(|(_, names, _)| *names == keep)
+            .map(|(_, _, invariant)| invariant);
+        assert_eq!(invariant, Some(None), "`{parameter}` keys nothing");
+        let mints = (minted(&source).into_iter()).find(|(names, _)| *names == keep);
+        assert_eq!(
+            mints,
+            Some((keep, vec![Mint::Varying])),
+            "`{parameter}`'s view routes cold"
+        );
+    }
+    // A type value's digest hashes its handle: a type binder keys, and a nominal over it is warm.
+    let source = format!(
+        "{PRELUDE}EXPR #(BOXED Elt :Type) -> Number = \
+                          #((NEWTYPE Box = :{{v :Elt}}) (1))\n"
+    );
+    let boxed = |names: &[(Vec<String>, Vec<Mint>)]| {
+        (names.iter())
+            .find(|(names, _)| names.first().is_some_and(|name| name == "Elt"))
+            .map(|(_, mints)| mints.clone())
+    };
+    assert_eq!(boxed(&minted(&source)), Some(vec![Mint::Invariant]));
+    let invariant = (keyed(&source).into_iter())
+        .find(|(_, names, _)| names.first().is_some_and(|name| name == "Elt"))
+        .map(|(_, _, invariant)| invariant);
+    assert_eq!(invariant, Some(Some(vec!["Elt".to_string()])));
+}
+
 #[test]
 fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
     let source = format!("{PRELUDE}{INVARIANT}{KEYED}LET q = #(1)\n");
@@ -1038,6 +1081,12 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
         (few.tiers.region, few.tiers.lent),
         (many.tiers.region, many.tiers.lent)
     );
+    // `ENDS` stops at the root's default bound, so an operator run past it shows the bound biting.
+    let bound = SpecBounds::default().root.get();
+    let depth = bound + 4;
+    let past = ran(depth as u32, &source);
+    assert_eq!(past.printed, "done");
+    assert_eq!((past.tiers.specialized, past.live), (depth + 1, bound));
 }
 
 #[test]
@@ -1124,31 +1173,32 @@ fn allocations(source: &str) -> u64 {
 }
 
 #[test]
-fn a_birth_keyed_on_a_list_digests_it_at_a_cost_below_its_length() {
-    // `TAKE` views a module built over the list it is handed, so its specialization is keyed on
-    // the list's digest, computed at each birth.
+fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() {
+    // `TAKE`'s parameter is `Any`, so it keys nothing: no call seeks a specialization, and the view
+    // of the module born over the list routes cold.
+    let source = |list: &str, count: usize| {
+        let mut source = format!(
+            "{PRELUDE}EXPR #(TAKE xs :Any) -> Number = \
+             #((MODULE h OVER #[xs] = (LET held = xs)) (LET seen = (h :| Holder)) (1))\n\
+             LET l = [{list}]\n"
+        );
+        source.push_str(&"PRINT (TAKE l)\n".repeat(count));
+        source
+    };
+    let shapes = keyed(&source("1", 1));
+    assert!(
+        (shapes.iter()).any(|(_, names, invariant)| names[0] == "xs" && invariant.is_none()),
+        "`TAKE` keys nothing: {shapes:?}"
+    );
     let per_birth = |length: usize| {
         let list = (0..length)
             .map(|at| at.to_string())
             .collect::<Vec<_>>()
             .join(" ");
-        let calls = |count: usize| {
-            let mut source = format!(
-                "{PRELUDE}EXPR #(TAKE xs :Any) -> Number = \
-                 #((MODULE h OVER #[xs] = (LET held = xs)) (LET seen = (h :| Holder)) (1))\n\
-                 LET l = [{list}]\n"
-            );
-            source.push_str(&"PRINT (TAKE l)\n".repeat(count));
-            allocations(&source)
-        };
         TIERS.with(|tiers| tiers.set(Tiers::default()));
-        let cost = (calls(4) - calls(1)) / 3;
+        let cost = (allocations(&source(&list, 4)) - allocations(&source(&list, 1))) / 3;
         let tiers = TIERS.with(Cell::get);
-        assert_eq!(
-            (tiers.sought, tiers.specialized),
-            (5, 2),
-            "each run builds one"
-        );
+        assert_eq!((tiers.sought, tiers.specialized), (0, 0));
         cost
     };
     let (short, long) = (per_birth(1), per_birth(64));
