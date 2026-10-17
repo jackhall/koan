@@ -86,7 +86,10 @@ KEEP_SHAS = 3
 # Where a baseline commit is checked out and built. Under `target/`, which is already
 # ignored, and one worktree per SHA so the build is paid once. Each worktree keeps its
 # own `target/` rather than sharing the main one, so building a baseline never
-# invalidates the fingerprints of the build under test.
+# invalidates the fingerprints of the build under test. The baseline's build names that
+# directory outright: under a `CARGO_TARGET_DIR` or a configured `build.target-dir`, both
+# builds would otherwise write one executable path, and the sweep would compare the
+# baseline against itself.
 BASELINES = REPO / "target" / "perf-baselines"
 
 # Where each trial's fresh copy of a binary is written, and removed after the run. Under
@@ -136,17 +139,18 @@ Key = tuple[str, int, str]
 # --- measurement ------------------------------------------------------------
 
 
-def build(cwd: Path) -> Path:
-    """Build the harness in `cwd` and return the binary cargo wrote.
+def build(cwd: Path, target_dir: Path | None = None) -> Path:
+    """Build the harness in `cwd`, into `target_dir` when one is named, and return the
+    binary cargo wrote.
 
     The path comes out of cargo's own JSON rather than being assembled from a target
-    directory, which is what lets a baseline worktree keep its build wherever its
-    configuration puts it.
+    directory, so the build under test lands wherever the caller's configuration puts it.
     """
-    run = subprocess.run(
-        ["cargo", "build", "-p", "cellgraph", "--features", "perf", "--bin", "perf",
-         "--message-format", "json-render-diagnostics"],
-        cwd=cwd, capture_output=True, text=True)
+    command = ["cargo", "build", "-p", "cellgraph", "--features", "perf", "--bin", "perf",
+               "--message-format", "json-render-diagnostics"]
+    if target_dir is not None:
+        command += ["--target-dir", str(target_dir)]
+    run = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
     if run.returncode != 0:
         print(run.stderr, file=sys.stderr, end="")
         sys.exit(f"the harness failed to build in {_display(cwd)} "
@@ -176,7 +180,7 @@ def baseline(sha: str) -> Path | None:
         if added.returncode != 0:
             print(added.stderr, file=sys.stderr, end="")
             return None
-    return build(tree)
+    return build(tree, tree / "target")
 
 
 def prune_baselines(keep: set[str]) -> None:
