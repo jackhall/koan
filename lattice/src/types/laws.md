@@ -48,7 +48,8 @@ handle only because no variable reaches it.
 ([identity](identity.md#typed-handles)). Only the lattice wraps a raw handle,
 every door is generic over its children's handle, and a `KType` asked of a
 parametric child is a compile error, pinned by a `compile_fail` doctest on
-`TypeChain::list`. `TypeChain::concrete` is the one checked conversion.
+`TypeChain::list`. `TypeChain::concrete` is the one checked conversion, and
+`TypeChain::concrete_declared`, its lift over a declared type, is built on it.
 
 ## The order is a partial order
 
@@ -106,9 +107,9 @@ second walk can drift from it.
 
 ## One type, one handle
 
-**The law.** A type's handle is its content digest, and equal types have equal
-handles: comparing two types is comparing two integers, with no structural
-fallback. So every canonical shape is part of identity — a union is flat,
+**The law.** A type's handle is its content digest under two flags that are
+not identity, and equal types have equal handles: comparing two types is
+comparing two integers, with no structural fallback. So every canonical shape is part of identity — a union is flat,
 deduplicated and holds no member under another; a record's digest ignores field
 order; a quantifier group is numbered by position, so two alpha-variants are
 one node; a union of the three family tops is `Any`.
@@ -135,8 +136,10 @@ for a type that already has one.
 which canonicalize before they digest. `equal_content_interns_once`,
 `union_of_is_canonical`, `a_union_holding_the_three_family_tops_is_any` and the
 two fixed-point laws over shapes and function types state it;
-[tests/golden.rs](tests/golden.rs) pins the builtin vocabulary's digests, so an
-identity move shows in a diff.
+`a_handles_flags_are_not_its_identity` states that a handle's two flags never
+reach its equality, hash or order, and `a_handles_flags_are_true` that each
+names what its node is; [tests/golden.rs](tests/golden.rs) pins the builtin
+vocabulary's digests, so an identity move shows in a diff.
 
 ## `join` and `meet` are exact
 
@@ -350,8 +353,8 @@ some of them and meets of two applications, and put carried unions under
 quantified positions, where a solve joins and meets. The interval and verdict
 laws draw their carried types within the static ones, binding each lexical
 variable as a run does. Three laws hold the crossing doors over any generated
-type: an adopted type reads in a fresh branch at its source's digest, view and
-flags; a merge leaves every source entry found; and a chain linked to the
+type: an adopted type reads in a fresh branch at its source's digest, view,
+flags and handle bits; a merge leaves every source entry found; and a chain linked to the
 generating branch reads every generated handle alike and holds exactly what it
 read.
 

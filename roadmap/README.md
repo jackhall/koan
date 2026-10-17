@@ -38,7 +38,6 @@ subdirectory's README carries its own slice.
 - [Matching](conditionals/matching.md)
 - [Where a content digest is demanded](gradual-build/digest-demand.md)
 - [The cost of an exit's adoption](gradual-build/exit-adoption-cost.md)
-- [Two flag bits in a type handle](gradual-build/handle-bits.md)
 - [Monotone elaboration](gradual-build/monotone-elaboration.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)

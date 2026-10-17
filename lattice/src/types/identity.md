@@ -3,25 +3,29 @@
 What a type handle is, what a typed handle promises, and where the lattice keeps
 its nodes. Part of [the type lattice](README.md)'s design.
 
-## Identity: a handle *is* a content digest
+## Identity: a handle is a content digest under two flags
 
 A [`Handle`](handle.rs) is a bare `u128` — no pointer, no index, no reference to
-the registry that minted it. That one word is the type's content digest, so
-equality, hashing and ordering all derive on it: **comparing two types is
+the registry that minted it. Its low 126 bits are the type's content digest,
+and equality, hashing and ordering read those alone: **comparing two types is
 comparing two integers**, and no structural descent exists to fall back to. The
 width is chosen so an accidental collision is less likely than a hardware fault,
 which is what makes digest equality *be* type equality with no repair path.
 
-The word's top two bits are flags, not digest, and every comparison, hash,
-table word and child digest masks them out: **in-root**, whether the node lies
-in the root, which is closed after the load, so the bit is fixed for the
-program's life; and **concrete**, the node's concreteness flag. Each is set by
-the door that interns or finds the node, and baked into the builtin
-constants, so a reader asks either question of the handle alone, with no
-lookup: a chain skips the root for a handle whose in-root bit is clear, adopts
-a root handle with a bit test, and answers a verdict over two root handles
-from the root's table alone
-([two flag bits](../../../roadmap/gradual-build/handle-bits.md)).
+The word's top two bits are flags, not digest: **in-root**, whether the node
+lies in the root — on the load's chain, the root builder — which is closed
+after the load, so the bit is fixed for the program's life; and **concrete**,
+whether nothing parametric is reachable from the node. A digest is the low 126
+bits of its hash by construction, so no flag reaches a recipe, a child digest
+or a verdict key, and a type's identity is its content wherever it lies. A
+node holds its handle, flags set as it is laid — in-root where it is laid into
+the root builder — and the builtin constants bake both in, so a reader asks
+either question of the handle alone, with no lookup: a chain skips the root
+for a handle whose in-root bit is clear, adopts a root handle with a bit test,
+and answers a verdict over two root handles from the root's table alone. A
+handle therefore resolves against the root of the program that minted it: a
+root handle read through a chain over another root that lacks it is a miss,
+and a miss on a handle panics.
 
 Three things follow, and each is load-bearing:
 
@@ -77,7 +81,11 @@ sealed. So a `KType` is concrete because every door that yields one builds it
 from concrete children or checks it. A `KType` converts into a `Parametric`; a
 `Parametric` becomes a `KType` only by a substitution that answers every
 variable, or through [`TypeChain::concrete`](chain.rs), the one checked
-conversion, which reads a flag interning stored. Every door that builds a type
+conversion, which reads the handle's concrete bit.
+`TypeChain::concrete_declared` lifts it over a `DeclaredType` — a type
+narrowed through `concrete`, a scheme kept as it is — and is built on it, so
+`concrete` stays the one conversion; each caller names the invariant behind
+the answer it expects. Every door that builds a type
 from child types is generic over the handle, so it yields a `KType` from
 `KType` children and a `Parametric` from parametric ones. A `KType` asked of a
 parametric child is a compile error, which a `compile_fail` doctest on
@@ -125,7 +133,8 @@ hands the chain), so building one lays nothing; no branch holds it, since a
 half's door is valid for one step. A chain is built per step and never
 stored. Two read-only doors let an embedder see where a type lands:
 `TypeChain::half`, the half the chain writes, and `TypeChain::in_root`, whether
-a type's node lies in the root — on the load's chain, in the root builder.
+a type's node lies in the root — on the load's chain, in the root builder —
+which reads the handle's in-root bit.
 
 How a value's types reach another habitat is the crossing's
 ([crossing](../../../src/values/README.md#crossing)), over three doors
@@ -179,8 +188,8 @@ outliving its destination.
   value leaves it
   ([type tiers](../../../design/type-tiers.md#the-scratch-branch-as-a-cache)).
 
-Each node is a [`StoredNode`](stored.rs) laid alone in its tier: its digest,
-then 32 B of content, 48 B in all. The content names each child — and each
+Each node is a [`StoredNode`](stored.rs) laid alone in its tier: its handle —
+the digest under its flags — then 32 B of content, 48 B in all. The content names each child — and each
 bound, lower end, code kind, carrier's met bound and application signature — by
 a reference to that child's node, so a walk or a relation steps from node to
 node and never consults a table. A shape's element keeps its slot's priority
@@ -198,9 +207,10 @@ a node by comparing against the digest the node holds: the digest is stored
 once, in the node. A handle is looked up once, where it enters the lattice — at
 a typed door or a public reader, or where it is read out of a quantifier
 group's bounds or a schema, which keep handles because koan reads them — and a
-lookup is one probe per tier the chain reads — two in a region, three in a
-scratch habitat — and, for a handle the chain's own tiers lack, one per link
-walked, once per cell. The registry holds `Never` and
+lookup is routed by the handle's in-root bit: a root handle's is one probe of
+the root, and any other's one probe per branch the chain reads — one in a
+region, two in a scratch habitat — and, for a handle those branches lack, one
+per link walked, once per cell. The registry holds `Never` and
 `Any` by reference, so producing either costs no lookup. Interning is
 insert-if-absent along the chain, so building the same content twice in a half
 yields one node and two equal handles. Identity is by digest, so two branches
@@ -217,9 +227,10 @@ its region: 16 B slots, each the digest's low word beside the node's
 reference, probed linearly at a load of at most one half. A region's writer
 lays fixed runs and has no allocator, so the table grows by laying a run of
 twice the length and re-placing each slot by its stored word, reading no node.
-A lookup probes the root first, then the region's branch, then a scratch
-branch, then for a read by handle the links, and skips a branch that holds
-nothing.
+An intern, which has a digest and no flags, probes the root first, then the
+region's branch, then a scratch branch, and skips a branch that holds nothing;
+a read by handle probes the root alone for a root handle, and for any other
+the region's branch, then a scratch branch, then the links.
 
 The lattice's [node-table benchmark](../../benches/node_table.rs) times both
 tables over 48 B linked stand-in nodes, from 1,000 to 60,000 entries, each
@@ -252,14 +263,16 @@ whether the type is porous or exposing
 every other variant's are a constant of its kind, so each probe is one read of
 the node. The probes are the lattice's own;
 the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
-concreteness through `concrete`.
+concreteness through `concrete` or `concrete_declared`.
 
 The **verdict tables** ([verdicts.rs](verdicts.rs)), one per tier, are keyed
 by `(subject, candidate, relation)`. A verdict is recorded in the table of the
-shortest-lived tier holding one of its two types — a type's tier being the one a
-lookup finds it in, the longest-lived holding it — so a verdict over a branch's
-type is released with the branch, and the run's verdicts never evict the
-load's. A verdict lookup probes each table that exists, shortest-lived first.
+shortest-lived tier holding one of its two types — a root handle's tier being
+the root, and any other's the branch a lookup finds it in — so a verdict over a
+branch's type is released with the branch, and the run's verdicts never evict
+the load's. A verdict over two root types is therefore read from the root's
+table alone, and any other from each branch table that exists, shortest-lived
+first.
 The root's table is a fixed run of two-slot buckets, laid in the root's bump
 at the load's first verdict or at the freeze, and never resized, so it strands nothing in a bump that releases nothing before the
 run ends; a full bucket evicts the slot not touched last. A branch's is a

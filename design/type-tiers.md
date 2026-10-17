@@ -24,13 +24,17 @@ brands each tier's door and owns the scratch habitat's reset.
 | region branch | the region's birth | its death | a porous body's run-built types, and what a caching body's exits carry |
 | scratch branch | the habitat's reset | its next reset | a step's scratch types, and every type a caching body builds |
 
-A handle is its content's digest, so it names one type in every tier, and a
-reset moves where a type resolves, never what it is. Every branch's table is a
+A handle's identity is its content's digest, so it names one type in every
+tier, and a reset moves where a type resolves, never what it is. Every branch's table is a
 [`DigestTable`](../lattice/src/bump/digest_table.rs) differing only in what
-lays its runs; the root's is a hashbrown table the load grows and freezes. A
-node lookup probes the tiers a step reads longest-lived first, the root before
-any branch, and a read by handle then follows a branch's link to its
-spawner's, caching the hit; a verdict lookup probes them shortest-lived first.
+lays its runs; the root's is a hashbrown table the load grows and freezes. An
+intern probes the tiers a step reads longest-lived first, the root before any
+branch. A read by handle is routed by the handle's in-root bit
+([identity](../lattice/src/types/identity.md#identity-a-handle-is-a-content-digest-under-two-flags)):
+a root handle probes the root alone, and any other probes the branches
+longest-lived first, then follows a branch's link to its spawner's, caching
+the hit. A verdict over two root types is read from the root's table alone,
+and any other from the branches' tables, shortest-lived first.
 The root is closed after the load, so every type the run builds lives in a
 branch, a composite over root types alone included.
 
@@ -364,9 +368,6 @@ types, and released with that tier.
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch
   laid at a predicted size.
-- [Two flag bits in a type handle](../roadmap/gradual-build/handle-bits.md) —
-  in-root and concrete read off the handle, so an adoption of a root type and
-  a value door's root check look nothing up.
 - [The cost of an exit's adoption](../roadmap/gradual-build/exit-adoption-cost.md)
   — an exit that hands over nothing for a settled part and lays nothing
   before reading the top value's bits.

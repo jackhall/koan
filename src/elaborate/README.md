@@ -584,8 +584,8 @@ retired lifetime name.
 [`tests/examples.rs`](tests/examples.rs) elaborates each production, each
 refusal, and a callable's type and registered shape off each builtin shape that
 births one — a bare definition and its combined twin alike — over a program
-shaped and activated in a cell with every slot bound or left empty as the test
-asks; [`tests/projections.rs`](tests/projections.rs) reads a record
+shaped and activated on the load's chain, in program storage, with every slot
+bound or left empty as the test asks; [`tests/projections.rs`](tests/projections.rs) reads a record
 field's declared type through an alias, a newtype layer and a chain, and each
 refusal. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
 door over the same harness: each form it elaborates, each group it seals — a

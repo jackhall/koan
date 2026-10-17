@@ -46,7 +46,7 @@ body's doors and its past activations both say something about it.
   above counts.
 - *A root-only site hint — decided.* No site hint: whether a memo is the
   root's is read off the handle's in-root bit
-  ([two flag bits](handle-bits.md)), which answers per handle what a static
+  ([identity](../../lattice/src/types/identity.md#identity-a-handle-is-a-content-digest-under-two-flags)), which answers per handle what a static
   site class could answer only where the site is exact and closed.
 
 ## Dependencies

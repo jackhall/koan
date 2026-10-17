@@ -28,6 +28,5 @@ hand.
 
 - [Where a content digest is demanded](digest-demand.md)
 - [The cost of an exit's adoption](exit-adoption-cost.md)
-- [Two flag bits in a type handle](handle-bits.md)
 - [Monotone elaboration](monotone-elaboration.md)
 

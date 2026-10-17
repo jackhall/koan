@@ -10,15 +10,15 @@
 //!
 //! Each node is a [`StoredNode`](super::stored::StoredNode) laid alone in the half the chain
 //! writes, holding its own handle beside its content and a reference to each child's node. A
-//! [`Handle`] is the digest of its node under two flags, and the digest is already a uniformly distributed hash,
-//! so each tier's table finds a node by its digest's low word and compares against the digest the
-//! node holds — it stores no second copy. Interning is insert-if-absent: [`find`](TypeChain::find),
-//! which has a digest and no flags, probes the root, the region tier, then the own tier,
-//! longest-lived first, and a miss lays the node in the own tier. A lookup by handle
-//! ([`locate`](TypeChain::locate)) is routed by the handle's in-root bit: a root handle probes the
-//! root alone, and any other skips it. Building the same content twice in a chain yields one node and two equal
-//! handles. Nothing ever leaves a tier and nothing in one carries drop glue, so a half releases its
-//! branch and every node in it whole.
+//! [`Handle`] is the digest of its node under two flags, and the digest is already a uniformly
+//! distributed hash, so each tier's table finds a node by its digest's low word and compares
+//! against the digest the node holds — it stores no second copy. Interning is insert-if-absent:
+//! [`find`](TypeChain::find), which has a digest and no flags, probes the root, the region tier,
+//! then the own tier, longest-lived first, and a miss lays the node in the own tier. A lookup by
+//! handle ([`locate`](TypeChain::locate)) is routed by the handle's in-root bit: a root handle
+//! probes the root alone, and any other skips it. Building the same content twice in a chain
+//! yields one node and two equal handles. Nothing ever leaves a tier and nothing in one carries
+//! drop glue, so a half releases its branch and every node in it whole.
 //!
 //! A handle is looked up once, where it enters the lattice ([`TypeChain::enter`]); every walk and
 //! relation inside follows references from there. A handle the chain's tiers lack is read through

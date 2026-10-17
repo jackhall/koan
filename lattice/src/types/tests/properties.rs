@@ -1865,7 +1865,8 @@ fn beside<'r>(world: &World, region: &'r Bump) -> TypeChain<'r, BumpHalf<'r>> {
 }
 
 /// Whether `kt` reads in `there` exactly as in the world: one digest recomputed off its content,
-/// one set of flags, one pair of handle bits, one rendering — which enters every handle a side table holds.
+/// one set of flags, one pair of handle bits, one rendering — which enters every handle a side
+/// table holds.
 fn reads_alike<'r>(
     world: &World,
     there: &TypeChain<'r, BumpHalf<'r>>,

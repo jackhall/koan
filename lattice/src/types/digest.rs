@@ -4,8 +4,9 @@
 //! Every type carries a digest computed bottom-up from its children (a recursive set at seal,
 //! over its finite SCC presentation). Equality is one digest compare and hashing keys on the
 //! digest. A digest is the low 126 bits of the hash, so the two flag bits a handle keeps above it
-//! never reach a recipe, a child digest or a verdict key; the width is chosen so an accidental collision is less likely than a hardware fault,
-//! so digest equality is type equality with no repair path.
+//! never reach a recipe, a child digest or a verdict key; the width is chosen so an accidental
+//! collision is less likely than a hardware fault, so digest equality is type equality with no
+//! repair path.
 //!
 //! The digest is a pure function of type content, so two independently built types with the same
 //! content digest equal with no shared interner. An opaque view's carrier is the one node keyed on

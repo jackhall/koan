@@ -694,11 +694,13 @@ a name the rest of the stack retired.
 ## Testing
 
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
-over a fixture that owns program storage, a seeded root beside a root builder
-the test's load-time work interns into, and a cell graph over that storage to
-run steps in; each cell's chain reads the root, then the builder, then the
-cell's own branch, so a type a value door builds in a cell lands in that cell's
-branch. Circular values are exercised
+over a fixture that owns program storage, a root builder the test's load-time
+work interns into, frozen into the program's one root when the first cell's
+chain is built, and a cell graph over that storage to run steps in; each
+cell's chain reads the root, then the cell's own branch, so a type a value door
+builds in a cell lands in that cell's branch. A test finishes its load-time
+interning before its first cell, as a program's load ends before its run
+starts. Circular values are exercised
 without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
 by hand, and the suites cover the door over each kind, a payload seen at its

@@ -1,6 +1,6 @@
 //! [`StoredNode`] — one interned type as a tier's table stores it: its handle — the digest under
-//! the two flags it was laid with — beside its [`Content`]. Each node is laid alone in the half its chain writes, and the table holds a
-//! reference to it.
+//! the two flags it was laid with — beside its [`Content`]. Each node is laid alone in the half
+//! its chain writes, and the table holds a reference to it.
 //!
 //! The table stores a node apart from the [`TypeNode`] a reader sees, so storage can pack what a
 //! view spells out. Each variant whose probe answers its children decide carries a [`Flags`] byte:

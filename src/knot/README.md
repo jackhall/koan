@@ -497,8 +497,8 @@ held by review.
 
 ## Testing
 
-The suites run programs through a fixture that activates a program in a cell
-and brings each binding into being — a component of type binders through
+The suites run programs through a fixture that shapes a program in the load —
+before the first cell freezes the root — then activates it in a cell and brings each binding into being — a component of type binders through
 [the declaration door](../elaborate/README.md#declarations), a cyclic component
 of value binders or a component of callable binders through the tie with an
 evaluator that supplies nothing, a module binder body-first (its body's

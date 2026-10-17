@@ -8,10 +8,10 @@
 //! root and whether it is concrete, both fixed for the program's life, so the chain answers
 //! either question with a bit test; the low 126 are the digest. Equality, hashing and ordering
 //! read the digest alone, so comparing two types is comparing two integers, a type's identity is
-//! its content wherever it lies, and no structural descent exists to fall back to. Content lives in the tiers a
-//! [`TypeChain`](super::chain::TypeChain) reads, keyed by the same digest, so any operation that
-//! needs a type's shape — rendering, kind classification, the relations — takes a chain and reads
-//! the [`TypeNode`]. Inside the lattice a type is named by a reference to its node
+//! its content wherever it lies, and no structural descent exists to fall back to. Content lives
+//! in the tiers a [`TypeChain`](super::chain::TypeChain) reads, keyed by the same digest, so any
+//! operation that needs a type's shape — rendering, kind classification, the relations — takes a
+//! chain and reads the [`TypeNode`]. Inside the lattice a type is named by a reference to its node
 //! instead ([`Naming`]): a handle is looked up once, where it enters, and every walk and relation
 //! follows references from there.
 //!
