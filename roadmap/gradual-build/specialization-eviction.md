@@ -1,6 +1,6 @@
 # Evicting specializations
 
-A build cell's specializations as a small least-recently-hit cache.
+A build cell's specializations as a small least-recently-born cache.
 
 **Problem.** A [specialization](../../src/build/README.md#two-trees-under-one-drain)
 lives from the first miss on its binding to the program's end: the drain's
@@ -18,19 +18,29 @@ in `src/dispatch/tests/caching.rs` asserts one specialization per link of
 the list its loop walks. A parent's table (`SpecTable` in
 `src/values/specialization.rs`) records a key and a handle per child and
 nothing about its use, so nothing a parent holds says which child a miss
-should displace.
+should displace; and it is insert-only, so the same loop adds an entry to
+the parent's table per iteration.
 
 **Acceptance criteria.**
 
 - A loop calling a caching frame over a new invariant binding each iteration
-  holds a number of live specializations, and bytes in them, independent of
-  its iteration count.
+  holds a number of live specializations, and bytes in them and in their
+  parents' tables, independent of its iteration count, including where the
+  frame's body calls a keyed callable of its own.
+- A build cell's table is a fixed run of entries, laid with the cell and
+  never grown: the build root's as long as the root bound, a
+  specialization's as long as the nested bound. Both bounds are parameters
+  of the load, 16 and 4 by default, each at least one.
 - Eviction runs at a miss in `Scheduler::seek`, before the miss creates its
-  child, and nowhere else: a parent past its bound releases its least
-  recently hit childless child. Each `SpecEntry` carries the parent's miss
-  count at the entry's last hit, and nothing else is added to the entry.
-- A build cell evicts only a childless specialization, and an eviction costs
-  a rebuild on the next miss and never a different answer.
+  child, and nowhere else: a parent with no free entry releases its least
+  recently born child with its subtree, leaf first, and the new child takes
+  that child's entry.
+- Each `SpecEntry` carries the parent's birth count at its specialization's
+  last birth, and nothing else is added to the entry. A birth is the miss
+  that creates the specialization, a seek that finds it live, or a hop of the
+  same callee under it: `wrapped_peeks` in `src/dispatch/tests/caching.rs`,
+  under a root bound of two, runs every `WRAP` hop warm.
+- An eviction costs a rebuild on the next miss and never a different answer.
 - A borrower's count does not enter the choice: a test evicts a
   specialization while a frame borrows it, and the frame runs to its end over
   the dead but undisposed specialization, the next miss on its key builds a
@@ -43,11 +53,16 @@ should displace.
 
 **Directions.**
 
-- *The bound* — open. A fixed count of live children per parent, a constant
-  of the scheduler; or a byte bound over the children's regions, through a
-  shipped `region_bytes` door on cellgraph. Recommended: a fixed count, since
-  the specializations a loop needs warm at once are few and a count needs no
-  new door.
+- *The bound* — decided. A fixed count of live children per parent, set at
+  load: the build root's table is shared by every top-level keyed callee, so
+  it takes a wider bound than a specialization's, whose bound is a branching
+  factor that nesting multiplies.
+- *Which child goes* — decided. The least recently born child, with or
+  without children: a policy that evicts only childless children starves
+  once every child of a parent has a child of its own, as a frame keyed per
+  iteration whose body calls a keyed callable leaves them.
+- *A setting a user can name* — deferred to
+  [setting the specialization bounds](bound-settings.md).
 
 ## Dependencies
 
@@ -58,4 +73,7 @@ bindings make a key at all is [digest demand](digest-demand.md)'s.
 
 **Requires:** none — the build tree's eviction mechanism stands.
 
-**Unblocks:** none.
+**Unblocks:**
+
+- [Setting the specialization bounds](bound-settings.md) — the bounds it
+  makes load parameters.

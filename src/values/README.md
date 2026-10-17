@@ -344,10 +344,11 @@ branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 The branch is kept in the habitat half's header, [`TypeHeader`](habitat.rs),
 whose form is a `HalfHeader`: the branch, laid with the header; for a build
-cell's region, the table of its specializations by key, laid on the first
-entry, insert-only, and renewed in place when a child is rebuilt; and for a
-specialization's region, its own handle, which the scheduler reads to name the
-build cell a frame runs under
+cell's region, the table of its specializations, a fixed run of entries laid
+with the cell, each a key, a handle and the stamp of its child's last birth,
+rekeyed in place when a miss reuses it; and for a specialization's region,
+its own handle and its parent's, which the scheduler reads to name the build
+cell a frame runs under and to stamp a hop's entry
 ([specialization.rs](specialization.rs), [the build module](../build/README.md#references-between-the-trees)).
 A `BuildRef`, the opaque token naming a build cell above the scheduler, lives
 there too, opened only by `values` and the scheduler. A

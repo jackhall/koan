@@ -217,8 +217,9 @@ keys do not cover resumes cold.
   never pinned by a run cell. The drain resolves the borrow before the run
   cell is born, and the cell holds it, unchanged, for its life.
 - **Build to run: nothing.** A build cell holds no handle to a run cell. A
-  binding reaches a build cell as the key the drain hands its birth; a
-  settled answer reaches a run cell through the chain alone.
+  binding reaches a build cell as the key the drain enters it under in its
+  parent's table; a settled answer reaches a run cell through the chain
+  alone.
 - **A callable to the build cell it was born under: an opaque token.** A
   callable's closure bindings carry the build cell its birth ran under, the
   specialization of the frame that bore it or the build root, as a
@@ -227,16 +228,29 @@ keys do not cover resumes cold.
   skip it. A call seeks its frame's specialization under that cell, so
   nesting follows the lexical chain with no chain stored, and no step can
   hand the drain a build cell the scheduler did not name to it.
-- **Build parent to build child: bare handles.** A table keyed by the
-  binding's digest in the parent's region header, beside its type branch, as
-  a type branch's digest table is: its keys are never removed, and an evicted child's entry is renewed in
-  place. A bare handle holds nothing alive, and a stale one is a miss. The
-  table is a small least-recently-hit cache: each entry carries the parent's
-  miss count at its last hit, and a miss on a parent past its bound releases
-  the least recently hit childless child before it creates the new one. A
-  borrower's count does not enter the choice. An evicted child waits dead but
-  undisposed until its last borrower disposes, as a released run root waits
-  on its subtree, and the next miss rebuilds it.
+- **Build parent to build child: bare handles.** A table in the parent's
+  region header, beside its type branch: a fixed run of entries, each a
+  binding's digest, a bare handle and a stamp, laid with the cell and never
+  grown. A bare handle holds nothing alive, and a stale one is a miss. The
+  run's length is the parent's **bound**: the build root's is the root
+  bound, every specialization's the nested bound, both parameters of the
+  load (16 and 4 by default). The nested bound is a branching factor: three
+  levels of bindings nested under one of the root's children hold at most
+  4 + 16 + 64 live specializations by default. The root's table is shared by every top-level keyed
+  callee, so its bound is wider. The root's table records the nested bound,
+  and each specialization lays its own table that long.
+- **The table is a least-recently-born cache.** The table counts every
+  **birth** under its cell: a miss that creates a child, a seek that finds
+  one live, and a hop of the same callee under one. Each entry's stamp is
+  that count at its child's last birth, so no two stamps are equal. A miss
+  takes the key's own stale entry, an empty one or a stale one; on a parent
+  with none free it releases the child with the oldest stamp, its subtree
+  with it, leaf first, before it creates the new child in that entry. A
+  child with children of its own is no exception, since every child of a
+  parent can come to hold one. A borrower's count does not enter the choice.
+  An evicted child waits dead but undisposed until its last borrower
+  disposes, as a released run root waits on its subtree, and the next miss
+  on its key rebuilds it.
 
 ## Types across the trees
 
@@ -272,9 +286,12 @@ keys do not cover resumes cold.
   scheduler's load door rather than the ready stack: its step runs the load,
   shape building, the type channel and the solver to quiescence. A
   specialization is a tree cell the drain creates and runs as it does a run
-  cell: its one step writes its own handle into its parent's table, runs the
+  cell: its one step lays its region header and its own table, runs the
   resumption under its binding to quiescence and quiesces, staying alive with
-  no continuation and reporting to nobody. What the resumption leaves parked
+  no continuation and reporting to nobody. The drain then enters it in its
+  parent's table and records the parent in its header, so the drain keeps
+  every table's books and no step writes another cell's region. What the
+  resumption leaves parked
   is the cell's **residual**, data in its region beside the settled facts: a
   child specialization reads it through the parent region it borrows, and a
   run cell resumes it in its scratch, so no binding wakes a quiesced build
@@ -283,17 +300,18 @@ keys do not cover resumes cold.
 - **The drain finds a run cell's build cell before the cell is born**, from
   the key the asker computed: the build cell the callable was born under,
   and a digest of the callee's segment with the content at its keyed names.
-  The drain reads that parent's table through a read-only peek
-  between steps; a live hit is the specialization, and a miss evicts where
-  the parent is past its bound, then creates one
-  under the parent and runs its one step at once, before anything else. The
+  The drain reads that parent's table through a peek between steps, which
+  stamps a live hit; a miss on a parent with no free entry evicts first, then
+  creates the specialization under the parent and runs its one step at
+  once, before anything else. The
   run cell is then created borrowing it, a `Fresh` cell as its lend and a
   `Shares` tenant through a lend of its own, and its first step lays its
   activation. A warm birth costs one peek; a cold birth one build step; no
   run cell parks for either; a hop of a tail loop of one callee borrows the
-  specialization its frame ran under and looks nothing up, or its parent's
-  scratch once that specialization is evicted; and a parent that has itself
-  been evicted births the frame cold, with no specialization.
+  specialization its frame ran under with no lookup, stamping its entry
+  through the parent its header names, or borrows its parent's scratch once
+  that specialization is evicted; and a parent that has itself been evicted
+  births the frame cold, with no specialization.
 - **A statement seam** changes no lend: the run cell resumes the frontier
   into its own scratch, and what it borrows stands from its creation to its
   disposal.
@@ -324,7 +342,7 @@ time.
 | cell | lives from | to | holds |
 |---|---|---|---|
 | build root | the load | the program's end | the root-level table; it writes the shapes, facts, residual and root tier into the owner's storage |
-| specialization | first miss on its binding | eviction, then its last borrower's disposal | settled facts, its residual, verdicts, warm types, its children's table |
+| specialization | first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | settled facts, its residual, verdicts, warm types, its children's table |
 | composed-code cell | the code value's birth | the value's home's death | the code's shape and facts |
 | run root | the load | the program's end | top-level bindings |
 | run cell | its birth | its disposal | activation, values, region branch, scratch |
@@ -357,7 +375,7 @@ and bindings; the closed one-shot load is the oracle.
   bare to a keyed callee, takes a new value per distinct content, so a loop
   calling such a callee over new content each iteration makes a
   specialization per iteration, and only eviction bounds how many live at
-  once.
+  once: no parent holds more live children than its bound.
 
 ## In the literature
 
@@ -381,8 +399,10 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 ## Open work
 
 - [Evicting specializations](../../roadmap/gradual-build/specialization-eviction.md)
-  — the least-recently-hit cache a build cell keeps its specializations in,
-  and its bound.
+  — the least-recently-born cache a build cell keeps its specializations
+  in, and its bounds.
+- [Setting the specialization bounds](../../roadmap/gradual-build/bound-settings.md)
+  — the bounds as a setting a user names.
 - [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)
   — a parameter keyed by its static type, and the seek's digests kept in the
   frame's slots.

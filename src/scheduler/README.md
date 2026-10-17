@@ -401,13 +401,18 @@ resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
 - `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a
   `Seek` where the body keys one: the build cell the callee was born under,
   the key, and the work a missed specialization runs.
-  The drain reads that build cell's table through a read-only `peek`. A live
-  hit is the specialization; a miss creates one, a tree cell under that build
-  cell borrowing its region, and enters it at once, outside the ready stack,
-  before anything else runs. Its step enters it in the table and ends
-  `enlist`, which refuses a cell that asked for children and returns
+  The drain reads that build cell's table through a `peek`, which stamps a
+  live hit with the table's birth count. A miss on a table with no free
+  entry first releases the child with the oldest stamp and its subtree,
+  leaf first; then it creates the specialization, a tree cell under that
+  build cell borrowing its region, and enters it at once, outside the ready
+  stack, before anything else runs. Its step lays its region header and its
+  own table, as long as the nested bound its parent's table records, and
+  ends `enlist`, which refuses a cell that asked for children and returns
   `Quiesced`: the cell stays alive with no continuation, reporting to nobody,
-  and is never on the stack. The frame is then born borrowing the
+  and is never on the stack. The drain then fills the entry with the key,
+  the handle and a fresh stamp, and records in the specialization's header
+  its own handle and its parent. The frame is then born borrowing the
   specialization's region, a `Fresh` cell as its lend and a `Shares` tenant
   as a lend of its own, counted on the specialization until its host's
   scratch next resets after the tenant's release. A call with no `Seek`, a
@@ -416,17 +421,20 @@ resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
   nothing.
 - `tail_under` hands the `BuildRef` its frame ran under, for a hop of the
   same callee, of either placement: the successor borrows that
-  specialization with no lookup, or is born cold where the specialization is
-  no longer live.
+  specialization with no lookup, stamping its entry in the parent its header
+  names, or is born cold where the specialization is no longer live.
 
 So a warm birth costs one peek, a cold birth one synchronous step, and no cell
 parks for either. `build_ref` reads the specialization a cell borrows off
-its region header, which `enlist` stamped with the specialization's own
-handle, and answers the fallback it is handed for any cell borrowing none. A
-specialization lives until its parent evicts it: `Scheduler::evict`, a
-test-only door, releases a childless one, which waits dead but undisposed
-until its last borrower disposes, and the next miss on its key renews the
-table's entry in place.
+its region header, where the drain recorded the specialization's own
+handle, and answers the fallback it is handed for any cell borrowing none.
+The two bounds, the build root's and every specialization's, are parameters
+of the [load door](load.rs), which lays the build root's table. A
+specialization lives until its parent evicts it at a miss, or an ancestor's
+eviction takes it with its subtree; it waits dead but undisposed until its
+last borrower disposes, and the next miss on its key builds it again.
+`Scheduler::evict`, a test-only door, releases a specialization's subtree
+the same way.
 
 ## Memory
 
@@ -493,18 +501,22 @@ no layer of koan's above present. They hold, each with a workload of its own:
   empty;
 - the round trip a continuation makes between `'graph` and a step's `'here`,
   through the raw slot doors a step never reaches;
-- the load door standing two roots and laying the build root's header, and
+- the load door standing two roots and laying the build root's header and
+  its table, and
   handing a refusal back ([tests/load.rs](tests/load.rs));
 - a missed specialization built once and found warm by the next birth, two
   bindings giving two under one parent, a graph with no build root birthing
   every seeking frame cold, a specialization nesting under the frame that
-  seeks beneath it, eviction leaf-first and a rebuild renewing the entry, a
-  frame under an evicted parent born cold, and a hop of the same callee
-  borrowing its frame's specialization and running cold once it is gone; and
+  seeks beneath it, a parent past its bound releasing its least recently
+  born child, a victim's subtree released leaf first, a hop stamping its
+  specialization, a frame under an evicted parent born cold, a hop of the
+  same callee borrowing its frame's specialization and running cold once it
+  is gone, and an evicted specialization disposing with its last borrower; and
   at `Shares`, two tenants seeking one key borrowing one specialization that
   their plain children copy, a call seeking nothing borrowing nothing under a
   frame that borrows one, a hop keeping its lend, and a tenant whose
-  specialization is evicted under it waking to read what it laid there
+  specialization is evicted under it waking to read what it laid there, the
+  specialization disposing only once the tenant's host's scratch resets
   ([tests/seek.rs](tests/seek.rs)).
 
 Every root work run under `cfg(test)` ends by asserting that koan's lends
