@@ -512,6 +512,100 @@ fn a_memo_holds_the_digest_of_the_value_its_slot_holds() {
     assert_eq!(printed, ["1", "7", "7", "1"]);
 }
 
+/// `PROBE`, viewing one module over the whole chain: one walk of it.
+const PROBE: &str = "EXPR #(PROBE link :Link) -> Number = \
+                     #((MODULE m OVER #[link] = (LET held = link)) (LET v = (m :| Holder)) (1))\n\
+                     PRINT (PROBE chain)";
+
+/// Across the caching suite's programs, what a loop hop's content digests cost, printed as a table
+/// of each counter per hop: the demands flat in depth, and the visits flat but where a key or a
+/// view reaches a new module over the rest of the chain each hop, which pays one walk of it.
+#[test]
+fn a_hops_digest_visits_hold_flat_or_pay_for_the_module_they_view() {
+    // Each program beside how many modules over the rest of the chain a hop digests, and who.
+    let programs = [
+        ("invariant_loop", invariant_loop(), 0, "-"),
+        ("wrapped_peeks", wrapped_peeks(), 1, "`h`, at `PEEK`'s seek"),
+        (
+            "FRESH_WRAPPED",
+            FRESH_WRAPPED.to_string(),
+            1,
+            "`h`, at `PEEK`'s seek",
+        ),
+        ("hosted_peeks", hosted_peeks(), 1, "`m`, at `PEEK`'s seek"),
+        ("varying_loop", varying_loop(), 1, "`m`, at its `:|`"),
+        (
+            "HELPER_LOOP",
+            HELPER_LOOP.to_string(),
+            1,
+            "`COUNTDOWN`'s `m`, at its `:|`",
+        ),
+        ("PARKING_LOOP", PARKING_LOOP.to_string(), 0, "-"),
+        ("mixed_chain", mixed_chain(), 0, "-"),
+        ("member_via_call", member_via_call(8), 0, "-"),
+        ("BY_NAME_WALK", BY_NAME_WALK.to_string(), 0, "-"),
+        ("received_list", received_list(8), 0, "-"),
+    ];
+    let probes = DEPTHS.map(|depth| digesting(depth, PROBE).1.visits);
+    let span = (DEPTHS[1] - DEPTHS[0]) as usize;
+    let per_link = (probes[1] - probes[0]) / span;
+    assert_eq!(
+        probes[2] - probes[1],
+        per_link * span,
+        "a walk is linear in the chain"
+    );
+    // The second difference over `DEPTHS` of `d (d + 1) / 2`: what one walk of the rest of the
+    // chain per hop adds up to, in links.
+    let walked = DEPTHS.map(|depth| (depth * (depth + 1) / 2) as usize);
+    let quadratic = (walked[2] - walked[1]) - (walked[1] - walked[0]);
+    let hops = (ENDS[1] - ENDS[0]) as usize;
+    let per_hop = |delta: usize| format!("{:.1}", delta as f64 / hops as f64);
+    eprintln!("| program | visits | demands | pays |");
+    for (name, source, pays, payer) in programs {
+        let counts = DEPTHS.map(|depth| digesting(depth, &source).1);
+        let visits = counts.map(|digested| digested.visits);
+        let demands = counts.map(|digested| digested.demands);
+        assert_flat(&format!("{name}: demands"), demands);
+        let growth = (visits[2] - visits[1]) - (visits[1] - visits[0]);
+        if pays == 0 {
+            assert_flat(&format!("{name}: visits"), visits);
+        } else {
+            assert_eq!(
+                growth,
+                pays * per_link * quadratic,
+                "{name}: each hop walks the rest of the chain {pays} time(s), through {payer}"
+            );
+        }
+        eprintln!(
+            "| {name} | {} | {} | {payer} |",
+            per_hop(visits[2] - visits[0]),
+            per_hop(demands[2] - demands[0])
+        );
+    }
+}
+
+#[test]
+fn a_module_surfaced_read_or_passed_on_digests_nothing() {
+    let source = "LET pass = (FN :{m :Any} -> Number = #(1))\n\
+                  EXPR #(SURFACE link :Link) -> Number = \
+                  #((MODULE m OVER #[link] = (LET held = link)) (LET h = m.held) \
+                  (USING m SCOPE (LET x = held)) (LET t = (pass {m = m})) \
+                  (SURFACE (ATTR link next)))\n\
+                  EXPR #(SURFACE end :Null) -> Number = #(7)\n\
+                  PRINT (SURFACE chain)";
+    for depth in ENDS {
+        let (ran, digested) = digesting(depth, source);
+        assert_eq!(ran.printed, "7");
+        assert_eq!(
+            digested,
+            Digested {
+                visits: 0,
+                demands: 0
+            }
+        );
+    }
+}
+
 #[test]
 fn a_shares_call_with_new_content_each_call_holds_its_hosts_region_flat() {
     let source = hosted_peeks();

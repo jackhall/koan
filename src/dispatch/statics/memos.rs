@@ -7,8 +7,8 @@
 //! composes that the module read from a slot of the view's own activation chain is a value that
 //! activation may digest again — a second view over another module capturing it, or a later hop
 //! of a loop that passes it on. So that slot is **digested**: it keeps a memo beside its value,
-//! which the `:|` fills and reads ([`ViewSlots`]). A call that passes a digested slot bare
-//! hands its memo ([`Handoff`]) to the parameter it binds, which the callee keeps where it is digested
+//! which the `:|` fills and reads ([`ViewSlots`]). A call that passes a digested slot bare hands
+//! its memo ([`Handoff`]) to the parameter it binds, which the callee keeps where it is digested
 //! too. A slot is marked when its `:|` is typed, so a hand-off is recorded only for a call typed
 //! after it: the under-approximation loses a saving, never soundness, since a memo is only ever
 //! filled from the value it sits beside.
