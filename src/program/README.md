@@ -408,7 +408,7 @@ owed a frame's contract, the frame's end, and — in a frame that routes — the
 hand-off of its last statement, which adopts the binders the shape lists
 that statement reading, and the frame's contract. The walk stops at a part
 whose [memo bits](../values/README.md#weight) say its types already resolve
-there, adopting its memo alone, and marks what it walked settled, so a value
+there, handing over nothing for it, and marks what it walked settled, so a value
 the frame received or passes on is walked once
 ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
 

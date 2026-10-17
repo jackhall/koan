@@ -1157,13 +1157,15 @@ a loop seeking its specialization once and a second caller finding it warm, a
 callable born in a frame or its block keying beneath the frame's
 specialization and a `Shares` callee's under its own chain, an evicted
 specialization rebuilt with the same answer, the allocations a birth keyed on
-a list costs, and each exit — a retyped value, a closure, a quote, a knot
-member, a held frame's hand-off, a received list adopted by its memo alone,
-a loop passing on a member of a received chain adopting a hop at a time,
-a member of a received value reached through a call's result adopted by its
-memo alone whatever its length, and a loop handing a callee a module built
-over its link each hop, caching and flat, a `Fresh` callee viewing it at an
-invariant site included;
+a list costs, a table of what a loop hop's adoptions cost, counter by counter,
+over the suite's programs, every count held flat across three evenly spaced
+depths, and each exit — a retyped value, a closure, a quote, a knot
+member, a held frame's hand-off, a received list passed on without being
+entered, a loop passing on a member of a received chain adopting a hop at a
+time, a member of a received value reached through a call's result not entered
+whatever its length, and a loop handing a callee a module built over its link
+each hop, caching and flat, a `Fresh` callee viewing it at an invariant site
+included;
 and [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md). Every runnable

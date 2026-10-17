@@ -508,14 +508,18 @@ fn a_fresh_loop_calling_a_shares_caching_helper_holds_each_specialization_flat()
     assert_eq!(caching(source), 2);
     let [few, many] = at_ends(source);
     assert_eq!(few.printed, "7");
-    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
+    // `ENDS` stops at the root's bound, so an operator run past it shows the bound biting.
+    let bound = SpecBounds::default().root.get();
+    let past = ran(bound as u32 + 4, source);
+    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1]), (&past, bound as u32 + 4)] {
         assert_eq!(ran.tiers.specialized, depth as usize, "one per link");
         assert_eq!(
             ran.live,
-            (depth as usize).min(SpecBounds::default().root.get()),
+            (depth as usize).min(bound),
             "the root's bound caps the live ones"
         );
     }
+    assert_eq!(past.live, bound, "the cap is reached");
     let flat = |ran: Ran| Ran {
         tiers: Tiers {
             sought: 0,

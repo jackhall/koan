@@ -110,7 +110,8 @@ to find the components a knot can tie and the eager cycles it refuses.
 and its heap-contract tests; [TEST.md](../TEST.md) is the testing reference.
 The `counters` feature, off by default, exposes the counters koan's tests read
 across the crate boundary, where `cfg(test)` does not reach — a branch's merge
-reach steps and its verdict count. Koan's dev-dependency turns it on, so a test build lays a branch a
+reach steps and its verdict count, and an adoption's asks, probes, hits and
+nodes laid. Koan's dev-dependency turns it on, so a test build lays a branch a
 word larger than the shipped interpreter's.
 The crate carries no roadmap tree: its open work is in koan's
 ([the type lattice's open work](src/types/README.md#open-work)).

@@ -541,7 +541,9 @@ carries the scalar types alone.
 - [`tests/bits.rs`](tests/bits.rs) — a knot's memo bits set through any
   member and read back off its root node; a knot born through a step's own
   chain stamped settled, and one born through a chain that does not intern
-  where it lays left unsettled; and a copy re-stamped at its destination.
+  where it lays left unsettled; an exit of a header over a settled member
+  handing over the header's own memo and not entering the member; and a copy
+  re-stamped at its destination.
 - [`tests/code.rs`](tests/code.rs) — the quote door binding `$` names where the
   quote is written and printing its marks, code compared by its text and the
   values its names bind, a quote reading its own binder as a one-node knot, and

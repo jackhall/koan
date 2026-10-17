@@ -337,14 +337,20 @@ one half alone, paired to that half's own writer, or the load's — so every typ
 the door interned lands in the root or the branch of the half the value lies
 in. A knot's birth stamps its root node the same way, from the types it carries
 and the values it holds; a builtin's answers both. A leaf, a type value and a
-header over a knot member carry no bits of their own: a header is adopted at
-its memo and read through to its member's. A part with either bit set already
-meets the contract — a root type resolves everywhere, and a settled type in the
-region every chain over a value there links — so the walk does not enter it,
-at an exit and at an invariant site alike, and the debug check walks with the
-same cutoff. An exit marks every value it entered settled after adopting its
-memos into the region; an invariant site adopts into the lent branch, where
-the value does not lie, and marks nothing. A clear bit is always safe and a
+header over a knot member carry no bits of their own: a header hands over its
+own memo wherever it is adopted and is read through to its member's bits. A
+part with either bit set already meets the contract — a root type resolves
+everywhere, and a settled type in the region every chain over a value there
+links — so the walk does not enter it, at an exit and at an invariant site
+alike. At an exit it hands over nothing for that part, its own memo included,
+since the region's chain reaches both the root and the home branch; an
+invariant site adopts into the lent branch, where the value does not lie, so
+there the part's own memo is still handed over. The debug check walks with the
+same cutoff. The walk reads the top value's bits before it lays anything, so an
+exit of a value that meets the contract allocates nothing, and it lays its
+stack, knot set and settled list in its caller's step scratch. An exit marks
+every value it entered settled after adopting its memos into the region; an
+invariant site marks nothing. A clear bit is always safe and a
 set bit is true: a restamp keeps the old bits only as far as the new memo
 allows — root-closed where the new type lies in the root, settled where its
 chain interns where it lays — a copy recomputes both through the same doors at
@@ -368,9 +374,6 @@ types, and released with that tier.
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch
   laid at a predicted size.
-- [The cost of an exit's adoption](../roadmap/gradual-build/exit-adoption-cost.md)
-  — an exit that hands over nothing for a settled part and lays nothing
-  before reading the top value's bits.
 - [Where a content digest is demanded](../roadmap/gradual-build/digest-demand.md)
   — a parameter keyed by its static type, the seek's digests kept beside the
   frame's values, and a module's content computed where a view first asks.

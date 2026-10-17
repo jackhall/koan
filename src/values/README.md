@@ -378,13 +378,17 @@ their memos in a scratch tier, so before a value leaves the body
 [`adopt_value`](crossing.rs) walks it as the crossing check does — each part's
 memo, each type value's payload, each type a knot carries and every value it
 holds — and adopts every type into the region, reading the whole chain the
-body ran on. A part whose [memo bits](#weight) meet the contract adopts its own
-memo and is not entered, and the exit marks every value it did enter settled
-after, so a value handed on through a loop is walked once. An invariant site
-adopts its operand and the view built over it into the lent branch through the
-same door, which there marks nothing
+body ran on. A part whose [memo bits](#weight) meet the contract is not
+entered and hands over nothing, its own memo included, and the exit marks every
+value it did enter settled after, so a value handed on through a loop is walked
+once. An invariant site adopts its operand and the view built over it into the
+lent branch through the same door, which there still hands over a meeting
+part's own memo and marks nothing; a header, whose bits are its member's, hands
+over its own memo at both. The walk reads the top value's bits before it lays
+anything and lays its stack, knot set and settled list in its caller's step
+scratch
 ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
-A test build audits each part the walk skipped, walking it whole.
+A test build audits each part as the walk skips it, walking it whole.
 
 **A debug build checks every crossing.** After each crossing door, a debug
 build asserts that every type the crossed value carries — each part's memo,
@@ -720,8 +724,9 @@ habitat check refusing a value no crossing carried ([tests/habitat.rs](tests/hab
 hundred thousand deep rendered, compared, crossed and digested on the default
 test thread, and a chain of headers as deep digested and crossed
 ([tests/depth.rs](tests/depth.rs)), and the memo bits — masked out of a
-weight's bytes, set by the doors, a restamp, a copy and an exit, and cleared by
-a porous part or chain ([tests/settled.rs](tests/settled.rs)). Three tests join the koan
+weight's bytes, set by the doors, a restamp, a copy and an exit, cleared by
+a porous part or chain, and an exit of a value that meets them laying nothing
+([tests/settled.rs](tests/settled.rs)). Three tests join the koan
 [Miri slate](../../observe/miri_slate.md), the paths only `values` drives:
 `a_copied_list_outlives_its_home` — a deep copy laying down strings, a list and
 a dict whose string keys are written inside its key run's `fill`, read after
@@ -752,9 +757,6 @@ knots as deep as the chain of newtypes digests beside it.
   — the lattice walks over a value's carried type, as deep as the value.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — whether
   `Module` and `Code` re-stamp a value.
-- [The cost of an exit's adoption](../../roadmap/gradual-build/exit-adoption-cost.md)
-  — an exit that hands over nothing for a settled part, and lays nothing
-  before reading the top value's bits.
 - [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)
   — the digest memo beside a keyed parameter, and a module's content computed
   where a view first asks.
