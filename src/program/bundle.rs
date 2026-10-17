@@ -11,8 +11,9 @@ use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, StepBundle};
 use crate::scope::{BodyShape, Site};
-use crate::type_lattice::{Halves, KType, Root};
-use crate::values::{BuildRef, Half, TypeHeader, Types, copy_severed};
+use crate::symbols::Symbol;
+use crate::type_lattice::{DeclaredType, Halves, KType, Root};
+use crate::values::{BuildRef, ContentDigest, Half, TypeHeader, Types, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -29,14 +30,16 @@ pub enum KBirth<'graph, 'cell> {
     /// `arguments`, a record of them by name, checked as `kind` says. A call by name solves each
     /// parameter from its entry in `contributed`, one per parameter in symbol order where the load
     /// recorded any, and from its argument's carried type where that entry is `None` or there are
-    /// none. `owed` is the contract of the evaluation that tailed into this frame: `None` when the
-    /// frame was spawned.
+    /// none. `handed` are the digest memos the caller hands on with arguments it passed bare.
+    /// `owed` is the contract of the evaluation that tailed into this frame: `None` when the frame
+    /// was spawned.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
         arguments: KValue<'graph, 'cell>,
         kind: CallKind,
         contributed: &'cell [Option<KType>],
+        handed: &'cell [Handed],
         owed: Option<Contract>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
@@ -130,6 +133,16 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
     }
 }
 
+/// A digest memo a call hands its callee: the digest of the value the argument `name` holds, read
+/// off the caller's digested slot it was passed bare from, beside the type that value carried
+/// there. The callee keeps it only where its parameter binds a value carrying that type.
+#[derive(Clone, Copy, Debug)]
+pub struct Handed {
+    pub name: Symbol,
+    pub digest: ContentDigest,
+    pub carried: DeclaredType<KType>,
+}
+
 /// What a cell holds at a step and parks with.
 #[derive(Clone, Copy)]
 pub enum KState<'graph, 'cell> {
@@ -182,8 +195,13 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 callee,
                 arguments,
                 contributed,
+                handed,
                 ..
-            } => callee.weight().plus(arguments.weight()).bytes() + size_of_val(*contributed),
+            } => {
+                callee.weight().plus(arguments.weight()).bytes()
+                    + size_of_val(*contributed)
+                    + size_of_val(*handed)
+            }
             KBirth::Eval { code, offered, .. } => code.weight().plus(offered.weight()).bytes(),
             KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => usize::MAX,
         }
@@ -226,6 +244,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     arguments,
                     kind,
                     contributed,
+                    handed,
                     owed,
                 } => {
                     let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
@@ -241,6 +260,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         arguments,
                         kind,
                         contributed: collect(writer, contributed.iter().copied()),
+                        handed: collect(writer, handed.iter().copied()),
                         owed,
                     }
                 }

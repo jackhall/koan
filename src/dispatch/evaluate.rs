@@ -53,17 +53,17 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{
-    CallKind, Contract, Evaluated, Exit, KBirth, KBundle, KState, block, called_function, seek,
-    surfaced_block,
+    CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, block, called_function,
+    seek, surfaced_block,
 };
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, InstanceRead, Mint, Narrowing, Offer, ShapeKind, Site,
-    Static, StaticType,
+    BodyShape, Candidate, CandidateList, HandedTo, InstanceRead, Mint, Narrowing, Offer,
+    ParameterBinding, ShapeKind, Site, Static, StaticType,
 };
-use crate::symbols::BinderSymbol;
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, Verdict, substitute_levels};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
@@ -422,6 +422,9 @@ fn ascribe<'graph, 'here>(
         if let Some(warm) = &warm {
             adopt_value::<KnottedFamily>(into(warm), types, &value, &scratch);
         }
+        if let Some(slots) = at.view.shape().view_slots(Site::of_node(node)) {
+            view::fill_at_view(value, slots, &at.view, types, &scratch);
+        }
         let raised = match view::ascribe(writer, value, ascribed, types, &scratch) {
             Ok(view) => {
                 if let Some(warm) = &warm {
@@ -767,6 +770,17 @@ fn call<'graph, 'here>(
                 exit.value(&arguments);
                 tails.iter().for_each(|owed| exit.contract(owed));
             });
+            let handed = handed(at, writer, Site::of_node(node), &scratch, |to| {
+                match (to, registered.parameters) {
+                    (HandedTo::Position(at), ParameterBinding::Named(names)) => {
+                        match names.get(at as usize)? {
+                            BinderSymbol::Value(name) => Some(name.symbol()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            });
             let call = |owed| {
                 crate::program::call(
                     program,
@@ -775,6 +789,7 @@ fn call<'graph, 'here>(
                     arguments,
                     CallKind::Keyworded,
                     &[],
+                    handed,
                     owed,
                     Use::Forwards,
                 )
@@ -795,6 +810,31 @@ fn call<'graph, 'here>(
     };
     let error = raised.raise(program, writer, &at.types);
     finish(step, at, error)
+}
+
+/// The digest memos the call keyed by `site` hands its callee: each digested slot the load saw it
+/// pass bare whose memo is filled, under the parameter `name_of` says that argument binds.
+fn handed<'here>(
+    at: &Evaluation<'_, 'here, '_, '_, '_>,
+    writer: Writer<'here, '_>,
+    site: Site,
+    scratch: &Bump,
+    name_of: impl Fn(HandedTo) -> Option<Symbol>,
+) -> &'here [Handed] {
+    let mut handed = BumpVec::new_in(scratch);
+    for handoff in at.view.shape().handoffs(site) {
+        let Some(digest) = (at.view.digest_memo(handoff.from)).and_then(|memo| memo.get()) else {
+            continue;
+        };
+        if let Some(name) = name_of(handoff.to) {
+            handed.push(Handed {
+                name,
+                digest,
+                carried: at.view.read(handoff.from).ktype(),
+            });
+        }
+    }
+    collect(writer, handed.iter().copied())
 }
 
 /// What each recorded contribution is where the call runs: a closed type as it is, a rigid one at
@@ -873,7 +913,8 @@ fn apply<'graph, 'here>(
         Gathered::Ready(operands) => operands,
         other => return unready(step, at, other),
     };
-    let recorded = at.view.shape().named_contributions(Site::of(argument));
+    let argument_site = Site::of(argument);
+    let recorded = at.view.shape().named_contributions(argument_site);
     let [Operand::Value(head), Operand::Value(argument)] = operands[..] else {
         unreachable!("both parts of an application are evaluated")
     };
@@ -907,6 +948,10 @@ fn apply<'graph, 'here>(
         contributed.iter().flatten().for_each(|kt| exit.handle(*kt));
         tails.iter().for_each(|owed| exit.contract(owed));
     });
+    let handed = handed(at, writer, argument_site, &scratch, |to| match to {
+        HandedTo::Field(name) => Some(name),
+        HandedTo::Position(_) => None,
+    });
     let call = |owed| {
         crate::program::call(
             program,
@@ -915,6 +960,7 @@ fn apply<'graph, 'here>(
             argument,
             CallKind::ByName,
             contributed,
+            handed,
             owed,
             Use::Forwards,
         )

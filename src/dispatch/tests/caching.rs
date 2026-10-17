@@ -332,6 +332,40 @@ fn adopting(depth: u32, source: &str) -> (Ran, Adoptions) {
     (ran, Adoptions::read())
 }
 
+/// What one run's content digests counted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Digested {
+    /// Parts the digest walks hashed, memo hits excluded.
+    visits: usize,
+    /// Demands opened, one per memo.
+    demands: usize,
+}
+
+impl Digested {
+    /// Zero both counters.
+    fn reset() {
+        use crate::values::{DIGEST_DEMANDS, DIGEST_VISITS};
+        DIGEST_VISITS.set(0);
+        DIGEST_DEMANDS.set(0);
+    }
+
+    /// Both counters as they stand.
+    fn read() -> Self {
+        use crate::values::{DIGEST_DEMANDS, DIGEST_VISITS};
+        Digested {
+            visits: DIGEST_VISITS.get(),
+            demands: DIGEST_DEMANDS.get(),
+        }
+    }
+}
+
+/// Run [`program`] at `depth` over `source`, counting its content digests.
+fn digesting(depth: u32, source: &str) -> (Ran, Digested) {
+    Digested::reset();
+    let ran = ran(depth, source);
+    (ran, Digested::read())
+}
+
 /// Across the caching suite's programs, what a loop hop's adoptions cost, printed as a table of each
 /// counter per hop: flat in depth, a root handle adopted at no lookup, no node laid where no hop
 /// builds a specialization, and every hop's walks stopping at a part on its bits.
@@ -396,6 +430,86 @@ fn a_hops_adoptions_hold_flat_in_depth() {
             "{name}: each hop's walks stop at a part on its bits"
         );
     }
+}
+
+/// A list of `length` numbers, as a koan literal.
+fn numbers(length: usize) -> String {
+    format!("[{}]", vec!["1"; length].join(", "))
+}
+
+/// `PAIR`, viewing two modules over the list it is handed, the second from inside a block, and
+/// `SINGLE`, viewing one.
+const PAIR: &str = "EXPR #(PAIR xs :(LIST OF Number)) -> Number = \
+                    #((MODULE a OVER #[xs] = (LET held = xs)) (MODULE b OVER #[xs] = (LET held = xs)) \
+                    (LET u = (a :| Holder)) (USING a SCOPE ((LET w = (b :| Holder)))) (1))\n\
+                    EXPR #(SINGLE xs :(LIST OF Number)) -> Number = \
+                    #((MODULE a OVER #[xs] = (LET held = xs)) (LET u = (a :| Holder)) (1))\n";
+
+/// `RUN`, a loop viewing a module over the record it passes on bare, over a record of `length`
+/// numbers.
+fn record_loop(length: usize) -> String {
+    format!(
+        "EXPR #(RUN cfg :{{items :(LIST OF Number)}} link :Link) -> Number = \
+         #((MODULE ops OVER #[cfg] = (LET held = cfg)) (LET v = (ops :| Holder)) \
+         (RUN cfg (ATTR link next)))\n\
+         EXPR #(RUN cfg :{{items :(LIST OF Number)}} end :Null) -> Number = #(7)\n\
+         PRINT (RUN {{items = {}}} chain)",
+        numbers(length)
+    )
+}
+
+#[test]
+fn two_views_over_modules_capturing_one_list_digest_it_once() {
+    let visits = |call: &str, length: usize| {
+        let (ran, digested) = digesting(1, &format!("{PAIR}PRINT ({call} {})", numbers(length)));
+        assert_eq!(ran.printed, "1");
+        digested.visits
+    };
+    let pair = visits("PAIR", 64) - visits("PAIR", 1);
+    let single = visits("SINGLE", 64) - visits("SINGLE", 1);
+    assert!(single > 0, "a view digests the list its module captures");
+    assert_eq!(pair, single, "the second view reads the first's memo");
+}
+
+#[test]
+fn a_loop_passing_a_record_on_bare_digests_it_once_per_loop() {
+    let growth = DEPTHS.map(|depth| {
+        let visits = |length| {
+            let (ran, digested) = digesting(depth, &record_loop(length));
+            assert_eq!(ran.printed, "7");
+            digested.visits
+        };
+        visits(64) - visits(1)
+    });
+    assert!(growth[0] > 0, "the first hop's view digests the record");
+    assert_eq!(
+        growth, [growth[0]; 3],
+        "each later hop reads the memo the tail call hands it"
+    );
+}
+
+#[test]
+fn a_memo_holds_the_digest_of_the_value_its_slot_holds() {
+    use crate::knot::module::view::CHECK_SLOT_MEMOS;
+    // `OUTER`'s `cfg :Any` is handed bare to `INNER`'s `cfg`, which binds it at a type of its own.
+    let restamped = "EXPR #(INNER cfg :{items :(LIST OF Number)}) -> Number = \
+                     #((MODULE b OVER #[cfg] = (LET held = cfg)) (LET w = (b :| Holder)) (1))\n\
+                     EXPR #(OUTER cfg :Any) -> Number = \
+                     #((MODULE a OVER #[cfg] = (LET held = cfg)) (LET v = (a :| Holder)) \
+                     (INNER cfg))\n\
+                     PRINT (OUTER {items = [1, 2]})";
+    let sources = [
+        format!("{PAIR}PRINT (PAIR [1, 2])"),
+        record_loop(2),
+        HELPER_LOOP.to_string(),
+        restamped.to_string(),
+    ];
+    CHECK_SLOT_MEMOS.set(true);
+    let printed = sources
+        .each_ref()
+        .map(|source| ran(DEPTHS[0], source).printed);
+    CHECK_SLOT_MEMOS.set(false);
+    assert_eq!(printed, ["1", "7", "7", "1"]);
 }
 
 #[test]

@@ -25,7 +25,7 @@ use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
 use super::keyed::Keyed;
-use super::shape::{Candidate, Coordinate, Site, Slot};
+use super::shape::{BodyShape, Candidate, Coordinate, Site, Slot};
 use super::tree::{Binder, Tree};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
@@ -556,6 +556,48 @@ pub struct Statics<'graph> {
     /// Each path this shape's type expressions read whose [`through`](PathEntry::through) names a
     /// lexical variable, by the path's level, beside where this shape reads each of them.
     pub throughs: Keyed<'graph, (usize, &'graph [Variable<'graph>])>,
+    /// Each slot that keeps a digest memo beside its value, sorted: the source of a capture of a
+    /// module a `:|` in this activation, or a block inside it, views by its binder's name.
+    pub digested: &'graph [Slot],
+    /// Each `:|` over a module binder read bare, by its site, sorted: where its captures' memos
+    /// sit.
+    pub view_slots: Keyed<'graph, (Site, ViewSlots<'graph>)>,
+    /// Each call that passes a digested slot bare, by the site its contributions are keyed by,
+    /// sorted: which argument each such slot is.
+    pub handoffs: Keyed<'graph, (Site, &'graph [Handoff])>,
+}
+
+/// At a `:|` over a module binder read bare: the module's body, and per capture its content
+/// composes that the load read from a slot, the capture's index beside the slot's coordinate from
+/// the `:|`'s own activation, where that slot's digest memo sits.
+#[derive(Clone, Copy)]
+pub struct ViewSlots<'graph> {
+    pub body: &'graph BodyShape<'graph>,
+    pub captures: &'graph [(u32, Coordinate)],
+}
+
+impl fmt::Debug for ViewSlots<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ViewSlots")
+            .field("captures", &self.captures)
+            .finish()
+    }
+}
+
+/// A call argument that is a bare read of a digested slot at `from`, whose memo the call hands to
+/// the callee's parameter it binds.
+#[derive(Clone, Copy, Debug)]
+pub struct Handoff {
+    pub to: HandedTo,
+    pub from: Coordinate,
+}
+
+/// Which argument a [`Handoff`] is: a call by name's record field, or a keyworded use's slot by
+/// its position among the use's evaluated slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandedTo {
+    Field(Symbol),
+    Position(u32),
 }
 
 /// How the run binds a path variable: the type a path's entry reads through the module at a

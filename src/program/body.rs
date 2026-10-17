@@ -50,7 +50,7 @@ use crate::scheduler::{
 };
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
-use crate::scope::{ParameterBinding, Static};
+use crate::scope::{Coordinate, ParameterBinding, Static, Target};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
@@ -58,7 +58,7 @@ use crate::type_lattice::{
 };
 use crate::values::{BuildRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
 
-use super::bundle::{KBirth, KBundle, KState, Within};
+use super::bundle::{Handed, KBirth, KBundle, KState, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
 use super::specialize::called_function;
@@ -224,6 +224,7 @@ fn ran<'graph, 'here, 'scratch>(
             arguments,
             kind,
             contributed,
+            handed,
             owed,
         }) => match frame(
             &step,
@@ -233,6 +234,7 @@ fn ran<'graph, 'here, 'scratch>(
             arguments,
             kind,
             contributed,
+            handed,
             owed,
         ) {
             Ok((activation, contract, barrier)) => Runner {
@@ -305,6 +307,7 @@ pub fn call<'graph, 'here>(
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
     contributed: &'here [Option<KType>],
+    handed: &'here [Handed],
     owed: Option<Contract>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
@@ -327,6 +330,7 @@ pub fn call<'graph, 'here>(
                 arguments,
                 kind,
                 contributed,
+                handed,
                 owed,
             },
         },
@@ -610,6 +614,7 @@ fn frame<'graph, 'here>(
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
     contributed: &[Option<KType>],
+    handed: &[Handed],
     owed: Option<Contract>,
 ) -> Result<
     (
@@ -812,9 +817,21 @@ fn frame<'graph, 'here>(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
-                argument
+                let value = argument
                     .seen_at(declared, types, scratch)
-                    .restamped(writer, types)
+                    .restamped(writer, types);
+                // A memo handed for a value carrying the type the parameter binds is that value's
+                // digest: the frame laid no header over it, so the slot holds the caller's value.
+                if let Some(handed) = (handed.iter()).find(|each| each.name == name.symbol())
+                    && handed.carried == value.ktype()
+                    && let Some(memo) = activation.digest_memo(Coordinate::Activation {
+                        hops: 0,
+                        target: Target::Local(slot),
+                    })
+                {
+                    memo.set(Some(handed.digest));
+                }
+                value
             }
             // A `:Type` parameter — a type-channel parameter no `FOR ALL` group declares — is an
             // argument like any other, passed by keyword or by name.

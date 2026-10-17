@@ -31,7 +31,9 @@ mod substrate;
 pub(crate) mod tests;
 
 pub use body::{CodeRefused, Runner, block, call, eval, placement_of, run, surfaced_block};
-pub use bundle::{KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Within};
+pub use bundle::{
+    Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Within,
+};
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
 pub use specialize::{called_function, seek, specialize};

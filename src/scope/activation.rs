@@ -2,7 +2,10 @@
 //!
 //! Its read half, the [`ActivationView`], is four pointers — the shape in program storage, the
 //! callable's closure bindings, the builtin table, and the enclosing block's view — beside the
-//! callable the activation runs and a covariant view of one [`SlotArray`] over the shape's slots.
+//! callable the activation runs, a covariant view of one [`SlotArray`] over the shape's slots, and
+//! the digest memos of the slots the load marked digested
+//! ([`digest_memo`](ActivationView::digest_memo)): each empty until a `:|` or a call's hand-off
+//! fills it with the digest of the value its slot holds.
 //! The [`Activation`] is that view beside the array itself, which is the door that binds. Nothing
 //! points into either, neither carries drop glue, and both are `Copy`: a copy is their bytes.
 //!
@@ -19,10 +22,11 @@
 //! resolves it through the knot member the activation runs to the sibling it names, a function or a
 //! data node.
 
+use std::cell::Cell;
 use std::ops::Deref;
 
 use crate::memory::{Covariant, SlotArray, SlotConflict, SlotView, Writer};
-use crate::values::{Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
+use crate::values::{ContentDigest, Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
@@ -72,6 +76,9 @@ pub struct ActivationView<
     /// its component, so it runs no member of its own.
     callable: Option<X>,
     slots: SlotView<'graph, 'cell, ValueFamily<XF>>,
+    /// One memo per slot the load marked digested, in the order of its
+    /// [`digested`](super::Statics::digested) slots.
+    digests: &'cell [Cell<Option<ContentDigest>>],
 }
 
 impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Clone for ActivationView<'graph, '_, XF, X> {
@@ -104,7 +111,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Clone for Activation<'graph, '_, XF> {
 
 impl<'graph, XF: KnottedFamily<'graph>> Copy for Activation<'graph, '_, XF> {}
 
-const _: () = assert!(size_of::<Activation<'static, 'static>>() == 64);
+const _: () = assert!(size_of::<Activation<'static, 'static>>() == 80);
 const _: () = assert!(!std::mem::needs_drop::<Activation<'static, 'static>>());
 
 impl<'graph, 'cell, XF: KnottedFamily<'graph>> Deref for Activation<'graph, 'cell, XF> {
@@ -129,6 +136,7 @@ where
         callable: Option<XF::Closed<'cell>>,
     ) -> Self {
         let slots = SlotArray::new(writer, shape.slots());
+        let digests = writer.fill(shape.digested_count(), |_| Cell::new(None));
         Activation {
             view: ActivationView {
                 shape,
@@ -137,6 +145,7 @@ where
                 enclosing,
                 callable,
                 slots: slots.view(),
+                digests,
             },
             slots,
         }
@@ -313,6 +322,23 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
                 ),
             },
         }
+    }
+
+    /// The digest memo of the slot `at` names, stepping `hops` enclosing loads as
+    /// [`read`](Self::read) does: `None` where it names no slot the load marked digested.
+    pub fn digest_memo(&self, at: Coordinate) -> Option<&'cell Cell<Option<ContentDigest>>> {
+        let Coordinate::Activation {
+            hops,
+            target: Target::Local(slot),
+        } = at
+        else {
+            return None;
+        };
+        let mut view = self;
+        for _ in 0..hops {
+            view = view.enclosing?;
+        }
+        Some(&view.digests[view.shape.digested_index(slot)?])
     }
 
     /// The value bound at `slot`, or `None` while it is empty.

@@ -144,9 +144,10 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    Coordinate, InstanceRead, Keyed, Leaf, Listed, Narrowing, Position, Print, ShapeError,
-    ShapeKind, Site, Slot, Source, Static, StaticSolution, StaticType, Statics, SurfacedHead,
-    Target, Tree, UnitWork, UseStatics, Variable as Located, Within, source_of,
+    Coordinate, HandedTo, Handoff, InstanceRead, Keyed, Leaf, Listed, Narrowing, Position, Print,
+    ShapeError, ShapeKind, Site, Slot, Source, Static, StaticSolution, StaticType, Statics,
+    SurfacedHead, Target, Tree, UnitWork, UseStatics, Variable as Located, ViewSlots, Within,
+    source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -163,6 +164,7 @@ use crate::values::{
 };
 
 mod caching;
+mod memos;
 mod paths;
 mod trees;
 mod views;
@@ -350,6 +352,13 @@ struct Level<'p, 'graph> {
     throughs: BumpVec<'p, (usize, &'graph [Located<'graph>])>,
     /// Each `LET` binder, by its right-hand side's site.
     rhs: BumpBackedMap<'p, Site, Slot>,
+    /// Each slot a `:|` in this activation, or a block inside it, reads a capture from: the slots
+    /// that keep a digest memo.
+    digested: BumpVec<'p, Slot>,
+    /// Each `:|` over a module binder read bare, beside where its captures' memos sit.
+    view_slots: BumpVec<'p, (Site, ViewSlots<'graph>)>,
+    /// Each call passing a digested slot bare, by the site its contributions are keyed by.
+    handoffs: BumpVec<'p, (Site, &'graph [Handoff])>,
 }
 
 impl Level<'_, '_> {
@@ -549,6 +558,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             trees: BumpVec::new_in(scratch),
             throughs: BumpVec::new_in(scratch),
             rhs,
+            digested: BumpVec::new_in(scratch),
+            view_slots: BumpVec::new_in(scratch),
+            handoffs: BumpVec::new_in(scratch),
         });
     }
 
@@ -797,6 +809,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .filter(|(_, fixed)| !fixed.is_unfixed())
                 .map(|((site, _), fixed)| (*site, *fixed)),
         );
+        at.digested.sort_unstable();
+        at.digested.dedup();
         at.shape.fix_statics(Statics {
             parts: Keyed::sorted(writer, &mut at.parts),
             statements: collect(writer, at.statements.iter().copied()),
@@ -810,6 +824,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             minting: Keyed::sorted(writer, &mut at.minting),
             trees: Keyed::sorted(writer, &mut at.trees),
             throughs: Keyed::sorted(writer, &mut at.throughs),
+            digested: collect(writer, at.digested.iter().copied()),
+            view_slots: Keyed::sorted(writer, &mut at.view_slots),
+            handoffs: Keyed::sorted(writer, &mut at.handoffs),
         });
     }
 
@@ -2128,6 +2145,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.chain[level].closed += 1;
             }
             self.record_view(level, site, tree);
+            self.view_slots(level, site, &operand_part.value);
             let signature = declared.and_then(|declared| types.concrete(declared));
             if let Some(signature) = signature {
                 let viewed = self.view_tree(signature, *tree, site)?;
@@ -2765,6 +2783,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         argument: &'graph ExpressionPart<'graph>,
         node: &'graph KExpression<'graph>,
     ) -> Result<Interval, ShapeError<'graph>> {
+        if let ExpressionPart::RecordLiteral(fields) = argument {
+            let mut handed = BumpVec::new_in(self.scratch);
+            handed.extend((fields.iter()).filter_map(|(field, value)| {
+                Some(Handoff {
+                    to: HandedTo::Field(field.symbol()),
+                    from: self.digested_read(level, value)?,
+                })
+            }));
+            self.handoffs(level, Site::of(argument), &handed);
+        }
         let never = Interval::point(KType::NEVER.into());
         let at_most = |pass: &Self| Ok(under(pass.returned(callee.shape, None)));
         // The argument's whole static type, where it was typed whole.
@@ -3051,6 +3079,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<Interval, ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         let wanted = slots(node, scratch);
+        let mut handed = BumpVec::new_in(scratch);
+        handed.extend(
+            (wanted.iter().enumerate()).filter_map(|(position, wanted)| {
+                let Wanted::Evaluated(part) = wanted else {
+                    return None;
+                };
+                Some(Handoff {
+                    to: HandedTo::Position(position as u32),
+                    from: self.digested_read(level, part)?,
+                })
+            }),
+        );
+        self.handoffs(level, Site::of_node(node), &handed);
         let mut given = BumpVec::with_capacity_in(wanted.len(), scratch);
         // Each argument that is an instance site is typed per candidate, at the slot it fills.
         let mut sites = BumpVec::new_in(scratch);

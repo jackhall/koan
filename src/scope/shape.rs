@@ -67,8 +67,9 @@ use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
 use super::typed::{
-    BodyClass, Caching, Elaboration, InstanceRead, Mint, PathEntry, PathRead, Static,
+    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathRead, Static,
     StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
+    ViewSlots,
 };
 
 mod build;
@@ -1163,6 +1164,36 @@ impl<'graph> BodyShape<'graph> {
             .get()
             .and_then(|statics| statics.named.get(site))
             .map_or(&[], |(_, recorded)| *recorded)
+    }
+
+    /// How many of this shape's slots keep a digest memo.
+    pub fn digested_count(&self) -> usize {
+        self.statics
+            .get()
+            .map_or(0, |statics| statics.digested.len())
+    }
+
+    /// Where `slot`'s digest memo sits among this shape's, if it keeps one.
+    pub fn digested_index(&self, slot: Slot) -> Option<usize> {
+        self.statics.get()?.digested.binary_search(&slot).ok()
+    }
+
+    /// Where the captures of the module the `:|` at `site` views keep their digest memos, where
+    /// the load recorded any.
+    pub fn view_slots(&self, site: Site) -> Option<ViewSlots<'graph>> {
+        self.statics
+            .get()?
+            .view_slots
+            .get(site)
+            .map(|(_, slots)| *slots)
+    }
+
+    /// The digested slots the call keyed by `site` passes bare: empty where none.
+    pub fn handoffs(&self, site: Site) -> &'graph [Handoff] {
+        self.statics
+            .get()
+            .and_then(|statics| statics.handoffs.get(site))
+            .map_or(&[], |(_, handed)| *handed)
     }
 
     /// Written once, by the language's load pass.

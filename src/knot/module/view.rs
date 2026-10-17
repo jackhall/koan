@@ -27,20 +27,25 @@
 //! rather than being made again. [`fitted`] and [`build`] are the one fit and the one body both
 //! the outer ascription and the nested case go through.
 //!
+//! A `:|` over a body-born module whose content no demand has computed computes it first
+//! ([`fill_at_view`]), from the digest memos of the slots its captures were read from where the
+//! load placed them, so a value two views reach through two modules is digested once.
+//!
 //! [`opaque_view_types`] is the half of an ascription computed from types alone: the bindings
 //! either side and the view's signature. The load calls it at a `:|` site over a content tree it
 //! sees all of, so the root holds each type the run's view would otherwise intern;
 //! [`nested_types`] is the same half of a nested re-view, which the load lays wherever it knows
 //! what a nested module carries (`dispatch/statics/views.rs`).
 
-use crate::knot::{KValue, Knotted};
+use crate::knot::{KActivationView, KValue, Knotted, composed};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
+use crate::scope::ViewSlots;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     ContentKey, FitsFailure, KType, Members, SchemaDraft, SigSchema, TypeNode,
     member as bound_member, substitute_parameters,
 };
-use crate::values::{Chain, ContentDigest, TypeValue, Value, fit_solution};
+use crate::values::{Chain, ContentDigest, Digests, TypeValue, Value, fit_solution};
 
 use super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
 use super::{Born, Module, ModuleContent, Operator, layout};
@@ -78,6 +83,66 @@ pub fn takes(types: &Chain<'_, '_, '_, '_, '_>, ascribed: KType) -> bool {
         types.node(ascribed),
         TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
     )
+}
+
+/// Compute the content of `source`, the body-born module a `:|` in `view` reads bare, where no
+/// demand has yet: each capture its content composes that the load read from a slot is taken from
+/// that slot's memo in `slots`, and a memo still empty is filled from the capture, which holds the
+/// value its slot does. Any other capture is digested through one demand opened for them all.
+pub fn fill_at_view<'graph, 'cell>(
+    source: KValue<'graph, 'cell>,
+    slots: ViewSlots<'graph>,
+    view: &KActivationView<'graph, 'cell>,
+    types: &Chain<'_, '_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+) {
+    let Some(module) = source.knot_member().and_then(Knotted::module) else {
+        return;
+    };
+    let Some((shape, closure)) = module.pending() else {
+        return;
+    };
+    debug_assert!(
+        std::ptr::eq(shape, slots.body),
+        "the load reads the module the binder births"
+    );
+    if !std::ptr::eq(shape, slots.body) {
+        return;
+    }
+    let mut memo = None;
+    let captures = composed(shape, closure.links()).map(|(index, link)| {
+        let cell = (slots.captures.iter())
+            .find(|(each, _)| *each as usize == index)
+            .and_then(|(_, at)| view.digest_memo(*at));
+        if let Some(digest) = cell.and_then(|cell| cell.get()) {
+            return (index, digest);
+        }
+        let digest = link.digest(memo.get_or_insert_with(|| Digests::new(types, scratch)));
+        if let Some(cell) = cell {
+            cell.set(Some(digest));
+        }
+        (index, digest)
+    });
+    let content = ModuleContent::body(shape.code_digest(), captures);
+    #[cfg(test)]
+    if CHECK_SLOT_MEMOS.get() {
+        let mut fresh = Digests::new(types, scratch);
+        let walked =
+            composed(shape, closure.links()).map(|(index, link)| (index, link.digest(&mut fresh)));
+        assert_eq!(
+            content,
+            ModuleContent::body(shape.code_digest(), walked),
+            "a slot's memo holds the digest of the value its capture holds"
+        );
+    }
+    module.fill(content);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether [`fill_at_view`] checks the content it builds from memos against a fresh walk of
+    /// the module's captures: the memo law.
+    pub static CHECK_SLOT_MEMOS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `source` seen as `signature` under `:|`, as a module of its own. The source's signature is the
