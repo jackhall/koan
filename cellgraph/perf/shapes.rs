@@ -672,8 +672,8 @@ pub const SHAPES: [Shape; 9] = [
     Shape {
         name: "tree_chain",
         run: tree_chain,
-        small: 64,
-        large: 256,
+        small: 16,
+        large: 64,
     },
     Shape {
         name: "tail_hop",
