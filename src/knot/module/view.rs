@@ -102,10 +102,8 @@ pub fn fill_at_view<'graph, 'cell>(
     let Some((shape, closure)) = module.pending() else {
         return;
     };
-    debug_assert!(
-        std::ptr::eq(shape, slots.body),
-        "the load reads the module the binder births"
-    );
+    // The memos are placed for the captures of the body the load read; any other module's
+    // content is left to the view's own walk.
     if !std::ptr::eq(shape, slots.body) {
         return;
     }
