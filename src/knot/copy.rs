@@ -1,9 +1,9 @@
 //! A knot member's copy: its whole knot re-tied at the destination.
 //!
 //! Every node of the source knot is rebuilt in index order, so an edge means the same node in the
-//! copy and is carried verbatim; each closure binding's value, each data node's value cell and each
-//! module member is the finished copy the crossing hands back, and the types, body shapes, knot
-//! weight's bytes and a module's content ride over; the crossing stamps the copy's memo bits
+//! copy and is carried verbatim; each closure binding's value — a body-born module's too — each
+//! data node's value cell and each module member is the finished copy the crossing hands back, and
+//! the types, body shapes, knot weight's bytes and a module's content, where known, ride over; the crossing stamps the copy's memo bits
 //! where it lands. A builtin's node points into program storage, so it is
 //! carried as-is. The copied member is the one at the source's own index.
 //!
@@ -41,7 +41,12 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                 Node::Function(function) => function.closure().held(out),
                 Node::Builtin(_) => {}
                 Node::Data { circular, .. } => circular.held(out),
-                Node::Module(module) => module.members().iter().for_each(|value| out(*value)),
+                Node::Module(module) => {
+                    module.members().iter().for_each(|value| out(*value));
+                    if let Some(closure) = module.captures() {
+                        closure.held(out);
+                    }
+                }
                 Node::Coerced(coerced) => out(Value::Knotted(coerced.underlying())),
                 Node::Code(code) => code.held(out),
             }
@@ -109,7 +114,9 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                 Node::Module(module) => {
                     let source = module.members();
                     let members = writer.fill(source.len(), |at| copy(&source[at]));
-                    Node::Module(module.rebuilt(writer, members))
+                    let closure =
+                        (module.captures()).map(|closure| closure.copied(writer, &mut *copy));
+                    Node::Module(module.rebuilt(writer, members, closure))
                 }
                 Node::Coerced(coerced) => {
                     let underlying = match copy(&Value::Knotted(coerced.underlying())) {

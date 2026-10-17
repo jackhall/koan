@@ -10,16 +10,13 @@
 //! it, and lays the registrations after them in slot order. Nothing assumes the body's slot order.
 
 use crate::elaborate::{member_count, schema_member, schema_of, self_signature};
-use crate::knot::{
-    Eager, KActivation, KActivationView, Knotted, Node, Supplied, Untieable, composed,
-};
+use crate::knot::{Eager, KActivation, KActivationView, Knotted, Node, Supplied, Untieable};
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
 use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
 use crate::symbols::BinderSymbol;
-use crate::values::digest::Digests;
 use crate::values::{BuildRef, Chain};
 
-use super::{Module, ModuleContent};
+use super::{Born, Module};
 
 /// The activation `slot`'s module body runs in: its captures read from `enclosing` and laid down,
 /// every slot empty. The caller binds its slots, then ties the binder with the finished
@@ -38,7 +35,8 @@ pub fn body_activation<'graph, 'cell>(
     let captures = ClosureBindings::read_captures(body, enclosing, scratch, |_| {
         unreachable!("a module captures no fellow member: it is alone in its component")
     });
-    // A module is never called, so its closure seeks no specialization.
+    // A module is never called, so its closure seeks no specialization. The module keeps it, to
+    // compute its content from where a demand first reaches it.
     let closure = ClosureBindings::of(writer, &captures, BuildRef::ROOT);
     Activation::of_module(writer, body, closure, enclosing.builtins())
 }
@@ -109,14 +107,11 @@ pub fn tie_member<'graph, 'cell, 'x>(
             .map(|value| value.expect("a module's body binds every member its signature names")),
     );
     members.extend(registrations);
-    // A body-born module is its code over what it captures, digested now: the module keeps no
-    // captures to digest later.
-    let mut memo = Digests::new(types, scratch);
-    let mut captures = BumpVec::new_in(scratch);
-    captures.extend(
-        composed(body.shape(), body.closure().links())
-            .map(|(index, link)| (index, link.digest(&mut memo))),
-    );
-    let content = ModuleContent::body(body.shape().code_digest(), &captures);
-    Ok(Module::tie(writer, ktype, &members, content, types))
+    // A body-born module is its code over what it captures, digested where a demand first
+    // reaches it: the module keeps its body's closure until then.
+    let born = Born::Body {
+        shape: body.shape(),
+        closure: body.closure(),
+    };
+    Ok(Module::tie(writer, ktype, &members, born, types))
 }

@@ -32,8 +32,8 @@
 //! a copy of the knot keeps it. That over-distinction is sound: a digest keys what is equal by
 //! content, and keying two equal things apart costs only a key.
 //!
-//! A digest is computed on demand and never stored on a value: only a view asks for one, so a value
-//! no module captures never pays for it. A demand walks what the value reaches through one
+//! A digest is computed on demand — by a view, or by a specialization's key — and kept only by a
+//! module, as its content, so a value no demand reaches never pays for it. A demand walks what the value reaches through one
 //! [`Digests`] memo over the demand's scratch, so a part shared many times over, and a knot met
 //! through any of its members, is digested once per demand. The walk runs over an explicit stack,
 //! as the copy does: a composite is a frame over the parts its surface shows, and a knot member a

@@ -57,7 +57,7 @@ pub(crate) mod tests;
 pub use builtin::{BuiltinFunction, builtin};
 pub use code::{Code, UsingRefused, quote, using};
 pub use function::{Function, barrier_instance, header_instance, instance, lambda};
-pub use module::{Coerced, Module, body_activation};
+pub use module::{Born, Coerced, Module, body_activation};
 pub use tie::{Tied, tie};
 
 use std::cell::Cell;
@@ -233,7 +233,7 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
             Node::Function(function) => function.content_parts(out),
             Node::Builtin(_) => unreachable!("a builtin digests as its overload"),
             Node::Data { .. } => Circular::content_parts(self, types, scratch, out),
-            Node::Module(_) => {}
+            Node::Module(module) => module.content_parts(out),
             Node::Coerced(coerced) => coerced.content_parts(out),
             Node::Code(code) => code.content_parts(out),
         }
@@ -252,7 +252,7 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
             Node::Function(function) => function.content(parts),
             Node::Builtin(_) => unreachable!("a builtin digests as its overload"),
             Node::Data { .. } => Circular::content(self, types, scratch, parts),
-            Node::Module(module) => module.content().digest(),
+            Node::Module(module) => module.content_digest(parts),
             Node::Coerced(coerced) => coerced.content(parts),
             Node::Code(code) => code.content(parts),
         }

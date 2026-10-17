@@ -69,14 +69,16 @@ fn a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep(
 /// so each hop holds different content and mints its view's carrier.
 const VIEW: &str = "(MODULE m OVER #[link] = (LET held = link)) (LET seen = (m :| Holder))";
 
-/// [`VIEW`]'s module, built and never viewed: the same work less the minting.
-const MODULE: &str = "(MODULE m OVER #[link] = (LET held = link))";
+/// [`VIEW`]'s module, viewed at a signature with no head parameter: the same work, its content's
+/// digest included, less the minting.
+const PLAIN: &str = "(MODULE m OVER #[link] = (LET held = link)) (LET seen = (m :| Plain))";
 
 /// A program whose `COUNTDOWN` follows a chain of `depth` links as `WALK` does, running `body`
 /// before each hop. `call` false leaves the chain unwalked, so the difference prices the walk.
 fn countdown(depth: u32, body: &str, call: bool) -> String {
     let mut source = format!(
         "SIG Holder FOR ALL #[Elt] = #[(VAL held :Elt)]\n\
+         SIG Plain = #[(VAL held :Any)]\n\
          NEWTYPE Link = :{{next :Any}}\n\
          EXPR #(COUNTDOWN link :Link) -> Str = #({body} (COUNTDOWN (ATTR link next)))\n\
          EXPR #(COUNTDOWN end :Null) -> Str = #(\"done\")\n\
@@ -166,12 +168,12 @@ fn walking(depth: u32, body: &str) -> Walk {
 #[test]
 fn a_fresh_loop_viewing_a_new_module_each_hop_holds_its_types_flat() {
     // Each hop's frame is a cell of its own, so the carrier it mints lives in that frame's branch
-    // and dies with it. A koan hop costs the heap a few allocations whatever it does, and building
-    // the module more as the chain it captures deepens, so the minting is priced as the view's
-    // cost over the module's: the same per hop at both depths.
+    // and dies with it. A koan hop costs the heap a few allocations whatever it does, and a view's
+    // digest of the module more as the chain it captures deepens, so the minting is priced as the
+    // view's cost over a view minting nothing: the same per hop at both depths.
     let (few, many) = if cfg!(miri) { (2, 4) } else { (64, 512) };
     let [viewed_few, viewed_many] = [few, many].map(|depth| walking(depth, VIEW));
-    let [built_few, built_many] = [few, many].map(|depth| walking(depth, MODULE));
+    let [plain_few, plain_many] = [few, many].map(|depth| walking(depth, PLAIN));
     assert_eq!(
         viewed_many.peak, viewed_few.peak,
         "a hop releases its predecessor"
@@ -189,10 +191,10 @@ fn a_fresh_loop_viewing_a_new_module_each_hop_holds_its_types_flat() {
         [0, 0],
         "no carrier reaches the root cell's branch"
     );
-    let minting = |viewed: &Walk, built: &Walk| viewed.allocations - built.allocations;
+    let minting = |viewed: &Walk, plain: &Walk| viewed.allocations - plain.allocations;
     let (per_few, per_many) = (
-        minting(&viewed_few, &built_few),
-        minting(&viewed_many, &built_many),
+        minting(&viewed_few, &plain_few),
+        minting(&viewed_many, &plain_many),
     );
     // A bump claims chunks as its bytes double, so the two depths may differ by a handful of
     // allocations that grow with the log of the depth, never with it.

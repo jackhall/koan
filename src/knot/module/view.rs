@@ -43,7 +43,7 @@ use crate::type_lattice::{
 use crate::values::{Chain, ContentDigest, TypeValue, Value, fit_solution};
 
 use super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
-use super::{Module, ModuleContent, Operator, layout};
+use super::{Born, Module, ModuleContent, Operator, layout};
 
 /// Which operator a program ascribes by: `:!` retypes the value to the type, `:|` views a module
 /// through a signature. Only `:|` comes through this door.
@@ -95,7 +95,8 @@ pub fn ascribe<'graph, 'tier: 'x, 'cell, 'x>(
         .filter(|member| member.module().is_some())
         .ok_or(Unascribable::NotAModule)?;
     let held = (source.ktype().as_type()).expect("a module's type is a signature type");
-    // A module's digest is its knot's over the content it was born with: no walk.
+    // A module's digest is its knot's over its content: a walk of its captures where no demand
+    // has computed it yet, none after.
     let bare = Value::Knotted(member).digest(types, scratch);
     let (sig, from, pins) = fitted(held, signature, types, scratch)?;
     let (viewed, content) = opaque(
@@ -382,7 +383,7 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
         }
     }
     Ok(Knotted::of(
-        Module::tie(writer, view, &members, content, types),
+        Module::tie(writer, view, &members, Born::View(content), types),
         0,
     ))
 }

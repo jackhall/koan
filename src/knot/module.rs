@@ -6,9 +6,11 @@
 //! content — never an activation, since a view has no body to activate. Its content is what it is,
 //! not what it holds: a body-born module's code over what it captures, and a view's operator and
 //! application over its source's bare member and what its fit solved. [`ModuleContent`] owns that
-//! recipe, and an opaque view's carriers
-//! are keyed on it. It is the one content computed where the node is born, since a module keeps no
-//! captures to digest later. A module is always a one-node knot:
+//! recipe, and an opaque view's carriers are keyed on it. A view's content is computed where the
+//! view is built. A body-born module's is computed where a demand first reaches it — a `:|` over
+//! it ([`view::fill_at_view`]) or a digest walk — and kept: until then the module holds its body
+//! and its closure, as a function does, so a module only surfaced, read or passed on digests
+//! nothing. A module is always a one-node knot:
 //! a mention reached from a module binder's root is eager whatever body it sits in. [`birth`] is
 //! where a body-born one comes from, [`Module::tie`] the one private-field door a body-born module
 //! and a view both go through, so there is one representation and one copy.
@@ -51,12 +53,13 @@ pub use birth::{body_activation, tie_member};
 use std::cell::Cell;
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
+use crate::scope::{BodyShape, ClosureBindings};
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 pub use crate::values::digest::Operator;
 use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
-use crate::values::{Chain, ContentDigest, Knotted as _, Seen, Value, Weight};
+use crate::values::{Chain, ContentDigest, Knotted as _, Link, Seen, Value, Weight};
 
-use super::{KValue, Knotted, Node};
+use super::{KValue, Knotted, Node, composed};
 
 /// A module: what one knot node holds.
 pub struct Module<'graph, 'cell> {
@@ -68,33 +71,65 @@ pub struct Module<'graph, 'cell> {
     knot_weight: Cell<Weight>,
     /// What the module is: its knot digests over it. It sits beside the node, as a barrier does, so
     /// the module arm keeps the node's width.
-    content: &'cell ModuleContent,
+    content: &'cell Content<'graph, 'cell>,
+}
+
+/// What a module is born with, which [`Module::tie`] lays beside its node: a view's content,
+/// computed where the view is built, or a body-born module's body and the closure it ran over,
+/// from which its content is computed on demand.
+pub enum Born<'graph, 'cell> {
+    View(ModuleContent),
+    Body {
+        shape: &'graph BodyShape<'graph>,
+        closure: &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
+    },
+}
+
+/// A module's content beside its node: the content once known, and a body-born module's body and
+/// closure, kept for the module's life so a copy carries what the content is computed from.
+struct Content<'graph, 'cell> {
+    known: Cell<Option<ModuleContent>>,
+    body: Option<(
+        &'graph BodyShape<'graph>,
+        &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
+    )>,
 }
 
 impl<'graph, 'cell> Module<'graph, 'cell> {
-    /// A module over `members`, already in layout order under `ktype`, whose content is `content`,
-    /// laid down as a one-node knot in `writer`'s region. The one private-field constructor the tie
-    /// and the view door share; the module is node `0`.
+    /// A module over `members`, already in layout order under `ktype`, born as `born`, laid down as
+    /// a one-node knot in `writer`'s region. The one private-field constructor the tie and the view
+    /// door share; the module is node `0`.
     ///
     /// A member that is itself a knot member carries its whole knot's weight, since a crossing
-    /// rebuilds that knot whole; the content beside the node weighs in too. The content is what the
-    /// module is — a body's code over what it captures, or a view's operator and application over
-    /// its source — never its members, which that content determines.
+    /// rebuilds that knot whole; the content beside the node weighs in too, with a body-born
+    /// module's closure. The content is what the module is — a body's code over what it captures,
+    /// or a view's operator and application over its source — never its members, which that
+    /// content determines.
     pub fn tie(
         writer: Writer<'cell, '_>,
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
-        content: ModuleContent,
+        born: Born<'graph, 'cell>,
         types: &Chain<'_, '_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
-        let knot_weight = members.iter().fold(
-            Weight::flat::<usize>()
-                .plus(Weight::flat::<Node<'graph, 'cell>>())
-                .plus(Weight::flat::<ModuleContent>()),
-            |weight, member| weight.plus(member.weight()),
-        );
+        let (known, body) = match born {
+            Born::View(content) => (Some(content), None),
+            Born::Body { shape, closure } => (None, Some((shape, closure))),
+        };
+        let flat = Weight::flat::<usize>()
+            .plus(Weight::flat::<Node<'graph, 'cell>>())
+            .plus(Weight::flat::<Content<'graph, 'cell>>());
+        let flat = body.map_or(flat, |(_, closure)| flat.plus(closure.weight()));
+        let knot_weight =
+            (members.iter()).fold(flat, |weight, member| weight.plus(member.weight()));
         let members = collect(writer, members.iter().copied());
-        let content = resident(writer, content);
+        let content = resident(
+            writer,
+            Content {
+                known: Cell::new(known),
+                body,
+            },
+        );
         let knot = KnotPlan::new(1).tie(writer, |_| {
             Node::Module(Module {
                 ktype,
@@ -125,23 +160,92 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         &self.knot_weight
     }
 
-    /// What the module is, computed where it was born.
-    pub fn content(&self) -> ModuleContent {
-        *self.content
+    /// What the module is, where a demand has computed it: always for a view.
+    pub fn content(&self) -> Option<ModuleContent> {
+        self.content.known.get()
     }
 
-    /// This module over `members` rebuilt in `writer`'s region — the copy's arm. The signature, the
-    /// knot weight and the content are facts about the members, which the copy preserves.
+    /// A body-born module's closure: what its content is computed over, kept for the module's
+    /// life.
+    pub fn captures(&self) -> Option<&'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>> {
+        self.content.body.map(|(_, closure)| closure)
+    }
+
+    /// A body-born module's body and closure while no demand has computed its content.
+    pub fn pending(
+        &self,
+    ) -> Option<(
+        &'graph BodyShape<'graph>,
+        &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
+    )> {
+        self.content
+            .body
+            .filter(|_| self.content.known.get().is_none())
+    }
+
+    /// Keep `content`, computed by a demand, as what the module is.
+    pub fn fill(&self, content: ModuleContent) {
+        debug_assert!(
+            self.content
+                .known
+                .get()
+                .is_none_or(|known| known == content),
+            "a module's content is one fact"
+        );
+        self.content.known.set(Some(content));
+    }
+
+    /// The values the node's content covers while it is pending, in the order
+    /// [`content_digest`](Self::content_digest) asks for their digests: each capture the code
+    /// digest does not name that holds a value, as a function's. Nothing once it is known.
+    pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
+    where
+        'cell: 'a,
+    {
+        if let Some((shape, closure)) = self.pending() {
+            for (_, link) in composed(shape, closure.links()) {
+                if let Link::Value(value) = link {
+                    out(Seen::of(*value));
+                }
+            }
+        }
+    }
+
+    /// The node's content digest: the known content's, or a pending one computed over its captures,
+    /// a value's digest answered by `parts`, and kept.
+    pub(super) fn content_digest(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
+        if let Some(known) = self.content.known.get() {
+            return known.digest();
+        }
+        let (shape, closure) = self.content.body.expect("a view's content is known");
+        let captures =
+            composed(shape, closure.links()).map(|(index, link)| (index, link.digest_from(parts)));
+        let content = ModuleContent::body(shape.code_digest(), captures);
+        self.fill(content);
+        content.digest()
+    }
+
+    /// This module over `members` and `closure` rebuilt in `writer`'s region — the copy's arm. The
+    /// signature, the knot weight and the content are facts about what the module holds, which the
+    /// copy preserves; a body-born module's closure arrives copied.
     pub(super) fn rebuilt<'to>(
         &self,
         writer: Writer<'to, '_>,
         members: &'to [KValue<'graph, 'to>],
+        closure: Option<&'to ClosureBindings<'to, Knotted<'graph, 'to>>>,
     ) -> Module<'graph, 'to> {
+        let body = (self.content.body.map(|(shape, _)| shape)).zip(closure);
         Module {
             ktype: self.ktype,
             members,
             knot_weight: Cell::new(self.knot_weight.get().without_bits()),
-            content: resident(writer, *self.content),
+            content: resident(
+                writer,
+                Content {
+                    known: Cell::new(self.content.known.get()),
+                    body,
+                },
+            ),
         }
     }
 }
@@ -155,8 +259,11 @@ pub struct ModuleContent(ContentDigest);
 impl ModuleContent {
     /// A body-born module's content: its body's `code` digest, then each capture the code digest
     /// does not name, beside its slot, as [`composed`](super::composed) yields them.
-    pub fn body(code: ContentDigest, captures: &[(usize, ContentDigest)]) -> ModuleContent {
-        ModuleContent(body_content(code, captures.iter().copied()))
+    pub fn body(
+        code: ContentDigest,
+        captures: impl Iterator<Item = (usize, ContentDigest)>,
+    ) -> ModuleContent {
+        ModuleContent(body_content(code, captures))
     }
 
     /// A view's content: its `operator` and the `application` it was built at, over its source's

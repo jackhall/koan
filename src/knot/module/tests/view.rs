@@ -139,7 +139,8 @@ fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
                     .unwrap_or_else(|error| panic!("`m` satisfies `Ord`: {error:?}"))
             };
             let content = |view: crate::knot::Knotted<'_, '_>| {
-                view.module().expect("a view is a module").content()
+                (view.module().expect("a view is a module").content())
+                    .expect("a view's content is known")
             };
             let bare = view(Value::Knotted(m));
             let Value::Type(key) = member(fixture, bare, "Carrier", types, scratch) else {
