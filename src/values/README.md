@@ -541,10 +541,11 @@ over-distinction is sound: keying two equal things apart costs only a key.
 recurs: a view asks for its source's, a call of a keyed body for the argument
 at each keyed parameter ([keys](../build/README.md#keys-which-bindings-make-a-specialization)),
 and nothing else, so a value no view or key reaches never pays for one. A
-value carries no digest; the slot the load marks as digested — a keyed
-parameter, filled at the frame's birth from the digests its key was computed
-from — keeps the memo beside the value, and a module keeps its content on
-itself from the first view or key that reaches it
+value carries no digest but a module, which keeps its content from the first
+view or key that reaches it; a slot the load marks as digested — the source of
+a capture of a module that a `:|` in the slot's activation views — keeps its
+value's digest beside it, filled by that view or handed in at the frame's
+birth by a call passing a digested slot bare
 ([a module is its content](../../design/modules.md#a-module-is-its-content)).
 A demand walks what the
 value reaches through one `Digests` memo over the demand's scratch, keyed by

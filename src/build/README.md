@@ -172,13 +172,12 @@ captures differ in type; then the content at each **keyed name**, in slot
 order: the parameters, `FOR ALL` names and `:Type` arguments any frontier at
 the entry waits on, facts in nested bodies included, beside the parameters
 its caching record's invariant sites read, the frame's blocks included
-([`key_of`](key.rs)). A parameter keys only where its static type is a
-signature or carrier type: a module's digest is the one word its content is
-stored as, where a list's or a record's costs its size, so a parameter of any
-other type keys nothing and the site over it routes cold. The digests a seek
-computes are handed to the frame it births, which keeps each in the slot
-beside the value, so the body's own demand for one — a module born over the
-parameter — walks nothing
+([`key_of`](key.rs)). A parameter keys only where its declared type is
+closed and lies under `Module`, or it holds a type value: a module's digest
+hashes the content it keeps and a type value's its handle, where a list's or a
+record's costs its size, so a parameter of any other type keys nothing and the
+site over it routes cold. A key's digests therefore cost a few hashes each,
+and the frame it births keeps none of them
 ([where a digest is demanded](../../roadmap/gradual-build/digest-demand.md)).
 A name a hop of the body's own tail rebinds is not
 keyed, since a hop of the same callee borrows its predecessor's specialization

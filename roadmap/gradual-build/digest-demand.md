@@ -23,21 +23,27 @@ run-built and its digest costs its size.
 
 **Acceptance criteria.**
 
-- A parameter keys only where its static type is a signature or carrier
-  type — content whose digest is one stored word; a parameter of any other
-  type keys nothing, and the site over it routes cold.
-- The digests a seek computes are written into the callee's keyed parameter
-  slots at the frame's birth, and a slot the load marks as digested keeps a
-  digest memo beside its value, filled at first demand: a program calling
-  `TAKE l` four times over one list digests `l` once.
+- A parameter keys only where its declared type is closed and lies under
+  `Module`, or it holds a type value — content whose digest costs a few
+  hashes, a module's from the content it keeps; a parameter of any other type
+  keys nothing, and the site over it routes cold.
 - A module's content is computed where a `:|` or a key first reaches the
-  module, read off the view tree at the load, and kept on the module; a
-  module surfaced by `USING … SCOPE`, read with `.` or passed on digests
-  nothing. A test counts digest visits per hop over the caching suite's
-  programs and asserts each is flat in depth or names the module it views
-  per hop as the one that pays.
-- The digest-visit and digest-demand counters of the measurement ship under
-  the `counters` feature.
+  module and kept on the module; until then a body-born module holds its
+  captures, as a closure does. A module surfaced by `USING … SCOPE`, read
+  with `.` or passed on digests nothing. A test counts digest visits per hop
+  over the caching suite's programs and asserts each is flat in depth or
+  names the module a key or a view reaches per hop as the one that pays.
+- A slot the load marks as digested — the source of a capture of a module
+  that a `:|` in the slot's activation, or a block inside it, views by its
+  binder's name — keeps a digest memo beside its value. The `:|` fills the
+  module's content from those memos, read off its view at the load, filling
+  an empty one from the capture it reads; a call passing a digested slot bare
+  hands a filled memo to the callee's digested parameter at the frame's
+  birth. A body viewing two modules over one list digests the list once, and
+  a tail loop viewing a module over a record it passes on bare digests the
+  record once per loop.
+- The digest-visit and digest-demand counters of the measurement ship as test
+  counters beside the adoption counters.
 
 **Directions.**
 

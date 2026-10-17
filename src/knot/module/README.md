@@ -40,9 +40,12 @@ digest of its source's bare member — the module behind any header — and what
 *fits* solved each head parameter to. `ModuleContent` ([module.rs](../module.rs)) owns that recipe
 — one constructor per kind, and `Module::tie` takes nothing else — so a
 module's content is computed one way wherever one is tied. It is computed at
-the first view or key that reaches the module — which the load reads off the
-view tree at each `:|` — and kept on the module behind a pointer, so the node
-keeps its width and a module nothing views pays for no digest
+the first view or key that reaches the module and kept on the module behind a
+pointer, so the node keeps its width and a module nothing views pays for no
+digest. Until then a body-born module holds its body's closure, as a function
+does, and its copy and the exit walk carry it. A `:|` over a module born in
+its own activation fills the content from the digests the captured slots
+keep, which the load reads off the view
 ([where a digest is demanded](../../../roadmap/gradual-build/digest-demand.md)).
 
 ## Layout order

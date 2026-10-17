@@ -30,11 +30,13 @@ Values are immutable, so a value's digest is a fact about it. It is computed
 on demand, when a view or a specialization's key asks for it, and composed
 from its parts' digests, as a type's digest is composed from its children's;
 one demand digests a part shared many times over once. A module's content is
-computed where a view or a key first reaches the module — which the load
-reads off the view tree at each `:|` — and kept on the module, so a module
-only surfaced, read or passed on digests nothing; a frame keeps the digests
-its key was computed from beside the parameters they digest, so a demand
-inside the body finds them
+computed where a view or a key first reaches the module and kept on the
+module, which holds what it captures until then, as a closure does, so a
+module only surfaced, read or passed on digests nothing. A slot a module
+captures keeps its value's digest beside it where a view reaches the module
+in the slot's own activation — the load reads which slots off the view at
+each `:|` — so two views over modules capturing one value, or the hops of a
+loop passing it on bare, digest it once
 ([where a digest is demanded](../roadmap/gradual-build/digest-demand.md)). The
 digest covers what a value's type shows of it, as a copy of the value lays it
 down, so a copy keeps its digest. A module, a function or a quote
