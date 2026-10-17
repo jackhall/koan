@@ -81,7 +81,7 @@ dependency, so it cannot say which facts a binding would settle.
   and reading an untyped fellow at `[Never, Any]`, and a worklist that gave
   the fellow an edge would narrow `LET a = LIST [b]; LET b = LIST [a]`
   forever, each step monotone. How many specializations live is bounded by
-  [eviction](specialization-eviction.md), not by the text.
+  [eviction](../../src/build/README.md#references-between-the-trees), not by the text.
 - *Deepening the borrow at a mid-body seam* — decided. Never. A statement's
   binding is either determined by entry content — a `MATCH` arm's `it` over
   a parameter, a `USING … SCOPE` key over one, a path hop rooted at one —

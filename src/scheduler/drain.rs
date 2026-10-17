@@ -544,7 +544,9 @@ where
                 index
             }
         };
-        // A specialization reports to nobody and is entered here, never from the ready stack.
+        // A specialization reports to nobody and is entered here, never from the ready stack. Its
+        // step seeks nothing (`enlist` refuses a cell that asked for children), so the entry
+        // `decide` chose is still free when the step returns.
         let continuation = Continuation {
             step: seek.work.step,
             provenance: Provenance {

@@ -398,9 +398,6 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 
 ## Open work
 
-- [Evicting specializations](../../roadmap/gradual-build/specialization-eviction.md)
-  — the least-recently-born cache a build cell keeps its specializations
-  in, and its bounds.
 - [Setting the specialization bounds](../../roadmap/gradual-build/bound-settings.md)
   — the bounds as a setting a user names.
 - [Where a content digest is demanded](../../roadmap/gradual-build/digest-demand.md)

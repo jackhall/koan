@@ -22,9 +22,6 @@ and nothing a user writes or runs can widen it.
 
 ## Dependencies
 
-**Requires:**
-
-- [Evicting specializations](specialization-eviction.md) — the bounds this
-  sets.
+**Requires:** none — the bounds are parameters of the load.
 
 **Unblocks:** none.

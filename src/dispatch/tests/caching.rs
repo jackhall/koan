@@ -929,7 +929,7 @@ fn a_frame_under_an_evicted_specialization_is_born_cold_with_the_same_answer() {
     );
     let tight = ran_under(2, &source, bounds(1, 1));
     assert_eq!(tight.printed, "1");
-    assert!(tight.tiers.cold_births >= 1, "{:?}", tight.tiers);
+    assert_eq!(tight.tiers.cold_births, 1, "`g` alone is born cold");
     let roomy = ran(2, &source);
     assert_eq!(roomy.printed, "1");
     assert_eq!(roomy.tiers.cold_births, 0);

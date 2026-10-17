@@ -20,7 +20,7 @@ brands each tier's door and owns the scratch habitat's reset.
 | tier | lives from | to | holds |
 |---|---|---|---|
 | root | the load | the program's end | every type the load builds |
-| specialization branch | the first miss on its binding | its eviction, then its last borrower's disposal | what the invariant sites of a caching frame keyed on that binding mint and copy |
+| specialization branch | the first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | what the invariant sites of a caching frame keyed on that binding mint and copy |
 | region branch | the region's birth | its death | a porous body's run-built types, and what a caching body's exits carry |
 | scratch branch | the habitat's reset | its next reset | a step's scratch types, and every type a caching body builds |
 
@@ -254,8 +254,9 @@ finds the first's invariant types and verdicts laid, and a hop of a tail loop
 of one callee borrows the specialization its frame ran under, with no lookup.
 A specialization lives until its parent evicts it and its last borrower
 disposes, so its warm tier outlives the parks that filled it. A parent keeps
-its specializations as a small least-recently-hit cache, and a miss past its
-bound evicts the least recently hit childless one, whatever borrows it
+its specializations as a small least-recently-born cache, a fixed table as
+long as its bound, and a miss on a full table evicts the least recently born
+child with its subtree, whatever borrows it
 ([the build module](../src/build/README.md#references-between-the-trees)). A
 frame whose specialization's parent is already evicted is born with none,
 and warms the scratch its asker's park holds, as below.
@@ -363,9 +364,6 @@ types, and released with that tier.
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch
   laid at a predicted size.
-- [Evicting specializations](../roadmap/gradual-build/specialization-eviction.md)
-  — the bound of the cache a build cell keeps its specializations in, so a
-  loop over new invariant content each call holds a bounded warm tier.
 - [Two flag bits in a type handle](../roadmap/gradual-build/handle-bits.md) —
   in-root and concrete read off the handle, so an adoption of a root type and
   a value door's root check look nothing up.

@@ -40,11 +40,11 @@ the drain's.
 A loaded program's graph is stood up instead by the **load door**,
 `Graph::load` ([load.rs](load.rs)): it takes two slab roots, the **build
 root** and the **run root**, and enters the build root once with the
-caller's load closure, before any root work. The closure is handed the build
-root's region writer and header door (`LoadStep`) and nothing else, and
-returns the frozen type root every later step reads; a refusal it returns
-drops the graph with it. The build root's region holds the root-level
-specialization table ([the build module](../build/README.md)); the run root
+caller's load closure, before any root work. The closure is handed nothing,
+and returns the frozen type root every later step reads; a refusal it returns
+drops the graph with it. Once it returns, the entry lays the build root's
+region header and its specialization table, as long as the root bound and
+recording the nested bound ([the build module](../build/README.md)); the run root
 is where every root work is born. A graph `Graph::new` makes has no build
 root, and every frame in it is born cold.
 

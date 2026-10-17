@@ -75,9 +75,13 @@ can intern into it, and lays the record down beside the
 [output sinks](#faults-and-output) the embedder hands `load`. All of that runs
 as the **build root's** one step: the scheduler's
 [load door](../scheduler/README.md#the-drain) stands the graph up over two slab
-roots, the build root and the run root, and enters the build root with the
-load, which also lays the build root's region header, whose table the
-root-level [specializations](#specializations) fill. A slab of two cells
+roots, the build root and the run root, enters the build root with the
+load, and then lays the build root's region header and its table, which the
+root-level [specializations](#specializations) fill. `load` takes the
+specialization bounds beside the slab cap: how many live children the build
+root's table holds, and how many every specialization's own holds
+([the build module](../build/README.md#references-between-the-trees)). The
+interpreter passes their defaults. A slab of two cells
 holds both. It returns a `Result`, and
 `LoadError` carries the parse error, or the rendering of the `ShapeError` that
 stopped it. A shape error borrows program storage and names symbols and types

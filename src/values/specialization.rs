@@ -154,15 +154,11 @@ impl<'cell> SpecTable<'cell> {
     }
 
     /// How many entries name a child, live or stale.
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         (self.entries.iter())
             .filter(|entry| entry.handle.get().is_some())
             .count()
-    }
-
-    /// Whether no entry names a child.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// The length of a child's own table.
