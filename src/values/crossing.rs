@@ -407,6 +407,8 @@ pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
 ) {
     match into {
         Destination::Region(region) => {
+            #[cfg(test)]
+            EXIT_WALKS.with(|count| count.set(count.get() + 1));
             let scratch = Bump::new();
             let mut entered = BumpVec::new_in(&scratch);
             adopted::<XF>(region, region, source, value, &mut |part| {
@@ -415,6 +417,8 @@ pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
             entered.iter().for_each(settle);
         }
         Destination::Warm { warm, region } => {
+            #[cfg(test)]
+            WARM_WALKS.with(|count| count.set(count.get() + 1));
             adopted::<XF>(warm, region, source, value, &mut |_| {});
         }
     }
@@ -451,11 +455,18 @@ fn adopted<'graph, 'cell, XF: KnottedFamily<'graph>>(
         },
         &mut |part| {
             #[cfg(test)]
-            skipped.push(part);
+            {
+                PARTS_SKIPPED.with(|count| count.set(count.get() + 1));
+                skipped.push(part);
+            }
             #[cfg(not(test))]
             let _ = part;
         },
-        entered,
+        &mut |part| {
+            #[cfg(test)]
+            PARTS_ENTERED.with(|count| count.set(count.get() + 1));
+            entered(part);
+        },
     );
     #[cfg(test)]
     for part in &skipped {
@@ -507,6 +518,14 @@ thread_local! {
     /// How many handles [`adopt_value`] has adopted: what a test reads to see a settled value's
     /// parts left unwalked.
     pub static ADOPTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many walks [`adopt_value`] has run into a region, at an exit.
+    pub static EXIT_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many walks [`adopt_value`] has run into a warm tier, at an invariant site.
+    pub static WARM_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many parts an adoption's walk has entered: each composite, and each knot once a walk.
+    pub static PARTS_ENTERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many parts an adoption's walk has skipped on their bits.
+    pub static PARTS_SKIPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One pending composite of the deep copy: the surface its children are read from, how many of

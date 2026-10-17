@@ -94,12 +94,34 @@ fn caching(source: &str) -> usize {
     )
 }
 
-/// The smallest depths that show a trend.
-const DEPTHS: [u32; 2] = [8, 32];
+/// The smallest depths that show a trend, evenly spaced, so the hops between the first two number
+/// those between the last two.
+const DEPTHS: [u32; 3] = [4, 10, 16];
 
-/// `source` run at both [`DEPTHS`].
-fn at_depths(source: &str) -> [Ran; 2] {
-    DEPTHS.map(|depth| ran(depth, source))
+/// The least and the greatest of [`DEPTHS`], for a test that compares two runs.
+const ENDS: [u32; 2] = [DEPTHS[0], DEPTHS[2]];
+
+/// `source` run at both [`ENDS`].
+fn at_ends(source: &str) -> [Ran; 2] {
+    ENDS.map(|depth| ran(depth, source))
+}
+
+/// Assert that `counts`, one counter of `what` at each of [`DEPTHS`], grows no faster in depth: the
+/// later hops cost no more than the earlier, whatever the operator run's fixed part.
+fn assert_flat(what: &str, [few, middle, many]: [usize; 3]) {
+    let grew = |from: usize, to: usize| {
+        to.checked_sub(from)
+            .unwrap_or_else(|| panic!("{what} fell from {from} to {to} with depth"))
+    };
+    let (early, late) = (grew(few, middle), grew(middle, many));
+    assert!(
+        late <= early,
+        "{what} grew {early} over depths {} to {} and {late} over {} to {}",
+        DEPTHS[0],
+        DEPTHS[1],
+        DEPTHS[1],
+        DEPTHS[2]
+    );
 }
 
 /// A Fresh loop over `ints`, passed on bare: its view's site is invariant.
@@ -183,45 +205,195 @@ fn mixed_chain() -> String {
     format!("{INVARIANT}{START}PRINT (START ints chain)")
 }
 
-/// An adopt of a root handle is a bit test: across every caching loop, a hop's adoption probes
-/// fall to the handles that are not the root's, and hold flat in depth.
+/// [`wrapped_peeks`] with both bodies `Fresh`, `PEEK` viewing at an invariant site.
+const FRESH_WRAPPED: &str = "EXPR #(PEEK m :Holder) -> Number = #((LET v = (m :| Holder)) (1))\n\
+                             EXPR #(WRAP m :Counter link :Link) -> Number = \
+                             #((LET v = (m :| Counter)) (MODULE h OVER #[link] = (LET held = link)) \
+                             (LET seen = (PEEK h)) (WRAP m (ATTR link next)))\n\
+                             EXPR #(WRAP m :Counter end :Null) -> Number = #(7)\n\
+                             PRINT (WRAP ints chain)";
+
+/// `PASS`, a loop handing `peek` a member of a record of `length` numbers it received, the member
+/// reached through `GETA`.
+fn member_via_call(length: usize) -> String {
+    let items = vec!["1"; length].join(", ");
+    format!(
+        "LET peek = (FN :{{xs :(LIST OF Number)}} -> Number = #(1))\n\
+         EXPR #(GETA p :{{a :(LIST OF Number)}}) -> :(LIST OF Number) = #(ATTR p a)\n\
+         EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} link :Link) -> Number = \
+         #((LET v = (m :| Counter)) (LET l = (GETA p)) (LET t = (peek {{xs = l}})) \
+         (PASS m p (ATTR link next)))\n\
+         EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} end :Null) -> Number = #(7)\n\
+         PRINT (PASS ints {{a = [{items}]}} chain)"
+    )
+}
+
+/// `WALK`, a loop handing the rest of the chain on through a call by name and a keyworded tail
+/// call.
+const BY_NAME_WALK: &str = "LET peek = (FN :{link :Any} -> Number = #(1))\n\
+                            EXPR #(WALK m :Counter link :Link) -> Number = \
+                            #((LET v = (m :| Counter)) (LET t = (peek {link = (ATTR link next)})) \
+                            (WALK m (ATTR link next)))\n\
+                            EXPR #(WALK m :Counter end :Null) -> Number = #(7)\n\
+                            PRINT (WALK ints chain)";
+
+/// `PASS`, a loop passing on a list of `length` numbers it received.
+fn received_list(length: usize) -> String {
+    let items = vec!["1"; length].join(", ");
+    format!(
+        "EXPR #(PASS m :Counter xs :Any link :Link) -> Str = \
+         #((LET v = (m :| Counter)) (PASS m xs (ATTR link next)))\n\
+         EXPR #(PASS m :Counter xs :Any end :Null) -> Str = #(\"done\")\n\
+         PRINT (PASS ints [{items}] chain)"
+    )
+}
+
+/// What one run's adoptions counted: the lattice's, then the walk's.
+#[derive(Clone, Copy)]
+struct Adoptions {
+    /// Handles the lattice was asked to make resolve.
+    asked: usize,
+    /// Of those, the ones that took a lookup.
+    probes: usize,
+    /// Lookups the chain answered at once.
+    hits: usize,
+    /// Lookups that missed, each laying a node.
+    laid: usize,
+    /// Handles the walks handed over.
+    adopted: usize,
+    /// Walks into a region, at an exit.
+    exits: usize,
+    /// Walks into a warm tier, at an invariant site.
+    warm: usize,
+    /// Parts the walks entered.
+    entered: usize,
+    /// Parts the walks skipped on their bits.
+    skipped: usize,
+}
+
+impl Adoptions {
+    /// Zero every counter.
+    fn reset() {
+        use crate::type_lattice::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
+        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+        let counters = [
+            &ADOPT_ASKED,
+            &ADOPT_PROBES,
+            &ADOPT_HITS,
+            &ADOPT_LAID,
+            &ADOPTED,
+            &EXIT_WALKS,
+            &WARM_WALKS,
+            &PARTS_ENTERED,
+            &PARTS_SKIPPED,
+        ];
+        for counter in counters {
+            counter.set(0);
+        }
+    }
+
+    /// Every counter as it stands.
+    fn read() -> Self {
+        use crate::type_lattice::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
+        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+        Adoptions {
+            asked: ADOPT_ASKED.get(),
+            probes: ADOPT_PROBES.get(),
+            hits: ADOPT_HITS.get(),
+            laid: ADOPT_LAID.get(),
+            adopted: ADOPTED.get(),
+            exits: EXIT_WALKS.get(),
+            warm: WARM_WALKS.get(),
+            entered: PARTS_ENTERED.get(),
+            skipped: PARTS_SKIPPED.get(),
+        }
+    }
+
+    /// The counters in table order, each named.
+    fn named(self) -> [(&'static str, usize); 9] {
+        [
+            ("asked", self.asked),
+            ("probes", self.probes),
+            ("hits", self.hits),
+            ("laid", self.laid),
+            ("adopted", self.adopted),
+            ("exits", self.exits),
+            ("warm", self.warm),
+            ("entered", self.entered),
+            ("skipped", self.skipped),
+        ]
+    }
+}
+
+/// Run [`program`] at `depth` over `source`, counting its adoptions.
+fn adopting(depth: u32, source: &str) -> (Ran, Adoptions) {
+    Adoptions::reset();
+    let ran = ran(depth, source);
+    (ran, Adoptions::read())
+}
+
+/// Across the caching suite's programs, what a loop hop's adoptions cost, printed as a table of each
+/// counter per hop: flat in depth, a root handle adopted at no lookup, no node laid where no hop
+/// builds a specialization, and every hop's walks stopping at a part on its bits.
 #[test]
-fn adoption_probes_fall_to_branch_handles() {
-    use crate::type_lattice::{ADOPT_ASKED, ADOPT_PROBES};
+fn a_hops_adoptions_hold_flat_in_depth() {
     let programs = [
         ("invariant_loop", invariant_loop()),
         ("wrapped_peeks", wrapped_peeks()),
+        ("FRESH_WRAPPED", FRESH_WRAPPED.to_string()),
         ("hosted_peeks", hosted_peeks()),
         ("varying_loop", varying_loop()),
         ("HELPER_LOOP", HELPER_LOOP.to_string()),
         ("PARKING_LOOP", PARKING_LOOP.to_string()),
         ("mixed_chain", mixed_chain()),
+        ("member_via_call", member_via_call(8)),
+        ("BY_NAME_WALK", BY_NAME_WALK.to_string()),
+        ("received_list", received_list(8)),
     ];
-    let counted = |depth: u32, source: &str| {
-        ADOPT_ASKED.with(|asked| asked.set(0));
-        ADOPT_PROBES.with(|probes| probes.set(0));
-        ran(depth, source);
-        (ADOPT_ASKED.with(Cell::get), ADOPT_PROBES.with(Cell::get))
-    };
-    let hops = (DEPTHS[1] - DEPTHS[0]) as usize;
-    eprintln!("| program | asked/hop | probes/hop |");
+    let hops = (ENDS[1] - ENDS[0]) as usize;
+    let per_hop = |delta: usize| format!("{:.1}", delta as f64 / hops as f64);
+    let header = Adoptions::read().named().map(|(name, _)| name).join(" | ");
+    eprintln!("| program | {header} | specialized |");
     for (name, source) in programs {
-        let [(few_asked, few), (many_asked, many)] = DEPTHS.map(|depth| counted(depth, &source));
-        let (asked, probes) = (many_asked - few_asked, many - few);
-        eprintln!(
-            "| {name} | {:.1} | {:.1} |",
-            asked as f64 / hops as f64,
-            probes as f64 / hops as f64
-        );
+        let runs = DEPTHS.map(|depth| adopting(depth, &source));
+        let counts = runs.each_ref().map(|(_, adoptions)| adoptions.named());
+        for at in 0..counts[0].len() {
+            let counter = counts[0][at].0;
+            assert_flat(
+                &format!("{name}: {counter}"),
+                counts.map(|named| named[at].1),
+            );
+        }
+        let specialized = runs.each_ref().map(|(ran, _)| ran.tiers.specialized);
+        assert_flat(&format!("{name}: specialized"), specialized);
+        let deltas = (counts[0].into_iter().zip(counts[2]))
+            .map(|((counter, few), (_, many))| (counter, many - few))
+            .collect::<BTreeMap<_, _>>();
+        let specialized = specialized[2] - specialized[0];
+        let row = (counts[0].iter())
+            .map(|(counter, _)| per_hop(deltas[counter]))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        eprintln!("| {name} | {row} | {} |", per_hop(specialized));
         assert!(
-            probes < asked,
-            "{name}: each loop adopts root handles at no lookup, {probes} probes of {asked}"
+            deltas["probes"] < deltas["asked"],
+            "{name}: each hop adopts root handles at no lookup, {} probes of {}",
+            deltas["probes"],
+            deltas["asked"]
         );
+        if specialized == 0 {
+            assert_eq!(
+                deltas["laid"], 0,
+                "{name}: a hop borrowing nothing new lays no node"
+            );
+            assert_eq!(
+                deltas["hits"], deltas["probes"],
+                "{name}: a hop borrowing nothing new hits at every probe"
+            );
+        }
         assert!(
-            many * DEPTHS[0] as usize <= few * DEPTHS[1] as usize,
-            "{name}: probes {few} over {} hops against {many} over {}",
-            DEPTHS[0],
-            DEPTHS[1]
+            deltas["skipped"] > 0,
+            "{name}: each hop's walks stop at a part on its bits"
         );
     }
 }
@@ -230,7 +402,7 @@ fn adoption_probes_fall_to_branch_handles() {
 fn a_shares_call_with_new_content_each_call_holds_its_hosts_region_flat() {
     let source = hosted_peeks();
     assert_eq!(caching(&source), 1, "`PEEK` caches");
-    let [few, many] = at_depths(&source);
+    let [few, many] = at_ends(&source);
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
     // The host's scratch grows with the loop, as its bytes do; its region does not.
     assert_eq!(few.tiers.region, many.tiers.region);
@@ -245,54 +417,38 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
         let ran = ran(depth, &source);
         (ran, crate::values::ADOPTED.with(Cell::get))
     };
-    let [(few, few_adopted), (many, many_adopted)] = DEPTHS.map(ran_adopting);
+    let runs = DEPTHS.map(ran_adopting);
+    let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
     // `PEEK` keys on the module it is handed, so it borrows a specialization of its own each hop,
     // and `WRAP` one across the loop; the region and each lent branch hold flat.
-    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+    for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
         assert_eq!(ran.tiers.specialized, depth as usize + 1);
     }
     assert_eq!(
         (few.tiers.region, few.tiers.lent),
         (many.tiers.region, many.tiers.lent)
     );
-    assert!(few_adopted > 0, "the loop's exits adopt");
-    // A hop's adoptions at the greater depth cost no more than at the lesser.
-    assert!(
-        many_adopted * DEPTHS[0] as usize <= few_adopted * DEPTHS[1] as usize,
-        "adoptions {few_adopted} over {} hops against {many_adopted} over {}",
-        DEPTHS[0],
-        DEPTHS[1]
-    );
+    assert!(*few_adopted > 0, "the loop's exits adopt");
+    assert_flat("adoptions", runs.each_ref().map(|(_, adopted)| *adopted));
 }
 
 #[test]
 fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_flat() {
-    // `wrapped_peeks` with both bodies `Fresh`: `PEEK` adopts the module it views into the lent
-    // branch at an invariant site, which stops at the link the module holds, settled by the exit
-    // that handed it on.
-    let source = "EXPR #(PEEK m :Holder) -> Number = #((LET v = (m :| Holder)) (1))\n\
-                  EXPR #(WRAP m :Counter link :Link) -> Number = \
-                  #((LET v = (m :| Counter)) (MODULE h OVER #[link] = (LET held = link)) \
-                  (LET seen = (PEEK h)) (WRAP m (ATTR link next)))\n\
-                  EXPR #(WRAP m :Counter end :Null) -> Number = #(7)\n\
-                  PRINT (WRAP ints chain)";
+    // `PEEK` adopts the module it views into the lent branch at an invariant site, which stops at
+    // the link the module holds, settled by the exit that handed it on.
+    let source = FRESH_WRAPPED;
     assert_eq!(caching(source), 2, "`WRAP` and `PEEK` cache");
     let ran_adopting = |depth: u32| {
         crate::values::ADOPTED.with(|adopted| adopted.set(0));
         let ran = ran(depth, source);
         (ran, crate::values::ADOPTED.with(Cell::get))
     };
-    let [(few, few_adopted), (_, many_adopted)] = DEPTHS.map(ran_adopting);
+    let runs = DEPTHS.map(ran_adopting);
+    let (few, few_adopted) = &runs[0];
     assert_eq!(few.printed, "7");
-    assert!(few_adopted > 0, "the loop's exits adopt");
-    // A hop's adoptions at the greater depth cost no more than at the lesser.
-    assert!(
-        many_adopted * DEPTHS[0] as usize <= few_adopted * DEPTHS[1] as usize,
-        "adoptions {few_adopted} over {} hops against {many_adopted} over {}",
-        DEPTHS[0],
-        DEPTHS[1]
-    );
+    assert!(*few_adopted > 0, "the loop's exits adopt");
+    assert_flat("adoptions", runs.each_ref().map(|(_, adopted)| *adopted));
 }
 
 #[test]
@@ -300,16 +456,7 @@ fn a_member_reached_through_a_call_is_adopted_by_its_memo_alone() {
     // `GETA`'s result is a member of the record the loop received, reached by a route the load
     // records nothing for: the exit handing it to `peek` stops at its memo, whatever its length.
     let adopted = |length: usize| {
-        let items = vec!["1"; length].join(", ");
-        let source = format!(
-            "LET peek = (FN :{{xs :(LIST OF Number)}} -> Number = #(1))\n\
-             EXPR #(GETA p :{{a :(LIST OF Number)}}) -> :(LIST OF Number) = #(ATTR p a)\n\
-             EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} link :Link) -> Number = \
-             #((LET v = (m :| Counter)) (LET l = (GETA p)) (LET t = (peek {{xs = l}})) \
-             (PASS m p (ATTR link next)))\n\
-             EXPR #(PASS m :Counter p :{{a :(LIST OF Number)}} end :Null) -> Number = #(7)\n\
-             PRINT (PASS ints {{a = [{items}]}} chain)"
-        );
+        let source = member_via_call(length);
         assert_eq!(caching(&source), 1);
         crate::values::ADOPTED.with(|adopted| adopted.set(0));
         assert_eq!(ran(DEPTHS[0], &source).printed, "7");
@@ -322,7 +469,7 @@ fn a_member_reached_through_a_call_is_adopted_by_its_memo_alone() {
 fn a_fresh_loop_over_an_invariant_module_holds_its_lent_branch_flat() {
     let source = invariant_loop();
     assert_eq!(caching(&source), 1);
-    let [few, many] = at_depths(&source);
+    let [few, many] = at_ends(&source);
     assert_eq!(few.printed, "7");
     assert!(few.tiers.lent > 0, "the view's types are adopted warm");
     assert!(
@@ -338,7 +485,7 @@ fn a_shares_loop_parking_each_hop_holds_its_hosts_scratch_bytes_flat() {
     // the last released.
     let source = PARKING_LOOP;
     assert_eq!(caching(source), 1);
-    let [few, many] = at_depths(source);
+    let [few, many] = at_ends(source);
     assert_eq!(few.printed, "done");
     assert!(few.tiers.scratch_bytes > 0);
     assert_eq!(few, many);
@@ -348,7 +495,7 @@ fn a_shares_loop_parking_each_hop_holds_its_hosts_scratch_bytes_flat() {
 fn a_fresh_loop_over_varying_content_holds_the_lattice_flat() {
     let source = varying_loop();
     assert_eq!(caching(&source), 1);
-    let [few, many] = at_depths(&source);
+    let [few, many] = at_ends(&source);
     assert_eq!((few.printed.as_str(), few.root), ("7", 0));
     assert_eq!(few, many);
 }
@@ -359,9 +506,9 @@ fn a_fresh_loop_calling_a_shares_caching_helper_holds_each_specialization_flat()
     // the host's region and each lent branch hold flat however long the loop.
     let source = HELPER_LOOP;
     assert_eq!(caching(source), 2);
-    let [few, many] = at_depths(source);
+    let [few, many] = at_ends(source);
     assert_eq!(few.printed, "7");
-    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
         assert_eq!(ran.tiers.specialized, depth as usize, "one per link");
         assert_eq!(
             ran.live,
@@ -387,7 +534,7 @@ fn a_fresh_loop_calling_a_shares_caching_helper_holds_each_specialization_flat()
 fn a_mixed_placement_tail_chain_over_invariant_content_holds_flat() {
     let source = mixed_chain();
     assert_eq!(caching(&source), 2);
-    let [few, many] = at_depths(&source);
+    let [few, many] = at_ends(&source);
     assert_eq!(few.printed, "7");
     assert_eq!(few, many);
 }
@@ -515,13 +662,7 @@ fn a_held_frame_hands_on_what_its_last_statement_reads() {
 #[test]
 fn a_received_list_passed_on_is_adopted_by_its_memo_alone() {
     let adopted = |length: usize| {
-        let items = vec!["1"; length].join(", ");
-        let source = format!(
-            "EXPR #(PASS m :Counter xs :Any link :Link) -> Str = \
-             #((LET v = (m :| Counter)) (PASS m xs (ATTR link next)))\n\
-             EXPR #(PASS m :Counter xs :Any end :Null) -> Str = #(\"done\")\n\
-             PRINT (PASS ints [{items}] chain)"
-        );
+        let source = received_list(length);
         assert_eq!(caching(&source), 1);
         crate::values::ADOPTED.with(|adopted| adopted.set(0));
         assert_eq!(ran(DEPTHS[0], &source).printed, "done");
@@ -535,28 +676,16 @@ fn a_member_of_a_received_value_passed_on_adopts_a_hop_at_a_time() {
     // Each hop passes on `(ATTR link next)`, the rest of the chain, through a keyworded tail call
     // and, in the second program, a call by name too: an exit adopting it whole would walk the
     // chain each hop, so the operator run's adoptions would grow with the square of its depth.
-    let by_name = "LET peek = (FN :{link :Any} -> Number = #(1))\n\
-                   EXPR #(WALK m :Counter link :Link) -> Number = \
-                   #((LET v = (m :| Counter)) (LET t = (peek {link = (ATTR link next)})) \
-                   (WALK m (ATTR link next)))\n\
-                   EXPR #(WALK m :Counter end :Null) -> Number = #(7)\n\
-                   PRINT (WALK ints chain)";
-    for source in [invariant_loop(), by_name.to_string()] {
+    for source in [invariant_loop(), BY_NAME_WALK.to_string()] {
         assert_eq!(caching(&source), 1);
         let adopted = |depth: u32| {
             crate::values::ADOPTED.with(|adopted| adopted.set(0));
             assert_eq!(ran(depth, &source).printed, "7");
             crate::values::ADOPTED.with(Cell::get)
         };
-        let (few, many) = (adopted(DEPTHS[0]), adopted(DEPTHS[1]));
-        assert!(few > 0, "the loop's exits adopt");
-        // A hop's adoptions at the greater depth cost no more than at the lesser.
-        assert!(
-            many * DEPTHS[0] as usize <= few * DEPTHS[1] as usize,
-            "adoptions {few} over {} hops against {many} over {}",
-            DEPTHS[0],
-            DEPTHS[1]
-        );
+        let counts = DEPTHS.map(adopted);
+        assert!(counts[0] > 0, "the loop's exits adopt");
+        assert_flat("adoptions", counts);
     }
 }
 
@@ -613,7 +742,7 @@ fn laid(program: &str) -> Vec<(&'static str, usize, usize)> {
 }
 
 /// The measurement the type-tiers work reads: the nodes laid through caching chains over the
-/// tutorial's runnable programs, then per caching body over the flat-loop programs at both
+/// tutorial's runnable programs, then per caching body over the flat-loop programs at each of
 /// [`DEPTHS`]. Run with `cargo test laid_through_caching_chains -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -886,8 +1015,8 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
     // `PEEK` keys on a new module each hop and `WRAP` on `ints` across the loop, both under the
     // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops are newer births.
     let source = wrapped_peeks();
-    let [few, many] = DEPTHS.map(|depth| ran_under(depth, &source, bounds(2, 2)));
-    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+    let [few, many] = ENDS.map(|depth| ran_under(depth, &source, bounds(2, 2)));
+    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
         let depth = depth as usize;
         assert_eq!(ran.printed, "done");
         assert_eq!(
@@ -941,8 +1070,8 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_fla
     );
     // Each hop builds an `OUTER` under the root and a `g` beneath it; a miss on the root's full
     // table releases the oldest `OUTER` with its `g`.
-    let [few, many] = DEPTHS.map(|depth| ran_under(depth, source, bounds(2, 2)));
-    for (ran, depth) in [(&few, DEPTHS[0]), (&many, DEPTHS[1])] {
+    let [few, many] = ENDS.map(|depth| ran_under(depth, source, bounds(2, 2)));
+    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
         let depth = depth as usize;
         assert_eq!(ran.printed, "7");
         assert_eq!(

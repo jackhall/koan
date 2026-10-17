@@ -167,8 +167,12 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// still takes its one root probe: the re-laid content references the root's node.
     fn adopt_handle<'s>(&self, source: &impl Source<'s>, handle: Handle) -> Linked<'t> {
         if let Some(found) = self.resolve(handle) {
+            #[cfg(any(test, feature = "counters"))]
+            ADOPT_HITS.with(|count| count.set(count.get() + 1));
             return found;
         }
+        #[cfg(any(test, feature = "counters"))]
+        ADOPT_LAID.with(|count| count.set(count.get() + 1));
         let from = source.reach(handle).unwrap_or_else(|| {
             panic!(
                 "a crossed value names type 0x{:032x}, which its home cannot resolve",
@@ -278,4 +282,9 @@ thread_local! {
     pub static ADOPT_ASKED: Cell<usize> = const { Cell::new(0) };
     /// How many of those took a lookup: the ones whose in-root bit is clear.
     pub static ADOPT_PROBES: Cell<usize> = const { Cell::new(0) };
+    /// How many of `adopt_handle`'s lookups — each probe, and each child of a node it re-lays —
+    /// the chain answered at once.
+    pub static ADOPT_HITS: Cell<usize> = const { Cell::new(0) };
+    /// How many of those lookups missed, each re-laying its node in the own tier.
+    pub static ADOPT_LAID: Cell<usize> = const { Cell::new(0) };
 }

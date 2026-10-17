@@ -531,3 +531,27 @@ fn adopting_a_root_handle_lays_and_probes_nothing() {
     assert_eq!(types.own_len(), 0);
     assert_eq!(types.root_probes(), 0);
 }
+
+#[test]
+fn an_adopt_hits_where_the_chain_resolves_and_lays_where_it_lacks() {
+    use crate::types::{ADOPT_HITS, ADOPT_LAID};
+    let symbols = SymbolInterner::new();
+    let (root_region, source_region, region) = (Bump::new(), Bump::new(), Bump::new());
+    let root = Root::seeded(&root_region);
+    let source = TypeChain::new(root, BumpHalf::new(&source_region));
+    let types = TypeChain::new(root, BumpHalf::new(&region));
+    let minted = record_named(&source, &symbols, "x");
+    assert!(!types.in_root(minted), "the seeded root lacks the record");
+    ADOPT_HITS.set(0);
+    ADOPT_LAID.set(0);
+    types.adopt_from(&source, minted);
+    assert_eq!(
+        ADOPT_LAID.get(),
+        1,
+        "the first adopt lays the record's node"
+    );
+    let hits = ADOPT_HITS.get();
+    types.adopt_from(&source, minted);
+    assert_eq!(ADOPT_HITS.get(), hits + 1, "the second adopt hits at once");
+    assert_eq!(ADOPT_LAID.get(), 1, "and lays nothing");
+}
