@@ -291,14 +291,20 @@ in a tenant's storage and crossed into the callee's birth.
   a barrier reached by its key, over a value member the block reads, its result crossing the
   block's frame and the barrier both, every captured byte read back.
 
-**Build tree** ([src/values/habitat.rs](../src/values/habitat.rs)) — a header's interior cells
-written after the header is laid: through the half's own door, through a borrower's lent region,
-and read back through `peek` between steps.
+**Build tree** ([src/scope/header.rs](../src/scope/header.rs),
+[src/values/habitat.rs](../src/values/habitat.rs)) — a header's interior cells written after the
+header is laid: through the half's own door, through a borrower's lent region, and read back
+through `peek` between steps.
 
-- `a_header_table_decides_hits_free_entries_and_its_least_recently_born_victim`
-  a slab cell's header laid, its fixed table laid through the half's own door, entries filled,
-  stamped and rekeyed in place through `Cell` writes, and its home set, every cell read back through
-  the same header.
+- `a_region_header_is_laid_on_the_first_intern_and_holds_the_table_and_the_home`
+  a slab cell's header laid by its first intern through the projected door, its branch, table
+  and home written through `Cell`s, and read back through the same header at the next step.
+- `a_table_decides_hits_free_entries_and_its_least_recently_born_victim`
+  a fixed table laid in a slab cell's region, entries filled, stamped and rekeyed in place through
+  `Cell` writes.
+- `a_frame_reads_its_specializations_settled_facts_through_its_lend`
+  a specialization's own step laying its settled facts in its region and setting them in its
+  header, read by two frames through their lent region and by none that borrows no region.
 - `a_parent_past_its_bound_releases_its_least_recently_born_child`
   the drain writing a parent's books through `peek` between steps — a hit's stamp, a new child's
   entry and home — under the root's table and a specialization's own, its victims released and an
@@ -321,9 +327,9 @@ and read back through `peek` between steps.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-18: 643s — 44 tests, 0 leaks, 0 UB
 - 2026-10-18: 872s — 42 tests, 0 leaks, 0 UB
 - 2026-10-17: 596s — 42 tests, 0 leaks, 0 UB
 - 2026-10-17: 671s — 42 tests, 0 leaks, 0 UB
 - 2026-10-16: 990s — 41 tests, 0 leaks, 0 UB
-- 2026-10-16: 300s — 37 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
