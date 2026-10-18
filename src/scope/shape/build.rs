@@ -74,7 +74,7 @@ use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run,
 };
-use super::super::typed::Static;
+use super::super::typed::{ShapeFacts, Static};
 use super::{
     Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
@@ -3433,6 +3433,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 paths: resident_cell(writer, &[][..]),
                 statics: resident_cell(writer, None),
                 caching: resident_cell(writer, None),
+                channel_residual: resident_cell(writer, Keyed::from_sorted(&[])),
+                statics_residual: resident_cell(writer, Keyed::from_sorted(&[])),
+                shape_facts: resident_cell(writer, ShapeFacts::default()),
             },
         )
     }

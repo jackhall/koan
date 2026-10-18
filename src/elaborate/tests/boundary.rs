@@ -22,3 +22,39 @@ const PREFIXES: &[&str] = &[
 fn elaborate_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_lifetimes() {
     crate::tests::boundary::holds("elaborate", PREFIXES, &[]);
 }
+
+/// The cell accessors and write doors the type channel's walk reaches only through its store.
+const ACCESSORS: &[&str] = &[
+    "declared_type",
+    "registered_type",
+    "typed_expression",
+    "type_expressions",
+    "typed",
+    "in_body",
+    "refusal",
+    "channel_residual",
+    "fix",
+    "fix_declared",
+    "fix_registered",
+    "fix_callable",
+    "fix_group_levels",
+    "fix_path_reads",
+    "fix_channel_paths",
+    "fix_declared_variables",
+    "fix_channel_residual",
+    "refuse_typing",
+];
+
+#[test]
+fn the_type_channel_reaches_every_cell_through_its_store() {
+    use crate::tests::boundary::{store_bypasses, strip_comments_and_strings};
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source = manifest.join("src/elaborate/channel.rs");
+    let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
+    let offenders = store_bypasses(&code, ACCESSORS, &[]);
+    assert!(
+        offenders.is_empty(),
+        "read past the store:\n{}",
+        offenders.join("\n")
+    );
+}

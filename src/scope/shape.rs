@@ -63,13 +63,14 @@ use crate::values::{Chain, ContentDigest, Knotted};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
+use super::facts::Residual;
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
 use super::typed::{
-    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathRead, Static,
-    StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
-    ViewSlots,
+    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathRead, ShapeFacts,
+    Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics,
+    Variable, ViewSlots,
 };
 
 mod build;
@@ -586,6 +587,12 @@ pub struct BodyShape<'graph> {
     statics: &'graph Cell<Option<Statics<'graph>>>,
     /// Where the body's types intern at run, fixed once the whole static pass has run.
     caching: &'graph Cell<Option<&'graph Caching<'graph>>>,
+    /// Each type channel fact of this body that waits on an unknown, beside its frontier.
+    channel_residual: &'graph Cell<Residual<'graph>>,
+    /// Each value channel fact of this body that waits on an unknown, beside its frontier.
+    statics_residual: &'graph Cell<Residual<'graph>>,
+    /// The static pass's facts about the body as a whole.
+    shape_facts: &'graph Cell<ShapeFacts<'graph>>,
 }
 
 /// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
@@ -1078,7 +1085,6 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// The static type of the binder at `slot` — a quantified callable's binder its scheme.
-    #[cfg(test)]
     pub fn binder_type(&self, slot: Slot) -> Option<DeclaredType<Interval>> {
         self.statics.get()?.binders.get(slot.index()).copied()
     }
@@ -1125,6 +1131,40 @@ impl<'graph> BodyShape<'graph> {
     pub fn fix_caching(&self, caching: &'graph Caching<'graph>) {
         debug_assert!(self.caching.get().is_none());
         self.caching.set(Some(caching));
+    }
+
+    /// Each type channel fact of this body that waits on an unknown, beside its frontier.
+    pub fn channel_residual(&self) -> Residual<'graph> {
+        self.channel_residual.get()
+    }
+
+    /// Written once, by the type channel.
+    pub fn fix_channel_residual(&self, residual: Residual<'graph>) {
+        debug_assert!(self.channel_residual.get().is_empty());
+        self.channel_residual.set(residual);
+    }
+
+    /// Each value channel fact of this body that waits on an unknown, beside its frontier.
+    pub fn statics_residual(&self) -> Residual<'graph> {
+        self.statics_residual.get()
+    }
+
+    /// Written once, by the language's load pass.
+    pub fn fix_statics_residual(&self, residual: Residual<'graph>) {
+        debug_assert!(self.statics_residual.get().is_empty());
+        self.statics_residual.set(residual);
+    }
+
+    /// The static pass's facts about this body as a whole.
+    pub fn shape_facts(&self) -> ShapeFacts<'graph> {
+        self.shape_facts.get()
+    }
+
+    /// Written by the static pass, each field once, where it fixes that fact.
+    pub fn fix_shape_facts(&self, edit: impl FnOnce(&mut ShapeFacts<'graph>)) {
+        let mut facts = self.shape_facts.get();
+        edit(&mut facts);
+        self.shape_facts.set(facts);
     }
 
     /// Whether the load recorded `site` as one of this shape's own minting sites.

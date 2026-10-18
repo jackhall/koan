@@ -172,3 +172,54 @@ pub(crate) fn collect_sources(directory: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// Each place `code` reaches a fact past its pass's store, as `line: text`: a call of one of
+/// `accessors` on any receiver but `self` — the store's own methods share their names — and a read
+/// of one of `fields` through an index into `chain` or a level named `at`, `popped` or `inner`.
+pub(crate) fn store_bypasses(code: &str, accessors: &[&str], fields: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    let lines: Vec<&str> = code.lines().collect();
+    let line_of = |at: usize| code[..at].matches('\n').count();
+    let mut flag = |at: usize, what: &str| {
+        let number = line_of(at);
+        found.push(format!("{}: {what}: {}", number + 1, lines[number].trim()));
+    };
+    for accessor in accessors {
+        let call = format!(".{accessor}(");
+        for (at, _) in code.match_indices(&call) {
+            // The receiver, across a line break a method chain is wrapped at.
+            let receiver: String = code[..at]
+                .trim_end()
+                .chars()
+                .rev()
+                .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+                .collect();
+            if receiver != "fles" {
+                flag(at, accessor);
+            }
+        }
+    }
+    for field in fields {
+        let read = format!(".{field}");
+        for (at, _) in code.match_indices(&read) {
+            let after = code[at + read.len()..].chars().next();
+            if after.is_some_and(|ch| ch.is_alphanumeric() || ch == '_' || ch == '(') {
+                continue;
+            }
+            let before = &code[..at];
+            let indexed = before.ends_with(']')
+                && before
+                    .rfind('[')
+                    .is_some_and(|open| before[..open].ends_with("chain"));
+            let named = ["at", "popped", "inner"].iter().any(|name| {
+                before.ends_with(name)
+                    && !before[..before.len() - name.len()]
+                        .ends_with(|ch: char| ch.is_alphanumeric() || ch == '_')
+            });
+            if indexed || named {
+                flag(at, field);
+            }
+        }
+    }
+    found
+}

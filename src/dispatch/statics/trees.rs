@@ -38,7 +38,7 @@ use crate::values::digest::{Operator, literal_digest, type_digest};
 use crate::values::{retype_target, retypes_by_header};
 
 use super::super::evaluate::{Form, Wanted, of_node, of_part, slots};
-use super::{Landing, Pass, address, done};
+use super::{Landing, Pass, address};
 use crate::knot::module::view::{self, Ascription};
 
 type Read<'graph, T> = Result<T, ShapeError<'graph>>;
@@ -177,7 +177,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let [operand, _, ascribed] = node.parts else {
                     unreachable!("an ascription has an operand, its keyword and a type")
                 };
-                let typed = shape.typed_expression(Site::of(&ascribed.value));
+                let typed = self.type_cell(shape, Site::of(&ascribed.value));
                 match self.resolved_type(self.scope_level(scope), typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
@@ -195,7 +195,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             Form::Leaf(ExpressionPart::Literal(literal)) => Tree::Digest(literal_digest(literal)),
             Form::Leaf(ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)) => {
-                match self.resolved_type(self.scope_level(scope), shape.typed_expression(site)) {
+                match self.resolved_type(self.scope_level(scope), self.type_cell(shape, site)) {
                     Static::Closed(handle) => named_type(self.types, handle),
                     _ => self.fallback(scope, named, site)?,
                 }
@@ -287,7 +287,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Read<'graph, Tree<'graph>> {
         let shape = self.scope_shape(scope);
         if let BinderSymbol::Type(_) = shape.slot_name(slot) {
-            return match shape.declared_type(slot) {
+            return match self.declared_cell(shape, slot) {
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {
                     Ok(named_type(self.types, handle))
                 }
@@ -297,7 +297,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if let Some(body) = shape.births(slot) {
             if body.kind() == ShapeKind::Module {
                 // A body not yet typed has not laid its type captures down.
-                if !done(body) {
+                if !self.done(body) {
                     return self.leaf_on(scope, slot);
                 }
                 let captures = self.captures_of(scope, body, site)?;
@@ -490,7 +490,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             } => (*source, tree.closed().then_some(carried)),
             Tree::Knot { members, index, .. } => {
                 let node = members[index as usize];
-                let own = match self.resolved_callable(level, node.shape.callable_type()) {
+                let own = match self.resolved_callable(level, self.callable_cell(node.shape)) {
                     Static::Closed(callable) if node.instance.is_empty() => {
                         callable.ktype.as_type()
                     }
@@ -573,7 +573,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if !body.composes(capture) {
                 continue;
             }
-            let tree = match source_of_capture(body, capture) {
+            let tree = match source_of_capture(body, self.laid_captures(body), capture) {
                 CaptureSource::Read(coordinate) => self.resolve(scope, coordinate, site)?,
                 _ => Tree::Leaf(Leaf::Unnamed(site)),
             };
@@ -607,7 +607,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 if !body.composes(capture) {
                     continue;
                 }
-                let held = match source_of_capture(body, capture) {
+                let held = match source_of_capture(body, self.laid_captures(body), capture) {
                     CaptureSource::Member { index, .. } => NodeCapture::Fellow(index),
                     CaptureSource::Read(coordinate) => {
                         NodeCapture::Tree(self.resolve(scope, coordinate, site)?)
@@ -639,10 +639,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         body: &'graph BodyShape<'graph>,
         keeps_scheme: bool,
     ) -> Option<&'graph [KType]> {
-        match body.born_instance() {
+        match self.born_instance(body) {
             Some(StaticSolution::Closed(solution)) => Some(solution),
             Some(StaticSolution::Rigid { .. }) => None,
-            None => match self.resolved_callable(level, body.callable_type()) {
+            None => match self.resolved_callable(level, self.callable_cell(body)) {
                 Static::Closed(callable) if callable.ktype.as_type().is_some() => Some(&[]),
                 Static::Rigid { value, .. } if value.ktype.as_type().is_some() => Some(&[]),
                 Static::Closed(_) | Static::Rigid { .. } if keeps_scheme => Some(&[]),
@@ -663,7 +663,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let Some(index) = shape.candidate_lists().position(Site::of_node(node)) else {
             return Ok(None);
         };
-        let Narrowing::Selected(coordinate) = self.chain[level].uses[index].narrowing else {
+        let Narrowing::Selected(coordinate) = self.use_at(level, index).narrowing else {
             return Ok(None);
         };
         let followed = self.follow(level, coordinate);
@@ -678,7 +678,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(None);
         }
         let Static::Closed(registered) =
-            self.resolved_registered(home, declaring.registered_type(slot))
+            self.resolved_registered(home, self.registered_cell(declaring, slot))
         else {
             return Ok(None);
         };
@@ -688,7 +688,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         // Each `FOR ALL` variable at the closed point the pass solved it to at this use.
         let mut solution = BumpVec::new_in(self.scratch);
         if !registered.quantifier_map.is_empty() {
-            let Some(points) = self.selections.get(&Site::of_node(node)).copied() else {
+            let site = Site::of_node(node);
+            let Some(points) = self.selection_at(level, site) else {
                 return Ok(None);
             };
             for (name, at) in registered.quantifier_map.iter() {
@@ -733,7 +734,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(None);
         };
         let callee = members[index as usize].shape;
-        let typed = self.resolved_callable(level, callee.callable_type());
+        let typed = self.resolved_callable(level, self.callable_cell(callee));
         if !matches!(typed, Static::Closed(callable) if callable.ktype.as_type().is_some()) {
             return Ok(None);
         }
@@ -771,7 +772,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let substituted = self.substituted(summary, &call, site, &mut done)?;
         // The frame retypes its value to its declared return.
         let level = self.chain.len() - 1;
-        let returns = match self.resolved_callable(level, callee.callable_type()) {
+        let returns = match self.resolved_callable(level, self.callable_cell(callee)) {
             Static::Closed(callable) => match callable.ktype.view(self.types).body {
                 TypeNode::KFunction { ret, .. } => Some(ret),
                 _ => None,
@@ -799,7 +800,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if let Some(summary) = self.summaries.get(&address(callee)) {
             return Ok(*summary);
         }
-        if done(callee) || !self.typed_on_demand(callee)? {
+        if self.done(callee) || !self.typed_on_demand(callee)? {
             return Ok(None);
         }
         Ok(self.summaries.get(&address(callee)).copied().flatten())
@@ -808,7 +809,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Whether the callable body `body` is typed, typing it now where the walk has not reached it:
     /// `false` where it is being typed, or the chain does not hold the shape it is nested in.
     fn typed_on_demand(&mut self, body: &'graph BodyShape<'graph>) -> Read<'graph, bool> {
-        if done(body) {
+        if self.done(body) {
             return Ok(true);
         }
         if self.unfilled || (self.typing.iter()).any(|typing| std::ptr::eq(*typing, body)) {
@@ -827,7 +828,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let typed = self.nest(parent, body);
         self.chain.extend(stash);
         typed?;
-        Ok(done(body))
+        Ok(self.done(body))
     }
 
     /// `tree`, a summary of `call`'s callee, with the call substituted: each parameter's leaf by
@@ -925,7 +926,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             {
                 // The frame binds the argument retyped to the parameter's declared type.
                 let level = self.chain.len() - 1;
-                let declared = match self.resolved_callable(level, call.callee.callable_type()) {
+                let declared = match self.resolved_callable(level, self.callable_cell(call.callee))
+                {
                     Static::Closed(callable) => match callable.ktype.view(self.types).body {
                         TypeNode::KFunction { params, .. } => {
                             params.get(binder.shape.slot_name(binder.slot).symbol())
@@ -1009,13 +1011,17 @@ fn inside<'graph>(shape: &BodyShape<'graph>, callee: &BodyShape<'graph>) -> bool
         || (callee.nested_shapes().iter()).any(|(_, nested)| inside(shape, nested))
 }
 
-/// Where capture `capture` of `body` is read from at birth: a builder capture's source, or a type
-/// capture's coordinate.
-fn source_of_capture(body: &BodyShape<'_>, capture: CaptureSlot) -> CaptureSource {
+/// Where capture `capture` of `body`, whose type captures are `laid`, is read from at birth: a
+/// builder capture's source, or a type capture's coordinate.
+fn source_of_capture(
+    body: &BodyShape<'_>,
+    laid: &[Coordinate],
+    capture: CaptureSlot,
+) -> CaptureSource {
     let builder = body.captures();
     match builder.get(capture.index()) {
         Some(spec) => spec.source,
-        None => CaptureSource::Read(body.type_captures()[capture.index() - builder.len()]),
+        None => CaptureSource::Read(laid[capture.index() - builder.len()]),
     }
 }
 

@@ -528,8 +528,7 @@ pub struct Statics<'graph> {
     pub statements: &'graph [Interval<Parametric>],
     /// Each slot's static type, an interval, by index: a value binder's, a registration's function
     /// type, and for a type name the type of the type value it holds. A quantified callable's binder
-    /// is its scheme. Read by tests alone.
-    #[cfg(test)]
+    /// is its scheme.
     pub binders: &'graph [DeclaredType<Interval<Parametric>>],
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does, sorted by site: the run checks nothing there.
@@ -541,6 +540,10 @@ pub struct Statics<'graph> {
     /// Each keyworded use the load fixed something about, by its node's site, sorted by site: its
     /// narrowing and its contributions. A use absent here is [`UseStatics::UNFIXED`].
     pub uses: Keyed<'graph, (Site, UseStatics<'graph>)>,
+    /// Each keyworded use the load selected a candidate at, by its node's site, sorted by site,
+    /// beside the closed point each variable of the candidate's group solves to there, by group
+    /// index.
+    pub selections: Keyed<'graph, (Site, &'graph [Option<KType>])>,
     /// Each call by name's contributions, by its argument part's site, sorted by site: per
     /// parameter of its callee in symbol order, the static type that parameter is solved from —
     /// `Unknown` where the frame reads the carried type.
@@ -565,6 +568,23 @@ pub struct Statics<'graph> {
     /// Each call that passes a digested slot bare, by the site its contributions are keyed by,
     /// sorted: which argument each such slot is.
     pub handoffs: Keyed<'graph, (Site, &'graph [Handoff])>,
+}
+
+/// What the static pass fixes about a body as a whole, each where it computes it: a callable's
+/// summary and whether it is recursive, a `MODULE` or `GROUP` body's exact signature, and a quote's
+/// code's last statement's static type as it runs unfilled.
+#[derive(Clone, Copy, Default)]
+pub struct ShapeFacts<'graph> {
+    /// A typed callable body's summary, the tree of its last statement: `Some(None)` where it has
+    /// none, a recursive one among them, and `None` before the pass typed it.
+    pub summary: Option<Option<Tree<'graph>>>,
+    /// Whether the callable body was met while it was typed, or typed since one was: it never
+    /// unfolds.
+    pub recursive: bool,
+    /// The signature every run of a `MODULE` or `GROUP` body ties, where the pass typed it exactly.
+    pub signature: Option<KType>,
+    /// A quote's code's last statement's static type as a traced `EVAL` runs it unfilled.
+    pub ran: Option<Interval<Parametric>>,
 }
 
 /// At a `:|` over a module binder read bare: the module's body, and per capture its content

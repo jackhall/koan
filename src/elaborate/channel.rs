@@ -38,7 +38,8 @@ use crate::scope::{
     Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
     FunctionGroupMap, Keyed, ParameterBinding, PathEntry, PathIndex, PathRead, Position,
     Registered, Registration, Root, ShapeError, ShapeGroupMap, ShapeKind, Site, Slot, Source,
-    Static, StaticRegistered, StaticType, SurfacedHead, Target, UnitWork, Variable, source_of,
+    Static, StaticRegistered, StaticType, SurfacedHead, Target, TypeExpression, UnitWork, Variable,
+    source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -52,6 +53,8 @@ use super::expression::{Elaborator, Groups, type_expression};
 use super::paths::declared_through;
 use super::reads::{Reads, TypeAt};
 use super::signature::callable_type;
+
+mod store;
 
 /// Type `root`'s type channel and every shape nested in it, writing each result into its cell and
 /// laying the records it keeps down through `writer`. A closed type that does not elaborate, or a
@@ -419,7 +422,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     fn declared(&self, level: usize, slot: Slot) -> Option<Parametric> {
         let shape = self.chain[level].shape;
         if shape.kind() == ShapeKind::Callable && shape.position_of(slot) == Position::PARAMETER {
-            return match self.types.node(shape.in_body(self.types, self.scratch)?) {
+            return match self.types.node(self.body_type(shape)?) {
                 TypeNode::KFunction { params, .. } => params.get(shape.slot_name(slot).symbol()),
                 _ => None,
             };
@@ -454,7 +457,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         let shape = self.chain[level].shape;
         let key = Key::Slot(level, slot);
         if shape.declarations(slot).is_some() {
-            return match shape.declared_type(slot) {
+            return match self.declared_cell(shape, slot) {
                 Static::Closed(handle) => Class::Type(handle),
                 _ => Class::RunBound {
                     key,
@@ -575,7 +578,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 let (Some(held), None) = (at_key.next(), at_key.next()) else {
                     return None;
                 };
-                match body.registered_type(held.slot) {
+                match self.registered_cell(body, held.slot) {
                     Static::Closed(registered) => Some(Static::Closed(registered)),
                     _ => None,
                 }
@@ -600,7 +603,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     ) -> Option<StaticRegistered<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         let ascribing = self.chain[level - hops as usize].shape;
-        let Static::Closed(ascribed) = ascribing.typed_expression(site) else {
+        let Static::Closed(ascribed) = self.type_cell(ascribing, site) else {
             return None;
         };
         let mut pins = BumpVec::new_in(scratch);
@@ -691,7 +694,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             match type_declarations(component, &reader, types, scratch) {
                 Ok(handles) => {
                     for (slot, handle) in component.members.iter().zip(handles) {
-                        shape.fix_declared(*slot, Static::Closed(*handle));
+                        self.fix_declared(shape, *slot, Static::Closed(*handle));
                     }
                 }
                 Err(Elaboration::Unknown { .. }) => {}
@@ -717,8 +720,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             outer: None,
         };
         // In program order, so each path variable this mints takes the same level at every load.
-        let mut written = BumpVec::with_capacity_in(shape.type_expressions().len(), scratch);
-        written.extend(shape.type_expressions().iter());
+        let expressions = self.type_expressions(shape);
+        let mut written = BumpVec::with_capacity_in(expressions.len(), scratch);
+        written.extend(expressions.iter());
         written.sort_unstable_by_key(|expression| expression.order);
         for expression in written {
             let reader = self.reader(level, Mode::Typing);
@@ -738,7 +742,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 None => type_expression(expression.part, &reader, types, scratch),
             };
             match typed {
-                Ok(handle) => expression.fix(self.fixed_type(&reader, handle)),
+                Ok(handle) => self.fix_expression(expression, self.fixed_type(&reader, handle)),
                 Err(Elaboration::Unknown { .. }) => {}
                 Err(error) => {
                     let statement = &shape.body()[expression.statement as usize];
@@ -749,13 +753,15 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 }
             }
         }
-        repeated_guards(shape)?;
+        repeated_guards(shape, expressions, |expression| {
+            self.expression_cell(expression)
+        })?;
 
         let mut signatures: Signatures<'p> = BumpVec::new_in(scratch);
         for registration in shape.registrations() {
             if let Some(head) = registration.surfaced {
                 if let Some(typed) = self.surfaced(level, registration, head, &mut signatures) {
-                    shape.fix_registered(registration.slot, typed);
+                    self.fix_registered(shape, registration.slot, typed);
                 }
                 continue;
             }
@@ -772,7 +778,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     let typed = self.fixed(&reader, registered, |registered| {
                         close_registered(types, registered)
                     });
-                    shape.fix_registered(registration.slot, typed);
+                    self.fix_registered(shape, registration.slot, typed);
                 }
                 Err(Elaboration::Unknown { .. }) => {}
                 Err(error) => {
@@ -787,7 +793,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         for (_, nested) in shape.nested_shapes() {
             let root = nested.kind() == ShapeKind::Code;
             // A quote whose code could not be built has nothing to type.
-            if root && nested.refusal().is_some() {
+            if root && self.code_refused(nested) {
                 continue;
             }
             let base = match root {
@@ -813,7 +819,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                         }
                     };
                     drop(reader);
-                    nested.fix_callable(typed);
+                    self.fix_callable(nested, typed);
                     let group = match typed {
                         Static::Closed(callable) => {
                             Some((callable.quantifier_map, callable.ktype.into()))
@@ -826,7 +832,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     match group {
                         Some((map, ktype)) if writes_for_all(form) => {
                             let own = self.own(map, ktype, base);
-                            nested.fix_group_levels(own.levels);
+                            self.fix_group_levels(nested, own.levels);
                             Some(own)
                         }
                         _ => None,
@@ -840,7 +846,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             self.chain.pop();
             match visited {
                 Err(error) if nested.kind() == ShapeKind::Code => {
-                    nested.refuse_typing(resident(self.writer, error));
+                    self.refuse_code(nested, resident(self.writer, error));
                 }
                 visited => visited?,
             }
@@ -851,15 +857,15 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             // A spelling typed twice is recorded twice; its first record stands.
             reads.sort_by_key(|(site, _)| *site);
             reads.dedup_by_key(|(site, _)| *site);
-            shape.fix_path_reads(Keyed::from_sorted(collect(
-                self.writer,
-                reads.iter().copied(),
-            )));
+            self.fix_path_reads(
+                shape,
+                Keyed::from_sorted(collect(self.writer, reads.iter().copied())),
+            );
         }
         if let Some((_, paths)) = &at.paths {
             let paths = paths.replace(BumpVec::new_in(self.scratch));
             if !paths.is_empty() {
-                shape.fix_channel_paths(collect(self.writer, paths.iter().copied()));
+                self.fix_channel_paths(shape, collect(self.writer, paths.iter().copied()));
             }
         }
         Ok(())
@@ -945,7 +951,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
             };
             let own = at.own.is_some_and(|own| own.map.get(name).is_some());
             let closed = shape.declarations(slot).is_some()
-                && matches!(shape.declared_type(slot), Static::Closed(_));
+                && matches!(self.declared_cell(shape, slot), Static::Closed(_));
             if !own && !closed {
                 names.push((Key::Slot(level, slot), next));
                 next += 1;
@@ -975,7 +981,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
             Key::Capture(_, capture) => (*numbered, Target::Capture(*capture)),
         }));
         if !homes.is_empty() {
-            shape.fix_declared_variables(collect(self.writer, homes.iter().copied()));
+            self.fix_declared_variables(shape, collect(self.writer, homes.iter().copied()));
         }
         let at = &mut self.chain[level];
         at.count = next - at.base;
@@ -1011,26 +1017,29 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     }
 }
 
-/// Refuse the first `MATCH … WITH` guard of `shape`, in program order, that types to the handle an
-/// earlier guard of its arm set does.
-fn repeated_guards<'graph>(shape: &'graph BodyShape<'graph>) -> Result<(), ShapeError<'graph>> {
+/// Refuse the first `MATCH … WITH` guard among `shape`'s `expressions`, in program order, that
+/// `typed` gives the handle an earlier guard of its arm set has.
+fn repeated_guards<'graph>(
+    shape: &'graph BodyShape<'graph>,
+    expressions: &'graph [TypeExpression<'graph>],
+    typed: impl Fn(&TypeExpression<'graph>) -> StaticType<'graph>,
+) -> Result<(), ShapeError<'graph>> {
     let handle = |typed: StaticType<'_>| match typed {
         Static::Closed(handle) => Some(Parametric::from(handle)),
         Static::Rigid { value: handle, .. } => Some(handle),
         Static::Unknown => None,
     };
     let guards = || {
-        shape
-            .type_expressions()
+        expressions
             .iter()
             .filter_map(|expression| Some((expression, expression.guard?)))
     };
     // The expressions sit in site order, an address's, so the repeat to report is chosen by order.
     let repeat = guards()
         .filter_map(|(expression, (arms, index))| {
-            let guard = handle(expression.typed())?;
+            let guard = handle(typed(expression))?;
             let (first, _) = guards().find(|(earlier, (held, written))| {
-                *held == arms && *written < index && handle(earlier.typed()) == Some(guard)
+                *held == arms && *written < index && handle(typed(earlier)) == Some(guard)
             })?;
             Some((expression, first, guard))
         })
@@ -1039,7 +1048,7 @@ fn repeated_guards<'graph>(shape: &'graph BodyShape<'graph>) -> Result<(), Shape
         return Ok(());
     };
     let body = shape.body();
-    let source = |expression: &crate::scope::TypeExpression<'_>| {
+    let source = |expression: &TypeExpression<'_>| {
         let statement = &body[expression.statement as usize];
         source_of(statement, expression.site).unwrap_or(statement.source)
     };

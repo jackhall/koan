@@ -80,7 +80,7 @@ impl<'graph> ChainPaths<'_, 'graph> {
 impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Open the path table of the chain `root` roots, holding the type channel's entries.
     pub(super) fn open_paths(&mut self, root: &'graph BodyShape<'graph>) {
-        let channel = root.paths();
+        let channel = self.channel_entries(root);
         let mut entries = BumpVec::with_capacity_in(channel.len(), self.scratch);
         entries.extend(channel.iter().map(|entry| (*entry, None)));
         let mut found = bump_hash_table(self.scratch);
@@ -115,14 +115,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         for (entry, resolution) in table.entries.iter() {
             if let Some(resolution) = resolution {
-                entry.fix_resolution(*resolution);
+                self.fix_resolution(entry, *resolution);
             }
         }
         if table.entries.len() > table.channel {
-            root.fix_paths(collect(
-                self.writer,
-                table.entries.iter().map(|(entry, _)| *entry),
-            ));
+            self.fix_paths(
+                root,
+                collect(self.writer, table.entries.iter().map(|(entry, _)| *entry)),
+            );
         }
     }
 
@@ -178,12 +178,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn spelled(&self, level: usize) -> BumpVec<'p, (usize, &'graph PathEntry<'graph>)> {
         let shape = self.chain[level].shape;
         let mut spelled = BumpVec::new_in(self.scratch);
-        if shape.path_reads().is_empty() {
+        if self.spellings(shape).is_empty() {
             return spelled;
         }
         for (index, node) in shape.body().iter().enumerate() {
             each_part(node, |part| {
-                if let Some(read) = shape.path_read(Site::of(part)) {
+                if let Some(read) = self.spelling(shape, Site::of(part)) {
                     spelled.push((index, read.entry));
                 }
             });
@@ -196,8 +196,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn resolve_spelled(&mut self, level: usize) -> Read<'graph, ()> {
         let shape = self.chain[level].shape;
         let mut entries: BumpVec<'_, &PathEntry<'graph>> =
-            BumpVec::with_capacity_in(shape.path_reads().len(), self.scratch);
-        entries.extend(shape.path_reads().iter().map(|(_, read)| read.entry));
+            BumpVec::with_capacity_in(self.spellings(shape).len(), self.scratch);
+        entries.extend(self.spellings(shape).iter().map(|(_, read)| read.entry));
         entries.sort_unstable_by_key(|entry| entry.level);
         for entry in entries {
             self.resolve_path(level, entry)?;
@@ -221,7 +221,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(Resolved::Class(entry.level));
         }
         self.paths[table].resolving.push(entry.level);
-        let resolution = self.resolution(level, entry);
+        let resolution = self.resolve_entry(level, entry);
         self.paths[table].resolving.pop();
         let (resolution, at) = resolution?;
         let index = entry.level - self.paths[table].base;
@@ -244,7 +244,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// `entry`'s resolution, read from `level`, beside where its root is written where it is
     /// written in place.
-    fn resolution(
+    fn resolve_entry(
         &mut self,
         level: usize,
         entry: &'graph PathEntry<'graph>,
@@ -271,9 +271,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let part = shape.body().iter().find_map(|node| part_of(node, site));
                 match part {
                     Some(part) => {
-                        let typed = match self.chain[level].parts.iter().find(|(at, _)| *at == site)
-                        {
-                            Some((_, typed)) => *typed,
+                        let typed = match self.part_type(level, site) {
+                            Some(typed) => typed,
                             None => self.part(level, part)?,
                         };
                         let tree = self.tree(level, part)?;
@@ -324,7 +323,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let bound = || match (tree, entry.through) {
             (Tree::Body { shape, .. }, None) => {
                 let (slot, _) = shape.slot(BinderSymbol::Type(entry.label))?;
-                match shape.declared_type(slot) {
+                match self.declared_cell(shape, slot) {
                     Static::Closed(held) if shape.declarations(slot).is_some() => Some(held),
                     _ => None,
                 }
@@ -364,7 +363,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             true => self.leaf_on(Scope::Chain(home), binder.slot)?,
             false => self.slot_tree(Scope::Chain(home), binder.slot, site)?,
         };
-        let held = match self.chain[home].binders[binder.slot.index()] {
+        let held = match self.binder_at(home, binder.slot) {
             DeclaredType::Type(typed) => exact(self.types, typed),
             DeclaredType::Scheme(_) => None,
         };
@@ -558,7 +557,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// The static type of the callable body `body`, written in the shape at `level`: a point at its
     /// function type, or its scheme, where the load typed it, `[Never, Any]` elsewhere.
     pub(super) fn callable(&self, level: usize, body: &BodyShape<'graph>) -> Bound {
-        let ktype = match self.resolved_callable(level, body.callable_type()) {
+        let ktype = match self.resolved_callable(level, self.callable_cell(body)) {
             Static::Closed(callable) => callable.ktype.into(),
             Static::Rigid {
                 value: callable, ..
@@ -798,10 +797,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(typed);
         }
         let site = Site::of(operand);
-        let Some((_, operand_type)) = (self.chain[level].parts.iter().rev())
-            .find(|(at, _)| *at == site)
-            .copied()
-        else {
+        let Some(operand_type) = self.part_type(level, site) else {
             return Ok(typed);
         };
         let upper = operand_type.upper;

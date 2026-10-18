@@ -16,7 +16,7 @@
 //! misses only keeps a parameter invariant too long, and one it over-counts only keeps a site
 //! cold.
 
-use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, collect, resident};
+use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
     BodyClass, BodyShape, Caching, Candidate, Coordinate, Keyed, Leaf, Mint, NodeCapture,
@@ -25,6 +25,7 @@ use crate::scope::{
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{Interval, KType, Side, TypeNode, Variable, is_subtype_of, read_through};
 
+use super::store::resolution_of;
 use super::{Form, Landing, Pass, Wanted, address, of_node, of_part, porous_site, slots};
 
 /// What a site's content depends on: nothing that varies per hop born under one park, the frame
@@ -121,7 +122,7 @@ impl<'p, 'graph> SiteRecord<'p, 'graph> {
     fn deps(&self, scratch: BumpAllocator<'p>) -> Deps<'p> {
         let mut deps = self.reads.deps;
         for entry in self.reads.pending {
-            let each = match entry.resolution() {
+            let each = match resolution_of(entry) {
                 Some(resolution) => {
                     tree_deps(self.shapes, self.frame_at, &resolution.tree, scratch)
                 }
@@ -208,13 +209,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// digests at a constant cost — a type value, by its handle, or a module, by the content it
     /// keeps. A list's or a record's digest costs its size, so any other parameter keys nothing;
     /// only a closed declaration bounds every argument at the load.
-    fn keys(&self, frame: &BodyShape<'_>, slot: Slot) -> bool {
+    fn keys(&self, frame: &BodyShape<'graph>, slot: Slot) -> bool {
         let name = frame.slot_name(slot);
         if let BinderSymbol::Type(_) = name {
             return true;
         }
         let (types, scratch) = (self.types, self.scratch);
-        let declared = (frame.in_body(types, scratch))
+        let declared = (self.body_type(frame))
             .and_then(|ktype| match types.node(ktype) {
                 TypeNode::KFunction { params, .. } => params.get(name.symbol()),
                 _ => None,
@@ -551,7 +552,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let Landing::Slot { level: home, slot } = self.follow(level, coordinate).landing else {
             return None;
         };
-        let parameters = match self.chain[home].shape.registered_type(slot) {
+        let parameters = match self.registered_cell(self.chain[home].shape, slot) {
             Static::Closed(registered) => registered.parameters,
             Static::Rigid { value, .. } => value.parameters,
             Static::Unknown => return None,
@@ -682,15 +683,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         keyed_slots[from..to].iter().map(|(_, slot)| *slot),
                     )
                 });
-            holder.fix_caching(resident(
-                self.writer,
+            self.fix_caching(
+                holder,
                 Caching {
                     caches,
                     mints: Keyed::sorted(self.writer, &mut mints),
                     warm: Keyed::sorted(self.writer, &mut warm),
                     invariant,
                 },
-            ));
+            );
         }
     }
 }

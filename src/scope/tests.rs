@@ -6,6 +6,7 @@ mod boundary;
 mod code;
 mod dispatch;
 mod examples;
+mod facts;
 mod groups;
 pub(crate) mod plan;
 mod properties;

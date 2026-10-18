@@ -30,6 +30,7 @@ mod activation;
 mod builtins;
 mod channels;
 mod closure;
+mod facts;
 mod groups;
 mod keyed;
 mod shape;
@@ -46,6 +47,7 @@ pub(crate) use signature::pair_label;
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
+pub use facts::{Address, Binding, FactKey, Frontier, Residual, Unknown, frontier_at, merge_into};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use keyed::{Keyed, KeyedEntry};
 pub use shape::{
@@ -59,7 +61,7 @@ pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Withi
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, HandedTo,
     Handoff, InstanceRead, Mint, Narrowing, ParameterBinding, PathEntry, PathIndex, PathRead,
-    Paths, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable, ViewSlots,
-    solutions,
+    Paths, Registered, Resolution, Resolved, Root, ShapeFacts, ShapeGroupMap, Source, Static,
+    StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
+    ViewSlots, solutions,
 };
