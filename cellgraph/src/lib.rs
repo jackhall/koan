@@ -40,7 +40,7 @@ pub use graph::{
     ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
-pub use header::{HabitatHeader, Header, HomeHeader, NoHeader};
+pub use header::{HabitatHeader, Header, HomeHeader, NoHeader, Projected, Projects};
 pub use lend::Lend;
 pub use once::{OnceRun, OnceView, Written};
 pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};

@@ -15,10 +15,10 @@ use cellgraph::{
     Active, CellGraph, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
     DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
     Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, Operand,
-    PeekError, Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError,
-    RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run,
-    SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer,
-    Written, covariant, reattachable,
+    PeekError, Prices, Projected, Projects, Prose, Ready, Reattachable, Receipt, ReceiptError,
+    RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
+    ReleaseTreeError, Run, SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun,
+    TreeHandle, Verdict, Writer, Written, covariant, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -491,6 +491,74 @@ fn the_habitat_header_answers_from_outside_the_crate() {
         .enter(dest, |context| *context.header().get().unwrap().get())
         .unwrap();
     assert_eq!(read, 8);
+}
+
+/// A header family with a part it projects to and a part it keeps hidden.
+struct Pair;
+reattachable!(Pair => &'cell PairHeader<'cell>);
+
+struct PairHeader<'cell> {
+    shown: Cell<Option<&'cell u32>>,
+    hidden: Cell<u32>,
+}
+
+impl<'graph> Projects<'graph> for Pair {
+    type Projection<'cell>
+        = &'cell Cell<Option<&'cell u32>>
+    where
+        'graph: 'cell;
+
+    fn lay<'cell>(writer: Writer<'cell, '_>) -> &'cell PairHeader<'cell>
+    where
+        'graph: 'cell,
+    {
+        one(
+            writer,
+            PairHeader {
+                shown: Cell::new(None),
+                hidden: Cell::new(0),
+            },
+        )
+    }
+
+    fn project<'cell>(header: &'cell PairHeader<'cell>) -> &'cell Cell<Option<&'cell u32>>
+    where
+        'graph: 'cell,
+    {
+        &header.shown
+    }
+}
+
+/// What a projected door shows, from code that names no header family.
+fn shown<'cell>(door: Projected<'cell, '_, &'cell Cell<Option<&'cell u32>>>) -> Option<u32> {
+    door.get()?.get().copied()
+}
+
+#[test]
+fn a_projected_header_lays_and_reads_one_part_from_outside_the_crate() {
+    let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Pair> =
+        CellGraph::new(1, weigh);
+    let cell = graph.create(None).unwrap();
+    graph
+        .enter(cell, |context| {
+            let door = context.header().project();
+            assert!(door.get().is_none(), "projecting a door lays nothing");
+            assert!(context.header().get().is_none());
+            let part = door.get_or_lay(context.writer());
+            assert_eq!(shown(door), None, "the laid header sets nothing");
+            part.set(Some(one(context.writer(), 5)));
+            assert_eq!(shown(door), Some(5));
+            assert!(
+                std::ptr::eq(door.get_or_lay(context.writer()), part),
+                "a laid header is kept"
+            );
+            let header = context.header().get().expect("the projected door laid it");
+            assert_eq!(header.hidden.get(), 0);
+            assert_eq!(header.shown.get().copied(), Some(5));
+        })
+        .unwrap();
+    graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]

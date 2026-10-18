@@ -259,6 +259,8 @@ every birth finds no header in a slot whose previous occupant laid one; and a re
 borrows its own plain bytes, outside any `Cell`, retired from a tree disposal and a slab release.
 
 - `graph::tests::headers::a_header_laid_in_a_step_comes_back_at_the_next_step`
+- `graph::tests::headers::a_projected_header_laid_in_a_step_comes_back_at_the_next_step`
+  — the same reattach reached through a `Projected` door's erased slot.
 - `graph::tests::headers::a_tenant_reads_its_hosts_header`
 - `graph::tests::headers::a_placement_reads_and_lays_its_destinations_header`
 - `graph::tests::headers::a_scratch_header_lasts_while_its_bump_does`
