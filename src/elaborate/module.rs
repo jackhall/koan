@@ -22,7 +22,7 @@ use crate::values::{Chain, KnottedFamily, Value};
 pub fn self_signature<'graph, XF: KnottedFamily<'graph>>(
     activation: &ActivationView<'graph, '_, XF>,
     keyworded: &[DeclaredType<KType>],
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     let shape = activation.shape();
@@ -45,7 +45,7 @@ pub fn module_signature(
     shape: &BodyShape<'_>,
     members: impl IntoIterator<Item = (Slot, DeclaredType<Parametric>)>,
     keyworded: &[DeclaredType<KType>],
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     debug_assert_eq!(shape.kind(), ShapeKind::Module);

@@ -27,7 +27,7 @@ pub(super) fn module<'graph, 'cell>(
 }
 
 /// The schema of the signature `handle` is.
-pub(super) fn schema<'run>(handle: KType, types: &Chain<'_, 'run, '_, '_, '_>) -> SigSchema<'run> {
+pub(super) fn schema<'run>(handle: KType, types: &Chain<'run, '_, '_, '_>) -> SigSchema<'run> {
     crate::elaborate::schema_of(handle, types).expect("a signature handle")
 }
 
@@ -36,7 +36,7 @@ pub(super) fn member<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     view: Knotted<'graph, 'cell>,
     name: &str,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let name: BinderSymbol = fixture.name(name);

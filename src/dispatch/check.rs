@@ -21,7 +21,7 @@ use crate::values::Chain;
 pub(super) fn overlaps<'graph>(
     shape: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'_, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
     for registration in shape.registrations() {

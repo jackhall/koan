@@ -159,11 +159,11 @@ impl Elaboration {
 
     /// The refusal as an error value's message, with its names spelled through `symbols` and its
     /// types through `types`.
-    pub fn display<'x, 'g, 'run, 'p, 'reg>(
+    pub fn display<'x, 'run, 'p, 'reg>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x Chain<'g, 'run, 'p, 'reg, '_>,
-    ) -> ElaborationDisplay<'x, 'g, 'run, 'p, 'reg> {
+        types: &'x Chain<'run, 'p, 'reg, '_>,
+    ) -> ElaborationDisplay<'x, 'run, 'p, 'reg> {
         ElaborationDisplay {
             error: self,
             symbols,
@@ -173,13 +173,13 @@ impl Elaboration {
 }
 
 /// An [`Elaboration`] beside the interner and registry it renders through.
-pub struct ElaborationDisplay<'x, 'g, 'run, 'p, 'reg> {
+pub struct ElaborationDisplay<'x, 'run, 'p, 'reg> {
     error: &'x Elaboration,
     symbols: &'x SymbolInterner,
-    types: &'x Chain<'g, 'run, 'p, 'reg, 'x>,
+    types: &'x Chain<'run, 'p, 'reg, 'x>,
 }
 
-impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_, '_> {
+impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.error {
             Elaboration::NotAType { name, .. } => {

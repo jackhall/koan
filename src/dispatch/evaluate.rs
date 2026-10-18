@@ -171,7 +171,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
     step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     birth: KBirth<'graph, 'here>,
     stage: u32,
-    types: Chain<'graph, 'tier, 'here, 'reg, '_>,
+    types: Chain<'tier, 'here, 'reg, '_>,
 ) -> Action<'graph, KBundle> {
     let KBirth::Evaluate {
         program,
@@ -1247,7 +1247,7 @@ fn exits<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'graph, 'here, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
-    adopt: impl FnOnce(&Exit<'_, '_, 'graph, 'here, '_>),
+    adopt: impl FnOnce(&Exit<'_, '_, 'here, '_>),
 ) {
     if at.view.shape().caches() {
         adopt(&Exit::new(step.types(), &at.types, scratch));

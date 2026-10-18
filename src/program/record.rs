@@ -35,7 +35,7 @@ pub trait Language {
     fn builtins<'graph>(
         writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph>;
 
@@ -48,7 +48,7 @@ pub trait Language {
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
@@ -62,7 +62,7 @@ pub trait Language {
     fn resume<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
         over: Resumption<'_, 'graph>,
@@ -112,7 +112,7 @@ impl Contract {
     /// before its frame solves, a quantified callee keeps nothing. The one answer for every call.
     pub fn kept_by(
         self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         callee: DeclaredType<KType>,
         solution: Option<&[KType]>,
     ) -> bool {
@@ -252,7 +252,7 @@ impl<'graph> Program<'graph> {
     pub fn error<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         message: impl fmt::Display,
     ) -> KValue<'graph, 'cell> {
         let scratch = Bump::new();
@@ -271,7 +271,7 @@ impl<'graph> Program<'graph> {
     pub fn message<'cell>(
         &self,
         value: &KValue<'graph, 'cell>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Option<&'cell str> {
         let Value::Tagged(tagged) = value else {
             return None;
@@ -291,7 +291,7 @@ impl<'graph> Program<'graph> {
     pub fn fulfilled<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
         contract: Contract,
     ) -> KValue<'graph, 'cell> {
@@ -331,7 +331,7 @@ impl<'graph> Program<'graph> {
     pub fn annotated<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
         annotation: KType,
         settled: bool,

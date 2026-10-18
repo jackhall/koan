@@ -91,7 +91,7 @@ impl Raised<'_> {
         self,
         program: &Program<'graph>,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> KValue<'graph, 'cell> {
         program.error(
             writer,
@@ -106,13 +106,13 @@ impl Raised<'_> {
 }
 
 /// A [`Raised`] beside the interner and registry it renders through.
-struct RaisedDisplay<'a, 'x, 'g, 'run, 'p, 'reg> {
+struct RaisedDisplay<'a, 'x, 'run, 'p, 'reg> {
     raised: Raised<'a>,
     symbols: &'x SymbolInterner,
-    types: &'x Chain<'g, 'run, 'p, 'reg, 'x>,
+    types: &'x Chain<'run, 'p, 'reg, 'x>,
 }
 
-impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_, '_> {
+impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ktype = |handle: KType| display_name(handle, self.types, self.symbols);
         match self.raised {

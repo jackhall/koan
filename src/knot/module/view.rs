@@ -78,7 +78,7 @@ pub enum Unascribable<'run, 'x> {
 }
 
 /// Whether the view door takes `ascribed`: one application of a signature, or the signature.
-pub fn takes(types: &Chain<'_, '_, '_, '_, '_>, ascribed: KType) -> bool {
+pub fn takes(types: &Chain<'_, '_, '_, '_>, ascribed: KType) -> bool {
     matches!(
         types.node(ascribed),
         TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
@@ -93,7 +93,7 @@ pub fn fill_at_view<'graph, 'cell>(
     source: KValue<'graph, 'cell>,
     slots: ViewSlots<'graph>,
     view: &KActivationView<'graph, 'cell>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) {
     let Some(module) = source.knot_member().and_then(Knotted::module) else {
@@ -151,7 +151,7 @@ pub fn ascribe<'graph, 'tier: 'x, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     source: KValue<'graph, 'cell>,
     signature: KType,
-    types: &Chain<'_, 'tier, 'cell, '_, '_>,
+    types: &Chain<'tier, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'tier, 'x>> {
     let member = (source.knot_member())
@@ -213,7 +213,7 @@ pub(crate) fn nested_types<'run: 'x, 'x>(
     held: KType,
     src: KType,
     dst: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<ViewTypes<'run>, Unascribable<'run, 'x>> {
     let TypeNode::SignatureApply { pins, .. } = types.node(dst) else {
@@ -246,7 +246,7 @@ pub fn opaque_view_types<'run>(
     held: Option<KType>,
     signature: KType,
     source: ContentDigest,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<ViewTypes<'run>> {
     let (sig, from, pins) = known_fit(held, signature, types, scratch)?;
@@ -259,7 +259,7 @@ pub fn opaque_view_types<'run>(
 pub fn fit_of(
     held: Option<KType>,
     signature: KType,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KType> {
     let (_, from, _) = known_fit(held, signature, types, scratch)?;
@@ -272,7 +272,7 @@ pub fn fit_of(
 fn known_fit<'run: 'x, 'x>(
     held: Option<KType>,
     signature: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<(
     SigSchema<'run>,
@@ -307,7 +307,7 @@ fn opaque<'run>(
     pins: &[(BinderSymbol, KType)],
     signature: KType,
     source: ContentDigest,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> (ViewTypes<'run>, ModuleContent) {
     let interned = Substitution::interned(from, types, scratch);
@@ -332,7 +332,7 @@ fn opaque<'run>(
 pub(super) fn fitted<'run: 'x, 'x>(
     held: KType,
     signature: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<
     (
@@ -357,7 +357,7 @@ pub(super) fn fitted<'run: 'x, 'x>(
 #[allow(clippy::type_complexity)]
 fn applied<'run: 'x, 'x>(
     signature: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<(SigSchema<'run>, KType, BumpVec<'x, (BinderSymbol, KType)>), Unascribable<'run, 'x>> {
     if !takes(types, signature) {
@@ -395,7 +395,7 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
     from: Substitution<'tier>,
     to: Substitution<'tier>,
     content: ModuleContent,
-    types: &Chain<'_, 'tier, 'cell, '_, '_>,
+    types: &Chain<'tier, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'tier, 'x>> {
     let cx = Coercion {
@@ -459,7 +459,7 @@ fn carriers<'x>(
     from: Members<'_, TypeSymbol, KType>,
     pins: &[(BinderSymbol, KType)],
     key: ContentKey,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Members<'x, TypeSymbol, KType> {
     Members::from_pairs(
@@ -486,7 +486,7 @@ fn carriers<'x>(
 pub(super) fn view_signature(
     sig: &SigSchema<'_>,
     to: Members<'_, TypeSymbol, KType>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     let mut draft = SchemaDraft::new(scratch);

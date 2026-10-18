@@ -26,12 +26,12 @@
 
 use crate::memory::{
     Active, Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, CellHandle, Covariant,
-    CrossedOperand, Delivery, HomeHeader, Operand, Prices, Reattachable, ReattachableOverBoth,
-    Stale, StepContext, Verdict, Writer, bump_set, bump_table, collect,
+    CrossedOperand, Delivery, HomeHeader, Operand, Prices, Projects, Reattachable,
+    ReattachableOverBoth, Stale, StepContext, Verdict, Writer, bump_set, bump_table, collect,
 };
 use crate::type_lattice::{Branch, DeclaredType, Halves, KType, Parametric, Root};
 
-use super::habitat::{Chain, Half, TypeHeader, Types};
+use super::habitat::{BranchCell, Chain, Half, Types};
 use super::settled::stamp_knot;
 use super::surface::Parts;
 use super::{
@@ -62,8 +62,9 @@ pub fn cross<
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
     XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
 >(
-    context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, TypeHeader>,
+    context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, H>,
     dest: impl Into<CellHandle>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
     root: &'graph Root<'graph>,
@@ -96,11 +97,12 @@ pub fn cross_here<
     S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
     XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
 >(
-    context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
+    context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, H>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
     root: &'graph Root<'graph>,
-    check: Option<&Chain<'_, '_, '_, '_, '_>>,
+    check: Option<&Chain<'_, '_, '_, '_>>,
 ) -> Value<'here, XF::Closed<'here>>
 where
     ValueFamily<XF>: Covariant<'graph>,
@@ -124,10 +126,15 @@ where
 /// its home's branch before it is read. The one door a copy of a value comes through, and it takes
 /// a [`CrossedOperand`], which only a priced placement hands out — so every copy is one the graph
 /// priced. See [README.md § Crossing](README.md#crossing).
-pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
+pub fn cross_view<
+    'graph,
+    'cell,
+    XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
+>(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
-    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, TypeHeader>,
+    types: &Chain<'cell, 'cell, '_, '_>,
+    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, H>,
 ) -> Value<'cell, XF::Closed<'cell>> {
     cross_view_against(writer, types, view, None)
 }
@@ -135,17 +142,26 @@ pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
 /// [`cross_view`], its debug check of a pinned value reading `check` where one is given rather
 /// than `types`: a value crossing within a caching body carries types in the body's scratch
 /// tiers, which the body's own chain reads and the destination's region chain does not.
-pub fn cross_view_against<'graph, 'cell, XF: KnottedFamily<'graph>>(
+pub fn cross_view_against<
+    'graph,
+    'cell,
+    XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
+>(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
-    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, TypeHeader>,
-    check: Option<&Chain<'_, '_, '_, '_, '_>>,
+    types: &Chain<'cell, 'cell, '_, '_>,
+    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, H>,
+    check: Option<&Chain<'_, '_, '_, '_>>,
 ) -> Value<'cell, XF::Closed<'cell>> {
     match *view {
         CrossedOperand::Pinned {
             view: value, home, ..
         } => {
-            home.read(|header, _| types.merge(header.into_value().branch()));
+            home.read(|header, _| {
+                if let Some(branch) = H::project(header.into_value()).get() {
+                    types.merge(branch);
+                }
+            });
             #[cfg(debug_assertions)]
             match check {
                 Some(check) => check_pinned_habitat::<XF>(check, &value),
@@ -158,7 +174,7 @@ pub fn cross_view_against<'graph, 'cell, XF: KnottedFamily<'graph>>(
         CrossedOperand::Copied {
             view: value, home, ..
         } => {
-            let [copied] = copied::<XF, 1>(writer, types, home, [&value]);
+            let [copied] = copied::<XF, H, 1>(writer, types, home, [&value]);
             #[cfg(debug_assertions)]
             check_habitat::<XF>(types, &copied);
             copied
@@ -177,17 +193,18 @@ pub fn copy_severed<
     'severed,
     F: Reattachable<'graph>,
     XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
     const N: usize,
 >(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
-    operand: &CrossedOperand<'graph, 'cell, 'severed, F, TypeHeader>,
+    types: &Chain<'cell, 'cell, '_, '_>,
+    operand: &CrossedOperand<'graph, 'cell, 'severed, F, H>,
     values: [&Value<'severed, XF::Closed<'severed>>; N],
 ) -> [Value<'cell, XF::Closed<'cell>>; N] {
     let CrossedOperand::Copied { home, .. } = *operand else {
         unreachable!("a pinned operand's values embed as they are")
     };
-    let copies = copied::<XF, N>(writer, types, home, values);
+    let copies = copied::<XF, H, N>(writer, types, home, values);
     #[cfg(debug_assertions)]
     for copy in &copies {
         check_habitat::<XF>(types, copy);
@@ -197,17 +214,24 @@ pub fn copy_severed<
 
 /// `values` rebuilt through `writer`, all through one copy, each type a part carries adopted into
 /// `types` from `home`'s branch, the half they were read in.
-fn copied<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, const N: usize>(
+fn copied<
+    'graph,
+    'cell,
+    'from,
+    XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
+    const N: usize,
+>(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
-    home: HomeHeader<'graph, 'from, TypeHeader>,
+    types: &Chain<'cell, 'cell, '_, '_>,
+    home: HomeHeader<'graph, 'from, H>,
     values: [&Value<'from, XF::Closed<'from>>; N],
 ) -> [Value<'cell, XF::Closed<'cell>>; N]
 where
     'graph: 'from,
 {
     home.read(|header, _| {
-        rebuilt::<XF, N>(writer, types, Some(header.into_value().branch()), values)
+        rebuilt::<XF, N>(writer, types, H::project(header.into_value()).get(), values)
     })
     .unwrap_or_else(|| rebuilt::<XF, N>(writer, types, None, values))
 }
@@ -216,7 +240,7 @@ where
 /// laid none.
 fn rebuilt<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, const N: usize>(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     source: Option<&Branch<'_>>,
     values: [&Value<'from, XF::Closed<'from>>; N],
 ) -> [Value<'cell, XF::Closed<'cell>>; N]
@@ -242,7 +266,7 @@ const PINNED_PARTS: usize = 16;
 /// value already.
 #[cfg(debug_assertions)]
 pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
 ) {
     check_parts::<XF>(types, value, usize::MAX, Cutoff::Off);
@@ -253,7 +277,7 @@ pub fn check_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
 /// it unless every such type lies past the prefix.
 #[cfg(debug_assertions)]
 pub fn check_pinned_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
 ) {
     check_parts::<XF>(types, value, PINNED_PARTS, Cutoff::Off);
@@ -263,7 +287,7 @@ pub fn check_pinned_habitat<'graph, 'cell, XF: KnottedFamily<'graph>>(
 /// its walk in a bump of its own: it is not the walk whose cost the caller pays.
 #[cfg(debug_assertions)]
 fn check_parts<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
     limit: usize,
     cutoff: Cutoff,
@@ -425,16 +449,16 @@ fn settle_knot<X: Knotted>(member: &X) {
 }
 
 /// Where [`adopt_value`] makes a value's types resolve.
-pub enum Destination<'d, 'graph, 'here, 'lent, 'door> {
+pub enum Destination<'d, 'here, 'lent, 'door> {
     /// An exit: the region chain of the step whose caching body the value leaves. The adoption
     /// marks every value it entered settled.
-    Region(&'d Types<'graph, 'here, 'door>),
+    Region(&'d Types<'here, 'door>),
     /// An invariant site under `routes`: the warm tier, beside the region chain of the step the
     /// value lies in, which a test build's audit reads. Marks nothing: the warm tier is not where
     /// the value lies.
     Warm {
-        warm: &'d Chain<'graph, 'lent, 'here, 'lent, 'door>,
-        region: &'d Types<'graph, 'here, 'door>,
+        warm: &'d Chain<'lent, 'here, 'lent, 'door>,
+        region: &'d Types<'here, 'door>,
     },
 }
 
@@ -449,8 +473,8 @@ pub enum Destination<'d, 'graph, 'here, 'lent, 'door> {
 /// whose bits meet. A test build audits each part as it is skipped, and a debug build checks what
 /// it adopted resolves, with the same cutoff. See [design/type-tiers.md § An adoption stops at a settled part](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part).
 pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    into: Destination<'_, 'graph, '_, '_, '_>,
-    source: &Chain<'_, '_, '_, '_, '_>,
+    into: Destination<'_, '_, '_, '_>,
+    source: &Chain<'_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
     scratch: BumpAllocator<'_>,
 ) {
@@ -496,9 +520,9 @@ pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
     )
 )]
 fn adopted<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    dest: &Chain<'_, '_, '_, '_, '_>,
-    region: &Chain<'_, '_, '_, '_, '_>,
-    source: &Chain<'_, '_, '_, '_, '_>,
+    dest: &Chain<'_, '_, '_, '_>,
+    region: &Chain<'_, '_, '_, '_>,
+    source: &Chain<'_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
     cutoff: Cutoff,
     scratch: BumpAllocator<'_>,
@@ -538,7 +562,7 @@ fn adopted<'graph, 'cell, XF: KnottedFamily<'graph>>(
 /// `region`, the chain of the region the value lies in, where it is settled.
 #[cfg(test)]
 fn audit<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    region: &Chain<'_, '_, '_, '_, '_>,
+    region: &Chain<'_, '_, '_, '_>,
     part: &Value<'cell, XF::Closed<'cell>>,
 ) {
     let bits = bits(part).expect("only a part with bits is skipped");
@@ -621,7 +645,7 @@ where
 {
     writer: Writer<'to, 'x>,
     /// The destination's chain: every type the copy reads is adopted into it, then read there.
-    types: &'x Chain<'graph, 'to, 'to, 'reg, 'x>,
+    types: &'x Chain<'to, 'to, 'reg, 'x>,
     /// The home branch the copied value's types are read from; `None` where its home had none.
     source: Option<&'x Branch<'home>>,
     /// Where the surfaces a copy opens are staged, beside its stacks.
@@ -643,7 +667,7 @@ where
 {
     fn new(
         writer: Writer<'to, 'x>,
-        types: &'x Chain<'graph, 'to, 'to, 'reg, '_>,
+        types: &'x Chain<'to, 'to, 'reg, '_>,
         source: Option<&'x Branch<'home>>,
         scratch: BumpAllocator<'x>,
     ) -> Self {

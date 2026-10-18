@@ -72,14 +72,16 @@ fn mint_list(step: &Step<'_, '_, '_, '_, '_, '_, Native>) {
 fn reach_steps(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
     step.header()
         .get()
-        .map_or(0, |header| header.branch().reach_steps())
+        .and_then(|header| header.branch())
+        .map_or(0, |branch| branch.reach_steps())
 }
 
 /// The length of `step`'s write home's branch, or 0 where it has none.
 fn branch_length(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
     step.header()
         .get()
-        .map_or(0, |header| header.branch().len())
+        .and_then(|header| header.branch())
+        .map_or(0, |branch| branch.len())
 }
 
 /// Run `start` as a root work over a slab of `cells`, starting from `Number`, and hand back what

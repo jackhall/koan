@@ -39,7 +39,7 @@ impl Fixture<'_, '_> {
     fn chain<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         node: KType,
         depth: usize,
     ) -> Value<'cell> {
@@ -61,7 +61,7 @@ impl Fixture<'_, '_> {
     fn knots<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         depth: usize,
     ) -> Holding<'cell> {
         let (types, scratch) = (types, self.scratch());
@@ -85,7 +85,7 @@ impl Fixture<'_, '_> {
     fn headers<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         depth: usize,
     ) -> Holding<'cell> {
         let (types, scratch) = (types, self.scratch());
@@ -109,11 +109,7 @@ impl Fixture<'_, '_> {
 }
 
 /// `value` as `PRINT` writes it.
-fn rendered(
-    fixture: &Fixture<'_, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
-    value: Value<'_>,
-) -> String {
+fn rendered(fixture: &Fixture<'_, '_>, types: &Chain<'_, '_, '_, '_>, value: Value<'_>) -> String {
     let mut out = String::new();
     value
         .render(&mut out, types, fixture.symbols, fixture.scratch())

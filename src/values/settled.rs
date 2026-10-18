@@ -17,7 +17,7 @@ use super::{Chain, Knotted, KnottedFamily, MemoBits, Value};
 /// beside it lays its value in: a chain over one half alone, paired to that half's own writer, or
 /// the load's chain. A scratch chain reads a region tier, and a paired half lays in a tier the
 /// value does not lie in, so neither does.
-pub(crate) fn interns_where_it_lays(types: &Chain<'_, '_, '_, '_, '_>) -> bool {
+pub(crate) fn interns_where_it_lays(types: &Chain<'_, '_, '_, '_>) -> bool {
     let halves = types.half();
     halves.region().is_none() && halves.half().interns_where_it_lays()
 }
@@ -27,7 +27,7 @@ pub(crate) fn interns_where_it_lays(types: &Chain<'_, '_, '_, '_, '_>) -> bool {
 /// is the only place their `settled` answer is folded in.
 pub(crate) fn part_bits<X: Knotted>(
     part: &Value<'_, X>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> MemoBits {
     match part {
         Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) => MemoBits::BOTH,
@@ -54,7 +54,7 @@ pub(crate) fn part_bits<X: Knotted>(
 /// every part is and `ktype` lies in the root; settled where every part meets the
 /// contract and `types` interns where it lays.
 pub(crate) fn composite_bits<'a, X: Knotted + 'a>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     ktype: KType,
     parts: impl IntoIterator<Item = &'a Value<'a, X>>,
 ) -> MemoBits {
@@ -84,7 +84,7 @@ pub(crate) fn composite_bits<'a, X: Knotted + 'a>(
 /// and the new memo `ktype` is read off `types`.
 pub(crate) fn restamp_bits(
     old: MemoBits,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     ktype: impl Into<DeclaredType<KType>>,
 ) -> MemoBits {
     MemoBits {
@@ -98,7 +98,7 @@ pub(crate) fn restamp_bits(
 /// the contract and `types`, the chain it was born through, interns where it lays.
 pub(crate) fn stamp_knot<'graph, 'cell, XF: KnottedFamily<'graph>>(
     member: &XF::Closed<'cell>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) where
     'graph: 'cell,
 {

@@ -28,7 +28,8 @@ fn branch_length<'graph>(
         branch.set(
             step.header()
                 .get()
-                .map_or(0, |header| header.branch().len()),
+                .and_then(|header| header.branch())
+                .map_or(0, |branch| branch.len()),
         )
     });
     step.leave(birth)

@@ -61,7 +61,7 @@ impl Language for Koan {
     fn builtins<'graph>(
         writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph> {
         builtins::table(writer, symbols, types, scratch)
@@ -74,7 +74,7 @@ impl Language for Koan {
     fn check<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'graph>> {
@@ -85,7 +85,7 @@ impl Language for Koan {
     fn resume<'graph>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
         over: Resumption<'_, 'graph>,
@@ -105,7 +105,7 @@ struct Evaluation<'graph, 'here, 'tier, 'reg, 'door> {
     contract: Option<Contract>,
     within: Within,
     birth: KBirth<'graph, 'here>,
-    types: Chain<'graph, 'tier, 'here, 'reg, 'door>,
+    types: Chain<'tier, 'here, 'reg, 'door>,
 }
 
 /// What one of a call's operands came to: a value, or — an `ATTR` label written bare — the name

@@ -207,7 +207,7 @@ fn ran<'graph, 'here, 'scratch>(
     state: KState<'graph, 'here>,
     scratch: Option<&'scratch [Site]>,
     routes: bool,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     let runner = match state {
         KState::Born(KBirth::Program { program }) => {
@@ -302,7 +302,7 @@ fn ran<'graph, 'here, 'scratch>(
 #[allow(clippy::too_many_arguments)]
 pub fn call<'graph, 'here>(
     program: &'graph Program<'graph>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
     kind: CallKind,
@@ -390,11 +390,11 @@ pub enum CodeRefused<'graph> {
 
 impl<'graph> CodeRefused<'graph> {
     /// The refusal as an error value's message: the shape's own error, or the unbound name or key.
-    pub fn display<'x, 'g, 'run, 'p, 'reg>(
+    pub fn display<'x, 'run, 'p, 'reg>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x Chain<'g, 'run, 'p, 'reg, '_>,
-    ) -> CodeRefusedDisplay<'x, 'graph, 'g, 'run, 'p, 'reg> {
+        types: &'x Chain<'run, 'p, 'reg, '_>,
+    ) -> CodeRefusedDisplay<'x, 'graph, 'run, 'p, 'reg> {
         CodeRefusedDisplay {
             refused: self,
             symbols,
@@ -404,13 +404,13 @@ impl<'graph> CodeRefused<'graph> {
 }
 
 /// A [`CodeRefused`] beside the interner and registry it renders through.
-pub struct CodeRefusedDisplay<'x, 'graph, 'g, 'run, 'p, 'reg> {
+pub struct CodeRefusedDisplay<'x, 'graph, 'run, 'p, 'reg> {
     refused: &'x CodeRefused<'graph>,
     symbols: &'x SymbolInterner,
-    types: &'x Chain<'g, 'run, 'p, 'reg, 'x>,
+    types: &'x Chain<'run, 'p, 'reg, 'x>,
 }
 
-impl fmt::Display for CodeRefusedDisplay<'_, '_, '_, '_, '_, '_> {
+impl fmt::Display for CodeRefusedDisplay<'_, '_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.refused {
             CodeRefused::Shape(error) => write!(f, "{}", error.display(self.symbols, self.types)),
@@ -433,7 +433,7 @@ impl fmt::Display for CodeRefusedDisplay<'_, '_, '_, '_, '_, '_> {
 /// code's was built where the program loaded.
 pub fn eval<'graph, 'here>(
     program: &'graph Program<'graph>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     code: Knotted<'graph, 'here>,
     offered: KValue<'graph, 'here>,
     returns: KType,
@@ -580,7 +580,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     fn check<'at>(
         &self,
         value: &KValue<'graph, 'at>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Result<(), Stopped<'at>> {
         match self.program.message(value, types) {
             Some(message) => Err(Stopped::Raised(message)),
@@ -609,7 +609,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 #[allow(clippy::too_many_arguments)]
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     program: &'graph Program<'graph>,
     callee: KValue<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
@@ -903,7 +903,7 @@ fn frame<'graph, 'here>(
 /// The return `shown`, a callee's type, gives every call where its group leaves it concrete: what
 /// a barrier's value is retyped to once it crosses out. `None` for a quantified return, which the
 /// barrier's own crossing types.
-fn shown_returns(types: &Chain<'_, '_, '_, '_, '_>, shown: DeclaredType<KType>) -> Option<KType> {
+fn shown_returns(types: &Chain<'_, '_, '_, '_>, shown: DeclaredType<KType>) -> Option<KType> {
     match shown.view(types).body {
         TypeNode::ExpressionShape { ret, .. } | TypeNode::KFunction { ret, .. } => {
             types.concrete(ret)
@@ -916,7 +916,7 @@ fn shown_returns(types: &Chain<'_, '_, '_, '_, '_>, shown: DeclaredType<KType>) 
 /// gives the call over `arguments`: at a scheme, under the solution the selection carried by the
 /// shape's own names. `None` where it carried none.
 fn shown_keyworded_returns(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: &Bump,
     shown: DeclaredType<KType>,
     arguments: KValue<'_, '_>,
@@ -949,7 +949,7 @@ enum Miss {
 /// contributed for it, per parameter in symbol order — under one collector: the group's solution
 /// where it is quantified.
 fn admitted<'x, 'tier: 'x>(
-    types: &Chain<'_, 'tier, '_, '_, '_>,
+    types: &Chain<'tier, '_, '_, '_>,
     scratch: &'x Bump,
     view: DeclaredView<'_>,
     arguments: KValue<'_, '_>,
@@ -1003,7 +1003,7 @@ fn admitted<'x, 'tier: 'x>(
 /// callee past the type it shows.
 fn shown_admitted<'graph, 'here>(
     writer: Writer<'here, '_>,
-    types: &Chain<'_, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     scratch: &Bump,
     shown: DeclaredType<KType>,
     arguments: KValue<'graph, 'here>,
@@ -1044,7 +1044,7 @@ fn shown_admitted<'graph, 'here>(
 /// it shows binds, since it may declare fewer parameters than its slot shows.
 fn restricted<'graph, 'here>(
     writer: Writer<'here, '_>,
-    types: &Chain<'_, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     scratch: &Bump,
     arguments: KValue<'graph, 'here>,
     params: TypeRecord<'_, Parametric>,
@@ -1074,7 +1074,7 @@ struct Barrier<'graph, 'cell> {
 /// every barrier stacked behind it: the function behind them all, beside the record it takes.
 fn crossed_in<'graph, 'here>(
     writer: Writer<'here, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     outermost: Knotted<'graph, 'here>,
     arguments: KValue<'graph, 'here>,
 ) -> Result<(Knotted<'graph, 'here>, KValue<'graph, 'here>), CoercionRefused> {
@@ -1098,7 +1098,7 @@ fn crossed_in<'graph, 'here>(
 /// every barrier stacked there, innermost first. A refusal is an error value.
 fn crossed_out<'graph, 'here>(
     writer: Writer<'here, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     program: &'graph Program<'graph>,
     outermost: Knotted<'graph, 'here>,
     value: KValue<'graph, 'here>,
@@ -1135,7 +1135,7 @@ fn crossed_out<'graph, 'here>(
 /// nowhere, which [`eval`] refuses first.
 fn code_frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     program: &'graph Program<'graph>,
     code: KValue<'graph, 'here>,
     offered: KValue<'graph, 'here>,
@@ -1182,7 +1182,7 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
     step: &mut Taking<'_, 'graph, '_, 'here, 'scratch, 'lent>,
     runner: &mut Runner<'graph, 'here>,
     scratch: Option<&'scratch [Site]>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
 ) -> Result<(), Stopped<'scratch>> {
     let unit = runner.current();
     let caches = runner.shape().caches();
@@ -1248,7 +1248,7 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
 /// The message of a tie the program refused, rendered into the running region.
 fn untied<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     runner: &Runner<'graph, 'here>,
     error: &Untieable<'_>,
 ) -> Stopped<'here> {
@@ -1263,7 +1263,7 @@ fn untied<'graph, 'here>(
 /// every member from the knot.
 fn tied<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
     component: &Component<'graph>,
@@ -1300,7 +1300,7 @@ fn tied<'graph, 'here>(
 /// it. The tie births an annotated member at its annotation, so each slot binds the bare member.
 fn bound_members<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
     component: &Component<'graph>,
@@ -1330,7 +1330,7 @@ fn bound_members<'graph, 'here>(
 /// it states one ([`Program::annotated`]).
 fn held<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     runner: &Runner<'graph, 'here>,
     slot: Slot,
     value: KValue<'graph, 'here>,
@@ -1354,7 +1354,7 @@ fn held<'graph, 'here>(
 /// `value` held to `annotation`, what the annotation `written` denotes.
 fn held_at<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     runner: &Runner<'graph, 'here>,
     written: &'graph ExpressionPart<'graph>,
     annotation: KType,
@@ -1370,7 +1370,7 @@ fn held_at<'graph, 'here>(
 fn perform<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     mut runner: Runner<'graph, 'here>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     loop {
         let shape = runner.shape();
@@ -1495,7 +1495,7 @@ fn ask<'graph, 'here>(
 /// sites laid down in scratch for the wake.
 fn first_tie<'graph, 'here, 'scratch, 'lent>(
     step: &mut Taking<'_, 'graph, '_, 'here, 'scratch, 'lent>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
     component: &Component<'graph>,
@@ -1537,7 +1537,7 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
 /// activation.
 fn declared<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
     component: &Component<'graph>,
@@ -1634,7 +1634,7 @@ fn entered<'graph, 'here>(
 /// it.
 fn left<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     body: Runner<'graph, 'here>,
     outer: &'here Outer<'graph, 'here>,
 ) -> Result<Runner<'graph, 'here>, Stopped<'here>> {
@@ -1673,7 +1673,7 @@ fn left<'graph, 'here>(
 fn ended<'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     runner: Runner<'graph, 'here>,
-    types: &Chain<'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     let value = runner.result.unwrap_or(Value::Null);
     match (runner.level, runner.contract) {

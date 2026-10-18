@@ -50,7 +50,7 @@ pub fn tie_member<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'x>> {

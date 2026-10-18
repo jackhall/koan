@@ -331,7 +331,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, 'cell>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
 ) -> Result<Staged<'graph, 'cell, 'x>, Untieable<'x>> {
@@ -389,7 +389,7 @@ const BOUND: &str = "an instance's lexical variables are bound where it is read 
 fn solved<'graph, 'x>(
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
@@ -413,7 +413,7 @@ const BORN: &str = "a callable's type holds no variable once its levels are boun
 
 /// `callable` as a function is born with it, every level its declaration read bound.
 fn born<'x>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     callable: Callable<'x, Parametric>,
 ) -> Callable<'x, KType> {
     Callable {
@@ -435,7 +435,7 @@ fn loaded<'graph, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<Callable<'x, KType>> {
     let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
@@ -500,7 +500,7 @@ pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
     activation: &KActivationView<'graph, 'cell>,
     bodies: &[Option<Born<'graph>>],
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Option<Staged<'graph, 'cell, 'x>>>, Untieable<'x>> {
     let mut staged = BumpVec::with_capacity_in(bodies.len(), scratch);
@@ -536,7 +536,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     activation: &KActivationView<'graph, 'cell>,
     site: Site,
     build: BuildRef,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>> {
     let body = activation
@@ -572,7 +572,7 @@ pub fn barrier_instance<'graph, 'cell>(
     member: Knotted<'graph, 'cell>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);
@@ -609,7 +609,7 @@ pub fn header_instance<'graph, 'cell>(
     header: &Retyped<Knotted<'graph, 'cell>>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);
@@ -633,7 +633,7 @@ pub fn instance<'graph, 'cell>(
     member: Knotted<'graph, 'cell>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);

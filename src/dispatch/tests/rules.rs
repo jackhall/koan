@@ -60,7 +60,7 @@ fn slot() -> impl Strategy<Value = Slot> {
 /// What the test interns into.
 struct World<'x, 'graph> {
     program: &'x Program<'graph>,
-    types: &'x Types<'x, 'x, 'x>,
+    types: &'x Types<'x, 'x>,
     scratch: &'x Bump,
 }
 

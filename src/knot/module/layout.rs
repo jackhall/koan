@@ -23,7 +23,7 @@ use crate::values::{Chain, Seen, TypeValue, Value, applications};
 /// Empty for anything that is no module.
 pub fn registrations<'graph, 'cell>(
     module: KValue<'graph, 'cell>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> &'cell [KValue<'graph, 'cell>] {
     let Some((node, schema)) = (module.knot_member())
@@ -46,7 +46,7 @@ pub fn member<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     module: KValue<'graph, 'cell>,
     name: BinderSymbol,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'cell>> {
     let node = module.knot_member()?.module()?;
@@ -71,7 +71,7 @@ pub fn member<'graph, 'cell>(
 /// holds declares, once.
 pub fn named_count(
     carried: KType,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> usize {
     let mut names = BumpVec::new_in(scratch);
@@ -106,7 +106,7 @@ pub fn functions_at<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     module: KValue<'graph, 'cell>,
     key: KeySymbol,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, KValue<'graph, 'cell>> {
     let mut found = BumpVec::new_in(scratch);
@@ -143,7 +143,7 @@ pub fn functions_at<'graph, 'cell, 'x>(
 pub fn covering<'graph, 'cell, 'x>(
     offered: &[KValue<'graph, 'cell>],
     declared: DeclaredType<KType>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, KValue<'graph, 'cell>> {
     let mut covers = BumpVec::new_in(scratch);
@@ -166,7 +166,7 @@ pub fn retyped_at_shape<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     function: KValue<'graph, 'cell>,
     declared: DeclaredType<KType>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let registered = registered_shape(function).expect("a registration member is a function");
@@ -180,7 +180,7 @@ pub fn retyped_at_shape<'graph, 'cell>(
 /// pins every head parameter, so each is closed.
 fn keyworded_members<'x>(
     carried: KType,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, DeclaredType<KType>> {
     let mut members: BumpVec<'x, DeclaredType<KType>> = BumpVec::new_in(scratch);
@@ -238,7 +238,7 @@ pub fn registered_shape(member: KValue<'_, '_>) -> Option<DeclaredType<KType>> {
 /// scheme's body spells its keys as a type's does.
 pub fn key_of(
     shape: DeclaredType<impl Into<Parametric>>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> KeySymbol {
     let TypeNode::ExpressionShape { elements, .. } = shape.view(types).body else {
         unreachable!("a registered shape is an expression shape")

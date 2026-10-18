@@ -27,7 +27,7 @@ fn interned_digests<'graph>(
     };
     let mut digests = Vec::new();
     program.root().each_digest(|digest| digests.push(digest));
-    if let Some(branch) = step.header().get().map(HalfHeader::branch) {
+    if let Some(branch) = step.header().get().and_then(HalfHeader::branch) {
         branch.each_digest(|digest| digests.push(digest));
     }
     INTERNED.with(|interned| *interned.borrow_mut() = digests);

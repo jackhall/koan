@@ -20,7 +20,7 @@ const PICK: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
 /// Load `source` and hand `inspect` the load before its root freezes.
 fn resumed<R: 'static>(
     source: &str,
-    inspect: impl for<'g, 'l, 'reg, 'door> FnOnce(&Loaded<'g, 'l, 'reg, 'door, Koan>) -> R,
+    inspect: impl for<'g, 'l, 'door> FnOnce(&Loaded<'g, 'l, 'door, Koan>) -> R,
 ) -> R {
     let (_, inspected) = CellSubstrate::load_with::<Koan, R>(
         source,
@@ -98,8 +98,8 @@ fn narrowing(
 }
 
 /// The upper end of the binder `name` of `shape`, read off `statics`, rendered.
-fn upper<'g, 'l, 'reg, 'door>(
-    loaded: &Loaded<'g, 'l, 'reg, 'door, Koan>,
+fn upper<'g, 'l, 'door>(
+    loaded: &Loaded<'g, 'l, 'door, Koan>,
     shape: &BodyShape<'_>,
     statics: Statics<'_>,
     name: &str,
@@ -386,7 +386,7 @@ mod laws {
 
     /// The binding `bound` gives, read off the load: each unknown at its slot of `SUBJECT`, each
     /// type off the alias the program declares it under.
-    fn binding<'g>(loaded: &Loaded<'g, '_, '_, '_, Koan>, bound: &Bound) -> Binding<'g> {
+    fn binding<'g>(loaded: &Loaded<'g, '_, '_, Koan>, bound: &Bound) -> Binding<'g> {
         let (symbols, root) = (loaded.symbols(), loaded.shape());
         let body = subject(root);
         let mut staged = Vec::new();
@@ -762,7 +762,7 @@ mod laws {
     /// Each fact of `SUBJECT`'s body a resumption under `bound` re-runs outside the load's with
     /// the binding substituted, rendered: the binders, statements and parts whose load value names
     /// only lexical variables the binding binds, and every use and settled site.
-    fn monotone(loaded: &Loaded<'_, '_, '_, '_, Koan>, bound: &Bound) -> Vec<String> {
+    fn monotone(loaded: &Loaded<'_, '_, '_, Koan>, bound: &Bound) -> Vec<String> {
         let binding = binding(loaded, bound);
         let Ok(settled) = loaded.resume(&[], binding, false) else {
             return Vec::new();

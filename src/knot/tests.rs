@@ -53,7 +53,7 @@ pub(crate) type TestContext<'graph, 'step, 'here, 'scratch, 'lent> =
 pub(crate) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which a test's load-time work and every shape go through.
-    pub types: &'f Types<'graph, 'graph, 'f>,
+    pub types: &'f Types<'graph, 'f>,
     /// The tiers every cell's chain is built over.
     pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
@@ -160,7 +160,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn run<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
         parsed: &Parsed<'graph>,
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
@@ -172,7 +172,7 @@ impl<'graph> Fixture<'_, 'graph> {
     fn activated<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
         shape: &'graph BodyShape<'graph>,
         builtins: &'cell Builtins<'cell, Knotted<'graph, 'cell>>,
         leave: &[&str],
@@ -200,7 +200,7 @@ impl<'graph> Fixture<'_, 'graph> {
     fn bring_in<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
@@ -278,7 +278,7 @@ impl<'graph> Fixture<'_, 'graph> {
     fn bring_module<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
@@ -327,7 +327,7 @@ impl<'graph> Fixture<'_, 'graph> {
 /// `ZZ _ _`, laid down in `writer`'s region, typed through `types`.
 fn builtin_table<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> &'cell Builtins<'cell, Knotted<'graph, 'cell>> {

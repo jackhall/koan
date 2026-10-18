@@ -192,7 +192,7 @@ use super::select;
 pub(super) fn statics<'graph>(
     root: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'graph, 'graph>,
-    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
@@ -217,7 +217,7 @@ pub(super) fn statics<'graph>(
 pub(super) fn resume_statics<'graph>(
     root: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'graph, 'graph>,
-    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'_>,
     over: crate::scope::Resumption<'_, 'graph>,
@@ -243,7 +243,7 @@ pub(super) fn resume_statics<'graph>(
 impl<'p, 'x, 'graph: 'p> Pass<'p, 'x, 'graph> {
     fn new(
         builtins: &'x KBuiltins<'graph, 'graph>,
-        types: &'x Types<'graph, 'graph, 'x>,
+        types: &'x Types<'graph, 'x>,
         writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'p>,
         resume: Option<Resume<'p, 'graph>>,
@@ -309,7 +309,7 @@ type Bound = DeclaredType<Interval>;
 /// static type `value` can ever satisfy `wanted`. `None` where one might. Each end is named
 /// through its bound, since a variable's name is its binder's.
 fn never_satisfies(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     value: Parametric,
     wanted: Parametric,
@@ -324,7 +324,7 @@ fn never_satisfies(
 /// Whether a value of the static type `typed` can reach a type minted at run: where its upper end
 /// is porous or exposing, and, where that is exact and closed, where it is exposing — an exact
 /// closed site carries that very type, and the surface door hides what the type does not name.
-fn porous_site(types: &Chain<'_, '_, '_, '_, '_>, typed: Interval) -> bool {
+fn porous_site(types: &Chain<'_, '_, '_, '_>, typed: Interval) -> bool {
     if typed.is_exact() && types.concrete(typed.upper).is_some() {
         types.exposing(typed.upper)
     } else {
@@ -334,7 +334,7 @@ fn porous_site(types: &Chain<'_, '_, '_, '_, '_>, typed: Interval) -> bool {
 
 /// Whether a value held to the declared type `slot` — a return, a parameter — can carry a type
 /// minted at run.
-fn porous_slot(types: &Chain<'_, '_, '_, '_, '_>, slot: Parametric) -> bool {
+fn porous_slot(types: &Chain<'_, '_, '_, '_>, slot: Parametric) -> bool {
     types.porous(slot) || types.exposing(slot)
 }
 
@@ -441,7 +441,7 @@ impl Level<'_, '_> {
 /// The walk's state: the chain of enclosing shapes.
 struct Pass<'p, 'x, 'graph> {
     builtins: &'x KBuiltins<'graph, 'graph>,
-    types: &'x Types<'graph, 'graph, 'x>,
+    types: &'x Types<'graph, 'x>,
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,

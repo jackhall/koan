@@ -18,18 +18,18 @@ use super::record::Contract;
 
 /// One exit of a caching body: the region chain `region` its values are adopted into, read from
 /// `body`, the chain the body runs on.
-pub struct Exit<'a, 'tier, 'graph, 'here, 'reg> {
-    region: Types<'graph, 'here, 'a>,
-    body: &'a Chain<'graph, 'tier, 'here, 'reg, 'a>,
+pub struct Exit<'a, 'tier, 'here, 'reg> {
+    region: Types<'here, 'a>,
+    body: &'a Chain<'tier, 'here, 'reg, 'a>,
     /// Where each walk lays its stack, knot set and settled list: the step's scratch.
     scratch: BumpAllocator<'a>,
 }
 
-impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'graph, 'here, 'reg> {
+impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'here, 'reg> {
     /// An exit from the body whose chain is `body` into `region`, walking in `scratch`.
     pub fn new(
-        region: Types<'graph, 'here, 'a>,
-        body: &'a Chain<'graph, 'tier, 'here, 'reg, '_>,
+        region: Types<'here, 'a>,
+        body: &'a Chain<'tier, 'here, 'reg, '_>,
         scratch: BumpAllocator<'a>,
     ) -> Self {
         Exit {

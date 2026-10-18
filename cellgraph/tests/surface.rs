@@ -15,8 +15,8 @@ use cellgraph::{
     Active, CellGraph, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
     DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
     Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, Operand,
-    PeekError, Prices, Projected, Projects, Prose, Ready, Reattachable, Receipt, ReceiptError,
-    RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
+    PeekError, Prices, Projected, ProjectionAt, Projects, Prose, Ready, Reattachable, Receipt,
+    ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
     ReleaseTreeError, Run, SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun,
     TreeHandle, Verdict, Writer, Written, covariant, reattachable,
 };
@@ -502,11 +502,12 @@ struct PairHeader<'cell> {
     hidden: Cell<u32>,
 }
 
+/// The part of a [`Pair`] header a projected door shows.
+struct Shown;
+reattachable!(Shown => &'cell Cell<Option<&'cell u32>>);
+
 impl<'graph> Projects<'graph> for Pair {
-    type Projection<'cell>
-        = &'cell Cell<Option<&'cell u32>>
-    where
-        'graph: 'cell;
+    type Projection = Shown;
 
     fn lay<'cell>(writer: Writer<'cell, '_>) -> &'cell PairHeader<'cell>
     where
@@ -530,7 +531,7 @@ impl<'graph> Projects<'graph> for Pair {
 }
 
 /// What a projected door shows, from code that names no header family.
-fn shown<'cell>(door: Projected<'cell, '_, &'cell Cell<Option<&'cell u32>>>) -> Option<u32> {
+fn shown<'cell>(door: Projected<'cell, '_, ProjectionAt<'static, 'cell, Pair>>) -> Option<u32> {
     door.get()?.get().copied()
 }
 

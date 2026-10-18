@@ -8,11 +8,13 @@
 //! as the root bound, once the load returns. See
 //! [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
 
-use crate::memory::{CellGraph, SlabHandle};
+use crate::memory::{CellGraph, Projects as _, SlabHandle};
+use crate::scheduler::continuation::ContinuationFamily;
 use crate::scheduler::continuation::StepBundle;
+use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::drain::Graph;
-use crate::type_lattice::{Habitat, Root};
-use crate::values::{Half, SpecBounds};
+use crate::type_lattice::Root;
+use crate::values::{Half, SpecBounds, TypeHeader};
 
 /// The two slab roots a loaded graph holds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,7 +35,8 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         bounds: SpecBounds,
         load: impl FnOnce() -> Result<(&'graph Root<'graph>, R), E>,
     ) -> Result<(Self, Roots, R), E> {
-        let mut cells = CellGraph::new(cap, crate::values::verdict);
+        let mut cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader> =
+            CellGraph::new(cap, crate::values::verdict);
         let build = cells
             .create(None)
             .expect("a fresh slab of at least two cells admits its build root");
@@ -44,8 +47,9 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
             .enter(build, |context| {
                 let loaded = load()?;
                 let half = Half::of(context.writer(), context.header());
-                let _ = half.own_or_lay();
-                let header = context.header().get().expect("the header is laid");
+                let header = context
+                    .header()
+                    .get_or_lay(|| TypeHeader::lay(context.writer()));
                 header.lay_table(half, bounds.root, bounds.nested);
                 Ok(loaded)
             })

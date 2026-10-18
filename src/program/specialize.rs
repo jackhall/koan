@@ -30,7 +30,7 @@ pub fn called_function<'graph, 'cell>(
 pub fn seek<'graph>(
     callee: KValue<'graph, '_>,
     arguments: KValue<'graph, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> Option<Seek<'graph, KBundle>> {
     let function = called_function(callee)?;
     let shape = function.shape();

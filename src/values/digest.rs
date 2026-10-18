@@ -221,8 +221,8 @@ fn composite(tag: Tag, ktype: KType, contents: ContentDigest) -> ContentDigest {
 /// Nothing a walk reads is freed or moved while it runs, so an address names one part of a shape
 /// for the walk's life, and the shape keeps two kinds of resident that could share an address
 /// apart.
-pub struct Digests<'a, 'g, 'run, 'p, 'reg, X> {
-    types: &'a Chain<'g, 'run, 'p, 'reg, 'a>,
+pub struct Digests<'a, 'run, 'p, 'reg, X> {
+    types: &'a Chain<'run, 'p, 'reg, 'a>,
     scratch: BumpAllocator<'a>,
     composites: BumpBackedMap<'a, MemoKey, ContentDigest>,
     knots: BumpBackedMap<'a, X, ContentDigest>,
@@ -270,10 +270,10 @@ struct Stacks<'a, 'cell, X> {
     held: BumpVec<'a, Seen<'cell, X>>,
 }
 
-impl<'a, 'g, 'run, 'p, 'reg, X: Knotted> Digests<'a, 'g, 'run, 'p, 'reg, X> {
+impl<'a, 'run, 'p, 'reg, X: Knotted> Digests<'a, 'run, 'p, 'reg, X> {
     /// A demand's memo, reading types in `types` and staging its walks and its tables over
     /// `scratch`.
-    pub fn new(types: &'a Chain<'g, 'run, 'p, 'reg, '_>, scratch: BumpAllocator<'a>) -> Self {
+    pub fn new(types: &'a Chain<'run, 'p, 'reg, '_>, scratch: BumpAllocator<'a>) -> Self {
         #[cfg(test)]
         DIGEST_DEMANDS.with(|count| count.set(count.get() + 1));
         Digests {

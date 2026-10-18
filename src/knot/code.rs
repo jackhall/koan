@@ -244,7 +244,7 @@ fn one_node<'graph, 'cell>(
     shape: &'graph BodyShape<'graph>,
     bound: &[Binding<'graph, 'cell>],
     supplied: &[Binding<'graph, 'cell>],
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> Knotted<'graph, 'cell> {
     let bound = collect(writer, bound.iter().copied());
     let supplied = collect(writer, supplied.iter().copied());
@@ -280,7 +280,7 @@ pub fn quote<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     part: &'graph ExpressionPart<'graph>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let (body, shape) = shape_of(activation.shape(), part)
@@ -314,7 +314,7 @@ pub fn using<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     code: Knotted<'graph, 'cell>,
     source: KValue<'graph, 'cell>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Knotted<'graph, 'cell>, UsingRefused> {
     let node = code
@@ -375,7 +375,7 @@ fn keyed<'graph, 'cell>(
     shape: &BodyShape<'graph>,
     key: KeySymbol,
     source: KValue<'graph, 'cell>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {

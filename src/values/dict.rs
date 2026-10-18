@@ -161,7 +161,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
     pub fn new(
         writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Value<'cell, X>)],
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let (keys, cells) = Self::kept(writer, entries, scratch);
@@ -181,7 +181,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Value<'cell, X>)],
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let (keys, cells) = Self::kept(writer, entries, scratch);
@@ -208,7 +208,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         keys: &'cell [Key<'cell>],
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = keys.iter().fold(Weight::flat::<Self>(), |weight, key| {
             weight.plus(key.weight())
@@ -300,7 +300,7 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
         &self,
         writer: Writer<'cell, '_>,
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
         let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));

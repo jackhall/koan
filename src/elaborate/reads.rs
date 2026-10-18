@@ -56,7 +56,7 @@ pub trait Reads<'graph> {
         _site: Site,
         _chain: &[ValueSymbol],
         _name: TypeSymbol,
-        _types: &Chain<'_, '_, '_, '_, '_>,
+        _types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE))
     }
@@ -82,7 +82,7 @@ pub trait Reads<'graph> {
 /// type, the last names no type member, or a member names a head parameter its application leaves
 /// unpinned.
 fn member_through(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     signature: KType,
     chain: &[ValueSymbol],
@@ -119,7 +119,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         site: Site,
         chain: &[ValueSymbol],
         name: TypeSymbol,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         let held = self.read(at);
         held.as_module()?;
@@ -171,7 +171,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
         site: Site,
         chain: &[ValueSymbol],
         name: TypeSymbol,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         ActivationView::member_type(self, at, site, chain, name, types)
     }
@@ -192,7 +192,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
 pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
     part: &'graph ExpressionPart<'graph>,
     view: &ActivationView<'graph, '_, XF>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
     // Where it runs, every name a type reads is bound to a concrete type.

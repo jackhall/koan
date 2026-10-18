@@ -116,7 +116,7 @@ pub trait Knotted: Copy + Eq + Hash {
     /// digests. An edge between siblings is no held value: the knot hashes its index.
     fn held<'a>(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -129,7 +129,7 @@ pub trait Knotted: Copy + Eq + Hash {
     /// this digest ([`digest::retyped_content`]).
     fn digest_held(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest;
@@ -219,7 +219,7 @@ impl Knotted for Nothing {
 
     fn held<'a>(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -230,7 +230,7 @@ impl Knotted for Nothing {
 
     fn digest_held(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -374,14 +374,14 @@ impl<'cell, X: Knotted> Value<'cell, X> {
     /// the door shows of it at its own memo, as a copy lays it down.
     pub fn digest(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> ContentDigest {
         self.digest_in(&mut Digests::new(types, scratch))
     }
 
     /// [`digest`](Self::digest) inside a demand already walking, through its `memo`.
-    pub fn digest_in(&self, memo: &mut Digests<'_, '_, '_, '_, '_, X>) -> ContentDigest {
+    pub fn digest_in(&self, memo: &mut Digests<'_, '_, '_, '_, X>) -> ContentDigest {
         memo.seen(Seen::of(*self))
     }
 

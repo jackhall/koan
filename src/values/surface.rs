@@ -80,7 +80,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn satisfies(
         &self,
         slot: KType,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> bool {
         satisfied_by(types, scratch, slot, self.ktype)
@@ -94,7 +94,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn seen_at(
         self,
         declared: impl Into<DeclaredType<KType>>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Self {
         let Some(kind) = kind(self.value) else {
@@ -125,7 +125,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn restamped(
         self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> Value<'cell, X> {
         if self.value.ktype() == self.ktype {
             return self.value;
@@ -152,7 +152,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     /// every knot member but a data node.
     pub fn surface<'x>(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'x>,
     ) -> Option<Surface<'x, 'cell, X>> {
         let (node, raw) = raw(self.value)?;
@@ -195,7 +195,7 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     pub fn field(
         &self,
         name: Symbol,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Self> {
         let Some((_, Raw::Record(names, cells))) = raw(self.value) else {
@@ -213,7 +213,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     /// This value opened at its own memo: [`Seen::surface`].
     pub fn surface<'x>(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'x>,
     ) -> Option<Surface<'x, 'cell, X>> {
         Seen::of(*self).surface(types, scratch)
@@ -223,7 +223,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     pub fn field(
         &self,
         name: Symbol,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Seen<'cell, X>> {
         Seen::of(*self).field(name, types, scratch)
@@ -236,7 +236,7 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
         self,
         writer: Writer<'cell, '_>,
         declared: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Value<'cell, X> {
         Seen::of(self)
@@ -307,7 +307,7 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
     pub fn child(
         &self,
         at: usize,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Seen<'a, X> {
         match self.parts {
@@ -546,7 +546,7 @@ fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
 /// code or a type value is taken at each such member its type fits, a module at each application it fits, pinned
 /// ([`pinned_at_fit`]). `None` where none is.
 fn target(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     kind: Kind,
     own: DeclaredType<KType>,
@@ -591,7 +591,7 @@ fn target(
 /// The applications the signature type `carried` holds, in `scratch`: a meet's members, or
 /// `carried` alone.
 pub fn applications<'x>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     carried: KType,
 ) -> BumpVec<'x, KType> {
@@ -609,7 +609,7 @@ pub fn applications<'x>(
 /// one of them not, or `declared` is no signature type. The load pins an exact operand with it, so
 /// a header's type is the one the load computes.
 pub fn pinned_at_fit(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     own: KType,
     declared: KType,
@@ -645,7 +645,7 @@ pub fn pinned_at_fit(
 /// `own`: each concrete, since a module's type offers no stand-in to the solve. Refused where `own`
 /// does not fit the application. What both a retype's pins and a view's `from` are read from.
 pub fn fit_solution<'run: 'x, 'x>(
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     own: KType,
     signature: KType,
@@ -668,7 +668,7 @@ pub fn fit_solution<'run: 'x, 'x>(
 /// `own`'s node, and `own` itself where nothing re-stamps — what a knot's tie births an annotated
 /// member at.
 pub fn retype_target(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     own: DeclaredType<KType>,
     declared: KType,
@@ -685,7 +685,7 @@ pub fn retype_target(
 /// for a type value. `None` for every other type, which a value satisfying it keeps its own type
 /// under — `Module`, every module's type, and `Code`, every code kind's, among them, as `Any` is
 /// every value's.
-fn retyped_kind(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> Option<Kind> {
+fn retyped_kind(types: &Chain<'_, '_, '_, '_>, declared: Parametric) -> Option<Kind> {
     if declared == KType::EMPTY_SIGNATURE.into() {
         return None;
     }
@@ -695,7 +695,7 @@ fn retyped_kind(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> Opti
 /// Whether a retype to `declared` lays a header over a function, a module or a quote's code — the
 /// knot members a header stands over beside a data node: [`retyped_kind`] answers one of their
 /// kinds at `declared`, or at a member of the union `declared` is. What a content tree retypes.
-pub fn retypes_by_header(types: &Chain<'_, '_, '_, '_, '_>, declared: KType) -> bool {
+pub fn retypes_by_header(types: &Chain<'_, '_, '_, '_>, declared: KType) -> bool {
     let header = |member: KType| {
         matches!(
             retyped_kind(types, member.into()),
@@ -745,7 +745,7 @@ fn node_kind(node: TypeNode<'_, Parametric>) -> Option<Kind> {
 /// otherwise; a union keeps each variant's own type. A module is pinned afresh at each run where
 /// `declared` leaves a parameter unpinned, and two pins of one parameter are unordered. It reads
 /// the predicate [`Seen::seen_at`] retypes by.
-pub fn retyped_to(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> Interval {
+pub fn retyped_to(types: &Chain<'_, '_, '_, '_>, declared: Parametric) -> Interval {
     match retyped_kind(types, declared) {
         Some(Kind::Module) if !pins_every_parameter(types, declared) => under(declared),
         Some(_) => Interval::point(declared),
@@ -755,7 +755,7 @@ pub fn retyped_to(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> In
 
 /// Whether every application the signature type `declared` holds pins each of its head
 /// parameters, a lexical variable counting as a pin.
-fn pins_every_parameter(types: &Chain<'_, '_, '_, '_, '_>, declared: Parametric) -> bool {
+fn pins_every_parameter(types: &Chain<'_, '_, '_, '_>, declared: Parametric) -> bool {
     let pinned = |application: Parametric| match types.node(application) {
         TypeNode::Signature { schema, .. } => schema.parameters.is_empty(),
         TypeNode::SignatureApply { signature, pins } => match types.node(signature) {

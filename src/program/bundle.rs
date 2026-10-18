@@ -224,9 +224,14 @@ impl<'graph> StepBundle<'graph> for KBundle {
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
                 let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
-                home.read(|header, _| match born {
-                    Born::Child => types.link(header.into_value().branch()),
-                    Born::Hop | Born::Left => types.link_or_merge(header.into_value().branch()),
+                home.read(|header, _| {
+                    let Some(branch) = header.into_value().branch() else {
+                        return;
+                    };
+                    match born {
+                        Born::Child => types.link(branch),
+                        Born::Hop | Born::Left => types.link_or_merge(branch),
+                    }
                 });
                 #[cfg(debug_assertions)]
                 view.values(&mut |value| {
@@ -248,7 +253,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     owed,
                 } => {
                     let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
-                    let [callee, arguments] = copy_severed::<_, KnottedFamily, 2>(
+                    let [callee, arguments] = copy_severed::<_, KnottedFamily, _, 2>(
                         writer,
                         &types,
                         view,
@@ -271,7 +276,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     contract,
                 } => {
                     let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
-                    let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
+                    let [code, offered] = copy_severed::<_, KnottedFamily, _, 2>(
                         writer,
                         &types,
                         view,

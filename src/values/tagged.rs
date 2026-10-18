@@ -31,7 +31,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         writer: Writer<'cell, '_>,
         head: &TypeValue,
         payload: Value<'cell, X>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, ConstructionRefused> {
         let identity = construction(types, scratch, head.handle(), payload.concrete_ktype())?;
@@ -44,7 +44,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         writer: Writer<'cell, '_>,
         payload: Value<'cell, X>,
         identity: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Tagged<'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
         let bits = composite_bits(types, identity, [&payload]);
@@ -59,7 +59,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         value: Value<'cell, X>,
         carrier: KType,
         witness: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'cell Tagged<'cell, X>, SealRefused> {
         let identity = sealing(types, scratch, carrier, witness, value.ktype())?;
@@ -72,7 +72,7 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
         writer: Writer<'cell, '_>,
         value: Value<'cell, X>,
         identity: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Tagged<'cell, X> {
         match value {
             Value::Tagged(tagged) => tagged.with_type(writer, identity, types),
@@ -122,7 +122,7 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
         &self,
         writer: Writer<'cell, '_>,
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
         let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));

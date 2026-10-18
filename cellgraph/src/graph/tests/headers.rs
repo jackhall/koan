@@ -150,11 +150,12 @@ fn a_header_laid_in_a_step_comes_back_at_the_next_step() {
 }
 
 /// A table header projects to its `Cell`; a label projects to nothing.
+/// A [`Marks`] header's table, where it is one.
+pub(super) struct Tables;
+crate::reattachable!(Tables => Option<&'cell Cell<&'cell u32>>);
+
 impl<'graph> Projects<'graph> for Marks {
-    type Projection<'cell>
-        = Option<&'cell Cell<&'cell u32>>
-    where
-        'graph: 'cell;
+    type Projection = Tables;
 
     fn lay<'cell>(writer: Writer<'cell, '_>) -> Mark<'graph, 'cell>
     where

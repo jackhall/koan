@@ -66,7 +66,7 @@ fn rebuilt<'graph>(original: KValue<'graph, '_>, copied: KValue<'graph, '_>) -> 
 /// `null` for a registration.
 fn synthetic<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     name: BinderSymbol,
     next: &mut f64,
 ) -> KValue<'graph, 'cell> {
@@ -197,7 +197,7 @@ fn cyclic(data: &[usize], reads: &[Vec<usize>]) -> bool {
 fn run<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     activation: &'cell KActivation<'graph, 'cell>,
     next: &mut f64,
     tied: &mut Vec<Knotted<'graph, 'cell>>,

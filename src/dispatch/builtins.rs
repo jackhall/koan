@@ -218,7 +218,7 @@ const _: () = {
 pub(super) fn table<'graph>(
     writer: Writer<'graph, '_>,
     symbols: &'graph SymbolInterner,
-    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
     scratch: BumpAllocator<'_>,
 ) -> &'graph KBuiltins<'graph, 'graph> {
     let type_value = |handle| Value::Type(TypeValue::new(writer, handle, types));
@@ -456,7 +456,7 @@ pub(super) fn run<'graph, 'here>(
 /// The elements of a list a slot admitted, read through its surface into `scratch`.
 pub(super) fn listed<'graph, 'here, 'x>(
     value: KValue<'graph, 'here>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KValue<'graph, 'here>] {
     let list = value
@@ -488,7 +488,7 @@ fn field<'graph, 'here>(
     value: KValue<'graph, 'here>,
     name: Symbol,
     writer: Writer<'here, '_>,
-    types: &Chain<'_, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'here>> {
     let mut seen = Seen::of(value);

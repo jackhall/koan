@@ -1027,10 +1027,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 }
 
 /// The tree of a type value naming `named` at its own kind, as the run births it.
-fn named_type<'graph>(
-    types: &crate::values::Chain<'_, '_, '_, '_, '_>,
-    named: KType,
-) -> Tree<'graph> {
+fn named_type<'graph>(types: &crate::values::Chain<'_, '_, '_, '_>, named: KType) -> Tree<'graph> {
     Tree::Digest(type_digest(named, KType::of_kind(named.kind_of(types))))
 }
 

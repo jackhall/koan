@@ -169,7 +169,7 @@ impl CellSubstrate {
         cap: u32,
         bounds: SpecBounds,
         output: Output,
-        inspect: impl for<'g, 'l, 'reg, 'door> FnOnce(Loaded<'g, 'l, 'reg, 'door, L>) -> R,
+        inspect: impl for<'g, 'l, 'door> FnOnce(Loaded<'g, 'l, 'door, L>) -> R,
     ) -> Result<(Self, R), LoadError> {
         let mut inspected = None;
         let owner = Owner {
@@ -188,7 +188,7 @@ impl CellSubstrate {
                 // Everything the root owns is laid in the owner's registry arena, which releases it
                 // whole. The load's chain never leaves the load: its end freezes the root.
                 let builder = RootBuilder::in_region(&owner.registry);
-                let types: &Chain<'_, '_, '_, '_, '_> =
+                let types: &Chain<'_, '_, '_, '_> =
                     &Types::building(Halves::alone(Half::load(builder)));
                 let scratch = Bump::new();
                 let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
@@ -260,17 +260,17 @@ impl CellSubstrate {
 
 /// A load whose passes have quiesced, before its types' root freezes: its root shape, and the
 /// door a resumption of it goes through. Only tests resume a load.
-pub struct Loaded<'graph, 'l, 'reg, 'door, L> {
+pub struct Loaded<'graph, 'l, 'door, L> {
     shape: &'graph BodyShape<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
-    types: &'l Chain<'graph, 'graph, 'graph, 'reg, 'door>,
+    types: &'l Chain<'graph, 'graph, 'graph, 'door>,
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'l>,
     symbols: &'graph SymbolInterner,
     language: std::marker::PhantomData<L>,
 }
 
-impl<'graph, 'l, 'reg, 'door, L: Language> Loaded<'graph, 'l, 'reg, 'door, L> {
+impl<'graph, 'l, 'door, L: Language> Loaded<'graph, 'l, 'door, L> {
     pub fn shape(&self) -> &'graph BodyShape<'graph> {
         self.shape
     }
@@ -280,7 +280,7 @@ impl<'graph, 'l, 'reg, 'door, L: Language> Loaded<'graph, 'l, 'reg, 'door, L> {
     }
 
     /// The load's chain: what a resumption interns its types through.
-    pub fn types(&self) -> &'l Chain<'graph, 'graph, 'graph, 'reg, 'door> {
+    pub fn types(&self) -> &'l Chain<'graph, 'graph, 'graph, 'door> {
         self.types
     }
 

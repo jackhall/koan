@@ -609,7 +609,7 @@ fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
                             };
                             let cells = parts(view, types, scratch);
                             let dest_types = fixture.tiers.half(writer, header);
-                            let copies = copy_severed::<_, KnottedFamily, 2>(
+                            let copies = copy_severed::<_, KnottedFamily, _, 2>(
                                 writer,
                                 &dest_types,
                                 &views[0],

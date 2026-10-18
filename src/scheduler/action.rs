@@ -20,7 +20,7 @@
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
-    Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
+    Projects as _, Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
 };
 use crate::scheduler::continuation::{
     BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested,
@@ -363,7 +363,7 @@ where
 
     /// The chain this step reads and interns types through for what it lays at `'here`: the
     /// graph's type root, then its write home's branch. Built once per step, never parked.
-    pub fn types(&self) -> Types<'graph, 'here, 'step> {
+    pub fn types(&self) -> Types<'here, 'step> {
         Types::new(
             self.type_root,
             Halves::alone(Half::of(self.writer(), self.header())),
@@ -372,7 +372,7 @@ where
 
     /// The chain for what the step lays in its scratch habitat: the graph's type root, its write
     /// home's branch, then the scratch habitat's own, released with it at the step's end.
-    pub fn scratch_types(&self) -> Chain<'graph, 'scratch, 'scratch, 'here, 'step> {
+    pub fn scratch_types(&self) -> Chain<'scratch, 'scratch, 'here, 'step> {
         Chain::scratch(
             self.type_root,
             Half::paired(self.writer(), self.header()),
@@ -383,7 +383,7 @@ where
     /// The chain a `Shares` caching body runs on: [`scratch_types`](Self::scratch_types)'s tiers,
     /// paired to this step's region writer, so a value laid at `'here` takes its types from the
     /// write home's scratch and nothing the body mints lands in its region.
-    pub fn shares_types(&self) -> Chain<'graph, 'scratch, 'here, 'here, 'step> {
+    pub fn shares_types(&self) -> Chain<'scratch, 'here, 'here, 'step> {
         Chain::scratch(
             self.type_root,
             Half::of(self.writer(), self.header()),
@@ -422,7 +422,7 @@ where
     /// link, which this lays: with the scratch branch where it is unlaid, late where another door
     /// laid it first. No branch links a scratch branch, so the late link is always open. Paired to
     /// the region writer. `None` for a cell with no lender.
-    pub fn reading_types(&self) -> Option<Chain<'graph, 'scratch, 'here, 'lent, 'step>> {
+    pub fn reading_types(&self) -> Option<Chain<'scratch, 'here, 'lent, 'step>> {
         let (lent_writer, lent_header) = self.lent()?;
         let Own::Branch(region) = Half::of(self.writer(), self.header()).own_or_lay() else {
             unreachable!("a step's region half lays a branch");
@@ -444,7 +444,7 @@ where
     /// born under the same specialization, or under the asker's park. What an invariant site's
     /// types are adopted into, so the next hop finds them. Paired to the region writer; `None` for
     /// a cell with no lender.
-    pub fn warm_types(&self) -> Option<Chain<'graph, 'lent, 'here, 'lent, 'step>> {
+    pub fn warm_types(&self) -> Option<Chain<'lent, 'here, 'lent, 'step>> {
         let (lent_writer, lent_header) = self.lent()?;
         Some(Chain::new(
             self.type_root,
@@ -510,14 +510,14 @@ where
     /// a caching body, whose children's values carry types in its scratch tiers.
     pub fn results_with<'c>(
         &'c mut self,
-        check: &'c Chain<'_, '_, '_, '_, '_>,
+        check: &'c Chain<'_, '_, '_, '_>,
     ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> + 'c {
         self.results_against(Some(check))
     }
 
     fn results_against<'c>(
         &'c mut self,
-        check: Option<&'c Chain<'_, '_, '_, '_, '_>>,
+        check: Option<&'c Chain<'_, '_, '_, '_>>,
     ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> + 'c {
         let root = self.type_root;
         let context = &mut *self.context;
@@ -637,8 +637,8 @@ where
             return self.failed(StepError::Refused);
         };
         let half = Half::of(self.writer(), self.header());
-        let _ = half.own_or_lay();
-        (self.header().get().expect("the header is laid")).lay_table(half, nested, nested);
+        let header = (self.header()).get_or_lay(|| TypeHeader::lay(self.writer()));
+        header.lay_table(half, nested, nested);
         Action(Kind::Quiesced)
     }
 
@@ -655,7 +655,7 @@ where
         self,
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
-            &Types<'graph, 'their, '_>,
+            &Types<'their, '_>,
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
@@ -706,7 +706,7 @@ where
         operands: [KValue<'graph, 'here>; N],
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
-            &Types<'graph, 'their, '_>,
+            &Types<'their, '_>,
             [KValue<'graph, 'their>; N],
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
@@ -717,10 +717,10 @@ where
     fn finish_in_home_against<const N: usize>(
         self,
         operands: [KValue<'graph, 'here>; N],
-        check: Option<&Chain<'_, '_, '_, '_, '_>>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
-            &Types<'graph, 'their, '_>,
+            &Types<'their, '_>,
             [KValue<'graph, 'their>; N],
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
@@ -762,7 +762,7 @@ where
     pub fn finish_with(
         self,
         value: KValue<'graph, 'here>,
-        check: &Chain<'_, '_, '_, '_, '_>,
+        check: &Chain<'_, '_, '_, '_>,
     ) -> Action<'graph, B> {
         self.finish_in_home_against([value], Some(check), |_, _, [value], _| Active::new(value))
     }

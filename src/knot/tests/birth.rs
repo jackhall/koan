@@ -22,7 +22,7 @@ use super::{
 pub(super) fn tie_with<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
     eager: &mut Eager<'_, 'graph, 'cell>,
@@ -45,7 +45,7 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
 pub(super) fn tie_of<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'f>> {

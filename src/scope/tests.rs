@@ -61,7 +61,7 @@ impl Knotted for Probe {
     /// A probe holds no value: every probe is a member of one empty knot, told apart by its index.
     fn held<'a>(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -71,7 +71,7 @@ impl Knotted for Probe {
 
     fn digest_held(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -142,7 +142,7 @@ covariant!(ValueFamily<ProbeFamily>);
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which every shape a test builds goes through.
-    pub types: &'f Types<'graph, 'graph, 'f>,
+    pub types: &'f Types<'graph, 'f>,
     pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }

@@ -82,10 +82,7 @@ fn rank<N: Ord + Copy, T>(table: &[(N, T)], name: N) -> Option<usize> {
 }
 
 /// The schema of the signature `handle` is, if it is one.
-pub fn schema_of<'run>(
-    handle: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
-) -> Option<SigSchema<'run>> {
+pub fn schema_of<'run>(handle: KType, types: &Chain<'run, '_, '_, '_>) -> Option<SigSchema<'run>> {
     match types.node(handle) {
         TypeNode::Signature { schema, .. } => Some(schema),
         _ => None,
@@ -109,7 +106,7 @@ pub struct SignatureMember {
 /// declares no such member, or is a meet leaving a parameter the member names unpinned or
 /// declaring a type member or a scheme two ways.
 pub fn signature_member(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     upper: Parametric,
     name: BinderSymbol,
@@ -178,7 +175,7 @@ pub fn signature_member(
 /// declared type with each pin substituted as it is, a variable kept. `None` where `signature`
 /// declares no such member.
 pub fn applied_member(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     signature: KType,
     pinned: &[(BinderSymbol, Parametric)],

@@ -87,7 +87,7 @@ impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
     pub fn write_summary(
         &self,
         f: &mut fmt::Formatter<'_>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
@@ -268,7 +268,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     pub fn write_summary(
         &self,
         f: &mut fmt::Formatter<'_>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {

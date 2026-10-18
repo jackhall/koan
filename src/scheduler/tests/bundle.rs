@@ -44,9 +44,14 @@ impl<'graph> StepBundle<'graph> for Native {
         let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
-                home.read(|header, _| match born {
-                    Born::Child => types.link(header.into_value().branch()),
-                    Born::Hop | Born::Left => types.link_or_merge(header.into_value().branch()),
+                home.read(|header, _| {
+                    let Some(branch) = header.into_value().branch() else {
+                        return;
+                    };
+                    match born {
+                        Born::Child => types.link(branch),
+                        Born::Hop | Born::Left => types.link_or_merge(branch),
+                    }
                 });
                 #[cfg(debug_assertions)]
                 crate::values::check_pinned_habitat::<crate::knot::KnottedFamily>(&types, view);

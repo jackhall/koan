@@ -50,7 +50,7 @@ fn body_of<'graph>(
 fn born<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     statement: usize,
 ) -> Knotted<'graph, 'cell> {

@@ -717,9 +717,9 @@ where
                     let lent = (context.lent_region())
                         .or_else(|| context.lent_scratch())
                         .and_then(|(_, header)| header.get())
-                        .map(HalfHeader::branch);
+                        .and_then(HalfHeader::branch);
                     (
-                        len(context.scratch_header().get().map(HalfHeader::branch)),
+                        len(context.scratch_header().get().and_then(HalfHeader::branch)),
                         len(lent),
                     )
                 };
@@ -740,10 +740,11 @@ where
                     let lent = (context.lent_region())
                         .or_else(|| context.lent_scratch())
                         .and_then(|(_, header)| header.get())
-                        .map(HalfHeader::branch);
+                        .and_then(HalfHeader::branch);
                     if let Some(shape) = CACHING.take() {
-                        let scratch = len(context.scratch_header().get().map(HalfHeader::branch))
-                            .saturating_sub(before.0);
+                        let scratch =
+                            len(context.scratch_header().get().and_then(HalfHeader::branch))
+                                .saturating_sub(before.0);
                         let warm = len(lent).saturating_sub(before.1);
                         LAID.with(|laid| {
                             let mut laid = laid.borrow_mut();
@@ -756,10 +757,11 @@ where
                         tiers.set(Tiers {
                             region: most
                                 .region
-                                .max(len(context.header().get().map(HalfHeader::branch))),
-                            scratch: most
-                                .scratch
-                                .max(len(context.scratch_header().get().map(HalfHeader::branch))),
+                                .max(len(context.header().get().and_then(HalfHeader::branch))),
+                            scratch: most.scratch.max(len(context
+                                .scratch_header()
+                                .get()
+                                .and_then(HalfHeader::branch))),
                             lent: most.lent.max(len(lent)),
                             lent_verdicts: (most.lent_verdicts)
                                 .max(lent.map_or(0, crate::type_lattice::Branch::verdict_count)),

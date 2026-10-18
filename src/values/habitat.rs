@@ -1,13 +1,14 @@
 //! Where a value's types live: the type lattice's tiers, reached from a habitat half.
 //!
 //! Each habitat half — a cell's region, or its scratch habitat — keeps one [`Branch`] of the type
-//! lattice in its header ([`TypeHeader`], whose form is a [`HalfHeader`]), laid by the first door
-//! that interns into the half and released with it. A build cell's region header also keeps its
-//! specialization table and its home ([specialization.rs](specialization.rs)). A [`Types`] chain is built per step over the frozen
-//! [`Root`](crate::type_lattice::Root) the load built and a [`Half`]: the writer that lays a value
-//! beside the header door of the same half, so a value door that takes both at one brand interns
-//! its type into the branch of the habitat it lays the value in. During the load the chain writes
-//! the root builder instead ([`Half::Load`]).
+//! lattice in its header, laid by the first door that interns into the half and released with it.
+//! A [`Half`] reaches the header only through a door projected to the branch's slot
+//! ([`BranchSlot`], whose family is [`BranchCell`]): any header family that projects to it serves,
+//! and a half that never interns lays no header at all. A [`Types`] chain is built per step over the
+//! frozen [`Root`](crate::type_lattice::Root) the load built and a [`Half`]: the writer that lays a
+//! value beside the projected header door of the same half, so a value door that takes both at one
+//! brand interns its type into the branch of the habitat it lays the value in. During the load the
+//! chain writes the root builder instead ([`Half::Load`]).
 //!
 //! `memory` names no type tier, so the habitat a chain writes is assembled here, where values pair
 //! writers with types. See [README.md § Crossing](README.md#crossing) for how a crossing makes a
@@ -17,29 +18,61 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 
-use crate::memory::{Header, LaysRuns, Writer, reattachable};
+use crate::memory::{Header, LaysRuns, Projected, Projects, Writer, reattachable};
 use crate::type_lattice::{Branch, Habitat, Halves, Own, RootBuilder, TypeChain};
 
 use super::specialization::{SpecHome, SpecTable};
+
+/// A half's branch slot, as its header keeps it: empty until the first door that interns into
+/// the half lays the branch.
+pub type BranchSlot<'cell> = &'cell Cell<Option<&'cell Branch<'cell>>>;
+
+/// The family of a [`BranchSlot`]: what a header family projects to for `values`, which reads a
+/// half's header through that part alone.
+pub struct BranchCell;
+
+reattachable!(BranchCell => BranchSlot<'cell>);
 
 /// The header family a koan graph keeps per habitat half: a [`HalfHeader`].
 pub struct TypeHeader;
 
 reattachable!(TypeHeader => &'cell HalfHeader<'cell>);
 
-/// What a habitat half keeps in its header: its branch of the type lattice, laid with the header;
-/// for a build cell's region, the fixed table of its specializations, laid with the cell; and for a
-/// specialization's region, its home, which the drain sets once the cell has enlisted.
+impl<'graph> Projects<'graph> for TypeHeader {
+    type Projection = BranchCell;
+
+    fn lay<'cell>(writer: Writer<'cell, '_>) -> &'cell HalfHeader<'cell>
+    where
+        'graph: 'cell,
+    {
+        &writer.fill(1, |_| HalfHeader {
+            branch: Cell::new(None),
+            table: Cell::new(None),
+            home: Cell::new(None),
+        })[0]
+    }
+
+    fn project<'cell>(header: &'cell HalfHeader<'cell>) -> BranchSlot<'cell>
+    where
+        'graph: 'cell,
+    {
+        &header.branch
+    }
+}
+
+/// What a habitat half keeps in its header: its branch of the type lattice, laid on the first
+/// intern; for a build cell's region, the fixed table of its specializations, laid with the cell;
+/// and for a specialization's region, its home, which the drain sets once the cell has enlisted.
 pub struct HalfHeader<'cell> {
-    branch: &'cell Branch<'cell>,
+    branch: Cell<Option<&'cell Branch<'cell>>>,
     table: Cell<Option<&'cell SpecTable<'cell>>>,
     home: Cell<Option<SpecHome>>,
 }
 
 impl<'cell> HalfHeader<'cell> {
-    /// The half's branch of the type lattice.
-    pub fn branch(&self) -> &'cell Branch<'cell> {
-        self.branch
+    /// The half's branch of the type lattice, once a door has interned into the half.
+    pub fn branch(&self) -> Option<&'cell Branch<'cell>> {
+        self.branch.get()
     }
 
     /// The half's specialization table, for a build cell's region.
@@ -84,16 +117,13 @@ impl<'cell> HalfHeader<'cell> {
 ///
 /// `'door` is the brand of the step that minted the half's doors, so a half cannot outlive it.
 #[derive(Clone, Copy)]
-pub enum Half<'graph, 'cell, 'pair, 'door>
-where
-    'graph: 'cell,
-{
-    /// A cell region or a scratch habitat: its writer beside its header door. `own_brand` is set
-    /// where the half is paired to its own brand ([`of`](Half::of)), so a door beside it lays its
-    /// value in the half it interns into.
+pub enum Half<'cell, 'pair, 'door> {
+    /// A cell region or a scratch habitat: its writer beside its header door, projected to the
+    /// branch slot. `own_brand` is set where the half is paired to its own brand
+    /// ([`of`](Half::of)), so a door beside it lays its value in the half it interns into.
     Habitat {
         writer: Writer<'cell, 'door>,
-        header: Header<'graph, 'cell, 'door, TypeHeader>,
+        branch: Projected<'cell, 'door, BranchSlot<'cell>>,
         pair: Pairing<'pair>,
         own_brand: bool,
     },
@@ -105,15 +135,16 @@ where
 /// as paired to another.
 pub type Pairing<'pair> = PhantomData<fn(&'pair ()) -> &'pair ()>;
 
-impl<'graph, 'cell, 'door> Half<'graph, 'cell, 'cell, 'door> {
-    /// The half `writer` lays into, whose header door is `header`, paired to its own brand.
-    pub fn of(
+impl<'cell, 'door> Half<'cell, 'cell, 'door> {
+    /// The half `writer` lays into, whose header door is `header`, paired to its own brand. It
+    /// keeps the door projected to the branch slot, and lays nothing.
+    pub fn of<'graph: 'cell, H: Projects<'graph, Projection = BranchCell>>(
         writer: Writer<'cell, 'door>,
-        header: Header<'graph, 'cell, 'door, TypeHeader>,
+        header: Header<'graph, 'cell, 'door, H>,
     ) -> Self {
         Half::Habitat {
             writer,
-            header,
+            branch: header.project(),
             pair: PhantomData,
             own_brand: true,
         }
@@ -125,16 +156,16 @@ impl<'graph, 'cell, 'door> Half<'graph, 'cell, 'cell, 'door> {
     }
 }
 
-impl<'graph, 'cell, 'pair, 'door> Half<'graph, 'cell, 'pair, 'door> {
+impl<'cell, 'pair, 'door> Half<'cell, 'pair, 'door> {
     /// The half `writer` lays into, paired to the writer at `'pair` that a caching body's value
     /// doors take beside a chain over it.
-    pub(crate) fn paired(
+    pub(crate) fn paired<'graph: 'cell, H: Projects<'graph, Projection = BranchCell>>(
         writer: Writer<'cell, 'door>,
-        header: Header<'graph, 'cell, 'door, TypeHeader>,
+        header: Header<'graph, 'cell, 'door, H>,
     ) -> Self {
         Half::Habitat {
             writer,
-            header,
+            branch: header.project(),
             pair: PhantomData,
             own_brand: false,
         }
@@ -150,7 +181,7 @@ impl<'graph, 'cell, 'pair, 'door> Half<'graph, 'cell, 'pair, 'door> {
     }
 }
 
-impl<'cell> LaysRuns<'cell> for Half<'_, 'cell, '_, '_> {
+impl<'cell> LaysRuns<'cell> for Half<'cell, '_, '_> {
     fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'cell [T] {
         match self {
             Half::Habitat { writer, .. } => writer.fill(len, fill),
@@ -166,30 +197,26 @@ impl<'cell> LaysRuns<'cell> for Half<'_, 'cell, '_, '_> {
     }
 }
 
-impl<'cell> Habitat<'cell> for Half<'_, 'cell, '_, '_> {
+impl<'cell> Habitat<'cell> for Half<'cell, '_, '_> {
     fn own(self) -> Option<Own<'cell>> {
         match self {
-            Half::Habitat { header, .. } => header.get().map(|header| Own::Branch(header.branch())),
+            Half::Habitat { branch, .. } => branch.get()?.get().map(Own::Branch),
             Half::Load(builder, _) => Some(Own::Builder(builder)),
         }
     }
 
     fn own_or_lay(self) -> Own<'cell> {
         match self {
-            Half::Habitat { writer, header, .. } => Own::Branch(
-                header
-                    .get_or_lay(|| {
-                        let mut branch = Some(Branch::new(self));
-                        let branch =
-                            &writer.fill(1, |_| branch.take().expect("a run of one fills once"))[0];
-                        &writer.fill(1, |_| HalfHeader {
-                            branch,
-                            table: Cell::new(None),
-                            home: Cell::new(None),
-                        })[0]
-                    })
-                    .branch(),
-            ),
+            Half::Habitat { writer, branch, .. } => {
+                let slot = branch.get_or_lay(writer);
+                if let Some(laid) = slot.get() {
+                    return Own::Branch(laid);
+                }
+                let mut branch = Some(Branch::new(self));
+                let laid = &writer.fill(1, |_| branch.take().expect("a run of one fills once"))[0];
+                slot.set(Some(laid));
+                Own::Branch(laid)
+            }
             Half::Load(builder, _) => Own::Builder(builder),
         }
     }
@@ -272,7 +299,7 @@ impl<'cell> Habitat<'cell> for Half<'_, 'cell, '_, '_> {
 ///     step.done()
 /// }
 /// ```
-pub type Types<'graph, 'cell, 'door> = Chain<'graph, 'cell, 'cell, 'cell, 'door>;
+pub type Types<'cell, 'door> = Chain<'cell, 'cell, 'cell, 'door>;
 
 /// A chain whose tiers sit at `'tier`, paired to the writer at `'pair`: what a value door takes
 /// beside a writer at `'pair`. A caching body's chains lay into a scratch tier, so their tier brand
@@ -281,7 +308,5 @@ pub type Types<'graph, 'cell, 'door> = Chain<'graph, 'cell, 'cell, 'cell, 'door>
 /// one lays nothing; the region's half takes the chain's pairing brand, which it lays no value
 /// under. A chain over a half alone holds none, and its `'reg` names nothing. The chain holds its
 /// halves' doors, so it is branded `'door` to the step that built it.
-pub type Chain<'graph, 'tier, 'pair, 'reg, 'door> = TypeChain<
-    'tier,
-    Halves<'reg, 'tier, Half<'graph, 'tier, 'pair, 'door>, Half<'graph, 'reg, 'pair, 'door>>,
->;
+pub type Chain<'tier, 'pair, 'reg, 'door> =
+    TypeChain<'tier, Halves<'reg, 'tier, Half<'tier, 'pair, 'door>, Half<'reg, 'pair, 'door>>>;

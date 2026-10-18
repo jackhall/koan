@@ -14,7 +14,7 @@ impl<'cell, X: Knotted> Value<'cell, X> {
     pub fn lower_part(
         writer: Writer<'cell, '_>,
         part: &ExpressionPart<'_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Value<'cell, X>> {
         lowers(part).then(|| lower(writer, part, types, scratch))
@@ -51,7 +51,7 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
 fn lower<'cell, X: Knotted>(
     writer: Writer<'cell, '_>,
     part: &ExpressionPart<'_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Value<'cell, X> {
     match part {

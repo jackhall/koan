@@ -25,7 +25,7 @@ fn code<'graph, 'cell>(
 
 fn rendered(
     fixture: &Fixture<'_, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     member: Knotted<'_, '_>,
 ) -> String {
     let mut out = String::new();

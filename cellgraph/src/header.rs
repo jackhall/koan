@@ -182,7 +182,7 @@ where
     'graph: 'cell,
 {
     /// This door narrowed to the part of the header its family projects to, the family erased.
-    pub fn project(self) -> Projected<'cell, 'door, H::Projection<'cell>> {
+    pub fn project(self) -> Projected<'cell, 'door, ProjectionAt<'graph, 'cell, H>> {
         Projected {
             slot: self.slot,
             _brand: PhantomData,
@@ -193,10 +193,9 @@ where
 /// A header family that lays its own empty header and projects one part of it: what a
 /// [`Projected`] door reads a header through.
 pub trait Projects<'graph>: HabitatHeader<'graph> {
-    /// The part of the header a projected door hands out, at the half's brand.
-    type Projection<'cell>: Copy
-    where
-        'graph: 'cell;
+    /// The family of the part of the header a projected door hands out. A family rather than a
+    /// form, so a caller generic over a brand names the projection with no higher-ranked bound.
+    type Projection: Reattachable<'graph>;
 
     /// A header with nothing set, laid through `writer`.
     fn lay<'cell>(writer: Writer<'cell, '_>) -> Self::At<'cell>
@@ -204,10 +203,14 @@ pub trait Projects<'graph>: HabitatHeader<'graph> {
         'graph: 'cell;
 
     /// The part of `header` a projected door hands out.
-    fn project<'cell>(header: Self::At<'cell>) -> Self::Projection<'cell>
+    fn project<'cell>(header: Self::At<'cell>) -> ProjectionAt<'graph, 'cell, Self>
     where
         'graph: 'cell;
 }
+
+/// A header family's projection at one brand.
+pub type ProjectionAt<'graph, 'cell, H> =
+    <<H as Projects<'graph>>::Projection as Reattachable<'graph>>::At<'cell>;
 
 /// A header slot read through its family's projection, the family erased. Crate-private, so the
 /// only slot it is reached on is one a [`Header`] door was minted over. `'cell` is a parameter of
@@ -217,18 +220,18 @@ pub(crate) trait ProjectedSlot<'cell, P> {
     fn get_or_lay(&'cell self, writer: Writer<'cell, '_>) -> P;
 }
 
-impl<'graph: 'cell, 'cell, H: Projects<'graph>> ProjectedSlot<'cell, H::Projection<'cell>>
+impl<'graph: 'cell, 'cell, H: Projects<'graph>> ProjectedSlot<'cell, ProjectionAt<'graph, 'cell, H>>
     for HeaderSlot<'graph, H>
 {
     // Each read goes through a `Header` door over the same slot at the same brand, so `get`'s
     // safety argument covers it unchanged. No local holds an `H::At<'cell>` (see `get_or_lay`).
-    fn get(&'cell self) -> Option<H::Projection<'cell>> {
+    fn get(&'cell self) -> Option<ProjectionAt<'graph, 'cell, H>> {
         Header::<'graph, 'cell, 'cell, H>::new(self)
             .get()
             .map(H::project)
     }
 
-    fn get_or_lay(&'cell self, writer: Writer<'cell, '_>) -> H::Projection<'cell> {
+    fn get_or_lay(&'cell self, writer: Writer<'cell, '_>) -> ProjectionAt<'graph, 'cell, H> {
         H::project(Header::<'graph, 'cell, 'cell, H>::new(self).get_or_lay(|| H::lay(writer)))
     }
 }

@@ -647,7 +647,7 @@ impl<'graph> BodyShape<'graph> {
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, X>,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -920,7 +920,7 @@ impl<'graph> BodyShape<'graph> {
     /// group levels. `None` where the load did not type the callable.
     pub fn in_body(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Parametric> {
         in_body_of(self.callable_type(), self.group_levels(), types, scratch)
@@ -1684,11 +1684,11 @@ impl ShapeError<'_> {
 
     /// The error rendered, led by where it was found (`path:line:col: `), with its names spelled
     /// through `symbols` and its types through `types`.
-    pub fn display<'x, 'g, 'run, 'p, 'reg>(
+    pub fn display<'x, 'run, 'p, 'reg>(
         &'x self,
         symbols: &'x SymbolInterner,
-        types: &'x Chain<'g, 'run, 'p, 'reg, '_>,
-    ) -> ShapeErrorDisplay<'x, 'g, 'run, 'p, 'reg> {
+        types: &'x Chain<'run, 'p, 'reg, '_>,
+    ) -> ShapeErrorDisplay<'x, 'run, 'p, 'reg> {
         ShapeErrorDisplay {
             error: self,
             symbols,
@@ -1699,13 +1699,13 @@ impl ShapeError<'_> {
 
 /// A [`ShapeError`] beside the interner its names render through and the registry its types
 /// render through.
-pub struct ShapeErrorDisplay<'x, 'g, 'run, 'p, 'reg> {
+pub struct ShapeErrorDisplay<'x, 'run, 'p, 'reg> {
     error: &'x ShapeError<'x>,
     symbols: &'x SymbolInterner,
-    types: &'x Chain<'g, 'run, 'p, 'reg, 'x>,
+    types: &'x Chain<'run, 'p, 'reg, 'x>,
 }
 
-impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_, '_> {
+impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
@@ -1988,7 +1988,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_, '_> {
     }
 }
 
-impl ShapeErrorDisplay<'_, '_, '_, '_, '_> {
+impl ShapeErrorDisplay<'_, '_, '_, '_> {
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
         spelled(key, self.symbols)
     }
@@ -2002,7 +2002,7 @@ pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
     arguments: &[A],
     ambiguous: Option<usize>,
     symbols: &SymbolInterner,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> fmt::Result {
     let key = spelled(key, symbols);
     match ambiguous {
@@ -2036,7 +2036,7 @@ pub fn view_refused(
     f: &mut fmt::Formatter<'_>,
     refused: ViewRefused,
     symbols: &SymbolInterner,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> fmt::Result {
     match refused {
         ViewRefused::NotAModule(value) => {
@@ -2089,7 +2089,7 @@ impl fmt::Display for KeyDisplay<'_> {
 pub fn in_body_of(
     callable: StaticCallable<'_>,
     levels: &[Parametric],
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<Parametric> {
     let ktype = match callable {

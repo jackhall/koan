@@ -12,7 +12,7 @@ use super::{Fixture, bound, callable, circular, declared, pin, with_fixture};
 /// `family` applied at `Type = argument`.
 fn boxed_at(
     fixture: &Fixture<'_, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     family: KType,
     argument: KType,
 ) -> KType {

@@ -77,7 +77,7 @@ mod store;
 pub fn type_channel<'graph, X: Knotted>(
     root: &'graph BodyShape<'graph>,
     builtins: &Builtins<'_, X>,
-    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
@@ -101,7 +101,7 @@ pub fn resume_channel<'graph, X: Knotted>(
     root: &'graph BodyShape<'graph>,
     over: Resumption<'_, 'graph>,
     builtins: &Builtins<'_, X>,
-    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
@@ -246,7 +246,7 @@ enum Mode {
 /// The walk's state: the chain of enclosing shapes, each numbering its names.
 struct Pass<'p, 'graph, 'cell, X> {
     builtins: &'p Builtins<'cell, X>,
-    types: &'p Types<'graph, 'graph, 'p>,
+    types: &'p Types<'graph, 'p>,
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
@@ -303,7 +303,7 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
         site: Site,
         chain: &[ValueSymbol],
         label: TypeSymbol,
-        _types: &Chain<'_, '_, '_, '_, '_>,
+        _types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         let unknown = Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE));
         let Some((level, slot)) = self.pass.landing(self.from, at) else {
@@ -1138,7 +1138,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
 
 /// The expression shape `shape` ranked by `classes`.
 fn ranked(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     shape: DeclaredType<Parametric>,
     classes: &[u16],
@@ -1173,7 +1173,7 @@ const FREE: &str = "a load-time type that read no lexical variable holds no vari
 /// A callable and its bucket entry that read no lexical variable, each declared type narrowed to
 /// concrete and a scheme kept as it is.
 fn close_callable<'graph>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     callable: Callable<'graph>,
 ) -> Callable<'graph, KType> {
     Callable {
@@ -1188,7 +1188,7 @@ fn close_callable<'graph>(
 /// A bucket entry that read no lexical variable, its shape narrowed as
 /// [`close_callable`] narrows a callable's type.
 fn close_registered<'graph>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     registered: Registered<'graph>,
 ) -> Registered<'graph, KType> {
     Registered {

@@ -44,9 +44,9 @@ pub(super) enum Held<'cell> {
 /// the load's chain.
 pub(super) struct Program<'p, 'graph, 'cell> {
     /// The load's chain, at the activation's brand.
-    pub types: &'p Chain<'graph, 'cell, 'cell, 'graph, 'p>,
+    pub types: &'p Chain<'cell, 'cell, 'graph, 'p>,
     /// The same chain, at the brand a load pass takes.
-    pub load: &'p Types<'graph, 'graph, 'p>,
+    pub load: &'p Types<'graph, 'p>,
     pub symbols: &'p SymbolInterner,
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
@@ -184,14 +184,14 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
 pub(super) fn with_program<R>(
     source: &str,
     extra: impl FnOnce(
-        &Chain<'_, '_, '_, '_, '_>,
+        &Chain<'_, '_, '_, '_>,
         BumpAllocator<'_>,
         &SymbolInterner,
     ) -> Vec<(&'static str, KType)>,
     hold: impl for<'graph, 'cell> Fn(
         &str,
         Writer<'cell, '_>,
-        &Chain<'graph, 'cell, 'cell, '_, '_>,
+        &Chain<'cell, 'cell, '_, '_>,
     ) -> Held<'cell>,
     check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
 ) -> R {
@@ -279,17 +279,17 @@ pub(super) fn brought<R>(
 }
 
 /// Every slot bound to `Null`.
-pub(super) fn nulls<'graph, 'cell>(
+pub(super) fn nulls<'cell>(
     _: &str,
     _: Writer<'cell, '_>,
-    _: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    _: &Chain<'cell, 'cell, '_, '_>,
 ) -> Held<'cell> {
     Held::Bound(Value::Null)
 }
 
 /// No builtin type past the scalars.
 pub(super) fn scalars(
-    _: &Chain<'_, '_, '_, '_, '_>,
+    _: &Chain<'_, '_, '_, '_>,
     _: BumpAllocator<'_>,
     _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {

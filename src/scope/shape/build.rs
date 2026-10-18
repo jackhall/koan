@@ -119,7 +119,7 @@ pub(super) fn program<'graph, X: Knotted>(
     brand: ProgramBrand<'graph>,
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, X>,
-    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
@@ -171,7 +171,7 @@ fn declared_parameters(
 fn written_as_read<'e>(
     form: &'static BuiltinShape,
     node: &KExpression<'_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> Result<(), ShapeError<'e>> {
     let declarator = matches!(
         form.id,
@@ -699,7 +699,7 @@ struct Builder<'graph, 'x, 'e> {
     builtins: &'e dyn BuiltinNames,
     /// The program's type registry, which the static check admits written parts through and a
     /// quote's carried type is interned in.
-    types: &'e Types<'graph, 'graph, 'e>,
+    types: &'e Types<'graph, 'e>,
     /// The program's interner, which records the spelling of each key a quote's code leaves open,
     /// so its carried type renders the key as written.
     symbols: &'e SymbolInterner,
@@ -737,7 +737,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         brand: ProgramBrand<'graph>,
         scratch: BumpAllocator<'x>,
         builtins: &'e dyn BuiltinNames,
-        types: &'e Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &'e Chain<'graph, 'graph, 'graph, '_>,
         symbols: &'e SymbolInterner,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,

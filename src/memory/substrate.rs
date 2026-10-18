@@ -11,9 +11,10 @@ pub use cellgraph::{
     Active, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
     DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
     Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, PeekError,
-    Prices, Prose, Reattachable, ReattachableOverBoth, ReceiptError, RedeemError, RegisterError,
-    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale,
-    Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, covariant, reattachable,
+    Prices, Projected, ProjectionAt, Projects, Prose, Reattachable, ReattachableOverBoth,
+    ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
+    ReleaseTreeError, Run, SlabHandle, Stale, Storage, TenantHandle, ThinRun, TreeHandle, Verdict,
+    Writer, covariant, reattachable,
 };
 
 /// A carrier at rest in the region hosting it, branded by that region's `'home`; `'graph` is the

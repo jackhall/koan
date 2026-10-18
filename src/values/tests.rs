@@ -56,7 +56,7 @@ pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell, '_>, text: &str) 
 /// value's payload. Empty for a value that does not open.
 pub(crate) fn parts<'cell, X: Knotted + 'cell>(
     value: crate::values::Value<'cell, X>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Vec<crate::values::Value<'cell, X>> {
     let Some(surface) = value.surface(types, scratch) else {
@@ -117,7 +117,7 @@ impl<'graph> TestTypes<'graph> {
     }
 
     /// The chain a test's load-time work goes through: the builder, as the load's chain.
-    pub fn load(&self) -> Types<'graph, 'graph, 'graph> {
+    pub fn load(&self) -> Types<'graph, 'graph> {
         Types::building(Halves::alone(Half::load(self.builder)))
     }
 
@@ -128,7 +128,7 @@ impl<'graph> TestTypes<'graph> {
         &self,
         writer: Writer<'here, 'door>,
         header: Header<'graph, 'here, 'door, TypeHeader>,
-    ) -> Types<'graph, 'here, 'door> {
+    ) -> Types<'here, 'door> {
         Types::new(self.root(), Halves::alone(Half::of(writer, header)))
     }
 
@@ -136,7 +136,7 @@ impl<'graph> TestTypes<'graph> {
     pub fn of<'step, 'here, C, S, D>(
         &self,
         context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
-    ) -> Types<'graph, 'here, 'step>
+    ) -> Types<'here, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
@@ -151,7 +151,7 @@ impl<'graph> TestTypes<'graph> {
     pub fn paired<'step, 'here, C, S, D>(
         &self,
         context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
-    ) -> Types<'graph, 'here, 'step>
+    ) -> Types<'here, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
@@ -168,7 +168,7 @@ impl<'graph> TestTypes<'graph> {
     pub fn shares<'step, 'here, 'scratch, C, S, D>(
         &self,
         context: &StepContext<'graph, 'step, 'here, 'scratch, '_, C, S, D, TypeHeader>,
-    ) -> Chain<'graph, 'scratch, 'here, 'here, 'step>
+    ) -> Chain<'scratch, 'here, 'here, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
@@ -234,10 +234,7 @@ impl<'graph> TestTypes<'graph> {
 
 /// A chain that reads `root` and interns anything a test asks of it into a builder of its own in
 /// `bump`: how a test reads the types a load built, outside any step.
-pub(crate) fn reading<'tier>(
-    root: &'tier Root<'tier>,
-    bump: &'tier Bump,
-) -> Types<'tier, 'tier, 'tier> {
+pub(crate) fn reading<'tier>(root: &'tier Root<'tier>, bump: &'tier Bump) -> Types<'tier, 'tier> {
     Types::new(
         root,
         Halves::alone(Half::load(RootBuilder::in_region(bump))),
@@ -256,7 +253,7 @@ pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDeliver
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which a test interns through before its first cell freezes the root.
-    pub types: &'f Types<'graph, 'graph, 'f>,
+    pub types: &'f Types<'graph, 'f>,
     /// The tiers every cell's chain is built over.
     pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
@@ -401,7 +398,7 @@ impl Knotted for Stand<'_> {
     /// A stand-in holds no value: its knot is its identity.
     fn held<'a>(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -411,7 +408,7 @@ impl Knotted for Stand<'_> {
 
     fn digest_held(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -485,7 +482,7 @@ impl Knotted for Node<'_> {
     /// a data node's.
     fn held<'a>(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -500,7 +497,7 @@ impl Knotted for Node<'_> {
     /// knot.
     fn digest_held(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -667,7 +664,7 @@ impl<'graph> Fixture<'_, 'graph> {
 pub(super) fn ring<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     identity: KType,
     values: &[Option<Holding<'cell>>],
 ) -> Vec<Node<'cell>> {

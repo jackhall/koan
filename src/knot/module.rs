@@ -110,7 +110,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
         born: Born<'graph, 'cell>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         let (known, body) = match born {
             Born::View(content) => (Some(content), None),
@@ -318,7 +318,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         declared: DeclaredType<Parametric>,
         from: KType,
         to: KType,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         debug_assert!(
             underlying.function().is_some() || underlying.coerced().is_some(),

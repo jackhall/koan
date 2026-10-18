@@ -210,7 +210,7 @@ fn wanted<'graph, 'cell>(
 fn describe<'graph>(
     value: KValue<'graph, '_>,
     program: &'graph Program<'graph>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> String {
     match value {
         Value::Number(number) => number.to_string(),
@@ -236,7 +236,7 @@ fn describe<'graph>(
 fn describe_member<'graph>(
     member: Knotted<'graph, '_>,
     program: &'graph Program<'graph>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> String {
     let knot = member
         .member()
