@@ -3439,6 +3439,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 shape_facts: resident_cell(writer, ShapeFacts::default()),
                 seams: resident_cell(writer, &[][..]),
                 reach: resident_cell(writer, Frontier::EMPTY),
+                specialization_keys: resident_cell(writer, None),
             },
         )
     }

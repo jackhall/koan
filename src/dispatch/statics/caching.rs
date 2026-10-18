@@ -15,6 +15,11 @@
 //! is varying. A wrong class costs growth or warmth, never soundness: an edge or an escape the pass
 //! misses only keeps a parameter invariant too long, and one it over-counts only keeps a site
 //! cold.
+//!
+//! A tail edge from a body into itself keeps a parameter only where it passes that same parameter
+//! on: one passing another, a swap, rebinds it. A callable's own record also lays the parameters
+//! that may key its specialization — each one `Pass::keys` admits that no such edge rebinds — and
+//! whether the body escapes, so that a hop of it seeks; `build::lay_keys` reads both.
 
 use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, collect};
 use crate::parse::ExpressionPart;
@@ -612,6 +617,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     }
                     let falls = match passed {
                         None => true,
+                        // A hop of a body into itself keeps a parameter only where it passes that
+                        // same one on.
+                        Some(from) if std::ptr::eq(edge.caller, edge.callee) && from != slot => {
+                            true
+                        }
                         Some(from) => {
                             !invariant_body(self, edge.caller)
                                 || varying.contains(&(address(edge.caller), *from))
@@ -659,6 +669,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         keyed_slots.sort_unstable();
         keyed_slots.dedup();
+        // Each parameter a hop of its body into itself rebinds: one it passes anything but that
+        // same parameter at. Such a name is no key: the hop borrows its predecessor's binding.
+        let mut rebound: BumpBackedSet<'p, (usize, Slot)> = bump_set(scratch);
+        for edge in self.edges.iter() {
+            if std::ptr::eq(edge.caller, edge.callee) {
+                for (slot, passed) in edge.arguments {
+                    if *passed != Some(*slot) {
+                        rebound.insert((address(edge.callee), *slot));
+                    }
+                }
+            }
+        }
         self.sites.sort_by_key(|record| address(record.holder));
         for (holder, frame) in self.holders.iter() {
             let caches = matches!(frame.class(), Some(BodyClass::Sealed { caches: true, .. }));
@@ -683,6 +705,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         keyed_slots[from..to].iter().map(|(_, slot)| *slot),
                     )
                 });
+            let own = std::ptr::eq(*holder, *frame) && frame.kind() == ShapeKind::Callable;
+            let mut keyable = BumpVec::new_in(scratch);
+            if own {
+                keyable.extend((0..frame.slots() as u32).map(Slot).filter(|slot| {
+                    frame.position_of(*slot) == Position::PARAMETER
+                        && self.keys(frame, *slot)
+                        && !rebound.contains(&(at, *slot))
+                }));
+            }
+            let keyable = collect(self.writer, keyable.iter().copied());
+            let escapes = !own || !invariant_body(self, frame);
             self.fix_caching(
                 holder,
                 Caching {
@@ -690,6 +723,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     mints: Keyed::sorted(self.writer, &mut mints),
                     warm: Keyed::sorted(self.writer, &mut warm),
                     invariant,
+                    keyable,
+                    escapes,
                 },
             );
         }

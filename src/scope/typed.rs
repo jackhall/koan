@@ -500,7 +500,8 @@ pub enum Mint {
 
 /// What the load fixed about where a body's types intern at run: whether its frame caches, how
 /// each of its own minting sites is classed, and which of its composite sites — list, dict and
-/// record literals and constructions — build values whose own types are warm.
+/// record literals and constructions — build values whose own types are warm. On a callable's own
+/// record it also says which of its parameters may key its specialization.
 #[derive(Clone, Copy, Debug)]
 pub struct Caching<'graph> {
     /// Whether the frame body this shape runs in caches: its own class for a callable or a quote's
@@ -517,6 +518,13 @@ pub struct Caching<'graph> {
     /// the frame seeks the specialization these slots' arguments key. `None` on every other
     /// record.
     pub invariant: Option<&'graph [Slot]>,
+    /// On a callable's own record: its parameter slots that may key a specialization, sorted: each
+    /// one `Pass::keys` admits and that no tail edge from the body into itself rebinds. Empty on
+    /// every other record.
+    pub keyable: &'graph [Slot],
+    /// Whether a frame of this body may be tail-called from a site the load cannot read: its name
+    /// escapes as a value, or no call by name reaches its binder. A hop of such a body seeks.
+    pub escapes: bool,
 }
 
 /// The value channel's load-time facts for one body: a static type for every value expression and

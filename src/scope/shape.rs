@@ -599,6 +599,9 @@ pub struct BodyShape<'graph> {
     seams: &'graph Cell<&'graph [Seam<'graph>]>,
     /// Every unknown a fact of this body, or of a body nested in it, waits on.
     reach: &'graph Cell<Frontier<'graph>>,
+    /// The parameter slots this callable's specialization keys on, sorted, once the seams are
+    /// listed: `None` where a call of it seeks nothing.
+    specialization_keys: &'graph Cell<Option<&'graph [Slot]>>,
 }
 
 /// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
@@ -1161,6 +1164,18 @@ impl<'graph> BodyShape<'graph> {
         debug_assert!(self.seams.get().is_empty() && self.reach.get().is_empty());
         self.seams.set(seams);
         self.reach.set(reach);
+    }
+
+    /// The parameter slots this callable's specialization keys on, sorted: `None` where a call of
+    /// it seeks nothing.
+    pub fn specialization_keys(&self) -> Option<&'graph [Slot]> {
+        self.specialization_keys.get()
+    }
+
+    /// Written once, once the seams are listed.
+    pub fn fix_specialization_keys(&self, keys: Option<&'graph [Slot]>) {
+        debug_assert!(self.specialization_keys.get().is_none());
+        self.specialization_keys.set(keys);
     }
 
     /// The static pass's facts about this body as a whole.
