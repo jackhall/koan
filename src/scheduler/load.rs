@@ -13,8 +13,9 @@ use crate::scheduler::continuation::ContinuationFamily;
 use crate::scheduler::continuation::StepBundle;
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::drain::Graph;
+use crate::scope::RegionHeader;
 use crate::type_lattice::Root;
-use crate::values::{Half, SpecBounds, TypeHeader};
+use crate::values::{Half, SpecBounds};
 
 /// The two slab roots a loaded graph holds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -35,8 +36,13 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         bounds: SpecBounds,
         load: impl FnOnce() -> Result<(&'graph Root<'graph>, R), E>,
     ) -> Result<(Self, Roots, R), E> {
-        let mut cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader> =
-            CellGraph::new(cap, crate::values::verdict);
+        let mut cells: CellGraph<
+            'graph,
+            ContinuationFamily<B>,
+            B::Scratch,
+            KDelivery,
+            RegionHeader,
+        > = CellGraph::new(cap, crate::values::verdict);
         let build = cells
             .create(None)
             .expect("a fresh slab of at least two cells admits its build root");
@@ -49,7 +55,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
                 let half = Half::of(context.writer(), context.header());
                 let header = context
                     .header()
-                    .get_or_lay(|| TypeHeader::lay(context.writer()));
+                    .get_or_lay(|| RegionHeader::lay(context.writer()));
                 header.lay_table(half, bounds.root, bounds.nested);
                 Ok(loaded)
             })

@@ -30,10 +30,11 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
-use crate::type_lattice::Root;
 #[cfg(test)]
-use crate::values::HalfHeader;
-use crate::values::{Decision, SpecHome, TypeHeader};
+use crate::scope::HalfHeader;
+use crate::scope::RegionHeader;
+use crate::type_lattice::Root;
+use crate::values::{Decision, SpecHome};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -45,7 +46,7 @@ use crate::values::{Decision, SpecHome, TypeHeader};
 /// It holds the frozen type root every step's chain reads first, so a step and a crossing take it
 /// from the graph they run over rather than from a program or a static.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
-    cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
+    cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
     type_root: &'graph Root<'graph>,
     /// The build tree's core cell, whose region holds the root-level specialization table: `Some`
     /// for a graph the [load door](Graph::load) stood up, `None` for one [`new`](Graph::new) made,
@@ -62,7 +63,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
 
     /// A graph over `cells`, its steps' types read over `type_root`, its build root `build_root`.
     pub(super) fn assemble(
-        cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
+        cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
         type_root: &'graph Root<'graph>,
         build_root: Option<SlabHandle>,
     ) -> Self {
@@ -156,7 +157,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     #[cfg(test)]
     pub(super) fn cells(
         &mut self,
-    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader> {
+    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader> {
         &mut self.cells
     }
 }

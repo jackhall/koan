@@ -33,8 +33,9 @@ use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::scope::{BodyShape, Builtins, Component, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
+use crate::values::tests::TestHeader;
 use crate::values::tests::TestTypes;
-use crate::values::{Chain, Circular, Knotted as _, Link, TypeHeader, TypeValue, Types, Value};
+use crate::values::{Chain, Circular, Knotted as _, Link, TypeValue, Types, Value};
 
 use super::module::body_activation;
 use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
@@ -44,11 +45,11 @@ pub(crate) struct Step;
 reattachable!(Step => ());
 
 /// A graph whose cells only store, keeping a type branch per habitat half.
-pub(crate) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TypeHeader>;
+pub(crate) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TestHeader>;
 
 /// A step context over [`TestGraph`].
 pub(crate) type TestContext<'graph, 'step, 'here, 'scratch, 'lent> =
-    StepContext<'graph, 'step, 'here, 'scratch, 'lent, Step, NoScratch, NoDelivery, TypeHeader>;
+    StepContext<'graph, 'step, 'here, 'scratch, 'lent, Step, NoScratch, NoDelivery, TestHeader>;
 
 pub(crate) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,

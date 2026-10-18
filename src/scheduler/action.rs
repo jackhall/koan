@@ -28,9 +28,10 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
+use crate::scope::RegionHeader;
 use crate::type_lattice::Root;
 use crate::type_lattice::{Habitat, Halves, Own};
-use crate::values::{BuildRef, Chain, Half, TypeHeader, Types};
+use crate::values::{BuildRef, Chain, Half, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -43,7 +44,7 @@ pub(super) type Context<'graph, 'step, 'here, 'scratch, 'lent, B> = StepContext<
     ContinuationFamily<B>,
     <B as StepBundle<'graph>>::Scratch,
     KDelivery,
-    TypeHeader,
+    RegionHeader,
 >;
 
 /// A bundle's scratch state at a step's two brands.
@@ -357,7 +358,7 @@ where
 
     /// The header door of this cell's write home — its region, or its host's for a tenant — at
     /// its own brand: where the branch of the types the step builds there rests.
-    pub fn header(&self) -> Header<'graph, 'here, 'step, TypeHeader> {
+    pub fn header(&self) -> Header<'graph, 'here, 'step, RegionHeader> {
         self.context.header()
     }
 
@@ -410,7 +411,7 @@ where
         &self,
     ) -> Option<(
         Writer<'lent, 'step>,
-        Header<'graph, 'lent, 'step, TypeHeader>,
+        Header<'graph, 'lent, 'step, RegionHeader>,
     )> {
         (self.context.lent_region()).or_else(|| self.context.lent_scratch())
     }
@@ -637,7 +638,7 @@ where
             return self.failed(StepError::Refused);
         };
         let half = Half::of(self.writer(), self.header());
-        let header = (self.header()).get_or_lay(|| TypeHeader::lay(self.writer()));
+        let header = (self.header()).get_or_lay(|| RegionHeader::lay(self.writer()));
         header.lay_table(half, nested, nested);
         Action(Kind::Quiesced)
     }
@@ -684,7 +685,7 @@ where
             // The witness is minted here: `CrossedOperand` declares `'graph: 'cell`, so the slice
             // argument's type implies the bound the witness states. Were that where-clause to go,
             // this would stop compiling — a compile error, never unsoundness.
-            |writer, header, _: &[CrossedOperand<'graph, '_, '_, KValueFamily, TypeHeader>]| {
+            |writer, header, _: &[CrossedOperand<'graph, '_, '_, KValueFamily, RegionHeader>]| {
                 build(
                     writer,
                     &Types::new(root, Halves::alone(Half::of(writer, header))),

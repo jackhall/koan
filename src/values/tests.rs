@@ -18,10 +18,10 @@ mod surface;
 mod working;
 
 use super::digest::{ContentDigest, DigestHasher, Tag};
-use super::{Chain, Half, TypeHeader, Types};
+use super::{BranchCell, BranchSlot, Chain, Half, Types};
 use crate::memory::{
     Active, Bump, BumpAllocator, CellGraph, CellHandle, Covariant, Delivery, Edge, Header,
-    KnotPlan, Member, NoDelivery, NoScratch, Operand, Prices, ProgramBrand, Reattachable,
+    KnotPlan, Member, NoDelivery, NoScratch, Operand, Prices, ProgramBrand, Projects, Reattachable,
     ReattachableOverBoth, ReleaseAbsorption, Stale, StepContext, Verdict, Writer, covariant,
     program_storage, reattachable,
 };
@@ -127,7 +127,7 @@ impl<'graph> TestTypes<'graph> {
     pub fn half<'here, 'door>(
         &self,
         writer: Writer<'here, 'door>,
-        header: Header<'graph, 'here, 'door, TypeHeader>,
+        header: Header<'graph, 'here, 'door, TestHeader>,
     ) -> Types<'here, 'door> {
         Types::new(self.root(), Halves::alone(Half::of(writer, header)))
     }
@@ -135,7 +135,7 @@ impl<'graph> TestTypes<'graph> {
     /// The chain for what `context`'s step lays in its cell.
     pub fn of<'step, 'here, C, S, D>(
         &self,
-        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
+        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TestHeader>,
     ) -> Types<'here, 'step>
     where
         C: Reattachable<'graph>,
@@ -150,7 +150,7 @@ impl<'graph> TestTypes<'graph> {
     /// where it lays.
     pub fn paired<'step, 'here, C, S, D>(
         &self,
-        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
+        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TestHeader>,
     ) -> Types<'here, 'step>
     where
         C: Reattachable<'graph>,
@@ -167,7 +167,7 @@ impl<'graph> TestTypes<'graph> {
     /// branch, then its scratch's, paired to the cell's writer.
     pub fn shares<'step, 'here, 'scratch, C, S, D>(
         &self,
-        context: &StepContext<'graph, 'step, 'here, 'scratch, '_, C, S, D, TypeHeader>,
+        context: &StepContext<'graph, 'step, 'here, 'scratch, '_, C, S, D, TestHeader>,
     ) -> Chain<'scratch, 'here, 'here, 'step>
     where
         C: Reattachable<'graph>,
@@ -184,7 +184,7 @@ impl<'graph> TestTypes<'graph> {
     /// [`values::cross`](crate::values::cross) over this test's chains.
     pub fn cross<'step, C, S, D, XF>(
         &self,
-        context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, TypeHeader>,
+        context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, TestHeader>,
         dest: impl Into<CellHandle>,
         carrier: &ValueCarrier<'graph, 'step, XF>,
     ) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
@@ -211,7 +211,7 @@ impl<'graph> TestTypes<'graph> {
     /// [`values::cross_here`](crate::values::cross_here) over this test's chains.
     pub fn cross_here<'step, 'here, C, S, D, XF>(
         &self,
-        context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
+        context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TestHeader>,
         carrier: &ValueCarrier<'graph, 'step, XF>,
     ) -> crate::values::Value<'here, XF::Closed<'here>>
     where
@@ -245,8 +245,31 @@ pub(crate) fn reading<'tier>(root: &'tier Root<'tier>, bump: &'tier Bump) -> Typ
 pub(super) struct Step;
 reattachable!(Step => ());
 
+/// A header family that keeps a half's branch and nothing else: all `values` reads of a header,
+/// so a suite here or in `knot` runs with no other layer's header record.
+pub(crate) struct TestHeader;
+reattachable!(TestHeader => BranchSlot<'cell>);
+
+impl<'graph> Projects<'graph> for TestHeader {
+    type Projection = BranchCell;
+
+    fn lay<'cell>(writer: Writer<'cell, '_>) -> BranchSlot<'cell>
+    where
+        'graph: 'cell,
+    {
+        &writer.fill(1, |_| std::cell::Cell::new(None))[0]
+    }
+
+    fn project<'cell>(header: BranchSlot<'cell>) -> BranchSlot<'cell>
+    where
+        'graph: 'cell,
+    {
+        header
+    }
+}
+
 /// A graph whose cells only store, keeping a type branch per habitat half.
-pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TypeHeader>;
+pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TestHeader>;
 
 /// What a test reads and writes outside the graph. `'graph` is the program storage the parsed AST
 /// and the types live in, which a graph built over it borrows.
@@ -296,7 +319,7 @@ impl<'graph> Fixture<'_, 'graph> {
                 Step,
                 NoScratch,
                 NoDelivery,
-                TypeHeader,
+                TestHeader,
             >,
         ) -> R,
     ) -> R {

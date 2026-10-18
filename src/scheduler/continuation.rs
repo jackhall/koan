@@ -18,8 +18,8 @@ use crate::memory::{
     ReattachableOverBoth, Writer, reattachable,
 };
 use crate::scheduler::action::{Action, Step, Use};
+use crate::scope::RegionHeader;
 use crate::type_lattice::Root;
-use crate::values::TypeHeader;
 
 /// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
 /// the family it holds at a step and parks with, the family of what a parked cell keeps in its
@@ -50,8 +50,8 @@ pub trait StepBundle<'graph>: 'graph {
     /// veneer calls it only from inside a priced crossing.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, TypeHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, TypeHeader>,
+        header: Header<'graph, 'cell, '_, RegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, RegionHeader>,
         born: Born,
         type_root: &'graph Root<'graph>,
     ) -> BirthAt<'graph, 'cell, Self>

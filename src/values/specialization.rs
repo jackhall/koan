@@ -1,9 +1,9 @@
 //! What a habitat half's header keeps for the build tree: the table of a build cell's
 //! specializations by key, and the opaque token naming the build cell a function was born under.
 //!
-//! A [`SpecTable`] rests in a build cell's region beside its type branch, in its
-//! [`HalfHeader`](super::HalfHeader): a fixed run of entries laid with the cell and never grown,
-//! as long as the cell's bound ([`SpecBounds`]). Each entry is a key, a bare handle and the
+//! A [`SpecTable`] rests in a build cell's region beside its type branch, in the region header
+//! `scope` declares: a fixed run of entries laid with the cell and never grown, as long as the
+//! cell's bound ([`SpecBounds`]). Each entry is a key, a bare handle and the
 //! parent's birth count at the child's last birth. A bare handle holds nothing alive, so a stale
 //! one is a miss the drain rebuilds in place. A miss with no empty or stale entry takes the entry
 //! of the least recently born child, whose subtree the drain releases first. The table counts

@@ -10,10 +10,11 @@
 use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, StepBundle};
+use crate::scope::RegionHeader;
 use crate::scope::{BodyShape, Site};
 use crate::symbols::Symbol;
 use crate::type_lattice::{DeclaredType, Halves, KType, Root};
-use crate::values::{BuildRef, ContentDigest, Half, TypeHeader, Types, copy_severed};
+use crate::values::{BuildRef, ContentDigest, Half, Types, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -213,8 +214,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     /// is rebuilt, each type its values carry adopted from the home's branch.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, TypeHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, TypeHeader>,
+        header: Header<'graph, 'cell, '_, RegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, RegionHeader>,
         born: Born,
         type_root: &'graph Root<'graph>,
     ) -> KBirth<'graph, 'cell>

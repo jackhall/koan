@@ -16,12 +16,9 @@
 
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::num::NonZeroUsize;
 
 use crate::memory::{Header, LaysRuns, Projected, Projects, Writer, reattachable};
 use crate::type_lattice::{Branch, Habitat, Halves, Own, RootBuilder, TypeChain};
-
-use super::specialization::{SpecHome, SpecTable};
 
 /// A half's branch slot, as its header keeps it: empty until the first door that interns into
 /// the half lays the branch.
@@ -32,80 +29,6 @@ pub type BranchSlot<'cell> = &'cell Cell<Option<&'cell Branch<'cell>>>;
 pub struct BranchCell;
 
 reattachable!(BranchCell => BranchSlot<'cell>);
-
-/// The header family a koan graph keeps per habitat half: a [`HalfHeader`].
-pub struct TypeHeader;
-
-reattachable!(TypeHeader => &'cell HalfHeader<'cell>);
-
-impl<'graph> Projects<'graph> for TypeHeader {
-    type Projection = BranchCell;
-
-    fn lay<'cell>(writer: Writer<'cell, '_>) -> &'cell HalfHeader<'cell>
-    where
-        'graph: 'cell,
-    {
-        &writer.fill(1, |_| HalfHeader {
-            branch: Cell::new(None),
-            table: Cell::new(None),
-            home: Cell::new(None),
-        })[0]
-    }
-
-    fn project<'cell>(header: &'cell HalfHeader<'cell>) -> BranchSlot<'cell>
-    where
-        'graph: 'cell,
-    {
-        &header.branch
-    }
-}
-
-/// What a habitat half keeps in its header: its branch of the type lattice, laid on the first
-/// intern; for a build cell's region, the fixed table of its specializations, laid with the cell;
-/// and for a specialization's region, its home, which the drain sets once the cell has enlisted.
-pub struct HalfHeader<'cell> {
-    branch: Cell<Option<&'cell Branch<'cell>>>,
-    table: Cell<Option<&'cell SpecTable<'cell>>>,
-    home: Cell<Option<SpecHome>>,
-}
-
-impl<'cell> HalfHeader<'cell> {
-    /// The half's branch of the type lattice, once a door has interned into the half.
-    pub fn branch(&self) -> Option<&'cell Branch<'cell>> {
-        self.branch.get()
-    }
-
-    /// The half's specialization table, for a build cell's region.
-    pub fn table(&self) -> Option<&'cell SpecTable<'cell>> {
-        self.table.get()
-    }
-
-    /// Lay the half's specialization table through `lay`, `length` entries long, its children's
-    /// tables `nested` long. A header that has a table keeps it, and the call returns it.
-    pub fn lay_table(
-        &self,
-        lay: impl LaysRuns<'cell>,
-        length: NonZeroUsize,
-        nested: NonZeroUsize,
-    ) -> &'cell SpecTable<'cell> {
-        if let Some(table) = self.table.get() {
-            return table;
-        }
-        let table = SpecTable::lay(lay, length, nested);
-        self.table.set(Some(table));
-        table
-    }
-
-    /// The specialization whose region this header is, and its parent, once the drain has set it.
-    pub fn home(&self) -> Option<SpecHome> {
-        self.home.get()
-    }
-
-    /// Record that this header's region is the specialization `home` names.
-    pub fn set_home(&self, home: SpecHome) {
-        self.home.set(Some(home));
-    }
-}
 
 /// The tier a chain interns into, beside the runs it lays content through: a habitat half's
 /// writer and header door at one brand, or the root builder during the load.

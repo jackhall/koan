@@ -10,8 +10,9 @@
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{CrossedOperand, Header, Writer, reattachable};
 use crate::scheduler::{Action, Born, Graph, NativeStep, Step, StepBundle};
+use crate::scope::RegionHeader;
 use crate::type_lattice::{Halves, Root};
-use crate::values::{Half, TypeHeader, Types};
+use crate::values::{Half, Types};
 
 /// The bundle the scheduler's tests run over.
 pub struct Native;
@@ -33,8 +34,8 @@ impl<'graph> StepBundle<'graph> for Native {
     /// the value crossing.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, TypeHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, TypeHeader>,
+        header: Header<'graph, 'cell, '_, RegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, RegionHeader>,
         born: Born,
         type_root: &'graph Root<'graph>,
     ) -> KValue<'graph, 'cell>

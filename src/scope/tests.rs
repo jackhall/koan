@@ -8,6 +8,7 @@ mod dispatch;
 mod examples;
 mod facts;
 mod groups;
+mod header;
 pub(crate) mod plan;
 mod properties;
 mod quoted_uses;

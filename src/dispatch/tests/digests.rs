@@ -7,8 +7,8 @@ use std::cell::RefCell;
 
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
 use crate::scheduler::{Action, Step, StepError};
+use crate::scope::HalfHeader;
 use crate::type_lattice::TypeDigest;
-use crate::values::HalfHeader;
 
 thread_local! {
     /// What [`interned_digests`] read: every digest the root and the root cell's branch hold.
