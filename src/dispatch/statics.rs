@@ -216,6 +216,7 @@ pub(super) fn statics<'graph>(
         holders: BumpVec::new_in(scratch),
         module_mints: bump_table(scratch),
         heading: false,
+        components: BumpVec::new_in(scratch),
     };
     pass.push(root, true);
     pass.open_paths(root);
@@ -430,6 +431,10 @@ struct Pass<'p, 'x, 'graph> {
     module_mints: BumpBackedMap<'p, usize, bool>,
     /// Whether the name the pass is about to read sits at a call's head.
     heading: bool,
+    /// Each component being typed, outermost first, by its shape's level and its members: a
+    /// fellow's callable is not typed on demand while its component is, since its body reads the
+    /// fellows' facts, not their seeds.
+    components: BumpVec<'p, (usize, &'graph [Slot])>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -1173,9 +1178,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
     }
 
-    /// Type a component's value binders: each callable or module it births first, then each data
-    /// member from its right-hand side, in member order. A component of type binders is the type
-    /// channel's.
+    /// Type a component's value binders: each callable it births at its declared type first, then
+    /// every other member seeded ([`seed`](Self::seed)) and typed against its fellows' seeds
+    /// ([`members`](Self::members)), so no member's type depends on the order the members are
+    /// typed in. A component of type binders is the type channel's.
     fn component(&mut self, level: usize, index: usize) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         let component = &shape.components()[index];
@@ -1191,48 +1197,41 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             return Ok(());
         }
+        // A callable member is its declared type, which reads no fellow.
         for member in component.members {
-            if let Some(body) = shape.births(*member) {
-                self.born(level, body);
-                let typed = match body.form() {
-                    Some(_) => self.callable(level, body),
-                    None if body.kind() == ShapeKind::Module => {
-                        DeclaredType::Type(self.module(level, body)?)
-                    }
-                    None => DeclaredType::Type(unknown()),
-                };
-                let typed = match typed {
-                    DeclaredType::Scheme(scheme) => self.bound(level, *member, body, scheme)?,
-                    typed => typed,
-                };
-                self.set_binder(level, *member, typed);
-                // The tie births an annotated member at its annotation, so a mention through a
-                // fellow's edge reads the binder at its retype, as the slot does.
-                if let (DeclaredType::Type(typed), Some(annotation)) =
-                    (typed, shape.annotation(*member))
-                {
-                    let held = self.annotated(level, *member, annotation, typed)?;
-                    self.set_binder(level, *member, DeclaredType::Type(held));
-                }
-            }
-        }
-        for member in component.members {
-            if shape.births(*member).is_some() {
+            let Some(body) = shape.births(*member) else {
+                continue;
+            };
+            self.born(level, body);
+            if body.form().is_none() {
                 continue;
             }
-            if let Some(rhs) = shape.rhs(*member) {
-                let wanted = match shape.annotation(*member) {
-                    Some(annotation) => self.declared(level, annotation),
-                    None => self
-                        .statement_of(level, *member)
-                        .and_then(|index| self.tail(level, index)),
-                };
-                let mut typed = self.part_at(level, rhs, wanted)?;
-                if let Some(annotation) = shape.annotation(*member) {
-                    typed = self.annotated(level, *member, annotation, typed)?;
-                }
-                self.set_binder(level, *member, DeclaredType::Type(typed));
+            let typed = match self.callable(level, body) {
+                DeclaredType::Scheme(scheme) => self.bound(level, *member, body, scheme)?,
+                typed => typed,
+            };
+            self.set_binder(level, *member, typed);
+            // The tie births an annotated member at its annotation, so a mention through a
+            // fellow's edge reads the binder at its retype, as the slot does.
+            if let (DeclaredType::Type(typed), Some(annotation)) =
+                (typed, shape.annotation(*member))
+            {
+                let held = self.annotated(level, *member, annotation, typed)?;
+                self.set_binder(level, *member, DeclaredType::Type(held));
             }
+        }
+        // Every other member is seeded before any is typed: a fellow read while the component is
+        // typed is its seed, whatever order the members are typed in.
+        for member in component.members {
+            if let Some(seed) = self.seed(level, *member) {
+                self.set_binder(level, *member, seed);
+            }
+        }
+        self.components.push((level, component.members));
+        let typed = self.members(level, component.members);
+        self.components.pop();
+        for (member, typed) in typed?.iter() {
+            self.set_binder(level, *member, DeclaredType::Type(*typed));
         }
         // A binding statement's value is the one binder it writes, where it writes only one.
         let mut values = component
@@ -1248,6 +1247,64 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         Ok(())
+    }
+
+    /// What a fellow reads `member`, a member of a component of the shape at `level` that births
+    /// no callable, as while the component is typed: its annotation, as a retype to it reads, the
+    /// signature a `MODULE` or `GROUP` body is at most, or `[Never, Any]`. `None` for a member
+    /// that births a callable, which is its declared type already.
+    fn seed(&self, level: usize, member: Slot) -> Option<Bound> {
+        let shape = self.chain[level].shape;
+        let body = shape.births(member);
+        if body.is_some_and(|body| body.form().is_some()) {
+            return None;
+        }
+        let module = body.is_some_and(|body| body.kind() == ShapeKind::Module);
+        Some(DeclaredType::Type(match shape.annotation(member) {
+            Some(annotation) => match self.declared(level, annotation) {
+                Some(declared) => retyped_to(self.types, declared),
+                None => unknown(),
+            },
+            None if module => under(KType::EMPTY_SIGNATURE.into()),
+            None => unknown(),
+        }))
+    }
+
+    /// Type `members`, the members of a component of the shape at `level` that birth no callable:
+    /// each `MODULE` or `GROUP` body, and each data member from its right-hand side, held to its
+    /// annotation. What each is typed as, written once every one is typed.
+    fn members(
+        &mut self,
+        level: usize,
+        members: &[Slot],
+    ) -> Result<BumpVec<'p, (Slot, Interval)>, ShapeError<'graph>> {
+        let shape = self.chain[level].shape;
+        let mut typed = BumpVec::with_capacity_in(members.len(), self.scratch);
+        for member in members {
+            let annotation = shape.annotation(*member);
+            let value = match shape.births(*member) {
+                Some(body) if body.form().is_some() => continue,
+                Some(body) if body.kind() == ShapeKind::Module => self.module(level, body)?,
+                Some(_) => unknown(),
+                None => {
+                    let Some(rhs) = shape.rhs(*member) else {
+                        continue;
+                    };
+                    let wanted = match annotation {
+                        Some(annotation) => self.declared(level, annotation),
+                        None => (self.statement_of(level, *member))
+                            .and_then(|index| self.tail(level, index)),
+                    };
+                    self.part_at(level, rhs, wanted)?
+                }
+            };
+            let value = match annotation {
+                Some(annotation) => self.annotated(level, *member, annotation, value)?,
+                None => value,
+            };
+            typed.push((*member, value));
+        }
+        Ok(typed)
     }
 
     /// The index of the statement that binds `member` in the shape at `level`, where one does.

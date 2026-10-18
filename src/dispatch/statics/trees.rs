@@ -807,7 +807,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Whether the callable body `body` is typed, typing it now where the walk has not reached it:
-    /// `false` where it is being typed, or the chain does not hold the shape it is nested in.
+    /// `false` where it is being typed, where the chain does not hold the shape it is nested in, and
+    /// where it is a fellow of a component being typed.
     fn typed_on_demand(&mut self, body: &'graph BodyShape<'graph>) -> Read<'graph, bool> {
         if self.done(body) {
             return Ok(true);
@@ -823,6 +824,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }) else {
             return Ok(false);
         };
+        let shape = self.chain[parent].shape;
+        let fellow = (self.components.iter()).any(|(level, members)| {
+            *level == parent
+                && (members.iter()).any(|member| {
+                    shape
+                        .births(*member)
+                        .is_some_and(|born| std::ptr::eq(born, body))
+                })
+        });
+        if fellow {
+            return Ok(false);
+        }
         let mut stash = BumpVec::with_capacity_in(self.chain.len() - parent - 1, self.scratch);
         stash.extend(self.chain.drain(parent + 1..));
         let typed = self.nest(parent, body);

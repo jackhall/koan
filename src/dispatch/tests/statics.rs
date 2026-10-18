@@ -594,3 +594,37 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
         "crates"
     );
 }
+
+#[test]
+fn a_fellow_in_a_knot_reads_its_seed_whatever_order_the_members_are_typed_in() {
+    let knot = "LET a = {next = b, v = 1}\nLET b = {next = a, v = \"s\"}";
+    let swapped = "LET b = {next = a, v = 1}\nLET a = {next = b, v = \"s\"}";
+    assert_eq!(top(knot, "a"), ":{next :Any v :Number}");
+    assert_eq!(top(knot, "b"), ":{next :Any v :Str}");
+    assert_eq!(top(swapped, "b"), top(knot, "a"));
+    assert_eq!(top(swapped, "a"), top(knot, "b"));
+}
+
+#[test]
+fn an_annotated_fellow_is_read_at_its_annotation() {
+    let knot = "LET a :{next :Any v :Number} = {next = b, v = 1}\nLET b = {next = a, v = \"s\"}";
+    assert_eq!(top(knot, "b"), ":{next :{next :Any v :Number} v :Str}");
+}
+
+#[test]
+fn a_fellow_s_callable_body_reads_the_fellow_s_own_type() {
+    let source = "LET a = {next = b, v = 1}\nLET b = {next = a, f = (FN :{} -> Any = #(a))}";
+    loaded(source, |program| {
+        let (_, f) = (program.shape().nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            .expect("the function's body is nested in the program");
+        let read = f.statement_type(0).expect("the load typed the body");
+        let rendered = display_name(
+            read.upper,
+            &reading(program.root(), &Bump::new()),
+            program.symbols(),
+        )
+        .to_string();
+        assert_eq!(rendered, ":{next :Any v :Number}");
+    });
+}
