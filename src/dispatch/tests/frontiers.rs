@@ -12,7 +12,7 @@ const PICK: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
                     EXPR #(PICK x :Str) -> Number = #(1)\n";
 
 /// The one quantified callable body the program's top level registers.
-fn quantified<'graph>(program: &Program<'graph>) -> &'graph BodyShape<'graph> {
+pub(super) fn quantified<'graph>(program: &Program<'graph>) -> &'graph BodyShape<'graph> {
     let mut found = (program.shape().nested_shapes().iter()).filter(|(_, nested)| {
         nested.kind() == ShapeKind::Callable && !nested.group_levels().is_empty()
     });
@@ -30,7 +30,7 @@ fn waits(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Vec<Unknow
 }
 
 /// The unknown the slot `name` of `shape` is: a type name's or a value binder's.
-fn unknown(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Unknown {
+pub(super) fn unknown(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Unknown {
     let found = (0..shape.slots()).map(|at| Slot(at as u32)).find(|at| {
         let named = shape.slot_name(*at);
         !matches!(named, BinderSymbol::Registration(_))
@@ -114,7 +114,7 @@ fn a_fact_in_an_inner_body_over_an_outer_name_waits_on_the_outer_slot() {
 }
 
 /// `shape`'s seams, each rendered as where it lies beside how many unknowns it waits on.
-fn seams(shape: &BodyShape<'_>) -> Vec<(SeamAt, Vec<Unknown>)> {
+pub(super) fn seams(shape: &BodyShape<'_>) -> Vec<(SeamAt, Vec<Unknown>)> {
     (shape.seams().iter())
         .map(|seam| (seam.at, seam.waits_on.unknowns().to_vec()))
         .collect()

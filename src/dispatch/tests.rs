@@ -13,6 +13,7 @@ mod functions;
 mod generate;
 mod generic;
 mod instances;
+mod keys;
 mod lexical;
 mod modules;
 mod narrowing;

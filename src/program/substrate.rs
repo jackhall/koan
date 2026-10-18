@@ -207,6 +207,7 @@ impl CellSubstrate {
                 type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
                 L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
                 crate::build::list_seams(shape, brand.writer(), &scratch);
+                crate::build::lay_keys(shape, brand.writer(), &scratch);
                 inspected = Some(inspect(Loaded {
                     shape,
                     builtins,

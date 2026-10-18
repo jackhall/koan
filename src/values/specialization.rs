@@ -24,12 +24,12 @@ use crate::type_lattice::{DeclaredType, KType, Parametric};
 
 use super::{ContentDigest, Knotted, Value};
 
-/// What a parent's table finds a specialization by: the callee's segment and the argument digests
-/// its invariant sites read, hashed into one digest.
+/// What a parent's table finds a specialization by: the callee's segment and the content digests
+/// at the names its key lists, hashed into one digest.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SpecKey(pub ContentDigest);
 
-/// The types a specialization's binding carries, one entry per keyed parameter in the order its
+/// The types a specialization's binding carries, one entry per keyed name in the order its
 /// key digests them: what the drain lays in a missed specialization's branch before its step
 /// ([build/README.md](../build/README.md#references-between-the-trees)). A handle is a content
 /// digest and holds nothing alive, so a binding outlives the values it was read from. One entry

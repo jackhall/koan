@@ -796,7 +796,7 @@ fn call<'graph, 'here>(
             };
             // A call through a barrier never tails: its value crosses the barrier where its
             // frame ends.
-            return called(step, at, callee, arguments, tails, call);
+            return called(step, at, callee, tails, call);
         }
         Selection::NoOverload => Raised::NoOverload {
             key: list.elements,
@@ -965,18 +965,18 @@ fn apply<'graph, 'here>(
             Use::Forwards,
         )
     };
-    called(step, at, head, argument, tails, call)
+    called(step, at, head, tails, call)
 }
 
-/// Run the frame `call` asks for over `callee` and `arguments`: a hop owing `tails` where it keeps
-/// the contract, else a child this evaluation parks on. A frame keyed on its bindings is born
-/// borrowing its specialization: a hop of the frame this evaluation runs in borrows that frame's
-/// own, and every other one is sought by the drain.
+/// Run the frame `call` asks for over `callee`: a hop owing `tails` where it keeps the contract,
+/// else a child this evaluation parks on. A frame keyed on its bindings is born borrowing its
+/// specialization: a hop of the frame this evaluation runs in borrows that frame's own where the
+/// body's name does not escape, so every hop into it is a tail edge the load read, and every other
+/// one is sought by the drain.
 fn called<'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'graph, 'here, '_, '_, '_>,
     callee: KValue<'graph, 'here>,
-    arguments: KValue<'graph, 'here>,
     tails: Option<Contract>,
     call: impl Fn(Option<Contract>) -> Request<'graph, 'here, KBundle>,
 ) -> Action<'graph, KBundle> {
@@ -986,24 +986,26 @@ fn called<'graph, 'here>(
     let same = callee.as_callable().is_some() && callee.as_callable() == at.view.callable();
     let keyed = || {
         called_function(callee).is_some_and(|function| {
-            function
-                .shape()
-                .caching()
-                .is_some_and(|caching| caching.invariant.is_some())
+            let shape = function.shape();
+            shape.specialization_keys().is_some()
+                && !shape.caching().is_some_and(|caching| caching.escapes)
                 && at.within.build != function.closure().build()
         })
     };
     if tails.is_some() {
+        if same && keyed() {
+            let Request {
+                placement, work, ..
+            } = request;
+            return step.tail_under(placement, work, at.within.build);
+        }
+        let seek = seek(&request.work.state, &at.types, &step.types());
         let Request {
             placement, work, ..
         } = request;
-        if same && keyed() {
-            return step.tail_under(placement, work, at.within.build);
-        }
-        let seek = seek(callee, arguments, &at.types);
         return step.tail_seeking(placement, work, seek);
     }
-    let seek = seek(callee, arguments, &at.types);
+    let seek = seek(&request.work.state, &at.types, &step.types());
     let asked = step.spawn_seeking(request, seek);
     park(step, at, asked, FINISHING)
 }

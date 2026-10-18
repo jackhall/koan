@@ -938,7 +938,7 @@ fn shown_keyworded_returns(
 
 /// Why arguments do not reach a frame: they do not name its parameters, one does not fit its
 /// parameter, or the group has no solution.
-enum Miss {
+pub(super) enum Miss {
     Misnamed,
     Unfit,
     Unsolved,
@@ -948,7 +948,7 @@ enum Miss {
 /// every value parameter's declared type against its argument's carried type — or what the load
 /// contributed for it, per parameter in symbol order — under one collector: the group's solution
 /// where it is quantified.
-fn admitted<'x, 'tier: 'x>(
+pub(super) fn admitted<'x, 'tier: 'x>(
     types: &Chain<'tier, '_, '_, '_>,
     scratch: &'x Bump,
     view: DeclaredView<'_>,

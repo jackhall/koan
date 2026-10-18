@@ -656,8 +656,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         };
         // Per frame body, the parameters its invariant sites read, across every holder it runs:
-        // what keys its specialization. A frame with an invariant site and no entry here reads
-        // captures alone.
+        // its specialization keys on them, beside its frontier names. A frame with an invariant
+        // site and no entry here reads captures alone.
         let mut keyed_frames: BumpBackedSet<'p, usize> = bump_set(scratch);
         let mut keyed_slots = BumpVec::new_in(scratch);
         for record in self.sites.iter() {

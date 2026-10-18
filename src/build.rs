@@ -4,7 +4,8 @@
 //! The cells themselves are the scheduler's to create and step: the load door enters the build
 //! root, and the drain resolves a frame's specialization before the frame is born. This module
 //! holds what decides a specialization's identity: [`key_of`], the digest a parent's table finds a
-//! child by; and the seams the load's frontiers decide ([`list_seams`]).
+//! child by; the seams the load's frontiers decide ([`list_seams`]); and the names each callable's
+//! key reads, laid from those seams ([`lay_keys`]).
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::scope` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads the source to hold it
@@ -18,5 +19,5 @@ mod seams;
 #[cfg(test)]
 mod tests;
 
-pub use key::key_of;
+pub use key::{key_of, lay_keys};
 pub use seams::list_seams;

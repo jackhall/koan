@@ -592,8 +592,9 @@ where
     }
 
     /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
-    /// born borrowing that same specialization with no lookup; or cold, where that specialization
-    /// is no longer live.
+    /// born borrowing that same specialization with no lookup — sound only for a callee whose name
+    /// does not escape, so that every hop into it is a tail edge the load read; or cold, where that
+    /// specialization is no longer live.
     pub fn tail_under(
         self,
         placement: Placement,
