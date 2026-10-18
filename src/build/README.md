@@ -262,11 +262,18 @@ keys do not cover stays unsettled.
 - **Build to run: nothing stored.** A build cell holds no handle to a run
   cell. A binding reaches a build cell as the key the drain enters it under
   in its parent's table and as its **nodes**: the `Seek` carries the binding's
-  handles beside the key, and the drain, between creating the specialization
-  and stepping it, lays each handle's node from the asker's chain into the
-  new branch, insert-if-absent — a by-value copy made while the asker is
-  between steps, leaving no reference behind. A settled answer reaches a run
-  cell through the chain alone.
+  handles beside the key — each keyed argument's carried type and, for a type
+  value, the type it names — and the drain enters a missed specialization
+  beside its asker (`CellGraph::enter_beside`), a hop's predecessor or else the
+  cell that asked. Before the step function runs, the entry adopts each
+  handle's node, children first, from the region branch of the asker's write
+  home, where the birth rests and every type its arguments carry resolves,
+  into the new branch, insert-if-absent; a root handle costs a bit test. The
+  asker's header is read at a brand of its own, so the copy is by value by
+  construction, made while the asker is between steps, and leaves no
+  reference behind. A hit lays nothing: the key digests the content the
+  handles are read from, so a hit's handles are the ones its miss laid. A
+  settled answer reaches a run cell through the chain alone.
 - **A callable to the build cell it was born under: an opaque token.** A
   callable's closure bindings carry the build cell its birth ran under, the
   specialization of the frame that bore it or the build root, as a
@@ -355,9 +362,9 @@ keys do not cover stays unsettled.
   and a digest of the callee's segment with the content at its keyed names.
   The drain reads that parent's table through a peek between steps, which
   stamps a live hit; a miss on a parent with no free entry evicts first, then
-  creates the specialization under the parent, lays the binding's nodes in
-  its branch from the asker's chain, and runs its one step at once, before
-  anything else. The
+  creates the specialization under the parent and runs its one step at once,
+  before anything else, entered beside the asker so that the binding's nodes
+  are laid in its branch before the step function runs. The
   run cell is then created borrowing it, a `Fresh` cell as its lend and a
   `Shares` tenant through a lend of its own, and its first step lays its
   activation. A warm birth costs one peek; a cold birth one build step; no
@@ -464,8 +471,5 @@ through a projection it defines.
   — the bounds as a setting a user names.
 - [Specialization keys over frontiers](../../roadmap/gradual-build/specialization-keys.md)
   — the key names the content at every name a frontier at the entry waits on.
-- [The binding by value](../../roadmap/gradual-build/binding-by-value.md) —
-  the drain lays a binding's nodes into a missed specialization's branch
-  before its step.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams over the content its bindings bring.

@@ -95,7 +95,5 @@ and the run binds a path variable per read (`elaborate::bound_path`).
 
 - [Specialization keys over frontiers](specialization-keys.md) — a fact is
   settled only under a key that covers its frontier.
-- [The binding by value](binding-by-value.md) — the resumption reads its
-  binding's types through the specialization's own chain.
 
 **Unblocks:** none — a leaf.

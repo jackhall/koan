@@ -405,9 +405,17 @@ resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
   live hit with the table's birth count. A miss on a table with no free
   entry first releases the child with the oldest stamp and its subtree,
   leaf first; then it creates the specialization, a tree cell under that
-  build cell borrowing its region, lays each binding handle's node into its
-  branch from the asker's chain, and enters it at once, outside the ready
-  stack, before anything else runs. Its step lays its region header and its
+  build cell borrowing its region, and enters it at once, outside the ready
+  stack, before anything else runs. Where the binding is not empty the entry
+  is opened beside the **asker** (`enter_beside`): the cell whose write home
+  holds the request's birth, a hop's predecessor or else the cell that asked.
+  Before the step function runs, the entry adopts each binding handle's node
+  from the region branch of the asker's write home, with its links, into the
+  specialization's branch, insert-if-absent. That header is read at a brand
+  of its own, so the branch keeps no reference into the run tree, and the
+  asker is between steps. A hit lays nothing; a debug build checks through
+  `peek` that the specialization's branch, with the root, holds every
+  handle. Its step lays its region header and its
   own table, as long as the nested bound its parent's table records, runs
   the resumption under its binding to quiescence, and
   ends `enlist`, which rests the facts the resumption settled in the header,
@@ -520,7 +528,10 @@ no layer of koan's above present. They hold, each with a workload of its own:
   born child, a victim's subtree released leaf first, a hop stamping its
   specialization, a frame under an evicted parent born cold, a hop of the
   same callee borrowing its frame's specialization and running cold once it
-  is gone, and an evicted specialization disposing with its last borrower; and
+  is gone, an evicted specialization disposing with its last borrower, a
+  missed specialization holding the nodes of a binding its asker minted, read
+  by a frame on a miss and on a later hit after the asker is gone, and a
+  binding of root types laying nothing; and
   at `Shares`, two tenants seeking one key borrowing one specialization that
   their plain children copy, a call seeking nothing borrowing nothing under a
   frame that borrows one, a hop keeping its lend, and a tenant whose
@@ -539,8 +550,5 @@ observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
-- [The binding by value](../../roadmap/gradual-build/binding-by-value.md) —
-  the `Seek` carries the binding's handles, and the drain lays their nodes
-  into a missed specialization's branch before its step.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   specialization's step runs the resumption under its binding.

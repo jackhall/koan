@@ -305,7 +305,11 @@ beside the writer rather than inside it because a slot inside `Writer` would put
 hold no slot at all: its `'graph` would be a borrow of itself. A borrower's step
 is handed its lent half's header at `'lent` the same way, and between steps
 `peek` reads a live cell's region header through a closure as `read` below
-does, handing out no door. A door copies the
+does, handing out no door. A step entered by `enter_beside` is handed a
+second live cell's region header the same way, at a brand of its own with no
+relation to the step's, so what it reads of that cell reaches its own region
+only as a copy by value; only a step writes a region, and only its own write
+home's. A door copies the
 erased value in and out and never lends a reference into the slot, which is why
 the slot is a `Cell` and not a `OnceCell`: a reference from
 `OnceCell::get_or_init` descends from a unique borrow, and a later interior
@@ -470,6 +474,15 @@ on the read out, which re-anchors at the same `'cell`.
   The continuation read *is* the sealed tier's accessor — a capture whose region
   sealed since it was stored comes back reading storage that sealed cell still
   retains — so there is no second door out of sealed storage.
+
+- **`enter_beside(handle, beside, step)`** is `enter` with a read of a second
+  live cell's region header: `step` is handed, beside its context, `beside`'s
+  laid header at a brand quantified per call, as `peek` hands it, and `None`
+  where none is laid. That brand bears no relation to the step's, so nothing
+  read of `beside` can be laid through any door the step holds. A tenant
+  `beside` reads its host's region. It refuses what `enter` refuses, a dead or
+  stale `beside`, and two cells whose write homes are one region
+  (`EnterBesideError`), each before anything changes.
 
 - **`redeem`** is the one door out of the at-rest state, and it **refuses rather
   than panics**. The executing cell must be entitled to the storage the value

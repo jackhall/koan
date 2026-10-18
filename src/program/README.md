@@ -421,6 +421,9 @@ A call into a keyed frame, whatever its placement, hands the drain a `Seek`
 its closure bindings; the key, the callee's segment and the content digest of
 each argument at its keyed names, read by name
 ([the build module](../build/README.md#keys-which-bindings-make-a-specialization));
+the binding, each keyed argument's carried type and, for a type value, the type
+it names, whose nodes the drain lays in a missed specialization's branch
+([references between the trees](../build/README.md#references-between-the-trees));
 and the work a missed specialization runs, [`specialize`](specialize.rs),
 which enlists the new cell in its parent's table. The frame is born borrowing
 the specialization, and its lent branch is the specialization's region, so
