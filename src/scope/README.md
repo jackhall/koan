@@ -1208,6 +1208,19 @@ invariant in `'graph`, which `'graph` already is everywhere it is named. A writt
 quote's code shape is built into program storage once, where the program
 loads.
 
+What a koan graph keeps per habitat half is `scope`'s record, the
+[region header](header.rs) (`RegionHeader`, whose form is a `HalfHeader`):
+the half's type branch; for a build cell's region, its specialization table;
+and for a specialization's region, its home and the `Settled` facts its
+resumption settled, which its own step rests there as it enlists and never
+again. A frame reaches those facts through the specialization's region it
+borrows, so what it reads of the program's shape stays shared in program
+storage ([the build module](../build/README.md#references-between-the-trees)).
+`values` reads the branch alone, through the projection `RegionHeader`
+defines, and the record is laid by the first door that interns into the half
+or by the step that lays its table, so a half that needs neither stays
+untouched.
+
 ## The import rule
 
 `scope` names `crate::values`, `crate::type_lattice`, `crate::symbols`,
@@ -1215,7 +1228,8 @@ loads.
 operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
 signature's operator channel and a body's held group are one record rather than
 two that must be kept in step. The scheduler reaches scopes through its
-embedder, and scopes never reach the scheduler. The compiler
+embedder, save the region header it names, and scopes never reach the
+scheduler. The compiler
 cannot hold a module to that, so [`tests::boundary`](tests/boundary.rs) reads
 the module's source and fails on any other `crate::` path, on an owning heap
 type outside the one error that lists names, and on a retired lifetime name.

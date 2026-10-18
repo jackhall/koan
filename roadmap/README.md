@@ -36,7 +36,8 @@ subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
-- [Activation typing](gradual-build/activation-typing.md)
+- [The binding by value](gradual-build/binding-by-value.md)
+- [Specialization keys over frontiers](gradual-build/specialization-keys.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)

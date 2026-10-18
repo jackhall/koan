@@ -75,11 +75,13 @@ silence the stale-anchor check; delete a redundant test instead.
   of one host, where the body runner's tail test hops `Fresh` frames over `Fresh` children. No
   `unsafe` of its own; the backing `unsafe` is `cellgraph`'s tenant creation and release, its
   keep and redeem doors and its reattach seam.
-- `src/values/habitat.rs` — a habitat half's header is laid once through its header door, and
-  holds `Cell`s written after it is laid: a build cell's specialization table, laid on the first
-  insert and renewed in place, and a specialization's own handle. A specialization writes its
-  parent's table through its lent region's writer, and the drain reads it through `peek` between
-  steps. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s header reattach and `peek`.
+- `src/scope/header.rs` — a habitat half's region header is laid once, through its header door
+  or the door `values` holds projected to its branch slot, and holds `Cell`s written after it is
+  laid: the branch, a build cell's specialization table, renewed in place, a specialization's own
+  handle and its settled facts. A specialization writes its parent's table through its lent
+  region's writer, a frame reads its specialization's settled facts through its lent region, and
+  the drain reads the table through `peek` between steps. No `unsafe` of its own; the backing
+  `unsafe` is `cellgraph`'s header reattach, its projected door and `peek`.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate

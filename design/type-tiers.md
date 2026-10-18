@@ -185,10 +185,11 @@ declared per call is classed alike by the type binders its declaration reads:
   content each hop, and whose every parameter leaf keys a specialization — a
   type binder, or one declared closed under `Module` or as a type value
   ([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)).
-  Into the **warm tier**: the branch of the specialization
+  Its type is a fact the specialization's resumption settles under the
+  binding, so it lies in the **warm tier**: the branch of the specialization
   the frame borrows, whatever its placement
-  ([below](#the-specialization-as-the-warm-tier)), or the host's scratch
-  for a `Shares` body that borrows none.
+  ([below](#the-specialization-as-the-warm-tier)), laid by the build and read
+  by the frame; a frame born with none mints it into its scratch.
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
   body, an action's result or an inline `MATCH`, on a parameter the loop
   rebinds, or on a parameter of any other declared type, whose digest costs
@@ -218,11 +219,11 @@ that borrows a lent branch reads through a chain whose own tier is a
 scratch, its own under `Fresh` and its host's under `Shares`, whose read tier
 is the lent branch, and whose scratch branch links the region it writes,
 linked by the first reading chain over it: laid linked where no branch is
-laid yet, linked late where one is. A type it builds stays in its scratch, and an
-invariant site copies its operands' types and what it mints into the lent
-branch, insert-if-absent, so after the first frame under the binding it
-hits. Verdicts over the lent branch's types are recorded there and stay warm
-across hops and callers. Under `Shares` the host's scratch may hold a node
+laid yet, linked late where one is. A type it builds stays in its scratch; an
+invariant site's type is settled in the lent branch by the specialization's
+resumption before any frame is born, so every frame under the binding reads
+it there and lays nothing into it. Verdicts the resumption reaches over the
+lent branch's types are recorded there and stay warm across hops and callers. Under `Shares` the host's scratch may hold a node
 over the lent branch's after the frame is gone, so the frame's lend is held
 until that scratch resets
 ([tree cells](../cellgraph/src/tree/README.md#death)).
@@ -242,9 +243,11 @@ parameter of the caller. A body
 whose name escapes as a value can be tail-called from a site the load cannot
 read, so its parameters are varying. The rule is conservative: an argument
 built over invariant leaves has the same content from the second round on,
-yet counts as varying. A wrong class is never unsound — a varying site routed
-warm grows the warm tier until it goes, an invariant site routed cold re-lays
-each hop — since soundness rests on the sealed class and the lend alone.
+yet counts as varying. A wrong class is never unsound — a site classed
+invariant whose content the key does not fix stays unsettled and mints into
+the scratch each hop, and one classed varying is settled all the same where
+its leaves key through a frontier — since the class decides the key, and
+soundness rests on the sealed class and the lend alone.
 
 ## The specialization as the warm tier
 
@@ -257,8 +260,8 @@ cell the callee was born under, before the frame is born. A `Fresh` frame
 takes it as its lend, and a `Shares` tenant through a lend of its own beside
 its host's. The specialization's region branch is the frame's warm tier, and
 every frame of that body under that binding borrows the same one, whatever
-park asked for it and whatever its placement: a second caller
-finds the first's invariant types and verdicts laid, and a hop of a tail loop
+park asked for it and whatever its placement: every caller finds the types
+and verdicts the resumption laid, and a hop of a tail loop
 of one callee borrows the specialization its frame ran under, with no lookup.
 A specialization lives until its parent evicts it and its last borrower
 disposes, so its warm tier outlives the parks that filled it. A parent keeps
@@ -267,7 +270,7 @@ long as its bound, and a miss on a full table evicts the least recently born
 child with its subtree, whatever borrows it
 ([the build module](../src/build/README.md#references-between-the-trees)). A
 frame whose specialization's parent is already evicted is born with none,
-and warms the scratch its asker's park holds, as below.
+and mints into the scratch its asker's park holds, as below.
 
 ## The scratch branch as a cache
 
@@ -374,6 +377,9 @@ types, and released with that tier.
 
 ## Open work
 
+- [Activation typing](../roadmap/gradual-build/activation-typing.md) — the
+  warm tier laid by a specialization's resumption and read by every frame
+  under the binding.
 - [Invariance around a tail cycle](../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch

@@ -877,8 +877,10 @@ types in the root.
 Each shape the pass types gets a write-once caching record
 ([`caching`](statics/caching.rs)) that classes every minting site **closed**,
 **invariant** or **varying** by the leaves of its content tree — a nominal
-declared per call by the type binders its declaration reads — and holds every
-composite site warm whose parts read invariant views alone. A caching frame
+declared per call by the type binders its declaration reads — and marks every
+composite site warm whose parts read invariant views alone: the sites whose
+fact closes under the frame's binding, settled by its specialization's
+resumption. A caching frame
 body's own record also lists the parameters its invariant sites read, its
 blocks' and module bodies' included, which key its
 [specialization](../build/README.md#keys-which-bindings-make-a-specialization)
@@ -1256,6 +1258,9 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
+- [Specialization keys over frontiers](../../roadmap/gradual-build/specialization-keys.md)
+  — the static pass keys a specialization on its frontier names beside its
+  invariant-site parameters.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams, and selection reading the verdicts a
   specialization holds, per [the build module](../build/README.md).

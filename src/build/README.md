@@ -85,8 +85,10 @@ The driver is a **worklist over the facts**, in the manner of Kildall. A rule
 that reads an unknown **parks** its fact on that unknown and records the
 **edge**. The load runs the worklist to **quiescence**. Its output is the fixed
 facts and the **residual**: the parked facts and their edges. A **binding**
-unparks the facts on its edge; their rules re-run, can only narrow, and what
-they produce goes to the specialization the binding names.
+at a keyed name unparks the facts on its edge; their rules re-run, can only
+narrow, and what they produce goes to the specialization the binding names. A
+binding no key fixes — a statement's, a parameter's that does not key —
+unparks nothing: its facts stay parked and are read per read.
 
 The worklist's schedule is the evaluation order of the two load passes, the
 type channel's walk and then the static pass's. The facts form no cycle, so
@@ -150,14 +152,15 @@ unifier are what the rules call, and this module lives downstream of them.
   waits on is no seam, and costs its run cell nothing. The load lists the
   seams per segment. An **entry seam** keys a specialization
   ([below](#keys-which-bindings-make-a-specialization)). A **statement
-  seam** is cold: its binding is content the run produces, an `EVAL`'s or an
-  action's result, which keys nothing, so the run cell resumes the frontier
-  into its own scratch and its lend never changes. A statement's binding that
+  seam** settles nothing: its binding is content the run produces, an
+  `EVAL`'s or an action's result, which keys nothing, so the facts waiting on
+  it stay unsettled, read per read, and the run cell's lend never changes. A
+  statement's binding that
   entry content determines — a `MATCH` arm's `it` over a parameter, a path
   hop rooted at one — is settled at the entry seam, since a load with that
   content declared would type it closed. A `USING … SCOPE` block's surfaced
   names are not among them: the load cannot type what a `USING` binds from
-  content, so they seam at the `USING` statement.
+  content, so they wait at the `USING` statement and stay unsettled.
 - **One build cell per seam per observed binding.** Facts that wake together,
   settle together and mint types under the same binding are one build cell
   with one type branch, never several. The build cell holds every fact any
@@ -167,14 +170,13 @@ unifier are what the rules call, and this module lives downstream of them.
   and one binding settles a whole section of code, the frontier class rather
   than the frame.
 - **Resumption scope is per frontier.** A frontier whose members all bind at
-  entry resumes at entry; one with a mid-body member resumes at that
-  statement. The scope is read off where the frontier's members bind, never
-  set program-wide.
-- **The tree is a chain.** Binding order follows the lexical chain: entry
-  before statements, statements in [unit order](../scope/README.md#units), an
-  outer body's seams before an inner body's. A specialization's parent is the
-  specialization of the seam preceding it in that order, so every run cell's
-  type chain is linear. The chain is rarely probed at run time: a settled
+  keyed names resumes at entry; one with a member no key covers — a mid-body
+  binding, a parameter that does not key — is never resumed. The scope is
+  read off where the frontier's members bind, never set program-wide.
+- **The tree is a chain.** Binding order follows the lexical chain: an
+  outer body's entry seam before an inner body's. A specialization's parent
+  is the specialization of the enclosing seam, so every run cell's type chain
+  is linear. The chain is rarely probed at run time: a settled
   fact is content, and only a verdict left *maybe* reads the chain.
 - **Code finishes building before it runs.** A body's call never precedes
   the binding of a variable it captures: the shape orders each unit after
@@ -201,12 +203,13 @@ By variance alone:
   carrier the same each hop: the binding's digest names a shared
   specialization, the warm tier, shared across parks and across callers;
 - **varying** content, a carrier minted per call, an action's result, a
-  rebound parameter: no specialization. The run cell resumes the residual
-  into its own scratch, the cold tier, and the parent never sees a one-off
-  child.
+  rebound parameter: no specialization. The facts waiting on it stay
+  unsettled, read per read, and the parent never sees a one-off child.
 
-A binding is content, digests and root handles, so a specialization reaches
-nothing of the run tree. Its key digests the callee's **segment**, the index
+A binding is content and digests, and its types reach a specialization as
+nodes the drain lays in its branch before its step
+([below](#references-between-the-trees)), so a specialization reaches nothing
+of the run tree. Its key digests the callee's **segment**, the index
 the one shape builder gives every body it seals, in seal order, so it is the
 same in every load of one text and tells apart two bodies of one text whose
 captures differ in type; then the content at each **keyed name**, in slot
@@ -230,7 +233,7 @@ frontier or invariant site reads costs a birth nothing, a body that keys
 nothing seeks nothing, and a keyed frame seeks whatever its placement. A
 capture never enters a key: `inner`'s fact on a capture `xs` waits at
 `outer`'s entry, so `outer` keys on `xs`, and a fact whose frontier the chain's
-keys do not cover resumes cold.
+keys do not cover stays unsettled.
 
 ## References between the trees
 
@@ -256,10 +259,14 @@ keys do not cover resumes cold.
   direction: the run root pins nothing of the build tree, and a build cell is
   never pinned by a run cell. The drain resolves the borrow before the run
   cell is born, and the cell holds it, unchanged, for its life.
-- **Build to run: nothing.** A build cell holds no handle to a run cell. A
-  binding reaches a build cell as the key the drain enters it under in its
-  parent's table; a settled answer reaches a run cell through the chain
-  alone.
+- **Build to run: nothing stored.** A build cell holds no handle to a run
+  cell. A binding reaches a build cell as the key the drain enters it under
+  in its parent's table and as its **nodes**: the `Seek` carries the binding's
+  handles beside the key, and the drain, between creating the specialization
+  and stepping it, lays each handle's node from the asker's chain into the
+  new branch, insert-if-absent — a by-value copy made while the asker is
+  between steps, leaving no reference behind. A settled answer reaches a run
+  cell through the chain alone.
 - **A callable to the build cell it was born under: an opaque token.** A
   callable's closure bindings carry the build cell its birth ran under, the
   specialization of the frame that bore it or the build root, as a
@@ -269,7 +276,9 @@ keys do not cover resumes cold.
   nesting follows the lexical chain with no chain stored, and no step can
   hand the drain a build cell the scheduler did not name to it.
 - **Build parent to build child: bare handles.** A table in the parent's
-  region header, beside its type branch: a fixed run of entries, each a
+  region header, beside its type branch and its settled facts — the header is
+  `scope`'s, holding branch, table, home and facts, and `values` reads the
+  branch through a projection it defines: a fixed run of entries, each a
   binding's digest, a bare handle and a stamp, laid with the cell and never
   grown. A bare handle holds nothing alive, and a stale one is a miss. The
   run's length is the parent's **bound**: the build root's is the root
@@ -304,7 +313,10 @@ keys do not cover resumes cold.
 - **A node lives in a tier its children outlive.** A specialization lays
   type nodes over the root tier and itself alone: a fact of a child that
   names a type its parent minted relays that type into the child's branch,
-  insert-if-absent, so no branch links its parent's. A run cell's scratch tier
+  insert-if-absent, so no branch links its parent's. A specialization's branch
+  holds the nodes the drain laid from its binding and what its resumption
+  minted, and nothing a frame lays: a frame lays into its region and scratch
+  alone. A run cell's scratch tier
   may reference its specialization's nodes, as a scratch tier references the
   lent branch's today; its region reaches them only by adopt at an exit, as
   it reaches the lent branch's; and the reverse never holds. A composite a
@@ -316,9 +328,9 @@ keys do not cover resumes cold.
 - **A verdict** is recorded in the shortest-lived tier holding one of its two
   types: a verdict between root types and a specialization's types lives in
   the specialization and is evicted with it. A verdict is never load-bearing.
-- **Porosity.** A sealed body's specialization may hold minted content; a
-  porous body's holds only what its exits adopt out, since a porous value
-  leaving the body carries its types into the region.
+- **Porosity.** Sealed or porous, a body's specialization holds what its
+  binding and its resumption name; a porous value leaving the body carries its
+  per-call types into the region by adopt at its exit.
 
 ## Steps and the drain
 
@@ -327,23 +339,25 @@ keys do not cover resumes cold.
   shape building, the type channel and the solver to quiescence. A
   specialization is a tree cell the drain creates and runs as it does a run
   cell: its one step lays its region header and its own table, runs the
-  resumption under its binding to quiescence and quiesces, staying alive with
-  no continuation and reporting to nobody. The drain then enters it in its
+  resumption under its binding — whose nodes the drain laid in its branch
+  before the step — to quiescence and quiesces, staying alive with no
+  continuation and reporting to nobody. The drain then enters it in its
   parent's table and records the parent in its header, so the drain keeps
   every table's books and no step writes another cell's region. What the
   resumption leaves parked
   is the cell's **residual**, data in its region beside the settled facts: a
-  child specialization reads it through the parent region it borrows, and a
-  run cell resumes it in its scratch, so no binding wakes a quiesced build
-  cell. A resumption that leaves a use with no candidate ends the step
-  failed, and the drain hands the fault to the asker as the frame's own.
+  child specialization reads it through the parent region it borrows, and
+  nothing else resumes it, so no binding wakes a quiesced build cell. A
+  resumption that refuses ends the step failed, and the drain hands
+  the fault to the asker as the frame's own.
 - **The drain finds a run cell's build cell before the cell is born**, from
   the key the asker computed: the build cell the callable was born under,
   and a digest of the callee's segment with the content at its keyed names.
   The drain reads that parent's table through a peek between steps, which
   stamps a live hit; a miss on a parent with no free entry evicts first, then
-  creates the specialization under the parent and runs its one step at
-  once, before anything else. The
+  creates the specialization under the parent, lays the binding's nodes in
+  its branch from the asker's chain, and runs its one step at once, before
+  anything else. The
   run cell is then created borrowing it, a `Fresh` cell as its lend and a
   `Shares` tenant through a lend of its own, and its first step lays its
   activation. A warm birth costs one peek; a cold birth one build step; no
@@ -352,9 +366,9 @@ keys do not cover resumes cold.
   through the parent its header names, or borrows its parent's scratch once
   that specialization is evicted; and a parent that has itself been evicted
   births the frame cold, with no specialization.
-- **A statement seam** changes no lend: the run cell resumes the frontier
-  into its own scratch, and what it borrows stands from its creation to its
-  disposal.
+- **A statement seam** changes no lend and resumes nothing: no resumption
+  runs in a run cell, and what a run cell borrows stands from its creation to
+  its disposal.
 - **The load** stands the build root up beside the run root and runs the build
   root's step to quiescence over the written program before the top-level
   run cell's first value step. The root tier is written during the load and
@@ -371,9 +385,13 @@ time.
   quote's code is elaborated eagerly and its refusal recorded, then reported
   where an `EVAL` runs it.
 - **Lazy:** a specialization checks its binding, and a composed-code cell its
-  text, when each arrives. A use left with no candidate at a resumption
-  faults at the resumption point, naming the call, as an admission miss
-  reads.
+  text, when each arrives. Every refusal a resumption reaches faults at the
+  resumption point, worded as the load words it, since a resumption is a
+  load with its binding declared: a use left with no candidate names the
+  call, as an admission miss reads, and an ambiguity or a return,
+  ascription, annotation or call by name that can never be satisfied reads
+  as its load refusal. A frame may so fault over a path it never takes, as
+  the load refuses code no run reaches.
 - A refused written program's step stops at the refusal, which is rendered
   while its names and types still stand.
 
@@ -435,11 +453,19 @@ bundle carries the build births and its steps fill a specialization, and
 dispatch reads facts and verdicts through a run cell's borrow. Nothing in
 `scope`, `elaborate` or the scheduler names `build`; a rule reads facts
 through its pass's fact store over `scope`'s vocabulary, never through the
-tree, and the scheduler hands a step its borrow's doors and no more.
+tree, and the scheduler hands a step its borrow's doors and no more. The
+region header family is `scope`'s: a half's branch, a build cell's table and
+home, and a specialization's settled facts, with `values` reading the branch
+through a projection it defines.
 
 ## Open work
 
 - [Setting the specialization bounds](../../roadmap/gradual-build/bound-settings.md)
   — the bounds as a setting a user names.
+- [Specialization keys over frontiers](../../roadmap/gradual-build/specialization-keys.md)
+  — the key names the content at every name a frontier at the entry waits on.
+- [The binding by value](../../roadmap/gradual-build/binding-by-value.md) —
+  the drain lays a binding's nodes into a missed specialization's branch
+  before its step.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams over the content its bindings bring.

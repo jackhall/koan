@@ -149,11 +149,11 @@ fn a_header_laid_in_a_step_comes_back_at_the_next_step() {
     assert_eq!(read, Some(7));
 }
 
-/// A table header projects to its `Cell`; a label projects to nothing.
 /// A [`Marks`] header's table, where it is one.
 pub(super) struct Tables;
 crate::reattachable!(Tables => Option<&'cell Cell<&'cell u32>>);
 
+/// A table header projects to its `Cell`; a label projects to nothing.
 impl<'graph> Projects<'graph> for Marks {
     type Projection = Tables;
 

@@ -342,14 +342,20 @@ over the graph's frozen type root and the build's writer and header.
 **A crossing carries types with the value.** A type the run builds lives in the
 branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
-The branch is kept in the habitat half's header, [`TypeHeader`](habitat.rs),
-whose form is a `HalfHeader`: the branch, laid with the header; for a build
-cell's region, the table of its specializations, a fixed run of entries laid
-with the cell, each a key, a handle and the stamp of its child's last birth,
-rekeyed in place when a miss reuses it; and for a specialization's region,
-its own handle and its parent's, which the scheduler reads to name the build
-cell a frame runs under and to stamp a hop's entry
-([specialization.rs](specialization.rs), [the build module](../build/README.md#references-between-the-trees)).
+The branch is kept in the habitat half's header, whose record is `scope`'s
+([`RegionHeader`](../scope/header.rs)): beside the branch it holds a build
+cell's table of specializations, a fixed run of entries laid with the cell,
+each a key, a handle and the stamp of its child's last birth, rekeyed in place
+when a miss reuses it ([specialization.rs](specialization.rs)); and a
+specialization's home, its own handle and its parent's, which the scheduler
+reads to name the build cell a frame runs under and to stamp a hop's entry,
+beside the facts its resumption settled
+([the build module](../build/README.md#references-between-the-trees)).
+`values` cannot name that record, so a [`Half`](habitat.rs) holds its header
+door projected to the branch's slot ([`BranchSlot`](habitat.rs)): any header
+family that projects to it serves, and `values` reads and lays the header
+through that slot alone. Projecting lays nothing, so a half that never interns
+lays no header; its first intern lays the record and the branch.
 A `BuildRef`, the opaque token naming a build cell above the scheduler, lives
 there too, opened only by `values` and the scheduler. A
 [`Chain`](habitat.rs) carries a pairing brand naming the writer it serves

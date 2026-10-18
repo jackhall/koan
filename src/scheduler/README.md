@@ -400,17 +400,20 @@ resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
   does, and a tenant copies its parent's lend.
 - `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a
   `Seek` where the body keys one: the build cell the callee was born under,
-  the key, and the work a missed specialization runs.
+  the key, the binding's handles, and the work a missed specialization runs.
   The drain reads that build cell's table through a `peek`, which stamps a
   live hit with the table's birth count. A miss on a table with no free
   entry first releases the child with the oldest stamp and its subtree,
   leaf first; then it creates the specialization, a tree cell under that
-  build cell borrowing its region, and enters it at once, outside the ready
+  build cell borrowing its region, lays each binding handle's node into its
+  branch from the asker's chain, and enters it at once, outside the ready
   stack, before anything else runs. Its step lays its region header and its
-  own table, as long as the nested bound its parent's table records, and
-  ends `enlist`, which refuses a cell that asked for children and returns
-  `Quiesced`: the cell stays alive with no continuation, reporting to nobody,
-  and is never on the stack. The drain then fills the entry with the key,
+  own table, as long as the nested bound its parent's table records, runs
+  the resumption under its binding to quiescence, and
+  ends `enlist`, which rests the facts the resumption settled in the header,
+  refuses a cell that asked for children and returns `Quiesced`: the cell
+  stays alive with no continuation, reporting to nobody, and is never on the
+  stack, so its settled facts are set at most once. The drain then fills the entry with the key,
   the handle and a fresh stamp, and records in the specialization's header
   its own handle and its parent. The frame is then born borrowing the
   specialization's region, a `Fresh` cell as its lend and a `Shares` tenant
@@ -428,6 +431,8 @@ So a warm birth costs one peek, a cold birth one synchronous step, and no cell
 parks for either. `build_ref` reads the specialization a cell borrows off
 its region header, where the drain recorded the specialization's own
 handle, and answers the fallback it is handed for any cell borrowing none.
+`settled` reads the facts that specialization's step rested in the same
+header, through the lent region alone, so a frame never copies them.
 The two bounds, the build root's and every specialization's, are parameters
 of the [load door](load.rs), which lays the build root's table. A
 specialization lives until its parent evicts it at a miss, or an ancestor's
@@ -453,13 +458,17 @@ nothing naming it.
 ## The import rule
 
 Outside doc comments this module names `crate::knot`, `crate::memory`,
-`crate::type_lattice` and `crate::values`, and nothing else in the crate — its
-tests included, which may name the crate's test scaffolding besides. It does
-not name `scope`, `parse`, `elaborate`, `symbols` or `program`. It names the
-lattice for the frozen root and a branch alone, the root a graph holds and
-hands every step and crossing, and `values` for the type chain those doors
-build, the header a graph keeps per habitat half (`TypeHeader`) and the
-specialization's key and token (`SpecKey`, `BuildRef`). `cellgraph` is reached
+`crate::scope`, `crate::type_lattice` and `crate::values`, and nothing else in
+the crate — its tests included, which may name the crate's test scaffolding
+besides. It does not name `parse`, `elaborate`, `symbols` or `program`. It
+names the lattice for the frozen root and a branch alone, the root a graph
+holds and hands every step and crossing; `scope` for the header a graph keeps
+per habitat half (`RegionHeader`), whose table and home the drain keeps the
+books of, and the facts a specialization's step rests there and a frame reads
+back through its lend (`Settled`); and `values` for the type chain those doors
+build and the specialization's key and token (`SpecKey`, `BuildRef`). `scope`
+names `values` and is named by `knot`, so the edge forms no cycle, and neither
+names this module. `cellgraph` is reached
 only through `memory`, and `cellgraph` itself depends on neither this module
 nor koan. `tests/boundary.rs` reads the source to hold the rule there; the
 ready stack and the request buffer are the owning heap types it blanks,
@@ -527,3 +536,11 @@ never what that specialization waits on.
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.
+
+## Open work
+
+- [The binding by value](../../roadmap/gradual-build/binding-by-value.md) —
+  the `Seek` carries the binding's handles, and the drain lays their nodes
+  into a missed specialization's branch before its step.
+- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
+  specialization's step runs the resumption under its binding.
