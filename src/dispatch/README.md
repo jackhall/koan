@@ -886,18 +886,25 @@ blocks' and module bodies' included, which key its
 [specialization](../build/README.md#keys-which-bindings-make-a-specialization)
 beside the names the solver's frontiers wait on at its entry:
 none where they read captures alone, and no list at all where it has no
-invariant site, since such a frame reads no warm tier. A leaf is
+invariant site, since such a frame reads no warm tier. Every callable's own
+record, whether or not it caches, also lists the parameters that may key its
+specialization — each one that keys, which no tail edge from the body into
+itself rebinds — and says whether the body escapes; the build unions them
+with the names its entry seams wait on once the seams are listed. A leaf is
 invariant where it is a capture, or a parameter every tail edge into its body
-passes on bare from an invariant parameter of the caller: a greatest fixpoint
+passes on bare from an invariant parameter of the caller, and every edge from
+the body into itself passes on as itself: a greatest fixpoint
 over the tail edges of every callable's and quote's code's last statement,
 fixed once the whole pass has run, a call by name's arguments paired with the
 callee's parameters by field and a keyworded use's by slot. A callable whose
 name is read as a value, or which is born in a `MODULE` or `GROUP` body or
-written in place, may be called from anywhere, so its parameters are varying.
-A parameter leaf holds its site invariant only where it keys
-([`Pass::keys`](statics/caching.rs)): a type binder, or a parameter declared
-closed under `Module` or as a type value, whose every argument digests at a
-constant cost; a site reading any other parameter is varying.
+written in place, **escapes**: it may be called from anywhere, so its
+parameters are varying, and a hop of it into itself seeks its specialization
+rather than borrowing its predecessor's.
+A parameter keys ([`Pass::keys`](statics/caching.rs)) where it is a type
+binder, or declared closed under `Module` or as a type value, whose every
+argument digests at a constant cost. A parameter leaf holds its site
+invariant only where it keys; a site reading any other parameter is varying.
 
 **Digest memos.** The pass also places the memos a content digest is kept in
 ([`memos`](statics/memos.rs)). At a `:|` over a module binder read bare, each

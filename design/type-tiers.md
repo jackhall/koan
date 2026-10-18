@@ -239,7 +239,9 @@ over the tail calls the load resolves: a call by name, its arguments paired
 with the callee's parameters by field, and each candidate of a keyworded use,
 paired by slot. Every parameter starts invariant, and one stays so only where,
 on every tail edge into its body, the argument at its slot is a bare invariant
-parameter of the caller. A body
+parameter of the caller, and on an edge from the body into itself that same
+parameter: a loop that swaps two parameters passes neither through unchanged.
+A body
 whose name escapes as a value can be tail-called from a site the load cannot
 read, so its parameters are varying. The rule is conservative: an argument
 built over invariant leaves has the same content from the second round on,
@@ -252,7 +254,8 @@ soundness rests on the sealed class and the lend alone.
 ## The specialization as the warm tier
 
 A caching frame whose body keys a specialization — its caching record lists
-the parameters its invariant sites read, or a frontier waits at its entry
+the parameters its invariant sites read, or an entry seam in its subtree waits
+on one of its names
 ([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)) —
 is born borrowing a **specialization** of its body under the content at those
 names: a build cell the drain finds in, or builds into, the table of the build
@@ -263,8 +266,9 @@ takes it as its lend, and a `Shares` tenant through a lend of its own beside
 its host's. The specialization's region branch is the frame's warm tier, and
 every frame of that body under that binding borrows the same one, whatever
 park asked for it and whatever its placement: every caller finds the types
-and verdicts the resumption laid, and a hop of a tail loop
-of one callee borrows the specialization its frame ran under, with no lookup.
+and verdicts the resumption laid, and a hop of a tail loop of one callee
+whose name does not escape borrows the specialization its frame ran under, with
+no lookup.
 A specialization lives until its parent evicts it and its last borrower
 disposes, so its warm tier outlives the parks that filled it. A parent keeps
 its specializations as a small least-recently-born cache, a fixed table as

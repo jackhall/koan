@@ -88,6 +88,12 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   statement seam is cold only because a run cell's lend is fixed at creation;
   a body remainder born as a cell with its own lend would reopen it, and
   nothing here forecloses that.
+- *A frame of a body that keys nothing, under an encloser's specialization* —
+  open. A callable whose facts all wait on its encloser's names keys nothing of
+  its own, so the encloser's specialization settles them, but its frame seeks
+  nothing and is born borrowing its parent's scratch, which cannot read them.
+  It may seek on its segment alone, a child of the specialization its closure
+  was born under, or borrow that specialization itself.
 
 ## Dependencies
 

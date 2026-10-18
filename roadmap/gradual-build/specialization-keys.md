@@ -15,12 +15,18 @@ other name has no key to be settled under.
 
 **Acceptance criteria.**
 
-- A specialization keys on its segment and the content at the names any
-  frontier at its entry waits on, facts in nested bodies included, beside the
+- A callable's specialization, whether or not its body caches, keys on its
+  segment and the content at each of its own entry-bound names that an entry
+  seam of its body, or of a callable nested in it, waits on, beside the
   parameters its invariant sites read.
 - A parameter keys only where its declared type is closed under `Module` or it
   holds a type value (`Pass::keys` in `src/dispatch/statics/caching.rs`), and
-  a name a hop of the body's own tail rebinds is not keyed.
+  a name a hop of the body's own tail rebinds, passing anything but that same
+  parameter at it, is not keyed.
+- A `FOR ALL` name's content is the call's solution at it, digested as the type
+  value the frame binds: carried by a keyworded call, held by an instance, and
+  solved by the asker for a call by name. A call past a header or a barrier,
+  of a body keyed on a `FOR ALL` name, is born cold.
 - A keyed frame seeks whatever its placement.
 - Two calls of one body whose arguments differ only at a frontier name build
   two specializations; two whose arguments agree at every keyed name share
@@ -36,6 +42,24 @@ other name has no key to be settled under.
   frontier name whose parameter neither is closed under `Module` nor holds a
   type value keys nothing, and the facts waiting on it stay unsettled per
   [activation typing](activation-typing.md).
+- *Whose names a nested body's frontier keys* — decided. Every entry seam in
+  the body's subtree counts, so `outer` keys its `m` where a fact of a nested
+  callable waits on `m` and the nested callable's own `Elt`, and the nested
+  specialization sits under a chain whose keys cover the frontier. A frontier
+  whose seam is a unit, or a quote's code entry, keys nothing.
+- *A hop of a body whose name escapes* — decided. It seeks with its actual
+  content, as a call of another callee does. Only a body whose name does not
+  escape has every hop into itself recorded as a tail edge, so only its hop
+  borrows its predecessor's specialization with no lookup: an escaping body
+  can tail-call itself through a value the load cannot follow, rebinding a
+  keyed name it never sees rebound.
+- *A `FOR ALL` name's solution past a header or a barrier* — deferred to
+  [gradual-build's unplanned work](README.md#unplanned-work). The frame solves
+  the node's own group only after retyping or crossing the arguments, and the
+  crossing is a value operation, so the asker cannot compute it.
+- *An `EVAL` frame over a written quote's code* — deferred to
+  [gradual-build's unplanned work](README.md#unplanned-work). An `EVAL` frame
+  seeks nothing here, and a seam at a code entry keys nothing.
 
 ## Dependencies
 

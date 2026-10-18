@@ -40,3 +40,14 @@ as surprises, not scheduled.
   over explicit inputs, each fact an id run from a queue, would make the edges
   structural rather than recorded and the laws read off the graph, and may be
   the better architecture; it rewrites the passes' rules wholesale.
+- **A `FOR ALL` name past a header or a barrier.** A call of a body keyed on a
+  `FOR ALL` name through a header or a barrier is born cold: the frame solves
+  the node's own group only after it retypes or crosses the arguments, and a
+  barrier's crossing (`coerce::inward`) is a value operation the asker cannot
+  run before the frame is born. Keying it needs that solution computed from
+  types alone.
+- **An `EVAL` frame over a written quote's code.** A quote's code binds its
+  holes, marks and `$` names at its entry, but an `EVAL` frame seeks no
+  specialization: it copies its asker's lend, and a quote's chain of build
+  cells is not placed. [Code splicing](../metaprogramming/code-splicing.md)
+  places composed code's; written code's has no owner.

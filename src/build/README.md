@@ -213,34 +213,55 @@ of the run tree. Its key digests the callee's **segment**, the index
 the one shape builder gives every body it seals, in seal order, so it is the
 same in every load of one text and tells apart two bodies of one text whose
 captures differ in type; then the content at each **keyed name**, in slot
-order: the parameters, `FOR ALL` names and `:Type` arguments any frontier at
-the entry waits on, facts in nested bodies included, beside the parameters
-its caching record's invariant sites read, the frame's blocks included
-([`key_of`](key.rs)). A parameter keys only where its declared type is
+order: each of the body's own parameters, `FOR ALL` names and `:Type`
+arguments that an entry seam of the body, or of a callable nested in it,
+waits on, beside the parameters its caching record's invariant sites read,
+the frame's blocks included ([`key_of`](key.rs)). Every callable keys on its
+frontier names, whether or not it caches; only a caching body's invariant
+sites name a warm tier, and a frame that does not cache borrows its
+specialization without reading a type tier through it. A frontier
+whose seam is a unit keys nothing, nor does one at a quote's code entry: an
+`EVAL` frame seeks nothing. So a fact of `inner` waiting on `outer`'s `m` and
+its own `Elt` sits at `inner`'s entry, `outer` keys on `m` and `inner` on
+`Elt`, and `inner`'s specialization, a child of `outer`'s, lies under a chain
+whose keys cover the frontier. A parameter keys only where its declared type is
 closed and lies under `Module`, or it holds a type value: a module's digest
 hashes the content it keeps and a type value's its handle, where a list's or a
 record's costs its size, so a parameter of any other type keys nothing and the
 site over it routes cold. A key's digests therefore cost a few hashes each,
 and the frame it births keeps none of them
-([`Pass::keys`](../dispatch/statics/caching.rs)).
-A name a hop of the body's own tail rebinds is not
-keyed, since a hop of the same callee borrows its predecessor's specialization
-with no lookup; a hop into another callee seeks with the actual content, so a
-callable called from sites the load cannot read — a lambda written in place,
-a `MODULE` body's member — keys on its names like any other, though its mint
-sites stay varying. Nothing else a frame binds enters the key, so a name no
-frontier or invariant site reads costs a birth nothing, a body that keys
-nothing seeks nothing, and a keyed frame seeks whatever its placement. A
-capture never enters a key: `inner`'s fact on a capture `xs` waits at
-`outer`'s entry, so `outer` keys on `xs`, and a fact whose frontier the chain's
-keys do not cover stays unsettled.
+([`Pass::keys`](../dispatch/statics/caching.rs)). The load lays each
+callable's list once its seams are listed.
+
+A `FOR ALL` name's content is the call's solution at it, digested as the type
+value the frame binds for it: a keyworded call carries the solution, an
+instance holds it, and for a call by name the asker runs the solve the frame
+runs at its entry. Past a header or a barrier the frame solves the node's own
+group only once it has retyped or crossed the arguments, so such a call of a
+body keyed on a `FOR ALL` name is born cold.
+
+A name a hop of the body's own tail rebinds, passing anything but that same
+parameter at it, is not keyed, since a hop of the same callee borrows its
+predecessor's specialization with no lookup. That holds only where every hop
+of the body into itself is a tail edge the load records, which is so for a body
+whose name does not escape. A body whose name escapes — a lambda written in
+place, a `MODULE` body's member, a callable read as a value — can tail-call
+itself through a value the load cannot follow, so its every hop seeks with the
+actual content, as a hop into another callee does; it keys on its names like
+any other, though its mint sites stay varying. Nothing else a frame binds
+enters the key, so a name no frontier or invariant site reads costs a birth
+nothing, a body that keys nothing seeks nothing, and a keyed frame seeks
+whatever its placement. A capture never enters a key: `inner`'s fact on a
+capture `xs` waits at `outer`'s entry, so `outer` keys on `xs`, and a fact
+whose frontier the chain's keys do not cover stays unsettled.
 
 ## References between the trees
 
 - **Run to build: one counted borrow per write home born under a binding.**
   A run cell born under a binding borrows its specialization, and an `EVAL`
   of composed code borrows the composed-code cell; a tail successor of the
-  same callee borrows the specialization its frame ran under, with no lookup;
+  same callee, whose name does not escape, borrows the specialization its
+  frame ran under, with no lookup;
   a run cell born under no binding borrows its parent's scratch, since the
   shapes and the root tier rest at `'graph` and nothing of the build root is
   read from a step; a `Shares` tenant of a keyed body borrows its
@@ -368,8 +389,9 @@ keys do not cover stays unsettled.
   run cell is then created borrowing it, a `Fresh` cell as its lend and a
   `Shares` tenant through a lend of its own, and its first step lays its
   activation. A warm birth costs one peek; a cold birth one build step; no
-  run cell parks for either; a hop of a tail loop of one callee borrows the
-  specialization its frame ran under with no lookup, stamping its entry
+  run cell parks for either; a hop of a tail loop of one callee whose name
+  does not escape borrows the specialization its frame ran under with no
+  lookup, stamping its entry
   through the parent its header names, or borrows its parent's scratch once
   that specialization is evicted; and a parent that has itself been evicted
   births the frame cold, with no specialization.
