@@ -14,7 +14,7 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, ShapeError, Slot};
+use crate::scope::{BodyShape, Resumption, Settled, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, Root, TypeNode, display_name, satisfied_by, substitute_quantified,
@@ -54,6 +54,22 @@ pub trait Language {
     ) -> Result<(), ShapeError<'graph>> {
         let _ = (shape, builtins, types, writer, scratch);
         Ok(())
+    }
+
+    /// Resume what [`check`](Self::check) fixed under `over`'s binding, beside `channel`, what the
+    /// type channel's resumption under it settled. The language's resumption settles nothing by
+    /// default.
+    fn resume<'graph>(
+        shape: &'graph BodyShape<'graph>,
+        builtins: &'graph KBuiltins<'graph, 'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        writer: Writer<'graph, 'graph>,
+        scratch: BumpAllocator<'_>,
+        over: Resumption<'_, 'graph>,
+        channel: &'graph Settled<'graph>,
+    ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
+        let _ = (shape, builtins, types, writer, scratch, over);
+        Ok(channel)
     }
 }
 

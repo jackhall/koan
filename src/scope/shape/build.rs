@@ -3431,7 +3431,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 declared_variables: resident_cell(writer, &[][..]),
                 type_captures: resident_cell(writer, &[][..]),
                 path_reads: resident_cell(writer, Keyed::from_sorted(&[])),
-                paths: resident_cell(writer, &[][..]),
+                paths: resident_cell(writer, (&[][..], 0)),
                 statics: resident_cell(writer, None),
                 caching: resident_cell(writer, None),
                 channel_residual: resident_cell(writer, Keyed::from_sorted(&[])),

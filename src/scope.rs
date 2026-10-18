@@ -48,7 +48,8 @@ pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
 pub use facts::{
-    Address, Binding, FactKey, Frontier, Residual, Seam, SeamAt, Unknown, frontier_at, merge_into,
+    Address, Binding, ChannelSettled, FactKey, Frontier, Residual, Resumption, Seam, SeamAt,
+    Settled, StaticsSettled, Unknown, frontier_at, merge_into,
 };
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use keyed::{Keyed, KeyedEntry};
@@ -57,7 +58,7 @@ pub use shape::{
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
     Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind, Site, Slot,
     SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, each_part,
-    part_of, selection_refused, source_of, spelled, view_refused,
+    in_body_of, part_of, selection_refused, source_of, spelled, view_refused,
 };
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};
 pub use typed::{

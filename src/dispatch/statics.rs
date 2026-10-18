@@ -130,6 +130,10 @@
 //! Every load-time fact the pass reads — a type channel cell, a binder's or a part's static type,
 //! another shape's cell — and every one it writes goes through its fact [`store`].
 //!
+//! [`resume_statics`] runs the pass again under a binding, once the load has quiesced ([`resume`]):
+//! a bound type name or module binder is the closed type it binds, and only the facts the binding
+//! wakes re-run.
+//!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
 //! one.
@@ -169,10 +173,12 @@ use crate::values::{
 mod caching;
 mod memos;
 mod paths;
+mod resume;
 mod store;
 mod trees;
 mod views;
 
+use resume::{Resume, Whole};
 use trees::Written;
 
 use super::builtins::Native;
@@ -190,33 +196,7 @@ pub(super) fn statics<'graph>(
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
-    let mut pass = Pass {
-        builtins,
-        types,
-        writer,
-        scratch,
-        chain: BumpVec::new_in(scratch),
-        unfilled: false,
-        trees: bump_table(scratch),
-        reading: BumpVec::new_in(scratch),
-        typing: BumpVec::new_in(scratch),
-        recursive: bump_set(scratch),
-        views: bump_table(scratch),
-        steps: bump_table(scratch),
-        rebuilds: bump_table(scratch),
-        modules: bump_table(scratch),
-        paths: BumpVec::new_in(scratch),
-        sites: BumpVec::new_in(scratch),
-        composites: bump_table(scratch),
-        edges: BumpVec::new_in(scratch),
-        escaping: bump_set(scratch),
-        bound_at_binder: bump_set(scratch),
-        holders: BumpVec::new_in(scratch),
-        module_mints: bump_table(scratch),
-        heading: false,
-        components: BumpVec::new_in(scratch),
-        scopes: std::cell::Cell::new(BumpVec::new_in(scratch)),
-    };
+    let mut pass = Pass::new(builtins, types, writer, scratch, None);
     // The walk's outermost gathering, which no rule closes.
     pass.open();
     pass.push(root, true);
@@ -229,6 +209,74 @@ pub(super) fn statics<'graph>(
         pass.cache();
     }
     visited
+}
+
+/// Resume the static pass over `root` under `over`'s binding, beside `channel`, what the type
+/// channel's resumption under it settled ([`resume`]). What it settles, laid down through
+/// `writer`; a use the binding leaves no candidate refuses as the load would.
+pub(super) fn resume_statics<'graph>(
+    root: &'graph BodyShape<'graph>,
+    builtins: &KBuiltins<'graph, 'graph>,
+    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    writer: Writer<'graph, 'graph>,
+    scratch: BumpAllocator<'_>,
+    over: crate::scope::Resumption<'_, 'graph>,
+    channel: &'graph crate::scope::Settled<'graph>,
+) -> Result<&'graph crate::scope::Settled<'graph>, ShapeError<'graph>> {
+    let resume = Resume::new(over, channel, scratch);
+    let mut pass = Pass::new(builtins, types, writer, scratch, Some(resume));
+    if pass.typed_shape(root) {
+        let resume = pass.resume.take().expect("the walk resumes");
+        return Ok(resume.settled(writer));
+    }
+    pass.open();
+    pass.push(root, true);
+    pass.open_paths(root);
+    let visited = pass.visit(0, None);
+    pass.close_paths(root);
+    pass.chain.pop();
+    visited?;
+    let resume = pass.resume.take().expect("the walk resumes");
+    Ok(resume.settled(writer))
+}
+
+impl<'p, 'x, 'graph: 'p> Pass<'p, 'x, 'graph> {
+    fn new(
+        builtins: &'x KBuiltins<'graph, 'graph>,
+        types: &'x Types<'graph, 'graph, 'x>,
+        writer: Writer<'graph, 'graph>,
+        scratch: BumpAllocator<'p>,
+        resume: Option<Resume<'p, 'graph>>,
+    ) -> Self {
+        Pass {
+            builtins,
+            types,
+            writer,
+            scratch,
+            chain: BumpVec::new_in(scratch),
+            unfilled: false,
+            trees: bump_table(scratch),
+            reading: BumpVec::new_in(scratch),
+            typing: BumpVec::new_in(scratch),
+            recursive: bump_set(scratch),
+            views: bump_table(scratch),
+            steps: bump_table(scratch),
+            rebuilds: bump_table(scratch),
+            modules: bump_table(scratch),
+            paths: BumpVec::new_in(scratch),
+            sites: BumpVec::new_in(scratch),
+            composites: bump_table(scratch),
+            edges: BumpVec::new_in(scratch),
+            escaping: bump_set(scratch),
+            bound_at_binder: bump_set(scratch),
+            holders: BumpVec::new_in(scratch),
+            module_mints: bump_table(scratch),
+            heading: false,
+            components: BumpVec::new_in(scratch),
+            scopes: std::cell::Cell::new(BumpVec::new_in(scratch)),
+            resume,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -365,6 +413,8 @@ struct Level<'p, 'graph> {
     /// Each fact of the shape that waits on an unknown, by the key its rule ran at, beside its
     /// frontier.
     residual: BumpVec<'p, (FactKey, Frontier<'graph>)>,
+    /// In a resumption, each key whose fact the walk re-ran: its residual entry replaced.
+    kept: BumpBackedSet<'p, FactKey>,
     /// What each binder's, statement's, part's and use's fact waits on, parallel to `binders`,
     /// `statements`, `parts` and `uses`.
     binder_frontiers: BumpVec<'p, Frontier<'graph>>,
@@ -443,6 +493,8 @@ struct Pass<'p, 'x, 'graph> {
     /// fellow's callable is not typed on demand while its component is, since its body reads the
     /// fellows' facts, not their seeds.
     components: BumpVec<'p, (usize, &'graph [Slot])>,
+    /// Set in a resumption: what it binds, and each fact it re-runs.
+    resume: Option<Resume<'p, 'graph>>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -564,6 +616,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             shape,
             roots_chain,
             residual: BumpVec::new_in(scratch),
+            kept: bump_set(scratch),
             binder_frontiers,
             statement_frontiers,
             part_frontiers: BumpVec::new_in(scratch),
@@ -589,6 +642,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             view_slots: BumpVec::new_in(scratch),
             handoffs: BumpVec::new_in(scratch),
         });
+        self.prefill(self.chain.len() - 1);
     }
 
     /// Type the shape at chain level `level` — its code first — then every shape nested in it, and
@@ -602,10 +656,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         for slot in 0..shape.slots() {
+            // A resumption re-runs a slot a value component types where its component does.
+            let slot = Slot(slot as u32);
+            if (self.resume.is_some() && self.component_types(shape, slot))
+                || !self.runs(level, FactKey::Slot(slot))
+            {
+                continue;
+            }
             self.open();
-            let seeded = self.seeded(level, Slot(slot as u32), surfacing);
-            let frontier = self.close_as(level, FactKey::Slot(Slot(slot as u32)));
-            self.set_binder(level, Slot(slot as u32), seeded, frontier);
+            let seeded = self.seeded(level, slot, surfacing);
+            let frontier = self.close_as(level, FactKey::Slot(slot));
+            self.set_binder(level, slot, seeded, frontier);
+            let slot = slot.index();
             // A registration's body is called only through the keyworded uses its key reaches.
             if shape.registration(Slot(slot as u32)).is_some()
                 && let Some(body) = shape.births(Slot(slot as u32))
@@ -639,6 +701,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
             }
             match unit.work {
+                UnitWork::Statement(index) if !self.runs(level, FactKey::Statement(index)) => {}
                 UnitWork::Statement(index) => {
                     self.open();
                     let wanted = self.tail(level, index as usize);
@@ -646,21 +709,25 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     let frontier = self.snapshot();
                     self.set_statement(level, index as usize, typed, frontier);
                     self.close_as(level, FactKey::Statement(index));
-                    self.tail_edges(level, index as usize);
+                    if self.resume.is_none() {
+                        self.tail_edges(level, index as usize);
+                    }
                 }
                 UnitWork::Component(index) => self.component(level, index.index())?,
             }
         }
         self.resolve_spelled(level)?;
         self.returns(level)?;
-        self.return_exits(level)?;
+        if self.resume.is_none() {
+            self.return_exits(level)?;
+        }
 
         for (_, nested) in shape.nested_shapes() {
             if !self.done(nested) {
                 self.nest(level, nested)?;
             }
         }
-        if !self.unfilled {
+        if !self.unfilled && self.resume.is_none() {
             self.throughs(level);
         }
         // A nested shape adds a type capture to each shape between it and the variable's home, so
@@ -677,8 +744,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         // A callable's summary is read once its body is typed: a recursive one has none.
         let shape = self.chain[level].shape;
-        if shape.kind() == ShapeKind::Callable && !self.unfilled {
-            let recursive = |pass: &Self| pass.recursive.contains(&address(shape));
+        if shape.kind() == ShapeKind::Callable
+            && !self.unfilled
+            && self.runs_whole(shape, Whole::Summary)
+        {
+            let recursive = |pass: &Self| {
+                pass.recursive.contains(&address(shape)) || pass.recursive_at_load(shape)
+            };
             let mut summary = None;
             self.open();
             if !recursive(self) {
@@ -690,7 +762,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 summary = None;
             }
             let recursive = recursive(self);
-            self.fix_shape_facts(shape, |facts| {
+            self.fix_shape_facts(shape, Whole::Summary, |facts| {
                 facts.summary = Some(summary);
                 facts.summary_frontier = frontier;
                 facts.recursive = recursive;
@@ -702,7 +774,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let at = &self.chain[level];
         // A module body reads a type its enclosing callable binds only where its `OVER` list
         // names it.
-        if at.shape.kind() == ShapeKind::Module {
+        if at.shape.kind() == ShapeKind::Module && self.resume.is_none() {
             let listed = at.shape.over().unwrap_or(&[]);
             for (_, _, (name, used)) in at.type_captures.iter() {
                 let name = BinderSymbol::Type(*name);
@@ -731,6 +803,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.refuse_code(nested, resident(self.writer, error));
                 Ok(())
             }
+            Ok(_) if code && !self.runs_whole(nested, Whole::Ran) => Ok(()),
             Ok(_) if code => {
                 let unfilled = std::mem::replace(&mut self.unfilled, true);
                 self.open();
@@ -741,7 +814,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let frontier = self.close();
                 // A use unfilled code can never run refuses nothing: its `EVAL` faults.
                 if let Ok(Some(last)) = ran {
-                    self.fix_shape_facts(nested, |facts| {
+                    self.fix_shape_facts(nested, Whole::Ran, |facts| {
                         facts.ran = Some(last);
                         facts.ran_frontier = frontier;
                     });
@@ -801,7 +874,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let frontier = self.close();
         let (typed, signature) = typed?;
         if let Some(signature) = signature.filter(|_| !self.unfilled) {
-            self.fix_shape_facts(body, |facts| {
+            self.fix_shape_facts(body, Whole::Signature, |facts| {
                 facts.signature = Some(signature);
                 facts.signature_frontier = frontier;
             });
@@ -1020,6 +1093,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         named: (TypeSymbol, SourceRef),
         source: Coordinate,
     ) -> CaptureSlot {
+        // A resumption reads a variable through the capture the load laid for it.
+        let laid = self.laid_captures(self.chain[level].shape);
+        if self.resume.is_some()
+            && let Some(index) = laid.iter().position(|held| *held == source)
+        {
+            let shape = self.chain[level].shape;
+            return CaptureSlot((shape.captures().len() + index) as u32);
+        }
         let at = &mut self.chain[level];
         let index = match at
             .type_captures
@@ -1147,6 +1228,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// and `[Never, Any]` for a local its unit sets.
     fn seeded(&self, level: usize, slot: Slot, surfacing: Option<Interval>) -> Bound {
         let shape = self.chain[level].shape;
+        // A type name a resumption binds holds the closed type it binds, and a module parameter
+        // is exactly the type it binds.
+        if let Some(bound) = self.binds(self.unknown_at(level, slot)) {
+            return DeclaredType::Type(match shape.slot_name(slot) {
+                BinderSymbol::Type(_) => {
+                    Interval::point(KType::of_kind(bound.kind_of(self.types)).into())
+                }
+                _ => Interval::point(bound.into()),
+            });
+        }
         if let (Some(surfacing), BinderSymbol::Value(_)) = (surfacing, shape.slot_name(slot))
             && shape.position_of(slot) == Position::PARAMETER
         {
@@ -1257,7 +1348,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 continue;
             };
             self.born(level, body);
-            if body.form().is_none() {
+            if body.form().is_none() || !self.runs(level, FactKey::Slot(*member)) {
                 continue;
             }
             self.open();
@@ -1275,6 +1366,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             self.set_binder(level, *member, typed, frontier);
             self.close_as(level, FactKey::Slot(*member));
         }
+        // A member a resumption skips keeps its fact once its fellows are typed.
+        let mut skipped = BumpVec::new_in(self.scratch);
+        for member in component.members {
+            if self.seed(level, *member).is_some() && !self.reruns(level, FactKey::Slot(*member)) {
+                skipped.push((*member, self.binder_fact(level, *member)));
+            }
+        }
         // Every other member is seeded before any is typed: a fellow read while the component is
         // typed is its seed, whatever order the members are typed in.
         for member in component.members {
@@ -1290,6 +1388,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         self.components.pop();
         for (member, typed, frontier) in typed?.iter() {
             self.set_binder(level, *member, DeclaredType::Type(*typed), *frontier);
+        }
+        for (member, (bound, frontier)) in skipped {
+            self.set_binder(level, member, bound, frontier);
         }
         // A binding statement's value is the one binder it writes, where it writes only one.
         let mut values = component
@@ -1351,6 +1452,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             {
                 continue;
             }
+            if !self.runs(level, FactKey::Slot(*member)) {
+                continue;
+            }
             self.open();
             let value = match shape.births(*member) {
                 Some(body) if body.form().is_some() => continue,
@@ -1370,6 +1474,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             };
             let value = match annotation {
                 Some(annotation) => self.annotated(level, *member, annotation, value)?,
+                None => value,
+            };
+            // A module binder a resumption binds is exactly the type it binds, as an annotation
+            // retyping it to that type would make it.
+            let value = match self.binds(self.unknown_at(level, *member)) {
+                Some(bound) => Interval::point(bound.into()),
                 None => value,
             };
             let frontier = self.close_as(level, FactKey::Slot(*member));
@@ -2019,6 +2129,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         wanted: Option<Parametric>,
         seed: Frontier<'graph>,
     ) -> Result<Interval, ShapeError<'graph>> {
+        // A part a resumption skips, or re-ran already, is the type the walk holds for it.
+        let site = Site::of(part);
+        if !self.reruns(level, FactKey::Site(site))
+            && let Some(typed) = self.part_type(level, site)
+        {
+            return Ok(typed);
+        }
+        self.runs(level, FactKey::Site(site));
         self.open_with(seed.unknowns());
         let shape = self.chain[level].shape;
         let form = of_part(shape, part);

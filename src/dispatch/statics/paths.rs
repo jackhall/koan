@@ -68,6 +68,8 @@ pub(super) struct ChainPaths<'p, 'graph> {
     members: BumpVec<'p, (usize, usize)>,
     /// Each entry being resolved, by level.
     resolving: BumpVec<'p, usize>,
+    /// Each entry this walk resolved, by index into `entries`.
+    resolved: BumpVec<'p, usize>,
 }
 
 impl<'graph> ChainPaths<'_, 'graph> {
@@ -80,29 +82,59 @@ impl<'graph> ChainPaths<'_, 'graph> {
 impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Open the path table of the chain `root` roots, holding the type channel's entries.
     pub(super) fn open_paths(&mut self, root: &'graph BodyShape<'graph>) {
-        let channel = self.channel_entries(root);
-        let mut entries = BumpVec::with_capacity_in(channel.len(), self.scratch);
-        entries.extend(channel.iter().map(|entry| (*entry, None)));
+        // A resumption reads every entry the load minted, and starts from each resolution whose
+        // frontier waits on nothing it binds.
+        let resuming = self.resume.is_some() && !self.unfilled;
+        let held = self.loaded_entries(root);
+        let channel = match resuming {
+            true => self.channel_entries(root).len(),
+            false => held.len(),
+        };
+        let mut entries = BumpVec::with_capacity_in(held.len(), self.scratch);
+        entries.extend(held.iter().map(|entry| (*entry, None)));
         let mut found = bump_hash_table(self.scratch);
-        for (index, entry) in channel.iter().enumerate() {
+        for (index, entry) in held.iter().enumerate() {
             let hash = PathEntry::hash_of(entry.root, entry.chain, entry.label);
             found.insert_unique(hash, index, |at: &usize| {
-                let held = channel[*at];
+                let held = held[*at];
                 PathEntry::hash_of(held.root, held.chain, held.label)
             });
         }
-        self.paths.push(ChainPaths {
+        let mut table = ChainPaths {
             root,
-            base: channel
+            base: held
                 .first()
                 .map_or_else(|| path_base(root), |entry| entry.level),
-            channel: channel.len(),
+            channel,
             entries,
             found,
             classes: bump_table(self.scratch),
             members: BumpVec::new_in(self.scratch),
             resolving: BumpVec::new_in(self.scratch),
-        });
+            resolved: BumpVec::new_in(self.scratch),
+        };
+        if resuming {
+            for index in 0..table.entries.len() {
+                let entry = table.entries[index].0;
+                let Some(resolution) = self.resolved_before(root, entry) else {
+                    continue;
+                };
+                if self.resolves_again(resolution.frontier) {
+                    continue;
+                }
+                table.entries[index].1 = Some(resolution);
+                if let Resolved::Class(rep) = resolution.resolved {
+                    let print = resolution.tree.print();
+                    if !matches!(print, Print::Unnamed) {
+                        let key = (entry.label, entry.through, print);
+                        table.classes.entry(key).or_insert(rep);
+                    }
+                    let at = (table.members).partition_point(|member| *member < (rep, entry.level));
+                    table.members.insert(at, (rep, entry.level));
+                }
+            }
+        }
+        self.paths.push(table);
     }
 
     /// Close the path table of the chain `root` roots, laying every entry and its resolution down
@@ -113,9 +145,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if self.unfilled {
             return;
         }
-        for (entry, resolution) in table.entries.iter() {
-            if let Some(resolution) = resolution {
-                self.fix_resolution(entry, *resolution);
+        for (index, (entry, resolution)) in table.entries.iter().enumerate() {
+            let resolved = self.resume.is_none() || table.resolved.contains(&index);
+            if let (Some(resolution), true) = (resolution, resolved) {
+                self.fix_resolution(root, entry, *resolution);
             }
         }
         if table.entries.len() > table.channel {
@@ -163,6 +196,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }) {
             return entries[*at].0;
         }
+        assert!(
+            self.resume.is_none() || self.unfilled,
+            "a resumption mints no path entry"
+        );
+        let table = self.table(level);
+        let table = &mut self.paths[table];
+        let entries = &table.entries;
         let level = table.base + table.entries.len();
         let entry = PathEntry::new(writer, root, chain, label, level, through);
         table.found.insert_unique(hash, table.entries.len(), |at| {
@@ -237,6 +277,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         let table = &mut self.paths[table];
         table.entries[index].1 = Some(resolution);
+        table.resolved.push(index);
         if let Resolved::Class(rep) = resolution.resolved {
             let at = table
                 .members

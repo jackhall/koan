@@ -31,6 +31,12 @@
 //! unknown beside what that binder waits on, a name a quote's code is run with — in either mode,
 //! named by the slot or capture of the shape that declares it.
 //!
+//! [`resume_channel`] runs the walk again under a binding, once the load has quiesced: a bound name
+//! reads as the closed type it binds, and a callable body's own bound `FOR ALL` name is that type
+//! at its group level. It skips a shape whose reach misses the binding and a cell whose frontier
+//! does, numbers the chain as the load did, reads the path entries the load minted, and writes each
+//! cell it re-runs beside the load's ([`store`]).
+//!
 //! See [README.md § The type channel at load](README.md#the-type-channel-at-load).
 
 use std::cell::Cell;
@@ -42,9 +48,10 @@ use crate::parse::quoted_body;
 use crate::scope::{
     Address, Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate,
     Elaboration, FactKey, Frontier, FunctionGroupMap, Keyed, ParameterBinding, PathEntry,
-    PathIndex, PathRead, Position, Registered, Registration, Root, ShapeError, ShapeGroupMap,
-    ShapeKind, Site, Slot, Source, Static, StaticRegistered, StaticType, SurfacedHead, Target,
-    TypeExpression, UnitWork, Unknown, Variable, frontier_at, merge_into, source_of,
+    PathIndex, PathRead, Position, Registered, Registration, Resumption, Root, Settled, ShapeError,
+    ShapeGroupMap, ShapeKind, Site, Slot, Source, Static, StaticRegistered, StaticType,
+    SurfacedHead, Target, TypeExpression, UnitWork, Unknown, Variable, frontier_at, merge_into,
+    source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -78,9 +85,41 @@ pub fn type_channel<'graph, X: Knotted>(
         writer,
         scratch,
         chain: BumpVec::new_in(scratch),
+        resume: None,
     };
     pass.chain.push(Level::new(root, true, 0, None, scratch));
     pass.visit(0)
+}
+
+/// Resume `root`'s type channel under `over`'s binding, once the load has typed it: the walk the
+/// load runs, each bound name read as the closed type it binds, re-running only the cells whose
+/// frontier waits on what it binds and writing each beside the load's. What it settles, laid
+/// down through `writer`; a closed type that no longer elaborates refuses as the load would.
+pub fn resume_channel<'graph, X: Knotted>(
+    root: &'graph BodyShape<'graph>,
+    over: Resumption<'_, 'graph>,
+    builtins: &Builtins<'_, X>,
+    types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+    writer: Writer<'graph, 'graph>,
+    scratch: BumpAllocator<'_>,
+) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
+    let mut pass = Pass {
+        builtins,
+        types,
+        writer,
+        scratch,
+        chain: BumpVec::new_in(scratch),
+        resume: Some(store::Resume::new(over, scratch)),
+    };
+    if !pass.skips_shape(root) {
+        let level = Level::new(root, true, 0, None, scratch);
+        pass.chain.push(level);
+        pass.prefill(0);
+        pass.visit(0)?;
+        pass.chain.clear();
+    }
+    let resume = pass.resume.take().expect("the walk resumes");
+    Ok(resume.settled(writer))
 }
 
 /// A run-bound name, by the chain level of the shape that declares it.
@@ -209,6 +248,8 @@ struct Pass<'p, 'graph, 'cell, X> {
     writer: Writer<'graph, 'graph>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
+    /// Set in a resumption: what it binds, and each cell it re-runs.
+    resume: Option<store::Resume<'p, 'graph>>,
 }
 
 /// The load-time reader: reads the names mentioned in the shape at chain level `from`.
@@ -231,7 +272,11 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
     fn type_at(&self, at: Coordinate) -> TypeAt {
         let note = |unknowns: &[Unknown]| {
             edit(&self.frontier, self.pass.scratch, |frontier| {
-                merge_into(frontier, unknowns)
+                // A name a resumption binds is closed: no unknown.
+                let unbound = unknowns.iter().filter(|at| self.pass.bound(**at).is_none());
+                for unknown in unbound {
+                    merge_into(frontier, &[*unknown]);
+                }
             })
         };
         match self.pass.classify(self.from, at, &note) {
@@ -355,16 +400,52 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     /// The frontier of what `reader` read, laid down: the frontier of the cell it typed.
     fn frontier_of(&self, reader: &Reader<'_, 'p, 'graph, 'cell, X>) -> Frontier<'graph> {
         edit(&reader.frontier, self.scratch, |frontier| {
-            Frontier::laid(self.writer, frontier)
+            self.lay(frontier)
         })
     }
 
     /// Record `frontier` as the frontier of the cell at `key` of the shape at `level`, where it
     /// waits on an unknown.
     fn keep(&mut self, level: usize, key: FactKey, frontier: Frontier<'graph>) {
-        if !frontier.is_empty() {
-            self.chain[level].residual.push((key, frontier));
+        let residual = &mut self.chain[level].residual;
+        // A resumption's walk starts from the residual the facts it skips leave.
+        if self.resume.is_some() {
+            residual.retain(|(held, _)| *held != key);
         }
+        if !frontier.is_empty() {
+            residual.push((key, frontier));
+        }
+    }
+
+    /// Start a resumption's walk of the shape at `level` from the residual it has: each cell it
+    /// skips keeps its frontier.
+    fn prefill(&mut self, level: usize) {
+        if self.resume.is_none() {
+            return;
+        }
+        let residual = self.residual_of(self.chain[level].shape);
+        self.chain[level].residual.extend(residual.iter().copied());
+    }
+
+    /// Fix each of `members`, type binders of the shape at `level`, that a resumption binds at the
+    /// closed type it binds.
+    fn bind_declared(&mut self, level: usize, members: &[Slot]) {
+        let shape = self.chain[level].shape;
+        for slot in members {
+            let unknown = Unknown {
+                segment: shape.segment(),
+                at: Address::Slot(*slot),
+            };
+            if let Some(bound) = self.bound(unknown) {
+                self.fix_declared(shape, *slot, Static::Closed(bound));
+            }
+        }
+    }
+
+    /// Lay `frontier`, the unknowns a cell's rule read, down.
+    fn lay(&self, frontier: &mut BumpVec<'_, Unknown>) -> Frontier<'graph> {
+        frontier.retain(|unknown| self.bound(*unknown).is_none());
+        Frontier::laid(self.writer, frontier)
     }
 
     /// The frontier recorded for the cell at `key` of the shape at `level`, while its shape is on
@@ -434,6 +515,15 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             .rev()
             .find(|level| self.chain[*level].root)
             .expect("every chain has a root");
+        // A resumption reads the paths the load minted, finding each where the load did.
+        if self.resume.is_some() {
+            let minted = self.loaded_paths(self.chain[at].shape).iter();
+            return (minted
+                .into_iter()
+                .find(|entry| entry.is(root, chain, label))
+                .copied())
+            .expect("a resumption mints no path entry");
+        }
         let (base, paths) = self.chain[at]
             .paths
             .as_ref()
@@ -509,6 +599,10 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     fn slot_at(&self, level: usize, slot: Slot, note: &dyn Fn(&[Unknown])) -> Class {
         let shape = self.chain[level].shape;
         let key = Key::Slot(level, slot);
+        // A name a resumption binds reads as the closed type it binds.
+        if let Some(bound) = self.bound(unknown_of(&self.chain, key)) {
+            return Class::Type(bound);
+        }
         if shape.declarations(slot).is_some() {
             return match self.declared_cell(shape, slot) {
                 Static::Closed(handle) => Class::Type(handle),
@@ -543,6 +637,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     /// it reads.
     fn capture_at(&self, level: usize, capture: CaptureSlot, note: &dyn Fn(&[Unknown])) -> Class {
         let key = Key::Capture(level, capture);
+        if self.chain[level].root
+            && let Some(bound) = self.bound(unknown_of(&self.chain, key))
+        {
+            return Class::Type(bound);
+        }
         // A name crossing into code is one of the code's own, beside the name it reads.
         if self.chain[level].root {
             note(&[unknown_of(&self.chain, key)]);
@@ -785,17 +884,17 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             if shape.declarations(component.members[0]).is_none() {
                 continue;
             }
+            // A component's members share one frontier.
+            if self.skips(self.staged(level, FactKey::Slot(component.members[0]))) {
+                self.bind_declared(level, component.members);
+                continue;
+            }
             let reader = self.reader(level, Mode::Declaring);
             let typed = type_declarations(component, &reader, types, scratch);
             let frontier = self.frontier_of(&reader);
             drop(reader);
-            if !frontier.is_empty() {
-                (self.chain[level].residual).extend(
-                    component
-                        .members
-                        .iter()
-                        .map(|slot| (FactKey::Slot(*slot), frontier)),
-                );
+            for slot in component.members {
+                self.keep(level, FactKey::Slot(*slot), frontier);
             }
             match typed {
                 Ok(handles) => {
@@ -816,6 +915,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     return Err(ShapeError::Type { error, at });
                 }
             }
+            self.bind_declared(level, component.members);
         }
 
         self.number(level);
@@ -831,6 +931,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         written.extend(expressions.iter());
         written.sort_unstable_by_key(|expression| expression.order);
         for expression in written {
+            if self.skips(self.staged(level, FactKey::Site(expression.site))) {
+                continue;
+            }
             let reader = self.reader(level, Mode::Typing);
             let typed = match expression.guard {
                 Some(_) => {
@@ -848,7 +951,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 None => type_expression(expression.part, &reader, types, scratch),
             };
             if let Ok(handle) = typed {
-                self.fix_expression(expression, self.fixed_type(&reader, handle));
+                self.fix_expression(shape, expression, self.fixed_type(&reader, handle));
             }
             let frontier = self.frontier_of(&reader);
             drop(reader);
@@ -865,11 +968,14 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             }
         }
         repeated_guards(shape, expressions, |expression| {
-            self.expression_cell(expression)
+            self.expression_cell(shape, expression)
         })?;
 
         let mut signatures: Signatures<'p> = BumpVec::new_in(scratch);
         for registration in shape.registrations() {
+            if self.skips(self.staged(level, FactKey::Slot(registration.slot))) {
+                continue;
+            }
             if let Some(head) = registration.surfaced {
                 let mut frontier = BumpVec::new_in(scratch);
                 let surfaced =
@@ -877,10 +983,8 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 if let Some(typed) = surfaced {
                     self.fix_registered(shape, registration.slot, typed);
                 }
-                if !frontier.is_empty() {
-                    let frontier = Frontier::laid(self.writer, &mut frontier);
-                    (self.chain[level].residual).push((FactKey::Slot(registration.slot), frontier));
-                }
+                let frontier = self.lay(&mut frontier);
+                self.keep(level, FactKey::Slot(registration.slot), frontier);
                 continue;
             }
             let Some(form) = shape.births(registration.slot).and_then(BodyShape::form) else {
@@ -915,7 +1019,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         for (_, nested) in shape.nested_shapes() {
             let root = nested.kind() == ShapeKind::Code;
             // A quote whose code could not be built has nothing to type.
-            if root && self.code_refused(nested) {
+            if (root && self.code_refused(nested)) || self.skips_shape(nested) {
                 continue;
             }
             let base = match root {
@@ -923,12 +1027,19 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 false => self.chain[level].base + self.chain[level].count,
             };
             let mut own_frontier = Frontier::EMPTY;
+            let mut skipped = true;
             let own = match nested.kind() {
                 ShapeKind::Callable => {
                     let form = nested.form().expect("a callable body sits in its form");
+                    skipped = self.skips(frontier_at(self.residual_of(nested), FactKey::Shape));
                     let reader = self.reader(level, Mode::Typing);
-                    let typed = match callable_type(form, &reader, types, scratch, None) {
-                        Ok(callable) => {
+                    let typed = match skipped {
+                        true => Ok(None),
+                        false => callable_type(form, &reader, types, scratch, None).map(Some),
+                    };
+                    let typed = match typed {
+                        Ok(None) => self.callable_cell(nested),
+                        Ok(Some(callable)) => {
                             self.fixed(&reader, laid_callable(self.writer, callable), |callable| {
                                 close_callable(types, callable)
                             })
@@ -943,7 +1054,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     };
                     own_frontier = self.frontier_of(&reader);
                     drop(reader);
-                    self.fix_callable(nested, typed);
+                    if !skipped {
+                        self.fix_callable(nested, typed);
+                    }
                     let group = match typed {
                         Static::Closed(callable) => {
                             Some((callable.quantifier_map, callable.ktype.into()))
@@ -955,7 +1068,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     };
                     match group {
                         Some((map, ktype)) if writes_for_all(form) => {
-                            let own = self.own(map, ktype, base);
+                            let own = self.own(nested, map, ktype, base);
                             self.fix_group_levels(nested, own.levels);
                             Some(own)
                         }
@@ -966,8 +1079,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             };
             self.chain
                 .push(Level::new(nested, root, base, own, scratch));
-            if !own_frontier.is_empty() {
-                (self.chain[level + 1].residual).push((FactKey::Shape, own_frontier));
+            self.prefill(level + 1);
+            if !skipped {
+                self.keep(level + 1, FactKey::Shape, own_frontier);
             }
             let visited = self.visit(level + 1);
             self.chain.pop();
@@ -982,9 +1096,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             &mut self.chain[level].residual,
             BumpVec::new_in(self.scratch),
         );
-        if !residual.is_empty() {
-            self.fix_channel_residual(shape, Keyed::sorted(self.writer, &mut residual));
-        }
+        self.fix_channel_residual(shape, Keyed::sorted(self.writer, &mut residual));
         let at = &self.chain[level];
         let mut reads = at.reads.replace(BumpVec::new_in(self.scratch));
         if !reads.is_empty() {
@@ -1084,8 +1196,9 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
                 continue;
             };
             let own = at.own.is_some_and(|own| own.map.get(name).is_some());
+            // Numbered as the load numbered it, so a resumption's levels are the load's.
             let closed = shape.declarations(slot).is_some()
-                && matches!(self.declared_cell(shape, slot), Static::Closed(_));
+                && matches!(self.loaded_declared(shape, slot), Static::Closed(_));
             if !own && !closed {
                 names.push((Key::Slot(level, slot), next));
                 next += 1;
@@ -1122,11 +1235,13 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         at.names = names;
     }
 
-    /// A quantified callable's own group, read off its load-time type `ktype` and its group map
-    /// `map`: the group's variable `i` is the lexical variable at level `base + i`, named as the
-    /// declaration wrote it, laid down in program storage.
+    /// The quantified callable `body`'s own group, read off its load-time type `ktype` and its
+    /// group map `map`: the group's variable `i` is the lexical variable at level `base + i`, named
+    /// as the declaration wrote it — or, where a resumption binds it, the type it binds — laid down
+    /// in program storage.
     fn own(
         &self,
+        body: &BodyShape<'graph>,
         map: FunctionGroupMap<'graph>,
         ktype: DeclaredType<Parametric>,
         base: usize,
@@ -1142,7 +1257,15 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
                 .iter()
                 .find(|(_, at)| *at == index)
                 .expect("each variable of the group is a name the declaration wrote");
-            self.types.lexical(base + index, name, *bound)
+            // A name a resumption binds is read in the body as the type it binds.
+            let unknown = (body.slot(BinderSymbol::Type(name))).map(|(slot, _)| Unknown {
+                segment: body.segment(),
+                at: Address::Slot(slot),
+            });
+            match unknown.and_then(|unknown| self.bound(unknown)) {
+                Some(closed) => closed.into(),
+                None => self.types.lexical(base + index, name, *bound),
+            }
         }));
         Own {
             map,

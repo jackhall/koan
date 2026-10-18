@@ -580,8 +580,9 @@ pub struct BodyShape<'graph> {
     /// root, and its entry. Written once, by the type channel.
     path_reads: &'graph Cell<Keyed<'graph, (Site, PathRead<'graph>)>>,
     /// Every path entry of the chain this body roots, by level: empty for a body rooting none.
-    /// Written by the type channel, then by the static pass, which adds its own.
-    paths: &'graph Cell<&'graph [&'graph PathEntry<'graph>]>,
+    /// Written by the type channel, then by the static pass, which adds its own: beside how many
+    /// the type channel minted.
+    paths: &'graph Cell<(&'graph [&'graph PathEntry<'graph>], usize)>,
     /// The value channel's static types and each keyworded use's statics, fixed by the language's
     /// load pass.
     statics: &'graph Cell<Option<Statics<'graph>>>,
@@ -921,29 +922,7 @@ impl<'graph> BodyShape<'graph> {
         types: &Chain<'_, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Parametric> {
-        let ktype = match self.callable_type() {
-            Static::Closed(callable) => callable.ktype.into(),
-            Static::Rigid {
-                value: callable, ..
-            } => callable.ktype,
-            Static::Unknown => return None,
-        };
-        match ktype {
-            DeclaredType::Type(ktype) => Some(ktype),
-            DeclaredType::Scheme(scheme) => {
-                debug_assert_eq!(
-                    scheme.group(types).bounds.len(),
-                    self.group_levels().len(),
-                    "the type channel numbered the callable's own group"
-                );
-                Some(instantiate_quantified(
-                    types,
-                    scratch,
-                    scheme,
-                    self.group_levels(),
-                ))
-            }
-        }
+        in_body_of(self.callable_type(), self.group_levels(), types, scratch)
     }
 
     /// Written once, by the load pass.
@@ -1038,32 +1017,39 @@ impl<'graph> BodyShape<'graph> {
 
     /// The path entry at `level` of the chain this body roots.
     pub fn path_entry(&self, level: usize) -> Option<&'graph PathEntry<'graph>> {
-        let paths = self.paths.get();
+        let paths = self.paths();
         let first = paths.first()?.level;
         paths.get(level.checked_sub(first)?).copied()
     }
 
     /// Every path entry of the chain this body roots, in level order.
     pub fn paths(&self) -> &'graph [&'graph PathEntry<'graph>] {
-        self.paths.get()
+        self.paths.get().0
+    }
+
+    /// The path entries of the chain this body roots that the type channel minted, the first of
+    /// [`paths`](Self::paths).
+    pub fn channel_paths(&self) -> &'graph [&'graph PathEntry<'graph>] {
+        let (paths, channel) = self.paths.get();
+        &paths[..channel]
     }
 
     /// Written once, by the type channel, on a chain's root.
     pub fn fix_channel_paths(&self, paths: &'graph [&'graph PathEntry<'graph>]) {
         debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
-        debug_assert!(self.paths.get().is_empty());
-        self.paths.set(paths);
+        debug_assert!(self.paths().is_empty());
+        self.paths.set((paths, paths.len()));
     }
 
     /// Written once, by the static pass, on a chain's root: every entry, the type channel's first.
     pub fn fix_paths(&self, paths: &'graph [&'graph PathEntry<'graph>]) {
         debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
         debug_assert!(
-            (self.paths.get().iter())
+            (self.paths().iter())
                 .zip(paths)
                 .all(|(channel, all)| std::ptr::eq(*channel, *all))
         );
-        self.paths.set(paths);
+        self.paths.set((paths, self.paths.get().1));
     }
 
     /// Where this body reads each lexical variable of the path at `level`'s
@@ -2125,5 +2111,33 @@ impl fmt::Display for KeyDisplay<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// A callable body's function type as its body reads it, its type `callable`'s own group
+/// instantiated at `levels`: `None` where the load did not type the callable.
+pub fn in_body_of(
+    callable: StaticCallable<'_>,
+    levels: &[Parametric],
+    types: &Chain<'_, '_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> Option<Parametric> {
+    let ktype = match callable {
+        Static::Closed(callable) => callable.ktype.into(),
+        Static::Rigid {
+            value: callable, ..
+        } => callable.ktype,
+        Static::Unknown => return None,
+    };
+    match ktype {
+        DeclaredType::Type(ktype) => Some(ktype),
+        DeclaredType::Scheme(scheme) => {
+            debug_assert_eq!(
+                scheme.group(types).bounds.len(),
+                levels.len(),
+                "the type channel numbered the callable's own group"
+            );
+            Some(instantiate_quantified(types, scratch, scheme, levels))
+        }
     }
 }

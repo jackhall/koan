@@ -48,7 +48,7 @@ use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
 use crate::scheduler::NativeStep;
-use crate::scope::{BodyShape, ShapeError};
+use crate::scope::{BodyShape, Resumption, Settled, ShapeError};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::Chain;
@@ -80,6 +80,18 @@ impl Language for Koan {
     ) -> Result<(), ShapeError<'graph>> {
         check::overlaps(shape, builtins, types, scratch)?;
         statics::statics(shape, builtins, types, writer, scratch)
+    }
+
+    fn resume<'graph>(
+        shape: &'graph BodyShape<'graph>,
+        builtins: &'graph KBuiltins<'graph, 'graph>,
+        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        writer: Writer<'graph, 'graph>,
+        scratch: BumpAllocator<'_>,
+        over: Resumption<'_, 'graph>,
+        channel: &'graph Settled<'graph>,
+    ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
+        statics::resume_statics(shape, builtins, types, writer, scratch, over, channel)
     }
 }
 

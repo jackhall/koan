@@ -8,8 +8,8 @@
 //! the entry of the frame body whose parameter its operand names, or else at the unit holding the
 //! `USING`. Binding order follows the lexical chain — an outer body before an inner one, and in a
 //! body its entry before its units in order — so a frontier's seam is the latest of its members'
-//! sites. Each body's **reach**, every unknown a fact of it or of a body nested in it waits on, is
-//! laid beside its seams.
+//! sites. Each body's **reach**, every unknown a fact of it or of a body nested in it waits on —
+//! its own facts as a whole among them — is laid beside its seams.
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
 use crate::scope::{
@@ -82,6 +82,16 @@ fn walk<'graph, 'x>(
                     .map(|unknown| (body, at, *unknown)),
             );
         }
+    }
+    // A body's own facts wait on what its facts read, and a resumption skips a body by its reach.
+    let facts = shape.shape_facts();
+    for frontier in [
+        facts.summary_frontier,
+        facts.signature_frontier,
+        facts.ran_frontier,
+        facts.born_frontier,
+    ] {
+        merge_into(&mut reach, frontier.unknowns());
     }
     for (_, nested) in shape.nested_shapes() {
         let inner = walk(nested, chain, found, reaches, scratch);
