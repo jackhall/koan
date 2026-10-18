@@ -14,15 +14,17 @@ binding settles, the verdicts over it and the types it mints. Its cells are
 with value computation as steps, and a run cell reads what a binding settled
 through one counted borrow.
 
-This module owns the build tree and the solver's driver: the build cells, the
-type facts with their edges, the frontiers and seams that decide where a
-resumption lands, the specialization tables and what they cost, and the
-borrow a run cell takes. Its neighbours keep what they own:
-[elaborate](../elaborate/README.md) the per-expression typing rules and the
-type channel's vocabulary, called from a build cell's step;
+This module owns the build tree and the seams the solver's frontiers decide:
+the build cells, the seams that decide where a resumption lands, the
+specialization tables and what they cost, and the borrow a run cell takes.
+The solver's driver is the two load passes themselves, made re-entrant, so
+each rule stays the code it is. Its neighbours keep what they own:
+[elaborate](../elaborate/README.md) the per-expression typing rules, the type
+channel's vocabulary and its walk, called from a build cell's step;
 [scope](../scope/README.md) the shapes and name resolution, built by the build
-root's step and stored in program storage; [dispatch](../dispatch/README.md)
-selection, reading verdicts through the borrow;
+root's step and stored in program storage, and the type facts' vocabulary —
+unknowns, frontiers, the residual and a binding; [dispatch](../dispatch/README.md)
+selection and the static pass's walk, reading verdicts through the borrow;
 [memory](../memory/README.md) program storage, which holds the parse, the
 builtin table and what the build root's step writes for the written program;
 the scheduler the drain, which gains build cells as enterable work, the load
@@ -84,18 +86,48 @@ that reads an unknown **parks** its fact on that unknown and records the
 **edge**. The load runs the worklist to **quiescence**. Its output is the fixed
 facts and the **residual**: the parked facts and their edges. A **binding**
 unparks the facts on its edge; their rules re-run, can only narrow, and what
-they produce goes to the specialization the binding names. The unknowns a
-binding removes are a parameter's content, which is its path class
+they produce goes to the specialization the binding names.
+
+The worklist's schedule is the evaluation order of the two load passes, the
+type channel's walk and then the static pass's. The facts form no cycle, so
+that order is a topological one: each fact is popped once, after every fact
+it reads. Every read a rule makes of a load-time fact goes through a fact
+store, which adds the read fact's frontier, and the read unknown where the
+fact is one, to the frontier of the fact being computed; a memo the walk
+keeps carries the frontier it was computed under. A resumption re-walks the
+program under its binding, skipping every shape, unit and part whose
+frontier the binding misses and re-running the rest, so each woken fact
+re-runs once. A bound unknown enters at the readers alone: the type
+channel's reader answers a bound name closed, a callable's own bound
+`FOR ALL` name takes its binding as its group level, a bound type name seeds
+as a closed type binder does, and a bound module binder's static type is
+exactly its binding. Everything else follows by the rules as they are: a path
+through a root whose static type is exact resolves closed.
+
+Every lexical variable is an unknown, a `USING … SCOPE` block's surfaced names
+and a quote's holes, `\` marks and `$` names among them, and so is a type binder
+the type channel leaves unknown and a module binder whose path is a class. A
+binding removes a parameter's content, which is its path class
 ([paths](../dispatch/README.md#paths)), a `FOR ALL` group's solution and a
 `:Type` argument at frame entry; a lexical variable's type at the statement
-that binds it; and a path variable's hop.
+that binds it; and a path variable's hop at the statement that binds its
+root. A surfaced name binds at entry where its operand is a parameter, and at
+its `USING` statement otherwise; a quote's code is the seam of its own holes,
+marks and `$` names. A module binder binds to the exact type it carries: for a
+parameter, the application of its declared signature the retype stamps, every
+head parameter pinned. A value's carried type is never an unknown: a static
+type that reads no unknown is final at the load, however wide.
 
 An unknown is named by its **lexical address**, the segment and the
 coordinate the shape binds it at, never by its lattice node, which every body
 numbering its chain alike shares. A mention of a fellow member of its own
-component, itself included, is no unknown: it reads the fellow's annotation,
-the type its birth declares or `[Never, Any]` and records no edge, so the
-facts form no cycle.
+component, itself included, in the component's own statements or in a block
+or `MODULE` or `GROUP` body they run inline, is no unknown: it reads the
+fellow's annotation, the type its birth declares — at most `Module` for a
+`MODULE` or `GROUP` body — or `[Never, Any]`, records no edge, and so reads
+the same whatever order the members are typed in. A callable body nested in a
+member is typed after the component and reads the fellow's fact. The facts
+form no cycle.
 
 The lattice is untouched: `substitute`, *fits*, `judge_by_class` and the
 unifier are what the rules call, and this module lives downstream of them.
@@ -366,9 +398,9 @@ and bindings; the closed one-shot load is the oracle.
   the binding's depth at each variable position, and the facts form no
   cycle, since a parameter's and a return's static type come from the
   declaration, a local's from an earlier unit, and a mention inside a cyclic
-  component is a leaf. Each re-run of a fact strictly narrows it, so one
-  resumption's re-runs total at most its facts times the domain's height,
-  and a varying binding never makes a
+  component is a leaf. A re-run never widens its fact, and each fact re-runs
+  at most once per resumption, so one resumption's re-runs total at most its
+  facts, and a varying binding never makes a
   specialization. The specializations themselves are not bounded by the
   program text: a key over invariant content the run builds, a list passed
   bare to a keyed callee, takes a new value per distinct content, so a loop
@@ -389,10 +421,11 @@ the sources behind it are in [gradual typing](../../design/gradual-typing.md#in-
 
 `build` names `memory`, `scope`, `elaborate`, the scheduler's step, `values`
 for a digest and `symbols`, and the type lattice. `program` and `dispatch`
-name `build`: the program's bundle carries the build births and its steps
-fill a specialization, and dispatch reads facts and verdicts through a run
-cell's borrow. Nothing in `scope`, `elaborate` or the scheduler names `build`;
-a rule reads facts through a reader the driver hands it, never through the
+name `build`: the program lists the seams once the load's passes quiesce, its
+bundle carries the build births and its steps fill a specialization, and
+dispatch reads facts and verdicts through a run cell's borrow. Nothing in
+`scope`, `elaborate` or the scheduler names `build`; a rule reads facts
+through its pass's fact store over `scope`'s vocabulary, never through the
 tree, and the scheduler hands a step its borrow's doors and no more.
 
 ## Open work

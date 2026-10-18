@@ -1199,8 +1199,10 @@ tutorial snippet is checked against its shown output by
 - [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the static pass's driver moved to [the build module](../build/README.md)
-  as a worklist, selection reading verdicts through a run cell's borrow.
+  — the static pass as a worklist its own walk schedules, re-entered under a
+  binding, a component's fellow read at its seed whatever the members' order,
+  and selection reading verdicts through a run cell's borrow, per
+  [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, a warning for an overload
   never selected, a pin read through its bounds, a member read exact through a

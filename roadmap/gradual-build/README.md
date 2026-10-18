@@ -28,3 +28,15 @@ hand.
 
 - [Monotone elaboration](monotone-elaboration.md)
 
+## Unplanned work
+
+Known gaps with no item behind them yet — recorded so they are not rediscovered
+as surprises, not scheduled.
+
+- **The solver as a fact graph.** [Monotone elaboration](monotone-elaboration.md)
+  schedules its worklist by the two load walks' evaluation order and makes the
+  walks re-entrant, so each rule stays the code it is and a fact's edges are
+  recorded by the reads the walk makes. A rewrite of every rule as a function
+  over explicit inputs, each fact an id run from a queue, would make the edges
+  structural rather than recorded and the laws read off the graph, and may be
+  the better architecture; it rewrites the passes' rules wholesale.

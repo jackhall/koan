@@ -1205,7 +1205,8 @@ type outside the one error that lists names, and on a retired lifetime name.
 - [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
 - [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the write-once cell as a monotone type fact, per
+  — the write-once cell as a monotone type fact, beside the vocabulary of
+  unknowns, frontiers, the residual and a binding, per
   [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.
