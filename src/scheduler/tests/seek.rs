@@ -1,6 +1,8 @@
 //! Seeking a specialization: the drain finds a frame's specialization in its parent's table before
 //! the frame is born, or builds it first with one synchronous step, and the frame borrows it,
 //! whatever its placement: a `Fresh` frame as its tree cell's lend, a `Shares` one as its tenant's.
+//! A missed specialization's branch holds its binding's nodes, copied from the asker's region, so a
+//! frame finds them after the asker is gone.
 
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
@@ -8,16 +10,16 @@ use std::ptr;
 
 use crate::knot::KValue;
 use crate::memory::{Active, Bump};
-use crate::scheduler::tests::bundle::{Native, TestGraph};
+use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, shares, work};
 use crate::scheduler::{
     Action, EVICT_BEFORE_STEP, Placement, Scheduler, Seek, Step, StepError, TIERS, Tiers, Use,
     WATCH_LOG, WATCHED, Watched, Work,
 };
 use crate::scope::{Binding, Settled};
-use crate::type_lattice::{KType, Root};
+use crate::type_lattice::{KType, Root, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{BuildRef, SpecBinding, SpecBounds, SpecKey};
+use crate::values::{BuildRef, KeyedTypes, SpecBinding, SpecBounds, SpecKey};
 
 thread_local! {
     /// The build cell each observing step ran under, in the order they ran.
@@ -32,6 +34,8 @@ thread_local! {
     /// Where [`settling`] laid its settled facts, and where each [`read_settled`] frame found
     /// them, as addresses: `None` for a frame that found none.
     static SETTLED: RefCell<Vec<Option<usize>>> = const { RefCell::new(Vec::new()) };
+    /// The type a [`minting`] asker laid in its own region, which its seek's binding carries.
+    static BOUND: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
 }
 
 fn builds() -> Vec<BuildRef> {
@@ -235,6 +239,194 @@ fn a_frame_reads_its_specializations_settled_facts_through_its_lend() {
         none, None,
         "a frame that borrows no specialization reads none"
     );
+}
+
+/// How many nodes the drains on this thread have laid into new specializations' branches since
+/// the last [`fresh_tally`].
+fn relayed() -> usize {
+    TIERS.with(|tiers| tiers.get().relayed)
+}
+
+/// A seek for the specialization keyed `at` under the build root, its binding carrying `bound`,
+/// built by `specialize`.
+fn seek_bound<'graph>(
+    at: usize,
+    bound: KType,
+    specialize: TestStep<'graph>,
+) -> Seek<'graph, Native> {
+    let mut binding = SpecBinding::default();
+    binding.push(KeyedTypes {
+        carried: bound.into(),
+        named: None,
+    });
+    Seek {
+        parent: BuildRef::ROOT,
+        key: key(at),
+        binding,
+        work: work(specialize, KValue::Null),
+    }
+}
+
+/// A specialization's step over a binding the asker minted: its own chain resolves the binding's
+/// type through its own branch before it lays anything, then it enlists.
+fn holding<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    {
+        let types = step.types();
+        let bound = BOUND.get();
+        assert!(!types.in_root(bound));
+        assert!(
+            types.resolves(bound),
+            "the drain laid the binding's node before the step"
+        );
+        assert!(
+            types.own_len() > 0,
+            "through the specialization's own branch"
+        );
+    }
+    step.enlist(None)
+}
+
+/// A specialization's step over a binding of root types: its branch holds nothing.
+fn holding_root<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    {
+        let types = step.types();
+        assert!(types.resolves(KType::NUMBER));
+        assert_eq!(types.own_len(), 0, "a root handle lays nothing");
+    }
+    step.enlist(None)
+}
+
+/// A frame that reads its binding's type, a list of a list of `Bool`, through its lend, and
+/// finishes.
+fn reading<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    {
+        let warm = step
+            .warm_types()
+            .expect("the frame borrows its specialization");
+        let bound = BOUND.get();
+        assert!(warm.resolves(bound), "the frame's lend holds its binding");
+        let TypeNode::List { element } = warm.node(bound) else {
+            panic!("the binding is a list")
+        };
+        assert!(matches!(
+            warm.node(element),
+            TypeNode::List { element } if element == KType::BOOL
+        ));
+    }
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+/// Finish with nothing, so the asker wakes.
+fn report<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+/// An asker that mints a type in its own region and seeks a specialization over it, for a
+/// `Fresh` frame.
+fn minting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    let bound = {
+        let types = step.types();
+        let bound = types.list(types.list(KType::BOOL));
+        assert!(
+            !types.in_root(bound),
+            "the asker minted it in its own region"
+        );
+        bound
+    };
+    BOUND.set(bound);
+    let seek = seek_bound(7, bound, holding);
+    let asked = step.spawn_seeking(fresh(reading, Use::Reads, KValue::Null), Some(seek));
+    step.park(asked, report, KValue::Null, None)
+}
+
+/// An asker that mints nothing and seeks the same specialization, for a `Shares` frame: a hit.
+fn rehitting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    let seek = seek_bound(7, BOUND.get(), holding);
+    let asked = step.spawn_seeking(shares(reading, Use::Reads, KValue::Null), Some(seek));
+    step.park(asked, report, KValue::Null, None)
+}
+
+/// Ask for a minting asker, and once it is gone, where the state is `2`, a rehitting one.
+fn mint_then_rehit<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
+    let asked = step.spawn(fresh(minting, Use::Reads, KValue::Null));
+    let next = if matches!(state, KValue::Number(2.0)) {
+        rehit_after
+    } else {
+        finished
+    };
+    step.park(asked, next, KValue::Null, None)
+}
+
+/// The second half of [`mint_then_rehit`]: the minting asker has finished and been retired.
+fn rehit_after<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    step.results().for_each(drop);
+    let asked = step.spawn(fresh(rehitting, Use::Reads, KValue::Null));
+    step.park(asked, finished, KValue::Null, None)
+}
+
+/// Run [`mint_then_rehit`] over a fresh graph from `state`, and read the specializations built
+/// and the nodes relayed.
+fn run_minting(state: f64) -> (usize, usize) {
+    reset();
+    fresh_tally();
+    let type_region = Bump::new();
+    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    Scheduler::over(&mut graph)
+        .run(
+            work(mint_then_rehit, KValue::Number(state)),
+            roots.run,
+            Placement::Fresh,
+        )
+        .expect("the root work ends");
+    (specialized(), relayed())
+}
+
+#[test]
+fn a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone()
+{
+    let once = run_minting(1.0);
+    assert_eq!(
+        once,
+        (1, 2),
+        "one miss, laying the list and its element's list"
+    );
+    assert_eq!(
+        run_minting(2.0),
+        once,
+        "the second seek hits, and a hit relays nothing"
+    );
+}
+
+/// Seek a specialization over a binding of `Number` alone.
+fn seek_root_bound<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    let seek = seek_bound(8, KType::NUMBER, holding_root);
+    let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), Some(seek));
+    step.park(asked, finished, KValue::Null, None)
+}
+
+#[test]
+fn a_binding_of_root_types_lays_nothing_in_its_specialization() {
+    reset();
+    fresh_tally();
+    let type_region = Bump::new();
+    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    Scheduler::over(&mut graph)
+        .run(
+            work(seek_root_bound, KValue::Null),
+            roots.run,
+            Placement::Fresh,
+        )
+        .expect("the root work ends");
+    assert_eq!((specialized(), relayed()), (1, 0));
 }
 
 #[test]

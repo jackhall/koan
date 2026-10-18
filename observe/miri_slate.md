@@ -307,6 +307,9 @@ through `peek` between steps.
 - `a_frame_reads_its_specializations_settled_facts_through_its_lend`
   a specialization's own step laying its settled facts in its region and setting them in its
   header, read by two frames through their lent region and by none that borrows no region.
+- `a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone`
+  a new specialization's entry, opened beside its asker, laying the binding's nodes from the
+  asker's region into its own branch, read by a frame after the asker's region is gone.
 - `a_parent_past_its_bound_releases_its_least_recently_born_child`
   the drain writing a parent's books through `peek` between steps — a hit's stamp, a new child's
   entry and home — under the root's table and a specialization's own, its victims released and an
@@ -329,9 +332,9 @@ through `peek` between steps.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-18: 1028s — 45 tests, 0 leaks, 0 UB
 - 2026-10-18: 643s — 44 tests, 0 leaks, 0 UB
 - 2026-10-18: 872s — 42 tests, 0 leaks, 0 UB
 - 2026-10-17: 596s — 42 tests, 0 leaks, 0 UB
 - 2026-10-17: 671s — 42 tests, 0 leaks, 0 UB
-- 2026-10-16: 990s — 41 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

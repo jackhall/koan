@@ -1565,3 +1565,49 @@ fn a_keyed_shares_call_links_a_host_scratch_laid_before_it() {
         ("done".to_string(), "seven".to_string())
     );
 }
+
+/// `BOXED`, keyed on a type it composes a nominal over. `ASK` composes a record type at run and
+/// hands it to `BOXED` by a child; `HOPPING` composes it and hands it by a child to `HOP`, which
+/// passes it on to `BOXED` by a tail hop. A hop keys only a type it passes through unchanged, so
+/// the type is composed one call up.
+const BOXED: &str = "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :Elt}) (1))\n\
+                     EXPR #(HOP Elt :Type) -> Number = #(BOXED Elt)\n\
+                     EXPR #(ASK Elt :Type) -> Number = \
+                     #((LET r = (BOXED :{a :Elt b :Elt})) (r))\n\
+                     EXPR #(HOPPING Elt :Type) -> Number = \
+                     #((LET r = (HOP :{a :Elt b :Elt})) (r))\n";
+
+#[test]
+fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
+    for asker in ["ASK", "HOPPING"] {
+        let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} Number)\n"));
+        let twice = ran(
+            DEPTHS[0],
+            &format!("{BOXED}LET first = ({asker} Number)\nPRINT ({asker} Number)\n"),
+        );
+        assert_eq!((once.printed.as_str(), twice.printed.as_str()), ("1", "1"));
+        assert_eq!(
+            (
+                once.tiers.sought,
+                once.tiers.specialized,
+                once.tiers.relayed
+            ),
+            (1, 1, 1),
+            "`{asker}`'s composed record is laid by value"
+        );
+        assert_eq!(
+            (
+                twice.tiers.sought,
+                twice.tiers.specialized,
+                twice.tiers.relayed
+            ),
+            (2, 1, 1),
+            "`{asker}`'s second call hits, and a hit relays nothing"
+        );
+    }
+    assert_eq!(
+        ran(DEPTHS[0], &invariant_loop()).tiers.relayed,
+        0,
+        "a written module's types are the root's"
+    );
+}
