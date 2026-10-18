@@ -17,7 +17,7 @@ use crate::scheduler::{
 use crate::scope::{Binding, Settled};
 use crate::type_lattice::{KType, Root};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{BuildRef, SpecBounds, SpecKey};
+use crate::values::{BuildRef, SpecBinding, SpecBounds, SpecKey};
 
 thread_local! {
     /// The build cell each observing step ran under, in the order they ran.
@@ -100,6 +100,7 @@ fn seek<'graph>(at: usize, parent: BuildRef) -> Seek<'graph, Native> {
     Seek {
         parent,
         key: key(at),
+        binding: SpecBinding::default(),
         work: work(specialize, KValue::Null),
     }
 }
@@ -194,6 +195,7 @@ fn seek_settled<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Actio
         let seek = Seek {
             parent: BuildRef::ROOT,
             key: key(1),
+            binding: SpecBinding::default(),
             work: work(settling, KValue::Null),
         };
         step.spawn_seeking(fresh(read_settled, Use::Reads, KValue::Null), Some(seek));

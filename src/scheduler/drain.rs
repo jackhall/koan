@@ -7,6 +7,10 @@
 //! asker's [`Seek`] finds or builds with one synchronous step, or, born cold, its parent's scratch
 //! for a `Fresh` frame and nothing for a `Shares` one. Any other cell borrows what its parent reads.
 //!
+//! A miss enters the new specialization beside its asker, and the entry lays the binding's nodes
+//! from the asker's region into the specialization's branch before its step runs, so the branch
+//! holds them by value.
+//!
 //! The drain keeps every build cell's books: it stamps a hit's entry and a hop's, fills a new
 //! child's entry and sets its home. A miss on a full table releases the least recently born child
 //! with its subtree, leaf first, before the new child is created; nothing else releases a
@@ -33,8 +37,8 @@ use crate::scheduler::seek::{Lending, Seek};
 #[cfg(test)]
 use crate::scope::HalfHeader;
 use crate::scope::RegionHeader;
-use crate::type_lattice::Root;
-use crate::values::{Decision, SpecHome};
+use crate::type_lattice::{Branch, Halves, Root};
+use crate::values::{Decision, Half, SpecBinding, SpecHome, Types};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -187,6 +191,8 @@ pub(crate) struct Tiers {
     /// How many frames were born cold because the build cell their seek or hop named is dead: a
     /// count.
     pub cold_births: usize,
+    /// Nodes the drain laid into new specializations' branches from their askers': a count.
+    pub relayed: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -213,6 +219,7 @@ thread_local! {
             specialized: 0,
             evicted: 0,
             cold_births: 0,
+            relayed: 0,
         })
     };
 }
@@ -387,7 +394,10 @@ where
                     } else {
                         Born::Child
                     };
-                    (self.create(provenance, asked, born)?, release_after)
+                    // The cell whose region holds the request's birth: a hop's predecessor, else
+                    // the cell that asked.
+                    let asker = release_after.unwrap_or(provenance.parent);
+                    (self.create(provenance, asked, born, asker)?, release_after)
                 }
             };
             #[cfg(test)]
@@ -471,17 +481,19 @@ where
     }
 
     /// Give a request its cell, under the parent its provenance names, its birth crossing as
-    /// `born` says, borrowing what its lending resolves to.
+    /// `born` says, borrowing what its lending resolves to. `asker` is the cell whose region holds
+    /// the birth, which a missed specialization reads its binding's nodes from.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
         born: Born,
+        asker: CellHandle,
     ) -> Result<CellHandle, DrainStalled> {
         let borrows = match asked.lending {
             Lending::Parent => Borrows::Parent,
             Lending::Call(None) => Borrows::Call(None),
-            Lending::Call(Some(seek)) => Borrows::Call(self.seek(seek)?),
+            Lending::Call(Some(seek)) => Borrows::Call(self.seek(seek, asker)?),
             Lending::Under(build) => Borrows::Call(match build.opened() {
                 None => None,
                 Some(spec) if self.graph.cells.is_live(spec) => {
@@ -509,13 +521,24 @@ where
 
     /// The specialization a frame `seek` asks for borrows: the one the parent's table names under
     /// the key, if it is live, its entry stamped; or else one created under the parent and stepped
-    /// at once, before anything else runs, and entered in the table. A full table first releases
-    /// its least recently born child with its subtree, and the new child takes its entry. `None`
-    /// for a parent that is not live, or a graph with no build root, whose frame is born cold.
-    fn seek(&mut self, seek: Seek<'graph, B>) -> Result<Option<CellHandle>, DrainStalled> {
+    /// at once beside `asker`, laying the binding's nodes first, before anything else runs, and
+    /// entered in the table. A full table first releases its least recently born child with its
+    /// subtree, and the new child takes its entry. `None` for a parent that is not live, or a
+    /// graph with no build root, whose frame is born cold.
+    fn seek(
+        &mut self,
+        seek: Seek<'graph, B>,
+        asker: CellHandle,
+    ) -> Result<Option<CellHandle>, DrainStalled> {
         #[cfg(test)]
         tally(|tiers| tiers.sought += 1);
-        let parent: CellHandle = match (seek.parent.opened(), self.graph.build_root) {
+        let Seek {
+            parent,
+            key,
+            binding,
+            work,
+        } = seek;
+        let parent: CellHandle = match (parent.opened(), self.graph.build_root) {
             (Some(spec), _) => spec.into(),
             (None, Some(root)) => root.into(),
             (None, None) => return Ok(None),
@@ -523,7 +546,7 @@ where
         let cells = &self.graph.cells;
         let decided = cells.peek(parent, |header, _| {
             let table = header.into_value().table()?;
-            Some(table.decide(seek.key, |spec| cells.is_live(spec)))
+            Some(table.decide(key, |spec| cells.is_live(spec)))
         });
         let decision = match decided {
             Ok(decision) => decision.flatten(),
@@ -538,7 +561,15 @@ where
         debug_assert!(decision.is_some(), "a live build cell holds a table");
         let index = match decision {
             None => return Ok(None),
-            Some(Decision::Hit(spec)) => return Ok(Some(spec.into())),
+            Some(Decision::Hit(spec)) => {
+                #[cfg(debug_assertions)]
+                assert!(
+                    self.holds_binding(spec, &binding),
+                    "a hit's specialization holds its binding's nodes: its key digests the \
+                     content they are read from"
+                );
+                return Ok(Some(spec.into()));
+            }
             Some(Decision::Fill(index)) => index,
             Some(Decision::Evict(index, victim)) => {
                 self.release_subtree(victim)?;
@@ -549,26 +580,26 @@ where
         // step seeks nothing (`enlist` refuses a cell that asked for children), so the entry
         // `decide` chose is still free when the step returns.
         let continuation = Continuation {
-            step: seek.work.step,
+            step: work.step,
             provenance: Provenance {
                 parent,
                 report: None,
                 home: parent,
             },
-            state: Rested::Awake(B::born(seek.work.state)),
+            state: Rested::Awake(B::born(work.state)),
         };
         let spec = (self.graph.cells)
             .create_tree_lent(parent, Lend::Named(parent), Some(continuation))
             .map_err(|_| DrainStalled::Unspawnable)?;
         #[cfg(test)]
         tally(|tiers| tiers.specialized += 1);
-        let (action, _) = self.step(spec.into())?;
+        let (action, _) = self.step_beside(spec.into(), asker, &binding)?;
         match action.kind() {
             Kind::Quiesced => {
                 let cells = &self.graph.cells;
                 let entered = cells.peek(parent, |header, _| {
                     let table = header.into_value().table()?;
-                    table.fill(index, seek.key, spec);
+                    table.fill(index, key, spec);
                     Some(())
                 });
                 let homed = cells.peek(spec, |header, _| {
@@ -583,6 +614,29 @@ where
             Kind::Failed(error) => Err(DrainStalled::Step(error)),
             _ => Err(DrainStalled::Step(StepError::Refused)),
         }
+    }
+
+    /// Whether the live specialization `spec`'s branch, with the root, holds the node of every
+    /// handle `binding` carries. Read through `peek`; lays nothing and opens no step. `adopt` lays
+    /// children before parents, so a found handle's children are there too.
+    #[cfg(debug_assertions)]
+    fn holds_binding(&self, spec: TreeHandle, binding: &SpecBinding) -> bool {
+        let root = self.graph.type_root;
+        let held = |branch: Option<&Branch<'_>>, digest| {
+            let mut found = false;
+            if let Some(branch) = branch {
+                branch.each_digest(|at| found |= at == digest);
+            }
+            if !found {
+                root.each_digest(|at| found |= at == digest);
+            }
+            found
+        };
+        let holds = self.graph.cells.peek(spec, |header, _| {
+            let branch = header.into_value().branch();
+            binding.handles().all(|kt| held(branch, kt.digest()))
+        });
+        binding.is_empty() || holds.ok().flatten().unwrap_or(false)
     }
 
     /// Stamp the entry of the live specialization `spec` in its parent's table: a hop of the same
@@ -683,97 +737,35 @@ where
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
         let type_root = graph.type_root;
-        graph
-            .cells
+        (graph.cells)
             .enter(cell, |context| {
-                let Continuation {
-                    step,
-                    provenance,
-                    state,
-                } = context
-                    .continuation()
-                    .expect("a ready cell carries a continuation");
-                // Both slots come off here, so the step is handed what it parked in each and
-                // reaches neither door itself. Only a park stores them back, so a step that
-                // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
-                // this step's end.
-                let scratch = context.scratch_state();
-                let state = match state {
-                    Rested::Awake(state) => state,
-                    Rested::Dormant(dormant, born) => {
-                        match wake::<B>(context, type_root, dormant, born) {
-                            Ok(state) => state,
-                            Err(_) => {
-                                return (Action::refused(StepError::Unredeemable), provenance);
-                            }
-                        }
-                    }
-                };
-                #[cfg(test)]
-                let before = {
-                    let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
-                        branch.map_or(0, crate::type_lattice::Branch::len)
-                    };
-                    // The half a step's warm chain reads: a specialization's region, or a scratch.
-                    let lent = (context.lent_region())
-                        .or_else(|| context.lent_scratch())
-                        .and_then(|(_, header)| header.get())
-                        .and_then(HalfHeader::branch);
-                    (
-                        len(context.scratch_header().get().and_then(HalfHeader::branch)),
-                        len(lent),
-                    )
-                };
-                let step = step(Step::new(
-                    context,
-                    type_root,
-                    &provenance,
-                    spawns,
-                    state,
-                    scratch,
-                ));
-                #[cfg(test)]
-                {
-                    let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
-                        branch.map_or(0, crate::type_lattice::Branch::len)
-                    };
-                    // The half a step's warm chain reads: a specialization's region, or a scratch.
-                    let lent = (context.lent_region())
-                        .or_else(|| context.lent_scratch())
-                        .and_then(|(_, header)| header.get())
-                        .and_then(HalfHeader::branch);
-                    if let Some(shape) = CACHING.take() {
-                        let scratch =
-                            len(context.scratch_header().get().and_then(HalfHeader::branch))
-                                .saturating_sub(before.0);
-                        let warm = len(lent).saturating_sub(before.1);
-                        LAID.with(|laid| {
-                            let mut laid = laid.borrow_mut();
-                            let entry = laid.entry(shape).or_default();
-                            *entry = (entry.0 + scratch, entry.1 + warm);
-                        });
-                    }
-                    TIERS.with(|tiers| {
-                        let most = tiers.get();
-                        tiers.set(Tiers {
-                            region: most
-                                .region
-                                .max(len(context.header().get().and_then(HalfHeader::branch))),
-                            scratch: most.scratch.max(len(context
-                                .scratch_header()
-                                .get()
-                                .and_then(HalfHeader::branch))),
-                            lent: most.lent.max(len(lent)),
-                            lent_verdicts: (most.lent_verdicts)
-                                .max(lent.map_or(0, crate::type_lattice::Branch::verdict_count)),
-                            scratch_bytes: most
-                                .scratch_bytes
-                                .max(context.scratch_writer().in_use()),
-                            ..most
-                        });
-                    });
-                }
-                (step, provenance)
+                run_step::<B>(context, type_root, spawns, None)
+            })
+            .map_err(|_| DrainStalled::Unenterable)
+    }
+
+    /// Enter the new specialization `spec` beside `asker` and run its one step, laying the node of
+    /// every handle `binding` carries into its branch first: read from the region branch of the
+    /// asker's write home, where the request's birth rests and so where every type its arguments
+    /// carry resolves; insert-if-absent, a root handle at a bit test. The read sits at a brand of
+    /// its own, so the branch keeps no reference into the run tree: a copy by value, made while
+    /// the asker is between steps. An empty binding opens no read.
+    fn step_beside(
+        &mut self,
+        spec: CellHandle,
+        asker: CellHandle,
+        binding: &SpecBinding,
+    ) -> Result<(Action<'graph, B>, Provenance), DrainStalled> {
+        if binding.is_empty() {
+            return self.step(spec);
+        }
+        self.spawns.clear();
+        let Scheduler { graph, spawns, .. } = self;
+        let type_root = graph.type_root;
+        (graph.cells)
+            .enter_beside(spec, asker, |context, read, _| {
+                let source = read.and_then(|header| header.into_value().branch());
+                run_step::<B>(context, type_root, spawns, Some((source, binding)))
             })
             .map_err(|_| DrainStalled::Unenterable)
     }
@@ -842,6 +834,118 @@ where
     pub(crate) fn peak_live_cells(&self) -> usize {
         self.census.peak
     }
+}
+
+/// One step of `cell`'s continuation, inside its entry: wake its state, seed its branch where
+/// the entry was opened beside an asker (`seed`: the asker's region branch and the binding whose
+/// nodes it lays), run the step function, and tally.
+fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    type_root: &'graph Root<'graph>,
+    spawns: &mut Spawns<'graph, B>,
+    seed: Option<(Option<&Branch<'_>>, &SpecBinding)>,
+) -> (Action<'graph, B>, Provenance)
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+    Erased<'graph, B::Birth>: Copy,
+{
+    let Continuation {
+        step,
+        provenance,
+        state,
+    } = context
+        .continuation()
+        .expect("a ready cell carries a continuation");
+    // Both slots come off here, so the step is handed what it parked in each and
+    // reaches neither door itself. Only a park stores them back, so a step that
+    // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
+    // this step's end.
+    let scratch = context.scratch_state();
+    let state = match state {
+        Rested::Awake(state) => state,
+        Rested::Dormant(dormant, born) => match wake::<B>(context, type_root, dormant, born) {
+            Ok(state) => state,
+            Err(_) => {
+                return (Action::refused(StepError::Unredeemable), provenance);
+            }
+        },
+    };
+    // A specialization's state is awake, so nothing above precedes its seeding.
+    if let Some((source, binding)) = seed {
+        let types = Types::new(
+            type_root,
+            Halves::alone(Half::of(context.writer(), context.header())),
+        );
+        for kt in binding.handles() {
+            types.adopt(source, kt);
+        }
+        #[cfg(test)]
+        tally(|tiers| tiers.relayed += types.own_len());
+    }
+    #[cfg(test)]
+    let before = {
+        let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
+            branch.map_or(0, crate::type_lattice::Branch::len)
+        };
+        // The half a step's warm chain reads: a specialization's region, or a scratch.
+        let lent = (context.lent_region())
+            .or_else(|| context.lent_scratch())
+            .and_then(|(_, header)| header.get())
+            .and_then(HalfHeader::branch);
+        (
+            len(context.scratch_header().get().and_then(HalfHeader::branch)),
+            len(lent),
+        )
+    };
+    let step = step(Step::new(
+        context,
+        type_root,
+        &provenance,
+        spawns,
+        state,
+        scratch,
+    ));
+    #[cfg(test)]
+    {
+        let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
+            branch.map_or(0, crate::type_lattice::Branch::len)
+        };
+        // The half a step's warm chain reads: a specialization's region, or a scratch.
+        let lent = (context.lent_region())
+            .or_else(|| context.lent_scratch())
+            .and_then(|(_, header)| header.get())
+            .and_then(HalfHeader::branch);
+        if let Some(shape) = CACHING.take() {
+            let scratch = len(context.scratch_header().get().and_then(HalfHeader::branch))
+                .saturating_sub(before.0);
+            let warm = len(lent).saturating_sub(before.1);
+            LAID.with(|laid| {
+                let mut laid = laid.borrow_mut();
+                let entry = laid.entry(shape).or_default();
+                *entry = (entry.0 + scratch, entry.1 + warm);
+            });
+        }
+        TIERS.with(|tiers| {
+            let most = tiers.get();
+            tiers.set(Tiers {
+                region: most
+                    .region
+                    .max(len(context.header().get().and_then(HalfHeader::branch))),
+                scratch: most.scratch.max(len(context
+                    .scratch_header()
+                    .get()
+                    .and_then(HalfHeader::branch))),
+                lent: most.lent.max(len(lent)),
+                lent_verdicts: (most.lent_verdicts)
+                    .max(lent.map_or(0, crate::type_lattice::Branch::verdict_count)),
+                scratch_bytes: most.scratch_bytes.max(context.scratch_writer().in_use()),
+                ..most
+            });
+        });
+    }
+    (step, provenance)
 }
 
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and

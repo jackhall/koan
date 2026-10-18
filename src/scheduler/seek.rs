@@ -2,10 +2,11 @@
 //! drain does with it before the frame is born.
 //!
 //! An asker that calls a body keyed on its bindings hands a [`Seek`]: the build cell the callee was
-//! born under, the key, and the specialization's own work. The drain reads that parent's table
-//! through a peek between steps; a live hit is the specialization, its entry stamped as a birth, and
-//! a miss creates one under the parent and runs its one step at once, so the frame is born borrowing
-//! it and parks for nothing. A miss on a full table first releases the parent's least recently born
+//! born under, the key, the types its binding carries, and the specialization's own work. The drain
+//! reads that parent's table through a peek between steps; a live hit is the specialization, its
+//! entry stamped as a birth, and a miss creates one under the parent, lays the binding's nodes in its
+//! branch from the asker's region, and runs its one step at once, so the frame is born borrowing it
+//! and parks for nothing. A miss on a full table first releases the parent's least recently born
 //! child with its subtree, and the new child takes its entry. A tail hop of the same callee under a
 //! live specialization stamps its entry too.
 //! A parent that is no longer live births the frame cold: a `Fresh` frame borrowing its parent's
@@ -14,14 +15,15 @@
 //! See [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
 
 use crate::scheduler::continuation::{StepBundle, Work};
-use crate::values::{BuildRef, SpecKey};
+use crate::values::{BuildRef, SpecBinding, SpecKey};
 
 /// What an asker hands the drain to find a frame's specialization: the build cell the callee was
-/// born under, the key in its table, and the work a missed specialization is born to run, at
-/// `'graph` since it reports to nobody.
+/// born under, the key in its table, the types its binding carries, and the work a missed
+/// specialization is born to run, at `'graph` since it reports to nobody.
 pub struct Seek<'graph, B: StepBundle<'graph>> {
     pub parent: BuildRef,
     pub key: SpecKey,
+    pub binding: SpecBinding,
     pub work: Work<'graph, 'graph, B>,
 }
 
