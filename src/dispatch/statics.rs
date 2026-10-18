@@ -652,7 +652,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn visit(
         &mut self,
         level: usize,
-        surfacing: Option<Interval>,
+        surfacing: Option<(Interval, Frontier<'graph>)>,
     ) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         for slot in 0..shape.slots() {
@@ -663,8 +663,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             {
                 continue;
             }
-            self.open();
-            let seeded = self.seeded(level, slot, surfacing);
+            // A surfaced name reads the module's static type, which its `USING` read.
+            let surfaced = surfacing.filter(|_| shape.position_of(slot) == Position::PARAMETER);
+            self.open_with(surfaced.map_or(&[][..], |(_, frontier)| frontier.unknowns()));
+            let seeded = self.seeded(level, slot, surfacing.map(|(typed, _)| typed));
+            self.note_own(level, slot, seeded);
             let frontier = self.close_as(level, FactKey::Slot(slot));
             self.set_binder(level, slot, seeded, frontier);
             let slot = slot.index();
@@ -833,7 +836,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         nested: &'graph BodyShape<'graph>,
         roots_chain: bool,
-        surfacing: Option<Interval>,
+        surfacing: Option<(Interval, Frontier<'graph>)>,
     ) -> Result<Option<Interval>, ShapeError<'graph>> {
         self.push(nested, roots_chain);
         let callable = nested.kind() == ShapeKind::Callable;
@@ -1390,7 +1393,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             self.set_binder(level, *member, DeclaredType::Type(*typed), *frontier);
         }
         for (member, (bound, frontier)) in skipped {
-            self.set_binder(level, member, bound, frontier);
+            self.restore_binder(level, member, bound, frontier);
         }
         // A binding statement's value is the one binder it writes, where it writes only one.
         let mut values = component
@@ -1482,6 +1485,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 Some(bound) => Interval::point(bound.into()),
                 None => value,
             };
+            self.note_own(level, *member, DeclaredType::Type(value));
             let frontier = self.close_as(level, FactKey::Slot(*member));
             typed.push((*member, value, frontier));
         }
@@ -2558,13 +2562,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let [_, operand, _, _] = node.parts else {
             unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
         };
-        let typed = self.part(level, &operand.value)?;
+        self.open();
+        let typed = self.part(level, &operand.value);
+        let frontier = self.close();
+        let typed = typed?;
         let shape = self.chain[level].shape;
         let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
             return Ok(unknown());
         };
         Ok(self
-            .nested(level, body, false, Some(typed))?
+            .nested(level, body, false, Some((typed, frontier)))?
             .unwrap_or_else(unknown))
     }
 

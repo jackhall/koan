@@ -140,16 +140,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// [`runs`](Self::runs), counting nothing.
     pub(super) fn reruns(&self, level: usize, key: FactKey) -> bool {
         match &self.resume {
-            // A slot the resumption binds holds what it binds.
-            Some(resume) if !self.unfilled => {
-                let own = match key {
-                    FactKey::Slot(slot) => {
-                        resume.wakes(Frontier::from_sorted(&[self.unknown_at(level, slot)]))
-                    }
-                    _ => false,
-                };
-                own || resume.wakes(self.staged(level, key))
-            }
+            Some(resume) if !self.unfilled => resume.wakes(self.staged(level, key)),
             _ => true,
         }
     }
@@ -566,6 +557,21 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         })
     }
 
+    /// Gather the unknown the binder at `slot` of the shape at `level`, of static type `bound`,
+    /// is itself, where it is one: a type name the chain numbers, or a module binder. A binding of
+    /// it changes its fact though nothing it read did.
+    pub(super) fn note_own(&self, level: usize, slot: Slot, bound: Bound) {
+        let shape = self.chain[level].shape;
+        let homed = (self.homes(shape).iter()).any(|(_, target)| *target == Target::Local(slot));
+        let own = match homed {
+            true => Some(self.unknown_at(level, slot)),
+            false => self.module_unknown(level, slot, bound),
+        };
+        if let Some(own) = own {
+            self.note(&[own]);
+        }
+    }
+
     /// Whether the pass has fixed `shape`'s cell.
     pub(super) fn typed_shape(&self, shape: &BodyShape<'graph>) -> bool {
         let Some(resume) = &self.resume else {
@@ -627,6 +633,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if let DeclaredType::Type(typed) = bound {
             self.sound(level, &[typed.lower, typed.upper]);
         }
+        let at = &mut self.chain[level];
+        at.binders[slot.index()] = bound;
+        at.binder_frontiers[slot.index()] = frontier;
+    }
+
+    /// Put back the static type of the binder at `slot` of the shape at `level`, a fact a
+    /// resumption skipped, beside the frontier it was read under.
+    pub(super) fn restore_binder(
+        &mut self,
+        level: usize,
+        slot: Slot,
+        bound: Bound,
+        frontier: Frontier<'graph>,
+    ) {
         let at = &mut self.chain[level];
         at.binders[slot.index()] = bound;
         at.binder_frontiers[slot.index()] = frontier;
@@ -781,12 +801,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         site: Site,
         tree: &'graph crate::scope::Tree<'graph>,
     ) {
+        self.keep_side(level, site);
         let replaces = self.resume.is_some();
         replace(&mut self.chain[level].trees, replaces, site, tree);
     }
 
     /// Record that the ascription or annotated binder's type part at `site` is settled.
     pub(super) fn record_settled(&mut self, level: usize, site: Site) {
+        self.keep_side(level, site);
         let settled = &mut self.chain[level].settled;
         if self.resume.is_none() || !settled.contains(&site) {
             settled.push(site);
@@ -800,6 +822,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         site: Site,
         read: crate::scope::InstanceRead<'graph>,
     ) {
+        self.keep_side(level, site);
         let replaces = self.resume.is_some();
         replace(&mut self.chain[level].instances, replaces, site, read);
     }
@@ -811,8 +834,16 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         site: Site,
         contributions: &'graph [StaticType<'graph>],
     ) {
+        self.keep_side(level, site);
         let replaces = self.resume.is_some();
         replace(&mut self.chain[level].named, replaces, site, contributions);
+    }
+
+    /// Keep what the innermost gathering holds as the frontier of a side fact recorded at `site`:
+    /// the rule recording it records it again exactly where nothing it read so far changes.
+    fn keep_side(&mut self, level: usize, site: Site) {
+        let frontier = self.snapshot();
+        self.keep(level, FactKey::Side(site), frontier);
     }
 
     /// Fix the solution the callable body `body` is born instantiated at, under what the
@@ -851,8 +882,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             (!resume.wakes(frontier)).then_some(frontier)
         };
         let shape = at.shape;
+        let side = |site| skipped(FactKey::Side(site)).is_some();
         let at = &mut self.chain[level];
-        at.residual.extend(residual.iter().copied());
+        // A side fact the walk does not start from is recorded again or not at all.
+        at.residual
+            .extend((residual.iter().copied()).filter(|(key, _)| match key {
+                FactKey::Side(site) => side(*site),
+                _ => true,
+            }));
         for (index, bound) in statics.binders.iter().enumerate() {
             if let Some(frontier) = skipped(FactKey::Slot(Slot(index as u32))) {
                 at.binders[index] = *bound;
@@ -889,10 +926,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .iter()
                 .filter(|(site, _)| use_skipped(*site).is_some()),
         );
-        at.settled.extend(statics.settled.iter());
-        at.instances.extend(statics.instances.iter());
-        at.named.extend(statics.named.iter());
-        at.trees.extend(statics.trees.iter());
+        at.settled
+            .extend(statics.settled.iter().filter(|site| side(**site)));
+        at.instances
+            .extend(statics.instances.iter().filter(|(site, _)| side(*site)));
+        at.named
+            .extend(statics.named.iter().filter(|(site, _)| side(*site)));
+        at.trees
+            .extend(statics.trees.iter().filter(|(site, _)| side(*site)));
         at.throughs.extend(statics.throughs.iter());
     }
 

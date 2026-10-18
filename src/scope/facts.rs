@@ -1,11 +1,11 @@
-//! The vocabulary of the solver'held type facts: what a load-time fact waits on, and what a binding
-//! settles ([the build module'held design](../build/README.md#type-facts-and-the-solver)).
+//! The vocabulary of the solver's type facts: what a load-time fact waits on, and what a binding
+//! settles ([the build module's design](../build/README.md#type-facts-and-the-solver)).
 //!
 //! A **fact** is one write-once load-time cell — a type channel cell or a value channel entry —
 //! and the rule that computes it runs at one [`FactKey`] of one shape. Every fact a rule run
 //! writes at its key shares one [`Frontier`]: the [`Unknown`]s that could change it, read
 //! transitively. A fact with an empty frontier is **fixed**; the others, each beside its frontier,
-//! are the shape'held [`Residual`]. A [`Binding`] gives some unknowns closed types, and **wakes**
+//! are the shape's [`Residual`]. A [`Binding`] gives some unknowns closed types, and **wakes**
 //! every fact whose frontier meets it.
 //!
 //! An unknown is named by its **lexical address** — the segment of the body that declares it and
@@ -23,7 +23,7 @@ use super::typed::{
     Resolution, ShapeFacts, StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics,
 };
 
-/// Where a body'held activation holds an unknown: a slot, or — for a name a quote'held code is run
+/// Where a body's activation holds an unknown: a slot, or — for a name a quote's code is run
 /// with — a capture.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Address {
@@ -32,7 +32,7 @@ pub enum Address {
 }
 
 /// A name a binding may remove, by its lexical address: the segment of the body declaring it, and
-/// where that body'held activation holds it.
+/// where that body's activation holds it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Unknown {
     pub segment: Segment,
@@ -86,7 +86,7 @@ impl<'a> Frontier<'a> {
         false
     }
 
-    /// This frontier with `other`'held unknowns, laid down through `writer` where it grows.
+    /// This frontier with `other`'s unknowns, laid down through `writer` where it grows.
     pub fn union<'w>(self, other: Frontier<'_>, writer: Writer<'w, '_>) -> Frontier<'w>
     where
         'a: 'w,
@@ -139,18 +139,21 @@ pub fn merge_into(into: &mut BumpVec<'_, Unknown>, unknowns: &[Unknown]) {
     }
 }
 
-/// Where a fact'held rule runs in its shape: a part, a node, a use or a type expression by its site;
+/// Where a fact's rule runs in its shape: a part, a node, a use or a type expression by its site;
 /// a statement by its index; a binder, a type binder or a registration by its slot; and the
-/// shape'held own facts — a callable'held type, its group levels, its summary — at the shape.
+/// shape's own facts — a callable's type, its group levels, its summary — at the shape. A
+/// fact a rule records beside its own — a settled check, an instance read, a call by name's
+/// contributions, a view's tree — is a side fact, by its site, waiting on what its rule had read.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum FactKey {
     Site(Site),
     Statement(u32),
     Slot(Slot),
     Shape,
+    Side(Site),
 }
 
-/// A shape'held facts that wait on an unknown, each by its key beside its frontier, sorted by key:
+/// A shape's facts that wait on an unknown, each by its key beside its frontier, sorted by key:
 /// every other fact of the shape is fixed.
 pub type Residual<'a> = Keyed<'a, (FactKey, Frontier<'a>)>;
 
@@ -203,7 +206,7 @@ impl<'a> Binding<'a> {
     }
 }
 
-/// Where in a body a seam lies: at its entry, or at a unit, by index into the body'held units — the
+/// Where in a body a seam lies: at its entry, or at a unit, by index into the body's units — the
 /// order a body binds in, entry first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum SeamAt {
@@ -211,7 +214,7 @@ pub enum SeamAt {
     Unit(u32),
 }
 
-/// A binding site at which some frontier'held last member binds, beside every unknown the frontiers
+/// A binding site at which some frontier's last member binds, beside every unknown the frontiers
 /// completed there wait on: where a resumption over the binding the seam takes lands.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Seam<'a> {
@@ -219,22 +222,22 @@ pub struct Seam<'a> {
     pub waits_on: Frontier<'a>,
 }
 
-/// What a resumption settled about one body'held type channel cells: each cell it re-ran, by where
-/// it lies, beside the body'held residual as the resumption leaves it.
+/// What a resumption settled about one body's type channel cells: each cell it re-ran, by where
+/// it lies, beside the body's residual as the resumption leaves it.
 #[derive(Clone, Copy)]
 pub struct ChannelSettled<'a> {
     pub declared: Keyed<'a, (Slot, StaticType<'a>)>,
     pub registered: Keyed<'a, (Slot, StaticRegistered<'a>)>,
     pub expressions: Keyed<'a, (Site, StaticType<'a>)>,
-    /// A callable body'held type, and its own group as its body reads it, where it re-ran.
+    /// A callable body's type, and its own group as its body reads it, where it re-ran.
     pub callable: Option<StaticCallable<'a>>,
     pub levels: Option<&'a [Parametric]>,
     pub residual: Residual<'a>,
-    /// A quote'held code'held refusal, where its code no longer types.
+    /// A quote's code's refusal, where its code no longer types.
     pub refusal: Option<&'a ShapeError<'a>>,
 }
 
-/// What a resumption settled about one body'held value channel: the body'held cell as the resumption
+/// What a resumption settled about one body's value channel: the body's cell as the resumption
 /// leaves it, beside its residual.
 #[derive(Clone, Copy)]
 pub struct StaticsSettled<'a> {
@@ -250,15 +253,15 @@ pub struct Settled<'a> {
     pub binding: Binding<'a>,
     pub channel: Keyed<'a, (Segment, ChannelSettled<'a>)>,
     pub statics: Keyed<'a, (Segment, StaticsSettled<'a>)>,
-    /// Each body'held own facts as a whole, where one of them re-ran.
+    /// Each body's own facts as a whole, where one of them re-ran.
     pub facts: Keyed<'a, (Segment, ShapeFacts<'a>)>,
-    /// Each callable body'held born instance, where it re-ran.
+    /// Each callable body's born instance, where it re-ran.
     pub born: Keyed<'a, (Segment, StaticSolution<'a>)>,
-    /// Each quote'held code the value channel no longer types, beside its refusal.
+    /// Each quote's code the value channel no longer types, beside its refusal.
     pub refusals: Keyed<'a, (Segment, &'a ShapeError<'a>)>,
-    /// Each path re-resolved, by its chain root'held segment and its level.
+    /// Each path re-resolved, by its chain root's segment and its level.
     pub resolutions: Keyed<'a, ((Segment, usize), Resolution<'a>)>,
-    /// How many facts each pass re-ran: the type channel'held, then the value channel'held.
+    /// How many facts each pass re-ran: the type channel's, then the value channel's.
     pub reran: (u32, u32),
 }
 
