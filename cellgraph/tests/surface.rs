@@ -13,12 +13,12 @@ use std::marker::PhantomData;
 
 use cellgraph::{
     Active, CellGraph, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
-    DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
-    Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, Operand,
-    PeekError, Prices, Projected, ProjectionAt, Projects, Prose, Ready, Reattachable, Receipt,
-    ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
-    ReleaseTreeError, Run, SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun,
-    TreeHandle, Verdict, Writer, Written, covariant, reattachable,
+    DeliverError, Delivered, Delivery, Dormant, DropFree, EnterBesideError, EnterError, Erased,
+    HabitatHeader, Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView,
+    Operand, PeekError, Prices, Projected, ProjectionAt, Projects, Prose, Ready, Reattachable,
+    Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError,
+    ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext, Storage,
+    TenantHandle, ThinRun, TreeHandle, Verdict, Writer, Written, covariant, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -224,6 +224,16 @@ fn name_peek_error(error: PeekError) -> &'static str {
     match error {
         PeekError::Stale(_) => "stale",
         PeekError::Tenant(_) => "tenant",
+    }
+}
+
+/// Every refusal `enter_beside` can give, matched by name for the same reason.
+fn name_enter_beside_error(error: EnterBesideError) -> &'static str {
+    match error {
+        EnterBesideError::Enter(EnterError::Stale(_)) => "stale",
+        EnterBesideError::Enter(EnterError::AlreadyExecuting) => "executing",
+        EnterBesideError::Beside(_) => "beside",
+        EnterBesideError::Same => "same",
     }
 }
 
@@ -882,6 +892,23 @@ fn a_named_lend_a_tenant_lend_and_the_peek_answer_from_outside_the_crate() {
         };
         assert_eq!(name_peek_error(error), name);
     }
+
+    // A step beside a live cell, reading its header and copying out of it.
+    let copied_out = graph.enter_beside(run, lender, |_, read, _| {
+        read.map(|header| *header.into_value().get())
+    });
+    assert_eq!(copied_out, Ok(Some(41)));
+    for (beside, name) in [(CellHandle::from(gone), "beside"), (run.into(), "same")] {
+        let Err(error) = graph.enter_beside(run, beside, |_, _, _| ()) else {
+            panic!("the entry must be refused");
+        };
+        assert_eq!(name_enter_beside_error(error), name);
+    }
+    let Err(error) = graph.enter_beside(gone, lender, |_, _, _| ()) else {
+        panic!("the entry must be refused");
+    };
+    assert_eq!(name_enter_beside_error(error), "stale");
+
     assert_eq!(graph.is_childless(lender), Ok(true));
     let child = graph.create_tree(lender, None).unwrap();
     assert_eq!(graph.is_childless(lender), Ok(false));

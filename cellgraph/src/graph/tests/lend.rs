@@ -9,7 +9,8 @@
 //! takes a count of its own, and a copied scratch lend is taken only under its lender; a named
 //! lend mints no pin; and each refusal changes nothing. Beside them, the drain's reads between
 //! steps: `peek` reads a live cell's region header and refuses any other name, and `is_childless`
-//! counts dead children that have not disposed.
+//! counts dead children that have not disposed. And `enter_beside`, whose step reads a second live
+//! cell's region header and copies what it reads into its own.
 //!
 //! The headers and scratch states are the [headers](super::headers) fixture's, so a read through a
 //! lent door is a read of the chunk the header names, which Miri checks.
@@ -650,6 +651,106 @@ fn peek_refuses_a_dead_stale_or_tenant_handle() {
 
     graph.release_tenant(tenant).unwrap();
     graph.release_tree(child).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// The number `beside`'s header points at, read inside a step of `cell` and laid by value in
+/// `cell`'s own header.
+fn copied_beside(
+    graph: &mut Graph,
+    cell: impl Into<CellHandle>,
+    beside: impl Into<CellHandle>,
+) -> Result<Option<u32>, EnterBesideError> {
+    graph.enter_beside(cell, beside, |context, read, _| {
+        let theirs = value_of(read?.into_value())?;
+        lay(context, theirs)
+    })
+}
+
+/// A step entered beside another live cell copies what it reads of that cell's header into its
+/// own region, and the copy outlives the cell it was read from. No spare bumps are kept, so the
+/// source's chunks are really freed and Miri sees any read that still reached them.
+#[test]
+fn enter_beside_lays_into_one_region_what_it_reads_of_another() {
+    let mut graph: Graph = CellGraph::with_config(
+        Config {
+            cap: 1,
+            spare_proportion: 0,
+            spare_window_shift: 6,
+        },
+        super::pin,
+    );
+    let root = graph.create(None).unwrap();
+    let from = graph.create_tree(root, None).unwrap();
+    let into = graph.create_tree(root, None).unwrap();
+    assert_eq!(
+        graph.enter(from, |context| lay(context, 41)).unwrap(),
+        Some(41)
+    );
+    assert_eq!(copied_beside(&mut graph, into, from), Ok(Some(41)));
+
+    graph.release_tree(from).unwrap();
+    assert!(!graph.is_live(from));
+    assert_eq!(peeked(&graph, into), Ok(Some(Some(41))));
+
+    graph.release_tree(into).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// `enter_beside` refuses a stale entered cell, a stale read cell and one region read beside
+/// itself, each leaving the cell enterable; a tenant on either side stands for its host.
+#[test]
+fn enter_beside_refuses_a_dead_or_stale_cell_and_one_region_twice() {
+    let mut graph = new_graph(2);
+    let root = graph.create(None).unwrap();
+    graph.enter(root, |context| lay(context, 3)).unwrap();
+    let cell = graph.create_tree(root, None).unwrap();
+    let dead = graph.create_tree(root, None).unwrap();
+    graph.release_tree(dead).unwrap();
+    let own_tenant = graph.create_tenant(cell, None).unwrap();
+    let root_tenant = graph.create_tenant(root, None).unwrap();
+
+    assert_eq!(
+        copied_beside(&mut graph, dead, root),
+        Err(EnterBesideError::Enter(EnterError::Stale(Stale(
+            dead.into()
+        ))))
+    );
+    assert_eq!(
+        copied_beside(&mut graph, cell, dead),
+        Err(EnterBesideError::Beside(Stale(dead.into())))
+    );
+    assert_eq!(
+        copied_beside(&mut graph, cell, cell),
+        Err(EnterBesideError::Same)
+    );
+    assert_eq!(
+        copied_beside(&mut graph, cell, own_tenant),
+        Err(EnterBesideError::Same)
+    );
+    assert_eq!(
+        graph.enter(cell, |_| ()),
+        Ok(()),
+        "a refusal leaves the cell enterable"
+    );
+
+    assert_eq!(
+        copied_beside(&mut graph, cell, root_tenant),
+        Ok(Some(3)),
+        "a tenant beside reads its host's header"
+    );
+    assert_eq!(
+        copied_beside(&mut graph, own_tenant, root),
+        Ok(Some(3)),
+        "a tenant entered writes its host's region"
+    );
+    assert_eq!(peeked(&graph, cell), Ok(Some(Some(3))));
+
+    graph.release_tenant(own_tenant).unwrap();
+    graph.release_tenant(root_tenant).unwrap();
+    graph.release_tree(cell).unwrap();
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }
